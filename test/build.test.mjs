@@ -147,20 +147,40 @@ test('error: default import is rejected (E005)', () => {
   assert.throws(() => bundleMemory(sources, { entry: 'src/main.js' }), /E005/);
 });
 
-// ── 9. external (escaping-src) imports are hoisted + deduped, verbatim ──
-test('external: escaping-src imports hoist to top, deduped', async () => {
+// ── 9. external (bare) imports are hoisted + deduped, verbatim ──
+test('external: bare imports hoist to top, deduped', async () => {
   const sources = {
     'src/main.js': "export { a } from './a.js';\nexport { b } from './b.js';\n",
-    'src/a.js': "import { shared } from '../vendor/lib.js';\nexport function a(){ return shared; }\n",
-    'src/b.js': "import { shared } from '../vendor/lib.js';\nexport function b(){ return shared + 1; }\n",
+    'src/a.js': "import { shared } from 'some-pkg';\nexport function a(){ return shared; }\n",
+    'src/b.js': "import { shared } from 'some-pkg';\nexport function b(){ return shared + 1; }\n",
   };
   const r = bundleMemory(sources, { entry: 'src/main.js' });
-  // The escaping '../vendor/lib.js' (relative to src/) is rewritten to
-  // './vendor/lib.js' for the root-level output, and deduped to a single import.
-  const importCount = (r.code.match(/^import \{ shared \} from '\.\/vendor\/lib\.js';$/gm) || []).length;
+  const importCount = (r.code.match(/^import \{ shared \} from 'some-pkg';$/gm) || []).length;
   assert.equal(importCount, 1, 'duplicate external import collapsed to one');
-  // import must be above the first section marker
-  assert.ok(r.code.indexOf("from './vendor/lib.js'") < r.code.indexOf('── src/'));
+  assert.ok(r.code.indexOf("from 'some-pkg'") < r.code.indexOf('── src/'));
+});
+
+test('error: escaping-relative import that is not inlined is rejected (E002)', () => {
+  const sources = {
+    'src/main.js': "export { a } from './a.js';\n",
+    'src/a.js': "import { x } from '../../other/src/lib.js';\nexport function a(){ return x; }\n",
+  };
+  assert.throws(() => bundleMemory(sources, { entry: 'src/main.js', srcRoot: 'src' }), /E002/);
+});
+
+// ── phase 2: inline (§4.2) — shared primitives bundled in, collision-safe ──
+test('inline: a bare-specifier primitive is inlined and collisions renamed', async () => {
+  const sources = {
+    'src/main.js': "export { area } from './use.js';\n",
+    'src/use.js': "import { box } from '@gcu/prim';\nfunction mul(a, b){ return a + b; }\nexport function area(w, h){ return box(w, h) + mul(w, h); }\n",
+    'lib/prim/main.js': "export function box(w, h){ return mul(w, h); }\nexport function mul(a, b){ return a * b; }\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js', srcRoot: 'src', inlineAliases: { '@gcu/prim': 'lib/prim/main.js' } });
+  assert.ok(!/from '@gcu\/prim'/.test(r.code), 'inlined import does not survive');
+  assert.ok(r.code.includes('mul$use') && r.code.includes('mul$main'), 'colliding mul renamed per-module');
+  const m = await importCode(r.code);
+  // box(2,3)=prim.mul=6 ; use.mul=2+3=5 ; total 11
+  assert.equal(m.area(2, 3), 11);
 });
 
 // ── 10. determinism: identical input → byte-identical output ──
@@ -245,10 +265,39 @@ test('define: collision with a declaration rejected (E007)', () => {
   assert.throws(() => bundleMemory(sources, { entry: 'src/main.js', define: { __X__: '2' } }), /E007/);
 });
 
-// ── 11. round-trip against real ext/adder ──
-test('round-trip: bundled ext/adder behaves like its source', async () => {
-  const dir = path.join(root, 'ext', 'adder');
+// ── 11. round-trip against real ext/sluice (zero-dep, exercises export *) ──
+test('round-trip: bundled ext/sluice behaves like its source', async () => {
+  const dir = path.join(root, 'ext', 'sluice');
   const r = bundle({ dir, entry: 'src/main.js', write: false });
+  const tmp = path.join(dir, '__roundtrip_bundle.js');
+  fs.writeFileSync(tmp, r.code);
+  try {
+    const srcMod = await import(pathToFileURL(path.join(dir, 'src', 'main.js')).href);
+    const bunMod = await import(pathToFileURL(tmp).href);
+    assert.deepEqual(Object.keys(bunMod).sort(), Object.keys(srcMod).sort(), 'export surface matches');
+    // exercise the welford accumulator (create → push → result) on fixed input
+    const data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const accResult = (mod) => {
+      const acc = mod.welford();
+      let st = acc.create();
+      for (const v of data) st = acc.push(st, v) ?? st;
+      return acc.result(st);
+    };
+    assert.deepEqual(accResult(bunMod), accResult(srcMod), 'welford result matches');
+    assert.equal(accResult(bunMod).mean, 5.5);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+});
+
+// ── 12. round-trip against real ext/adder via inline (inlines @gcu/air) ──
+test('round-trip: bundled ext/adder (inline air) behaves like its source', async () => {
+  const dir = path.join(root, 'ext', 'adder');
+  const r = bundle({
+    dir, entry: 'src/main.js', write: false,
+    inline: ['../air/src/types.js', '../air/src/lower/base.js', '../air/src/passes.js'],
+  });
+  assert.ok(!/from '\.\.\/\.\.\/air/.test(r.code), 'air imports are inlined, not external');
 
   // Write the bundle as a sibling of index.js so its escaping-src externals
   // ('../../air/src/...') resolve, then import + compare to source.

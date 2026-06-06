@@ -65,6 +65,9 @@ export function bundleModules(sources, opts) {
   const srcRoot = opts.srcRoot != null ? opts.srcRoot : dirOf(entry);
   const parse = (code) => parseModule(code, parser);
   const defineMap = validateDefine(opts.define, parse);
+  // inline (§4.2): the adapter has already read inlined deps into `sources` and
+  // built inlineAliases (bare-specifier → source key). lintEscaping defaults on.
+  const clsOpts = { inlineAliases: opts.inlineAliases || {}, lintEscaping: opts.lintEscaping !== false };
 
   // ── parse + classify (memoized per path) ──────────────────────────
   const byPath = new Map();
@@ -95,7 +98,7 @@ export function bundleModules(sources, opts) {
             throw buildError('E005', `default imports are not allowed ('${spec}')`, astLoc(path, node));
           }
         }
-        const c = classify(spec, path, srcRoot, sources, astLoc(path, node));
+        const c = classify(spec, path, srcRoot, sources, astLoc(path, node), clsOpts);
         if (c.kind === 'internal') {
           internalDeps.push(c.path);
           for (const s of node.specifiers) {
@@ -125,12 +128,12 @@ export function bundleModules(sources, opts) {
           }
         }
       } else if (node.type === 'ExportAllDeclaration') {
-        const c = classify(node.source.value, path, srcRoot, sources, astLoc(path, node));
+        const c = classify(node.source.value, path, srcRoot, sources, astLoc(path, node), clsOpts);
         if (c.kind === 'internal') internalDeps.push(c.path);
       } else if (node.type === 'ExportDefaultDeclaration') {
         throw buildError('E005', `'export default' is not allowed in sources`, astLoc(path, node));
       } else if (node.type === 'ExportNamedDeclaration' && node.source) {
-        const c = classify(node.source.value, path, srcRoot, sources, astLoc(path, node));
+        const c = classify(node.source.value, path, srcRoot, sources, astLoc(path, node), clsOpts);
         if (c.kind === 'internal') internalDeps.push(c.path);
       }
     }
@@ -189,7 +192,7 @@ export function bundleModules(sources, opts) {
       if (ex.kind === 'reexport-named') {
         const m = ex.specifiers.find((s) => s.exported === name);
         if (m) {
-          const c = classify(ex.source, modPath, srcRoot, sources, null);
+          const c = classify(ex.source, modPath, srcRoot, sources, null, clsOpts);
           if (c.kind === 'internal') return resolveTarget(c.path, m.local, seen);
           return name; // re-export from external — leave as-is
         }
@@ -213,7 +216,7 @@ export function bundleModules(sources, opts) {
         if (node.declaration) {
           for (const nm of declaredNames(node.declaration)) direct.set(nm, outputName(mod, nm));
         } else if (node.source) {
-          const c = classify(node.source.value, modPath, srcRoot, sources, null);
+          const c = classify(node.source.value, modPath, srcRoot, sources, null, clsOpts);
           for (const s of node.specifiers) {
             const exported = s.exported.name || s.exported.value;
             const local = s.local.name || s.local.value;
@@ -228,7 +231,7 @@ export function bundleModules(sources, opts) {
         }
       } else if (node.type === 'ExportAllDeclaration') {
         if (node.exported) continue; // `export * as ns` — namespace re-export, deferred
-        const c = classify(node.source.value, modPath, srcRoot, sources, null);
+        const c = classify(node.source.value, modPath, srcRoot, sources, null, clsOpts);
         if (c.kind !== 'internal') continue; // external `export *` — not enumerable
         for (const e of exportsOf(c.path, seen)) {
           let set = star.get(e.exported);
@@ -290,7 +293,7 @@ export function bundleModules(sources, opts) {
       if (node.type === 'ImportDeclaration') {
         patches.push(stmtDelete(node, mod.source));
         const spec = node.source.value;
-        const c = classify(spec, mod.path, srcRoot, sources, null);
+        const c = classify(spec, mod.path, srcRoot, sources, null, clsOpts);
         if (c.kind === 'external') {
           const out = c.out; // specifier rewritten for the output location
           if (node.specifiers.length === 0) {

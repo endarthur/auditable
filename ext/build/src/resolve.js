@@ -46,29 +46,45 @@ export function rewriteSpec(spec, fromPath, srcRoot) {
 }
 
 // Classify an import specifier as seen from `fromPath`, given the package's
-// `srcRoot` (e.g. 'src') and the set of available source paths.
+// `srcRoot` (e.g. 'src'), the available source paths, and options.
 //
 //   { kind: 'internal', path }   — resolved path that exists in `sources`
-//   { kind: 'external', spec, out } — bare or escaping-relative; `out` is the
-//                                     specifier rewritten for the output location
+//                                  (a src/ file OR an inlined dep — §4.2)
+//   { kind: 'external', spec, out } — bare specifier (verbatim)
 //
-// Throws E003/E004 for extension-less / directory-index / missing forms.
-export function classify(spec, fromPath, srcRoot, sources, loc) {
+// opts: { inlineAliases: {spec→key}, lintEscaping: bool }
+//   inlineAliases maps a bare specifier the host opted to inline (e.g.
+//     '@gcu/dimensions') to its source key. Relative inlined deps don't need an
+//     alias — the adapter keyed them so normal path arithmetic resolves them.
+//   lintEscaping (default true, the phase-2 model): escaping-relative imports
+//     that are NEITHER in src/ NOR inlined are an E002 error. Shared deps must
+//     use `inline` (collision-safe), not escaping-relative coupling.
+//
+// Throws E002 (escaping, not inlined) / E003 / E004.
+export function classify(spec, fromPath, srcRoot, sources, loc, opts = {}) {
+  const inlineAliases = opts.inlineAliases || {};
+  if (Object.prototype.hasOwnProperty.call(inlineAliases, spec)) {
+    return { kind: 'internal', path: inlineAliases[spec] };
+  }
   if (!isRelative(spec)) {
     return { kind: 'external', spec, out: spec };
   }
   const resolved = joinPath(dirOf(fromPath), spec);
 
-  // Escaping src/ → external (verbatim, path rewritten). The lint rule that
-  // makes this an ERROR (E002) is phase 2; phase 1 honors §4's pass-through.
+  // In sources (a src/ file or an inlined dep the adapter read in) → internal.
+  if (sources[resolved] !== undefined) {
+    return { kind: 'internal', path: resolved };
+  }
+
   const root = srcRoot || '';
   const insideRoot = root ? (resolved === root || resolved.startsWith(root + '/')) : !resolved.startsWith('..');
   if (!insideRoot) {
-    return { kind: 'external', spec, out: rewriteSpec(spec, fromPath, srcRoot) };
-  }
-
-  if (sources[resolved] !== undefined) {
-    return { kind: 'internal', path: resolved };
+    // Escaping-relative and not inlined. The phase-2 model rejects this (E002);
+    // `lintEscaping: false` restores §4's pass-through (rewritten external).
+    if (opts.lintEscaping === false) {
+      return { kind: 'external', spec, out: rewriteSpec(spec, fromPath, srcRoot) };
+    }
+    throw buildError('E002', `relative import '${spec}' escapes src/ and is not inlined — use the inline option for shared deps (SPEC §4.2)`, loc);
   }
 
   // Inside root but absent — diagnose the likely cause.
