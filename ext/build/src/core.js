@@ -18,6 +18,7 @@ import { stmtDelete, exportPrefixStrip, declaredNames, declSitePatches } from '.
 import { applyPatches } from './emit.js';
 import { validateDefine, collectDefinePatches } from './define.js';
 import { collectAnnotations } from './annotations.js';
+import { collectTsElision } from './tselide.js';
 import { lintModule } from './lint.js';
 import { buildError, astLoc } from './errors.js';
 
@@ -344,12 +345,17 @@ export function bundleModules(sources, opts) {
       declSitePatches(node, ownRenames, patches);
     }
 
-    // reference rename patches (scope-aware) + define substitution. @bundle-verbatim
-    // declaration bodies are emitted unchanged — drop patches landing inside them
-    // (decl-site renames, pushed above, are kept so collisions still resolve).
-    const inVerbatim = (p) => mod.verbatimRanges.some(([s, e]) => p.start >= s && p.end <= e);
-    for (const p of collectRenamePatches(mod.ast, renameMap, topNames)) if (!inVerbatim(p)) patches.push(p);
-    for (const p of collectDefinePatches(mod.ast, defineMap)) if (!inVerbatim(p)) patches.push(p);
+    // TS annotation elision (delete type syntax) + its deleted ranges.
+    const { patches: tsPatches, ranges: tsRanges } = collectTsElision(mod.ast);
+    for (const p of tsPatches) patches.push(p);
+
+    // reference rename patches (scope-aware) + define substitution. Drop patches
+    // landing inside a @bundle-verbatim body (emitted unchanged) or inside an
+    // elided type (decl-site renames, pushed above, are kept so collisions resolve).
+    const protectedRanges = mod.verbatimRanges.concat(tsRanges);
+    const isProtected = (p) => protectedRanges.some(([s, e]) => p.start >= s && p.end <= e);
+    for (const p of collectRenamePatches(mod.ast, renameMap, topNames)) if (!isProtected(p)) patches.push(p);
+    for (const p of collectDefinePatches(mod.ast, defineMap)) if (!isProtected(p)) patches.push(p);
 
     let body = applyPatches(mod.source, patches).replace(/^\n+/, '').replace(/\n+$/, '');
 

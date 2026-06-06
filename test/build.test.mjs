@@ -227,6 +227,25 @@ test('lint: opt-out via lint:false', () => {
   assert.doesNotThrow(() => bundleMemory(sources, { entry: 'src/main.js', lint: false }));
 });
 
+// ── phase 2: TS annotation elision (§14/§18) ──
+test('TS elision: type annotations / aliases / interfaces / as are stripped', async () => {
+  const sources = {
+    'src/main.js': "export { add, pick } from './a.js';\n",
+    'src/a.js':
+      "interface Pt { x: number }\n" +
+      "type N = number;\n" +
+      "export function add(x: number, y: number): number { const z: N = x + y; return z; }\n" +
+      "export function pick(o: any){ return (o as { v: number }).v; }\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js' });
+  assert.ok(!/:\s*number/.test(r.code), 'type annotations elided');
+  assert.ok(!/\binterface\b/.test(r.code) && !/\btype N\b/.test(r.code), 'interface/alias elided');
+  assert.ok(!/\bas\b\s*\{/.test(r.code), 'as-expression elided');
+  const m = await importCode(r.code);
+  assert.equal(m.add(2, 3), 5);
+  assert.equal(m.pick({ v: 7 }), 7);
+});
+
 // ── phase 2: annotations (§5) ──
 test('@bundle-share: shared singleton is not renamed; identity preserved', async () => {
   const sources = {
