@@ -1,0 +1,347 @@
+// @gcu/build — pure core: bundleModules (SPEC §1.4, §6, §7)
+//
+// I/O-free. Input is the complete module set already read into memory
+// ({ [path]: source }); output is { code, map, meta, warnings }. The same
+// function runs unchanged in node, in a @gcu/vfs-backed Works build, and in
+// tests — it touches no fs and no environment globals beyond an optional parser.
+//
+// It reuses @gcu/air's parser config + import/export extraction (SPEC §21).
+// Phase 1 imports those from air's SOURCE (../../air/src/api.js), NOT the bare
+// '@gcu/air' bundle — the bundle is strip-only and has no export footer yet
+// (the footer fix + the self-host path is phase 2).
+
+import { parseModule, extractImports, extractExports } from '../../air/src/api.js';
+import { classify } from './resolve.js';
+import { renameCollisions } from './rename.js';
+import { collectRenamePatches } from './scope.js';
+import { stmtDelete, exportPrefixStrip, declaredNames, declSitePatches } from './rewrite.js';
+import { applyPatches } from './emit.js';
+import { buildError, astLoc } from './errors.js';
+
+const PARSE_OPTS = { ecmaVersion: 'latest', sourceType: 'module', locations: true, ranges: true };
+
+function getParser(opts) {
+  if (opts && opts.parser) return opts.parser;
+  const A = (typeof globalThis !== 'undefined' && globalThis.Acorn) || (typeof window !== 'undefined' && window.Acorn);
+  if (A) return A.Parser.extend(A.tsPlugin());
+  throw new Error('gcu-build: no parser. Pass opts.parser (acorn Parser) or load window.Acorn.');
+}
+
+function dirOf(p) { return p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''; }
+function baseOf(p) {
+  const f = p.includes('/') ? p.slice(p.lastIndexOf('/') + 1) : p;
+  return f.replace(/\.[^.]+$/, '');
+}
+
+// Scan for forbidden dynamic import() expressions (SPEC §3.2, E006).
+function findDynamicImport(ast) {
+  let found = null;
+  (function walk(n) {
+    if (found || !n || typeof n.type !== 'string') return;
+    if (n.type === 'ImportExpression') { found = n; return; }
+    for (const k in n) {
+      if (k === 'loc' || k === 'range') continue;
+      const v = n[k];
+      if (Array.isArray(v)) { for (const c of v) walk(c); }
+      else if (v && typeof v.type === 'string') walk(v);
+    }
+  })(ast);
+  return found;
+}
+
+/**
+ * Bundle a complete in-memory module set into one flat ESM string.
+ * @param {Object<string,string>} sources  path → source code
+ * @param {{ entry:string, parser?:object, srcRoot?:string, header?:string,
+ *           packageName?:string, packageDesc?:string }} opts
+ * @returns {{ code:string, map:null, meta:object, warnings:Array }}
+ */
+export function bundleModules(sources, opts) {
+  if (!opts || !opts.entry) throw new Error('gcu-build: opts.entry is required');
+  const parser = getParser(opts);
+  const entry = opts.entry;
+  if (sources[entry] === undefined) throw new Error(`gcu-build: entry '${entry}' not in sources`);
+  const srcRoot = opts.srcRoot != null ? opts.srcRoot : dirOf(entry);
+  const parse = (code) => parseModule(code, parser);
+
+  // ── parse + classify (memoized per path) ──────────────────────────
+  const byPath = new Map();
+  function load(path) {
+    if (byPath.has(path)) return byPath.get(path);
+    let ast;
+    try { ast = parse(sources[path]); }
+    catch (e) { throw buildError('E001', `parse error: ${e.message}`, { file: path, line: e.loc ? e.loc.line : 0, col: e.loc ? e.loc.column : 0 }); }
+
+    const dyn = findDynamicImport(ast);
+    if (dyn) throw buildError('E006', `dynamic import() not allowed`, astLoc(path, dyn));
+
+    const imports = extractImports(ast);
+    const exports = extractExports(ast);
+
+    const internalImportBindings = []; // { local, source(path), imported, kind }
+    const externalImports = [];        // { local, source(spec), imported, kind, node }
+    const internalDeps = [];           // resolved paths, in body order
+
+    // classify imports (body-order via ast.body for deterministic dep order)
+    for (const node of ast.body) {
+      if (node.type === 'ImportDeclaration') {
+        const spec = node.source.value;
+        // default import banned (SPEC §3.1)
+        for (const s of node.specifiers) {
+          if (s.type === 'ImportDefaultSpecifier') {
+            throw buildError('E005', `default imports are not allowed ('${spec}')`, astLoc(path, node));
+          }
+        }
+        const c = classify(spec, path, srcRoot, sources, astLoc(path, node));
+        if (c.kind === 'internal') {
+          internalDeps.push(c.path);
+          for (const s of node.specifiers) {
+            if (s.type === 'ImportNamespaceSpecifier') {
+              throw buildError('E007', `namespace import 'import * as ${s.local.name}' from an internal module is not supported in phase 1 ('${spec}')`, astLoc(path, node));
+            }
+            internalImportBindings.push({
+              local: s.local.name,
+              source: c.path,
+              imported: s.imported ? (s.imported.name || s.imported.value) : null,
+              kind: 'named',
+            });
+          }
+        } else {
+          for (const s of node.specifiers) {
+            externalImports.push({
+              local: s.local.name,
+              source: spec,
+              imported: s.type === 'ImportNamespaceSpecifier' ? '*' : (s.imported ? (s.imported.name || s.imported.value) : null),
+              kind: s.type === 'ImportNamespaceSpecifier' ? 'namespace' : 'named',
+              node,
+            });
+          }
+          if (node.specifiers.length === 0) {
+            externalImports.push({ local: null, source: spec, imported: null, kind: 'side-effect', node });
+          }
+        }
+      } else if (node.type === 'ExportAllDeclaration') {
+        throw buildError('E007', `'export *' is not supported in phase 1`, astLoc(path, node));
+      } else if (node.type === 'ExportDefaultDeclaration') {
+        throw buildError('E005', `'export default' is not allowed in sources`, astLoc(path, node));
+      } else if (node.type === 'ExportNamedDeclaration' && node.source) {
+        const c = classify(node.source.value, path, srcRoot, sources, astLoc(path, node));
+        if (c.kind === 'internal') internalDeps.push(c.path);
+      }
+    }
+
+    // own top-level bindings (declared names; NOT import locals)
+    const ownBindings = new Set();
+    for (const node of ast.body) {
+      const decl = node.type === 'ExportNamedDeclaration' ? node.declaration : node;
+      if (!decl) continue;
+      for (const nm of declaredNames(decl)) ownBindings.add(nm);
+    }
+
+    const mod = { path, source: sources[path], ast, imports, exports, internalImportBindings, externalImports, internalDeps, ownBindings, basename: baseOf(path) };
+    byPath.set(path, mod);
+    return mod;
+  }
+
+  // ── manifest walk: post-order DFS (deps before dependents) ─────────
+  const order = [];
+  const visited = new Set();
+  const onstack = new Set();
+  (function visit(path) {
+    if (visited.has(path)) return;
+    if (onstack.has(path)) throw buildError('E013', `circular import involving '${path}'`, { file: path, line: 0, col: 0 });
+    onstack.add(path);
+    const mod = load(path);
+    for (const dep of mod.internalDeps) visit(dep);
+    onstack.delete(path);
+    visited.add(path);
+    order.push(mod);
+  })(entry);
+
+  // ── rename-on-collision ───────────────────────────────────────────
+  const { renames, warnings } = renameCollisions(order);
+  const outputName = (mod, name) => {
+    const mm = renames.get(mod);
+    return (mm && mm.get(name)) || name;
+  };
+
+  // Resolve an exported name of an internal module to its final output binding,
+  // following re-exports and import-internal aliases.
+  function resolveTarget(modPath, name, seen = new Set()) {
+    const key = modPath + '::' + name;
+    if (seen.has(key)) return name;
+    seen.add(key);
+    const mod = byPath.get(modPath);
+    if (!mod) return name;
+    if (mod.ownBindings.has(name)) return outputName(mod, name);
+    const imp = mod.internalImportBindings.find((b) => b.local === name);
+    if (imp) return resolveTarget(imp.source, imp.imported, seen);
+    const ext = mod.externalImports.find((b) => b.local === name);
+    if (ext) return outputName(mod, name);
+    for (const ex of mod.exports) {
+      if (ex.kind === 'reexport-named') {
+        const m = ex.specifiers.find((s) => s.exported === name);
+        if (m) {
+          const c = classify(ex.source, modPath, srcRoot, sources, null);
+          if (c.kind === 'internal') return resolveTarget(c.path, m.local, seen);
+          return name; // re-export from external — leave as-is (phase 1)
+        }
+      }
+    }
+    return name;
+  }
+
+  // ── per-module rewrite ─────────────────────────────────────────────
+  const hoistNamed = new Map();   // source → Map(specText → true) preserving order
+  const hoistSideEffect = [];     // sources, first-appearance order
+  const hoistVerbatim = [];       // verbatim lines (namespace/other external), deduped
+  const seenSideEffect = new Set();
+  const seenVerbatim = new Set();
+  const exportEntries = [];       // { exported, internal }  (entry only)
+
+  const moduleOut = [];
+  for (const mod of order) {
+    const isEntry = mod.path === entry;
+    const patches = [];
+
+    // build per-module reference rename map + topNames
+    const renameMap = new Map();
+    const ownRenames = renames.get(mod) || new Map();
+    for (const [nm, nn] of ownRenames) renameMap.set(nm, nn);
+    const topNames = new Set(mod.ownBindings);
+    for (const b of mod.internalImportBindings) {
+      topNames.add(b.local);
+      const target = resolveTarget(b.source, b.imported);
+      if (target !== b.local) renameMap.set(b.local, target);
+    }
+    for (const b of mod.externalImports) {
+      if (!b.local) continue;
+      topNames.add(b.local);
+      const on = outputName(mod, b.local);
+      if (on !== b.local) renameMap.set(b.local, on);
+    }
+
+    // structural patches: imports, exports, decl-site renames
+    for (const node of mod.ast.body) {
+      if (node.type === 'ImportDeclaration') {
+        patches.push(stmtDelete(node, mod.source));
+        const spec = node.source.value;
+        const c = classify(spec, mod.path, srcRoot, sources, null);
+        if (c.kind === 'external') {
+          const out = c.out; // specifier rewritten for the output location
+          if (node.specifiers.length === 0) {
+            if (!seenSideEffect.has(out)) { seenSideEffect.add(out); hoistSideEffect.push(out); }
+          } else if (node.specifiers.some((s) => s.type === 'ImportNamespaceSpecifier' || s.type === 'ImportDefaultSpecifier')) {
+            // verbatim slice, but with the source specifier rewritten for the output location
+            const text = mod.source.slice(node.start, node.source.start) + `'${out}'` + mod.source.slice(node.source.end, node.end);
+            if (!seenVerbatim.has(text)) { seenVerbatim.add(text); hoistVerbatim.push(text); }
+          } else {
+            let m = hoistNamed.get(out);
+            if (!m) hoistNamed.set(out, (m = new Map()));
+            for (const s of node.specifiers) {
+              const imported = s.imported.name || s.imported.value;
+              const localOut = outputName(mod, s.local.name);
+              const t = imported === localOut ? imported : `${imported} as ${localOut}`;
+              m.set(t, true);
+            }
+          }
+        }
+        continue;
+      }
+
+      if (node.type === 'ExportNamedDeclaration') {
+        if (node.declaration) {
+          patches.push(exportPrefixStrip(node));
+          declSitePatches(node.declaration, ownRenames, patches);
+          if (isEntry) {
+            for (const nm of declaredNames(node.declaration)) {
+              exportEntries.push({ exported: nm, internal: outputName(mod, nm) });
+            }
+          }
+        } else {
+          patches.push(stmtDelete(node, mod.source));
+          if (isEntry) {
+            for (const s of node.specifiers) {
+              const exported = s.exported.name || s.exported.value;
+              const local = s.local.name || s.local.value;
+              let internal;
+              if (node.source) {
+                const c = classify(node.source.value, mod.path, srcRoot, sources, astLoc(mod.path, node));
+                internal = c.kind === 'internal' ? resolveTarget(c.path, local) : local;
+              } else {
+                internal = resolveTarget(mod.path, local);
+              }
+              exportEntries.push({ exported, internal });
+            }
+          }
+        }
+        continue;
+      }
+
+      // plain top-level declaration → decl-site renames only
+      declSitePatches(node, ownRenames, patches);
+    }
+
+    // reference rename patches (scope-aware)
+    for (const p of collectRenamePatches(mod.ast, renameMap, topNames)) patches.push(p);
+
+    let body = applyPatches(mod.source, patches).replace(/^\n+/, '').replace(/\n+$/, '');
+    moduleOut.push({ path: mod.path, body });
+  }
+
+  // ── assemble ───────────────────────────────────────────────────────
+  const pkgName = opts.packageName || '';
+  const pkgDesc = opts.packageDesc || '';
+  const defaultHeader =
+    `// ⚠ GENERATED FILE — DO NOT EDIT. Source: ${srcRoot}/  Build: @gcu/build ${entry}\n` +
+    (pkgName ? `// ${pkgName}${pkgDesc ? ' — ' + pkgDesc : ''}\n` : '');
+  const header = opts.header != null ? opts.header : defaultHeader;
+
+  const lines = [];
+  lines.push(header.replace(/\n+$/, ''));
+  lines.push('');
+
+  // hoisted external imports
+  const importLines = [];
+  for (const spec of hoistSideEffect) importLines.push(`import '${spec}';`);
+  for (const [spec, m] of hoistNamed) {
+    importLines.push(`import { ${[...m.keys()].join(', ')} } from '${spec}';`);
+  }
+  for (const text of hoistVerbatim) importLines.push(text);
+  if (importLines.length) { lines.push(importLines.join('\n')); lines.push(''); }
+
+  for (const mod of moduleOut) {
+    lines.push(`// ── ${mod.path} ──`);
+    lines.push('');
+    lines.push(mod.body);
+    lines.push('');
+  }
+
+  if (exportEntries.length) {
+    const body = exportEntries
+      .map((e) => (e.exported === e.internal ? `  ${e.exported},` : `  ${e.internal} as ${e.exported},`))
+      .join('\n');
+    lines.push(`export {\n${body}\n};`);
+    lines.push('');
+  }
+
+  const code = lines.join('\n');
+
+  const meta = {
+    entry,
+    package: pkgName || null,
+    modules: order.map((m) => ({ path: m.path, exports: [...m.ownBindings] })),
+    renames: [],
+    exports: exportEntries.map((e) => e.exported),
+    warnings,
+  };
+  for (const [mod, mm] of renames) {
+    for (const [original, renamed] of mm) {
+      meta.renames.push({ original, renamed, module: mod.path, reason: 'collision' });
+    }
+  }
+
+  return { code, map: null, meta, warnings };
+}
+
+export { renameCollisions };
