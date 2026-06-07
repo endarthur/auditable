@@ -50,6 +50,22 @@ test('discover + deriveEdges + topoOrder: app depends on core, built core-first'
   }
 });
 
+test('deriveEdges: deep-escaping import (../../dep/) yields the package name, not ".."', () => {
+  const ext = fs.mkdtempSync(path.join(os.tmpdir(), 'gcu-make-deep-'));
+  try {
+    writePkg(ext, 'core', { 'src/main.js': 'export const K = 1;\n' });
+    // app reaches core via a two-segment escaping path (the real over→dimensions shape)
+    writePkg(ext, 'app',
+      { 'src/main.js': 'export { v } from "./x.js";\n', 'src/x.js': 'import { K } from "../../core/src/main.js";\nexport const v = K;\n' });
+    const pkgs = discover(ext);
+    const edges = deriveEdges(pkgs);
+    assert.deepEqual([...edges.get('app')], ['core'], 'captures "core", not ".."');
+    assert.deepEqual(topoOrder(pkgs, edges), ['core', 'app']);
+  } finally {
+    fs.rmSync(ext, { recursive: true, force: true });
+  }
+});
+
 test('topoOrder throws on a cycle', () => {
   const pkgs = [{ name: 'a' }, { name: 'b' }];
   const edges = new Map([['a', new Set(['b'])], ['b', new Set(['a'])]]);

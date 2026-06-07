@@ -58,7 +58,10 @@ function srcHash(srcDir) {
 export function deriveEdges(pkgs) {
   const names = new Set(pkgs.map((p) => p.name));
   const edges = new Map(pkgs.map((p) => [p.name, new Set()]));
-  const re = /from\s*['"](?:@gcu\/([a-z0-9.-]+)|\.\.\/([a-z0-9.-]+)\/)/g;
+  // `@gcu/<name>` (bare) or `../…/<name>/` (escaping — one or more `../` segments,
+  // then the package dir). The name class excludes '.' so `../../dimensions/` yields
+  // 'dimensions', not the intervening '..'.
+  const re = /from\s*['"](?:@gcu\/([a-z0-9-]+)|(?:\.\.\/)+([a-z0-9-]+)\/)/g;
   for (const p of pkgs) {
     for (const f of srcFilesOf(p.srcDir)) {
       const txt = fs.readFileSync(f, 'utf8');

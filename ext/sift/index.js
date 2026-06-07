@@ -1,7 +1,7 @@
-// @gcu/sift — safe structured predicate spec + validator + evaluator + parser
-// Auto-generated from ext/sift/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/sift — A safe, structured predicate spec (no eval) with a JS-flavoured string parser — the lib the GCU selection/linking contract rests on.
 
-// -- predicate.js --
+// ── src/predicate.js ──
 
 // @gcu/sift — predicate: a structured, safe boolean-expression spec for filters
 // and cross-surface selections (the selection/linking contract §2).
@@ -249,10 +249,19 @@ function _str(n) {
 }
 function _wrap(n) { return n && PARENS.has(n.op) ? '(' + _str(n) + ')' : _str(n); }
 
+// ── src/main.js ──
+
+// @gcu/sift — the safe, structured predicate lib the selection/linking contract
+// rests on. One module today (predicate.js); kept as a manifest for symmetry
+// with the other concat libs and room to grow (e.g. a set-algebra combinator).
+//
+// Module manifest (build concat order):
+//   predicate.js — structured boolean-expr spec + validator + evaluator + parser
+
 export {
   evaluatePredicate,
-  parsePredicate,
   predicateColumns,
-  predicateToString,
   validatePredicate,
+  parsePredicate,
+  predicateToString,
 };

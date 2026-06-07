@@ -1,45 +1,8 @@
 #!/usr/bin/env node
-// Bundle ext/dimensions/src/ into ext/dimensions/index.js — a single ES module.
-// Concat strategy (strip import/export, auto-collect the export footer). CRLF-safe.
+// Bundle ext/dimensions/src/ into ext/dimensions/index.js via @gcu/build. Zero-dep
+// leaf. Sidecars off: index.js stays a clean self-contained ESM (inlined into the
+// works-all bundle; over inlines the dimensions.js source directly).
+import { bundle } from '../build/src/main.js';
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const srcDir = path.join(__dirname, 'src');
-
-const files = ['dimensions.js'];
-
-const exported = new Set();
-const chunks = [];
-
-for (const file of files) {
-  let src = fs.readFileSync(path.join(srcDir, file), 'utf8').replace(/\r\n/g, '\n');
-
-  const re = /^export\s+(?:async\s+)?(?:function|const|let|class)\s+([A-Za-z_$][\w$]*)/gm;
-  let m;
-  while ((m = re.exec(src)) !== null) exported.add(m[1]);
-
-  src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
-  src = src.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
-  src = src.replace(/^export\s+async\s+function\s+/gm, 'async function ');
-  src = src.replace(/^export\s+function\s+/gm, 'function ');
-  src = src.replace(/^export\s+const\s+/gm, 'const ');
-  src = src.replace(/^export\s+let\s+/gm, 'let ');
-  src = src.replace(/^export\s+class\s+/gm, 'class ');
-
-  src = src.replace(/^\n+/, '').replace(/\n+$/, '');
-  chunks.push(`// -- ${file} --\n\n${src}`);
-}
-
-const header = `// @gcu/dimensions — zero-dependency dimension algebra (free abelian group over
-// integer exponents). Auto-generated from ext/dimensions/src/ — do not edit directly.
-`;
-
-const names = [...exported].sort();
-const footer = `\nexport {\n${names.map((n) => '  ' + n).join(',\n')},\n};\n`;
-
-const output = header + '\n' + chunks.join('\n\n') + '\n' + footer;
-fs.writeFileSync(path.join(__dirname, 'index.js'), output);
-console.log(`Built ext/dimensions/index.js (${(output.length / 1024).toFixed(1)} KB, ${names.length} exports)`);
+const r = await bundle({ at: import.meta.url, sourcemap: false, meta: false });
+console.log(`Built ext/dimensions/index.js (${(r.code.length / 1024).toFixed(1)} KB, ${r.meta.exports.length} exports)`);

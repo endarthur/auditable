@@ -1,7 +1,7 @@
-// @gcu/dimensions — zero-dependency dimension algebra (free abelian group over
-// integer exponents). Auto-generated from ext/dimensions/src/ — do not edit directly.
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/dimensions — Zero-dependency dimension algebra: dimensions as sparse {axis: exponent} maps forming a free abelian group under multiplication (componentwise exponent arithmetic), plus a name → dim-vector registry. The shared core under dimensional analysis — @gcu/numbat builds unit resolution on it; @gcu/over builds grade-math checking on it.
 
-// -- dimensions.js --
+// ── src/dimensions.js ──
 
 // @gcu/dimensions — the dimension algebra at the heart of dimensional analysis.
 //
@@ -102,13 +102,19 @@ class DimRegistry {
   list() { return [...this._dims.entries()].map(([name, dim]) => ({ name, dim })); }
 }
 
+// ── src/main.js ──
+
+// @gcu/dimensions — module manifest. One module today (dimensions.js: the
+// zero-dep dimension algebra — free abelian group over axes); kept as a manifest
+// for symmetry with the other @gcu/build packages and room to grow.
+
 export {
-  DimRegistry,
-  dimDiv,
-  dimEmpty,
   dimEq,
-  dimFormat,
-  dimInv,
   dimMul,
+  dimDiv,
   dimPow,
+  dimInv,
+  dimEmpty,
+  dimFormat,
+  DimRegistry,
 };
