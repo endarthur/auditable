@@ -478,6 +478,20 @@ test('mergeBundles: cross-bundle collisions renamed, consume sites resolve', asy
   assert.equal(m.run(), 'A:number|B|A:number');
 });
 
+// ── phase 2: import through a wildcard-re-export chain (strata's stub pattern) ──
+test('export *: a consumer resolves a symbol imported through a wildcard re-export', async () => {
+  const sources = {
+    'src/main.js': "export { useP } from './use.js';\nexport * from './stub.js';\n",
+    'src/use.js': "import { P } from './stub.js';\nexport function useP(){ return P() + 1; }\n",
+    'src/stub.js': "export * from '@gcu/prim';\n",      // re-export * from an inlined primitive
+    'lib/prim/main.js': "export function P(){ return 10; }\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js', srcRoot: 'src', inlineAliases: { '@gcu/prim': 'lib/prim/main.js' } });
+  const m = await importCode(r.code);
+  assert.equal(m.useP(), 11);           // use.js imported P THROUGH stub's export *
+  assert.equal(m.P(), 10);              // P surfaced on main via the export * chain
+});
+
 // ── 11. round-trip against real ext/sluice (zero-dep, exercises export *) ──
 test('round-trip: bundled ext/sluice behaves like its source', async () => {
   const dir = path.join(root, 'ext', 'sluice');

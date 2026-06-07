@@ -1,7 +1,7 @@
-// @gcu/strata — auditable column-oriented table working model (base+overlay)
-// Auto-generated from ext/strata/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/strata — An auditable, reactive, column-oriented table working model: an immutable typed-columnar base + a sparse value-patch overlay (non-destructive editing, recoverable provenance), reactive derived columns (JS formulas), a sort/filter view pipeline, group-by aggregation, and a native .strata zip document. CSV ingest is recon-injectable. Zero hard dependencies; renders via @gcu/loom.
 
-// -- values.js --
+// ── src/values.js ──
 
 // @gcu/strata — values: type coercion, the null vocabulary, display formatting.
 //
@@ -42,7 +42,7 @@ function fmtCell(v) {
   return String(v);
 }
 
-// -- formula.js --
+// ── src/formula.js ──
 
 // @gcu/strata — formula: compile a derived-column expression to a per-row fn.
 //
@@ -93,7 +93,7 @@ function compileFormula(formula, columnNames) {
   return { formula, deps, fn };
 }
 
-// -- table.js --
+// ── src/table.js ──
 
 // @gcu/strata — table: the in-memory working model (strata-spec §2 role 1, §4
 // layers 1-3). An immutable typed-columnar BASE + a sparse value-patch OVERLAY +
@@ -109,7 +109,6 @@ function compileFormula(formula, columnNames) {
 // array packing is a windowing-era optimization.
 //
 // Pure (new Function for formulas works in any JS env; no DOM). Node-testable.
-
 
 
 /**
@@ -228,7 +227,7 @@ function createTable({ schema, columns, nrows }) {
   return t;
 }
 
-// -- ingest.js --
+// ── src/ingest.js ──
 
 // @gcu/strata — ingest: source adapters into the working model (strata-spec §6).
 //
@@ -241,7 +240,6 @@ function createTable({ schema, columns, nrows }) {
 // `(await load('@gcu/recon')).sniff`.
 //
 // Pure, zero-dep (beyond ./values, ./table).
-
 
 
 // recon type → strata type. Generous matching (recon may say numeric/integer/
@@ -329,7 +327,7 @@ function tableFromCsv(text, opts = {}) {
   return createTable({ schema, columns, nrows: lines.length - 1 });
 }
 
-// -- ../../sift/src/predicate.js --
+// ── ../sift/src/predicate.js ──
 
 // @gcu/sift — predicate: a structured, safe boolean-expression spec for filters
 // and cross-surface selections (the selection/linking contract §2).
@@ -577,7 +575,22 @@ function _str(n) {
 }
 function _wrap(n) { return n && PARENS.has(n.op) ? '(' + _str(n) + ')' : _str(n); }
 
-// -- view.js --
+// ── src/predicate.js ──
+
+// @gcu/strata — predicate: re-export of @gcu/sift.
+//
+// The predicate lib was EXTRACTED to @gcu/sift (ext/sift) once @gcu/plate became
+// its second consumer (the selection/linking contract's safe structured filter).
+// strata keeps using it through this re-export so view.js / its public API are
+// unchanged — but the SOURCE OF TRUTH is now sift:
+//   • dev/node: this stub re-exports sift's src (relative import resolves).
+//   • build: strata/build.js's `files` list points at ../sift/src/predicate.js
+//     directly (build-inline), so strata's bundle stays a self-contained leaf and
+//     re-exports the same symbols — no source duplication.
+// Surfaces that need the evaluator (plate) get it via @gcu/strata's re-export, so
+// they never double-inline sift alongside strata.
+
+// ── src/view.js ──
 
 // @gcu/strata — view: the sort/filter pipeline over a table (strata-spec §4.3).
 //
@@ -678,7 +691,7 @@ function createView(table) {
   };
 }
 
-// -- aggregate.js --
+// ── src/aggregate.js ──
 
 // @gcu/strata — aggregate: group-by + aggregation (strata-spec §5 aggregate cells).
 //
@@ -776,7 +789,7 @@ function groupBy(table, spec, rowIndices) {
   return createTable({ schema, columns, nrows: order.length });
 }
 
-// -- transform.js --
+// ── src/transform.js ──
 
 // @gcu/strata — transform: run an OVER transform over a StrataTable, producing a
 // NEW StrataTable (the same shape `groupBy` returns — a result you can view, save,
@@ -872,7 +885,7 @@ function transformWithOver(table, overSource, opts = {}) {
   return { table: createTable({ schema, columns, nrows }), columns: res.columns, checks: res.checks || [], warnings: res.warnings || [] };
 }
 
-// -- document.js --
+// ── src/document.js ──
 
 // @gcu/strata — document: the native `.strata` file (strata-spec §3).
 //
@@ -1016,7 +1029,7 @@ function readStrata(bytes, opts = {}) {
   return { table, document };
 }
 
-// -- provider.js --
+// ── src/provider.js ──
 
 // @gcu/strata — provider: adapt a StrataTable to the @gcu/loom cell-provider
 // contract. This is the real provider that replaces loom's toy memory-provider:
@@ -1028,7 +1041,6 @@ function readStrata(bytes, opts = {}) {
 // joined only by the contract, not the code.
 //
 // Pure, zero-dep (beyond ./values).
-
 
 
 // MUST match @gcu/loom CellState / CellType enum values.
@@ -1119,29 +1131,50 @@ function createTableProvider(table, view) {
   };
 }
 
+// ── src/main.js ──
+
+// @gcu/strata — an auditable, reactive, column-oriented table surface. This
+// package is the strata working MODEL: a typed columnar base + a value-patch
+// overlay (the auditable, non-destructive spine), CSV ingest (recon-injectable),
+// and an adapter to the @gcu/loom grid renderer. The surface shell (standalone↔
+// Works parity, the native .strata document, derived columns, the view pipeline)
+// builds on top of this.
+//
+// Module manifest (build concat order):
+//   values.js   — coercion, null vocabulary, display formatting (pure)
+//   formula.js  — compileFormula: derived-column JS expression → per-row fn (pure)
+//   table.js    — createTable: base + value-patch overlay + derived columns (pure)
+//   ingest.js   — tableFromCsv (recon-injectable; built-in sniffer fallback) (pure)
+//   predicate.js— structured safe boolean-expr spec + parser + evaluator (pure)
+//   view.js     — createView: the filter→sort pipeline over a table (pure)
+//   aggregate.js— groupBy: group-by + aggregation → a summary table (pure)
+//   transform.js— transformWithOver: an OVER transform → a new table (@gcu/over-injectable)
+//   document.js — writeStrata/readStrata: the native .strata zip (archive-injectable)
+//   provider.js — createTableProvider(table, view?): StrataTable → @gcu/loom provider (pure)
+
 export {
-  AGG_OPS,
   COL_TYPES,
-  FORMULA_ERROR,
   NULL_TOKENS,
-  builtinSniff,
   coerceValue,
+  fmtCell,
+  FORMULA_ERROR,
+  extractDeps,
   compileFormula,
   createTable,
-  createTableProvider,
-  createView,
   detectCsvDelimiter,
-  evaluatePredicate,
-  extractDeps,
-  fmtCell,
-  groupBy,
-  parsePredicate,
-  predicateColumns,
-  predicateToString,
-  previewOverTransform,
-  readStrata,
+  builtinSniff,
   tableFromCsv,
-  transformWithOver,
+  evaluatePredicate,
+  predicateColumns,
   validatePredicate,
+  parsePredicate,
+  predicateToString,
+  createView,
+  AGG_OPS,
+  groupBy,
+  previewOverTransform,
+  transformWithOver,
   writeStrata,
+  readStrata,
+  createTableProvider,
 };

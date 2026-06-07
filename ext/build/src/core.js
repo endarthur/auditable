@@ -209,6 +209,16 @@ export function bundleModules(sources, opts) {
         }
       }
     }
+    // wildcard re-export: `export * from './x.js'` — follow into x if it surfaces `name`
+    // (the strata `predicate.js` stub re-exports * from the inlined sift predicate).
+    for (const ex of mod.exports) {
+      if (ex.kind === 'reexport-wildcard' && !ex.exported) {
+        const c = classify(ex.source, modPath, srcRoot, sources, null, clsOpts);
+        if (c.kind === 'internal' && exportsOf(c.path).some((e) => e.exported === name)) {
+          return resolveTarget(c.path, name, seen);
+        }
+      }
+    }
     return name;
   }
 
