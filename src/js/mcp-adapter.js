@@ -17,6 +17,7 @@
 import { S } from './state.js';
 import * as hooks from './hooks.js';
 import { buildDAG, isManual, isNorun, parseCellName, isPrivate, isMcp, isMcpRw, parseMcpDescribe, isMcpManifest, parseMcpFs } from './dag.js';
+import { resolveAccess, readable as _mcpReadable } from './mcp-access.js';
 import { runDAG, runAll, renderMdCell, renderHtmlCell } from './exec.js';
 import { addCell } from './cell-ops.js';
 import { _ctIsExecutable } from './cell-types.js';
@@ -254,55 +255,12 @@ function _mcpResolveManifestCell(ref) {
 
 // ── Access control helpers ──
 
+// The access DECISION (directives → manifest → default) is pure and lives in
+// mcp-access.js (unit-tested). Here we supply the impure inputs: the parsed
+// manifest, and the cell's index + name (for manifest tool-level bindings).
 function _mcpCellAccess(cell) {
-  // Returns: 'private' | 'rw' | 'read' | 'open' | 'none'
-  //   private = hidden; read = read-only source; rw = pre-approved edits/exec;
-  //   open = readable + edits/exec CONFIRM (the default); none = strict-mode hidden.
-  // Precedence: cell directives > manifest tool-level > manifest defaults > open
   const code = cell.code || '';
-
-  // 1. Explicit cell directives (highest priority)
-  if (isPrivate(code)) return 'private';
-  if (isMcpRw(code)) return 'rw';
-  if (isMcp(code)) return 'read';
-  if (isMcpManifest(code)) return 'private'; // manifest cell itself
-
-  // 2. Manifest overrides
-  const manifest = _mcpGetManifest();
-  if (manifest) {
-    // 2a. Tool-level access
-    if (manifest.tools) {
-      const idx = S.cells.indexOf(cell);
-      const name = parseCellName(code);
-      for (const def of Object.values(manifest.tools)) {
-        if ((typeof def.cell === 'number' && def.cell === idx) ||
-            (typeof def.cell === 'string' && def.cell === name)) {
-          if (def.access === 'rw') return 'rw';
-          if (def.access === 'read' || def.access === 'r') return 'read';
-          if (def.access === 'private') return 'private';
-          break;
-        }
-      }
-    }
-    // 2b. Default access level (the baseline posture)
-    const d = manifest.defaults;
-    if (d === 'rw') return 'rw';
-    if (d === 'read' || d === 'r') return 'read';
-    if (d === 'open') return 'open';
-    // "private"/"strict"/"none" restore the old opt-in posture: cells are not
-    // exposed until annotated with // %mcp.
-    if (d === 'private' || d === 'strict' || d === 'none') return 'none';
-  }
-
-  // Default posture: read-open. Reads pass; edits/execution confirm (see the
-  // write/execute gates). Override globally with a // %mcp manifest `defaults`.
-  return 'open';
-}
-
-// Is this cell's content visible to the agent? (read / rw / open — anything but
-// private or strict-mode 'none'.)
-function _mcpReadable(access) {
-  return access === 'read' || access === 'rw' || access === 'open';
+  return resolveAccess(code, _mcpGetManifest(), S.cells.indexOf(cell), parseCellName(code));
 }
 
 function _mcpRequireRead(input) {
