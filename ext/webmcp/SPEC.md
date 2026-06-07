@@ -1,6 +1,15 @@
 # `@gcu/webmcp` — Spec Draft
 
-**Status:** Draft v1.7
+> ⚠ **Historical design doc (2026-03).** The bridge, shim, transports, and wire
+> protocol have moved to **[`@gcu/numen`](https://github.com/gentropic/numen)** —
+> see its `SPEC.md` / `TRANSPORTS.md` for the current design (incl. the `fs`
+> transport and multi-surface `--watch`). Auditable's access posture is now
+> **read-open** ("open to read, gated to act"), not the default-private model
+> described below — see `ext/webmcp/README.md` + `src/js/mcp-access.js`. This
+> document is kept as the original design record; treat the bridge/transport
+> sections as superseded.
+
+**Status:** Draft v1.7 (historical — superseded by @gcu/numen + read-open posture)
 **Date:** 2026-03-19
 **Author:** Arthur (endarthur), with Claude
 

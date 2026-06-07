@@ -342,7 +342,7 @@ A backdoor for cases where you really do need a `window.foo` (debugging surface,
 
 ### 3.7 MCP tools (status: not yet manifested)
 
-Auditable ships an MCP (Model Context Protocol) bridge — `webmcp_bridge.js` + `src/js/shim.js` + `src/js/mcp-adapter.js` — that lets a client (Claude Code, …) read cells, run cells, edit sources, etc. Tools are registered via the polyfilled `navigator.modelContext.registerTool({ … })`.
+Auditable connects to MCP clients (Claude Code, …) via **[`@gcu/numen`](https://github.com/gentropic/numen)** — the shared GCU bridge (`numen-bridge.js`) + the vendored `src/js/shim.js` — plus Auditable's own adapter `src/js/mcp-adapter.js` (tools + the read-open access model in `src/js/mcp-access.js`). A client can read cells, run cells, edit sources, etc. Tools are registered via the polyfilled `navigator.modelContext.registerTool({ … })`.
 
 **Today, this is not surfaced through the manifest.** An extension that wants to register MCP tools (e.g. `@gcu/spinifex` exposing a `mapSnapshot` tool, `@gcu/learn` exposing a `predictBatch` tool) does so by calling `navigator.modelContext.registerTool(…)` directly in `onActivate`:
 
