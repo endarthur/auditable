@@ -2,7 +2,7 @@
   "mcpServers": {
     "auditable": {
       "command": "node",
-      "args": ["webmcp_bridge.js"]
+      "args": ["../numen/numen-bridge.js", "--app", "auditable", "--port", "7802"]
     }
   }
 }
