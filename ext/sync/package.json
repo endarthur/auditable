@@ -1,0 +1,20 @@
+{
+  "name": "@gcu/sync",
+  "version": "0.1.0",
+  "description": "Peer-to-peer state convergence over a swappable carrier. A transport-agnostic channel seam + a two-lane, values-first merge (set-union of opaque bundles + a content-verified blob lane). Carriers (Trystero, WebRTC, PeerJS, chirp) are channel factories. Extracted from hopper; the shared sync layer under ars, federated collab, and multi-window Works.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["src", "index.js", "LICENSE", "README.md"],
+  "keywords": ["sync", "p2p", "webrtc", "trystero", "crdt", "set-union", "content-addressed", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/sync"
+  }
+}
