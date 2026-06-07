@@ -58,31 +58,126 @@ function chipEl() {
   return el;
 }
 
-function renderIdle() {
+let _roomId = null;
+let _panelOpen = false;
+
+// The chip just reflects state and toggles the panel — clicking it never networks.
+function refreshChip() {
   const el = chipEl();
-  el.textContent = '⚭ collaborate';
-  el.title = 'Start a collaboration room (shares presence over the network)';
-  el.onclick = () => {
-    const id = prompt('Collaboration room id (share it with whoever should join):',
-      'au-' + Math.random().toString(36).slice(2, 8));
-    if (id) startPresence(id.trim());
-  };
+  el.textContent = _pres ? `● ${_pres.peers().size + 1} here` : '⚭ collaborate';
+  el.title = _pres ? 'Collaboration active — click for the panel'
+    : 'Collaborate — opens a panel; nothing connects until you press Start';
+  el.onclick = togglePanel;
 }
 
-function renderActive(peers) {
-  const el = chipEl();
-  const n = peers.size;
-  el.textContent = `● ${n + 1} here`;   // +1 = you
-  // Roster as a plain-text title — names + cell, both sanitized.
-  const lines = [`${myName()} (you)`];
-  for (const [id, st] of peers) {
-    const name = String(st && st.name || 'anon').slice(0, NAME_CAP);
-    const cell = Number.isInteger(st && st.cell) && st.cell >= 0 && st.cell < S.cells.length ? `cell ${st.cell}` : '—';
-    lines.push(`${name} · ${cell}`);
-    void colorFor(id); // (reserved for in-editor ghost cursors — v2)
+// ── panel: the setup + roster UI. Opening it does NOT touch the network; only
+//    "Start collaborating" loads the carrier and joins. ──
+
+function panelEl() {
+  let el = document.getElementById('presencePanel');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'presencePanel';
+    el.style.cssText = 'position:fixed;top:44px;right:10px;z-index:9999;display:none;min-width:240px;max-width:300px;'
+      + 'background:var(--au-bg-raised,#1b1f26);color:var(--au-fg,#e6e6e6);border:1px solid var(--au-border,#333);'
+      + 'border-radius:8px;padding:12px;font-size:12px;box-shadow:0 6px 24px rgba(0,0,0,.4)';
+    document.body.appendChild(el);
   }
-  el.title = lines.join('\n') + '\n(click to leave)';
-  el.onclick = stopPresence;
+  return el;
+}
+
+function togglePanel() { _panelOpen = !_panelOpen; renderPanel(); }
+
+function renderPanel() {
+  const el = panelEl();
+  el.style.display = _panelOpen ? 'block' : 'none';
+  if (!_panelOpen) return;
+  el.textContent = '';
+  (_pres ? renderActivePanel : renderIdlePanel)(el);
+}
+
+function field(label, value) {
+  const wrap = document.createElement('label');
+  wrap.style.cssText = 'display:block;margin:6px 0';
+  wrap.textContent = label;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = value;
+  input.style.cssText = 'width:100%;margin-top:2px;box-sizing:border-box;background:var(--au-bg,#11141a);color:inherit;border:1px solid var(--au-border,#333);border-radius:4px;padding:4px 6px;font:inherit';
+  wrap.appendChild(input);
+  return { wrap, input };
+}
+
+function btn(label, primary) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.style.cssText = 'margin-top:8px;padding:5px 10px;font:inherit;cursor:pointer;border:1px solid var(--au-border,#444);border-radius:4px;'
+    + (primary ? 'background:var(--au-accent,#c66a2e);color:#fff' : 'background:transparent;color:inherit');
+  return b;
+}
+
+function renderIdlePanel(el) {
+  const title = document.createElement('div');
+  title.textContent = 'Collaborate';
+  title.style.cssText = 'font-weight:600;margin-bottom:4px';
+  el.appendChild(title);
+
+  const name = field('Your name', myName());
+  const room = field('Room id (share with collaborators)', 'au-' + Math.random().toString(36).slice(2, 8));
+  el.append(name.wrap, room.wrap);
+
+  const hint = document.createElement('p');
+  hint.textContent = 'Start connects to peers over the network (Trystero, loaded on demand). The room id is the shared secret — anyone with it can join and see presence.';
+  hint.style.cssText = 'margin:6px 0;opacity:.7;line-height:1.4';
+  el.appendChild(hint);
+
+  const start = btn('Start collaborating', true);
+  start.onclick = async () => {
+    const r = room.input.value.trim();
+    if (!r) { room.input.focus(); return; }
+    myName(name.input.value);
+    start.disabled = true; start.textContent = 'Connecting…';
+    await startPresence(r);
+  };
+  el.appendChild(start);
+}
+
+function renderActivePanel(el) {
+  const head = document.createElement('div');
+  head.style.cssText = 'font-weight:600;margin-bottom:6px';
+  head.textContent = '● Connected';
+  el.appendChild(head);
+
+  const roomRow = document.createElement('div');
+  roomRow.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:8px';
+  const code = document.createElement('code');
+  code.textContent = _roomId || '';
+  code.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;background:var(--au-bg,#11141a);padding:3px 6px;border-radius:4px';
+  const copy = btn('copy'); copy.style.marginTop = '0'; copy.style.padding = '3px 8px';
+  copy.onclick = () => { try { navigator.clipboard.writeText(_roomId || ''); copy.textContent = 'copied'; setTimeout(() => { copy.textContent = 'copy'; }, 1200); } catch { /* no clipboard */ } };
+  roomRow.append(code, copy);
+  el.appendChild(roomRow);
+
+  // Roster. Peer data is untrusted → textContent only, name capped, cell clamped,
+  // color derived locally from the peer id (un-spoofable).
+  const you = document.createElement('div');
+  you.textContent = `● ${myName()} (you)`;
+  you.style.cssText = 'margin:2px 0';
+  el.appendChild(you);
+  for (const [id, st] of _pres.peers()) {
+    const row = document.createElement('div');
+    row.style.cssText = 'margin:2px 0;display:flex;gap:6px;align-items:center';
+    const dot = document.createElement('span'); dot.textContent = '●'; dot.style.color = colorFor(id);
+    const nm = String((st && st.name) || 'anon').slice(0, NAME_CAP);
+    const cell = Number.isInteger(st && st.cell) && st.cell >= 0 && st.cell < S.cells.length ? `cell ${st.cell}` : '—';
+    const label = document.createElement('span'); label.textContent = `${nm} · ${cell}`;
+    row.append(dot, label);
+    el.appendChild(row);
+  }
+
+  const leave = btn('Leave');
+  leave.onclick = stopPresence;
+  el.appendChild(leave);
 }
 
 // ── lifecycle ──
@@ -90,33 +185,35 @@ function renderActive(peers) {
 export async function startPresence(roomId, name) {
   if (_pres) stopPresence();
   if (name) myName(name);
+  _roomId = String(roomId);
   let joinRoom;
   try {
     ({ joinRoom } = await import(/* @vite-ignore */ TRYSTERO_URL));
   } catch (e) {
-    const el = chipEl();
-    el.textContent = '⚭ offline';
-    el.title = 'Could not load the collaboration carrier (needs the network, or a Trystero .gcupkg).';
-    setTimeout(renderIdle, 2500);
+    _roomId = null;
+    const el = panelEl();
+    el.textContent = 'Could not load the collaboration carrier — needs the network (or a Trystero .gcupkg).';
     return;
   }
-  const room = joinRoom({ appId: APP_ID }, String(roomId));
+  const room = joinRoom({ appId: APP_ID }, _roomId);
   _pres = roomPresence(room);
   _pres.set(selfState());
   _unsub = hooks.on('cell:selected', () => { if (_pres) _pres.set(selfState()); });
-  _pres.onChange((peers) => renderActive(peers));
-  renderActive(_pres.peers());
+  _pres.onChange(() => { refreshChip(); if (_panelOpen) renderPanel(); });
+  _panelOpen = true;
+  refreshChip(); renderPanel();
 }
 
 export function stopPresence() {
   if (_unsub) { _unsub(); _unsub = null; }
   if (_pres) { _pres.leave(); _pres = null; }
-  renderIdle();
+  _roomId = null;
+  refreshChip(); renderPanel();
 }
 
 // Programmatic entry + the discoverable chip.
 if (typeof window !== 'undefined') {
   window.auditableCollaborate = startPresence;
-  // inject the idle chip once the toolbar exists (deferred past module-eval).
-  setTimeout(() => { try { renderIdle(); } catch { /* no toolbar — headless/runtime */ } }, 0);
+  // show the idle chip once the toolbar exists (deferred past module-eval).
+  setTimeout(() => { try { refreshChip(); } catch { /* no toolbar — headless/runtime */ } }, 0);
 }
