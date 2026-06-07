@@ -172,3 +172,6 @@ ext/rv/ref/our.dtb
 # by examples/defs/data-corpora/build.js. The generated corpus modules
 # at examples/data/{sherlock,aesop}.js ARE committed.
 examples/defs/data-corpora/*.raw.txt
+
+# @gcu/make incremental build cache
+.gcu-make.cache.json

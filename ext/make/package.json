@@ -1,0 +1,19 @@
+{
+  "name": "@gcu/make",
+  "version": "0.1.0",
+  "description": "Derived-graph build orchestrator for GCU packages. Discovers @gcu/build-managed packages, reads their cross-package edges from source, topo-sorts, and rebuilds only what changed. No Makefile, no rules, no .PHONY — the imports are the truth.",
+  "type": "module",
+  "main": "make.js",
+  "bin": {
+    "gcu-make": "./cli.js"
+  },
+  "files": ["make.js", "cli.js", "LICENSE"],
+  "keywords": ["build", "orchestrator", "monorepo", "incremental", "gcu", "auditable"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/make"
+  }
+}
