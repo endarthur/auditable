@@ -10,6 +10,7 @@ import { toggleMdComment, autoResize, cssSummary } from './cell-dom.js';
 import { openFind, closeFind } from './find.js';
 import { getEditor, setCm6Callbacks } from './cm6.js';
 import { toggleSplitView } from './split.js';
+import * as hooks from './hooks.js';
 import { confirm as dialogConfirm } from '#dialog';
 
 // ── KEYBOARD / SELECTION ──
@@ -56,6 +57,7 @@ export function selectCell(id, scroll) {
   // deselect previous
   $$('.cell.selected').forEach(el => el.classList.remove('selected'));
   S.selectedId = id;
+  hooks.emit('cell:selected', id);   // presence (and any observer) tracks the active cell
   if (id === null) return;
   const cell = S.cells.find(c => c.id === id);
   if (cell) {

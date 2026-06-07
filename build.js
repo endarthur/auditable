@@ -1401,6 +1401,15 @@ if (fs.existsSync(procPath)) {
   modules.unshift({ name: 'proc', source: procSrc });
 }
 
+// Add @gcu/sync bundle as a module entry (the federation/sync layer — used by
+// the presence consumer; the carrier itself, Trystero, is lazy-loaded on opt-in).
+const syncPath = path.join(__dirname, 'ext/sync/index.js');
+if (fs.existsSync(syncPath)) {
+  let syncSrc = fs.readFileSync(syncPath, 'utf8');
+  syncSrc = syncSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'sync', source: syncSrc });
+}
+
 // Add @gcu/menu bundle as a module entry (ES module with named exports)
 const menuPath = path.join(__dirname, 'ext/menu/index.js');
 if (fs.existsSync(menuPath)) {
