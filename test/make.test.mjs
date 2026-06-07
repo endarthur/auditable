@@ -76,7 +76,7 @@ test('make: builds in order, then skips unchanged, then rebuilds downstream of a
   const ext = makeWorkspace();
   try {
     // first run: builds both (core before app), app inlines core's K
-    const r1 = make({ extDir: ext, log: () => {} });
+    const r1 = make({ extDir: ext, noTargets: true, log: () => {} });
     assert.deepEqual(r1.order, ['core', 'app']);
     assert.deepEqual(r1.built, ['core', 'app']);
     const appIdx = pathToFileURL(path.join(ext, 'app', 'index.js')).href;
@@ -84,16 +84,56 @@ test('make: builds in order, then skips unchanged, then rebuilds downstream of a
     assert.equal(m.v, 42, 'core K (41) inlined into app, v = K + 1');
 
     // second run: nothing changed → skip both
-    const r2 = make({ extDir: ext, log: () => {} });
+    const r2 = make({ extDir: ext, noTargets: true, log: () => {} });
     assert.deepEqual(r2.built, []);
     assert.deepEqual(r2.skipped, ['core', 'app']);
 
     // change core → core rebuilds AND app (downstream) rebuilds
     fs.writeFileSync(path.join(ext, 'core', 'src', 'k.js'), 'export const K = 100;\n');
-    const r3 = make({ extDir: ext, log: () => {} });
+    const r3 = make({ extDir: ext, noTargets: true, log: () => {} });
     assert.deepEqual(r3.built, ['core', 'app'], 'a change to core re-bundles its dependents');
     m = await import(appIdx + '?v=3'); // cache-bust the ESM import
     assert.equal(m.v, 101);
+  } finally {
+    fs.rmSync(ext, { recursive: true, force: true });
+  }
+});
+
+test('make: targets rebuild when a package they consume changes (the cascade)', () => {
+  const ext = makeWorkspace();
+  try {
+    const ran = [];
+    // 'bundle' consumes core's built index.js (the package→target input edge);
+    // 'site' has no inputs of its own — it only rebuilds when its dep does.
+    const targets = [
+      { name: 'bundle', out: null, deps: [], inputs: () => [path.join(ext, 'core', 'index.js')] },
+      { name: 'site', out: null, deps: ['bundle'], inputs: () => [] },
+    ];
+    const runTarget = (t) => ran.push(t.name);
+
+    const r1 = make({ extDir: ext, targets, runTarget, log: () => {} });
+    assert.deepEqual(r1.targets.built, ['bundle', 'site'], 'first run builds both targets');
+
+    const r2 = make({ extDir: ext, targets, runTarget, log: () => {} });
+    assert.deepEqual(r2.targets.built, [], 'nothing changed → targets skip');
+
+    // change core → core (+app) rebuild → bundle (consumes core) → site (deps bundle)
+    fs.writeFileSync(path.join(ext, 'core', 'src', 'k.js'), 'export const K = 999;\n');
+    const r3 = make({ extDir: ext, targets, runTarget, log: () => {} });
+    assert.ok(r3.built.includes('core'), 'core rebuilt');
+    assert.deepEqual(r3.targets.built, ['bundle', 'site'], 'the change cascaded core → bundle → site');
+    assert.deepEqual(ran, ['bundle', 'site', 'bundle', 'site']);
+  } finally {
+    fs.rmSync(ext, { recursive: true, force: true });
+  }
+});
+
+test('make: --no-targets (targets:[]) skips the target phase', () => {
+  const ext = makeWorkspace();
+  try {
+    const r = make({ extDir: ext, noTargets: true, run: () => {}, log: () => {} });
+    assert.deepEqual(r.targets.built, []);
+    assert.deepEqual(r.targets.order, []);
   } finally {
     fs.rmSync(ext, { recursive: true, force: true });
   }
@@ -103,7 +143,7 @@ test('make: injectable runner reports order without spawning', () => {
   const ext = makeWorkspace();
   try {
     const ran = [];
-    const r = make({ extDir: ext, force: true, run: (pkg) => ran.push(pkg.name), log: () => {} });
+    const r = make({ extDir: ext, force: true, noTargets: true, run: (pkg) => ran.push(pkg.name), log: () => {} });
     assert.deepEqual(ran, ['core', 'app']);
     assert.deepEqual(r.built, ['core', 'app']);
   } finally {
