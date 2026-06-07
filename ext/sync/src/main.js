@@ -6,3 +6,4 @@
 export * from './address.js';
 export * from './session.js';
 export * from './trystero.js';
+export * from './presence.js';

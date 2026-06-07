@@ -7,7 +7,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { syncSession } from '../ext/sync/src/session.js';
 import { trysteroChannel } from '../ext/sync/src/trystero.js';
+import { roomPresence } from '../ext/sync/src/presence.js';
 import { contentAddress } from '../ext/sync/src/address.js';
+
+const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // A minimal store implementing the contract: records unioned by id, blobs by hash.
 function makeStore() {
@@ -136,4 +139,42 @@ test('trysteroChannel: peers union by joining a room (carrier round-trip)', asyn
   await Promise.all([syncSession(ca, A), syncSession(cb, B)]);
   assert.deepEqual([...A.records.keys()].sort(), ['a1', 'b1']);
   assert.deepEqual([...B.records.keys()].sort(), ['a1', 'b1']);
+});
+
+test('roomPresence: N peers see each other; departure removes the ghost', async () => {
+  const net = mockNet();
+  const pA = roomPresence(net.makeRoom('A'));
+  const pB = roomPresence(net.makeRoom('B'));
+  const pC = roomPresence(net.makeRoom('C'));
+  pA.set({ name: 'A', cell: 1 });
+  pB.set({ name: 'B', cell: 2 });
+  pC.set({ name: 'C', cell: 3 });
+  net.announce();            // peers join → each greets the others with its state
+  await tick();
+
+  assert.deepEqual([...pA.peers().keys()].sort(), ['B', 'C']);
+  assert.equal(pA.peers().get('B').name, 'B');
+  assert.equal(pA.peers().get('C').cell, 3);
+  assert.deepEqual([...pC.peers().keys()].sort(), ['A', 'B']);
+
+  // an update re-broadcasts and is reflected
+  pB.set({ name: 'B', cell: 9 });
+  await tick();
+  assert.equal(pA.peers().get('B').cell, 9);
+
+  // C leaves → A and B drop its ghost
+  let aChanged = false;
+  pA.onChange(() => { aChanged = true; });
+  pC.leave();
+  await tick();
+  assert.ok(aChanged, 'onChange fired on departure');
+  assert.deepEqual([...pA.peers().keys()].sort(), ['B']);
+});
+
+test('roomPresence: peer state is never applied locally — display only', async () => {
+  // The primitive only ever exposes peers' state for reading; it has no path that
+  // mutates the local app. (Documented invariant — asserted by surface shape.)
+  const net = mockNet();
+  const p = roomPresence(net.makeRoom('solo'));
+  assert.deepEqual(Object.keys(p).sort(), ['leave', 'onChange', 'peers', 'set']);
 });
