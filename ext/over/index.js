@@ -1,108 +1,7 @@
-// @gcu/over — OVER (Ordered/Vectorized Expression Runner): the table-transform DSL
-// Auto-generated from ext/over/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/over — OVER — Ordered/Vectorized Expression Runner: a row-wise table-transform DSL, Datamine-EXTRA-compatible with a native superset. Lowers via @gcu/air. (Design stage.)
 
-// -- dimensions/dimensions.js (inlined) --
-
-// @gcu/dimensions — the dimension algebra at the heart of dimensional analysis.
-//
-// A dimension is a sparse object `{ axis: integerExponent }`. Dimensions form a
-// free abelian group under multiplication (componentwise exponent add); the
-// identity is `{}` (scalar / dimensionless) and the inverse is negation. That's the
-// whole model — small, total, and exact (integer exponents, no floats).
-//
-// This is the zero-dependency core shared across GCU: ep's @gcu/numbat does full
-// unit resolution + conversion on top of it; auditable's @gcu/over uses it for
-// compile-time grade-math checking (with a domain unit table where, deliberately,
-// %/g·t⁻¹/ppm are DISTINCT axes — mining grades must not silently mix even though a
-// physics engine would call them all dimensionless). The axis KEYS are the caller's
-// vocabulary: numbat uses 'length'/'mass'/'time'/…; a domain layer can mint its own.
-
-// Equal iff every axis has the same exponent (missing = 0, so key order and stored
-// zeros don't matter).
-const dimEq = (a, b) => {
-  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
-    if ((a[k] || 0) !== (b[k] || 0)) return false;
-  }
-  return true;
-};
-
-// Product: add exponents componentwise, dropping any that cancel to zero.
-const dimMul = (a, b) => {
-  const r = {};
-  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
-    const n = (a[k] || 0) + (b[k] || 0);
-    if (n) r[k] = n;
-  }
-  return r;
-};
-
-// Quotient: subtract exponents componentwise, dropping zeros.
-const dimDiv = (a, b) => {
-  const r = {};
-  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
-    const n = (a[k] || 0) - (b[k] || 0);
-    if (n) r[k] = n;
-  }
-  return r;
-};
-
-// Raise to an integer power: scale every exponent, dropping zeros.
-const dimPow = (d, n) => {
-  const r = {};
-  for (const k in d) {
-    const e = d[k] * n;
-    if (e) r[k] = e;
-  }
-  return r;
-};
-
-// Reciprocal dimension (negate all exponents).
-const dimInv = (d) => dimPow(d, -1);
-
-// True for the scalar / dimensionless dimension only. (Checks Object.keys, so a
-// stored `{length: 0}` reads as non-empty — but the arithmetic above never produces
-// stored zeros, so that case doesn't arise in practice.)
-const dimEmpty = (d) => Object.keys(d).length === 0;
-
-// Human-readable form: `mass·length^-3`, or `-` for dimensionless.
-const dimFormat = (d) => {
-  const parts = Object.entries(d).map(([k, v]) => (v === 1 ? k : `${k}^${v}`));
-  return parts.join('·') || '-';
-};
-
-// DimRegistry — a name → dim-vector table. Base dimensions allocate a fresh axis
-// named after themselves (lowercased); derived dimensions store a precomputed vector
-// (built via the arithmetic above). Re-defining with the same shape is idempotent
-// (so a vendored module's `dimension Length` won't conflict with a host's pre-seed);
-// re-defining with a different shape throws.
-class DimRegistry {
-  constructor() {
-    this._dims = new Map();
-  }
-
-  defineBase(name) {
-    const axis = name.toLowerCase();
-    this._define(name, { [axis]: 1 });
-  }
-
-  defineDerived(name, dim) {
-    this._define(name, dim);
-  }
-
-  _define(name, dim) {
-    if (this._dims.has(name)) {
-      if (dimEq(this._dims.get(name), dim)) return;
-      throw new Error(`dimension already defined with different shape: ${name}`);
-    }
-    this._dims.set(name, dim);
-  }
-
-  resolve(name) { return this._dims.get(name) ?? null; }
-  has(name) { return this._dims.has(name); }
-  list() { return [...this._dims.entries()].map(([name, dim]) => ({ name, dim })); }
-}
-
-// -- util.js --
+// ── src/util.js ──
 
 // @gcu/over — shared zero-dep primitives used across the pipeline modules. Kept in
 // ONE place because the concat build flattens every module into a single scope, so a
@@ -126,7 +25,7 @@ const refRowsOf = (t) => (Array.isArray(t) ? t : (t && t.rows) || null);
 // `isBoolish` (same set, one definition).
 const REL = new Set(['==', '!=', '<', '<=', '>', '>=']);
 
-// -- lex.js --
+// ── src/lex.js ──
 
 // @gcu/over — lexer. Turns OVER source into a flat token stream.
 //
@@ -247,7 +146,7 @@ function lex(src) {
   return toks;
 }
 
-// -- parse.js --
+// ── src/parse.js ──
 
 // @gcu/over — parser. Token stream → AST (the v0 row-map grammar; windows + the
 // v1 statements `check`/`emit`/escape come later). Recursive descent.
@@ -264,7 +163,6 @@ function lex(src) {
 //   Expr = Num{value} | Str{value} | Bool{value} | Absent
 //        | Field{name} | Unary{op:'-', operand} | Binary{op,left,right}
 //        | Call{name, args:[Expr]} | Match{subject, arms:[{rel?,test?,value}], default?}
-
 
 
 const TYPES = new Set(['int', 'float', 'bool', 'string', 'category']);
@@ -549,7 +447,108 @@ function parseTokens(toks) {
   return { type: 'Transform', dialect, statements };
 }
 
-// -- units.js --
+// ── ../dimensions/src/dimensions.js ──
+
+// @gcu/dimensions — the dimension algebra at the heart of dimensional analysis.
+//
+// A dimension is a sparse object `{ axis: integerExponent }`. Dimensions form a
+// free abelian group under multiplication (componentwise exponent add); the
+// identity is `{}` (scalar / dimensionless) and the inverse is negation. That's the
+// whole model — small, total, and exact (integer exponents, no floats).
+//
+// This is the zero-dependency core shared across GCU: ep's @gcu/numbat does full
+// unit resolution + conversion on top of it; auditable's @gcu/over uses it for
+// compile-time grade-math checking (with a domain unit table where, deliberately,
+// %/g·t⁻¹/ppm are DISTINCT axes — mining grades must not silently mix even though a
+// physics engine would call them all dimensionless). The axis KEYS are the caller's
+// vocabulary: numbat uses 'length'/'mass'/'time'/…; a domain layer can mint its own.
+
+// Equal iff every axis has the same exponent (missing = 0, so key order and stored
+// zeros don't matter).
+const dimEq = (a, b) => {
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if ((a[k] || 0) !== (b[k] || 0)) return false;
+  }
+  return true;
+};
+
+// Product: add exponents componentwise, dropping any that cancel to zero.
+const dimMul = (a, b) => {
+  const r = {};
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const n = (a[k] || 0) + (b[k] || 0);
+    if (n) r[k] = n;
+  }
+  return r;
+};
+
+// Quotient: subtract exponents componentwise, dropping zeros.
+const dimDiv = (a, b) => {
+  const r = {};
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const n = (a[k] || 0) - (b[k] || 0);
+    if (n) r[k] = n;
+  }
+  return r;
+};
+
+// Raise to an integer power: scale every exponent, dropping zeros.
+const dimPow = (d, n) => {
+  const r = {};
+  for (const k in d) {
+    const e = d[k] * n;
+    if (e) r[k] = e;
+  }
+  return r;
+};
+
+// Reciprocal dimension (negate all exponents).
+const dimInv = (d) => dimPow(d, -1);
+
+// True for the scalar / dimensionless dimension only. (Checks Object.keys, so a
+// stored `{length: 0}` reads as non-empty — but the arithmetic above never produces
+// stored zeros, so that case doesn't arise in practice.)
+const dimEmpty = (d) => Object.keys(d).length === 0;
+
+// Human-readable form: `mass·length^-3`, or `-` for dimensionless.
+const dimFormat = (d) => {
+  const parts = Object.entries(d).map(([k, v]) => (v === 1 ? k : `${k}^${v}`));
+  return parts.join('·') || '-';
+};
+
+// DimRegistry — a name → dim-vector table. Base dimensions allocate a fresh axis
+// named after themselves (lowercased); derived dimensions store a precomputed vector
+// (built via the arithmetic above). Re-defining with the same shape is idempotent
+// (so a vendored module's `dimension Length` won't conflict with a host's pre-seed);
+// re-defining with a different shape throws.
+class DimRegistry {
+  constructor() {
+    this._dims = new Map();
+  }
+
+  defineBase(name) {
+    const axis = name.toLowerCase();
+    this._define(name, { [axis]: 1 });
+  }
+
+  defineDerived(name, dim) {
+    this._define(name, dim);
+  }
+
+  _define(name, dim) {
+    if (this._dims.has(name)) {
+      if (dimEq(this._dims.get(name), dim)) return;
+      throw new Error(`dimension already defined with different shape: ${name}`);
+    }
+    this._dims.set(name, dim);
+  }
+
+  resolve(name) { return this._dims.get(name) ?? null; }
+  has(name) { return this._dims.has(name); }
+  list() { return [...this._dims.entries()].map(([name, dim]) => ({ name, dim })); }
+}
+
+// ── src/units.js ──
 
 // @gcu/over — units: compile-time dimensional checking of grade math. A column can
 // carry a UNIT (a dimension) beside its vtype; units propagate through arithmetic in
@@ -651,9 +650,9 @@ function matchUnit(e, uctx) {
   return known.every((u) => dimEq(u, known[0])) ? known[0] : null;
 }
 
-export { dimEq, dimFormat };   // re-exported for the schema pass
+// re-exported for the schema pass
 
-// -- schema.js --
+// ── src/schema.js ──
 
 // @gcu/over — the static schema pass (SPEC §5, the auditable core). Walk the AST
 // once, BEFORE any row, and resolve the output column list as a pure function of
@@ -896,7 +895,7 @@ function normalizeType(t) {
   return 'dynamic';
 }
 
-// -- runtime.js --
+// ── src/runtime.js ──
 
 // @gcu/over — the `_over` runtime: the helpers + function registry the emitted row
 // function calls. Semantics (SPEC §6 / locked decisions):
@@ -1008,7 +1007,7 @@ const overRuntime = {
   },
 };
 
-// -- emit.js --
+// ── src/emit.js ──
 
 // @gcu/over — direct-emit row compiler. Lowers the AST to a JS row function the
 // driver runs per record. This is the chunk-3 executor (the proven strata
@@ -1023,7 +1022,6 @@ const overRuntime = {
 // Expression emission is parameterized by an "emit context" (ec) — { ref, defaults,
 // onWindow } — so the same emitters serve the row body AND window-argument
 // extraction (which reads input rows).
-
 
 
 const CMP_FN = { '==': 'eq', '!=': 'ne', '<': 'lt', '<=': 'le', '>': 'gt', '>=': 'ge' };
@@ -1192,7 +1190,7 @@ function compileExpr(expr, runtime = overRuntime) {
   return (row) => fn(row, runtime);
 }
 
-// -- windows.js --
+// ── src/windows.js ──
 
 // @gcu/over — window aggregates (SPEC §7, the `over` feature, the name).
 // `agg(expr) over GROUP [order EXPR] [where EXPR]` — an aggregate over a group,
@@ -1205,8 +1203,6 @@ function compileExpr(expr, runtime = overRuntime) {
 //   • `where EXPR` filters which rows participate in the accumulation.
 // In-memory accumulators here; the sluice mergeable/parallel path is the big-data
 // upgrade (the workbench pattern). Explicit prev/next/first/last lag-lead: next.
-
-
 
 
 const AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std']);
@@ -1341,7 +1337,7 @@ function winLookup(results, id, keyParts, rowIndex) {
   return r.byKey.has(key) ? r.byKey.get(key) : null;
 }
 
-// -- lookup.js --
+// ── src/lookup.js ──
 
 // @gcu/over — lookup / join (SQL-y, multi-table).
 //
@@ -1488,7 +1484,7 @@ function makeLookup(indexes) {
   };
 }
 
-// -- join.js --
+// ── src/join.js ──
 
 // @gcu/over — aggregating join (the natural seam past single-match `lookup`).
 //
@@ -1513,10 +1509,6 @@ function makeLookup(indexes) {
 //
 // In-memory build-once-probe, like `lookup`; the sluice mergeable path is the
 // big-data upgrade. Index defs dedup by (table, eq-cols, range-cols).
-
-
-
-
 
 
 const JOIN_AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std', 'wmean']);
@@ -1666,7 +1658,7 @@ function makeJoinAgg(byKey, specs) {
   };
 }
 
-// -- check.js --
+// ── src/check.js ──
 
 // @gcu/over — `check` (the validation report — the word in the app's name).
 //
@@ -1753,7 +1745,7 @@ class OverCheckError extends Error {
   }
 }
 
-// -- driver.js --
+// ── src/driver.js ──
 
 // @gcu/over — the driver. Runs a compiled row function over a record stream,
 // applying the stream concerns: `delete` drops the row, `exit` stops the stream,
@@ -1763,9 +1755,6 @@ class OverCheckError extends Error {
 //
 // v0 table shape = an array of row objects ([{FE:62, …}, …]); strata's columnar
 // table adapts to/from this at the surface.
-
-
-
 
 
 const NO_WIN = () => null;
@@ -1803,7 +1792,7 @@ function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, joinDefs,
   return { rows: out, checks };
 }
 
-// -- api.js --
+// ── src/api.js ──
 
 // @gcu/over — public API. compile(text, opts) → a transform: parse → schema pass
 // → emit the row function → return { outputColumns, source, run(rows) }.
@@ -1814,13 +1803,6 @@ function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, joinDefs,
 //
 // If inputSchema is omitted it's inferred from the rows at run time (so
 // `compile(text).run(rows)` just works); pass it when you want the preview.
-
-
-
-
-
-
-
 
 
 function inferSchema(rows) {
@@ -1862,7 +1844,7 @@ function compile(text, opts = {}) {
   };
 }
 
-// -- tag.js --
+// ── src/tag.js ──
 
 // @gcu/over — the notebook surface: the `over` tagged template + editor support
 // (syntax highlighting + completions), self-registered as a tagged language.
@@ -1962,47 +1944,59 @@ if (typeof window !== 'undefined') {
   }
 }
 
+// ── src/main.js ──
+
+// @gcu/over — module manifest. Its imports/re-exports ARE the build manifest
+// (@gcu/build walks them); every src module is listed so the bundle's public
+// surface is the full union of the package's exports — no drift between what the
+// source defines and what the bundle ships. (Build order is derived from the
+// actual import graph, so the order here is just for reading.)
+
 export {
-  OverCheckError,
-  OverLexError,
-  OverParseError,
-  REL,
-  SEP,
-  analyzePredicate,
-  applyRows,
-  buildJoinIndexes,
-  buildLookups,
-  collectChecks,
-  collectJoinAggs,
-  collectLookups,
-  collectWindows,
-  compile,
-  compileExpr,
-  compileRowFn,
-  computeWindows,
-  emitExpr,
-  emitRowSource,
-  hasChecks,
-  hasFailedRequire,
-  hasJoinAggs,
-  hasLookups,
-  inferExprType,
-  inferUnit,
   isAbsent,
-  lex,
-  makeAcc,
-  makeCheckReport,
-  makeJoinAgg,
-  makeLookup,
+  SEP,
   numCmp,
-  over,
-  overRuntime,
+  refRowsOf,
+  REL,
+  OverLexError,
+  lex,
+  OverParseError,
   parse,
   parseTokens,
   parseUnit,
-  refRowsOf,
-  schemaPass,
-  tableOfPredicate,
+  inferUnit,
+  dimEq,
+  dimFormat,
   unify,
+  inferExprType,
+  schemaPass,
+  overRuntime,
+  emitExpr,
+  emitRowSource,
+  compileRowFn,
+  compileExpr,
+  collectWindows,
+  makeAcc,
+  computeWindows,
   winLookup,
+  tableOfPredicate,
+  analyzePredicate,
+  collectLookups,
+  hasLookups,
+  buildLookups,
+  makeLookup,
+  collectJoinAggs,
+  hasJoinAggs,
+  buildJoinIndexes,
+  makeJoinAgg,
+  collectChecks,
+  hasChecks,
+  makeCheckReport,
+  hasFailedRequire,
+  OverCheckError,
+  applyRows,
+  compile,
+  over,
+  tokenizeOver,
+  overCompletions,
 };
