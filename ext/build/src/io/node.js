@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { bundleModules } from '../core.js';
 import { makeNodeParser } from './parser-node.js';
 
@@ -75,12 +76,17 @@ function readSrcTree(dir, srcRoot) {
 }
 
 /**
- * @param {{ dir?:string, entry?:string, outFile?:string, write?:boolean,
- *           meta?:boolean, header?:string, packageName?:string, packageDesc?:string }} opts
+ * @param {{ at?:string, dir?:string, entry?:string, outFile?:string, write?:boolean,
+ *           sourcemap?:boolean, meta?:boolean, define?:object, inline?:string[],
+ *           lintEscaping?:boolean, header?:string, packageName?:string, packageDesc?:string }} opts
+ *   `at`: pass `import.meta.url` so the package dir is the build script's own
+ *   directory — no fileURLToPath dance. `dir` overrides it.
  * @returns {{ code, map, meta, warnings, outPath:string|null }}
  */
 export function bundle(opts = {}) {
-  const dir = opts.dir || process.cwd();
+  // `at: import.meta.url` lets a build script name its own location without the
+  // path/fileURLToPath dance. Explicit, not inferred. `dir` still wins if given.
+  const dir = opts.dir || (opts.at ? path.dirname(fileURLToPath(opts.at)) : process.cwd());
   const entry = opts.entry || 'src/main.js';
   const srcRoot = entry.includes('/') ? entry.slice(0, entry.lastIndexOf('/')) : 'src';
   const write = opts.write !== false;

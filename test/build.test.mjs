@@ -422,6 +422,23 @@ test('vfs adapter: build a package over a @gcu/vfs MemoryBackend', async () => {
   assert.equal(m.f(), 42);
 });
 
+// ── phase 2: bundle({ at }) — clean build-script ergonomic ──
+test('bundle({ at: import.meta.url }) resolves the package dir', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gcubuild-at-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'src'));
+    fs.writeFileSync(path.join(tmp, 'src', 'main.js'), "export { f } from './a.js';\n");
+    fs.writeFileSync(path.join(tmp, 'src', 'a.js'), "export function f(){ return 1; }\n");
+    // `at` points at a (notional) build script inside the package dir
+    const at = pathToFileURL(path.join(tmp, 'build.js')).href;
+    const r = bundle({ at, write: false });
+    assert.deepEqual(r.meta.exports, ['f']);
+    assert.ok(r.code.includes('function f()'));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // ── phase 2: CLI (§13.2) — stdout + drift --check ──
 test('CLI: --stdout emits code; --check detects drift', () => {
   const cli = path.join(root, 'ext', 'build', 'cli.js');
