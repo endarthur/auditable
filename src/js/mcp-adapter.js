@@ -2,11 +2,17 @@
 // Registers tools with navigator.modelContext (set up by shim.js).
 // All function names prefixed with _mcp to avoid IIFE collisions.
 //
-// Access control:
-//   - No directive: cell hidden from MCP (listed with minimal metadata only)
-//   - // %mcp: cell output readable via getCellOutput, source via getCellSource
-//   - // %mcp rw: source readable AND writable via updateCellSource
-//   - // %private: hard opt-out, overrides everything (invisible unless %mcp describe)
+// Access control (read-open posture — "open to read, gated to act"):
+//   - No directive (default 'open'): readable; edits + execution CONFIRM (dialog,
+//     with an "always allow" that holds for the session).
+//   - // %mcp: explicit read-only — readable, source edits DENIED (runnable w/ confirm).
+//   - // %mcp rw: pre-approved — readable + edits/execution run WITHOUT a confirm.
+//   - // %private: hard opt-out — invisible to MCP (unless %mcp describe).
+//   - Manifest cell (// %mcp manifest) sets the baseline via `defaults`:
+//     "open" (the default) | "read" | "rw" | "private"/"strict" (restores the old
+//     opt-in posture — cells hidden until annotated). Per-cell directives win.
+//   The line is at ACTING: reads are open because you connected the agent to your
+//   own notebook; mutation + execution stay human-gated (numen threat model §5.1).
 
 import { S } from './state.js';
 import * as hooks from './hooks.js';
@@ -249,8 +255,10 @@ function _mcpResolveManifestCell(ref) {
 // ── Access control helpers ──
 
 function _mcpCellAccess(cell) {
-  // Returns: 'private' | 'rw' | 'read' | 'none'
-  // Precedence: cell directives > manifest tool-level > manifest defaults > none
+  // Returns: 'private' | 'rw' | 'read' | 'open' | 'none'
+  //   private = hidden; read = read-only source; rw = pre-approved edits/exec;
+  //   open = readable + edits/exec CONFIRM (the default); none = strict-mode hidden.
+  // Precedence: cell directives > manifest tool-level > manifest defaults > open
   const code = cell.code || '';
 
   // 1. Explicit cell directives (highest priority)
@@ -276,14 +284,25 @@ function _mcpCellAccess(cell) {
         }
       }
     }
-    // 2b. Default access level
+    // 2b. Default access level (the baseline posture)
     const d = manifest.defaults;
     if (d === 'rw') return 'rw';
     if (d === 'read' || d === 'r') return 'read';
-    if (d === 'private') return 'private';
+    if (d === 'open') return 'open';
+    // "private"/"strict"/"none" restore the old opt-in posture: cells are not
+    // exposed until annotated with // %mcp.
+    if (d === 'private' || d === 'strict' || d === 'none') return 'none';
   }
 
-  return 'none';
+  // Default posture: read-open. Reads pass; edits/execution confirm (see the
+  // write/execute gates). Override globally with a // %mcp manifest `defaults`.
+  return 'open';
+}
+
+// Is this cell's content visible to the agent? (read / rw / open — anything but
+// private or strict-mode 'none'.)
+function _mcpReadable(access) {
+  return access === 'read' || access === 'rw' || access === 'open';
 }
 
 function _mcpRequireRead(input) {
@@ -614,10 +633,7 @@ function _mcpListCells() {
   _mcpManifestCode = null;
 
   const manifest = _mcpGetManifest();
-  const hasMcpCells = S.cells.some(c => {
-    const a = _mcpCellAccess(c);
-    return a === 'read' || a === 'rw';
-  });
+  const hasMcpCells = S.cells.some(c => _mcpReadable(_mcpCellAccess(c)));
 
   const cells = S.cells.map((c, i) => {
     const access = _mcpCellAccess(c);
@@ -761,7 +777,7 @@ async function _mcpGetCellScreenshot(input) {
 // ── Tool: updateCellSource ──
 
 async function _mcpUpdateCellSource(input, client) {
-  const { cell, index } = _mcpRequireWrite(input);
+  const { cell, index, access } = _mcpRequireWrite(input);
 
   let newCode;
   if (input.patches) {
@@ -778,14 +794,16 @@ async function _mcpUpdateCellSource(input, client) {
     throw new Error('Provide either code (full replacement) or patches (array of {old, new})');
   }
 
-  // Show diff confirmation
+  // Show diff confirmation — skipped for // %mcp rw cells (pre-approved edits).
   const oldCode = cell.code || '';
-  const accepted = await _mcpConfirm(
-    `Update cell ${index}` + (parseCellName(cell.code) ? ` (${parseCellName(cell.code)})` : ''),
-    _mcpSimpleDiff(oldCode, newCode),
-    'code'
-  );
-  if (!accepted) throw new Error('User rejected the change.');
+  if (access !== 'rw') {
+    const accepted = await _mcpConfirm(
+      `Update cell ${index}` + (parseCellName(cell.code) ? ` (${parseCellName(cell.code)})` : ''),
+      _mcpSimpleDiff(oldCode, newCode),
+      'code'
+    );
+    if (!accepted) throw new Error('User rejected the change.');
+  }
 
   setCellCode(cell, newCode);
 
@@ -864,7 +882,7 @@ function _mcpGetDAG() {
       const access = _mcpCellAccess(c);
       const entry = { index: i, type: c.type };
       // Only expose defines/uses for accessible cells
-      if (access === 'read' || access === 'rw') {
+      if (_mcpReadable(access)) {
         entry.defines = c.defines?.size > 0 ? [...c.defines] : [];
         entry.uses = c.uses?.size > 0 ? [...c.uses] : [];
       }
@@ -872,10 +890,8 @@ function _mcpGetDAG() {
     }),
     edges: edges.filter(e => {
       // Only show edges where both endpoints are accessible
-      const fromAccess = _mcpCellAccess(S.cells[e.from]);
-      const toAccess = _mcpCellAccess(S.cells[e.to]);
-      return (fromAccess === 'read' || fromAccess === 'rw') &&
-             (toAccess === 'read' || toAccess === 'rw');
+      return _mcpReadable(_mcpCellAccess(S.cells[e.from])) &&
+             _mcpReadable(_mcpCellAccess(S.cells[e.to]));
     }),
   };
 }
@@ -904,7 +920,7 @@ function _mcpGetNotebookContext() {
   const accessibleDefines = [];
   for (const entry of cellList.cells) {
     const access = entry.access;
-    if (access === 'read' || access === 'rw') {
+    if (_mcpReadable(access)) {
       const cell = S.cells[entry.index];
       entry.source = cell.code;
       if (entry.defines) {
@@ -1059,7 +1075,15 @@ if (navigator.modelContext && window.__auditable_mcp) {
     },
     annotations: { title: 'Run cell' },
     execute: _mcpAudited('runCell', async (input) => {
-      const { cell } = _mcpRequireRead(input);
+      const { cell, index, access } = _mcpRequireRead(input);
+      if (access !== 'rw') {
+        const accepted = await _mcpConfirm(
+          `Run cell ${index}` + (parseCellName(cell.code) ? ` (${parseCellName(cell.code)})` : ''),
+          '(executes the cell and its downstream dependents)',
+          'execute'
+        );
+        if (!accepted) throw new Error('User rejected cell execution.');
+      }
       await runDAG([cell.id], true);
       return { ok: true, errors: _mcpCollectErrors() };
     }),
@@ -1079,17 +1103,19 @@ if (navigator.modelContext && window.__auditable_mcp) {
     },
     annotations: { destructiveHint: true, title: 'Set widget value' },
     execute: _mcpAudited('setWidgetValue', async (input) => {
-      const { cell } = _mcpRequireWrite(input);
+      const { cell, access } = _mcpRequireWrite(input);
       const widget = cell.el?.querySelector(`audit-slider[name="${input.name}"], audit-dropdown[name="${input.name}"], audit-checkbox[name="${input.name}"], audit-text-input[name="${input.name}"]`);
       if (!widget) throw new Error(`Widget "${input.name}" not found in cell ${S.cells.indexOf(cell)}`);
 
       const oldValue = widget.value;
-      const accepted = await _mcpConfirm(
-        `Set widget "${input.name}"`,
-        `${oldValue} \u2192 ${input.value}`,
-        'widget'
-      );
-      if (!accepted) throw new Error('User rejected the change.');
+      if (access !== 'rw') {
+        const accepted = await _mcpConfirm(
+          `Set widget "${input.name}"`,
+          `${oldValue} \u2192 ${input.value}`,
+          'widget'
+        );
+        if (!accepted) throw new Error('User rejected the change.');
+      }
 
       widget.value = input.value;
       // Dispatch events to trigger reactive system / callbacks
@@ -1106,6 +1132,8 @@ if (navigator.modelContext && window.__auditable_mcp) {
     inputSchema: { type: 'object', properties: {} },
     annotations: { title: 'Run all cells' },
     execute: _mcpAudited('runAll', async () => {
+      const accepted = await _mcpConfirm('Run all cells', '(executes every cell in the notebook)', 'execute');
+      if (!accepted) throw new Error('User rejected run all.');
       await runAll();
       return { ok: true, errors: _mcpCollectErrors() };
     }),
