@@ -90,6 +90,23 @@ export const REPO_TARGETS = [
     inputs: (root) => [...filesUnder(path.join(root, 'works')), ...extBundles(root), path.join(root, 'auditable.html'), path.join(root, 'build.js')] },
   { name: 'works-all', out: 'works-all.html', cmd: ['build.js', '--target=works-all'], deps: ['auditable'],
     inputs: (root) => [...filesUnder(path.join(root, 'works')), ...extBundles(root), path.join(root, 'auditable.html'), path.join(root, 'build.js')] },
+  // The 79 examples each embed a compressed copy of the runtime, so they go stale on
+  // every auditable.html change — gen_examples.js reads build/auditable.html (the
+  // cleartext sibling build.js also writes). out:null = many files, not one; the dir
+  // always exists so it's input/dep-gated only. checkPaths feeds the --check drift
+  // diff but excludes the crypto demo (re-encrypts with a random DEK/IV every run).
+  { name: 'examples', out: null, cmd: ['gen_examples.js'], deps: ['auditable'],
+    inputs: (root) => [
+      ...filesUnder(path.join(root, 'examples', 'defs')),
+      path.join(root, 'build', 'auditable.html'),
+      path.join(root, 'gen_examples.js'),
+      path.join(root, 'make_example.js'),
+    ],
+    checkPaths: [
+      'examples/',
+      ':(exclude)examples/basics/example_encrypted_password-is-auditable.html',
+      ':(exclude)examples/basics/example_encrypted_password-is-auditable.recovery.txt',
+    ] },
 ];
 
 // Cross-package dependency edges, derived from source: a package depends on
@@ -145,6 +162,8 @@ function saveCache(extDir, cache) { fs.writeFileSync(cachePath(extDir), JSON.str
  *           targets?:object[], log?:(s:string)=>void, run?:(pkg)=>void,
  *           runTarget?:(t)=>void }} opts
  *   run/runTarget — injectable runners (default: `node …`); tests stub them.
+ *   A target is `{ name, out, cmd, deps, inputs(root), checkPaths? }`; out:null =
+ *   many outputs (input/dep-gated only); checkPaths = git pathspecs for --check drift.
  * @returns {{ order, built, skipped, edges, targets:{order,built,skipped} }}
  */
 export function make(opts) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // @gcu/make CLI. Rebuilds @gcu/build-managed packages in dependency order, then
-// the repo targets (auditable.html → works → works-all), skipping the unchanged.
+// the repo targets (auditable.html → works/works-all + examples), skipping unchanged.
 // No rules to write — packages are derived; the few non-package targets declared.
 //
 //   gcu-make                 build everything that changed (+ its dependents + targets)
@@ -39,7 +39,7 @@ if (flags.has('--graph')) {
   }
   console.log(`\n  ── targets (non-package root builds) ──`);
   for (const t of REPO_TARGETS) {
-    console.log(`  ${t.name}${t.deps && t.deps.length ? '  ←  ' + t.deps.join(', ') : ''}  →  ${t.out}`);
+    console.log(`  ${t.name}${t.deps && t.deps.length ? '  ←  ' + t.deps.join(', ') : ''}  →  ${t.out || t.cmd.join(' ')}`);
   }
   console.log(`\n${pkgs.length} managed package(s) + ${REPO_TARGETS.length} target(s); auditable's inputs include ext/*/index.js, so a package change cascades to works.`);
   process.exit(0);
@@ -49,9 +49,12 @@ try {
   if (flags.has('--check')) {
     // rebuild everything, then assert the committed outputs match (no drift).
     const r = make({ extDir, force: true, noTargets, log });
-    const outs = r.order.map((n) => path.join(extDir, n, 'index.js'))
-      .concat((r.targets.order || []).map((n) => path.join(root, REPO_TARGETS.find((t) => t.name === n).out)));
-    const drift = execFileSync('git', ['diff', '--name-only', '--', ...outs], { encoding: 'utf8' }).trim();
+    const outs = r.order.map((n) => path.relative(root, path.join(extDir, n, 'index.js')));
+    const targetPaths = (r.targets.order || []).flatMap((n) => {
+      const t = REPO_TARGETS.find((x) => x.name === n);
+      return t.checkPaths || (t.out ? [t.out] : []);
+    });
+    const drift = execFileSync('git', ['diff', '--name-only', '--', ...outs, ...targetPaths], { cwd: root, encoding: 'utf8' }).trim();
     if (drift) {
       console.error('gcu-make: error: drift — these outputs are out of date (rebuild + commit):\n  ' + drift.split('\n').join('\n  '));
       process.exit(1);
