@@ -178,3 +178,11 @@ examples/defs/data-corpora/*.raw.txt
 
 # Landing toy bundles — copied from ext/ for local preview; CI deploys them to gh-pages /lib/
 landing/lib/
+
+# Generated distributables — built by CI (release.yml) → gh-pages + release assets, so
+# they don't bloat .git. auditable.html stays committed (the product + the update root).
+/works.html
+/works-all.html
+/editions/*.html
+examples/**/*.html
+examples/**/*.recovery.txt

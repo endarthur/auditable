@@ -30,6 +30,7 @@ jobs:
           node build.js --target=scan
           node gen_examples.js
           node gen_gallery.js
+          node make_encrypted_example.mjs
         env:
           AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
           AUDITABLE_RELEASE: ${{ github.event.release.tag_name }}
