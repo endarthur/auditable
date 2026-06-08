@@ -6,7 +6,7 @@ import {
   pyBool, pyTypeName, pyStr, pyRepr, pyIter, pyCollect, pyFormatValue,
   adderGetAttr,
 } from './builtins.js';
-import { _resolveModule, _loadVfsModule, _loadHttpModule, _loadDirectModule } from './eval.js';
+import { _resolveModule, _loadVfsModule, _loadHttpModule, _loadDirectModule, _loadAuditableModule } from './eval.js';
 
 // ── Arithmetic (preserve Python semantics) ──
 
@@ -586,6 +586,8 @@ async function _import(name) {
   if (mod) return mod;
   mod = await _loadVfsModule(name);
   if (mod) return mod;
+  mod = await _loadAuditableModule(name);
+  if (mod) return mod;
   mod = await _loadHttpModule(name);
   if (mod) return mod;
   throw new AdderError('ModuleNotFoundError', `No module named '${name}'`);
@@ -601,6 +603,7 @@ async function _importFrom(moduleName, names) {
   // names: array of { name, alias } (or special "*" to expose all)
   let mod = _resolveModule(moduleName);
   if (!mod) mod = await _loadVfsModule(moduleName);
+  if (!mod) mod = await _loadAuditableModule(moduleName);
   if (!mod) mod = await _loadHttpModule(moduleName);
   if (!mod) throw new AdderError('ModuleNotFoundError', `No module named '${moduleName}'`);
   return _extractFromImport(mod, names, moduleName);

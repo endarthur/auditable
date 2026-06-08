@@ -138,6 +138,27 @@ export const LANGUAGE_PACKS = {
   stereonet: '@gcu/stereonet',
 };
 
+// Adder ↔ auditable module bridge. adder calls this (via the window hook below) when
+// an `import <name>` misses its own resolvers, so `import plt` / `import sadpan` work
+// offline with no bootstrap `load()` cell: we find the INSTALLED auditable extension
+// that exports <name> and load it (which registers the export under <name>).
+// Resolution order: the live alias map (filled as extensions register this session) →
+// the persisted `adderExports` on installed-module entries (the pre-load path — from a
+// saved notebook or an embedded edition, known before anything is loaded). Only ever
+// loads from _installedModules; never touches the network.
+export async function resolveAdderModule(name) {
+  let url = window._auditableAdderAliases && window._auditableAdderAliases[name];
+  if (!url && window._installedModules) {
+    for (const [u, e] of Object.entries(window._installedModules)) {
+      if (e && Array.isArray(e.adderExports) && e.adderExports.includes(name)) { url = u; break; }
+    }
+  }
+  if (!url) return null;
+  try { await loadInstalledModule(url); } catch { return null; }
+  return (window._auditableExtensions && window._auditableExtensions[name]) || null;
+}
+if (typeof window !== 'undefined') window._auditableResolveModule = resolveAdderModule;
+
 // Diagnostic log helper — emits to this frame's console AND the parent
 // frame's console when running as a Works surface, so users don't have
 // to dig into the per-iframe console context in DevTools.

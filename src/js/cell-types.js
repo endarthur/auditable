@@ -285,9 +285,22 @@ export function registerExtension(manifest) {
     window._airRegisterLowerer(manifest.airLowerer.language, manifest.airLowerer.fn);
   }
   if (manifest.exports) {
+    const keys = Object.keys(manifest.exports);
     for (const [k, v] of Object.entries(manifest.exports)) {
       window._auditableExtensions[k] = v;
     }
+    // Each export key is the name adder code imports this extension by
+    // (`import plt`, `import sadpan`). Record key → module url so adder can
+    // lazy-load the extension on import even before it's been loaded (see
+    // _auditableResolveModule in exec.js), and persist the keys onto the
+    // installed-module entry so a fresh init can rebuild that map from the saved
+    // notebook without loading anything. This is what lets an installed language
+    // ecosystem (adder + plot + sadpan + …) work first-class — no bootstrap
+    // `load()` cell, no run-on-load.
+    window._auditableAdderAliases = window._auditableAdderAliases || {};
+    for (const k of keys) window._auditableAdderAliases[k] = manifest.name;
+    const entry = window._installedModules && window._installedModules[manifest.name];
+    if (entry && typeof entry === 'object') entry.adderExports = keys;
   }
   if (manifest.globals) {
     for (const [k, v] of Object.entries(manifest.globals)) window[k] = v;

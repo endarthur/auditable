@@ -11,6 +11,7 @@ import { emitJS } from '../ext/air/src/emit-js.js';
 import { _py } from '../ext/adder/src/runtime.js';
 import { adderBuiltins, pyStr } from '../ext/adder/src/builtins.js';
 import { run as airRun } from '../ext/adder/src/air.js';
+import { run as twRun } from '../ext/adder/src/runner.js';
 
 async function runTranspile(code) {
   const output = [];
@@ -618,5 +619,39 @@ describe('sync lambda/function as a synchronous JS callback (FFI)', () => {
   it('a sync nested function works as a JS callback', async () => {
     const r = await airRun('def sq(v):\n    return v * v\nout = mapmean([1, 2, 3, 4], sq)\n', { globals: { mapmean } });
     assert.equal(r.out, 7.5);
+  });
+});
+
+// Regression: `import <name>` lazy-loads an INSTALLED auditable extension via the
+// window resolver hook (auditable sets window._auditableResolveModule). This is what
+// makes adder first-class — `import plt` resolves the bundled @gcu/plot with no
+// bootstrap `load()` cell. The hook fires after adder's own resolvers miss, on BOTH the
+// AIR transpile path and the tree-walker. Standalone-safe when the hook is absent.
+describe('adder import lazy-loads installed extensions via the resolver hook', () => {
+  for (const [label, run] of [['AIR', airRun], ['tree-walker', twRun]]) {
+    it(`import <name> resolves through window._auditableResolveModule (${label})`, async () => {
+      const prev = globalThis.window;
+      let asked = null;
+      globalThis.window = {
+        _auditableResolveModule: async (n) => { asked = n; return n === 'plt' ? { area: (r) => 3 * r * r } : null; },
+      };
+      try {
+        const r = await run('import plt\nout = plt.area(2)\n');
+        assert.equal(r.out, 12);
+        assert.equal(asked, 'plt');
+      } finally {
+        if (prev === undefined) delete globalThis.window; else globalThis.window = prev;
+      }
+    });
+  }
+
+  it('is standalone-safe: no hook → ModuleNotFoundError, not a crash', async () => {
+    const prev = globalThis.window;
+    if (prev !== undefined) delete globalThis.window;
+    try {
+      await assert.rejects(() => airRun('import definitely_not_a_real_module_xyz\n'), /ModuleNotFound|No module named/);
+    } finally {
+      if (prev !== undefined) globalThis.window = prev;
+    }
   });
 });

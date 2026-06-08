@@ -1554,6 +1554,16 @@ export function _resolveModule(name) {
   return null;
 }
 
+// Bridge to auditable's installed-extension loader. auditable sets a window hook
+// (_auditableResolveModule, in exec.js) that lazy-loads an INSTALLED @gcu extension
+// which exports <name> — so `import plt` / `import sadpan` resolve from the embedded
+// modules with no bootstrap `load()` cell. Standalone-safe: returns null when the hook
+// is absent (Node tests, or a non-auditable host) so adder still runs on its own.
+export async function _loadAuditableModule(name) {
+  if (typeof window === 'undefined' || typeof window._auditableResolveModule !== 'function') return null;
+  try { return await window._auditableResolveModule(name); } catch { return null; }
+}
+
 // Parse + evaluate source as a fresh module, cache it under cacheKey.
 // Shared by _loadVfsModule, _loadHttpModule, _loadDirectModule.
 async function _instantiateModule(cacheKey, displayName, source, filePath) {
@@ -1713,6 +1723,8 @@ async function _evalImport(node, scope) {
     }
     mod = await _loadVfsModule(module);
     if (mod) { scope.set(alias || module, mod); continue; }
+    mod = await _loadAuditableModule(module);
+    if (mod) { scope.set(alias || module, mod); continue; }
     mod = await _loadHttpModule(module);
     if (mod) { scope.set(alias || module, mod); continue; }
     throw new AdderError('ModuleNotFoundError', `No module named '${module}'`, node.line);
@@ -1729,6 +1741,7 @@ async function _evalImportFrom(node, scope) {
   } else {
     mod = _resolveModule(node.module);
     if (!mod) mod = await _loadVfsModule(node.module);
+    if (!mod) mod = await _loadAuditableModule(node.module);
     if (!mod) mod = await _loadHttpModule(node.module);
     displayModule = node.module;
   }

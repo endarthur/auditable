@@ -1237,20 +1237,24 @@ if (target === 'scan') {
 const EDITIONS = {
   'auditable-py': {
     title: 'Python (adder)',
+    // [url, srcPath, adderExports?] — adderExports are the names adder code imports the
+    // lib by (the lib's registerExtension `exports` keys). Persisting them on the
+    // installed-module entry lets `import plt` / `import sadpan` lazy-load the embedded
+    // lib with no bootstrap cell. adder itself is the cell-type language (auto-activated
+    // at boot by autoLoadFromCells once an adder cell is present) — nothing to import.
     exts: [
       ['@gcu/adder', 'ext/adder/index.js'],
-      ['@gcu/plot', 'ext/plot/index.js'],
-      ['@gcu/sadpan', 'ext/sadpan/index.js'],
+      ['@gcu/plot', 'ext/plot/index.js', ['plt']],
+      ['@gcu/sadpan', 'ext/sadpan/index.js', ['sadpan']],
     ],
     // preferredCodeType:'adder' makes adder the default for the combo button and every
-    // add-cell path (a / b / Ctrl+Enter-new). runOnLoad:'yes' auto-runs the bootstrap
-    // on open so adder is registered immediately — otherwise getPreferredCodeType()
-    // falls back to JS until the load cell is run by hand.
-    settings: { theme: 'dark', fontSize: 13, width: '860', preferredCodeType: 'adder', runOnLoad: 'yes' },
+    // add-cell path (a / b / Ctrl+Enter-new). No runOnLoad and no bootstrap load() cell:
+    // autoLoadFromCells registers adder at boot (an adder cell is present), and the libs
+    // lazy-load on first `import`. First-class, runOnLoad-agnostic.
+    settings: { theme: 'dark', fontSize: 13, width: '860', preferredCodeType: 'adder' },
     cells: [
-      { type: 'md', code: '# Auditable — Python edition\n\nadder (a Python dialect that compiles to JavaScript), `@gcu/plot`, and `@gcu/sadpan` are **bundled into this file** — it works fully offline, no fetch. The collapsed cell below loads them from the embedded copies; new code cells default to `adder`.' },
-      { type: 'code', collapsed: true, code: 'await load("@gcu/adder")\nawait load("@gcu/plot")\nawait load("@gcu/sadpan")' },
-      { type: 'adder', code: 'print("hello from adder")' },
+      { type: 'md', code: '# Auditable — Python edition\n\nadder (a Python dialect that compiles to JavaScript) is the default cell language here, and `@gcu/plot` + `@gcu/sadpan` are **bundled into this file** — it works fully offline, no fetch. Just `import plt` / `import sadpan` in an `adder` cell; they load from the embedded copies on first use. New code cells default to `adder`.' },
+      { type: 'adder', code: 'import plt\nimport sadpan as pd\n\nprint("hello from adder — plt + sadpan load on import")' },
     ],
   },
 };
@@ -1259,9 +1263,10 @@ if (EDITIONS[target]) {
   const zlib = require('zlib');
   const ed = EDITIONS[target];
   const modules = {};
-  for (const [url, rel] of ed.exts) {
+  for (const [url, rel, adderExports] of ed.exts) {
     const raw = fs.readFileSync(path.join(__dirname, rel), 'utf8');
     modules[url] = { source: zlib.gzipSync(Buffer.from(raw, 'utf8')).toString('base64'), cellId: null, compressed: true };
+    if (adderExports) modules[url].adderExports = adderExports;
   }
   const outDir = path.join(__dirname, 'editions');
   fs.mkdirSync(outDir, { recursive: true });
