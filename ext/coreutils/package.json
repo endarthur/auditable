@@ -1,0 +1,28 @@
+{
+  "name": "@gcu/coreutils",
+  "version": "0.1.0",
+  "description": "Lite, worker-free coreutils (ls/cat/echo/mkdir/rm/cp/mv/touch/head/tail) over a @gcu/vfs-shaped filesystem. The genuinely-useful handful, runnable anywhere (file:// too) without a shell process. Host-agnostic: run(argv, {vfs, cwd}) → {stdout, stderr, code}. Zero dependencies.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["coreutils", "shell", "vfs", "ls", "cat", "filesystem", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/coreutils"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/coreutils"
+}

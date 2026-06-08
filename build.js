@@ -1481,6 +1481,15 @@ if (fs.existsSync(procPath)) {
   modules.unshift({ name: 'proc', source: procSrc });
 }
 
+// Add @gcu/coreutils bundle as a module entry (lite VFS shell commands — the notebook
+// shell's `!cmd` fast-path runs these natively over the notebook VFS, no geas worker).
+const coreutilsPath = path.join(__dirname, 'ext/coreutils/index.js');
+if (fs.existsSync(coreutilsPath)) {
+  let coreutilsSrc = fs.readFileSync(coreutilsPath, 'utf8');
+  coreutilsSrc = coreutilsSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'coreutils', source: coreutilsSrc });
+}
+
 // Add @gcu/sync bundle as a module entry (the federation/sync layer — used by
 // the presence consumer; the carrier itself, Trystero, is lazy-loaded on opt-in).
 const syncPath = path.join(__dirname, 'ext/sync/index.js');

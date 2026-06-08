@@ -10,9 +10,84 @@
 // asks for it.
 
 import { ProcessManager } from '#proc';
+import { run as coreutilsRun, names as coreutilsNames } from '#coreutils';
 
 function _escHtml(s) {
   return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
+}
+
+// Every shell result has the same shape (geas path + lite path) so display() / the
+// `!cmd` rewrite render identically.
+function _shellResult(stdout, stderr, exitCode) {
+  const r = {
+    stdout, stderr, exitCode,
+    _repr_html_() {
+      const parts = [];
+      if (stdout) parts.push(`<pre class="au-shell-out">${_escHtml(stdout)}</pre>`);
+      if (stderr) parts.push(`<pre class="au-shell-err">${_escHtml(stderr)}</pre>`);
+      return parts.join('') || '<pre class="au-shell-out"></pre>';
+    },
+  };
+  if (exitCode !== 0) r.error = new Error(`shell exited ${exitCode}`);
+  return r;
+}
+
+// Minimal argv tokenizer: whitespace split with "double" / 'single' quote support.
+function _tokenize(s) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(s))) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+}
+
+// Lite, worker-free dispatch for the built-in commands (pkg + @gcu/coreutils). Runs
+// natively over the notebook VFS, so it works everywhere including file:// — no geas.
+// Returns a result, or null when the script isn't a single lite command (pipes,
+// redirects, sequencing, multi-line) → fall through to geas.
+async function _runLite(script, vfs, ctx, opts) {
+  if (/[|<>&;`$]/.test(script) || script.includes('\n')) return null;
+  const argv = _tokenize(script.trim());
+  if (!argv.length) return null;
+  const cmd = argv[0];
+  if (cmd === 'pkg') return _pkg(argv.slice(1), ctx);
+  if (coreutilsNames.includes(cmd)) {
+    const { stdout, stderr, code } = await coreutilsRun(argv, { vfs, cwd: opts.cwd || '/home/nb' });
+    return _shellResult(stdout, stderr, code);
+  }
+  return null;
+}
+
+// pkg-lite: install / list / remove over the host's module system (install() +
+// _installedModules). Notebook-scoped — the package persists in the saved notebook.
+// (In Works, geas's richer `pkg` — workspace /lib, lockfile, SRI — is reachable as a
+// non-lite command; this is the universal, standalone-friendly subset.)
+async function _pkg(args, ctx) {
+  const sub = args[0];
+  try {
+    if (sub === 'install' || sub === 'add' || sub === 'i') {
+      const specs = args.slice(1).filter(Boolean);
+      if (!specs.length) return _shellResult('', 'pkg: install needs a package spec', 1);
+      const done = [];
+      for (const spec of specs) { await ctx.install(spec); done.push(spec); }
+      return _shellResult(`installed: ${done.join(', ')}`, '', 0);
+    }
+    if (sub === 'list' || sub === 'ls') {
+      return _shellResult(Object.keys(window._installedModules || {}).sort().join('\n'), '', 0);
+    }
+    if (sub === 'remove' || sub === 'rm' || sub === 'uninstall') {
+      const name = args[1];
+      if (!name) return _shellResult('', 'pkg: remove needs a package name', 1);
+      const mods = window._installedModules || {};
+      if (!(name in mods)) return _shellResult('', `pkg: ${name}: not installed`, 1);
+      delete mods[name];
+      if (window._importCache) delete window._importCache[name];
+      return _shellResult(`removed: ${name}`, '', 0);
+    }
+    return _shellResult('', `pkg: unknown subcommand "${sub || ''}" — try install | list | remove`, 1);
+  } catch (e) {
+    return _shellResult('', `pkg: ${(e && e.message) || e}`, 1);
+  }
 }
 
 // Resolve a module that was installed into the notebook's VFS at boot
@@ -60,6 +135,11 @@ export function makeShell(cell, ctx) {
     const vfs = window._notebookVFS;
     if (!vfs) throw new Error('notebook.shell: no VFS in scope');
 
+    // Lite built-ins (pkg + coreutils) run natively over the VFS — no geas worker, so
+    // they work on file:// too. Non-lite scripts fall through to geas (Works/http).
+    const lite = await _runLite(script, vfs, ctx, opts);
+    if (lite) return lite;
+
     const { module, source } = await _getGeas();
     const { createGeasClient, procToWorker } = module;
 
@@ -97,19 +177,7 @@ export function makeShell(cell, ctx) {
       });
       await client.ready();
       const { exitCode } = await client.exec(script);
-      const stdout = stdoutBuf.join('');
-      const stderr = stderrBuf.join('');
-      const result = {
-        stdout, stderr, exitCode,
-        _repr_html_() {
-          const parts = [];
-          if (stdout) parts.push(`<pre class="au-shell-out">${_escHtml(stdout)}</pre>`);
-          if (stderr) parts.push(`<pre class="au-shell-err">${_escHtml(stderr)}</pre>`);
-          return parts.join('') || '<pre class="au-shell-out"></pre>';
-        },
-      };
-      if (exitCode !== 0) result.error = new Error(`shell exited ${exitCode}`);
-      return result;
+      return _shellResult(stdoutBuf.join(''), stderrBuf.join(''), exitCode);
     } finally {
       if (!killed) await kill();
     }
