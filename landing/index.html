@@ -81,9 +81,10 @@
   .eco > h2 { font-family:"Space Mono",monospace; font-size:20px; margin:52px 0 4px; }
   .eco > .lead { color:var(--dim); margin:0 0 18px; max-width:64ch; }
   .eco-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(196px,1fr)); gap:10px; }
-  .ext { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:11px 13px;
-    transition:border-color .12s; }
-  .ext:hover { border-color:var(--teal); }
+  .ext { display:block; color:inherit; text-decoration:none;
+    background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:11px 13px;
+    transition:border-color .12s, transform .12s; }
+  .ext:hover { border-color:var(--teal); transform:translateY(-1px); }
   .ext b { font-family:"Space Mono",monospace; color:var(--teal); font-size:13px; }
   .ext span { display:block; color:var(--dim); font-size:13px; margin-top:3px; line-height:1.4; }
 </style>
@@ -115,7 +116,8 @@
     <h2>Try the languages</h2>
     <p class="lead">Real interpreters and compilers, running right in this page — each loads only when you hit Run. Edit the code and run it again.</p>
     <div class="tabs" id="toy-tabs">
-      <button data-lang="adder" class="active">adder · Python</button>
+      <button data-lang="js" class="active">js · JavaScript</button>
+      <button data-lang="adder">adder · Python</button>
       <button data-lang="soft">soft · English</button>
       <button data-lang="atra">atra · Wasm</button>
     </div>
@@ -130,22 +132,22 @@
     <h2>Batteries included</h2>
     <p class="lead">Languages, science, and geoscience plug in as cell types and libraries — no package manager, no environment. A sample of what ships:</p>
     <div class="eco-grid">
-      <div class="ext"><b>adder</b><span>Python, compiled to JS</span></div>
-      <div class="ext"><b>soft</b><span>English-keyword language</span></div>
-      <div class="ext"><b>atra</b><span>compiles to WebAssembly</span></div>
-      <div class="ext"><b>glsl</b><span>live GLSL shaders</span></div>
-      <div class="ext"><b>sql</b><span>SQL with completions</span></div>
-      <div class="ext"><b>plot</b><span>matplotlib-shaped charts</span></div>
-      <div class="ext"><b>sadpan</b><span>pandas-shaped dataframes</span></div>
-      <div class="ext"><b>natra</b><span>numpy-shaped ndarrays</span></div>
-      <div class="ext"><b>scitra</b><span>scipy-shaped science</span></div>
-      <div class="ext"><b>line</b><span>pure-JS linear algebra</span></div>
-      <div class="ext"><b>learn</b><span>scikit-learn-shaped ML</span></div>
-      <div class="ext"><b>gslib</b><span>geostatistics — kriging, sgsim</span></div>
-      <div class="ext"><b>spinifex</b><span>web GIS over OpenLayers</span></div>
-      <div class="ext"><b>stereonet</b><span>structural-geology nets</span></div>
-      <div class="ext"><b>units</b><span>dimensional units &amp; conversion</span></div>
-      <div class="ext"><b>calque</b><span>spreadsheet language → xlsx</span></div>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/adder" target="_blank" rel="noopener"><b>adder</b><span>Python, compiled to JS</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/soft" target="_blank" rel="noopener"><b>soft</b><span>English-keyword language</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/atra" target="_blank" rel="noopener"><b>atra</b><span>compiles to WebAssembly</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/shader" target="_blank" rel="noopener"><b>glsl</b><span>live GLSL shaders</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/sql" target="_blank" rel="noopener"><b>sql</b><span>SQL with completions</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/plot" target="_blank" rel="noopener"><b>plot</b><span>matplotlib-shaped charts</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/sadpan" target="_blank" rel="noopener"><b>sadpan</b><span>pandas-shaped dataframes</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/natra" target="_blank" rel="noopener"><b>natra</b><span>numpy-shaped ndarrays</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/scitra" target="_blank" rel="noopener"><b>scitra</b><span>scipy-shaped science</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/line" target="_blank" rel="noopener"><b>line</b><span>pure-JS linear algebra</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/learn" target="_blank" rel="noopener"><b>learn</b><span>scikit-learn-shaped ML</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/atra/lib" target="_blank" rel="noopener"><b>gslib</b><span>geostatistics — kriging, sgsim</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/spinifex" target="_blank" rel="noopener"><b>spinifex</b><span>web GIS over OpenLayers</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/stereonet" target="_blank" rel="noopener"><b>stereonet</b><span>structural-geology nets</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/units" target="_blank" rel="noopener"><b>units</b><span>dimensional units &amp; conversion</span></a>
+      <a class="ext" href="https://github.com/endarthur/auditable/tree/main/ext/calque" target="_blank" rel="noopener"><b>calque</b><span>spreadsheet language → xlsx</span></a>
     </div>
   </section>
 
@@ -176,6 +178,7 @@
   // ships tiny. adder/soft return their defined variables (print is discarded, like a
   // cell's output); atra compiles to Wasm in-browser and we call main() + show the size.
   const SNIPPETS = {
+    js: `// the obvious one — yes, a notebook runs JavaScript\nconst squares = Array.from({ length: 8 }, (_, n) => n * n);\nreturn { squares, total: squares.reduce((a, b) => a + b, 0) };`,
     adder: `# real Python — compiled to JS, running in this page\nsquares = [n*n for n in range(8)]\ntotal = sum(squares)`,
     soft: `set width to 12\nset height to 8\nset area to width times height`,
     atra: `! a numeric kernel — compiled to WebAssembly, in your browser\nfunction main(): i32\nvar\n  i, s: i32\nbegin\n  s := 0\n  for i := 0, 100\n    s := s + i\n  end for\n  main := s\nend`,
@@ -191,6 +194,11 @@
     return lines.join('\n') || '(no values)';
   };
   const RUN = {
+    js(code) {
+      const r = new Function(code)();
+      if (r === undefined) return '(no value returned — end with `return …`)';
+      return (r && typeof r === 'object' && !Array.isArray(r)) ? fmt(r) : JSON.stringify(r);
+    },
     async adder(code) { const { adder } = await mod('adder'); return fmt(await adder.adderTag([code])); },
     async soft(code) { const { soft } = await mod('soft'); return fmt(await soft.softTag([code]), ['Math', 'Text', 'List']); },
     async atra(code) {
@@ -201,7 +209,7 @@
       return `main() = ${out}\ncompiled to ${bytes} bytes of WebAssembly`;
     },
   };
-  let cur = 'adder';
+  let cur = 'js';
   const codeEl = document.getElementById('toy-code');
   const outEl = document.getElementById('toy-out');
   const statusEl = document.getElementById('toy-status');
@@ -227,7 +235,7 @@
       statusEl.textContent = 'error';
     }
   });
-  setLang('adder');
+  setLang('js');
 </script>
 </body>
 </html>
