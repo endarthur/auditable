@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>auditable — a reactive notebook in a single HTML file</title>
+<meta name="description" content="A reactive computational notebook in a single, self-contained HTML file. JavaScript and Python, offline, no install.">
+<style>
+  :root {
+    --bg:#14171c; --panel:#1b1f26; --line:#2a2f38; --fg:#e6e8eb; --dim:#9aa3af;
+    --teal:#3fb6b2; --orange:#e08a3c; --green:#6cae54;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); line-height:1.55;
+    font-family:"Barlow",system-ui,-apple-system,Segoe UI,sans-serif; }
+  a { color:var(--teal); text-decoration:none; }
+  .wrap { max-width:980px; margin:0 auto; padding:0 24px; }
+  code, .mono { font-family:"Space Mono",ui-monospace,Menlo,monospace; }
+
+  .hero { padding:96px 0 56px; text-align:center; }
+  .hero h1 { font-family:"Space Mono",monospace; font-size:48px; margin:0 0 12px; letter-spacing:-.01em; }
+  .hero .tag { font-size:21px; margin:0 auto 10px; max-width:34ch; }
+  .hero .sub { color:var(--dim); max-width:56ch; margin:0 auto 32px; }
+  .cta { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+  .btn { display:inline-block; padding:12px 22px; border-radius:8px; font-weight:600;
+    border:1px solid var(--line); background:var(--panel); color:var(--fg); transition:border-color .12s,transform .12s; }
+  .btn:hover { transform:translateY(-1px); border-color:var(--teal); }
+  .btn.primary { background:var(--orange); border-color:var(--orange); color:#14171c; }
+  .btn.primary:hover { filter:brightness(1.06); }
+  .btn .mono { font-size:13px; color:var(--dim); display:block; font-weight:400; }
+  .btn.primary .mono { color:#3a2a14; }
+
+  .features { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; padding:24px 0 8px; }
+  .feat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px 22px; }
+  .feat h3 { margin:0 0 6px; font-family:"Space Mono",monospace; font-size:15px; }
+  .feat p { margin:0; color:var(--dim); font-size:15px; }
+  .feat .k { color:var(--teal); }
+
+  .strip { border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-top:48px;
+    padding:36px 0; display:flex; gap:32px; flex-wrap:wrap; justify-content:space-between; align-items:center; }
+  .strip .blurb { max-width:46ch; color:var(--dim); }
+  .strip .blurb b { color:var(--fg); }
+
+  footer { padding:40px 0 64px; color:var(--dim); font-size:14px; text-align:center; }
+  footer a { color:var(--dim); } footer a:hover { color:var(--teal); }
+  .editions { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:14px; font-size:13px; }
+  .editions a { font-family:"Space Mono",monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="hero">
+    <h1>auditable</h1>
+    <p class="tag">A reactive computational notebook in a single HTML file.</p>
+    <p class="sub">JavaScript and Python in the same reactive document. No install, no server, no account — it runs entirely in your browser, and it works offline. Save it, email it, archive it: it's one file.</p>
+    <div class="cta">
+      <a class="btn primary" href="auditable.html">Open the notebook <span class="mono">auditable.html</span></a>
+      <a class="btn" href="works.html">Open Works <span class="mono">the GCU desktop</span></a>
+      <a class="btn" href="examples/index.html">Browse examples <span class="mono">79 notebooks</span></a>
+    </div>
+  </section>
+
+  <section class="features">
+    <div class="feat"><h3 class="k">One file</h3><p>Inline CSS, HTML, and JS in a single self-contained <code>.html</code>. Nothing to install; nothing phones home.</p></div>
+    <div class="feat"><h3 class="k">Reactive</h3><p>Cells form a dependency graph. Change a value or drag a slider and everything downstream re-runs automatically.</p></div>
+    <div class="feat"><h3 class="k">JS + Python</h3><p>Write JavaScript, or Python via <code>adder</code> — a real Python dialect that compiles to fast JS. Same reactive graph.</p></div>
+    <div class="feat"><h3 class="k">Offline &amp; private</h3><p>The network is an opt-in edge. It runs under a strict no-network policy, losing only explicitly network-named features.</p></div>
+    <div class="feat"><h3 class="k">Extensible</h3><p>Languages, cell types, and libraries plug in — geostatistics, GIS, plotting, dataframes, shaders, SQL, and more.</p></div>
+    <div class="feat"><h3 class="k">Verifiable</h3><p>Releases are Ed25519-signed; the in-app updater verifies signatures before applying. Trust is checkable.</p></div>
+  </section>
+
+  <section class="strip">
+    <div class="blurb"><b>Built for real work.</b> Resource estimation, geostatistics, spatial analysis — the kind of computation that usually needs a stack of installs, in one file you can hand to a colleague.</div>
+    <a class="btn" href="https://github.com/endarthur/auditable/releases">Download a release <span class="mono">signed builds</span></a>
+  </section>
+
+  <footer>
+    <div>
+      <a href="https://github.com/endarthur/auditable">Source on GitHub</a> ·
+      <a href="https://github.com/endarthur/auditable/releases">Releases</a> ·
+      <a href="scan/">Signature scanner</a> ·
+      MIT licensed
+    </div>
+    <div class="editions">
+      Editions:
+      <a href="editions/auditable-py.html">Python</a>
+      <a href="editions/auditable-geo.html">Geoscience</a>
+    </div>
+    <div style="margin-top:16px">Geoscientific Chaos Union — <a href="https://gentropic.org">gentropic.org</a></div>
+  </footer>
+
+</div>
+</body>
+</html>

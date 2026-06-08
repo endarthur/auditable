@@ -18,29 +18,33 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Build auditable.html
-        run: node build.js
+      # All distributables are built here (only auditable.html is also committed;
+      # works/works-all/editions/examples are de-committed and produced fresh).
+      - name: Build all targets
+        run: |
+          node build.js
+          node build.js --target=works
+          node build.js --target=works-all
+          node build.js --target=auditable-py
+          node build.js --target=auditable-geo
+          node build.js --target=scan
+          node gen_examples.js
+          node gen_gallery.js
         env:
           AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
           AUDITABLE_RELEASE: ${{ github.event.release.tag_name }}
 
-      - name: Build works.html
-        run: node build.js --target=works
-        env:
-          AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
-          AUDITABLE_RELEASE: ${{ github.event.release.tag_name }}
-
-      - name: Sign auditable.html
-        if: env.ED25519_PRIVATE_KEY != ''
-        run: node sign.js auditable.html
+      # Hard-fail if the signing key is absent — never ship an unsigned release.
+      - name: Sign signed artifacts
         env:
           ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
-
-      - name: Sign works.html
-        if: env.ED25519_PRIVATE_KEY != ''
-        run: node sign.js works.html
-        env:
-          ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
+        run: |
+          if [ -z "$ED25519_PRIVATE_KEY" ]; then
+            echo "::error::ED25519_PRIVATE_KEY is not set — refusing to publish an unsigned release."
+            exit 1
+          fi
+          node sign.js auditable.html
+          node sign.js works.html
 
       - name: Upload release assets
         env:
@@ -49,21 +53,28 @@ jobs:
           gh release upload "${{ github.event.release.tag_name }}" \
             auditable.html \
             works.html \
+            works-all.html \
+            editions/auditable-py.html \
+            editions/auditable-geo.html \
             --clobber
 
       - name: Deploy to GitHub Pages
+        env:
+          AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
         run: |
-          # Build scanner with public key
-          node build.js --target=scan
-          # Prepare gh-pages content
-          mkdir -p _pages/scan
+          mkdir -p _pages/scan _pages/editions
+          # Landing page + single-file apps (signed auditable + works ride to the site).
+          cp landing/index.html _pages/index.html
           cp auditable.html _pages/
           cp works.html _pages/
-          cp works.html _pages/index.html
-          cp scan/index.html _pages/scan/
-          cp scan/manifest.json _pages/scan/
-          cp scan/sw.js _pages/scan/
-          # Write version.json for lightweight update checks (with release notes)
+          cp editions/auditable-py.html editions/auditable-geo.html _pages/editions/
+          # Example notebooks + generated gallery → /examples/ (clickable).
+          find examples -name '*.html' -exec cp --parents {} _pages/ \;
+          # Scanner PWA.
+          cp scan/index.html scan/manifest.json scan/sw.js _pages/scan/
+          # Lightweight update manifest (version + release notes).
           node -e "
             const fs = require('fs');
             fs.writeFileSync('_pages/version.json', JSON.stringify({
@@ -71,7 +82,7 @@ jobs:
               notes: process.env.RELEASE_BODY || ''
             }));
           "
-          # Deploy
+          # Deploy as a fresh orphan commit — gh-pages never accumulates history.
           cd _pages
           git init
           git checkout -b gh-pages
@@ -81,7 +92,3 @@ jobs:
           git commit -m "Deploy ${{ github.event.release.tag_name }}"
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git push -f origin gh-pages
-        env:
-          AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_BODY: ${{ github.event.release.body }}
