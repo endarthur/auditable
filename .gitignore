@@ -175,3 +175,6 @@ examples/defs/data-corpora/*.raw.txt
 
 # @gcu/make incremental build cache
 .gcu-make.cache.json
+
+# Landing toy bundles — copied from ext/ for local preview; CI deploys them to gh-pages /lib/
+landing/lib/

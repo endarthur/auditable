@@ -64,12 +64,16 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           RELEASE_BODY: ${{ github.event.release.body }}
         run: |
-          mkdir -p _pages/scan _pages/editions
+          mkdir -p _pages/scan _pages/editions _pages/lib
           # Landing page + single-file apps (signed auditable + works ride to the site).
           cp landing/index.html _pages/index.html
           cp auditable.html _pages/
           cp works.html _pages/
           cp editions/auditable-py.html editions/auditable-geo.html _pages/editions/
+          # Language-toy bundles, lazy-loaded by the landing page's playground.
+          cp ext/adder/index.js _pages/lib/adder.js
+          cp ext/soft/index.js _pages/lib/soft.js
+          cp ext/atra/index.js _pages/lib/atra.js
           # Example notebooks + generated gallery → /examples/ (clickable).
           find examples -name '*.html' -exec cp --parents {} _pages/ \;
           # Scanner PWA.
