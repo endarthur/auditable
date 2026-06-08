@@ -66,10 +66,10 @@ jobs:
           RELEASE_BODY: ${{ github.event.release.body }}
         run: |
           mkdir -p _pages/scan _pages/editions _pages/lib
-          # Landing page + single-file apps (signed auditable + works ride to the site).
+          # Landing page + the notebook. (Works has its own home: gentropic.org/works,
+          # published by the gentropic/works repo from this release — see the trigger below.)
           cp landing/index.html _pages/index.html
           cp auditable.html _pages/
-          cp works.html _pages/
           cp editions/auditable-py.html editions/auditable-geo.html _pages/editions/
           # Language-toy bundles, lazy-loaded by the landing page's playground.
           cp ext/adder/index.js _pages/lib/adder.js
@@ -97,3 +97,9 @@ jobs:
           git commit -m "Deploy ${{ github.event.release.tag_name }}"
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git push -f origin gh-pages
+
+      # Tell the Works repo to rebuild its PWA from this fresh release.
+      - name: Trigger Works PWA rebuild
+        env:
+          GH_TOKEN: ${{ secrets.WORKS_DISPATCH_TOKEN }}
+        run: gh workflow run publish.yml --repo gentropic/works --ref main
