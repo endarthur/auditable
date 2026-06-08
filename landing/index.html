@@ -17,7 +17,7 @@
   .wrap { max-width:980px; margin:0 auto; padding:0 24px; }
   code, .mono { font-family:"Space Mono",ui-monospace,Menlo,monospace; }
 
-  .hero { padding:96px 0 56px; text-align:center; }
+  .hero { padding:72px 0 44px; text-align:center; }
   .hero h1 { font-family:"Space Mono",monospace; font-size:48px; margin:0 0 12px; letter-spacing:-.01em; }
   .hero .tag { font-size:21px; margin:0 auto 10px; max-width:34ch; }
   .hero .sub { color:var(--dim); max-width:56ch; margin:0 auto 32px; }
@@ -68,6 +68,24 @@
     border-radius:8px; color:var(--teal); white-space:pre-wrap; word-break:break-word;
     font-family:"Space Mono",ui-monospace,Menlo,monospace; font-size:13px; line-height:1.55; }
   #toy-out.err { color:var(--orange); }
+
+  /* dark scrollbars (Firefox + WebKit) */
+  * { scrollbar-width:thin; scrollbar-color:#39414e transparent; }
+  ::-webkit-scrollbar { width:11px; height:11px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:#2f3845; border-radius:7px; border:2px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background:#3d4858; }
+  ::-webkit-scrollbar-corner { background:transparent; }
+
+  /* ecosystem grid */
+  .eco > h2 { font-family:"Space Mono",monospace; font-size:20px; margin:52px 0 4px; }
+  .eco > .lead { color:var(--dim); margin:0 0 18px; max-width:64ch; }
+  .eco-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(196px,1fr)); gap:10px; }
+  .ext { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:11px 13px;
+    transition:border-color .12s; }
+  .ext:hover { border-color:var(--teal); }
+  .ext b { font-family:"Space Mono",monospace; color:var(--teal); font-size:13px; }
+  .ext span { display:block; color:var(--dim); font-size:13px; margin-top:3px; line-height:1.4; }
 </style>
 </head>
 <body>
@@ -105,6 +123,29 @@
       <textarea id="toy-code" spellcheck="false" aria-label="code"></textarea>
       <div class="toy-bar"><button id="toy-run">▶ Run</button><span id="toy-status"></span></div>
       <pre id="toy-out">› hit Run</pre>
+    </div>
+  </section>
+
+  <section class="eco">
+    <h2>Batteries included</h2>
+    <p class="lead">Languages, science, and geoscience plug in as cell types and libraries — no package manager, no environment. A sample of what ships:</p>
+    <div class="eco-grid">
+      <div class="ext"><b>adder</b><span>Python, compiled to JS</span></div>
+      <div class="ext"><b>soft</b><span>English-keyword language</span></div>
+      <div class="ext"><b>atra</b><span>compiles to WebAssembly</span></div>
+      <div class="ext"><b>glsl</b><span>live GLSL shaders</span></div>
+      <div class="ext"><b>sql</b><span>SQL with completions</span></div>
+      <div class="ext"><b>plot</b><span>matplotlib-shaped charts</span></div>
+      <div class="ext"><b>sadpan</b><span>pandas-shaped dataframes</span></div>
+      <div class="ext"><b>natra</b><span>numpy-shaped ndarrays</span></div>
+      <div class="ext"><b>scitra</b><span>scipy-shaped science</span></div>
+      <div class="ext"><b>line</b><span>pure-JS linear algebra</span></div>
+      <div class="ext"><b>learn</b><span>scikit-learn-shaped ML</span></div>
+      <div class="ext"><b>gslib</b><span>geostatistics — kriging, sgsim</span></div>
+      <div class="ext"><b>spinifex</b><span>web GIS over OpenLayers</span></div>
+      <div class="ext"><b>stereonet</b><span>structural-geology nets</span></div>
+      <div class="ext"><b>units</b><span>dimensional units &amp; conversion</span></div>
+      <div class="ext"><b>calque</b><span>spreadsheet language → xlsx</span></div>
     </div>
   </section>
 
