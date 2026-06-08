@@ -129,7 +129,7 @@ e_s = df["est"]
 
 me = err.mean()
 mae = err.abs().mean()
-rmse = err.apply(lambda v: v**2).mean() ** 0.5
+rmse = (err * err).mean() ** 0.5
 
 # correlation: cov(t,e) / (std_t * std_e)
 cov = ((t_s - t_s.mean()) * (e_s - e_s.mean())).mean()

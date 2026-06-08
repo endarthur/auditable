@@ -83,7 +83,7 @@ for spacing in spacings:
     vt = ((t_s - t_s.mean()) * (t_s - t_s.mean())).mean()
     corr = cov / (t_s.std() * e_s.std()) if t_s.std() > 0 and e_s.std() > 0 else 0
     slope = cov / vt if vt > 0 else 0
-    rmse = (err.apply(lambda v: v**2).mean()) ** 0.5
+    rmse = (err * err).mean() ** 0.5
 
     results.append({
         "spacing": spacing, "nsamples": len(samples),
