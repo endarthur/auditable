@@ -7,13 +7,7 @@
 /// md
 # adder + GSLIB — cross-language geostatistics
 
-A resource estimation pipeline in adder, a JS-targeting Python dialect. Data generation, variogram computation, kriging, widgets, plotting, and grade-tonnage — all in adder. One JS cell bootstraps the extensions; everything else is adder. Values are native JS values: no FFI, no marshalling.
-
-/// code collapsed
-// %collapsed
-await load("@gcu/adder")
-await load("@gcu/sadpan")
-const gslib = await load("@atra/gslib")
+A resource estimation pipeline in adder, a JS-targeting Python dialect. Data generation, variogram computation, kriging, widgets, plotting, and grade-tonnage — all in adder. Pure adder — `gslib` and `sadpan` are bundled and load on first `import`. Values are native JS values: no FFI, no marshalling.
 
 /// md
 ## parameters
@@ -171,6 +165,7 @@ for i in range(len(vario_h)):
 
 /// adder
 import js
+import gslib
 
 _t0 = js.performance.now()
 kResult = gslib.kb2d({"data": samples, "grid": {"nx": gridN, "ny": gridN, "xsiz": 1/gridN, "ysiz": 1/gridN}, "variogram": {"nugget": vNugget, "structures": [{"type": modelIdx, "contribution": vSill, "range": vRange}]}, "search": {"radius": 2.0, "ndmax": min(nHoles, 24)}})

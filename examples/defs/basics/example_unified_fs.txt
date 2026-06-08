@@ -58,10 +58,6 @@ display("(this file won't survive a save/reload)")
 
 Python's `open()` resolves relative paths against `/projects/self` — the same directory notebook.fs writes to. no import or bridge needed.
 
-/// code collapsed
-// %collapsed
-await load("@gcu/adder")
-
 /// adder
 # Python reads the CSV that JS wrote above
 with open("survey/drillholes.csv") as f:

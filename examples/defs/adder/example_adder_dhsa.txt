@@ -12,19 +12,13 @@ Determine optimal drill spacing for resource classification. Generate a referenc
 
 Written in [adder](https://github.com/endarthur/auditable), a Python dialect that compiles to JavaScript. Adder runs inside [auditable](https://endarthur.github.io/auditable/) — a reactive computational notebook in a single HTML file. The code cells below use Python syntax but execute natively in the browser, with direct access to JS libraries like `gslib` (geostatistics compiled to WebAssembly) and `@gcu/plot` (canvas plotting). No server, no install — just open the HTML file.
 
-/// code collapsed
-// %collapsed
-await load("@gcu/plot")
-await load("@gcu/adder")
-await load("@gcu/sadpan")
-const gslib = await load("@atra/gslib")
-
 /// adder
 import math
 import random
 import js
 import sadpan as pd
 import plt
+import gslib
 
 /// md
 ## parameters

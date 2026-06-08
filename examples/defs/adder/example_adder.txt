@@ -7,10 +7,6 @@
 
 A JS-targeting Python dialect as a first-class cell language — pure JS tree-walking interpreter, no WASM. Adder cells participate in Auditable's reactive DAG — define variables in adder, use them downstream in JS or other adder cells.
 
-/// code collapsed
-// %collapsed
-await load("@gcu/adder")
-
 /// md
 ## basics
 

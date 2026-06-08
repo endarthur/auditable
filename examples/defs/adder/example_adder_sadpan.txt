@@ -13,11 +13,6 @@
 DataFrames implement `_repr_html_()`, so they render as tables
 automatically when they're the last expression in a cell.
 
-/// code collapsed
-// %collapsed
-await load("@gcu/adder")
-await load("@gcu/sadpan")
-
 /// md
 ## create a DataFrame
 

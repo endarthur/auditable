@@ -9,10 +9,6 @@ Adder provides `open()`, `os`, `os.path`, `pathlib`, `shutil`, and `glob` — st
 
 The filesystem follows a Unix layout: cwd starts at `/projects/self`, `/tmp` is volatile scratch space, `/usr/lib/python` holds system modules. Relative paths just work — `open('data/x.csv')` in Python and `notebook.fs.read('data/x.csv')` in JS point to the same file.
 
-/// code collapsed
-// %collapsed
-await load("@gcu/adder")
-
 /// md
 ## open() — read and write files
 
