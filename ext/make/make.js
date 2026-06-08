@@ -90,6 +90,16 @@ export const REPO_TARGETS = [
     inputs: (root) => [...filesUnder(path.join(root, 'works')), ...extBundles(root), path.join(root, 'auditable.html'), path.join(root, 'build.js')] },
   { name: 'works-all', out: 'works-all.html', cmd: ['build.js', '--target=works-all'], deps: ['auditable'],
     inputs: (root) => [...filesUnder(path.join(root, 'works')), ...extBundles(root), path.join(root, 'auditable.html'), path.join(root, 'build.js')] },
+  // Editions (editions/auditable-<name>.html): the base notebook with a curated ext
+  // set embedded for offline use. Built from build/auditable.html (written by the
+  // auditable target) + the embedded ext bundles, so a change to any of those re-bakes
+  // the edition. Reproducible (git-date build), so it's safe under --check.
+  { name: 'auditable-py', out: 'editions/auditable-py.html', cmd: ['build.js', '--target=auditable-py'], deps: ['auditable'],
+    inputs: (root) => [
+      path.join(root, 'build', 'auditable.html'),
+      path.join(root, 'ext/adder/index.js'), path.join(root, 'ext/plot/index.js'), path.join(root, 'ext/sadpan/index.js'),
+      path.join(root, 'build.js'), path.join(root, 'make_example.js'),
+    ] },
   // The 79 examples each embed a compressed copy of the runtime, so they go stale on
   // every auditable.html change — gen_examples.js reads build/auditable.html (the
   // cleartext sibling build.js also writes). out:null = many files, not one; the dir

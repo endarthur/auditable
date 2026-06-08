@@ -4,6 +4,19 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
+
+// Deterministic build date: the HEAD commit's date (YYYY-MM-DD), not wall-clock, so the
+// same source tree builds byte-identically — no spurious churn across the examples and
+// editions that embed the runtime, and the output is sha256-pinnable. Falls back to
+// 'dev' outside a git checkout.
+function buildDateFromGit() {
+  try {
+    return execSync('git log -1 --date=short --format=%cd', { cwd: __dirname, encoding: 'utf8' }).trim() || 'dev';
+  } catch {
+    return 'dev';
+  }
+}
 
 const target = (process.argv.find(a => a.startsWith('--target=')) || '').split('=')[1] || '';
 const lean = process.argv.includes('--lean');
@@ -172,7 +185,7 @@ if (target === 'works' || target === 'works-all') {
   // the auditable target's injection loop further down — modules opt in
   // by declaring a const with the matching placeholder value.
   const worksPkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-  const worksBuildDate = new Date().toISOString().slice(0, 10);
+  const worksBuildDate = buildDateFromGit();
   const worksRelease = process.env.AUDITABLE_RELEASE || 'dev';
   const worksPubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
   const worksRepo = process.env.AUDITABLE_REPO || 'endarthur/auditable';
@@ -1213,6 +1226,45 @@ if (target === 'scan') {
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: auditable editions (editions/auditable-<name>.html)
+// ══════════════════════════════════════════════════
+// A pre-bundled "edition" = the base notebook with a curated set of extensions
+// embedded in _installedModules, so load("@gcu/<ext>") resolves instantly and offline
+// (no network round-trip). Requires build/auditable.html — run `node build.js` first;
+// gcu-make orders this after the auditable target. Reproducible thanks to the git-date
+// build above. (editions/, not dist/ — the latter is the conventional gitignored
+// build-output dir; editions are committed distributables.)
+const EDITIONS = {
+  'auditable-py': {
+    title: 'Python (adder)',
+    exts: [
+      ['@gcu/adder', 'ext/adder/index.js'],
+      ['@gcu/plot', 'ext/plot/index.js'],
+      ['@gcu/sadpan', 'ext/sadpan/index.js'],
+    ],
+    cells: [
+      { type: 'md', code: '# Auditable — Python edition\n\nadder (a Python dialect that compiles to JavaScript), `@gcu/plot`, and `@gcu/sadpan` are **bundled into this file** — it works fully offline, no fetch. The collapsed cell below loads them from the embedded copies; write Python in `adder` cells.' },
+      { type: 'code', collapsed: true, code: 'await load("@gcu/adder")\nawait load("@gcu/plot")\nawait load("@gcu/sadpan")' },
+      { type: 'adder', code: 'print("hello from adder")' },
+    ],
+  },
+};
+if (EDITIONS[target]) {
+  const makeExample = require('./make_example');
+  const zlib = require('zlib');
+  const ed = EDITIONS[target];
+  const modules = {};
+  for (const [url, rel] of ed.exts) {
+    const raw = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+    modules[url] = { source: zlib.gzipSync(Buffer.from(raw, 'utf8')).toString('base64'), cellId: null, compressed: true };
+  }
+  const outDir = path.join(__dirname, 'editions');
+  fs.mkdirSync(outDir, { recursive: true });
+  makeExample({ title: ed.title, cells: ed.cells, modules, outPath: path.join(outDir, target + '.html') });
+  process.exit(0);
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: auditable (default)
 // ══════════════════════════════════════════════════
 
@@ -1538,7 +1590,7 @@ if (fs.existsSync(termDefaultCssPath)) {
 // Applied per-module (no-op for modules that don't contain the placeholder).
 const builtins = fs.readFileSync(path.join(srcDir, 'builtins.json'), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-const buildDate = new Date().toISOString().slice(0, 10);
+const buildDate = buildDateFromGit();
 const release = process.env.AUDITABLE_RELEASE || 'dev';
 const pubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
 const repo = process.env.AUDITABLE_REPO || 'endarthur/auditable';
