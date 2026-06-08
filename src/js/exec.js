@@ -239,20 +239,35 @@ async function _autoLoadLanguagePacks() {
 // and loads it. Same "installed-only, never network" rule as the
 // language-pack loader. EXTENSION_SPEC §3.5 + §6.1.
 async function _autoLoadAdapters() {
+  const installed = window._installedModules || {};
+  const keys = Object.keys(installed);
+  const adapterSuffix = '/adder';
+  const hasAdapter = (name) => keys.some(k => k.endsWith('/' + name + adapterSuffix));
+
   const wantNames = new Set();
+  const fromNames = new Set();   // explicit `from X import` — worth a "missing adapter" hint
   for (const cell of S.cells) {
     if (cell.type !== 'adder' && cell.type !== 'mpy') continue;
     if (!cell.code) continue;
-    const re = /^\s*from\s+([a-zA-Z_]\w*)\s+import\b/gm;
     let m;
-    while ((m = re.exec(cell.code)) !== null) wantNames.add(m[1]);
+    // `from <name> import …` — the canonical adapter trigger.
+    const fromRe = /^\s*from\s+([a-zA-Z_]\w*)\s+import\b/gm;
+    while ((m = fromRe.exec(cell.code)) !== null) { fromNames.add(m[1]); wantNames.add(m[1]); }
+    // Plain `import x`, `import x as y`, `import a, b` — also triggers adapter preload so
+    // `import natra as np` works with no bootstrap cell. Gated by hasAdapter() so plain
+    // builtins (math, random, js, …) and adapter-less libs (sadpan, gslib) don't get
+    // probed or logged — only names that actually ship a */<name>/adder bridge.
+    const impRe = /^\s*import\s+(.+)$/gm;
+    while ((m = impRe.exec(cell.code)) !== null) {
+      for (const part of m[1].split(',')) {
+        const nm = part.trim().split(/\s+as\s+/)[0].trim();
+        if (/^[a-zA-Z_]\w*$/.test(nm) && hasAdapter(nm)) wantNames.add(nm);
+      }
+    }
   }
   if (wantNames.size === 0) return;
 
-  const installed = window._installedModules || {};
   const exts = window._auditableExtensions || {};
-  const adapterSuffix = '/adder';
-  const keys = Object.keys(installed);
 
   for (const name of wantNames) {
     if (exts[name]) continue;   // namespace already published — nothing to do
@@ -282,7 +297,7 @@ async function _autoLoadAdapters() {
     }
     try {
       await loadInstalledModule(chosen);
-      _diagLog('info', `[runtime] auto-loaded adapter "${chosen}" (referenced by \`from ${name} import …\`)`);
+      _diagLog('info', `[runtime] auto-loaded adapter "${chosen}" (referenced by adder import "${name}")`);
     }
     catch (e) { _diagLog('warn', `[runtime] auto-load adapter "${chosen}":`, e.message); }
   }

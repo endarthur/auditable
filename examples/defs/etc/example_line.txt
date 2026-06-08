@@ -15,9 +15,9 @@ This notebook shows line in both **JS cells** (direct API) and **adder cells** (
 
 /// code collapsed
 // %collapsed
+// JS cells below use `line` directly; adder cells just `import line as np`
+// (the @gcu/line/adder bridge auto-loads at boot — no explicit load needed).
 const line = await load("@gcu/line")
-await load("@gcu/adder")
-await load("@gcu/line/adder")
 
 /// md
 ## creation

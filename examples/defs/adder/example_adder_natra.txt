@@ -11,12 +11,6 @@
 
 Write `import natra as np` in adder cells and get numpy-like syntax — operators, slicing, reductions — backed by natra's Wasm-accelerated ndarray engine.
 
-/// code collapsed
-// %collapsed
-await load("@gcu/adder")
-await load("@gcu/natra")
-await load("@gcu/natra/adder")
-
 /// adder
 import natra as np
 
