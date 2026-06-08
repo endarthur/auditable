@@ -10,6 +10,7 @@ import { runPasses } from '../ext/air/src/passes.js';
 import { emitJS } from '../ext/air/src/emit-js.js';
 import { _py } from '../ext/adder/src/runtime.js';
 import { adderBuiltins, pyStr } from '../ext/adder/src/builtins.js';
+import { run as airRun } from '../ext/adder/src/air.js';
 
 async function runTranspile(code) {
   const output = [];
@@ -591,5 +592,31 @@ describe('adder transpile — sync-builtin shadowing (audit 2026-06-01)', () => 
   it('an unshadowed known-sync builtin still skips the await (fast path intact)', async () => {
     const r = await runTranspile('print(len([1, 2, 3, 4]))');
     assert.equal(r.output, '4');
+  });
+});
+
+// Regression: a sync lambda/function handed to a SYNCHRONOUS JS consumer (Array.map,
+// sort comparators, sadpan Series.apply) must be callable synchronously — i.e. emitted
+// as a plain `function`, not `async function`. Before the fix, lowerLambda hardcoded
+// is_async:true and nested defs were never sync-classified, so JS callers got Promises
+// (this is what made `err.apply(lambda v: v**2).mean()` return NaN/null in the GSLIB
+// estimation example). The lambda/function only stays async when its body truly awaits.
+describe('sync lambda/function as a synchronous JS callback (FFI)', () => {
+  const mapmean = (arr, fn) => { const m = arr.map(fn); return m.reduce((a, b) => a + b, 0) / m.length; };
+  const callSync = (fn) => fn(3); // JS invokes the adder callable synchronously
+
+  it('a sync lambda returns a value (not a Promise) when JS calls it', async () => {
+    const r = await airRun('out = callSync(lambda v: v ** 2)\n', { globals: { callSync } });
+    assert.equal(r.out, 9);
+  });
+
+  it('a sync lambda works as an Array.map callback', async () => {
+    const r = await airRun('out = mapmean([1, 2, 3], lambda v: v ** 2)\n', { globals: { mapmean } });
+    assert.equal(r.out, 14 / 3);
+  });
+
+  it('a sync nested function works as a JS callback', async () => {
+    const r = await airRun('def sq(v):\n    return v * v\nout = mapmean([1, 2, 3, 4], sq)\n', { globals: { mapmean } });
+    assert.equal(r.out, 7.5);
   });
 });

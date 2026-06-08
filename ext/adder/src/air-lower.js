@@ -1847,10 +1847,13 @@ function lowerFuncDef(ctx, node) {
 
   const op = ctx.emit('func_region', [name], fType, l, {
     name, params, body, ret_type: retType,
-    // Sync user functions emit as plain `function`; only async generators stay
-    // generators. Everything else stays async because some call site or
-    // builtin in the body needed the await wrapping.
-    is_async: !isSync && !isGenerator,
+    // Top-level: trust analyseSyncFunctions (it handles decorators, cross-function
+    // async, and the await-insertion at call sites). Nested functions are never
+    // analysed there, so don't force them async — emit-js's emitFunc promotes to
+    // async iff the body actually awaits (the same _bodyHasAwait path generators
+    // use). A sync nested function thus emits a plain `function`, usable as a
+    // synchronous JS callback.
+    is_async: savedTopLevel ? (!isSync && !isGenerator) : false,
     is_generator: isGenerator,
   });
 
@@ -1902,7 +1905,12 @@ function lowerLambda(ctx, node) {
 
   return ctx.emit('func_region', [null], DYNAMIC, l, {
     name: null, params, body, ret_type: DYNAMIC,
-    is_async: true, is_generator: false,
+    // Lambdas are never async-defs (Python has no `async lambda`). emit-js's
+    // emitFunc promotes to async iff the body actually awaits (_bodyHasAwait), so a
+    // sync lambda — the common map/filter/sort/Series.apply callback — emits a plain
+    // `function`, callable synchronously by JS consumers. (Was hardcoded `true`,
+    // which forced an async wrapper, so JS callers got a Promise instead of a value.)
+    is_async: false, is_generator: false,
   });
 }
 
