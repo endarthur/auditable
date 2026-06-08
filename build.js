@@ -1242,8 +1242,13 @@ const EDITIONS = {
       ['@gcu/plot', 'ext/plot/index.js'],
       ['@gcu/sadpan', 'ext/sadpan/index.js'],
     ],
+    // preferredCodeType:'adder' makes adder the default for the combo button and every
+    // add-cell path (a / b / Ctrl+Enter-new). runOnLoad:'yes' auto-runs the bootstrap
+    // on open so adder is registered immediately — otherwise getPreferredCodeType()
+    // falls back to JS until the load cell is run by hand.
+    settings: { theme: 'dark', fontSize: 13, width: '860', preferredCodeType: 'adder', runOnLoad: 'yes' },
     cells: [
-      { type: 'md', code: '# Auditable — Python edition\n\nadder (a Python dialect that compiles to JavaScript), `@gcu/plot`, and `@gcu/sadpan` are **bundled into this file** — it works fully offline, no fetch. The collapsed cell below loads them from the embedded copies; write Python in `adder` cells.' },
+      { type: 'md', code: '# Auditable — Python edition\n\nadder (a Python dialect that compiles to JavaScript), `@gcu/plot`, and `@gcu/sadpan` are **bundled into this file** — it works fully offline, no fetch. The collapsed cell below loads them from the embedded copies; new code cells default to `adder`.' },
       { type: 'code', collapsed: true, code: 'await load("@gcu/adder")\nawait load("@gcu/plot")\nawait load("@gcu/sadpan")' },
       { type: 'adder', code: 'print("hello from adder")' },
     ],
@@ -1260,7 +1265,7 @@ if (EDITIONS[target]) {
   }
   const outDir = path.join(__dirname, 'editions');
   fs.mkdirSync(outDir, { recursive: true });
-  makeExample({ title: ed.title, cells: ed.cells, modules, outPath: path.join(outDir, target + '.html') });
+  makeExample({ title: ed.title, cells: ed.cells, settings: ed.settings, modules, outPath: path.join(outDir, target + '.html') });
   process.exit(0);
 }
 
