@@ -21,11 +21,11 @@
   "author": "Arthur Endlein Correia",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/endarthur/auditable.git",
+    "url": "git+https://github.com/gentropic/auditable.git",
     "directory": "ext/sluice"
   },
-  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/sluice",
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/sluice",
   "bugs": {
-    "url": "https://github.com/endarthur/auditable/issues"
+    "url": "https://github.com/gentropic/auditable/issues"
   }
 }

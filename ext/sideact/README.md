@@ -2,7 +2,7 @@
 
 Signals + templates + DOM binding. Standalone reactive UI library — zero dependencies.
 
-Part of [Auditable](https://github.com/endarthur/auditable). Exposed inside notebooks as the `sr` namespace, where `sr.state()` additionally persists signals across cell re-executions.
+Part of [Auditable](https://github.com/gentropic/auditable). Exposed inside notebooks as the `sr` namespace, where `sr.state()` additionally persists signals across cell re-executions.
 
 Pre-1.0 — APIs may break on minor version bumps.
 

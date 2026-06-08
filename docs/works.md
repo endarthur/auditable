@@ -56,11 +56,11 @@ Built-in surface kinds (Works 0.1):
 | `settings` | `surfaces/settings.html` | Workspace settings (theme, fonts, mount management). |
 | `stub` | `surfaces/stub.html` | Smoke target — minimal "I connected" surface. |
 
-A new surface kind is a single HTML file in `works/surfaces/` plus three lines in `works/js/surface-registry.js`. The contract is documented in [works/SURFACES.md](https://github.com/endarthur/auditable/blob/main/works/SURFACES.md) — practical authoring guide with patterns, gotchas, and reference implementations.
+A new surface kind is a single HTML file in `works/surfaces/` plus three lines in `works/js/surface-registry.js`. The contract is documented in [works/SURFACES.md](https://github.com/gentropic/auditable/blob/main/works/SURFACES.md) — practical authoring guide with patterns, gotchas, and reference implementations.
 
 ## Layout
 
-[@gcu/rails](https://github.com/endarthur/auditable/tree/main/ext/rails) is the docked-tab layout engine. Three primitives:
+[@gcu/rails](https://github.com/gentropic/auditable/tree/main/ext/rails) is the docked-tab layout engine. Three primitives:
 
 - **Tab** — a hosted surface.
 - **Stack** — a group of tabs, with a tab bar; one tab visible at a time.
@@ -120,7 +120,7 @@ Top menu bar (the `@gcu/menu` MenuBar). Items:
 
 ## A-Bus — the coordination layer
 
-The shell hosts the A-Bus broker; every surface is a peer. Surfaces address each other (and the shell) over A-Bus method calls and signals — see [@gcu/abus/SPEC.md](https://github.com/endarthur/auditable/blob/main/ext/abus/SPEC.md). The shell exposes a `works` service at `/` with three interfaces:
+The shell hosts the A-Bus broker; every surface is a peer. Surfaces address each other (and the shell) over A-Bus method calls and signals — see [@gcu/abus/SPEC.md](https://github.com/gentropic/auditable/blob/main/ext/abus/SPEC.md). The shell exposes a `works` service at `/` with three interfaces:
 
 - `VFS` — `Read`, `Write`, `MkDir`, `Stat`, `List`, `Move`, `Delete`. Surfaces use this to read/write workspace files.
 - `Shell` — `OpenSurface`, `SpawnSurface`, layout management.
@@ -202,7 +202,7 @@ The legacy `works:*` postMessage bridge and the lightweight-JSON notebook format
 
 ## See also
 
-- [SURFACES.md](https://github.com/endarthur/auditable/blob/main/works/SURFACES.md) — how to author a new surface kind.
-- [@gcu/abus SPEC](https://github.com/endarthur/auditable/blob/main/ext/abus/SPEC.md) — the IPC backbone.
-- [@gcu/vfs](https://github.com/endarthur/auditable/tree/main/ext/vfs) — the workspace filesystem.
-- [@gcu/rails](https://github.com/endarthur/auditable/tree/main/ext/rails) — the layout engine.
+- [SURFACES.md](https://github.com/gentropic/auditable/blob/main/works/SURFACES.md) — how to author a new surface kind.
+- [@gcu/abus SPEC](https://github.com/gentropic/auditable/blob/main/ext/abus/SPEC.md) — the IPC backbone.
+- [@gcu/vfs](https://github.com/gentropic/auditable/tree/main/ext/vfs) — the workspace filesystem.
+- [@gcu/rails](https://github.com/gentropic/auditable/tree/main/ext/rails) — the layout engine.

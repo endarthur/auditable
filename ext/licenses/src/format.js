@@ -112,7 +112,7 @@ function formatSpdxBom(table, opts = {}) {
   const now = (opts.now || new Date()).toISOString().replace(/\.\d+Z$/, 'Z');
   const docName = opts.documentName || 'auditable-workspace';
   const namespace = opts.documentNamespace
-    || `https://endarthur.github.io/auditable/sbom/${docName}-${Date.now()}`;
+    || `https://gentropic.org/auditable/sbom/${docName}-${Date.now()}`;
 
   const packages = table.map((e, idx) => {
     const declared = e.spdx && e.spdx !== 'UNKNOWN' ? e.spdx : 'NOASSERTION';

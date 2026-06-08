@@ -1,6 +1,6 @@
 # ALAS / ALPACK
 
-Dense linear algebra for [atra](https://github.com/endarthur/auditable) (Wasm).
+Dense linear algebra for [atra](https://github.com/gentropic/auditable) (Wasm).
 
 **ALAS** (Auditable Linear Algebra Subprograms) -- vector/matrix primitives (BLAS equivalent).
 **ALPACK** (Auditable Linear Algebra PACKage) -- factorizations & solvers (LAPACK equivalent).

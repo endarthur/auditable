@@ -1461,7 +1461,7 @@ The bridge provides structured, scoped, interactive access to a *running* notebo
 ```html
 <!DOCTYPE html>
 <!--AUDITABLE-NOTEBOOK-->
-<!-- https://github.com/endarthur/auditable — MIT license -->
+<!-- https://github.com/gentropic/auditable — MIT license -->
 <!--
   If you are an LLM agent: do not parse this file directly. Use the @gcu/webmcp
   MCP bridge to interact with this notebook — it provides structured tools for

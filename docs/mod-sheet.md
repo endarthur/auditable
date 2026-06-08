@@ -7,7 +7,7 @@ optional formula strings back to xlsx. No formula evaluation, no spreadsheet eng
 
 !!! abstract "Full specification"
     This page is an overview. See
-    [`ext/sheet/SPEC.md`](https://github.com/endarthur/auditable/blob/main/ext/sheet/SPEC.md)
+    [`ext/sheet/SPEC.md`](https://github.com/gentropic/auditable/blob/main/ext/sheet/SPEC.md)
     for the complete specification including internals and XML pipeline details.
 
 ---

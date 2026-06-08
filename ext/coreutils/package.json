@@ -21,8 +21,8 @@
   "author": "Arthur Endlein Correia",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/endarthur/auditable.git",
+    "url": "git+https://github.com/gentropic/auditable.git",
     "directory": "ext/coreutils"
   },
-  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/coreutils"
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/coreutils"
 }

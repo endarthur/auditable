@@ -2,7 +2,7 @@
 
 **A tiny in-process text search engine.** Inverted index, BM25F scoring with field boosts, Damerau-Levenshtein fuzzy expansion, synonym dictionary, prefix matching, snippet generation, did-you-mean suggestions.
 
-Designed for browser-sized corpora (hundreds to low thousands of documents): docs sites, command palettes, in-page table search, the help system inside [Auditable Works](https://github.com/endarthur/auditable). Zero dependencies. ~18 KB unminified, gzips to ~6 KB.
+Designed for browser-sized corpora (hundreds to low thousands of documents): docs sites, command palettes, in-page table search, the help system inside [Auditable Works](https://github.com/gentropic/auditable). Zero dependencies. ~18 KB unminified, gzips to ~6 KB.
 
 ```js
 import { Librarian } from '@gcu/librarian';

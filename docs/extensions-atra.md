@@ -6,7 +6,7 @@ literals, with zero dependencies and no external toolchain.
 
 !!! abstract "Full specification"
     This page is an overview. See
-    [`ext/atra/SPEC.md`](https://github.com/endarthur/auditable/blob/main/ext/atra/SPEC.md)
+    [`ext/atra/SPEC.md`](https://github.com/gentropic/auditable/blob/main/ext/atra/SPEC.md)
     for the complete language specification.
 
 ## Quick Start

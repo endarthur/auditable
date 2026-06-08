@@ -167,7 +167,7 @@ Legacy notebooks (the older 4-block `AUDITABLE-FS` + `AUDITABLE-DATA` + `AUDITAB
 
 ## VFS layout
 
-`notebook.fs` is the user-facing API; behind it sits a [@gcu/vfs](https://github.com/endarthur/auditable/tree/main/ext/vfs) instance with several mounts:
+`notebook.fs` is the user-facing API; behind it sits a [@gcu/vfs](https://github.com/gentropic/auditable/tree/main/ext/vfs) instance with several mounts:
 
 | Mount | Persistent? | Contents |
 |---|---|---|

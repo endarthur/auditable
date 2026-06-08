@@ -35,10 +35,10 @@
     "browser"
   ],
   "license": "MIT",
-  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/term",
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/term",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/endarthur/auditable.git",
+    "url": "git+https://github.com/gentropic/auditable.git",
     "directory": "ext/term"
   }
 }

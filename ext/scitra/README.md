@@ -4,7 +4,7 @@
 
 Companion to [@gcu/natra](https://www.npmjs.com/package/@gcu/natra) (numpy-shape arrays) and [@gcu/line](https://www.npmjs.com/package/@gcu/line) (BLAS-shape linear algebra). Where natra is "arrays" and line is "matrix factorizations," scitra is the higher-level statistical / spatial / optimisation primitives that real-world geoscience code reaches for.
 
-Part of [Auditable](https://github.com/endarthur/auditable). Architecture, scoring rationale, and module reference at [SPEC.md](./SPEC.md).
+Part of [Auditable](https://github.com/gentropic/auditable). Architecture, scoring rationale, and module reference at [SPEC.md](./SPEC.md).
 
 Pre-1.0 — APIs may change on minor version bumps.
 

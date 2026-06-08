@@ -20,11 +20,11 @@
   "author": "Arthur Endlein Correia",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/endarthur/auditable.git",
+    "url": "git+https://github.com/gentropic/auditable.git",
     "directory": "ext/spinifex"
   },
-  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/spinifex",
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/spinifex",
   "bugs": {
-    "url": "https://github.com/endarthur/auditable/issues"
+    "url": "https://github.com/gentropic/auditable/issues"
   }
 }

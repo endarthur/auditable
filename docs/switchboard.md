@@ -21,7 +21,7 @@
 
 Switchboard isn't a CSS framework; it's a set of rules. The whole system fits in a `<style>` block and a small JS theme-switcher. No build step, no preprocessor, no class library. CSS custom properties carry all the tokens; you read them from `var(--au-*)` and Switchboard owns whether `--au-action` resolves to orange-on-dark or orange-on-light.
 
-The full canon lives in [ext/switchboard/SPEC.md](https://github.com/endarthur/auditable/blob/main/ext/switchboard/SPEC.md) (version 1.0, MIT). This page is the user-facing summary — what to expect, how to extend cleanly, where to look when something's off.
+The full canon lives in [ext/switchboard/SPEC.md](https://github.com/gentropic/auditable/blob/main/ext/switchboard/SPEC.md) (version 1.0, MIT). This page is the user-facing summary — what to expect, how to extend cleanly, where to look when something's off.
 
 ## Three commitments
 
@@ -157,6 +157,6 @@ A new surface that wants its own palette tweaks: define them as additional `--au
 
 ## See also
 
-- [ext/switchboard/SPEC.md](https://github.com/endarthur/auditable/blob/main/ext/switchboard/SPEC.md) — full canon (version 1.0). Token tables, component reference, accessibility notes, the "piss filter" anti-pattern explained.
+- [ext/switchboard/SPEC.md](https://github.com/gentropic/auditable/blob/main/ext/switchboard/SPEC.md) — full canon (version 1.0). Token tables, component reference, accessibility notes, the "piss filter" anti-pattern explained.
 - [Settings → Appearance](settings.md) — toggle bundled fonts, override theme, edit `/home/nb/theme.css`.
 - [Auditable Works](works.md) — the consumer that bundled fonts default to "on" for.

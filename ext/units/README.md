@@ -1,6 +1,6 @@
 # @gcu/units
 
-Unit conversion for length, mass, area, volume, angle, grade, density, and magnetic quantities. Plus sieve mesh conversions, drill-core utilities, formatting helpers. Used by geoscientific notebooks in [Auditable](https://github.com/endarthur/auditable).
+Unit conversion for length, mass, area, volume, angle, grade, density, and magnetic quantities. Plus sieve mesh conversions, drill-core utilities, formatting helpers. Used by geoscientific notebooks in [Auditable](https://github.com/gentropic/auditable).
 
 Pre-1.0 — APIs may break on minor version bumps.
 

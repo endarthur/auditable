@@ -10,7 +10,7 @@ another. Calque structurally translates array expressions into Excel's formula l
 
 !!! abstract "Full specification"
     This page is an overview. See
-    [`ext/calque/SPEC.md`](https://github.com/endarthur/auditable/blob/main/ext/calque/SPEC.md)
+    [`ext/calque/SPEC.md`](https://github.com/gentropic/auditable/blob/main/ext/calque/SPEC.md)
     for the complete language specification.
 
 ---

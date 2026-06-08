@@ -2,7 +2,7 @@
 
 Virtual filesystem abstraction with pluggable backends. One `VFS` class, many backends: in-memory, File System Access API, OPFS, IndexedDB, HTML-comment embedded (for single-file notebooks), fetch, REST, and overlay. Glob matching, event emitter, permission checks.
 
-Part of [Auditable](https://github.com/endarthur/auditable).
+Part of [Auditable](https://github.com/gentropic/auditable).
 
 Pre-1.0 — APIs may break on minor version bumps.
 

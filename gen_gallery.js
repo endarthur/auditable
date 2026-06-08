@@ -93,7 +93,7 @@ const html = `<!doctype html>
 <main>
 ${sections}
 </main>
-<footer>auditable · Geoscientific Chaos Union · <a href="https://github.com/endarthur/auditable" style="color:var(--teal)">github.com/endarthur/auditable</a></footer>
+<footer>auditable · Geoscientific Chaos Union · <a href="https://github.com/gentropic/auditable" style="color:var(--teal)">github.com/gentropic/auditable</a></footer>
 </body>
 </html>
 `;

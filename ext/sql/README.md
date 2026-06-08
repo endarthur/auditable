@@ -1,6 +1,6 @@
 # @gcu/sql
 
-SQL language tag with syntax highlighting and completions for [Auditable](https://github.com/endarthur/auditable) and anywhere else you want a `sql` tagged template helper.
+SQL language tag with syntax highlighting and completions for [Auditable](https://github.com/gentropic/auditable) and anywhere else you want a `sql` tagged template helper.
 
 Pre-1.0 — APIs may break on minor version bumps.
 

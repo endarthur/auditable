@@ -2,7 +2,7 @@
 
 Greedy voxel meshing for block models and volumetric data. Binning, bucket aggregation, chunked meshing, convenience wrappers. Produces triangle meshes suitable for Three.js, WebGPU, or any renderer.
 
-Part of [Auditable](https://github.com/endarthur/auditable). Designed to pair with [@gcu/grid](https://www.npmjs.com/package/@gcu/grid) (block model) and [@gcu/dee](https://www.npmjs.com/package/@gcu/dee) (Three.js scene).
+Part of [Auditable](https://github.com/gentropic/auditable). Designed to pair with [@gcu/grid](https://www.npmjs.com/package/@gcu/grid) (block model) and [@gcu/dee](https://www.npmjs.com/package/@gcu/dee) (Three.js scene).
 
 Pre-1.0 — APIs may break on minor version bumps.
 

@@ -20,7 +20,7 @@ table-rendering kernel for the GCU stack.
   the scrollbar; swap at runtime
 - Pure vanilla JS, single ES module, zero runtime deps; ~31 KB unminified
 
-`@gcu/loom` is part of the [Auditable](https://github.com/endarthur/auditable)
+`@gcu/loom` is part of the [Auditable](https://github.com/gentropic/auditable)
 ecosystem. It's the grid behind [`@gcu/strata`](../strata) (columnar + overlay
 data) and is usable standalone with any provider you write.
 

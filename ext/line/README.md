@@ -20,7 +20,7 @@ missing from the JS ecosystem.
 - Works in Node, modern browsers, Deno, Bun
 - ~90 KB unminified, single ES module, zero runtime deps
 
-`@gcu/line` is part of the [Auditable](https://github.com/endarthur/auditable)
+`@gcu/line` is part of the [Auditable](https://github.com/gentropic/auditable)
 ecosystem and ships with a Python (adder) bridge, but the core library
 is fully usable as a standalone npm package.
 
@@ -452,7 +452,7 @@ OPENBLAS_NUM_THREADS=1 python test/perf_line_numpy.py # numpy reference
 
 ## When to use line vs natra
 
-[natra](https://github.com/endarthur/auditable/tree/main/ext/natra) is a
+[natra](https://github.com/gentropic/auditable/tree/main/ext/natra) is a
 sibling library backed by atra-compiled Wasm with BLAS-style kernels.
 Both can coexist; pick per-task:
 

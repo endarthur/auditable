@@ -2,7 +2,7 @@
 
 Regular block-model grid utilities: geometry (index/flat conversion, centroids, rotation), selections (masks, boolean ops, classification), compacting, operations (map, reduce, histogram, grade-tonnage, swath plots), spatial queries (slices, shells, regridding).
 
-Part of [Auditable](https://github.com/endarthur/auditable). Used with [@gcu/voxmesh](https://www.npmjs.com/package/@gcu/voxmesh) and [@gcu/dee](https://www.npmjs.com/package/@gcu/dee) for 3D visualization.
+Part of [Auditable](https://github.com/gentropic/auditable). Used with [@gcu/voxmesh](https://www.npmjs.com/package/@gcu/voxmesh) and [@gcu/dee](https://www.npmjs.com/package/@gcu/dee) for 3D visualization.
 
 Pre-1.0 — APIs may break on minor version bumps.
 

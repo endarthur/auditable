@@ -2,7 +2,7 @@
 
 Matplotlib-style plotting for the browser. Canvas-based, zero runtime dependencies. Thin familiar API: `subplots`, `plot`, `scatter`, `imshow`, `hist`, `bar`.
 
-Part of [Auditable](https://github.com/endarthur/auditable).
+Part of [Auditable](https://github.com/gentropic/auditable).
 
 Pre-1.0 — APIs may break on minor version bumps.
 

@@ -154,4 +154,4 @@ The settings panel footer shows version information:
 - **Version** — the auditable version number
 - **Build** — release type and build date
 - **Runtime** — base runtime size in KB
-- A link to the [GitHub repository](https://github.com/endarthur/auditable)
+- A link to the [GitHub repository](https://github.com/gentropic/auditable)

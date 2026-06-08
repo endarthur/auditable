@@ -1,6 +1,6 @@
 # @gcu/air
 
-Auditable Intermediate Representation — an SSA-based compiler IR with structured regions, used by [Auditable](https://github.com/endarthur/auditable) for analysis, optimization, and V8-hinted JavaScript emission across JavaScript/TypeScript, [adder](https://www.npmjs.com/package/@gcu/adder) (Python), and [Soft](https://www.npmjs.com/package/@gcu/soft) dialects.
+Auditable Intermediate Representation — an SSA-based compiler IR with structured regions, used by [Auditable](https://github.com/gentropic/auditable) for analysis, optimization, and V8-hinted JavaScript emission across JavaScript/TypeScript, [adder](https://www.npmjs.com/package/@gcu/adder) (Python), and [Soft](https://www.npmjs.com/package/@gcu/soft) dialects.
 
 Normal consumers don't touch @gcu/air directly — they use `@gcu/adder/air` or `@gcu/soft/air`, which are thin wrappers over this package. Reach for @gcu/air directly when you want to compile your own language to JS, add passes, or emit hinted JavaScript from your own AST pipeline.
 

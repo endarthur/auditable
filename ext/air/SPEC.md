@@ -2,7 +2,7 @@
 
 **Status:** v0.3 (shipped 2026-05-09); v0.2 baseline still authoritative for §2-§16 below
 **Author:** Arthur Endlein Correia / GCU
-**Repository:** [endarthur/auditable](https://github.com/endarthur/auditable)
+**Repository:** [gentropic/auditable](https://github.com/gentropic/auditable)
 
 ## 0. v0.3 — Self-Describing IR (2026-05-09)
 

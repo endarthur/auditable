@@ -2,7 +2,7 @@
 
 **A D-Bus-shaped coordination bus for browser apps.** Method calls, signals, name registration, introspection — over MessagePorts.
 
-A-Bus is the IPC layer of [Auditable Works](https://github.com/endarthur/auditable): the shell hosts the broker, every surface (notebook, terminal, docs, file inspector) is a peer, and they coordinate through a single asynchronous bus instead of an ad-hoc tangle of `postMessage` handlers. Shaped after D-Bus because D-Bus's vocabulary (well-known names, object paths, interfaces, methods, signals, subscriptions, introspection) is well-worn and battle-tested for exactly this problem.
+A-Bus is the IPC layer of [Auditable Works](https://github.com/gentropic/auditable): the shell hosts the broker, every surface (notebook, terminal, docs, file inspector) is a peer, and they coordinate through a single asynchronous bus instead of an ad-hoc tangle of `postMessage` handlers. Shaped after D-Bus because D-Bus's vocabulary (well-known names, object paths, interfaces, methods, signals, subscriptions, introspection) is well-worn and battle-tested for exactly this problem.
 
 Works over any `MessagePort`-shaped transport: `MessageChannel` (browser, Node), iframe → parent `window.postMessage` bridges, `Worker` ports.
 

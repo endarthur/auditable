@@ -13,7 +13,7 @@ const __AUDITABLE_VERSION__ = '0.0.0';
 const __AUDITABLE_BUILD_DATE__ = 'dev';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_PUBLIC_KEY__ = '';
-const __AUDITABLE_REPO__ = 'endarthur/auditable';
+const __AUDITABLE_REPO__ = 'gentropic/auditable';
 
 // Build-time-injected vendored license manifest. Same placeholder as
 // works-service.js — build.js rewrites this single line to the real

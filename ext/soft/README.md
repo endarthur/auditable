@@ -1,6 +1,6 @@
 # @gcu/soft
 
-Soft — a programming language with English keywords, designed for soft-keyboard input. Every keyword is a common English word; the language can be written without symbols entirely. Usable as a standalone interpreter library or as an [Auditable](https://github.com/endarthur/auditable) cell type.
+Soft — a programming language with English keywords, designed for soft-keyboard input. Every keyword is a common English word; the language can be written without symbols entirely. Usable as a standalone interpreter library or as an [Auditable](https://github.com/gentropic/auditable) cell type.
 
 Pure JS tree-walking interpreter. Ships with an optional AIR-transpilation fast path (`@gcu/soft/air`) via [@gcu/air](https://www.npmjs.com/package/@gcu/air).
 

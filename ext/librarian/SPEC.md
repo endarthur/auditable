@@ -2,7 +2,7 @@
 
 **A BM25F-shaped text search engine for browser-sized corpora.**
 
-Librarian is the search engine that powers Ctrl+K in [Auditable Works](https://github.com/endarthur/auditable) and any future GCU surface that needs in-page text retrieval — command palettes, table search, in-tool help. Pure JS, zero dependencies, designed to be readable end to end and small enough to inline into a single-file deployable.
+Librarian is the search engine that powers Ctrl+K in [Auditable Works](https://github.com/gentropic/auditable) and any future GCU surface that needs in-page text retrieval — command palettes, table search, in-tool help. Pure JS, zero dependencies, designed to be readable end to end and small enough to inline into a single-file deployable.
 
 | Field      | Value                                          |
 |------------|------------------------------------------------|

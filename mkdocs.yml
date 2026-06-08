@@ -1,8 +1,8 @@
 site_name: auditable
 site_description: A reactive computational notebook in a single HTML file
-site_url: https://endarthur.github.io/auditable/
-repo_url: https://github.com/endarthur/auditable
-repo_name: endarthur/auditable
+site_url: https://gentropic.org/auditable/
+repo_url: https://github.com/gentropic/auditable
+repo_name: gentropic/auditable
 
 theme:
   name: material

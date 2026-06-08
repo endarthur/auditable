@@ -188,7 +188,7 @@ if (target === 'works' || target === 'works-all') {
   const worksBuildDate = buildDateFromGit();
   const worksRelease = process.env.AUDITABLE_RELEASE || 'dev';
   const worksPubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
-  const worksRepo = process.env.AUDITABLE_REPO || 'endarthur/auditable';
+  const worksRepo = process.env.AUDITABLE_REPO || 'gentropic/auditable';
   for (const mod of modules) {
     mod.source = mod.source.replace(
       "const __AUDITABLE_VERSION__ = '0.0.0';",
@@ -203,7 +203,7 @@ if (target === 'works' || target === 'works-all') {
       "const __AUDITABLE_PUBLIC_KEY__ = '';",
       `const __AUDITABLE_PUBLIC_KEY__ = '${worksPubKey}';`);
     mod.source = mod.source.replace(
-      "const __AUDITABLE_REPO__ = 'endarthur/auditable';",
+      "const __AUDITABLE_REPO__ = 'gentropic/auditable';",
       `const __AUDITABLE_REPO__ = '${worksRepo}';`);
   }
   // licenses-spec §7.3 — vendor licenses available to the works shell too.
@@ -829,7 +829,7 @@ if (target === 'calque') {
   // 4. Assemble
   const html = `<!DOCTYPE html>
 <!-- Calque Editor \u2014 spreadsheet language tool -->
-<!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
+<!-- Part of the Auditable project \u2014 https://github.com/gentropic/auditable -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -887,7 +887,7 @@ if (target === 'gcu-press') {
   // 4. Assemble
   const html = `<!DOCTYPE html>
 <!-- GCU Press \u2014 typesetting editor -->
-<!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
+<!-- Part of the Auditable project \u2014 https://github.com/gentropic/auditable -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -945,7 +945,7 @@ if (target === 'plan') {
   // 4. Assemble
   const html = `<!DOCTYPE html>
 <!-- Plan \u2014 project scheduling tool -->
-<!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
+<!-- Part of the Auditable project \u2014 https://github.com/gentropic/auditable -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1012,7 +1012,7 @@ if (target === 'geas') {
 
   const html = `<!DOCTYPE html>
 <!-- geas — the GCU shell, standalone terminal -->
-<!-- Part of the Auditable project — https://github.com/endarthur/auditable -->
+<!-- Part of the Auditable project — https://github.com/gentropic/auditable -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1089,7 +1089,7 @@ if (target === 'dee') {
   // 4. Assemble
   const html = `<!DOCTYPE html>
 <!-- dee \u2014 3D block model viewer -->
-<!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
+<!-- Part of the Auditable project \u2014 https://github.com/gentropic/auditable -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1164,7 +1164,7 @@ if (target === 'rv') {
   // 7. Assemble
   const html = `<!DOCTYPE html>
 <!-- rv \u2014 RISC-V RV32IMA system emulator -->
-<!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
+<!-- Part of the Auditable project \u2014 https://github.com/gentropic/auditable -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1304,9 +1304,9 @@ const appDir = path.join(srcDir, 'app');
 function buildAppRuntime() {
   let appJs = processModules(path.join(appDir, 'main.js'), appDir);
   // inject build-time constants into app runtime
-  const pagesUrlVal = process.env.AUDITABLE_PAGES_URL || 'https://endarthur.github.io/auditable';
+  const pagesUrlVal = process.env.AUDITABLE_PAGES_URL || 'https://gentropic.org/auditable';
   appJs = appJs.replace(
-    "const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';",
+    "const __AUDITABLE_PAGES_URL__ = 'https://gentropic.org/auditable';",
     `const __AUDITABLE_PAGES_URL__ = '${pagesUrlVal}';`
   );
   return appJs;
@@ -1630,8 +1630,8 @@ const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'ut
 const buildDate = buildDateFromGit();
 const release = process.env.AUDITABLE_RELEASE || 'dev';
 const pubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
-const repo = process.env.AUDITABLE_REPO || 'endarthur/auditable';
-const pagesUrl = process.env.AUDITABLE_PAGES_URL || 'https://endarthur.github.io/auditable';
+const repo = process.env.AUDITABLE_REPO || 'gentropic/auditable';
+const pagesUrl = process.env.AUDITABLE_PAGES_URL || 'https://gentropic.org/auditable';
 
 for (const mod of modules) {
   mod.source = mod.source.replace("'__AUDITABLE_BUILTINS__'", builtins.trim());
@@ -1652,11 +1652,11 @@ for (const mod of modules) {
     `const __AUDITABLE_PUBLIC_KEY__ = '${pubKey}';`
   );
   mod.source = mod.source.replace(
-    "const __AUDITABLE_REPO__ = 'endarthur/auditable';",
+    "const __AUDITABLE_REPO__ = 'gentropic/auditable';",
     `const __AUDITABLE_REPO__ = '${repo}';`
   );
   mod.source = mod.source.replace(
-    "const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';",
+    "const __AUDITABLE_PAGES_URL__ = 'https://gentropic.org/auditable';",
     `const __AUDITABLE_PAGES_URL__ = '${pagesUrl}';`
   );
   if (execModeArg) {
@@ -1716,7 +1716,7 @@ function assemble(jsCode) {
   reading cells, inspecting outputs, and editing code with proper access control.
   Raw file access bypasses the notebook's governance model.
 -->
-<!-- https://github.com/endarthur/auditable — MIT license -->
+<!-- https://github.com/gentropic/auditable — MIT license -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">

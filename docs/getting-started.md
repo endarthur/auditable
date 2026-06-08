@@ -14,8 +14,8 @@ Both are single HTML files — no install, no server, no dependencies.
 ## Download
 
 Get the latest `auditable.html` and `works.html` from the
-[GitHub releases page](https://github.com/endarthur/auditable/releases) or directly
-from [endarthur.github.io/auditable](https://endarthur.github.io/auditable/auditable.html).
+[GitHub releases page](https://github.com/gentropic/auditable/releases) or directly
+from [gentropic.org/auditable](https://gentropic.org/auditable/auditable.html).
 
 ## Opening auditable
 

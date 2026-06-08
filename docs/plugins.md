@@ -191,7 +191,7 @@ Plugins uninstalled via `_ctUninstallPlugin(url)` remove the cell type, revert a
 
 !!! info "Reference implementations"
     - [adder](adder/index.md) — Python dialect. Reference for cell types + AIR lowerers + context hooks. See `ext/adder/src/register.js`.
-    - [@gcu/soft](https://github.com/endarthur/auditable/tree/main/ext/soft) — English-keyword language. Reference for simpler cell types.
+    - [@gcu/soft](https://github.com/gentropic/auditable/tree/main/ext/soft) — English-keyword language. Reference for simpler cell types.
     - [@gcu/sql](https://www.npmjs.com/package/@gcu/sql) — tagged-template only (no cell type). Reference for `taggedLanguage` contributions.
 
 ---

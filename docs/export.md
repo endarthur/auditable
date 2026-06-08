@@ -184,7 +184,7 @@ so cell data and settings changes don't invalidate it — only runtime modificat
 **Verification tools:**
 
 - The built-in **update system** verifies signatures when downloading new versions
-- The **[scan tool](https://endarthur.github.io/auditable/scan/)** is a standalone PWA
+- The **[scan tool](https://gentropic.org/auditable/scan/)** is a standalone PWA
   for verifying signatures on any saved notebook
 
 !!! info "Signing infrastructure"
@@ -210,6 +210,6 @@ settings, and installed modules.
 
 ## Works Workspace Integration
 
-When a notebook runs inside an [Auditable Works workspace](works.md), saving works differently — instead of downloading a file, the notebook surface flushes via the [@gcu/abus](https://github.com/endarthur/auditable/tree/main/ext/abus) `Surface.Flush()` method, and the shell writes the result to the workspace VFS at the notebook's path. The Works shell then persists the workspace using its configured backend (IndexedDB or File System Access API).
+When a notebook runs inside an [Auditable Works workspace](works.md), saving works differently — instead of downloading a file, the notebook surface flushes via the [@gcu/abus](https://github.com/gentropic/auditable/tree/main/ext/abus) `Surface.Flush()` method, and the shell writes the result to the workspace VFS at the notebook's path. The Works shell then persists the workspace using its configured backend (IndexedDB or File System Access API).
 
 The notebook detects the Works parent automatically — when the surface receives an `abus:welcome` from the shell, it switches save behavior to the A-Bus flush path. No user configuration needed. The legacy `works:*` postMessage bridge is retired.

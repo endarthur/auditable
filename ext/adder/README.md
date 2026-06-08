@@ -4,7 +4,7 @@ Python-in-JavaScript. AST parser + tree-walking evaluator in pure JS, no WASM. A
 
 Ships with an optional AIR-transpilation fast path (`@gcu/adder/air`) that compiles adder source to V8-hinted JavaScript via [@gcu/air](https://www.npmjs.com/package/@gcu/air), typically 15–300× faster than the tree-walker on numeric workloads.
 
-Originally built for [Auditable](https://github.com/endarthur/auditable) notebooks; usable as a standalone library anywhere ESM runs — browsers, Node, workers, Deno.
+Originally built for [Auditable](https://github.com/gentropic/auditable) notebooks; usable as a standalone library anywhere ESM runs — browsers, Node, workers, Deno.
 
 Pre-1.0 — APIs may change on minor version bumps.
 

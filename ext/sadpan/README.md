@@ -2,7 +2,7 @@
 
 DataFrame-style structured data manipulation. Series, Table, group-by, joins, CSV/JSON IO. Inspired by pandas, scaled down for a notebook runtime.
 
-Part of [Auditable](https://github.com/endarthur/auditable).
+Part of [Auditable](https://github.com/gentropic/auditable).
 
 Pre-1.0 — APIs may break on minor version bumps.
 

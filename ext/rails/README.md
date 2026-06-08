@@ -8,7 +8,7 @@ Rails, stacks, tabs, floats — no recursion, no OS popout. Panels never reparen
 
 Zero dependencies. Structural CSS is ~1 KB gzipped; the library is ~6 KB gzipped.
 
-Part of [Auditable](https://github.com/endarthur/auditable). Designed first for the Auditable Works workspace shell.
+Part of [Auditable](https://github.com/gentropic/auditable). Designed first for the Auditable Works workspace shell.
 
 Pre-1.0 — APIs may break on minor version bumps. Floats are in progress.
 

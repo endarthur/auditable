@@ -22,11 +22,11 @@
   "author": "Arthur Endlein Correia",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/endarthur/auditable.git",
+    "url": "git+https://github.com/gentropic/auditable.git",
     "directory": "ext/peel"
   },
-  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/peel",
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/peel",
   "bugs": {
-    "url": "https://github.com/endarthur/auditable/issues"
+    "url": "https://github.com/gentropic/auditable/issues"
   }
 }

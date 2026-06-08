@@ -8,8 +8,8 @@ import { Dialog } from '#dialog';
 // ── SELF-UPDATE SYSTEM ──
 
 const __AUDITABLE_PUBLIC_KEY__ = '';
-const __AUDITABLE_REPO__ = 'endarthur/auditable';
-const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';
+const __AUDITABLE_REPO__ = 'gentropic/auditable';
+const __AUDITABLE_PAGES_URL__ = 'https://gentropic.org/auditable';
 
 // Cached result of the load-time signature self-verification (sets the
 // toolbar badge as a side effect; surfaced inside the update dialog when

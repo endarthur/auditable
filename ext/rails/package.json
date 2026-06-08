@@ -26,11 +26,11 @@
   "author": "Arthur Endlein Correia",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/endarthur/auditable.git",
+    "url": "git+https://github.com/gentropic/auditable.git",
     "directory": "ext/rails"
   },
-  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/rails",
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/rails",
   "bugs": {
-    "url": "https://github.com/endarthur/auditable/issues"
+    "url": "https://github.com/gentropic/auditable/issues"
   }
 }

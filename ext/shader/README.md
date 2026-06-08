@@ -2,7 +2,7 @@
 
 Shadertoy-compatible WebGL 2 shader helper. Tagged-template `glsl` + `shader(canvas, code)` with live hot-compile, Shadertoy-style uniforms (`iTime`, `iResolution`, `iMouse`), and automatic vertex/fragment wiring.
 
-Part of [Auditable](https://github.com/endarthur/auditable).
+Part of [Auditable](https://github.com/gentropic/auditable).
 
 Pre-1.0 — APIs may break on minor version bumps.
 

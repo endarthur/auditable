@@ -2,7 +2,7 @@
 
 **A D-Bus-shaped coordination protocol for browser apps.**
 
-A-Bus is the IPC backbone of [Auditable Works](https://github.com/endarthur/auditable) and any other GCU surface that needs structured cross-realm coordination — iframe panels, web workers, SharedWorker shells, multi-tab notebooks. The shape mirrors D-Bus (well-known names + object paths + interfaces + signals + introspection); the transport is MessagePort.
+A-Bus is the IPC backbone of [Auditable Works](https://github.com/gentropic/auditable) and any other GCU surface that needs structured cross-realm coordination — iframe panels, web workers, SharedWorker shells, multi-tab notebooks. The shape mirrors D-Bus (well-known names + object paths + interfaces + signals + introspection); the transport is MessagePort.
 
 | Field      | Value                                          |
 |------------|------------------------------------------------|

@@ -2,7 +2,7 @@
 
 ISO 9660 CD/DVD filesystem reader and writer in pure JavaScript. Supports Joliet extensions for long/Unicode filenames.
 
-Part of [Auditable](https://github.com/endarthur/auditable).
+Part of [Auditable](https://github.com/gentropic/auditable).
 
 Pre-1.0 — APIs may break on minor version bumps.
 

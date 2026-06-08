@@ -100,7 +100,7 @@ ui.display("This cell runs manually")
 
 This is the same format as `examples/defs/**/*.txt`. Human-readable, diff-friendly, no JSON escaping needed for code bodies — the format is "split on `///` lines, content between markers is verbatim."
 
-See [`examples/defs/FORMAT.md`](https://github.com/endarthur/auditable/blob/main/examples/defs/FORMAT.md) for the full grammar.
+See [`examples/defs/FORMAT.md`](https://github.com/gentropic/auditable/blob/main/examples/defs/FORMAT.md) for the full grammar.
 
 ### Why not raw JSON?
 
@@ -217,7 +217,7 @@ See `keygen.js` (generates the signing keypair) and `sign.js` (signs a built `au
 
 ## See also
 
-- [`examples/defs/FORMAT.md`](https://github.com/endarthur/auditable/blob/main/examples/defs/FORMAT.md) — the `///` plain-text format spec.
+- [`examples/defs/FORMAT.md`](https://github.com/gentropic/auditable/blob/main/examples/defs/FORMAT.md) — the `///` plain-text format spec.
 - [Encryption](../encryption.md) — what the `AUDITABLE-CRYPTO` block contains.
 - [Notebook Filesystem](../filesystem.md) — what gets serialized into the `/home/nb/` portion of the VFS dump.
 - [Export](../export.md) — save modes, packed export, app export, signatures.

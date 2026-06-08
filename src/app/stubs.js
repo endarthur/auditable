@@ -9,7 +9,7 @@ function setEditorSearchDecorations() {}
 function clearEditorSearchDecorations() {}
 function clearAllSearchDecorations() {}
 
-const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';
+const __AUDITABLE_PAGES_URL__ = 'https://gentropic.org/auditable';
 
 // ── HOOK BUS STUB ──
 // Tiny in-app substitute for src/js/hooks.js (which the app runtime doesn't bundle).

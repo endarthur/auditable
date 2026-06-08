@@ -174,5 +174,5 @@ function showShortcuts() {
 }
 
 function showAbout() {
-  alert('dee \u2014 3D block model viewer\nPart of the Auditable project\nhttps://github.com/endarthur/auditable');
+  alert('dee \u2014 3D block model viewer\nPart of the Auditable project\nhttps://github.com/gentropic/auditable');
 }

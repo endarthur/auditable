@@ -245,7 +245,7 @@ function showAbout() {
     'Calque \u2014 a spreadsheet language\n\n' +
     'Write code, see spreadsheet, download xlsx.\n' +
     'Part of the Auditable project.\n\n' +
-    'https://github.com/endarthur/auditable'
+    'https://github.com/gentropic/auditable'
   );
 }
 

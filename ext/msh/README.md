@@ -129,7 +129,7 @@ For now: **opaque magic, preserved verbatim on round-trip.** The
 `DEFAULT_BINARY_SIGNATURE` constant in `msh.js` is the canonical value;
 the writer emits it when no `binarySignature` is supplied. If you ever
 figure out what they mean, please [open an
-issue](https://github.com/endarthur/auditable/issues) — we'd love to
+issue](https://github.com/gentropic/auditable/issues) — we'd love to
 update this section.
 
 ## API

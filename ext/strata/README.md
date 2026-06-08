@@ -22,7 +22,7 @@ the strata surface, usable standalone.
   to the loom grid; the model has zero DOM and is fully node-testable
 - Pure vanilla JS, single ES module, zero *hard* deps (recon/archive are injected)
 
-`@gcu/strata` is part of the [Auditable](https://github.com/endarthur/auditable)
+`@gcu/strata` is part of the [Auditable](https://github.com/gentropic/auditable)
 ecosystem. Geoscience-grade: drillhole/assay/blockmodel data is tabular, and the
 overlay spine makes edits non-destructive and auditable by construction.
 

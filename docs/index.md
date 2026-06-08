@@ -39,19 +39,19 @@ Two flavors:
 
 | Feature | Description |
 |---|---|
-| **Tabbed shell** | Notebook, terminal, docs reader, file preview, settings — all surfaces in a docked-tab layout ([@gcu/rails](https://github.com/endarthur/auditable/tree/main/ext/rails)). |
+| **Tabbed shell** | Notebook, terminal, docs reader, file preview, settings — all surfaces in a docked-tab layout ([@gcu/rails](https://github.com/gentropic/auditable/tree/main/ext/rails)). |
 | **Workspace VFS** | One filesystem per workspace (IndexedDB or disk-folder via FSAA). All surfaces read/write the same tree. |
 | **Disk-folder mounts** | Mount real folders at `/mnt/<name>` — direct OS read/write through the File System Access API. |
 | **`geas` shell** | A real shell with `pkg` (package manager), `ed`, `readline`-edited input, plus the GCU coreutils. |
 | **Docs surface** | In-tool documentation reader with Ctrl+K full-text search across the entire docs corpus + every `ext/*/SPEC.md` + every `ext/*/README.md`. |
-| **A-Bus coordination** | Surfaces talk to each other and the shell via [@gcu/abus](https://github.com/endarthur/auditable/tree/main/ext/abus) — D-Bus-shaped IPC over MessagePorts. |
+| **A-Bus coordination** | Surfaces talk to each other and the shell via [@gcu/abus](https://github.com/gentropic/auditable/tree/main/ext/abus) — D-Bus-shaped IPC over MessagePorts. |
 | **Workspace export** | Bundle the whole workspace (notebooks + files + settings) into one self-contained `.html`. |
 
 **Learn more:** [Auditable Works](works.md) · [Encryption](encryption.md) · [MCP Bridge](mcp.md) · [Notebook Filesystem](filesystem.md) · [Plugins](plugins.md) · [adder (Python)](adder/index.md)
 
 ## Get auditable
 
-Download `auditable.html` from the [GitHub repository](https://github.com/endarthur/auditable) — it's a single file, no install needed.
+Download `auditable.html` from the [GitHub repository](https://github.com/gentropic/auditable) — it's a single file, no install needed.
 
 ## Quick start
 

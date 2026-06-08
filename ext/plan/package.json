@@ -43,11 +43,11 @@
   "author": "Arthur Endlein Correia",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/endarthur/auditable.git",
+    "url": "git+https://github.com/gentropic/auditable.git",
     "directory": "ext/plan"
   },
-  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/plan",
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/plan",
   "bugs": {
-    "url": "https://github.com/endarthur/auditable/issues"
+    "url": "https://github.com/gentropic/auditable/issues"
   }
 }

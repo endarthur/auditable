@@ -209,7 +209,7 @@ function showAbout() {
     + 'PERT estimation, critical path, Monte Carlo simulation,\n'
     + 'Gantt charts, earned value management.\n\n'
     + 'Part of the Auditable project.\n'
-    + 'https://github.com/endarthur/auditable'
+    + 'https://github.com/gentropic/auditable'
   );
 }
 
