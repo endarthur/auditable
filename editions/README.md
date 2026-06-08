@@ -11,6 +11,7 @@ yields byte-identical output.
 | edition | bundles | for |
 |---|---|---|
 | `auditable-py.html` | adder + `@gcu/plot` + `@gcu/sadpan` | scientific Python (NumPy/pandas/matplotlib-shaped), offline |
+| `auditable-geo.html` | the above + gslib (geostatistics: sgsim, kriging) | resource estimation, offline (the dogfood handout) |
 
 The lean `auditable.html` at the repo root stays the canonical app; editions are
 batteries-included distributables built on top of it. Adding one is a small entry in

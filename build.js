@@ -1257,6 +1257,24 @@ const EDITIONS = {
       { type: 'adder', code: 'import plt\nimport sadpan as pd\n\nprint("hello from adder — plt + sadpan load on import")' },
     ],
   },
+  'auditable-geo': {
+    title: 'Geoscience (adder)',
+    // The resource-estimation stack. gslib is a plain @atra wasm lib (named exports
+    // sgsim/kb2d, no registerExtension) — adderExports:['gslib'] + the generalized
+    // resolver make `import gslib` resolve the embedded namespace, so no JS bootstrap
+    // cell to bridge it into scope.
+    exts: [
+      ['@gcu/adder', 'ext/adder/index.js'],
+      ['@gcu/plot', 'ext/plot/index.js', ['plt']],
+      ['@gcu/sadpan', 'ext/sadpan/index.js', ['sadpan']],
+      ['@atra/gslib', 'ext/atra/lib/gslib.js', ['gslib']],
+    ],
+    settings: { theme: 'dark', fontSize: 13, width: '860', preferredCodeType: 'adder' },
+    cells: [
+      { type: 'md', code: '# Auditable — Geoscience edition\n\nThe resource-estimation stack — adder (Python), gslib (geostatistics: sgsim, kriging), `@gcu/plot`, `@gcu/sadpan` — **bundled in, fully offline**. Just `import gslib` / `import plt` / `import sadpan` in an `adder` cell; they load from the embedded copies on first use. See the *resource estimation* example for a worked simulate → drill → estimate pipeline.' },
+      { type: 'adder', code: 'import gslib\nimport plt\nimport sadpan as pd\n\nprint("geoscience edition — gslib, plt, sadpan bundled (offline)")' },
+    ],
+  },
 };
 if (EDITIONS[target]) {
   const makeExample = require('./make_example');

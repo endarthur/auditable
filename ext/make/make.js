@@ -100,6 +100,12 @@ export const REPO_TARGETS = [
       path.join(root, 'ext/adder/index.js'), path.join(root, 'ext/plot/index.js'), path.join(root, 'ext/sadpan/index.js'),
       path.join(root, 'build.js'), path.join(root, 'make_example.js'),
     ] },
+  { name: 'auditable-geo', out: 'editions/auditable-geo.html', cmd: ['build.js', '--target=auditable-geo'], deps: ['auditable'],
+    inputs: (root) => [
+      path.join(root, 'build', 'auditable.html'),
+      path.join(root, 'ext/adder/index.js'), path.join(root, 'ext/plot/index.js'), path.join(root, 'ext/sadpan/index.js'), path.join(root, 'ext/atra/lib/gslib.js'),
+      path.join(root, 'build.js'), path.join(root, 'make_example.js'),
+    ] },
   // The 79 examples each embed a compressed copy of the runtime, so they go stale on
   // every auditable.html change — gen_examples.js reads build/auditable.html (the
   // cleartext sibling build.js also writes). out:null = many files, not one; the dir

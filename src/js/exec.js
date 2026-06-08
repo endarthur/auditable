@@ -154,8 +154,12 @@ export async function resolveAdderModule(name) {
     }
   }
   if (!url) return null;
-  try { await loadInstalledModule(url); } catch { return null; }
-  return (window._auditableExtensions && window._auditableExtensions[name]) || null;
+  let mod;
+  try { mod = await loadInstalledModule(url); } catch { return null; }
+  // Prefer the extension's named export (registerExtension libs — plt, sadpan); fall
+  // back to the loaded module itself for plain libs that don't registerExtension but are
+  // declared importable via adderExports (e.g. the @atra/gslib namespace of sgsim/kb2d).
+  return (window._auditableExtensions && window._auditableExtensions[name]) || mod || null;
 }
 if (typeof window !== 'undefined') window._auditableResolveModule = resolveAdderModule;
 
