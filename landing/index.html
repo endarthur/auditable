@@ -8,7 +8,7 @@
 <style>
   :root {
     --bg:#14171c; --panel:#1b1f26; --line:#2a2f38; --fg:#e6e8eb; --dim:#9aa3af;
-    --teal:#3fb6b2; --orange:#e08a3c; --green:#6cae54;
+    --teal:#3fb6b2; --orange:#e08a3c; --green:#6cae54; --kw:#c8a8d8;
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); line-height:1.55;
@@ -55,10 +55,24 @@
     border-radius:8px 8px 0 0; position:relative; top:1px; }
   .tabs button.active { color:var(--fg); background:var(--panel); border-color:var(--line); }
   .pad { background:var(--panel); border:1px solid var(--line); border-radius:0 10px 10px 10px; padding:14px; }
-  #toy-code { display:block; width:100%; min-height:128px; resize:vertical; background:var(--bg); color:var(--fg);
-    border:1px solid var(--line); border-radius:8px; padding:12px; tab-size:2;
-    font-family:"Space Mono",ui-monospace,Menlo,monospace; font-size:13px; line-height:1.55; }
-  #toy-code:focus { outline:none; border-color:var(--teal); }
+  /* highlighted editor: transparent textarea over a colored <pre>, scroll-synced */
+  .editor { position:relative; }
+  .editor .hl, #toy-code {
+    margin:0; box-sizing:border-box; width:100%; min-height:128px; padding:12px;
+    border:1px solid var(--line); border-radius:8px; tab-size:2; white-space:pre; overflow:auto;
+    font-family:"Space Mono",ui-monospace,Menlo,monospace; font-size:13px; line-height:1.55;
+  }
+  .editor .hl { position:absolute; inset:0; background:var(--bg); color:var(--fg);
+    pointer-events:none; scrollbar-width:none; }
+  .editor .hl::-webkit-scrollbar { display:none; }
+  .editor .hl code { font:inherit; }
+  #toy-code { position:relative; resize:vertical; background:transparent; color:transparent; caret-color:var(--fg); }
+  #toy-code:focus { outline:none; }
+  .editor:focus-within .hl, .editor:focus-within #toy-code { border-color:var(--teal); }
+  .c-kw { color:var(--kw); }
+  .c-str { color:var(--green); }
+  .c-com { color:var(--dim); font-style:italic; }
+  .c-num { color:var(--teal); }
   .toy-bar { display:flex; align-items:center; gap:12px; margin:12px 0; }
   #toy-run { font-family:"Space Mono",monospace; font-weight:700; font-size:13px; padding:9px 20px; cursor:pointer;
     background:var(--green); color:#11160d; border:none; border-radius:8px; }
@@ -122,7 +136,10 @@
       <button data-lang="atra">atra · Wasm</button>
     </div>
     <div class="pad">
-      <textarea id="toy-code" spellcheck="false" aria-label="code"></textarea>
+      <div class="editor">
+        <pre class="hl" aria-hidden="true"><code id="toy-hl"></code></pre>
+        <textarea id="toy-code" spellcheck="false" wrap="off" aria-label="code"></textarea>
+      </div>
       <div class="toy-bar"><button id="toy-run">▶ Run</button><span id="toy-status"></span></div>
       <pre id="toy-out">› hit Run</pre>
     </div>
@@ -211,11 +228,52 @@
   };
   let cur = 'js';
   const codeEl = document.getElementById('toy-code');
+  const hlEl = document.getElementById('toy-hl');
   const outEl = document.getElementById('toy-out');
   const statusEl = document.getElementById('toy-status');
+
+  // Tiny per-language highlighter: one master regex (comment | string | number |
+  // identifier), classify by which group matched. No deps, no bundle.
+  const GRAMMAR = {
+    js:    { com: /\/\/[^\n]*|\/\*[\s\S]*?\*\//, str: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/, kw: 'const let var function return if else for while do of in new class extends await async yield try catch finally throw switch case break continue typeof instanceof delete void this super import export from default true false null undefined' },
+    adder: { com: /#[^\n]*/, str: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/, kw: 'def return if elif else for while in not and or is import from as class lambda pass break continue with try except finally raise yield global None True False print range len sum' },
+    soft:  { com: /#[^\n]*/, str: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/, kw: 'set to say if otherwise each for change in is at least most than greater less equal plus minus times divided by and or not while repeat let be of' },
+    atra:  { com: /![^\n]*/, str: /"(?:[^"\\]|\\.)*"/, kw: 'function subroutine var begin end for call return if then else while do and or not mod div export i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool array' },
+  };
+  for (const g of Object.values(GRAMMAR)) g.kwset = new Set(g.kw.split(' '));
+  const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  function highlight(code, lang) {
+    const g = GRAMMAR[lang];
+    if (!g) return esc(code) + '\n';
+    const re = new RegExp('(?<com>' + g.com.source + ')|(?<str>' + g.str.source + ')|(?<num>\\b\\d+(?:\\.\\d+)?\\b)|(?<id>[A-Za-z_]\\w*)', 'g');
+    let out = '', last = 0, m;
+    while ((m = re.exec(code)) !== null) {
+      out += esc(code.slice(last, m.index));
+      const t = m[0], gr = m.groups;
+      const cls = gr.com ? 'c-com' : gr.str ? 'c-str' : gr.num ? 'c-num' : (gr.id && g.kwset.has(t)) ? 'c-kw' : '';
+      out += cls ? '<span class="' + cls + '">' + esc(t) + '</span>' : esc(t);
+      last = m.index + t.length;
+      if (t.length === 0) re.lastIndex++;
+    }
+    return out + esc(code.slice(last)) + '\n';
+  }
+  const paint = () => { hlEl.innerHTML = highlight(codeEl.value, cur); };
+  codeEl.addEventListener('input', paint);
+  codeEl.addEventListener('scroll', () => { const p = hlEl.parentElement; p.scrollTop = codeEl.scrollTop; p.scrollLeft = codeEl.scrollLeft; });
+  codeEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    e.preventDefault();
+    const s = codeEl.selectionStart, en = codeEl.selectionEnd;
+    codeEl.value = codeEl.value.slice(0, s) + '  ' + codeEl.value.slice(en);
+    codeEl.selectionStart = codeEl.selectionEnd = s + 2;
+    paint();
+  });
+
   const setLang = (lang) => {
     cur = lang;
     codeEl.value = SNIPPETS[lang];
+    paint();
+    codeEl.scrollTop = 0; hlEl.parentElement.scrollTop = 0;
     outEl.textContent = '› hit Run';
     outEl.classList.remove('err');
     for (const b of document.querySelectorAll('#toy-tabs button')) b.classList.toggle('active', b.dataset.lang === lang);
