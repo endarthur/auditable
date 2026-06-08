@@ -13,6 +13,20 @@ const makeExample = require('./make_example');
 const defsDir = path.join(__dirname, 'examples', 'defs');
 const outDir = path.join(__dirname, 'examples');
 
+// adder import name(s) per embedded module, so adder cells can `import plt` (etc.) and
+// the notebook's lazy-import resolver finds the bundled copy from _installedModules —
+// no bootstrap load() cell. Runtime source of truth is each lib's registerExtension
+// `exports` key; this is the build-time hint persisted into the saved notebook so it's
+// known before anything loads. (Mirrors build.js's EDITIONS adderExports.)
+const ADDER_EXPORTS = {
+  '@gcu/plot': ['plt'],
+  '@gcu/sadpan': ['sadpan'],
+  '@gcu/natra': ['natra'],
+  '@gcu/scitra': ['scitra'],
+  '@gcu/learn': ['learn'],
+  '@atra/gslib': ['gslib'],
+};
+
 // ── Example categories ──
 // Each key is a subfolder under examples/defs/.
 // Add new examples to the appropriate category.
@@ -276,6 +290,7 @@ for (const [category, defs] of Object.entries(categories)) {
           const source = compressed.toString('base64');
           modules[url] = { source, compressed: true, cellId: null };
         }
+        if (ADDER_EXPORTS[url]) modules[url].adderExports = ADDER_EXPORTS[url];
       }
     }
 

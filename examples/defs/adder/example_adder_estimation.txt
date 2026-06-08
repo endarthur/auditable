@@ -8,14 +8,7 @@
 /// md
 # simulate, drill, estimate
 
-A complete resource estimation validation workflow in adder, a JS-targeting Python dialect. Generate a "true" deposit by unconditional Gaussian simulation, sample it with synthetic drillholes, krige the samples, then compare the estimate to the truth. One JS cell bootstraps the extensions; everything else is adder.
-
-/// code collapsed
-// %collapsed
-await load("@gcu/plot")
-await load("@gcu/adder")
-await load("@gcu/sadpan")
-const gslib = await load("@atra/gslib")
+A complete resource estimation validation workflow in adder, a JS-targeting Python dialect. Generate a "true" deposit by unconditional Gaussian simulation, sample it with synthetic drillholes, krige the samples, then compare the estimate to the truth. Pure adder — `gslib` (geostatistics), `plt` (plotting), and `sadpan` (dataframes) are bundled into this notebook and load on first `import`, no setup cell.
 
 /// md
 ## parameters
@@ -37,6 +30,8 @@ simSeed = ui.slider("sim seed", 42, {"min": 1, "max": 999, "step": 1})
 Generate the "true" deposit using GSLIB's `sgsim`. This is what we're trying to estimate.
 
 /// adder
+import gslib
+
 vario = {"nugget": vNugget, "structures": [{"type": "spherical", "contribution": vSill, "range": vRange}]}
 search = {"radius": max(vRange * 2, 20), "ndmax": 10, "nodmax": 12}
 grid = {"nx": gridN, "ny": gridN, "xsiz": 1, "ysiz": 1}
@@ -71,6 +66,7 @@ print(f"{nHoles} samples · mean {mean:.3f} · std {sd:.3f}")
 ## estimation — krige the samples
 
 /// adder
+import gslib
 import js
 
 t0 = js.performance.now()
