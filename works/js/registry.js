@@ -11,6 +11,7 @@ import { installGcudatBytes, getInstalled, patchInstalled } from './gcudat-insta
 import { installGcupkgBytes } from './file-ops.js';
 import { openPath } from './surfaces.js';
 import { destFor } from './paths.js';
+import { getLibSource } from './surface-registry.js';
 
 const DEFAULT_SOURCE = {
   url: 'https://raw.githubusercontent.com/gentropic/gcu-library/main/registry.json',
@@ -119,7 +120,55 @@ export async function checkUpdates() {
   return out;
 }
 
-async function installEntry(entry, base, sourceUrl) {
+// Is a lib already provisioned — baked into the shell (works/works-all) or
+// installed into /lib (a provisioned works-core)? If so, the dep-closure skips it.
+async function isLibProvisioned(name) {
+  if (getLibSource(name)) return true;
+  return WKS.vfs.exists('/lib/@gcu/' + name + '/source').catch(() => false);
+}
+
+// Find a catalog entry by exact name across every configured source. Returns the
+// first match (sources are user-ordered; the code source should precede others).
+async function resolveAcrossSources(name) {
+  for (const s of await getSources()) {
+    try {
+      const { base, registry } = await fetchRegistry({ url: s.url });
+      const entry = (registry.entries || []).find((e) => e.name === name);
+      if (entry) return { entry, base, sourceUrl: s.url };
+    } catch { /* source unreachable — try the next */ }
+  }
+  return null;
+}
+
+// After installing a package, pull its declared `requires` lib closure from the
+// configured sources — each missing lib installed SRI-verified, with NO extra
+// consent prompt (the top-level package install was already consented; npm-style
+// transitive-dep install). `requires` are read from gcu.services[].requires.
+// Recurses (a lib could declare its own service requires; ours are leaves).
+// `seen` guards diamonds + cycles. Returns the lib names it installed.
+export async function installRequiresClosure(pkgLibPath, seen = new Set()) {
+  const installed = [];
+  let pkg;
+  try { pkg = JSON.parse(await WKS.vfs.readFile(pkgLibPath + '/package.json', 'utf8')); }
+  catch { return installed; }
+  const services = pkg && pkg.gcu && Array.isArray(pkg.gcu.services) ? pkg.gcu.services : [];
+  const reqs = new Set();
+  for (const svc of services) for (const r of (svc.requires || [])) reqs.add(r);
+
+  for (const r of reqs) {
+    if (seen.has(r)) continue;
+    seen.add(r);
+    if (await isLibProvisioned(r)) continue;
+    const found = await resolveAcrossSources('@gcu/' + r);
+    if (!found) { console.warn(`[works] dep-closure: no source has @gcu/${r} (service may not activate)`); continue; }
+    setStatus(`installing dependency @gcu/${r}…`);
+    const dest = await installEntry(found.entry, found.base, found.sourceUrl, { skipConfirm: true, seen });
+    if (dest) installed.push(r);
+  }
+  return installed;
+}
+
+async function installEntry(entry, base, sourceUrl, opts = {}) {
   const url = resolveEntryUrl(base, Array.isArray(entry.url) ? entry.url[0] : entry.url);
   setStatus('fetching ' + entry.name + '…');
   const res = await fetch(url, { cache: 'no-cache' });
@@ -147,13 +196,17 @@ async function installEntry(entry, base, sourceUrl) {
     return dest;
   }
   if (entry.kind === 'gcupkg') {
-    // Code extension — runs in the workspace. Always confirm before install,
-    // regardless of source trust (SRI only proves the bytes are intact).
-    const ok = await dlgConfirm(
-      '"' + (entry.title || entry.name) + '" is a code extension — it runs in your workspace with full access.\n\n'
-      + 'Only install extensions you trust.\n\nInstall it?',
-      { title: 'Install extension', danger: true });
-    if (!ok) { setStatus('install cancelled'); return null; }
+    // Code extension — runs in the workspace. Confirm before install (SRI only
+    // proves the bytes are intact, not that the code is safe) — UNLESS skipConfirm
+    // (a dep-closure lib, or a provisioning install whose top-level package the
+    // user already consented to / the profile pre-authorized).
+    if (!opts.skipConfirm) {
+      const ok = await dlgConfirm(
+        '"' + (entry.title || entry.name) + '" is a code extension — it runs in your workspace with full access.\n\n'
+        + 'Only install extensions you trust.\n\nInstall it?',
+        { title: 'Install extension', danger: true });
+      if (!ok) { setStatus('install cancelled'); return null; }
+    }
     let r;
     try { r = await installGcupkgBytes(bytes, entry.name + '.gcupkg'); }
     catch (e) { setStatus('install failed: ' + (e.message || e)); return null; }
@@ -161,6 +214,10 @@ async function installEntry(entry, base, sourceUrl) {
       version: r.version || entry.version || '', source: sourceUrl || '', integrity: entry.integrity || '',
       kind: 'gcupkg', datKind: '', title: entry.title || entry.name, dest: r.libPath, at: Date.now(),
     }).catch(() => {});
+    // Pull the package's declared lib dep-closure (no-op when already provisioned,
+    // e.g. baked in works/works-all). seen threads through recursion to dedup.
+    try { await installRequiresClosure(r.libPath, opts.seen || new Set()); }
+    catch (e) { console.warn('[works] dep-closure failed for ' + entry.name + ':', e); }
     setStatus('installed ' + entry.name);
     return r.libPath;
   }
@@ -193,11 +250,20 @@ export async function listEntries(sourceUrl) {
   const { registry } = await fetchRegistry({ url: sourceUrl });
   return registry.entries || [];
 }
-export async function installByName(sourceUrl, name) {
+export async function installByName(sourceUrl, name, opts = {}) {
   const { base, registry } = await fetchRegistry({ url: sourceUrl });
   const entry = (registry.entries || []).find((e) => e.name === name);
   if (!entry) throw new Error('no entry "' + name + '" in this registry');
-  return installEntry(entry, base, sourceUrl);
+  return installEntry(entry, base, sourceUrl, opts);
+}
+
+// Provision a package WITHOUT a per-package consent prompt — the install
+// primitive a profile / first-run setup (distributions phase 3) drives: the user
+// authorized the profile, not each package. Installs the named package + its
+// declared lib dep-closure, all SRI-verified. Interactive Browse-Library installs
+// keep prompting (installByName with no opts → confirm).
+export async function provisionPackage(sourceUrl, name) {
+  return installByName(sourceUrl, name, { skipConfirm: true });
 }
 
 // Install an entry referenced by a capsule (QR / share-link → boot #capsule).

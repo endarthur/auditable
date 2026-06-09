@@ -883,11 +883,43 @@ if (target === 'packages') {
         title: 'Data Workbench', tags: ['geoscience', 'tabular', 'blockmodel'] },
     ];
 
+    // Lib dependencies that the distributables' services `require` — packaged as
+    // lib-packages (a .gcupkg whose index.js IS the bundle, so installGcupkg writes
+    // it to /lib/@gcu/<lib>/source, where ensureLibSource finds it). These let a
+    // provisioned shell install a package's dep-closure (build.js bakes them into
+    // works/works-all, but works-core must pull them).
+    const LIB_DEPS = ['flowsheet', 'sluice', 'recon', 'omf1'];   // proc is a works-core CORE_LIB (already baked)
+    const LIB_LICENSE = 'MIT License\n\nCopyright (c) 2026 Arthur Endlein Correia / Geoscientific Chaos Union\n\n'
+      + 'Permission is hereby granted, free of charge, to any person obtaining a copy of this software, to deal in it '
+      + 'without restriction. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.\n';
+
     const outDir = path.join(__dirname, 'packages');
     const distDir = path.join(outDir, 'dist');
     fs.mkdirSync(distDir, { recursive: true });
 
     const entries = [];
+
+    // Lib-packages first (so the catalog lists deps before the packages that need them).
+    for (const lib of LIB_DEPS) {
+      const idx = path.join(__dirname, 'ext', lib, 'index.js');
+      if (!fs.existsSync(idx)) { console.error(`packages: ext/${lib}/index.js missing — build the lib first`); process.exit(1); }
+      let version = '0.1.0', description = `@gcu/${lib} — bundled library`;
+      const lpj = path.join(__dirname, 'ext', lib, 'package.json');
+      if (fs.existsSync(lpj)) { try { const o = JSON.parse(fs.readFileSync(lpj, 'utf8')); version = o.version || version; description = o.description || description; } catch { /* */ } }
+      const name = `@gcu/${lib}`;
+      const files = {
+        'package.json': Buffer.from(JSON.stringify({ name, version, description, license: 'MIT', main: 'index.js' }, null, 2)),
+        'index.js': fs.readFileSync(idx),
+        'LICENSE': Buffer.from(LIB_LICENSE),
+      };
+      const { bytes } = packGcupkg({ name, version, description, license: 'MIT', files, contributes: ['lib'], integrityCovers: ['index.js'], date });
+      const slug = name.replace(/[@/]/g, '_');
+      const rel = `dist/${slug}.gcupkg`;
+      fs.writeFileSync(path.join(outDir, rel), bytes);
+      entries.push({ name, kind: 'gcupkg', title: name, description, version, license: 'MIT', contributes: ['lib'], size: bytes.length, url: rel, integrity: sriOfBytes(bytes), tags: ['lib'] });
+      console.log(`  packed ${name}@${version} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB)`);
+    }
+
     for (const d of DISTRIBUTABLES) {
       const pkgDir = path.join(__dirname, d.dir);
       const pkgJsonPath = path.join(pkgDir, 'package.json');

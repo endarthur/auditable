@@ -23,7 +23,7 @@ import { maybePromptReinstall, planReinstall, runReinstall, readRecipe } from '.
 import { importNotebook, importFileAsNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
 import { metaGet, metaSet } from './meta.js';
-import { openLibraryDialog, installByName, addSourceSilent, installFromCapsule } from './registry.js';
+import { openLibraryDialog, installByName, provisionPackage, addSourceSilent, installFromCapsule } from './registry.js';
 import { fragmentDecode, resolveCapsule } from '#capsule';
 import { installGcudatBytes } from './gcudat-install.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
@@ -75,7 +75,8 @@ async function boot() {
   WKS.installGcudat = installGcudatBytes;   // .gcudat bytes → routed by kind
   WKS.installGcupkgBytes = installGcupkgBytes;   // .gcupkg bytes → parse + install to /lib (registry/programmatic)
   WKS.browseLibrary = openLibraryDialog;    // Browse Library dialog (content registry)
-  WKS.registryInstall = installByName;      // (sourceUrl, name) → install an entry
+  WKS.registryInstall = installByName;      // (sourceUrl, name) → install an entry (interactive: confirms)
+  WKS.provisionPackage = provisionPackage;  // (sourceUrl, name) → install + dep-closure, no prompt (provisioning)
   WKS.registryAddSource = addSourceSilent;  // (url, name) → add a registry source
   WKS.buildProjectExportHtml = buildProjectExportHtml;
   WKS.exportProject = exportProject;
