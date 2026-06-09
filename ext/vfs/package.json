@@ -1,6 +1,6 @@
 {
   "name": "@gcu/vfs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Virtual filesystem abstraction over multiple backends: in-memory, File System Access API, OPFS, IndexedDB, HTML-comment embedded, fetch, REST, and overlays. Glob matching, event emitter, permissions.",
   "type": "module",
   "main": "index.js",

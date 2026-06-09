@@ -9,6 +9,7 @@ import { OPFSBackend } from './opfs.js';
 import { FSAABackend } from './fsaa.js';
 import { FetchBackend } from './fetch-backend.js';
 import { RESTBackend } from './rest.js';
+import { DropboxBackend } from './dropbox.js';
 import { OverlayBackend } from './overlay.js';
 import { CacheBackend } from './cache.js';
 import { vfsGlob } from './glob.js';
@@ -22,6 +23,7 @@ const BACKEND_TYPES = {
   fsaa: FSAABackend,
   fetch: FetchBackend,
   rest: RESTBackend,
+  dropbox: DropboxBackend,
   overlay: OverlayBackend,
   cache: CacheBackend,
 };

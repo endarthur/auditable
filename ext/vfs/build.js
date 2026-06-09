@@ -52,7 +52,7 @@ const header = '// \u26a0 GENERATED FILE \u2014 DO NOT EDIT. Source: ext/vfs/src
 // Backend classes + BACKEND_TYPES registry are exported so @gcu/proc (and
 // any other downstream that needs to replicate backends in a worker) can
 // reconstruct a Backend from a serialized {type, ...opts} config.
-const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { VFS, VFSError, Backend, BACKEND_TYPES, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, OPFSBackend, FetchBackend, RESTBackend, OverlayBackend, CacheBackend, checkPermission, path };\n';
+const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { VFS, VFSError, Backend, BACKEND_TYPES, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, OPFSBackend, FetchBackend, RESTBackend, DropboxBackend, OverlayBackend, CacheBackend, checkPermission, path };\n';
 
 const outPath = path.join(__dirname, 'index.js');
 fs.writeFileSync(outPath, output);

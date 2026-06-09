@@ -13,6 +13,7 @@ import './opfs.js';
 import './fsaa.js';
 import './fetch-backend.js';
 import './rest.js';
+import './dropbox.js';
 import './abus.js';
 import './overlay.js';
 import './cache.js';
