@@ -1,0 +1,23 @@
+{
+  "name": "@example/service",
+  "version": "0.1.0",
+  "description": "Reference SERVICE contribution for EXTENSION_SPEC — declares an A-Bus service as data (gcu.services), activated cold→hot, dependency-injected. The services counterpart to @example/quip (which is a surface contribution).",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["auditable-extension", "example", "works-service"],
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "EXTENSION_SPEC — a declarative A-Bus service contribution (gcu.services). No works.js: services are data + a lazily-activated entry, not boot-time code."
+  },
+  "gcu": {
+    "services": [
+      {
+        "name": "example-echo",
+        "entry": "service.js",
+        "export": "setupService",
+        "requires": ["capsule"],
+        "permission": "open"
+      }
+    ]
+  }
+}

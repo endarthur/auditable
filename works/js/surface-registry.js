@@ -196,8 +196,30 @@ export async function decompressLibs() {
 
 // A decompressed shared-library bundle source (or null). Used by the pipeline
 // service to make an import()-able blob URL of @gcu/sluice for proc scan workers.
+// SYNC — returns only the build-baked payloads. For a lib that may have been
+// INSTALLED into the workspace (a provisioned lean shell), use ensureLibSource.
 export function getLibSource(name) {
   return _libSources.get(name) || null;
+}
+
+// Resolve a lib bundle source by bare @gcu name, falling back to an INSTALLED
+// copy in the workspace VFS when it isn't a build-baked payload — and cache it
+// into _libSources so later sync getLibSource() calls (including the service's
+// own internal use) see it. This is what lets a provisioned package's declared
+// `requires` resolve in a lean shell (works-core) where the lib was never baked:
+// the package + its lib deps are installed into /lib, and the service activator
+// ensures each dep here before injecting it. Baked builtins win (checked first),
+// then /lib (a user/profile install), then /usr/lib (the builtin mirror).
+export async function ensureLibSource(name, vfs) {
+  const cached = _libSources.get(name);
+  if (cached) return cached;
+  if (!vfs) return null;
+  for (const p of ['/lib/@gcu/' + name + '/source', '/usr/lib/@gcu/' + name + '/source']) {
+    let src = null;
+    try { src = await vfs.readFile(p, 'utf8'); } catch { /* try next */ }
+    if (src) { _libSources.set(name, src); return src; }
+  }
+  return null;
 }
 
 // Write each shared library into the workspace's /usr/lib as a module

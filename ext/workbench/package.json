@@ -15,7 +15,7 @@
         "name": "pipeline",
         "entry": "service.js",
         "export": "setupService",
-        "requires": ["flowsheet", "sluice", "recon", "proc"],
+        "requires": ["flowsheet", "sluice", "recon", "proc", "omf1"],
         "permission": "open"
       }
     ]

@@ -23,7 +23,7 @@
 
 import { WKS } from './state.js';
 import { connect } from '#abus';
-import { getLibSource } from './surface-registry.js';
+import { getLibSource, ensureLibSource } from './surface-registry.js';
 import { enumerateInstalled } from './extension-loader.js';
 
 function _libPathFor(name) {
@@ -39,14 +39,15 @@ function _blobImport(src) {
 // so the broker can run it lazily with the right package + entry + requires.
 function _makeActivator(pkgName, libPath, svc) {
   return async function activate() {
-    // 1. Resolve declared deps to module namespaces. These are /usr/lib builtins
-    //    (abus/sluice/recon/flowsheet/proc/…), decompressed at boot into the
-    //    shell's lib-source store — the same accessor the service itself uses
-    //    for its proc-worker sluice URL.
+    // 1. Resolve declared deps to module namespaces. ensureLibSource finds them
+    //    among the build-baked builtins (works/works-all) OR an installed copy in
+    //    /lib (a provisioned lean shell) — and caches each into the lib-source
+    //    store, so the service's own later sync getLibSource() (its proc-worker
+    //    sluice URL, the omf1 reader) sees them too.
     const deps = {};
     for (const r of svc.requires || []) {
-      const src = getLibSource(r);
-      if (!src) throw new Error(`service "${svc.name}" (${pkgName}): required lib @gcu/${r} is unavailable`);
+      const src = await ensureLibSource(r, WKS.vfs);
+      if (!src) throw new Error(`service "${svc.name}" (${pkgName}): required lib @gcu/${r} is unavailable (not baked, not in /lib)`);
       deps[r] = await _blobImport(src);
     }
 

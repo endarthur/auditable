@@ -717,6 +717,68 @@ Topic convention: cell-originated topics are recommended (not required) to live 
 
 ---
 
+## 3.9 Service contributions (`package.json` → `gcu.services`)  *(status: shipped)*
+
+A package can contribute a **shell-realm A-Bus service** — a long-lived peer that claims a well-known name and exposes an interface other surfaces call (e.g. `@gcu/workbench`'s `pipeline` flowsheet engine). Unlike surfaces/context-menus (§3.8, which need code — a `works.js`), a service is contributed as **DATA**: the shell never runs package code at boot to register it. That data-not-code shape is deliberate — naming a service is a weaker grant than running boot-time code, so it's the safer contribution.
+
+### The manifest
+
+Declare services under `gcu.services` in the package's `package.json`:
+
+```json
+{
+  "name": "@gcu/workbench",
+  "version": "1.0.0",
+  "gcu": {
+    "services": [
+      {
+        "name":       "pipeline",        // the A-Bus name the service claims (flat: /^[a-z][a-z0-9_-]*$/, no dots)
+        "entry":      "service.js",      // the entry module, relative to /lib/<pkg>/
+        "export":     "setupService",    // the named export the activator calls (default: setupService)
+        "requires":   ["flowsheet", "sluice", "recon", "proc"],  // lib deps to inject (see below)
+        "permission": "open"             // recorded for the install-time gate
+      }
+    ]
+  }
+}
+```
+
+At boot the shell scans every installed package's `gcu.services` and declares each on the broker **cold** (lazy). No code runs until the **first call** to the service name, at which point the broker activates it (cold→hot) — so an installed-but-unused service costs nothing.
+
+### The entry — `setupService(ctx)`
+
+The entry module exports `async function setupService(ctx)`. It imports **nothing**; every dependency arrives through `ctx` (dependency injection), so the same module runs identically whether it's shell-bundled or blob-imported from `/lib`, and needs no post-boot import map.
+
+```js
+export async function setupService(ctx) {
+  const { broker, connect, vfs, libDir, getLibSource, deps } = ctx;
+  const ch = new MessageChannel();
+  broker.connect(ch.port1);
+  const bus = await connect(ch.port2, { client: 'my-service' });
+  bus.expose('/', { Echo: { methods: { Ping: () => 'pong' } } });
+  await bus.claim('my-service');   // MUST claim the declared name before returning
+  return bus;
+}
+```
+
+`ctx`:
+- `broker` — the A-Bus broker (`broker.connect(port)`).
+- `connect` — `@gcu/abus` `connect()`.
+- `vfs` — the workspace VFS.
+- `libDir` — this package's `/lib` path (e.g. `/lib/@gcu/workbench`).
+- `getLibSource(name)` — a baked/installed lib's source (sync; for making blob-URL imports, e.g. a worker payload).
+- `deps` — the `requires` libs, resolved to their module namespaces and injected by name.
+
+### Dependency resolution (baked **and** provisioned)
+
+Each `requires` entry is a bare `@gcu/*` lib name. The activator resolves it from the build-baked payloads (works / works-all) **or** an installed copy in `/lib` (a lean, runtime-provisioned shell) — so the same package works whether it's baked into a monolith or installed at runtime into `works-core`. List **every** lib the service touches (including ones used only on optional code paths), so the full dep-closure is present when provisioned.
+
+### Reference
+
+`ext/example-service/` is the minimal reference (a service, no surface — just `package.json` + `service.js`, no `works.js`). `ext/workbench/` (`@gcu/workbench`) is a real package contributing **both** a surface (`works.js`) and a service (`gcu.services`). Shell-side machinery: `works/js/extension-services.js` (the scan + activator), `works/js/lib-builtins-loader.js` (pre-install of baked builtin packages). See the works-contribution-registry design for the full model.
+
+---
+
 ## 4. Cross-language adapters
 
 The natra / sadpan / scitra / plot / learn / line family is **the same pattern repeated** — each library wraps an underlying JS-native engine with a Python-shaped surface and registers it through `manifest.exports`. Together with `@gcu/ipynb`'s import-substitution table they make round-trip `.ipynb` portability possible: `import numpy as np` in a notebook landing inside auditable is rewritten to `import natra as np`, and `natra` is what the `exports` registered.
