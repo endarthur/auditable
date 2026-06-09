@@ -25,12 +25,17 @@ jobs:
           node build.js
           node build.js --target=works
           node build.js --target=works-all
+          node build.js --target=works-core
+          node build.js --target=packages
           node build.js --target=auditable-py
           node build.js --target=auditable-geo
           node build.js --target=scan
           node gen_examples.js
           node gen_gallery.js
           node make_encrypted_example.mjs
+          # The package catalog is a directory (registry.json + dist/*.gcupkg) — zip
+          # it as one release asset for the Works repo to consume + serve same-origin.
+          (cd packages && zip -qr ../packages.zip .)
         env:
           AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
           AUDITABLE_RELEASE: ${{ github.event.release.tag_name }}
@@ -55,6 +60,8 @@ jobs:
             auditable.html \
             works.html \
             works-all.html \
+            works-core.html \
+            packages.zip \
             editions/auditable-py.html \
             editions/auditable-geo.html \
             --clobber

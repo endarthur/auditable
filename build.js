@@ -185,11 +185,13 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   const worksRelease = process.env.AUDITABLE_RELEASE || 'dev';
   const worksPubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
   const worksRepo = process.env.AUDITABLE_REPO || 'gentropic/auditable';
-  const worksPagesUrl = process.env.AUDITABLE_PAGES_URL || 'https://gentropic.org/auditable';
+  // The package catalog URL — same-origin with the Works PWA (gentropic.org/works).
+  // Overridable for a different deploy via AUDITABLE_CATALOG_URL.
+  const worksCatalogUrl = process.env.AUDITABLE_CATALOG_URL || 'https://gentropic.org/works/packages/registry.json';
   for (const mod of modules) {
     mod.source = mod.source.replace(
-      "const __AUDITABLE_PAGES_URL__ = 'https://gentropic.org/auditable';",
-      `const __AUDITABLE_PAGES_URL__ = '${worksPagesUrl}';`);
+      "const __GCU_CATALOG_URL__ = 'https://gentropic.org/works/packages/registry.json';",
+      `const __GCU_CATALOG_URL__ = '${worksCatalogUrl}';`);
     mod.source = mod.source.replace(
       "const __AUDITABLE_VERSION__ = '0.0.0';",
       `const __AUDITABLE_VERSION__ = '${worksPkg.version || '0.0.0'}';`);

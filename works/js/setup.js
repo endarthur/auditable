@@ -16,10 +16,13 @@ import { listProfiles, isProvisioned, provisionProfile, provisionProfileSpec } f
 import { metaGet } from './meta.js';
 import { readSettings, writeSettings, applyWorkspaceSettings } from './settings-store.js';
 
-// Build-injected (works build); the default points at auditable's deploy where
-// the package catalog is hosted. Overridable per-workspace via the
-// `registry.catalogUrl` meta key (used in tests + custom deployments).
-const __AUDITABLE_PAGES_URL__ = 'https://gentropic.org/auditable';
+// Build-injected (works build): the package catalog URL — the first-party code
+// source a provisioned shell installs from. Hosted SAME-ORIGIN as the Works PWA
+// (gentropic.org/works/packages/) so provisioning needs no CORS and the SW
+// runtime-caches the .gcupkgs for offline re-provision. Overridable per-workspace
+// via the `registry.catalogUrl` meta key (tests + custom deployments) or
+// showSetupDialog({ catalogUrl }).
+const __GCU_CATALOG_URL__ = 'https://gentropic.org/works/packages/registry.json';
 
 // Sync — the works-core build carries the profiles payload; monoliths don't. Used
 // to gate the menu entries (which build synchronously).
@@ -29,8 +32,7 @@ export function hasProfilesPayload() {
 
 async function getCatalogUrl() {
   const override = await metaGet('registry.catalogUrl').catch(() => null);
-  if (override) return override;
-  return __AUDITABLE_PAGES_URL__.replace(/\/$/, '') + '/packages/registry.json';
+  return override || __GCU_CATALOG_URL__;
 }
 
 async function probeCatalog(url) {
