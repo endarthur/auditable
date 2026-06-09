@@ -75,6 +75,7 @@ export async function showSetupDialog(opts = {}) {
     : (profiles.find((p) => !(p.packages || []).length) || profiles[0]).name;
   let custom = false;
   let customUrl = '';
+  let customText = null;   // a .gcuprofile loaded from a local file (takes precedence over the URL)
 
   const dialog = new Dialog({
     title: firstRun ? 'Welcome to Auditable Works' : 'Set up / change profile',
@@ -122,16 +123,38 @@ export async function showSetupDialog(opts = {}) {
         const desc = (p.description || '') + (pkgs.length ? `  ·  installs: ${pkgs.join(', ')}` : '  ·  shell only, no download');
         mkRow(p.name, p.title || p.name, desc);
       }
-      // Custom (Form 1) — point at a .gcuprofile URL.
-      const cu = mkRow('__custom__', 'Custom…', 'Provision from a .gcuprofile URL (its packages install from your sources).');
+      // Custom (Form 1) — a .gcuprofile by URL or a local file. Either way its
+      // packages install from the configured sources.
+      const cu = mkRow('__custom__', 'Custom…', 'Provision from a .gcuprofile — paste a URL or browse for a file.');
       const customWrap = document.createElement('div');
       customWrap.style.cssText = 'display:none; margin-top:5px;';
+      const fileNote = document.createElement('div');
+      fileNote.style.cssText = 'display:none; font-size:11px; color:var(--au-info); margin-top:3px;';
+      const customRow = document.createElement('div');
+      customRow.style.cssText = 'display:flex; gap:6px;';
       const customInput = document.createElement('input');
       customInput.type = 'url'; customInput.placeholder = 'https://…/my.gcuprofile';
-      customInput.style.cssText = 'width:100%; box-sizing:border-box; font:inherit; font-size:12px; padding:5px 8px; '
+      customInput.style.cssText = 'flex:1; box-sizing:border-box; font:inherit; font-size:12px; padding:5px 8px; '
         + 'border:1px solid var(--au-border); border-radius:5px; background:var(--au-surface-bright); color:var(--au-fg);';
-      customInput.addEventListener('input', () => { customUrl = customInput.value.trim(); });
-      customWrap.appendChild(customInput);
+      customInput.addEventListener('input', () => { customUrl = customInput.value.trim(); customText = null; fileNote.style.display = 'none'; });
+      const browseBtn = _btn('Browse…', false);
+      browseBtn.style.padding = '5px 12px';
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file'; fileInput.accept = '.gcuprofile,application/json'; fileInput.style.display = 'none';
+      browseBtn.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', async () => {
+        const f = fileInput.files && fileInput.files[0];
+        if (!f) return;
+        try {
+          customText = await f.text(); customUrl = ''; customInput.value = '';
+          fileNote.textContent = 'Loaded: ' + f.name; fileNote.style.color = 'var(--au-info)';
+        } catch {
+          customText = null; fileNote.textContent = 'Could not read ' + f.name; fileNote.style.color = 'var(--au-fault)';
+        }
+        fileNote.style.display = 'block';
+      });
+      customRow.append(customInput, browseBtn);
+      customWrap.append(customRow, fileInput, fileNote);
       cu.main.appendChild(customWrap);
 
       // ── theme ──
@@ -186,7 +209,7 @@ export async function showSetupDialog(opts = {}) {
       // Run the provisioning, swap the body to a progress/summary view, close on done.
       async function runSetup(minimal) {
         const useCustom = !minimal && custom;
-        if (useCustom && !customUrl) { customInput.style.borderColor = 'var(--au-fault)'; customInput.focus(); return; }
+        if (useCustom && !customUrl && !customText) { customInput.style.borderColor = 'var(--au-fault)'; customInput.focus(); return; }
         // Progress view.
         body.innerHTML = '';
         const prog = document.createElement('div');
@@ -204,7 +227,9 @@ export async function showSetupDialog(opts = {}) {
             const mn = profiles.find((p) => !(p.packages || []).length);
             report = await provisionProfile(mn ? mn.name : profiles[0].name, catalogUrl);
           } else if (useCustom) {
-            const spec = JSON.parse(await (await fetch(customUrl, { cache: 'no-cache' })).text());
+            const txt = customText != null ? customText
+              : await (await fetch(customUrl, { cache: 'no-cache' })).text();
+            const spec = JSON.parse(txt);
             report = await provisionProfileSpec(spec, catalogUrl);
           } else {
             report = await provisionProfile(selected, catalogUrl);
