@@ -73,4 +73,19 @@ function resolveToEdition(name, opts = {}) {
   return { title: r.title, base: r.base, settings: r.settings, cells: r.starter, exts };
 }
 
-module.exports = { resolveProfile, resolveToEdition, loadProfile };
+// Map a resolved profile to the runtime/PROVISIONED shape — what a lean shell's
+// first-run setup consumes. Unlike resolveToEdition (which needs packages.json
+// `path` entries to bake), provisioning installs packages by NAME from the catalog
+// (the registry entry names ARE the `@gcu/*` package names), so no package index
+// is required. Returns { name, title, base, description, packages, settings, starter }.
+function resolveToProvisioned(name, opts = {}) {
+  const r = resolveProfile(name, opts);
+  const prof = loadProfile(opts.profilesDir || __dirname, name);
+  return {
+    name: r.name, title: r.title, base: r.base,
+    description: prof.description || '',
+    packages: r.packages, settings: r.settings, starter: r.starter,
+  };
+}
+
+module.exports = { resolveProfile, resolveToEdition, resolveToProvisioned, loadProfile };

@@ -674,6 +674,29 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   }
   const builtinPkgsPayload = buildBuiltinPackagesPayload();
 
+  // ── Distribution profiles payload (works-core only) ─────────────────
+  // The lean shell's first-run setup picks a profile and provisions its packages
+  // from the catalog. Bake the RESOLVED profiles (resolveToProvisioned) as a small
+  // JSON payload so the profile LIST is available offline/first-paint; only the
+  // package install needs the network. works/works-all are baked monoliths — they
+  // don't provision, so they don't carry this. (distributions phase 3.)
+  function buildProfilesPayload() {
+    if (!isWorksCore) return '';
+    const { resolveToProvisioned } = require('./profiles/resolve.js');
+    const WORKS_PROFILES = ['works-minimal', 'works-geoscience', 'works-everything'];
+    const profiles = [];
+    for (const n of WORKS_PROFILES) {
+      try { profiles.push(resolveToProvisioned(n, { profilesDir: path.join(__dirname, 'profiles') })); }
+      catch (e) { console.error(`packages: profile ${n} failed to resolve: ${e.message}`); process.exit(1); }
+    }
+    const json = JSON.stringify({ version: 1, profiles });
+    const gz = worksZlib.gzipSync(Buffer.from(json, 'utf8'));
+    const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
+    console.log(`works-core: bundling ${profiles.length} distribution profiles (${profiles.map((p) => p.name).join(', ')})`);
+    return `<script type="text/plain" id="profiles-payload">\n${b64}\n</script>`;
+  }
+  const profilesPayload = buildProfilesPayload();
+
   // Terminal-specific: inline @gcu/term's CSS (structural term.css + default theme),
   // the same pair the standalone geas tool uses. The geas-worker payload that used to
   // live here is gone — the terminal spawns its worker via the geas blob URL discovered
@@ -836,6 +859,10 @@ ${examplesPayload}
      gzipped. The shell unpacks them into /lib/<name>/ at boot; the surface +
      service scans pick them up like any user install. @gcu/workbench lives here. -->
 ${builtinPkgsPayload}
+
+<!-- Auditable works-core distribution profiles — resolved .gcuprofiles (the
+     first-run setup's profile list), gzipped. works-core only. -->
+${profilesPayload}
 
 ${compressWorksRuntime(worksJs)}
 </body>

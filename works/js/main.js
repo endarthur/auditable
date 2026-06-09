@@ -34,5 +34,6 @@ import './uninstall-extension.js';
 import './tree.js';
 import './about.js';
 import './registry.js';
+import './provision.js';
 import './menubar.js';
 import './init.js';

@@ -1,0 +1,9 @@
+{
+  "name": "works-everything",
+  "title": "Everything",
+  "base": "works-core",
+  "description": "Every first-party Works package in the catalog.",
+  "packages": ["@gcu/workbench", "@example/service"],
+  "settings": { "theme": "dark" },
+  "starter": []
+}

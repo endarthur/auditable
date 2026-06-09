@@ -1,0 +1,9 @@
+{
+  "name": "works-minimal",
+  "title": "Minimal",
+  "base": "works-core",
+  "description": "Just the lean desktop shell — terminal, text, preview, settings. Add packages later from the Library.",
+  "packages": [],
+  "settings": {},
+  "starter": []
+}

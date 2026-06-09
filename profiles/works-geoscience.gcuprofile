@@ -1,0 +1,9 @@
+{
+  "name": "works-geoscience",
+  "title": "Geoscience",
+  "base": "works-core",
+  "description": "The lean shell plus the geoscience/tabular Data Workbench (CSV / OMF block models, grade-tonnage, swath).",
+  "packages": ["@gcu/workbench"],
+  "settings": { "theme": "dark" },
+  "starter": []
+}

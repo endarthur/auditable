@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import resolve from '../profiles/resolve.js';
-const { resolveProfile, resolveToEdition } = resolve;
+const { resolveProfile, resolveToEdition, resolveToProvisioned } = resolve;
 
 const realProfiles = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'profiles');
 
@@ -31,6 +31,26 @@ test('resolveToEdition maps packages → exts (with adderExports from the index)
   assert.deepEqual(e.exts.find((x) => x[0] === '@atra/gslib'), ['@atra/gslib', 'ext/atra/lib/gslib.js', ['gslib']]);
   assert.deepEqual(e.exts.find((x) => x[0] === '@gcu/adder'), ['@gcu/adder', 'ext/adder/index.js']);
   assert.equal(e.cells.length, 2);
+});
+
+// ── provisioned (runtime) profiles — the works-core first-run setup shape ──
+test('resolveToProvisioned returns the runtime shape (names, settings, no package index needed)', () => {
+  const p = resolveToProvisioned('works-geoscience', { profilesDir: realProfiles });
+  assert.equal(p.name, 'works-geoscience');
+  assert.equal(p.base, 'works-core');
+  assert.deepEqual(p.packages, ['@gcu/workbench']);   // catalog entry names, as-is
+  assert.equal(p.settings.theme, 'dark');
+  assert.ok(typeof p.description === 'string' && p.description.length);
+});
+
+test('works-everything provisions both first-party packages', () => {
+  const p = resolveToProvisioned('works-everything', { profilesDir: realProfiles });
+  assert.deepEqual(p.packages, ['@gcu/workbench', '@example/service']);
+});
+
+test('works-minimal provisions no packages (just the shell)', () => {
+  const p = resolveToProvisioned('works-minimal', { profilesDir: realProfiles });
+  assert.deepEqual(p.packages, []);
 });
 
 // ── fixtures for the merge/edge rules ──

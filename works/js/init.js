@@ -24,6 +24,7 @@ import { importNotebook, importFileAsNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
 import { metaGet, metaSet } from './meta.js';
 import { openLibraryDialog, installByName, provisionPackage, addSourceSilent, installFromCapsule } from './registry.js';
+import { listProfiles, provisionProfile, isProvisioned, getProvisioned } from './provision.js';
 import { fragmentDecode, resolveCapsule } from '#capsule';
 import { installGcudatBytes } from './gcudat-install.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
@@ -77,6 +78,10 @@ async function boot() {
   WKS.browseLibrary = openLibraryDialog;    // Browse Library dialog (content registry)
   WKS.registryInstall = installByName;      // (sourceUrl, name) → install an entry (interactive: confirms)
   WKS.provisionPackage = provisionPackage;  // (sourceUrl, name) → install + dep-closure, no prompt (provisioning)
+  WKS.listProfiles = listProfiles;          // baked distribution profiles (first-run setup list)
+  WKS.provisionProfile = provisionProfile;  // (name, catalogUrl) → install a profile's packages + settings + marker
+  WKS.isProvisioned = isProvisioned;        // has this workspace been provisioned?
+  WKS.getProvisioned = getProvisioned;      // the provisioned marker (profile + what installed)
   WKS.registryAddSource = addSourceSilent;  // (url, name) → add a registry source
   WKS.buildProjectExportHtml = buildProjectExportHtml;
   WKS.exportProject = exportProject;
