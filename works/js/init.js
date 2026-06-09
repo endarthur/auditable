@@ -187,6 +187,45 @@ async function boot() {
   // provisioned yet, offer the profile picker. No-op on a monolith (no profiles)
   // or an already-provisioned workspace. Fire-and-forget over the ready shell.
   maybeShowFirstRunSetup().catch((e) => console.warn('[works] setup:', (e && e.message) || e));
+
+  // PWA: request persistent storage — the workspace (provisioned /lib + every
+  // project) lives in IndexedDB; a controlled PWA + this request keep the browser
+  // from evicting it. Best-effort (absent on file:// / older engines).
+  try { navigator.storage?.persist?.().catch(() => {}); } catch { /* */ }
+
+  // PWA: when the service worker (deploy-only) finds a newer shell in the
+  // background it posts 'works:update-available'. Offer a one-click reload — safe,
+  // since the workspace is in IndexedDB and survives the reload.
+  try {
+    navigator.serviceWorker?.addEventListener('message', (e) => {
+      if (e && e.data && e.data.type === 'works:update-available') _showUpdateBanner();
+    });
+  } catch { /* */ }
+}
+
+let _updateBannerShown = false;
+function _showUpdateBanner() {
+  if (_updateBannerShown || typeof document === 'undefined') return;
+  _updateBannerShown = true;
+  const bar = document.createElement('div');
+  bar.style.cssText = 'position:fixed; left:50%; transform:translateX(-50%); bottom:16px; z-index:99999; '
+    + 'display:flex; gap:10px; align-items:center; padding:8px 14px; border-radius:8px; '
+    + 'background:var(--au-surface-raised,#1b2026); color:var(--au-fg,#e6e9ec); '
+    + 'border:1px solid var(--au-border,#2a313a); box-shadow:0 4px 16px rgba(0,0,0,.4); font:13px ui-sans-serif,system-ui;';
+  const txt = document.createElement('span');
+  txt.textContent = 'A new version of Works is available.';
+  const reload = document.createElement('button');
+  reload.textContent = 'Reload';
+  reload.style.cssText = 'font:inherit; font-weight:600; padding:4px 12px; border-radius:5px; cursor:pointer; '
+    + 'border:1px solid var(--au-action,#d97a3c); background:var(--au-action,#d97a3c); color:var(--au-surface-deep,#0d1014);';
+  reload.addEventListener('click', () => location.reload());
+  const dismiss = document.createElement('button');
+  dismiss.textContent = '✕';
+  dismiss.style.cssText = 'font:inherit; padding:4px 8px; border-radius:5px; cursor:pointer; '
+    + 'border:1px solid var(--au-border,#2a313a); background:transparent; color:var(--au-fg-soft,#9aa3ad);';
+  dismiss.addEventListener('click', () => bar.remove());
+  bar.append(txt, reload, dismiss);
+  document.body.appendChild(bar);
 }
 
 async function handleCapsuleBoot() {
