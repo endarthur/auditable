@@ -571,7 +571,7 @@ if (realFrame) {
   realCells = await realFrame.evaluate(() => ((window.S && window.S.cells) || []).length);
 }
 
-// ── Terminal surface — geas in a worker, xterm.js display ─────────────
+// ── Terminal surface — geas in a worker, @gcu/term display ────────────
 // Spawn the terminal, wait for Ready (worker boot + geas init), then drive
 // `echo` and `ls /projects` through the client and confirm both the
 // builtin output and a VFS-proxied readdir reach the xterm buffer.
@@ -591,15 +591,12 @@ let termRun = { error: 'no frame' };
 if (termFrame) {
   termRun = await termFrame.evaluate(async () => {
     const client = window._geasClient;
-    const term = window._term;
-    if (!client || !term) return { error: 'no test hook' };
+    if (!client) return { error: 'no test hook' };
+    // @gcu/term renders to the DOM — read the rendered #screen (renderer-agnostic;
+    // replaces the old xterm term.buffer scrape).
     const snapshot = () => {
-      const buf = term.buffer.active;
-      let text = '';
-      for (let i = 0; i < buf.length; i++) {
-        text += buf.getLine(i).translateToString(true) + '\n';
-      }
-      return text;
+      const screen = document.getElementById('screen');
+      return screen ? screen.textContent : '';
     };
     try { await client.exec('echo hello-from-smoke'); }
     catch (e) { return { error: 'echo failed: ' + e.message }; }
@@ -624,17 +621,7 @@ if (termFrame) {
 // ── pkg CLI (pkg-spec chunk 4) — install local: + list + freeze + remove
 const termPkg = termFrame ? await termFrame.evaluate(async () => {
   const client = window._geasClient;
-  const term = window._term;
-  if (!client || !term) return { error: 'no test hook' };
-  const snapshot = (start = 0) => {
-    const buf = term.buffer.active;
-    let text = '';
-    for (let i = start; i < buf.length; i++) {
-      text += buf.getLine(i).translateToString(true) + '\n';
-    }
-    return text;
-  };
-  const startLine = term.buffer.active.length;
+  if (!client) return { error: 'no test hook' };
 
   // 1. Write a tiny JS module to /tmp on the surface VFS — the geas
   //    worker's vfs is the same VFS via serveVFS, so this lands at /tmp

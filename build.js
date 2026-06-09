@@ -292,14 +292,14 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   const isWorksCore = (target === 'works-core');
   // works-core's /usr/lib set = the dep-union of the CORE surfaces (CORE_KINDS at the
   // surfaces loop): stub/text/preview/inspector/settings/library/terminal. Every heavy
-  // surface lib is provisioned, not bundled. (v1.0's terminal still uses xterm; v1.1
-  // swaps it to @gcu/term, dropping xterm here.) See spec_inbox/gcu-distributions-spec.md.
-  const CORE_LIBS = ['abus', 'menu', 'qr', 'capsule', 'vfs', 'xterm', 'geas', 'proc', 'readline'];
+  // surface lib is provisioned, not bundled. (The terminal surface uses @gcu/term — the
+  // light 20 KB-gz renderer — not xterm.) See spec_inbox/gcu-distributions-spec.md.
+  const CORE_LIBS = ['abus', 'menu', 'qr', 'capsule', 'vfs', 'term', 'geas', 'proc', 'readline'];
   // NB: 'strata-app' (the shared strata app core, source-override below) must
   // precede 'loom'/'strata'/'recon'/'archive' — the runtime surface inliner
   // iterates in this order, and inlining strata-app first is what brings its
   // bare @gcu/* imports into the surface text so those libs inline after it.
-  const SHARED_LIBS_BASE = ['abus', 'surface', 'strata-app', 'loom', 'strata', 'over', 'plate', 'sift', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
+  const SHARED_LIBS_BASE = ['abus', 'surface', 'strata-app', 'loom', 'strata', 'over', 'plate', 'sift', 'vfs', 'term', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).
@@ -635,13 +635,14 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   }
   const examplesPayload = buildExamplesPayload();
 
-  // Terminal-specific: inline xterm.css. The geas-worker payload that used
-  // to live here is gone — the terminal now spawns its worker via the geas
-  // blob URL discovered in its own import map (§15.2 sharing extends to
-  // module workers).
+  // Terminal-specific: inline @gcu/term's CSS (structural term.css + default theme),
+  // the same pair the standalone geas tool uses. The geas-worker payload that used to
+  // live here is gone — the terminal spawns its worker via the geas blob URL discovered
+  // in its own import map (§15.2 sharing extends to module workers).
   function buildTerminalSurfaceCss(html) {
-    const css = fs.readFileSync(path.join(__dirname, 'ext/xterm/xterm.css'), 'utf8');
-    return html.replace('/* @xterm-css */', css);
+    const termCss = fs.readFileSync(path.join(__dirname, 'ext/term/term.css'), 'utf8');
+    const termDefaultCss = fs.readFileSync(path.join(__dirname, 'ext/term/term-default.css'), 'utf8');
+    return html.replace('/* @term-css */', termCss + '\n' + termDefaultCss);
   }
 
   // Shared theme tokens + theme-init JS — surfaces opt in by including the
@@ -722,7 +723,7 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
       deps: ['abus', 'markdown', 'docview', 'librarian', 'katex', 'reader-core'] },
     { kind: 'library',   file: 'works/surfaces/library.html', deps: ['abus', 'qr', 'capsule'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
-      deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
+      deps: ['abus', 'vfs', 'term', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'sideact', 'patchbay', 'menu'] },
     { kind: 'strata',    file: 'works/surfaces/strata.html',    deps: ['abus', 'surface', 'strata-app'] },
     { kind: 'plate',     file: 'works/surfaces/plate.html',     deps: ['abus', 'surface', 'plate', 'strata', 'recon', 'archive'] },
