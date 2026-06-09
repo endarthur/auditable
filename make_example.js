@@ -78,4 +78,8 @@ if (require.main === module) {
   makeExample({ ...def, outPath });
 }
 
+// Also expose the runtime compressor so the works build (build.js) can self-extract its
+// shell JS with the same proven loader (atob is forgiving-base64, so the wrapped payload
+// decodes despite the inserted newlines).
+makeExample.compressRuntimeNode = compressRuntimeNode;
 module.exports = makeExample;

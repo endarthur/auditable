@@ -282,6 +282,11 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   // path (embedded whole) — its own runtime resolves its own imports
   // internally, doesn't need to participate in this map.
   const worksZlib = require('zlib');
+  // Self-extracting compression for the shell runtime (the lib/surface/docs/examples
+  // payloads are already gzipped; this gzips the raw shell JS — the dominant byte cost,
+  // ~59% of works-core). The CSS stays raw in <head> to avoid FOUC. DecompressionStream
+  // gzip is ~ms, so boot cost is negligible. Reuses make_example's proven loader.
+  const { compressRuntimeNode: compressWorksRuntime } = require('./make_example');
 
   const isWorksAll = (target === 'works-all');
   const isWorksCore = (target === 'works-core');
@@ -784,9 +789,7 @@ ${docsPayload}
      VFS at /usr/share/examples/ for the Help → Open example… picker. -->
 ${examplesPayload}
 
-<script>
-${worksJs}
-</script>
+${compressWorksRuntime(worksJs)}
 </body>
 </html>
 `;
