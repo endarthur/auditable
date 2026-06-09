@@ -151,12 +151,45 @@ test('parseGcupkg: rejects non-ZIP bytes', async () => {
 });
 
 test('parseGcupkg: rejects missing required files', async () => {
-  // ZIP with only a package.json, missing index.js + LICENSE + meta.
+  // ZIP with only a package.json, missing LICENSE + meta.
   const bytes = zipSync({ 'package.json': enc('{}') });
   await assert.rejects(
     () => parseGcupkg(bytes, archiveLib),
     /missing required file/,
   );
+});
+
+test('parseGcupkg + installGcupkg: shell-only package (no index.js) installs', async () => {
+  // A surface/service package ships no notebook-context index.js (EXTENSION_SPEC
+  // §3.9). It parses, and installs its entries via the generic asset loop —
+  // no /source written (that's the notebook entry).
+  const name = '@test/svc';
+  const serviceJs = enc('export async function setupService(ctx){ return null; }');
+  const packageJson = enc(JSON.stringify({
+    name, version: '0.1.0', license: 'MIT',
+    gcu: { services: [{ name: 'test-svc', entry: 'service.js', requires: [], permission: 'open' }] },
+  }, null, 2));
+  const meta = { gcupkgVersion: 1, name, version: '0.1.0', spdx: 'MIT', contributes: ['service'], size: { 'service.js': serviceJs.length } };
+  const bytes = zipSync({
+    'package.json': packageJson,
+    'service.js': serviceJs,
+    'works.js': enc('// shell-context registration (optional)'),
+    'LICENSE': enc('MIT'),
+    '.gcupkg-meta.json': enc(JSON.stringify(meta, null, 2) + '\n'),
+  });
+
+  const parsed = await parseGcupkg(bytes, archiveLib);
+  assert.equal(parsed.meta.name, name);
+  assert.equal(parsed.files['index.js'], undefined);     // no notebook entry
+  assert.ok(parsed.files['service.js']);
+
+  const vfs = makeVfs();
+  const res = await installGcupkg(parsed, { vfs });
+  assert.equal(res.libPath, '/lib/@test/svc');
+  assert.ok(vfs.files.has('/lib/@test/svc/package.json'));
+  assert.ok(vfs.files.has('/lib/@test/svc/service.js'));  // landed via generic asset loop
+  assert.ok(vfs.files.has('/lib/@test/svc/works.js'));
+  assert.ok(!vfs.files.has('/lib/@test/svc/source'));     // shell-only → no notebook /source
 });
 
 test('parseGcupkg: rejects unsupported gcupkgVersion', async () => {

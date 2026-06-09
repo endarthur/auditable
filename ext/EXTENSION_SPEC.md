@@ -1031,6 +1031,7 @@ example@0.1.0.gcupkg                   ← archive filename: <name>@<version>.gc
 ├── package.json                       ← required; same shape as §5.3
 ├── index.js                           ← optional*; NOTEBOOK entry — cell types, taggedLanguages, exports, …
 ├── works.js                           ← optional*; SHELL entry — surfaces, contextMenu, MCP tools
+├── service.js                         ← optional*; SHELL-side A-Bus service entry (exports setupService), referenced by package.json `gcu.services` (§3.9)
 ├── adder.js                           ← optional; Python-shape adapter (§4) — auto-loadable as `<name>/adder`
 ├── soft.js                            ← optional; Soft-shape adapter (same convention)
 ├── surface.html                       ← optional; surface asset referenced by works.js (or surfaces/*.html for multiple)
@@ -1047,7 +1048,7 @@ example@0.1.0.gcupkg                   ← archive filename: <name>@<version>.gc
 └── .gcupkg-meta.json                  ← required; bundle metadata (see below)
 ```
 
-*at least one of `index.js` / `works.js` is required — an extension that contributes nothing in either context isn't an extension. Most ship one or the other; only language packs with both runtime semantics and Works UI need both.
+*at least one of `index.js` (notebook context) / `works.js` (shell surfaces) / a `gcu.services` declaration (its `service.js` entry — §3.9) is required — an extension that contributes nothing in any context isn't an extension. Most ship one. A pure-service package (e.g. `@example/service`) has only `service.js` + the `gcu.services` data manifest, no `index.js` and no `works.js`. The installer writes `/lib/<pkg>/source` only when `index.js` is present.
 
 Secondary entry points (`adder.js`, future `soft.js`) live at the archive root alongside `index.js` and are declared in `package.json` `exports` map. The installer hydrates them into `_installedModules` under the `<name>/adder` (resp. `<name>/soft`) key so `load("<name>/adder")` from a cell resolves directly without a network fetch. Any other top-level file (e.g. `surface.html`, `icons/icon.svg`, custom asset trees) is mirrored under `/lib/<pkg>/` verbatim — the installer doesn't need to know about each asset by name.
 

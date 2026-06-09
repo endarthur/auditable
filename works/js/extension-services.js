@@ -75,6 +75,33 @@ function _makeActivator(pkgName, libPath, svc) {
   };
 }
 
+// Declare every service one installed package's gcu.services manifest names.
+// Returns the declared names. Shared by the boot scan and the post-install path
+// (file-ops.js installGcupkgBytes) so a runtime-installed service is usable
+// without a reload — the mirror of evaluateWorksScript for surfaces.
+export async function declarePackageServices(pkgName) {
+  if (!WKS.broker || !WKS.vfs) return [];
+  const libPath = _libPathFor(pkgName);
+  let pkg;
+  try { pkg = JSON.parse(await WKS.vfs.readFile(libPath + '/package.json', 'utf8')); }
+  catch { return []; }   // no package.json — not a declarative package
+  const services = pkg && pkg.gcu && Array.isArray(pkg.gcu.services) ? pkg.gcu.services : [];
+  const declared = [];
+  for (const svc of services) {
+    if (!svc || typeof svc.name !== 'string' || !svc.name) continue;
+    try {
+      WKS.broker.declareService(svc.name, {
+        permission: svc.permission,
+        activator:  _makeActivator(pkgName, libPath, svc),
+      });
+      declared.push(svc.name);
+    } catch (e) {
+      console.warn(`[works] service-scan: declare "${svc.name}" (${pkgName}) failed:`, e);
+    }
+  }
+  return declared;
+}
+
 // Walk /lib, read each package's gcu.services, declare them all cold. Call once
 // at boot, after the broker + VFS + lib sources exist (so activators can run
 // when a call lands). Idempotent enough — declaring the same name twice just
@@ -85,27 +112,9 @@ export async function declareInstalledServices() {
   try { names = await enumerateInstalled(); }
   catch (e) { console.warn('[works] service-scan: /lib enumerate failed:', e); return; }
 
-  let declared = 0;
   const seen = [];
   for (const pkgName of names) {
-    const libPath = _libPathFor(pkgName);
-    let pkg;
-    try { pkg = JSON.parse(await WKS.vfs.readFile(libPath + '/package.json', 'utf8')); }
-    catch { continue; }   // no package.json — not a declarative package
-    const services = pkg && pkg.gcu && Array.isArray(pkg.gcu.services) ? pkg.gcu.services : [];
-    for (const svc of services) {
-      if (!svc || typeof svc.name !== 'string' || !svc.name) continue;
-      try {
-        WKS.broker.declareService(svc.name, {
-          permission: svc.permission,
-          activator:  _makeActivator(pkgName, libPath, svc),
-        });
-        declared++;
-        seen.push(`${svc.name} ⇐ ${pkgName}`);
-      } catch (e) {
-        console.warn(`[works] service-scan: declare "${svc.name}" (${pkgName}) failed:`, e);
-      }
-    }
+    for (const name of await declarePackageServices(pkgName)) seen.push(`${name} ⇐ ${pkgName}`);
   }
-  if (declared > 0) console.info(`[works] declared ${declared} cold service(s): ${seen.join(', ')}`);
+  if (seen.length) console.info(`[works] declared ${seen.length} cold service(s): ${seen.join(', ')}`);
 }

@@ -51,8 +51,11 @@ export async function parseGcupkg(bytes, archiveLib) {
     files[e.path] = await archive.read(u8, e.path);
   }
 
-  // Required-file check before any further parsing.
-  for (const required of ['.gcupkg-meta.json', 'package.json', 'index.js', 'LICENSE']) {
+  // Required-file check before any further parsing. index.js is NOT required:
+  // a shell-only package (surfaces via works.js + services via gcu.services,
+  // no notebook-context entry) ships none. The notebook-side `source` (= index.js)
+  // is only written when present (install phase).
+  for (const required of ['.gcupkg-meta.json', 'package.json', 'LICENSE']) {
     if (!files[required]) {
       throw new Error(`parseGcupkg: missing required file '${required}'`);
     }
@@ -104,12 +107,17 @@ export async function parseGcupkg(bytes, archiveLib) {
       integrity.covered = meta.integrityCovers;
       integrity.computed = await _computeIntegrity(meta.integrityCovers, files);
       integrity.ok = integrity.computed === meta.integrity;
-    } else {
+    } else if (files['index.js']) {
       // Legacy: single-file index.js hash (no separator framing).
       integrity.covered = ['index.js'];
       integrity.computed = await _computeLegacyIntegrity(files['index.js']);
       integrity.ok = integrity.computed === meta.integrity;
       integrity.note = 'legacy single-file integrity (index.js only); upgrade producer to emit integrityCovers';
+    } else {
+      // A declared hash but no integrityCovers and no index.js to fall back on
+      // (shell-only package) — can't verify. Leave ok null; the consent prompt
+      // surfaces it as unsigned.
+      integrity.note = 'integrity declared but no integrityCovers and no index.js — cannot verify; producer must emit integrityCovers';
     }
   } else {
     integrity.note = 'no integrity hash in meta';
@@ -254,8 +262,11 @@ export async function installGcupkg(parsed, opts = {}) {
 
   await vfs.mkdir(libPath, { recursive: true });
 
-  // Canonical artifact: `source` (matches pkg's existing /lib layout).
-  await vfs.writeFile(libPath + '/source', files['index.js']);
+  // Canonical artifact: `source` (matches pkg's existing /lib layout) — only when
+  // the package ships a notebook-context index.js. Shell-only packages (surface +
+  // service) have none; their entries (works.js / service.js / surface.html) land
+  // via the generic top-level asset loop below.
+  if (files['index.js']) await vfs.writeFile(libPath + '/source', files['index.js']);
 
   // Optional secondary entry — adder.js. Stored as its OWN leaf
   // directory (/lib/<pkg>/adder/source + meta.json) so persist.js's
@@ -315,7 +326,7 @@ export async function installGcupkg(parsed, opts = {}) {
     url:         meta.homepage || meta.name,
     kind:        'gcupkg',
     installedAt: new Date().toISOString(),
-    size:        files['index.js'].length,
+    size:        files['index.js'] ? files['index.js'].length : 0,
     version:     meta.version,
     license: {
       spdx:        meta.spdx || packageJson.license || null,

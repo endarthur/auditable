@@ -28,7 +28,7 @@ import { fragmentDecode, resolveCapsule } from '#capsule';
 import { installGcudatBytes } from './gcudat-install.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
-import { installGlobalFileDrop } from './file-ops.js';
+import { installGlobalFileDrop, installGcupkgBytes } from './file-ops.js';
 import { installShellAuditable, evaluateAllWorksScripts } from './extension-loader.js';
 import { installBuiltinPackages } from './lib-builtins-loader.js';
 import { declareInstalledServices } from './extension-services.js';
@@ -73,6 +73,7 @@ async function boot() {
   WKS.importFileAsNotebook = importFileAsNotebook;
   WKS.importBook = importEpubBytes;   // .epub bytes → /home/library/books/<slug>/
   WKS.installGcudat = installGcudatBytes;   // .gcudat bytes → routed by kind
+  WKS.installGcupkgBytes = installGcupkgBytes;   // .gcupkg bytes → parse + install to /lib (registry/programmatic)
   WKS.browseLibrary = openLibraryDialog;    // Browse Library dialog (content registry)
   WKS.registryInstall = installByName;      // (sourceUrl, name) → install an entry
   WKS.registryAddSource = addSourceSilent;  // (url, name) → add a registry source

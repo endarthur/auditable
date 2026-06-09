@@ -12,6 +12,7 @@ import { archive } from '#archive';
 import { parseGcupkg, installGcupkg, gcupkgConsentDescriptor, gcupkgConsentPrompt } from '#gcupkg';
 import { mergeExamplesFromExtension } from './examples-loader.js';
 import { evaluateWorksScript } from './extension-loader.js';
+import { declarePackageServices } from './extension-services.js';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const parentOf = (p) => {
@@ -686,6 +687,12 @@ export async function installGcupkgBytes(bytes, filename) {
   // didn't ship a works.js.
   try { await evaluateWorksScript(parsed.meta.name); }
   catch (e) { console.warn('[works] post-install works.js evaluation failed:', e.message); }
+
+  // §3.9 — declare the just-installed package's services cold (the data-manifest
+  // counterpart to works.js). Without this the boot scan is the only declarer, so
+  // a runtime-installed service would need a reload to become callable.
+  try { await declarePackageServices(parsed.meta.name); }
+  catch (e) { console.warn('[works] post-install service declaration failed:', e.message); }
 
   return { name: parsed.meta.name, version: parsed.meta.version, libPath: result.libPath, integrityOk: parsed.integrity.ok };
 }
