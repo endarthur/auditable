@@ -1,0 +1,7 @@
+{
+  "_note": "Build-time package index: profile package-name → { path, adderExports? }. Profiles name packages; this maps each to its in-repo bundle for the BAKED build path (build.js --profile). The runtime/provisioned path resolves names via the registry instead (later phase). adderExports = the names adder code imports the lib by; ideally these move into each package's own manifest later. See spec_inbox/gcu-distributions-spec.md.",
+  "@gcu/adder": { "path": "ext/adder/index.js" },
+  "@gcu/plot": { "path": "ext/plot/index.js", "adderExports": ["plt"] },
+  "@gcu/sadpan": { "path": "ext/sadpan/index.js", "adderExports": ["sadpan"] },
+  "@atra/gslib": { "path": "ext/atra/lib/gslib.js", "adderExports": ["gslib"] }
+}

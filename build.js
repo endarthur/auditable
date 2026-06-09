@@ -1234,52 +1234,22 @@ if (target === 'scan') {
 // gcu-make orders this after the auditable target. Reproducible thanks to the git-date
 // build above. (editions/, not dist/ — the latter is the conventional gitignored
 // build-output dir; editions are committed distributables.)
-const EDITIONS = {
-  'auditable-py': {
-    title: 'Python (adder)',
-    // [url, srcPath, adderExports?] — adderExports are the names adder code imports the
-    // lib by (the lib's registerExtension `exports` keys). Persisting them on the
-    // installed-module entry lets `import plt` / `import sadpan` lazy-load the embedded
-    // lib with no bootstrap cell. adder itself is the cell-type language (auto-activated
-    // at boot by autoLoadFromCells once an adder cell is present) — nothing to import.
-    exts: [
-      ['@gcu/adder', 'ext/adder/index.js'],
-      ['@gcu/plot', 'ext/plot/index.js', ['plt']],
-      ['@gcu/sadpan', 'ext/sadpan/index.js', ['sadpan']],
-    ],
-    // preferredCodeType:'adder' makes adder the default for the combo button and every
-    // add-cell path (a / b / Ctrl+Enter-new). No runOnLoad and no bootstrap load() cell:
-    // autoLoadFromCells registers adder at boot (an adder cell is present), and the libs
-    // lazy-load on first `import`. First-class, runOnLoad-agnostic.
-    settings: { theme: 'dark', fontSize: 13, width: '860', preferredCodeType: 'adder' },
-    cells: [
-      { type: 'md', code: '# Auditable — Python edition\n\nadder (a Python dialect that compiles to JavaScript) is the default cell language here, and `@gcu/plot` + `@gcu/sadpan` are **bundled into this file** — it works fully offline, no fetch. Just `import plt` / `import sadpan` in an `adder` cell; they load from the embedded copies on first use. New code cells default to `adder`.' },
-      { type: 'adder', code: 'import plt\nimport sadpan as pd\n\nprint("hello from adder — plt + sadpan load on import")' },
-    ],
-  },
-  'auditable-geo': {
-    title: 'Geoscience (adder)',
-    // The resource-estimation stack. gslib is a plain @atra wasm lib (named exports
-    // sgsim/kb2d, no registerExtension) — adderExports:['gslib'] + the generalized
-    // resolver make `import gslib` resolve the embedded namespace, so no JS bootstrap
-    // cell to bridge it into scope.
-    exts: [
-      ['@gcu/adder', 'ext/adder/index.js'],
-      ['@gcu/plot', 'ext/plot/index.js', ['plt']],
-      ['@gcu/sadpan', 'ext/sadpan/index.js', ['sadpan']],
-      ['@atra/gslib', 'ext/atra/lib/gslib.js', ['gslib']],
-    ],
-    settings: { theme: 'dark', fontSize: 13, width: '860', preferredCodeType: 'adder' },
-    cells: [
-      { type: 'md', code: '# Auditable — Geoscience edition\n\nThe resource-estimation stack — adder (Python), gslib (geostatistics: sgsim, kriging), `@gcu/plot`, `@gcu/sadpan` — **bundled in, fully offline**. Just `import gslib` / `import plt` / `import sadpan` in an `adder` cell; they load from the embedded copies on first use. See the *resource estimation* example for a worked simulate → drill → estimate pipeline.' },
-      { type: 'adder', code: 'import gslib\nimport plt\nimport sadpan as pd\n\nprint("geoscience edition — gslib, plt, sadpan bundled (offline)")' },
-    ],
-  },
-};
-if (EDITIONS[target]) {
+// Editions are now defined as PROFILES: profiles/<name>.gcuprofile (a base + a named set
+// of packages + settings + starter; may `extends` another profile — e.g. auditable-geo
+// extends auditable-py + gslib). resolve.js flattens that and maps package names → in-repo
+// bundles via profiles/packages.json. Same bake (gzip each ext → make_example) as before;
+// the per-package detail just moved out of a hand-rolled table. Triggered by --profile=<name>,
+// or --target=<name> when profiles/<name>.gcuprofile exists (so gcu-make's --target=auditable-py
+// keeps working). Spec: spec_inbox/gcu-distributions-spec.md.
+const profileArg = (process.argv.find(a => a.startsWith('--profile=')) || '').split('=')[1] || null;
+const profilesDir = path.join(__dirname, 'profiles');
+const profileName = profileArg
+  || (fs.existsSync(path.join(profilesDir, target + '.gcuprofile')) ? target : null);
+if (profileName) {
   const makeExample = require('./make_example');
   const zlib = require('zlib');
-  const ed = EDITIONS[target];
+  const { resolveToEdition } = require('./profiles/resolve');
+  const ed = resolveToEdition(profileName, { profilesDir });
   const modules = {};
   for (const [url, rel, adderExports] of ed.exts) {
     const raw = fs.readFileSync(path.join(__dirname, rel), 'utf8');
@@ -1288,7 +1258,7 @@ if (EDITIONS[target]) {
   }
   const outDir = path.join(__dirname, 'editions');
   fs.mkdirSync(outDir, { recursive: true });
-  makeExample({ title: ed.title, cells: ed.cells, settings: ed.settings, modules, outPath: path.join(outDir, target + '.html') });
+  makeExample({ title: ed.title, cells: ed.cells, settings: ed.settings, modules, outPath: path.join(outDir, profileName + '.html') });
   process.exit(0);
 }
 

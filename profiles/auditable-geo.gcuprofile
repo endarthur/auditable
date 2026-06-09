@@ -1,0 +1,11 @@
+{
+  "name": "auditable-geo",
+  "title": "Geoscience (adder)",
+  "base": "auditable",
+  "extends": ["auditable-py"],
+  "packages": ["@atra/gslib"],
+  "starter": [
+    { "type": "md", "code": "# Auditable — Geoscience edition\n\nThe resource-estimation stack — adder (Python), gslib (geostatistics: sgsim, kriging), `@gcu/plot`, `@gcu/sadpan` — **bundled in, fully offline**. Just `import gslib` / `import plt` / `import sadpan` in an `adder` cell; they load from the embedded copies on first use. See the *resource estimation* example for a worked simulate → drill → estimate pipeline." },
+    { "type": "adder", "code": "import gslib\nimport plt\nimport sadpan as pd\n\nprint(\"geoscience edition — gslib, plt, sadpan bundled (offline)\")" }
+  ]
+}

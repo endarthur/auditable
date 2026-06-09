@@ -1,0 +1,11 @@
+{
+  "name": "auditable-py",
+  "title": "Python (adder)",
+  "base": "auditable",
+  "packages": ["@gcu/adder", "@gcu/plot", "@gcu/sadpan"],
+  "settings": { "theme": "dark", "fontSize": 13, "width": "860", "preferredCodeType": "adder" },
+  "starter": [
+    { "type": "md", "code": "# Auditable — Python edition\n\nadder (a Python dialect that compiles to JavaScript) is the default cell language here, and `@gcu/plot` + `@gcu/sadpan` are **bundled into this file** — it works fully offline, no fetch. Just `import plt` / `import sadpan` in an `adder` cell; they load from the embedded copies on first use. New code cells default to `adder`." },
+    { "type": "adder", "code": "import plt\nimport sadpan as pd\n\nprint(\"hello from adder — plt + sadpan load on import\")" }
+  ]
+}
