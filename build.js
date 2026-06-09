@@ -118,7 +118,7 @@ function processModules(mainPath, moduleDir, opts = {}) {
 // TARGET: works
 // ══════════════════════════════════════════════════
 
-if (target === 'works' || target === 'works-all') {
+if (target === 'works' || target === 'works-all' || target === 'works-core') {
   // Auditable Works — the GCU desktop shell. Registry build: every shell
   // module and every ext-library bundle gets its own ES-module scope via
   // blob URLs + an import map — the machinery the auditable target uses.
@@ -284,6 +284,12 @@ if (target === 'works' || target === 'works-all') {
   const worksZlib = require('zlib');
 
   const isWorksAll = (target === 'works-all');
+  const isWorksCore = (target === 'works-core');
+  // works-core's /usr/lib set = the dep-union of the CORE surfaces (CORE_KINDS at the
+  // surfaces loop): stub/text/preview/inspector/settings/library/terminal. Every heavy
+  // surface lib is provisioned, not bundled. (v1.0's terminal still uses xterm; v1.1
+  // swaps it to @gcu/term, dropping xterm here.) See spec_inbox/gcu-distributions-spec.md.
+  const CORE_LIBS = ['abus', 'menu', 'qr', 'capsule', 'vfs', 'xterm', 'geas', 'proc', 'readline'];
   // NB: 'strata-app' (the shared strata app core, source-override below) must
   // precede 'loom'/'strata'/'recon'/'archive' — the runtime surface inliner
   // iterates in this order, and inlining strata-app first is what brings its
@@ -313,7 +319,7 @@ if (target === 'works' || target === 'works-all') {
     extra.sort();
     return [...SHARED_LIBS_BASE, ...extra];
   }
-  const SHARED_LIBS = isWorksAll ? _allExtBundles() : SHARED_LIBS_BASE;
+  const SHARED_LIBS = isWorksAll ? _allExtBundles() : isWorksCore ? CORE_LIBS : SHARED_LIBS_BASE;
 
   // works-all also bundles the atra libraries (pre-compiled JS+Wasm
   // distributions) under /usr/lib/@atra/<name>/. These are what
@@ -530,7 +536,7 @@ if (target === 'works' || target === 'works-all') {
     const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
     return `<script type="text/plain" id="docs-payload">\n${b64}\n</script>`;
   }
-  const docsPayload = buildDocsPayload();
+  const docsPayload = isWorksCore ? '' : buildDocsPayload();
 
   // ── Examples payload (works-all only) ──────────────────────────────
   // Walk examples/defs/<category>/*.txt; bundle as { 'category/name.txt':
@@ -690,6 +696,9 @@ if (target === 'works' || target === 'works-all') {
     return html.replace('</head>', '<style>' + _menuCss + '</style>\n</head>');
   }
 
+  // works-core ships only the core surfaces (terminal/text/preview/inspector/settings/
+  // library/stub); every other surface is provisioned, not bundled.
+  const CORE_KINDS = new Set(['stub', 'text', 'preview', 'inspector', 'settings', 'library', 'terminal']);
   const surfaceParts = [];
   for (const s of [
     { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus'] },
@@ -716,6 +725,10 @@ if (target === 'works' || target === 'works-all') {
     { kind: 'encode',    file: 'works/surfaces/encode.html',    deps: ['abus'] },
     { kind: 'notebook',  file: 'auditable.html',                deps: null },
   ]) {
+    if (isWorksCore && !CORE_KINDS.has(s.kind)) continue;
+    if (isWorksCore && s.deps) {
+      for (const d of s.deps) if (!CORE_LIBS.includes(d)) throw new Error(`works-core: surface '${s.kind}' needs lib '${d}' missing from CORE_LIBS`);
+    }
     const sp = path.join(__dirname, s.file);
     if (!fs.existsSync(sp)) {
       console.error(`Error: surface source ${s.file} not found`
@@ -778,7 +791,7 @@ ${worksJs}
 </html>
 `;
 
-  const outFile = isWorksAll ? 'works-all.html' : 'works.html';
+  const outFile = isWorksCore ? 'works-core.html' : isWorksAll ? 'works-all.html' : 'works.html';
   fs.writeFileSync(path.join(__dirname, outFile), worksHtml);
   const worksSize = fs.statSync(path.join(__dirname, outFile)).size;
   console.log(`Built ${outFile} (${(worksSize / 1024).toFixed(1)} KB)`);

@@ -182,6 +182,7 @@ landing/lib/
 # Generated distributables — built by CI (release.yml) → gh-pages + release assets, so
 # they don't bloat .git. auditable.html stays committed (the product + the update root).
 /works.html
+/works-core.html
 /works-all.html
 /editions/*.html
 examples/**/*.html
