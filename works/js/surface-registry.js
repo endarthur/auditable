@@ -467,7 +467,11 @@ registerKind('encode', { label: 'Encode / Hash', icon: '⇄', extensions: [] });
 // The A-Bus inspector — a diagnostic surface, spawned from the Debug menu
 // (not tied to a VFS path).
 registerKind('inspector', { label: 'A-Bus Inspector', icon: '◉', extensions: [] });
-registerKind('workbench', { label: 'Data Workbench', icon: '▤', extensions: [] });
+// NB: the Data Workbench surface ('workbench') is NOT a built-in kind — it is
+// contributed by the @gcu/workbench package's works.js (registerExtension), so
+// it exists only where that package is installed (works/works-all, not
+// works-core). The Tools → Data workbench menu item is gated on it being
+// registered (menubar.js).
 
 // Workspace settings — appearance, mounts, storage home. Single-instance
 // (the spawner re-uses the open tab if one exists). Tools → Settings…

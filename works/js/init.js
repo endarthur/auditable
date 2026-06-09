@@ -11,7 +11,6 @@ import { setupLayout, restoreLayout } from './layout.js';
 import { setupMenuBar } from './menubar.js';
 import { setupTree, refreshTree, newProject, newFile, duplicateProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
-import { setupPipelineService } from './pipeline-service.js';
 import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
 import { decompressLibs, decompressSurfaces, installSharedLibsToVfs } from './surface-registry.js';
 import { installDocsToVfs } from './docs-loader.js';
@@ -31,6 +30,8 @@ import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
 import { installGlobalFileDrop } from './file-ops.js';
 import { installShellAuditable, evaluateAllWorksScripts } from './extension-loader.js';
+import { installBuiltinPackages } from './lib-builtins-loader.js';
+import { declareInstalledServices } from './extension-services.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
@@ -40,6 +41,7 @@ async function boot() {
   await restoreMounts();       // reconnect saved /mnt/* disk-folder mounts
   await decompressLibs();      // shared library payloads → source strings
   await installSharedLibsToVfs(WKS.vfs);   // expose them at /usr/lib as @gcu/*
+  await installBuiltinPackages(WKS.vfs);   // seed /lib with distribution-shipped packages (works/works-all)
   await installDocsToVfs(WKS.vfs);         // /usr/share/doc/ for the docs surface
   await installBuiltinBooks(WKS.vfs);      // /usr/share/books/gcu-docs/ (the docs, as a reader book)
   await installExamplesToVfs(WKS.vfs);     // /usr/share/examples/ (works-all only)
@@ -51,13 +53,13 @@ async function boot() {
   setupTree();                 // the file-tree explorer
   installGlobalFileDrop();     // drag OS files (.txt/.html/.ipynb) onto the shell
   await setupWorksService();   // the `works` A-Bus service (core — eager, the bootstrap service)
-  // The `pipeline` service (shell-side flowsheet engine) is a FEATURE service — only the
-  // workbench surface calls it. Declare it COLD: the broker activates it (runs
-  // setupPipelineService, which connects + claims 'pipeline') on the first call, so it
-  // runs no code until the workbench is actually used. Step toward making it a workbench-
-  // package contribution (works-contribution-registry-spec); for now the declaration is
-  // built-in, proving the cold→hot path end-to-end.
-  WKS.broker.declareService('pipeline', { activator: setupPipelineService });
+  // FEATURE services (e.g. the workbench's `pipeline` flowsheet engine) are declared
+  // COLD from each installed package's `gcu.services` data manifest — the broker
+  // activates one on its first call (dependency-injecting the package's declared libs,
+  // then running its setupService). No feature-service code runs until the feature is
+  // used; works-core ships none of these packages, so it carries none of their code.
+  // (works-contribution-registry-spec — the declarative, provisionable model.)
+  await declareInstalledServices();
   setupSurfaces();             // surface-signal tracking
   await restoreLayout();       // reopen the saved tabs
 

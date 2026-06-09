@@ -1,0 +1,23 @@
+{
+  "name": "@gcu/workbench",
+  "version": "0.1.0",
+  "description": "Geoscience/tabular Data Workbench — a Works surface plus the shell-side `pipeline` A-Bus service (a @gcu/flowsheet engine over @gcu/sluice + @gcu/recon, scans fanned across @gcu/proc workers).",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["auditable-extension", "works-surface", "geoscience", "tabular", "blockmodel"],
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "works-contribution-registry — a package that contributes BOTH a surface (works.js, code) and a service (gcu.services, declarative data)."
+  },
+  "gcu": {
+    "services": [
+      {
+        "name": "pipeline",
+        "entry": "service.js",
+        "export": "setupService",
+        "requires": ["flowsheet", "sluice", "recon", "proc"],
+        "permission": "open"
+      }
+    ]
+  }
+}

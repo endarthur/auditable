@@ -3,6 +3,7 @@
 import { MenuBar } from '#menu';
 import { WKS, setStatus } from './state.js';
 import { spawnSurface, openPath } from './surfaces.js';
+import { kindDef } from './surface-registry.js';
 import { newProject } from './tree.js';
 import { importNotebookViaPicker, importFileAsNotebook } from './import.js';
 import { importEpubViaPicker } from './book-import.js';
@@ -45,7 +46,9 @@ export function setupMenuBar() {
     { label: 'Tools', items: () => [
       { label: 'Terminal',  action: 'tools:terminal' },
       { label: 'Library',   action: 'tools:library' },
-      { label: 'Data workbench', action: 'tools:workbench' },
+      // Contributed by the @gcu/workbench package — present only where that
+      // package is installed (works/works-all, not the lean works-core).
+      ...(kindDef('workbench') ? [{ label: 'Data workbench', action: 'tools:workbench' }] : []),
       { label: 'Encode / Hash', action: 'tools:encode' },
       { label: 'New rack',  action: 'tools:patchbay' },
       { label: 'Settings…', action: 'tools:settings' },

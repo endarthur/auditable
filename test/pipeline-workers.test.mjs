@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import * as sluice from '../ext/sluice/src/main.js';
 import { ProcessManager } from '../ext/proc/src/main.js';
 import { createNodeWorker } from '../ext/proc/src/node-worker-shim.js';
-import { scanParallel, _scanChunk } from '../works/js/pipeline-workers.js';
+import { scanParallel, _scanChunk } from '../ext/workbench/src/pipeline-workers.js';
 
 // The sluice bundle as an import()-able data: URL — the worker imports this to
 // rebuild accumulators (the shell uses a blob URL of the bundled lib instead).

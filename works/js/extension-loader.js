@@ -198,6 +198,11 @@ export async function evaluateAllWorksScripts() {
   }
 }
 
+// Enumerate every installed package under /lib: scoped names at
+// /lib/<scope>/<name>, bare names under /lib/local/<name>. Shared with the
+// service scan (extension-services.js) so both walk /lib identically.
+export async function enumerateInstalled() { return _enumerateInstalled(); }
+
 async function _enumerateInstalled() {
   const out = [];
   let topLevel;

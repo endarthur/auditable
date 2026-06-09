@@ -161,15 +161,11 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     // Capsule transport — used by init.js's #capsule boot handler to decode
     // share-link / QR registry-pointers (QR → install). Inline schemes only.
     ['capsule',  'ext/capsule/index.js'],
-    // The geoscience/tabular workbench base libs — imported by the shell-side
-    // pipeline service (works/js/pipeline-service.js): the @gcu/flowsheet engine
-    // running over @gcu/sluice (streaming stats) + @gcu/recon (schema sniffing).
-    // proc: the worker substrate — pipeline-service fans heavy scans across a
-    // @gcu/proc Pool (shell-side; the terminal surface bundles proc separately).
-    ['sluice',    'ext/sluice/index.js'],
-    ['recon',     'ext/recon/index.js'],
-    ['flowsheet', 'ext/flowsheet/index.js'],
-    ['proc',      'ext/proc/index.js'],
+    // NB: the geoscience/tabular workbench base libs (sluice/recon/flowsheet)
+    // are NO LONGER shell-import registry entries — the @gcu/workbench package's
+    // pipeline service is dependency-injected and resolves them via getLibSource
+    // (the /usr/lib payloads). proc stays a /usr/lib payload (the terminal +
+    // the activator both use it via getLibSource), not a shell-import entry.
   ]) {
     const p = path.join(__dirname, rel);
     if (!fs.existsSync(p)) {
@@ -635,6 +631,49 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   }
   const examplesPayload = buildExamplesPayload();
 
+  // ── Builtin packages payload (works / works-all; NOT works-core) ─────
+  // Distribution-shipped packages pre-installed into /lib at boot. Each is a
+  // real package directory (package.json + entry files); the shell's
+  // lib-builtins-loader unpacks them into /lib/<name>/ (write-if-absent-or-
+  // stale) and the surface scan + service scan pick them up like any user
+  // install. works-core omits this payload — that's why pipeline + its libs
+  // leave the lean shell (works-contribution-registry-spec phase 2).
+  //
+  // @gcu/workbench: the Data Workbench surface + the shell-side `pipeline`
+  // A-Bus service (declared in its package.json gcu.services, activated cold).
+  const BUILTIN_PACKAGES = [
+    { dir: 'ext/workbench', files: ['package.json', 'service.js', 'works.js', 'surface.html'] },
+  ];
+  function buildBuiltinPackagesPayload() {
+    if (isWorksCore) return '';
+    const packages = [];
+    for (const spec of BUILTIN_PACKAGES) {
+      const pkgJsonPath = path.join(__dirname, spec.dir, 'package.json');
+      if (!fs.existsSync(pkgJsonPath)) {
+        console.error(`Error: builtin package ${spec.dir}/package.json not found — build the package first.`);
+        process.exit(1);
+      }
+      const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+      const files = {};
+      for (const rel of spec.files) {
+        const fp = path.join(__dirname, spec.dir, rel);
+        if (!fs.existsSync(fp)) {
+          console.error(`Error: builtin package ${spec.dir}/${rel} not found — run \`node ${spec.dir}/build.js\` first.`);
+          process.exit(1);
+        }
+        files[rel] = fs.readFileSync(fp, 'utf8');
+      }
+      packages.push({ name: pkgJson.name, version: pkgJson.version || '0.0.0', files });
+    }
+    if (packages.length === 0) return '';
+    console.log(`works: bundling ${packages.length} builtin package(s) (${packages.map((p) => p.name + ' v' + p.version).join(', ')})`);
+    const json = JSON.stringify({ version: 1, packages });
+    const gz = worksZlib.gzipSync(Buffer.from(json, 'utf8'));
+    const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
+    return `<script type="text/plain" id="pkg-builtins-payload">\n${b64}\n</script>`;
+  }
+  const builtinPkgsPayload = buildBuiltinPackagesPayload();
+
   // Terminal-specific: inline @gcu/term's CSS (structural term.css + default theme),
   // the same pair the standalone geas tool uses. The geas-worker payload that used to
   // live here is gone — the terminal spawns its worker via the geas blob URL discovered
@@ -714,7 +753,9 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
     { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus'] },
-    { kind: 'workbench', file: 'works/surfaces/workbench.html', deps: ['abus'] },
+    // NB: the 'workbench' surface is no longer a built-in payload — it ships
+    // inside the @gcu/workbench builtin package (pkg-builtins-payload below),
+    // installed into /lib at boot and registered as a contributed surface.
     { kind: 'docs',      file: 'works/surfaces/docs.html',
       deps: ['abus', 'markdown', 'librarian', 'docview'] },
     { kind: 'book',      file: 'works/surfaces/reader.html',
@@ -789,6 +830,12 @@ ${docsPayload}
      bundled as a gzipped JSON map. Decompressed at boot into the workspace
      VFS at /usr/share/examples/ for the Help → Open example… picker. -->
 ${examplesPayload}
+
+<!-- Auditable Works builtin packages (works / works-all; omitted from works-core)
+     — distribution-shipped .gcupkg-shaped packages (package.json + entry files),
+     gzipped. The shell unpacks them into /lib/<name>/ at boot; the surface +
+     service scans pick them up like any user install. @gcu/workbench lives here. -->
+${builtinPkgsPayload}
 
 ${compressWorksRuntime(worksJs)}
 </body>

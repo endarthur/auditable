@@ -310,17 +310,17 @@ if (nbFrame) {
 }
 
 // Notebook surface sees the shell's /usr/lib builtins as @gcu/* modules
-// in its _installedModules — `await load('@gcu/xterm')` works natively.
+// in its _installedModules — `await load('@gcu/term')` works natively.
 let nbBuiltins = null;
 if (nbFrame) {
   nbBuiltins = await nbFrame.evaluate(() => {
     const m = window._installedModules || {};
     return {
-      hasXterm: !!m['@gcu/xterm'],
+      hasTerm:  !!m['@gcu/term'],
       hasGeas:  !!m['@gcu/geas'],
       hasVfs:   !!m['@gcu/vfs'],
       hasAbus:  !!m['@gcu/abus'],
-      xtermBuiltinFlag: !!(m['@gcu/xterm'] && m['@gcu/xterm'].builtin),
+      termBuiltinFlag: !!(m['@gcu/term'] && m['@gcu/term'].builtin),
     };
   });
 }
@@ -1657,9 +1657,9 @@ const checks = {
                                         && typeof nbFlush.lockfile.modules === 'object',
   // Notebook sees /usr/lib builtins as @gcu/* modules
   'notebook sees /usr/lib builtins':  nbBuiltins
-      && nbBuiltins.hasXterm && nbBuiltins.hasGeas
+      && nbBuiltins.hasTerm && nbBuiltins.hasGeas
       && nbBuiltins.hasVfs && nbBuiltins.hasAbus,
-  'builtin flag preserved':           nbBuiltins && nbBuiltins.xtermBuiltinFlag,
+  'builtin flag preserved':           nbBuiltins && nbBuiltins.termBuiltinFlag,
   // Shell-side /mnt mounts mirror into the notebook surface VFS
   'notebook mirrors /mnt mount (boot)':   nbMirroredMount && nbMirroredMount.hasMirror,
   'notebook reads through proxy':         nbMirroredMount && nbMirroredMount.mountContent === 'from disk',

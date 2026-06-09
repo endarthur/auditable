@@ -1,3 +1,62 @@
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/workbench/src/  Build: node ext/workbench/build.js
+// @gcu/workbench — shell-side `pipeline` service entry (exports setupService).
+
+// -- pipeline-workers.js --
+
+// Parallel scan driver — fans a sluice scan across @gcu/proc Pool workers, the
+// §7a model: the engine orchestrates on the main thread (cheap) and dispatches
+// the heavy SCAN off-thread, chunked, then merges the partial states.
+//
+// Pure / dependency-injected (takes the sluice module + a proc Pool + a sluice
+// module URL), so it runs unchanged in the shell (sluice bundled, proc workers)
+// and in Node tests (createNodeWorker, sluice via a data: URL). The worker fn is
+// self-contained — proc strips closures, so it receives everything as arguments.
+//
+// Forward-compatible (not a bodge): the chunk crosses as a Blob by reference (no
+// byte copy); proc Phase B (VFS-from-worker) later upgrades the SOURCE the worker
+// reads, without touching this driver. The accumulator crosses as a serializable
+// spec (sluice.accumulatorFromSpec), the permanent cross-realm op contract.
+
+// Worker-side: import sluice from the given module URL, rebuild the accumulator
+// from its spec, scan one Blob chunk, return the partial (mergeable) state.
+// Standalone — references only its arguments (proc serializes it via toString()).
+export async function _scanChunk(blob, sluiceUrl, parseOpts, accSpec, opSpecs) {
+  const S = await import(sluiceUrl);
+  const acc = S.accumulatorFromSpec(accSpec);
+  // Row-expression ops (calc/filter) cross as serializable specs and fuse into
+  // the scan after the parse — compiled here, worker-side (the §7a contract).
+  return S.scanState(S.recipe(S.fromBlob(blob), S.parseCsv(parseOpts), ...S.opsFromSpecs(opSpecs)), acc);
+}
+
+// scanParallel({ sluice, pool, sluiceUrl, blob, parseOpts?, accSpec, workers? })
+//   sluice    — the sluice module (main-thread: chunks / accumulatorFromSpec / merge)
+//   pool      — a @gcu/proc Pool (pool.map dispatches chunks to workers)
+//   sluiceUrl — an import()-able URL of the sluice bundle (data:/blob)
+//   blob      — the source as a sliceable Blob/File
+//   accSpec   — a serializable accumulator spec (sluice.accumulatorFromSpec)
+// Returns the finalized accumulator result (merged across chunks).
+export async function scanParallel({ sluice, pool, sluiceUrl, blob, parseOpts = {}, accSpec, opSpecs = [], workers = 4 }) {
+  const { header, blobs } = await sluice.chunks(blob, workers, { comment: parseOpts.comment });
+  const opts = { ...parseOpts, header };
+  const make = () => sluice.accumulatorFromSpec(accSpec);
+  const ops = () => sluice.opsFromSpecs(opSpecs);
+
+  let states;
+  if (blobs.length <= 1) {
+    // Trivial input — skip worker overhead, scan inline.
+    const b = blobs[0] || blob;
+    states = [await sluice.scanState(sluice.recipe(sluice.fromBlob(b), sluice.parseCsv(opts), ...ops()), make())];
+  } else {
+    states = await pool.map(blobs, _scanChunk, { extra: [sluiceUrl, opts, accSpec, opSpecs] });
+  }
+
+  const acc = make();
+  const merged = states.reduce((a, b) => acc.merge(a, b));
+  return acc.result(merged);
+}
+
+// -- pipeline-service.js --
+
 // The `pipeline` A-Bus service — the shell-side @gcu/flowsheet engine.
 //
 // Per the runtime/data-residency design (pipeline-engine-design.md §7a): the
@@ -5,25 +64,32 @@
 // shell resolves the lazy/content-addressed graph and returns small results over
 // A-Bus — bytes never cross into the surface.
 //
+// DEPENDENCY-INJECTED. This module has NO imports of its own (only the sibling
+// pipeline-workers, concatenated at build). Everything it needs — the broker, an
+// A-Bus `connect`, the workspace vfs, and the @gcu/{flowsheet,sluice,recon,proc}
+// libs + a `getLibSource` accessor — arrives through `setupService(ctx)`. That
+// is what lets the service run identically whether it's shell-bundled or
+// blob-imported from /lib by the broker's cold→hot service activator (the
+// works-contribution-registry model): the activator resolves the package's
+// declared `requires` and hands them in, so there is no post-boot import-map to
+// depend on.
+//
 // Scan execution: heavy scans fan OUT across @gcu/proc workers (the §7a worker
-// model) via works/js/pipeline-workers.js → sluice chunks/scanState/merge, with
-// graceful fallback to an inline (main-thread) scan when a worker pool isn't
-// available (e.g. file:// blocks a worker importing a blob-URL'd lib). The
-// accumulator crosses to workers as a serializable spec; the chunk crosses as a
-// Blob by reference.
+// model) via pipeline-workers.js → sluice chunks/scanState/merge, with graceful
+// fallback to an inline (main-thread) scan when a worker pool isn't available
+// (e.g. file:// blocks a worker importing a blob-URL'd lib). The accumulator
+// crosses to workers as a serializable spec; the chunk crosses as a Blob by
+// reference.
 //
 // ⚠ Remaining interim (see the project memory): load.csv reads the WHOLE file
 // (vfs.readFile → Blob), not streamed. proc Phase B (VFS-from-worker) / a ranged
 // streaming Source replaces that without touching the engine or this service.
 
-import { connect } from '#abus';
-import { WKS } from './state.js';
-import { createEngine, createRegistry } from '#flowsheet';
-import * as sluice from '#sluice';
-import { sniff } from '#recon';
-import { ProcessManager } from '#proc';
-import { scanParallel } from './pipeline-workers.js';
-import { getLibSource } from './surface-registry.js';
+
+// Injected at setup time via ctx (see the header). Declared module-level so the
+// helper functions below close over them; assigned once in setupService, which
+// the broker runs before any Pull can reach the engine.
+let connect, sluice, sniff, createEngine, createRegistry, ProcessManager, getLibSource;
 
 // Lazy, once: a @gcu/proc worker pool + an import()-able blob URL of the sluice
 // bundle (the workers import it to rebuild accumulators). null ⇒ run inline.
@@ -218,15 +284,33 @@ export function createPipelineRegistry(vfs) {
   return reg;
 }
 
-export async function setupPipelineService() {
+// The cold→hot service activator entry. The broker calls this once, on the first
+// `pipeline` call, with the injected ctx. It connects to the broker, builds the
+// flowsheet engine + node registry, exposes the Pipeline interface, and claims
+// the `pipeline` service name.
+//
+// ctx = {
+//   broker,                              // the A-Bus broker (broker.connect)
+//   connect,                             // @gcu/abus connect()
+//   vfs,                                 // the workspace VFS
+//   libDir,                              // '/lib/@gcu/workbench' (unused today)
+//   getLibSource,                        // (name) → decompressed lib source string
+//   deps: { flowsheet, sluice, recon, proc },   // the resolved `requires` namespaces
+// }
+export async function setupService(ctx) {
+  ({ connect, getLibSource } = ctx);
+  const { broker, vfs, deps } = ctx;
+  sluice = deps.sluice;
+  sniff = deps.recon.sniff;
+  ({ createEngine, createRegistry } = deps.flowsheet);
+  ProcessManager = deps.proc.ProcessManager;
+
   const ch = new MessageChannel();
-  WKS.broker.connect(ch.port1);
+  broker.connect(ch.port1);
   const bus = await connect(ch.port2, { client: 'pipeline-shell' });
-  const vfs = WKS.vfs;
 
   const registry = createPipelineRegistry(vfs);
   const engine = createEngine({ registry });
-  WKS.pipelineEngine = engine;
 
   async function resolvePipeline(p) {
     if (typeof p === 'string') return JSON.parse(await vfs.readFile(p, 'utf8'));
@@ -247,6 +331,5 @@ export async function setupPipelineService() {
   });
 
   await bus.claim('pipeline');
-  WKS.pipelineBus = bus;
   return bus;
 }
