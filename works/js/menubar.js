@@ -4,6 +4,7 @@ import { MenuBar } from '#menu';
 import { WKS, setStatus } from './state.js';
 import { spawnSurface, openPath } from './surfaces.js';
 import { kindDef } from './surface-registry.js';
+import { hasProfilesPayload, showSetupDialog } from './setup.js';
 import { newProject } from './tree.js';
 import { importNotebookViaPicker, importFileAsNotebook } from './import.js';
 import { importEpubViaPicker } from './book-import.js';
@@ -51,6 +52,8 @@ export function setupMenuBar() {
       ...(kindDef('workbench') ? [{ label: 'Data workbench', action: 'tools:workbench' }] : []),
       { label: 'Encode / Hash', action: 'tools:encode' },
       { label: 'New rack',  action: 'tools:patchbay' },
+      // Lean works-core only: provision / change the distribution profile.
+      ...(hasProfilesPayload() ? [{ label: 'Set up / change profile…', action: 'tools:setup' }] : []),
       { label: 'Settings…', action: 'tools:settings' },
     ] },
     { label: 'Debug', items: () => [
@@ -62,6 +65,7 @@ export function setupMenuBar() {
       // examples even when no bundled notebook examples are present.
       { label: 'Documentation', action: 'help:docs', shortcut: 'F1' },
       { label: 'Documentation (as a book)', action: 'help:docsbook' },
+      ...(hasProfilesPayload() ? [{ label: 'Getting started…', action: 'help:gettingstarted' }] : []),
       { label: 'Open example…', action: 'help:openexample' },
       '---',
       { label: 'About Auditable Works', action: 'help:about' },
@@ -100,6 +104,7 @@ export function setupMenuBar() {
     if (action === 'tools:workbench') { spawnSurface('workbench', { title: 'Data Workbench' }); return; }
     if (action === 'tools:encode') { spawnSurface('encode', { title: 'Encode / Hash' }); return; }
     if (action === 'tools:patchbay') { await newRack(); return; }
+    if (action === 'tools:setup' || action === 'help:gettingstarted') { await showSetupDialog({}); return; }
     if (action === 'tools:settings') {
       // Single-instance: focus the existing settings tab if any.
       for (const rec of WKS.surfaces.values()) {

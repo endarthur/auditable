@@ -4,6 +4,6 @@
   "base": "works-core",
   "description": "Every first-party Works package in the catalog.",
   "packages": ["@gcu/workbench", "@example/service"],
-  "settings": { "theme": "dark" },
+  "settings": { "appearance": { "theme": "dark" } },
   "starter": []
 }

@@ -39,7 +39,7 @@ test('resolveToProvisioned returns the runtime shape (names, settings, no packag
   assert.equal(p.name, 'works-geoscience');
   assert.equal(p.base, 'works-core');
   assert.deepEqual(p.packages, ['@gcu/workbench']);   // catalog entry names, as-is
-  assert.equal(p.settings.theme, 'dark');
+  assert.equal(p.settings.appearance.theme, 'dark');   // works settings nest theme under appearance
   assert.ok(typeof p.description === 'string' && p.description.length);
 });
 

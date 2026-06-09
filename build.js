@@ -185,7 +185,11 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   const worksRelease = process.env.AUDITABLE_RELEASE || 'dev';
   const worksPubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
   const worksRepo = process.env.AUDITABLE_REPO || 'gentropic/auditable';
+  const worksPagesUrl = process.env.AUDITABLE_PAGES_URL || 'https://gentropic.org/auditable';
   for (const mod of modules) {
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_PAGES_URL__ = 'https://gentropic.org/auditable';",
+      `const __AUDITABLE_PAGES_URL__ = '${worksPagesUrl}';`);
     mod.source = mod.source.replace(
       "const __AUDITABLE_VERSION__ = '0.0.0';",
       `const __AUDITABLE_VERSION__ = '${worksPkg.version || '0.0.0'}';`);

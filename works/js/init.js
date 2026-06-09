@@ -25,6 +25,7 @@ import { importEpubBytes } from './book-import.js';
 import { metaGet, metaSet } from './meta.js';
 import { openLibraryDialog, installByName, provisionPackage, addSourceSilent, installFromCapsule } from './registry.js';
 import { listProfiles, provisionProfile, isProvisioned, getProvisioned } from './provision.js';
+import { maybeShowFirstRunSetup, showSetupDialog } from './setup.js';
 import { fragmentDecode, resolveCapsule } from '#capsule';
 import { installGcudatBytes } from './gcudat-install.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
@@ -82,6 +83,7 @@ async function boot() {
   WKS.provisionProfile = provisionProfile;  // (name, catalogUrl) → install a profile's packages + settings + marker
   WKS.isProvisioned = isProvisioned;        // has this workspace been provisioned?
   WKS.getProvisioned = getProvisioned;      // the provisioned marker (profile + what installed)
+  WKS.showSetup = showSetupDialog;          // open the setup / change-profile dialog (Tools / Help)
   WKS.registryAddSource = addSourceSilent;  // (url, name) → add a registry source
   WKS.buildProjectExportHtml = buildProjectExportHtml;
   WKS.exportProject = exportProject;
@@ -180,6 +182,11 @@ async function boot() {
   // missing content, prompt + restore over the ready shell. Fire-and-forget so
   // boot completes; never let a reinstall failure break the desktop.
   maybePromptReinstall().catch((e) => console.warn('[works] reinstall:', (e && e.message) || e));
+
+  // First-run setup — on the lean works-core, if this workspace hasn't been
+  // provisioned yet, offer the profile picker. No-op on a monolith (no profiles)
+  // or an already-provisioned workspace. Fire-and-forget over the ready shell.
+  maybeShowFirstRunSetup().catch((e) => console.warn('[works] setup:', (e && e.message) || e));
 }
 
 async function handleCapsuleBoot() {

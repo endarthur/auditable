@@ -55,14 +55,33 @@ export async function isProvisioned() {
 export async function provisionProfile(name, catalogUrl, opts = {}) {
   const prof = (await listProfiles()).find((p) => p.name === name);
   if (!prof) throw new Error('unknown profile: ' + name);
+  return _provision(prof, catalogUrl, opts);
+}
 
+// Provision a RAW .gcuprofile spec — the v1 "Custom…" path (Form 1): point the
+// setup at a .gcuprofile (a URL / pasted JSON), provision its packages from the
+// configured sources. Treated FLAT — `extends` is ignored in v1 (runtime extends
+// resolution against the baked base profiles is roadmapped). The packages it
+// names must exist in some configured/added source (partial provisions are fine).
+export async function provisionProfileSpec(spec, catalogUrl, opts = {}) {
+  if (!spec || typeof spec !== 'object') throw new Error('invalid profile spec');
+  const prof = {
+    name: spec.name || 'custom',
+    title: spec.title || spec.name || 'Custom',
+    packages: Array.isArray(spec.packages) ? spec.packages : [],
+    settings: spec.settings || {},
+  };
+  return _provision(prof, catalogUrl, opts);
+}
+
+async function _provision(prof, catalogUrl, opts = {}) {
   // Add the catalog as a source so the dep-closure can resolve libs from it.
   if (catalogUrl) {
     try { await addSourceSilent(catalogUrl, opts.sourceName || 'GCU Packages'); }
     catch (e) { console.warn('[works] provision: addSource failed:', e); }
   }
 
-  const report = { name, title: prof.title, installed: [], failed: [] };
+  const report = { name: prof.name, title: prof.title, installed: [], failed: [] };
   for (const pkg of prof.packages || []) {
     setStatus('provisioning ' + pkg + '…');
     try {
@@ -88,7 +107,7 @@ export async function provisionProfile(name, catalogUrl, opts = {}) {
 
   // Record the marker (re-runnable: a later provision overwrites it).
   await metaSet('provisioned', {
-    profile: name, at: Date.now(),
+    profile: prof.name, at: Date.now(),
     installed: report.installed, failed: report.failed,
   }).catch(() => {});
 
