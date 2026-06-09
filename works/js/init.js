@@ -50,8 +50,14 @@ async function boot() {
   setupMenuBar();              // the desktop menu bar
   setupTree();                 // the file-tree explorer
   installGlobalFileDrop();     // drag OS files (.txt/.html/.ipynb) onto the shell
-  await setupWorksService();   // the `works` A-Bus service
-  await setupPipelineService();  // the `pipeline` A-Bus service (shell-side flowsheet engine)
+  await setupWorksService();   // the `works` A-Bus service (core — eager, the bootstrap service)
+  // The `pipeline` service (shell-side flowsheet engine) is a FEATURE service — only the
+  // workbench surface calls it. Declare it COLD: the broker activates it (runs
+  // setupPipelineService, which connects + claims 'pipeline') on the first call, so it
+  // runs no code until the workbench is actually used. Step toward making it a workbench-
+  // package contribution (works-contribution-registry-spec); for now the declaration is
+  // built-in, proving the cold→hot path end-to-end.
+  WKS.broker.declareService('pipeline', { activator: setupPipelineService });
   setupSurfaces();             // surface-signal tracking
   await restoreLayout();       // reopen the saved tabs
 

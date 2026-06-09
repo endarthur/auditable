@@ -156,6 +156,81 @@ test('call to an unowned name rejects with NameHasNoOwner', async () => {
   } finally { h.teardown(); }
 });
 
+// ── cold→hot service activation (declareService) ───────────────────────
+
+test('declareService: a cold service activates on first call, only once', async () => {
+  const h = harness();
+  try {
+    let activations = 0;
+    h.broker.declareService('lazy', {
+      activator: async () => {
+        activations++;
+        const { bus } = await h.join({ client: 'lazy-impl' });
+        bus.expose('/', { Demo: { methods: { Ping: () => 'pong', Echo: (x) => x } } });
+        await bus.claim('lazy');
+      },
+    });
+    assert.equal(activations, 0, 'declaration is inert — no code runs until first call');
+
+    const { bus: caller } = await h.join({ client: 'caller' });
+    const r1 = await caller.call({ to: 'lazy', path: '/', interface: 'Demo', member: 'Ping' }, []);
+    assert.equal(r1, 'pong');
+    assert.equal(activations, 1, 'first call activated it');
+
+    const r2 = await caller.call({ to: 'lazy', path: '/', interface: 'Demo', member: 'Echo' }, ['hi']);
+    assert.equal(r2, 'hi');
+    assert.equal(activations, 1, 'already hot — no re-activation');
+  } finally { h.teardown(); }
+});
+
+test('declareService: concurrent first-calls coalesce onto one activation', async () => {
+  const h = harness();
+  try {
+    let activations = 0;
+    h.broker.declareService('lazy2', {
+      activator: async () => {
+        activations++;
+        await settle(10);   // simulate async module load
+        const { bus } = await h.join({ client: 'lazy2-impl' });
+        bus.expose('/', { Demo: { methods: { Ping: () => 'pong' } } });
+        await bus.claim('lazy2');
+      },
+    });
+    const { bus: caller } = await h.join({ client: 'caller2' });
+    const results = await Promise.all([
+      caller.call({ to: 'lazy2', path: '/', interface: 'Demo', member: 'Ping' }, []),
+      caller.call({ to: 'lazy2', path: '/', interface: 'Demo', member: 'Ping' }, []),
+      caller.call({ to: 'lazy2', path: '/', interface: 'Demo', member: 'Ping' }, []),
+    ]);
+    assert.deepEqual(results, ['pong', 'pong', 'pong']);
+    assert.equal(activations, 1, 'three concurrent first-calls coalesced onto one activation');
+  } finally { h.teardown(); }
+});
+
+test('declareService: a failed activation rejects the call but allows retry', async () => {
+  const h = harness();
+  try {
+    let attempts = 0;
+    h.broker.declareService('flaky', {
+      activator: async () => {
+        attempts++;
+        if (attempts === 1) throw new Error('boom');
+        const { bus } = await h.join({ client: 'flaky-impl' });
+        bus.expose('/', { Demo: { methods: { Ping: () => 'ok' } } });
+        await bus.claim('flaky');
+      },
+    });
+    const { bus: caller } = await h.join({ client: 'caller-flaky' });
+    await assert.rejects(
+      caller.call({ to: 'flaky', path: '/', interface: 'Demo', member: 'Ping' }, []),
+      (e) => e.code === ERR.NameHasNoOwner);
+    // Second call retries activation and succeeds.
+    const r = await caller.call({ to: 'flaky', path: '/', interface: 'Demo', member: 'Ping' }, []);
+    assert.equal(r, 'ok');
+    assert.equal(attempts, 2);
+  } finally { h.teardown(); }
+});
+
 test('a call can address a peer by its unique name', async () => {
   const h = harness();
   try {

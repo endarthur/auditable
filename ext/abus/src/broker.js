@@ -28,6 +28,12 @@ export function createBroker() {
   const clientIds = new Map(); // uniqueName -> clientId string
   const subs = [];             // { subscriber, filter, subId }
   const pendingCalls = new Map(); // `${callerUnique}|${callId}` -> targetUnique
+  // Cold-service declarations (works-contribution-registry-spec): wellKnownName ->
+  // { activator, permission, activating }. A call to a declared-but-unowned name runs
+  // the activator (which connects a peer + claims the name), then re-routes — so a
+  // shell-realm service runs no code until first use. `activating` caches the in-flight
+  // activation so concurrent first-calls coalesce onto one run.
+  const declared = new Map();
 
   function post(uniqueName, msg) {
     const port = ports.get(uniqueName);
@@ -135,6 +141,11 @@ export function createBroker() {
           ? (ports.has(msg.to) ? msg.to : null)
           : owners.get(msg.to);
         if (!target) {
+          // Cold→hot: a declared-but-not-yet-live service activates on first call.
+          if (typeof msg.to === 'string' && declared.has(msg.to)) {
+            _activateThenRoute(fromUnique, msg);
+            return;
+          }
           replyErr(msg, fromUnique, ERR.NameHasNoOwner, `no peer for '${msg.to}'`);
           return;
         }
@@ -372,5 +383,36 @@ export function createBroker() {
     };
   }
 
-  return { connect, disconnect, stats, inspect };
+  // Declare a cold service: a well-known name that activates lazily on first call.
+  // `activator()` must, when awaited, connect a peer that claims `name` + exposes its
+  // interface. `permission` is recorded for the install-time gate (enforced shell-side;
+  // see works-contribution-registry-spec). No code runs until the name is first called.
+  function declareService(name, opts) {
+    if (typeof name !== 'string' || !name) throw new Error('declareService: name required');
+    const activator = opts && opts.activator;
+    if (typeof activator !== 'function') throw new Error('declareService: opts.activator must be a function');
+    declared.set(name, { activator, permission: opts && opts.permission, activating: null });
+  }
+
+  async function _activateThenRoute(fromUnique, msg) {
+    const d = declared.get(msg.to);
+    try {
+      if (!d.activating) d.activating = Promise.resolve().then(() => d.activator());
+      await d.activating;
+    } catch (e) {
+      d.activating = null;   // failed — allow a later call to retry activation
+      replyErr(msg, fromUnique, ERR.NameHasNoOwner,
+        `service '${msg.to}' failed to activate: ${(e && e.message) || e}`);
+      return;
+    }
+    // The activator must have claimed the name; if it didn't, it misbehaved.
+    if (!owners.get(msg.to)) {
+      replyErr(msg, fromUnique, ERR.NameHasNoOwner,
+        `service '${msg.to}' did not claim its name on activation`);
+      return;
+    }
+    route(fromUnique, msg);   // now resolves through the owner table
+  }
+
+  return { connect, disconnect, stats, inspect, declareService };
 }
