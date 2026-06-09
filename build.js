@@ -850,6 +850,91 @@ ${compressWorksRuntime(worksJs)}
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: packages — the first-party code-package catalog
+// ══════════════════════════════════════════════════
+//
+// Packs auditable's distributable first-party extensions (ext/<name>/) into
+// .gcupkgs + emits a registry.json catalog, under packages/ (gitignored — a
+// build output emitted to the deploy: "auditable hosts its own packages, the
+// catalog points at them"; spec_inbox/gcu-packages-spec.md). works-core /
+// provisioned shells add this catalog's URL as a (higher-trust) code source;
+// gcu-library stays content-only. The artifacts are byte-deterministic (the
+// git build date drives the ZIP timestamps), so the SRI in registry.json is
+// stable across rebuilds of the same tree.
+//
+// A distributable here is a SHELL package (surface and/or service, no notebook
+// index.js). Its lib deps (a service's `requires`) are NOT yet packaged — the
+// dep-closure installer is the next step; until then a provisioned package whose
+// libs aren't already present won't fully activate (the lib resolution exists,
+// the auto-install of the closure doesn't).
+if (target === 'packages') {
+  (async () => {
+    const { packGcupkg, sriOfBytes } = await import('./ext/pack-gcupkg.mjs');
+    const buildDate = buildDateFromGit();
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(buildDate) ? new Date(buildDate + 'T00:00:00Z') : new Date(0);
+
+    // The catalog manifest — auditable's distributable first-party extensions.
+    const DISTRIBUTABLES = [
+      { dir: 'ext/example-service', files: ['package.json', 'service.js', 'LICENSE', 'README.md'],
+        contributes: ['service'], integrityCovers: ['service.js'],
+        title: 'Echo (reference service)', tags: ['example', 'reference', 'service'] },
+      { dir: 'ext/workbench', files: ['package.json', 'service.js', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
+        contributes: ['surface', 'service'], integrityCovers: ['service.js', 'works.js', 'surface.html'],
+        title: 'Data Workbench', tags: ['geoscience', 'tabular', 'blockmodel'] },
+    ];
+
+    const outDir = path.join(__dirname, 'packages');
+    const distDir = path.join(outDir, 'dist');
+    fs.mkdirSync(distDir, { recursive: true });
+
+    const entries = [];
+    for (const d of DISTRIBUTABLES) {
+      const pkgDir = path.join(__dirname, d.dir);
+      const pkgJsonPath = path.join(pkgDir, 'package.json');
+      if (!fs.existsSync(pkgJsonPath)) { console.error(`packages: ${d.dir}/package.json missing`); process.exit(1); }
+      const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+
+      const files = {};
+      for (const rel of d.files) {
+        const fp = path.join(pkgDir, rel);
+        if (!fs.existsSync(fp)) continue;   // optional files (README) may be absent
+        files[rel] = fs.readFileSync(fp);
+      }
+      const { bytes } = packGcupkg({
+        name: pkgJson.name, version: pkgJson.version,
+        description: pkgJson.description, license: pkgJson.license,
+        files, contributes: d.contributes, integrityCovers: d.integrityCovers, date,
+      });
+
+      const slug = pkgJson.name.replace(/[@/]/g, '_');
+      const rel = `dist/${slug}.gcupkg`;
+      fs.writeFileSync(path.join(outDir, rel), bytes);
+      entries.push({
+        name: pkgJson.name, kind: 'gcupkg',
+        title: d.title || pkgJson.name, description: pkgJson.description || '',
+        version: pkgJson.version, license: pkgJson.license || 'UNLICENSED',
+        contributes: d.contributes, size: bytes.length, url: rel,
+        integrity: sriOfBytes(bytes), tags: d.tags || [],
+      });
+      console.log(`  packed ${pkgJson.name}@${pkgJson.version} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB)`);
+    }
+
+    const registry = {
+      registry: 1,
+      name: 'GCU Packages',
+      description: 'First-party code extensions for Auditable Works (.gcupkg). Higher-trust — installs run in your workspace.',
+      homepage: 'https://github.com/gentropic/auditable',
+      updated: buildDate,
+      entries,
+    };
+    fs.writeFileSync(path.join(outDir, 'registry.json'), JSON.stringify(registry, null, 2) + '\n');
+    console.log(`Built packages/registry.json (${entries.length} entries)`);
+    process.exit(0);
+  })();
+  return;
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: calque
 // ══════════════════════════════════════════════════
 
