@@ -85,6 +85,7 @@ export async function provisionProfileSpec(spec, catalogUrl, opts = {}) {
     packages: Array.isArray(spec.packages) ? spec.packages : [],
     sources: Array.isArray(spec.sources) ? spec.sources : [],
     settings: spec.settings || {},
+    starter: Array.isArray(spec.starter) ? spec.starter : [],
   };
   return _provision(prof, catalogUrl, opts);
 }
@@ -130,8 +131,15 @@ async function _provision(prof, catalogUrl, opts = {}) {
     } catch (e) { console.warn('[works] provision: settings apply failed:', e); }
   }
 
-  // TODO(starter): a profile's `starter` cells seed a welcome notebook — deferred
-  // until the setup UI lands (it's notebook-cell-shaped; needs a project create).
+  // Seed the profile's starter cells as a welcome notebook project. Skippable
+  // (the setup checkbox / `profile provision --no-starter`); write-if-absent so
+  // a re-provision never clobbers — or resurrects — an edited/deleted welcome.
+  // report.starter carries the project path when (and only when) seeded now.
+  report.starter = null;
+  if (!opts.skipStarter && Array.isArray(prof.starter) && prof.starter.length) {
+    try { report.starter = await _seedStarter(prof); }
+    catch (e) { console.warn('[works] provision: starter seed failed:', e); }
+  }
 
   // Record the marker (re-runnable: a later provision overwrites it).
   await metaSet('provisioned', {
@@ -141,6 +149,28 @@ async function _provision(prof, catalogUrl, opts = {}) {
 
   setStatus(report.failed.length ? `provisioned ${prof.title} (${report.failed.length} failed)` : `provisioned ${prof.title}`);
   return report;
+}
+
+// Write the profile's starter cells as a notebook project (the shape
+// tree.js's newProject creates: project.json + notebook.txt in the /// form).
+// Write-if-absent: an existing /projects/welcome — even a deleted-then-
+// recreated-by-the-user one — is never touched. Returns the project path,
+// or null when it already existed.
+async function _seedStarter(prof) {
+  const dir = '/projects/welcome';
+  if (await WKS.vfs.exists(dir + '/project.json').catch(() => false)) return null;
+  const title = 'Welcome — ' + (prof.title || prof.name);
+  const lines = ['/// auditable', '/// title: ' + title];
+  for (const cell of prof.starter) {
+    if (!cell || typeof cell.code !== 'string') continue;
+    lines.push('', '/// ' + (cell.type || 'code'), cell.code.replace(/\s+$/, ''));
+  }
+  await WKS.vfs.mkdir(dir, { recursive: true });
+  await WKS.vfs.writeFile(dir + '/project.json', JSON.stringify({
+    kind: 'notebook', id: 'p-' + Math.random().toString(36).slice(2, 9), title,
+  }, null, 2));
+  await WKS.vfs.writeFile(dir + '/notebook.txt', lines.join('\n') + '\n');
+  return dir;
 }
 
 // ── profile export ──────────────────────────────────────────────────
@@ -193,5 +223,5 @@ export async function exportProfileSpec(opts = {}) {
 // bound through _setProfileApply because this module imports registry.js for
 // the install primitives — a static import back would be a cycle. Packages
 // resolve preferring the source the profile shipped from, then the rest.
-_setProfileApply(async (spec, sourceUrl) =>
-  provisionProfileSpec(spec, await getCatalogUrl(), { preferredSource: sourceUrl }));
+_setProfileApply(async (spec, sourceUrl, opts) =>
+  provisionProfileSpec(spec, await getCatalogUrl(), { preferredSource: sourceUrl, ...(opts || {}) }));

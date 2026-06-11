@@ -5,5 +5,10 @@
   "description": "Every first-party Works package in the catalog.",
   "packages": ["@gcu/workbench", "@example/service"],
   "settings": { "appearance": { "theme": "dark" } },
-  "starter": []
+  "starter": [
+    { "type": "md", "code": "# Welcome to Auditable Works\n\nEverything in the first-party catalog is installed. A quick tour:\n\n- **Tools → Terminal** — a real shell (geas): `ls /`, `pkg search`, `profile current`.\n- **Tools → Data workbench** — stream stats over CSV / OMF block models.\n- **Tools → Library** — browse and install content packs and extensions from registry sources.\n- **File → New notebook** — a reactive computational notebook; this page is one.\n\nThe cells below are live — run them (▶ on a cell, or Run all in the toolbar):" },
+    { "type": "code", "code": "// Cells form a dependency graph: this one defines `n`,\n// the next one redraws whenever the slider moves.\nconst n = ui.slider(\"points\", { min: 50, max: 2000, value: 400, step: 50 });" },
+    { "type": "code", "code": "const c = ui.canvas(640, 200);\nconst g = c.getContext(\"2d\");\ng.fillStyle = \"#14171c\"; g.fillRect(0, 0, 640, 200);\nfor (let i = 0; i < n; i++) {\n  const x = (i / n) * 640;\n  const y = 100 - 80 * Math.sin((i / n) * 6 * Math.PI) * Math.exp(-i / n);\n  g.fillStyle = `hsl(${180 + (i / n) * 120}, 60%, 60%)`;\n  g.fillRect(x, y, 2, 2);\n}" },
+    { "type": "md", "code": "Drag the slider — the canvas cell re-runs reactively. Delete this notebook whenever you like; re-provision or change profile from **Tools → Set up / change profile…**." }
+  ]
 }

@@ -11989,10 +11989,13 @@ async function _profileExport(ctx, path) {
   return 0;
 }
 
-// profile provision <name | vfs-path | url> — a baked profile by name, or a
-// raw .gcuprofile read from the VFS / fetched from a URL.
-async function _profileProvision(ctx, target) {
+// profile provision <name | vfs-path | url> [--no-starter] — a baked profile
+// by name, or a raw .gcuprofile read from the VFS / fetched from a URL.
+// --no-starter skips seeding the profile's welcome notebook.
+async function _profileProvision(ctx, args) {
   if (!(await _requireHost(ctx, 'provision'))) return 1;
+  const popts = args.includes('--no-starter') ? { skipStarter: true } : {};
+  const target = args.find((a) => !a.startsWith('--'));
   if (!target) { await ctx.stderr('profile provision: needs a profile name, .gcuprofile path, or URL\n'); return 1; }
 
   const isUrl = /^https?:\/\//.test(target);
@@ -12013,10 +12016,10 @@ async function _profileProvision(ctx, target) {
       try { spec = JSON.parse(text); }
       catch { await ctx.stderr(`profile provision: ${target} is not valid .gcuprofile JSON\n`); return 1; }
       await ctx.stdout(`provisioning ${spec.title || spec.name || 'custom'}…\n`);
-      report = await ctx.host('ProfileProvisionSpec', [spec]);
+      report = await ctx.host('ProfileProvisionSpec', [spec, popts]);
     } else {
       await ctx.stdout(`provisioning ${target}…\n`);
-      report = await ctx.host('ProfileProvision', [target]);
+      report = await ctx.host('ProfileProvision', [target, popts]);
     }
   } catch (e) { await ctx.stderr(`profile provision: ${e.message}\n`); return 1; }
 
@@ -12024,6 +12027,7 @@ async function _profileProvision(ctx, target) {
   const fail = (report && report.failed) || [];
   if (inst.length) await ctx.stdout(`installed: ${inst.join(', ')}\n`);
   if (!inst.length && !fail.length) await ctx.stdout('nothing to install (shell-only profile)\n');
+  if (report && report.starter) await ctx.stdout(`welcome notebook: ${report.starter}\n`);
   if (fail.length) {
     await ctx.stderr(`failed: ${fail.join(', ')} (offline? declined source? — re-run to retry)\n`);
     return 1;
@@ -12042,6 +12046,7 @@ async function _profileHelp(ctx) {
     '                             .gcuprofile (no path → stdout)',
     '  provision <name>           provision a baked profile by name',
     '  provision <file|url>       provision a .gcuprofile from the VFS or a URL',
+    '    --no-starter             skip seeding the profile\'s welcome notebook',
     '  help                       show this message',
     '',
     'Auditable Works only — profiles are a works-core (lean shell) feature;',
@@ -12062,7 +12067,7 @@ async function _profile(argv, ctx) {
     case 'current':
     case 'status':    return _profileCurrent(ctx);
     case 'export':    return _profileExport(ctx, argv[2]);
-    case 'provision': return _profileProvision(ctx, argv[2]);
+    case 'provision': return _profileProvision(ctx, argv.slice(2));
     default:          await ctx.stderr(`profile: unknown subcommand "${sub}" (try 'profile help')\n`);
                       return 1;
   }

@@ -3,7 +3,7 @@
 // per surface and addresses each by its unique name.
 
 import { WKS, setStatus } from './state.js';
-import { kindDef, kindForExtension, kindForPath, surfaceUrl } from './surface-registry.js';
+import { kindDef, kindForExtension, kindForPath, surfaceUrl, surfaceAvailable } from './surface-registry.js';
 
 const _byUnique = new Map();   // A-Bus unique name → tab id
 
@@ -96,6 +96,13 @@ export async function openPath(p) {
 
   if (!kind || !kindDef(kind)) {
     setStatus('No surface for ' + p);
+    return null;
+  }
+  // Registered but payload-less — a lean build that knows the kind without
+  // carrying its surface (works-core + 'notebook' until the notebook ships
+  // as an installable package). Degrade to a status, not a throw.
+  if (!surfaceAvailable(kind)) {
+    setStatus('The ' + kind + ' surface isn\'t in this build — install it to open ' + basename(p));
     return null;
   }
   return spawnSurface(kind, { path: p, title });

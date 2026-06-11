@@ -226,8 +226,8 @@ export async function setupWorksService() {
         ProfileList:          () => listProfiles(),                  // baked profiles ([] on monoliths)
         ProfileProvisioned:   () => getProvisioned(),                // marker or null
         ProfileExport:        (opts) => exportProfileSpec(opts || {}),  // → .gcuprofile spec object
-        ProfileProvision:     async (name) => provisionProfile(name, await getCatalogUrl()),
-        ProfileProvisionSpec: async (spec) => provisionProfileSpec(spec, await getCatalogUrl()),
+        ProfileProvision:     async (name, popts) => provisionProfile(name, await getCatalogUrl(), popts || {}),
+        ProfileProvisionSpec: async (spec, popts) => provisionProfileSpec(spec, await getCatalogUrl(), popts || {}),
 
         // ── Notebook A-Bus access (notebook-abus-access-spec.md) ──
         // Tier 3: a notebook asks for the raw bus; this prompts (unless a grant

@@ -400,6 +400,14 @@ export function surfaceUrl(kind) {
   return url;
 }
 
+// Is the kind actually spawnable — registered AND its payload present? A lean
+// works-core registers e.g. 'notebook' (the kind table is build-independent)
+// but doesn't carry the surface; callers that would openPath/spawn on spec
+// (setup's welcome notebook, tree double-click) check this instead of throwing.
+export function surfaceAvailable(kind) {
+  return _surfaceBlobs.has(kind);
+}
+
 // ── Built-in kinds ───────────────────────────────────────────────────
 
 // The Auditable notebook — a project directory (project.json kind:'notebook'

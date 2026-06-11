@@ -242,7 +242,7 @@ async function installEntry(entry, base, sourceUrl, opts = {}) {
     setStatus('applying profile ' + (spec.title || spec.name || entry.name) + '…');
     _applyingProfile = true;
     let report;
-    try { report = await _profileApply(spec, sourceUrl); }
+    try { report = await _profileApply(spec, sourceUrl, { skipStarter: !!opts.skipStarter }); }
     finally { _applyingProfile = false; }
     setStatus(report && !(report.failed || []).length
       ? 'applied profile ' + (report.title || report.name)

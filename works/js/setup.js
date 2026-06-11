@@ -14,6 +14,8 @@ import { Dialog } from '#dialog';
 import { WKS } from './state.js';
 import { listProfiles, isProvisioned, provisionProfile, provisionProfileSpec, getCatalogUrl } from './provision.js';
 import { listProfileEntries, installByName, addSourceWithConsent } from './registry.js';
+import { openPath } from './surfaces.js';
+import { surfaceAvailable } from './surface-registry.js';
 import { readSettings, writeSettings, applyWorkspaceSettings } from './settings-store.js';
 
 // The catalog URL (build-injected) + its meta override live in provision.js
@@ -74,6 +76,7 @@ export async function showSetupDialog(opts = {}) {
   let custom = false;
   let customUrl = '';
   let customText = null;   // a .gcuprofile loaded from a local file (takes precedence over the URL)
+  let seedStarter = true;  // create the profile's welcome notebook (the checkbox)
 
   const dialog = new Dialog({
     title: firstRun ? 'Welcome to Auditable Works' : 'Set up / change profile',
@@ -178,6 +181,21 @@ export async function showSetupDialog(opts = {}) {
       themeRow.append(themeLbl, themeSel);
       wrap.appendChild(themeRow);
 
+      // ── welcome notebook ──
+      // Profiles may ship starter cells (a welcome/tour notebook seeded into
+      // /projects/welcome). On by default; seeding is write-if-absent anyway,
+      // so re-runs never duplicate or clobber.
+      const starterRow = document.createElement('label');
+      starterRow.style.cssText = 'display:flex; align-items:center; gap:7px; font-size:12px; color:var(--au-fg-soft); cursor:pointer;';
+      const starterCheck = document.createElement('input');
+      starterCheck.type = 'checkbox'; starterCheck.checked = seedStarter;
+      starterCheck.style.cssText = 'cursor:pointer;';
+      starterCheck.addEventListener('change', () => { seedStarter = starterCheck.checked; });
+      const starterLbl = document.createElement('span');
+      starterLbl.textContent = 'Create the welcome notebook (when the profile ships one)';
+      starterRow.append(starterCheck, starterLbl);
+      wrap.appendChild(starterRow);
+
       // ── footer ──
       const status = document.createElement('div');
       status.style.cssText = 'font-size:11px; color:var(--au-fg-soft);';
@@ -225,11 +243,12 @@ export async function showSetupDialog(opts = {}) {
         prog.append(head, note);
         body.appendChild(prog);
 
+        const provOpts = { skipStarter: !seedStarter };
         let report = null, err = null;
         try {
           if (minimal) {
             const mn = profiles.find((p) => !(p.packages || []).length);
-            report = await provisionProfile(mn ? mn.name : profiles[0].name, catalogUrl);
+            report = await provisionProfile(mn ? mn.name : profiles[0].name, catalogUrl, provOpts);
           } else if (useCustom) {
             const txt = customText != null ? customText
               : await (await fetch(customUrl, { cache: 'no-cache' })).text();
@@ -247,16 +266,16 @@ export async function showSetupDialog(opts = {}) {
               return;
             }
             // Form 1 — a raw .gcuprofile spec.
-            report = await provisionProfileSpec(parsed, catalogUrl);
+            report = await provisionProfileSpec(parsed, catalogUrl, provOpts);
           } else if (selected.startsWith('__src__')) {
             // A source-shipped profile entry — routes through the registry's
             // SRI-checked entry install (the kind:'profile' apply path). The
             // user just clicked Set up, so no second confirm.
             const sp = srcProfiles[parseInt(selected.slice(7), 10)];
-            report = await installByName(sp.sourceUrl, sp.entry.name, { skipConfirm: true });
+            report = await installByName(sp.sourceUrl, sp.entry.name, { skipConfirm: true, ...provOpts });
             if (!report) throw new Error('profile apply cancelled');
           } else {
-            report = await provisionProfile(selected, catalogUrl);
+            report = await provisionProfile(selected, catalogUrl, provOpts);
           }
         } catch (e) { err = e.message || String(e); }
 
@@ -287,7 +306,17 @@ export async function showSetupDialog(opts = {}) {
         }
         const done = _btn('Done', true);
         done.style.alignSelf = 'flex-end';
-        done.addEventListener('click', () => ctx.close(report));
+        done.addEventListener('click', () => {
+          ctx.close(report);
+          // A welcome notebook seeded just now → open it (report.starter is
+          // null when skipped or when one already existed). The lean shell may
+          // not carry the notebook surface (it's installable, not core) — the
+          // project still seeds and sits in the tree for when it does.
+          if (!err && report && report.starter) {
+            WKS.refreshTree?.();
+            if (surfaceAvailable('notebook')) openPath(report.starter);
+          }
+        });
         sum.append(sh, sd, done);
         body.appendChild(sum);
         done.focus();
