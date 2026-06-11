@@ -11,9 +11,23 @@
 // monolith instead. Nothing here runs at boot unless setup invokes it.
 
 import { WKS, setStatus } from './state.js';
-import { provisionPackage, addSourceSilent } from './registry.js';
+import { provisionPackageAcrossSources, addSourceSilent, addSourceWithConsent, DEFAULT_SOURCE, _setProfileApply } from './registry.js';
+import { getInstalled } from './gcudat-install.js';
 import { readSettings, writeSettings, applyWorkspaceSettings } from './settings-store.js';
 import { metaGet, metaSet } from './meta.js';
+
+// Build-injected (works build): the package catalog URL — the first-party code
+// source a provisioned shell installs from. Hosted SAME-ORIGIN as the Works PWA
+// (gentropic.org/works/packages/) so provisioning needs no CORS and the SW
+// runtime-caches the .gcupkgs for offline re-provision. Overridable per-workspace
+// via the `registry.catalogUrl` meta key (tests + custom deployments) or
+// showSetupDialog({ catalogUrl }).
+const __GCU_CATALOG_URL__ = 'https://gentropic.org/works/packages/registry.json';
+
+export async function getCatalogUrl() {
+  const override = await metaGet('registry.catalogUrl').catch(() => null);
+  return override || __GCU_CATALOG_URL__;
+}
 
 let _profiles = null;
 
@@ -69,6 +83,7 @@ export async function provisionProfileSpec(spec, catalogUrl, opts = {}) {
     name: spec.name || 'custom',
     title: spec.title || spec.name || 'Custom',
     packages: Array.isArray(spec.packages) ? spec.packages : [],
+    sources: Array.isArray(spec.sources) ? spec.sources : [],
     settings: spec.settings || {},
   };
   return _provision(prof, catalogUrl, opts);
@@ -81,11 +96,24 @@ async function _provision(prof, catalogUrl, opts = {}) {
     catch (e) { console.warn('[works] provision: addSource failed:', e); }
   }
 
+  // A profile may carry its packages' origin sources (an exported profile whose
+  // packages came from a non-default source). Unknown sources get the trust
+  // prompt — the profile itself is inert data, but a source can serve code, so
+  // adding one silently would break the consent model. A declined source just
+  // means its packages fail to resolve (collected below, not fatal).
+  for (const src of prof.sources || []) {
+    if (typeof src !== 'string' || !src) continue;
+    try { await addSourceWithConsent(src); }
+    catch (e) { console.warn('[works] provision: source add failed:', e); }
+  }
+
   const report = { name: prof.name, title: prof.title, installed: [], failed: [] };
   for (const pkg of prof.packages || []) {
     setStatus('provisioning ' + pkg + '…');
     try {
-      const dest = await provisionPackage(catalogUrl, pkg);
+      // Resolve across every configured source — the catalog (preferred) first,
+      // then the rest (gcu-library content, the profile's own sources, …).
+      const dest = await provisionPackageAcrossSources(pkg, opts.preferredSource || catalogUrl);
       if (dest) report.installed.push(pkg); else report.failed.push(pkg);
     } catch (e) {
       console.warn('[works] provision package', pkg, 'failed:', e);
@@ -114,3 +142,56 @@ async function _provision(prof, catalogUrl, opts = {}) {
   setStatus(report.failed.length ? `provisioned ${prof.title} (${report.failed.length} failed)` : `provisioned ${prof.title}`);
   return report;
 }
+
+// ── profile export ──────────────────────────────────────────────────
+// Snapshot this workspace as a .gcuprofile spec — the inverse of _provision,
+// and the sharing path: export here, host it (or a registry pointing at it),
+// provision it elsewhere via the setup screen's Custom… / `profile provision`.
+//
+// What's captured: every install-ledger entry with a recorded `source` (both
+// code extensions and content packs — re-resolvable by name), the origin
+// sources beyond the defaults (consumed by _provision with a trust prompt),
+// and the benign workspace prefs (appearance, textEditor). Deliberately NOT
+// captured: sideloads/direct installs (no source to re-resolve from), baked
+// builtins (not in the ledger), and security-relevant settings like
+// abusWorkspace — a shared profile must never pre-grant anything.
+export async function exportProfileSpec(opts = {}) {
+  const ledger = await getInstalled();
+  const defaults = new Set([DEFAULT_SOURCE.url, __GCU_CATALOG_URL__, await getCatalogUrl()]);
+  const packages = [];
+  const sources = [];
+  for (const name of Object.keys(ledger).sort()) {
+    const rec = ledger[name];
+    if (!rec || !rec.source) continue;
+    if (rec.dep) continue;   // transitive dep-closure install — re-derives at provision time
+    packages.push(name);
+    if (!defaults.has(rec.source) && !sources.includes(rec.source)) sources.push(rec.source);
+  }
+
+  const cur = await readSettings(WKS.vfs).catch(() => ({}));
+  const settings = {};
+  if (cur.appearance) settings.appearance = cur.appearance;
+  if (cur.textEditor) settings.textEditor = cur.textEditor;
+
+  const name = String(opts.name || 'my-works').trim() || 'my-works';
+  const spec = {
+    name,
+    title: opts.title || name,
+    base: 'works-core',
+    description: opts.description
+      || ('Exported from an Auditable Works workspace, ' + new Date().toISOString().slice(0, 10) + '.'),
+    packages,
+  };
+  if (sources.length) spec.sources = sources;
+  spec.settings = settings;
+  spec.starter = [];
+  return spec;
+}
+
+// Register as the registry's profile-entry applier (Form 2: a registry can
+// carry kind:'profile' entries; "installing" one provisions its spec). Late-
+// bound through _setProfileApply because this module imports registry.js for
+// the install primitives — a static import back would be a cycle. Packages
+// resolve preferring the source the profile shipped from, then the rest.
+_setProfileApply(async (spec, sourceUrl) =>
+  provisionProfileSpec(spec, await getCatalogUrl(), { preferredSource: sourceUrl }));

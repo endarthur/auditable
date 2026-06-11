@@ -13,6 +13,7 @@ import './typed.js';
 import './executor.js';
 import './builtins-typed.js';
 import './pkg-cmd.js';
+import './profile-cmd.js';
 import './builtins-archive.js';
 import '../../ed/src/buffer.js';
 import '../../ed/src/regex.js';

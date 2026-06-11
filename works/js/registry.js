@@ -13,7 +13,7 @@ import { openPath } from './surfaces.js';
 import { destFor } from './paths.js';
 import { getLibSource } from './surface-registry.js';
 
-const DEFAULT_SOURCE = {
+export const DEFAULT_SOURCE = {
   url: 'https://raw.githubusercontent.com/gentropic/gcu-library/main/registry.json',
   name: 'GCU Library',
 };
@@ -120,6 +120,31 @@ export async function checkUpdates() {
   return out;
 }
 
+// ── distribution profiles as registry entries (Form 2) ─────────────
+// A registry may carry `kind: 'profile'` entries whose url points at a
+// .gcuprofile — a SOURCE that ships a distribution. Applying one provisions
+// its package set. The applier is provision.js's provisionProfileSpec,
+// late-bound here at its module init (provision.js imports this module for
+// the install primitives, so a static import back would be a cycle).
+let _profileApply = null;
+let _applyingProfile = false;
+export function _setProfileApply(fn) { _profileApply = fn; }
+
+// Every kind:'profile' entry across the configured sources — the setup
+// dialog appends these to the baked profile list when online.
+export async function listProfileEntries() {
+  const out = [];
+  for (const s of await getSources()) {
+    try {
+      const { base, registry } = await fetchRegistry({ url: s.url });
+      for (const e of registry.entries || []) {
+        if (e.kind === 'profile') out.push({ entry: e, base, sourceUrl: s.url, sourceName: s.name || registry.name || s.url });
+      }
+    } catch { /* source unreachable — skip */ }
+  }
+  return out;
+}
+
 // Is a lib already provisioned — baked into the shell (works/works-all) or
 // installed into /lib (a provisioned works-core)? If so, the dep-closure skips it.
 async function isLibProvisioned(name) {
@@ -162,7 +187,7 @@ export async function installRequiresClosure(pkgLibPath, seen = new Set()) {
     const found = await resolveAcrossSources('@gcu/' + r);
     if (!found) { console.warn(`[works] dep-closure: no source has @gcu/${r} (service may not activate)`); continue; }
     setStatus(`installing dependency @gcu/${r}…`);
-    const dest = await installEntry(found.entry, found.base, found.sourceUrl, { skipConfirm: true, seen });
+    const dest = await installEntry(found.entry, found.base, found.sourceUrl, { skipConfirm: true, asDep: true, seen });
     if (dest) installed.push(r);
   }
   return installed;
@@ -195,6 +220,37 @@ async function installEntry(entry, base, sourceUrl, opts = {}) {
     }
     return dest;
   }
+  if (entry.kind === 'profile') {
+    // A distribution profile — applying it provisions its package set. The
+    // bytes (SRI-checked above like any entry) are the .gcuprofile itself.
+    // _applyingProfile is the reentrancy guard: a profile whose package list
+    // names another profile entry would recurse through provision → here.
+    if (_applyingProfile) { setStatus('a profile cannot include another profile'); return null; }
+    if (!_profileApply) { setStatus('profiles need the works shell'); return null; }
+    let spec;
+    try { spec = JSON.parse(new TextDecoder().decode(bytes)); }
+    catch { setStatus('"' + entry.name + '" is not a valid .gcuprofile'); return null; }
+    if (!opts.skipConfirm) {
+      const pkgs = Array.isArray(spec.packages) ? spec.packages : [];
+      const ok = await dlgConfirm(
+        'Apply the "' + (spec.title || spec.name || entry.name) + '" profile?\n\n'
+        + (pkgs.length ? 'Installs: ' + pkgs.join(', ') + '\n\n' : '')
+        + 'Profiles install packages — including code extensions that run in your workspace.',
+        { title: 'Apply profile', danger: true });
+      if (!ok) { setStatus('profile apply cancelled'); return null; }
+    }
+    setStatus('applying profile ' + (spec.title || spec.name || entry.name) + '…');
+    _applyingProfile = true;
+    let report;
+    try { report = await _profileApply(spec, sourceUrl); }
+    finally { _applyingProfile = false; }
+    setStatus(report && !(report.failed || []).length
+      ? 'applied profile ' + (report.title || report.name)
+      : 'profile applied with failures: ' + ((report && report.failed) || []).join(', '));
+    // The provision report ({ name, installed, failed }) — truthy for the
+    // generic dest-checks, and the setup summary renders it directly.
+    return report || null;
+  }
   if (entry.kind === 'gcupkg') {
     // Code extension — runs in the workspace. Confirm before install (SRI only
     // proves the bytes are intact, not that the code is safe) — UNLESS skipConfirm
@@ -210,9 +266,13 @@ async function installEntry(entry, base, sourceUrl, opts = {}) {
     let r;
     try { r = await installGcupkgBytes(bytes, entry.name + '.gcupkg'); }
     catch (e) { setStatus('install failed: ' + (e.message || e)); return null; }
+    // `dep` marks a transitive (dep-closure) install — profile export skips
+    // these (a profile records intent; the closure re-derives at provision
+    // time). Always written, so a later EXPLICIT install clears the mark.
     await patchInstalled(entry.name, {
       version: r.version || entry.version || '', source: sourceUrl || '', integrity: entry.integrity || '',
       kind: 'gcupkg', datKind: '', title: entry.title || entry.name, dest: r.libPath, at: Date.now(),
+      dep: !!opts.asDep,
     }).catch(() => {});
     // Pull the package's declared lib dep-closure (no-op when already provisioned,
     // e.g. baked in works/works-all). seen threads through recursion to dedup.
@@ -266,6 +326,21 @@ export async function provisionPackage(sourceUrl, name) {
   return installByName(sourceUrl, name, { skipConfirm: true });
 }
 
+// provisionPackage across every configured source — preferred (usually the
+// first-party catalog) first, then the rest in user order. A profile's package
+// list may span sources: code from the catalog, content packs from gcu-library,
+// anything from the profile's own declared sources. Same no-prompt contract as
+// provisionPackage. Throws when no source has the name.
+export async function provisionPackageAcrossSources(name, preferredUrl) {
+  if (preferredUrl) {
+    try { return await installByName(preferredUrl, name, { skipConfirm: true }); }
+    catch { /* not in the preferred source — fall through to the sweep */ }
+  }
+  const found = await resolveAcrossSources(name);
+  if (!found) throw new Error('no configured source has "' + name + '"');
+  return installEntry(found.entry, found.base, found.sourceUrl, { skipConfirm: true });
+}
+
 // Install an entry referenced by a capsule (QR / share-link → boot #capsule).
 // If the source is new, prompt a one-time trust confirm (a source can serve
 // code), add it, then install. An already-trusted source (e.g. the default
@@ -292,6 +367,22 @@ export async function addSourceSilent(url, nm) {
     await setSources(sources);
   }
   return url;
+}
+
+// Add a source with the one-time trust prompt — already-configured sources
+// pass straight through (no prompt). The consent surface for sources that
+// arrive embedded in data (a profile's `sources`, a pasted registry URL)
+// rather than typed by hand. Returns the url, or null if declined.
+export async function addSourceWithConsent(url, nm) {
+  const sources = await getSources();
+  if (sources.some((s) => s.url === url)) return url;
+  const ok = await dlgConfirm(
+    'Add a registry source?\n\n' + url + '\n\n'
+    + 'Sources can serve data packs — and code extensions that run in your workspace.\n\n'
+    + 'Only add sources you trust.',
+    { title: 'Add registry source', danger: true });
+  if (!ok) return null;
+  return addSourceSilent(url, nm);
 }
 export { getSources };
 
@@ -370,7 +461,7 @@ export async function openLibraryDialog() {
           const row = document.createElement('div'); row.className = 'reg-row';
           row.innerHTML =
             '<div class="body">'
-            + '<div class="ttl">' + esc(e.title || e.name) + '<span class="badge">' + esc(e.kind === 'gcupkg' ? 'ext' : (e.datKind || 'data')) + '</span>'
+            + '<div class="ttl">' + esc(e.title || e.name) + '<span class="badge">' + esc(e.kind === 'gcupkg' ? 'ext' : e.kind === 'profile' ? 'profile' : (e.datKind || 'data')) + '</span>'
             + (isNC(e.license) ? '<span class="badge nc" title="Non-commercial — free to share, not to sell">NC</span>' : '') + '</div>'
             + '<div class="meta">' + esc(e.license || '') + (e.attribution ? ' · ' + esc(e.attribution) : '') + ' · ' + fmtSize(e.size || 0) + (e.version ? ' · v' + esc(e.version) : '') + '</div>'
             + (e.description ? '<div class="desc">' + esc(e.description) + '</div>' : '')
@@ -380,17 +471,17 @@ export async function openLibraryDialog() {
           const btn = document.createElement('button');
           const LABEL = { install: 'Install', update: 'Update ↑', installed: 'Reinstall ↻' };
           btn.className = 'reg-btn install' + (status === 'installed' ? ' done' : status === 'update' ? ' upd' : '');
-          btn.textContent = LABEL[status];
+          btn.textContent = e.kind === 'profile' ? 'Apply' : LABEL[status];
           btn.title = status === 'installed' ? 'Reinstall (overwrite — reading state is kept)' : '';
           btn.addEventListener('click', async () => {
             const wasReinstall = status === 'installed';
             btn.disabled = true; btn.textContent = '…';
             try {
               const dest = await installEntry(e, base, current.url);
-              // A fresh book install/update jumps into the book; a no-reason
-              // reinstall (or any extension install) keeps the dialog open.
-              if (dest && !wasReinstall && e.kind !== 'gcupkg') { ctx.close(); await openPath(dest); }
-              else { setStatus(dest ? (e.kind === 'gcupkg' ? 'installed ' + e.name : 'reinstalled ' + e.name) : 'install cancelled'); render(); }
+              // A fresh book install/update jumps into the book; extension
+              // installs and profile applies keep the dialog open.
+              if (dest && !wasReinstall && e.kind === 'gcudat') { ctx.close(); await openPath(dest); }
+              else { setStatus(dest ? (e.kind === 'profile' ? 'applied ' + e.name : e.kind === 'gcupkg' ? 'installed ' + e.name : 'reinstalled ' + e.name) : 'install cancelled'); render(); }
             } catch (err) { setStatus('install failed: ' + (err.message || err)); render(); }
           });
           row.appendChild(btn);

@@ -276,11 +276,12 @@ window.addEventListener('message', async (ev) => {
       onStderr: adapter.write,
       onBlock:  adapter.writeBlock,
       onWantInput: readLine,
-      // Host-RPC bridge: lets worker-hosted builtins (e.g. `pkg`) reach the
-      // shell. Safelisted to the content-registry surface so a geas command
-      // can't drive arbitrary Shell operations.
+      // Host-RPC bridge: lets worker-hosted builtins (e.g. `pkg`, `profile`)
+      // reach the shell. Safelisted to the content-registry + distribution-
+      // profile surfaces so a geas command can't drive arbitrary Shell
+      // operations. Trust prompts (new sources, etc.) still run shell-side.
       host: (member, args) => {
-        if (!/^Registry/.test(String(member))) throw new Error(`host: "${member}" not permitted`);
+        if (!/^(Registry|Profile)/.test(String(member))) throw new Error(`host: "${member}" not permitted`);
         return bus.call({ to: 'works', path: '/', interface: 'Shell', member }, args || []);
       },
     });

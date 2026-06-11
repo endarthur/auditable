@@ -24,7 +24,7 @@ import { importNotebook, importFileAsNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
 import { metaGet, metaSet } from './meta.js';
 import { openLibraryDialog, installByName, provisionPackage, addSourceSilent, installFromCapsule } from './registry.js';
-import { listProfiles, provisionProfile, isProvisioned, getProvisioned } from './provision.js';
+import { listProfiles, provisionProfile, provisionProfileSpec, exportProfileSpec, isProvisioned, getProvisioned } from './provision.js';
 import { maybeShowFirstRunSetup, showSetupDialog } from './setup.js';
 import { fragmentDecode, resolveCapsule } from '#capsule';
 import { installGcudatBytes } from './gcudat-install.js';
@@ -81,10 +81,14 @@ async function boot() {
   WKS.provisionPackage = provisionPackage;  // (sourceUrl, name) → install + dep-closure, no prompt (provisioning)
   WKS.listProfiles = listProfiles;          // baked distribution profiles (first-run setup list)
   WKS.provisionProfile = provisionProfile;  // (name, catalogUrl) → install a profile's packages + settings + marker
+  WKS.provisionProfileSpec = provisionProfileSpec; // (spec, catalogUrl) → provision a raw .gcuprofile spec
+  WKS.exportProfileSpec = exportProfileSpec; // ({name,title,description}) → .gcuprofile spec of this workspace
   WKS.isProvisioned = isProvisioned;        // has this workspace been provisioned?
   WKS.getProvisioned = getProvisioned;      // the provisioned marker (profile + what installed)
   WKS.showSetup = showSetupDialog;          // open the setup / change-profile dialog (Tools / Help)
   WKS.registryAddSource = addSourceSilent;  // (url, name) → add a registry source
+  WKS.metaGet = metaGet;                    // shell-meta read (e.g. registry.catalogUrl override)
+  WKS.metaSet = metaSet;                    // shell-meta write
   WKS.buildProjectExportHtml = buildProjectExportHtml;
   WKS.exportProject = exportProject;
   WKS.newFile = newFile;

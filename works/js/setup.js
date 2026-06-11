@@ -12,27 +12,17 @@
 
 import { Dialog } from '#dialog';
 import { WKS } from './state.js';
-import { listProfiles, isProvisioned, provisionProfile, provisionProfileSpec } from './provision.js';
-import { metaGet } from './meta.js';
+import { listProfiles, isProvisioned, provisionProfile, provisionProfileSpec, getCatalogUrl } from './provision.js';
+import { listProfileEntries, installByName, addSourceWithConsent } from './registry.js';
 import { readSettings, writeSettings, applyWorkspaceSettings } from './settings-store.js';
 
-// Build-injected (works build): the package catalog URL — the first-party code
-// source a provisioned shell installs from. Hosted SAME-ORIGIN as the Works PWA
-// (gentropic.org/works/packages/) so provisioning needs no CORS and the SW
-// runtime-caches the .gcupkgs for offline re-provision. Overridable per-workspace
-// via the `registry.catalogUrl` meta key (tests + custom deployments) or
-// showSetupDialog({ catalogUrl }).
-const __GCU_CATALOG_URL__ = 'https://gentropic.org/works/packages/registry.json';
+// The catalog URL (build-injected) + its meta override live in provision.js
+// (getCatalogUrl) — shared with the works-service Profile* methods.
 
 // Sync — the works-core build carries the profiles payload; monoliths don't. Used
 // to gate the menu entries (which build synchronously).
 export function hasProfilesPayload() {
   return !!document.getElementById('profiles-payload');
-}
-
-async function getCatalogUrl() {
-  const override = await metaGet('registry.catalogUrl').catch(() => null);
-  return override || __GCU_CATALOG_URL__;
 }
 
 async function probeCatalog(url) {
@@ -67,7 +57,13 @@ export async function showSetupDialog(opts = {}) {
   if (profiles.length === 0) return null;     // monolith — nothing to provision
   const firstRun = !!opts.firstRun;
   const catalogUrl = opts.catalogUrl || await getCatalogUrl();
-  const online = await probeCatalog(catalogUrl);
+  // Probe + source scan in parallel — srcProfiles are kind:'profile' entries
+  // from the configured registry sources (Form 2: a source can ship whole
+  // distributions). Unreachable sources skip fast; offline yields [].
+  const [online, srcProfiles] = await Promise.all([
+    probeCatalog(catalogUrl),
+    listProfileEntries().catch(() => []),
+  ]);
 
   const cur = await readSettings(WKS.vfs).catch(() => ({}));
   let theme = cur.appearance?.theme || document.documentElement.getAttribute('data-theme') || 'dark';
@@ -125,9 +121,15 @@ export async function showSetupDialog(opts = {}) {
         const desc = (p.description || '') + (pkgs.length ? `  ·  installs: ${pkgs.join(', ')}` : '  ·  shell only, no download');
         mkRow(p.name, p.title || p.name, desc);
       }
-      // Custom (Form 1) — a .gcuprofile by URL or a local file. Either way its
-      // packages install from the configured sources.
-      const cu = mkRow('__custom__', 'Custom…', 'Provision from a .gcuprofile — paste a URL or browse for a file.');
+      // Distribution-source profiles (Form 2) — kind:'profile' entries the
+      // configured registry sources carry. Applying one provisions its spec.
+      srcProfiles.forEach((sp, i) => {
+        const e = sp.entry;
+        mkRow('__src__' + i, e.title || e.name, (e.description || '') + '  ·  from ' + sp.sourceName);
+      });
+      // Custom — a .gcuprofile (Form 1) or a registry/source URL (Form 2) —
+      // sniffed by content; a registry adds as a source and resurfaces here.
+      const cu = mkRow('__custom__', 'Custom…', 'A .gcuprofile (URL or file) — or a distribution source\'s registry URL.');
       const customWrap = document.createElement('div');
       customWrap.style.cssText = 'display:none; margin-top:5px;';
       const fileNote = document.createElement('div');
@@ -231,8 +233,28 @@ export async function showSetupDialog(opts = {}) {
           } else if (useCustom) {
             const txt = customText != null ? customText
               : await (await fetch(customUrl, { cache: 'no-cache' })).text();
-            const spec = JSON.parse(txt);
-            report = await provisionProfileSpec(spec, catalogUrl);
+            let parsed;
+            try { parsed = JSON.parse(txt); }
+            catch { throw new Error('not valid JSON (expected a .gcuprofile or a registry.json)'); }
+            if (parsed && parsed.registry != null) {
+              // Form 2 — a registry: a distribution SOURCE. Add it (trust
+              // prompt), then reopen the setup so its profiles are listed.
+              if (!customUrl) throw new Error('a registry must be added by URL — a local file can\'t serve its packages');
+              const added = await addSourceWithConsent(customUrl, parsed.name);
+              if (!added) throw new Error('source not added');
+              ctx.close(null);
+              showSetupDialog({ ...opts, catalogUrl });
+              return;
+            }
+            // Form 1 — a raw .gcuprofile spec.
+            report = await provisionProfileSpec(parsed, catalogUrl);
+          } else if (selected.startsWith('__src__')) {
+            // A source-shipped profile entry — routes through the registry's
+            // SRI-checked entry install (the kind:'profile' apply path). The
+            // user just clicked Set up, so no second confirm.
+            const sp = srcProfiles[parseInt(selected.slice(7), 10)];
+            report = await installByName(sp.sourceUrl, sp.entry.name, { skipConfirm: true });
+            if (!report) throw new Error('profile apply cancelled');
           } else {
             report = await provisionProfile(selected, catalogUrl);
           }

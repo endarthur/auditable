@@ -278,7 +278,7 @@ function render() {
       '<div class="cover">' + (coverUrl ? '<img src="' + esc(coverUrl) + '" alt="">' : (ICON[e.datKind] || ICON.data)) + '</div>'
       + '<div class="body">'
       + '<div class="ttl">' + esc(e.title || e.name) + '</div>'
-      + '<div class="badges"><span class="badge">' + esc(e.kind === 'gcupkg' ? 'ext' : (e.datKind || 'data')) + '</span>'
+      + '<div class="badges"><span class="badge">' + esc(e.kind === 'gcupkg' ? 'ext' : e.kind === 'profile' ? 'profile' : (e.datKind || 'data')) + '</span>'
       + (isNC(e.license) ? '<span class="badge nc" title="Non-commercial — free to share, not to sell">NC</span>' : '') + '</div>'
       + '<div class="meta">' + esc(e.license || '') + (e.attribution ? ' · ' + esc(e.attribution) : '') + ' · ' + fmtSize(e.size || 0) + (e.version ? ' · v' + esc(e.version) : '') + '</div>'
       + (multi ? '<div class="src">' + esc(e._srcName || '') + '</div>' : '')
@@ -286,21 +286,24 @@ function render() {
       + '<div class="act"></div>'
       + '</div>';
     const btn = document.createElement('button');
-    btn.textContent = LABEL[status];
+    btn.textContent = e.kind === 'profile' ? 'Apply' : LABEL[status];
     btn.className = status === 'installed' ? 'done' : status === 'update' ? 'upd' : '';
     if (status === 'installed') btn.title = 'Reinstall (overwrite — reading state is kept)';
     btn.addEventListener('click', async () => {
       const wasReinstall = status === 'installed';
+      const idle = e.kind === 'profile' ? 'Apply' : LABEL[status];
       btn.disabled = true; btn.textContent = '…';
       try {
+        // For a kind:'profile' entry the shell applies it (provision) and the
+        // confirm + trust dialogs run shell-side; dest is the provision report.
         const dest = await callShell('RegistryInstall', [e._src, e.name]);
         if (dest) {
           statusMap = await callShell('RegistryStatuses', [allEntries]).catch(() => statusMap);
-          if (!wasReinstall && e.kind !== 'gcupkg') await callShell('OpenPath', [dest]);
-          else $('credit').textContent = (e.kind === 'gcupkg' ? 'installed ' : 'reinstalled ') + (e.title || e.name);
+          if (!wasReinstall && e.kind === 'gcudat') await callShell('OpenPath', [dest]);
+          else $('credit').textContent = (e.kind === 'profile' ? 'applied ' : e.kind === 'gcupkg' ? 'installed ' : 'reinstalled ') + (e.title || e.name);
           renderSide(); render();
-        } else { btn.disabled = false; btn.textContent = LABEL[status]; }
-      } catch (err) { btn.disabled = false; btn.textContent = LABEL[status]; $('credit').textContent = 'install failed: ' + (err.message || err); }
+        } else { btn.disabled = false; btn.textContent = idle; }
+      } catch (err) { btn.disabled = false; btn.textContent = idle; $('credit').textContent = 'install failed: ' + (err.message || err); }
     });
     card.querySelector('.act').appendChild(btn);
     const share = document.createElement('button');

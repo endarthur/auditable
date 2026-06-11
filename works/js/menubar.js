@@ -13,9 +13,10 @@ import { mountFolder } from './mount.js';
 import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
 import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js';
 import { openDiskFile, mountDiskFile } from './disk.js';
-import { confirm as dlgConfirm, Dialog } from '#dialog';
+import { confirm as dlgConfirm, prompt as dlgPrompt, Dialog } from '#dialog';
 import { showAbout } from './about.js';
 import { openLibraryDialog } from './registry.js';
+import { exportProfileSpec } from './provision.js';
 import { getExamplesManifest } from './examples-loader.js';
 import { aggregateLicenses, formatNoticesFile } from '#licenses';
 
@@ -39,6 +40,7 @@ export function setupMenuBar() {
       '---',
       { label: 'Save',                       action: 'workspace:save', shortcut: 'Ctrl+S' },
       { label: 'Export workspace…',          action: 'workspace:export' },
+      { label: 'Export profile…',            action: 'workspace:export-profile' },
       { label: 'Export THIRD-PARTY-NOTICES…', action: 'workspace:export-notices' },
     ] },
     { label: 'View', items: () => [
@@ -85,6 +87,7 @@ export function setupMenuBar() {
     if (action === 'disk:mount') { await mountDiskFile(); return; }
     if (action === 'workspace:save') { await saveWorkspace(); return; }
     if (action === 'workspace:export') { await exportWorkspace(); return; }
+    if (action === 'workspace:export-profile') { await exportProfileFlow(); return; }
     if (action === 'workspace:export-notices') { await exportNotices(); return; }
     if (action === 'workspace:new') {
       if (await dlgConfirm('Discard the current workspace and start fresh?', { danger: true })) {
@@ -360,6 +363,29 @@ async function openExamplePicker() {
 // text. aggregateLicenses walks the workspace VFS (/sys/licenses for the
 // build-time vendored deps, /lib for pkg packages, /var/modules for
 // legacy install() entries); formatNoticesFile produces a single plaintext
+// File → Export profile… — snapshot the workspace's installed packages +
+// settings as a downloadable .gcuprofile (the sharing path: host it somewhere,
+// provision it elsewhere via setup's Custom… or `profile provision`). The
+// engine is exportProfileSpec (provision.js); this is just name-prompt + save.
+async function exportProfileFlow() {
+  const name = await dlgPrompt('Profile name (the .gcuprofile identifier):',
+    { title: 'Export profile', defaultValue: 'my-works', placeholder: 'my-works' });
+  if (name == null) return;
+  let spec;
+  try { spec = await exportProfileSpec({ name }); }
+  catch (e) { setStatus('profile export failed: ' + (e.message || e)); return; }
+  const blob = new Blob([JSON.stringify(spec, null, 2) + '\n'], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = spec.name + '.gcuprofile';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  setStatus('exported ' + a.download + ' (' + spec.packages.length + ' package'
+    + (spec.packages.length === 1 ? '' : 's') + ')');
+}
+
 // blob; we trigger the browser save dialog. No transform — what the user
 // downloads is what they'd put alongside a re-distribution of this
 // workspace.

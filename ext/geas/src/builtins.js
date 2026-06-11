@@ -13,6 +13,7 @@
 import { defaultTypedBuiltins } from './builtins-typed.js';
 import { drainInput } from './typed.js';
 import { _pkg } from './pkg-cmd.js';
+import { _profile } from './profile-cmd.js';
 import { runEd } from '../../ed/src/api.js';
 import { archiveBuiltins } from './builtins-archive.js';
 
@@ -80,6 +81,8 @@ export function defaultBuiltins() {
     sha256sum: _sha256sum,
     // pkg-spec §5: install / list / freeze / remove modules into /lib.
     pkg:      _pkg,
+    // gcu-distributions: list / current / export / provision (Works host bridge).
+    profile:  _profile,
     // "ed is the standard text editor." POSIX-ish, GNU-sanded defaults.
     ed:       runEd,
   }));

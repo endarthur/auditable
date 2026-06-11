@@ -15,6 +15,7 @@ import { Dialog } from '#dialog';
 import { installExtensionWithConsent } from './file-ops.js';
 import { metaGet, metaSet } from './meta.js';
 import { getSources, addSourceSilent, removeSource, fetchRegistry, installByName, entryStatuses, checkUpdates } from './registry.js';
+import { listProfiles, getProvisioned, provisionProfile, provisionProfileSpec, exportProfileSpec, getCatalogUrl } from './provision.js';
 import { bookDir, dataDir } from './paths.js';
 
 // Build-time-injected vendored license manifest (see build.js's
@@ -220,6 +221,13 @@ export async function setupWorksService() {
                                             || (await vfs.exists(dataDir(name)).catch(() => false)),
         RegistryStatuses:     (entries) => entryStatuses(entries),   // → { name: 'install'|'installed'|'update' }
         RegistryCheckUpdates: () => checkUpdates(),                  // → [{name,title,from,to,source}]
+
+        // ── Distribution profiles (geas `profile` + setup drive these) ──
+        ProfileList:          () => listProfiles(),                  // baked profiles ([] on monoliths)
+        ProfileProvisioned:   () => getProvisioned(),                // marker or null
+        ProfileExport:        (opts) => exportProfileSpec(opts || {}),  // → .gcuprofile spec object
+        ProfileProvision:     async (name) => provisionProfile(name, await getCatalogUrl()),
+        ProfileProvisionSpec: async (spec) => provisionProfileSpec(spec, await getCatalogUrl()),
 
         // ── Notebook A-Bus access (notebook-abus-access-spec.md) ──
         // Tier 3: a notebook asks for the raw bus; this prompts (unless a grant
