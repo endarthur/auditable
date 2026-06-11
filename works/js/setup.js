@@ -15,7 +15,6 @@ import { WKS } from './state.js';
 import { listProfiles, isProvisioned, provisionProfile, provisionProfileSpec, getCatalogUrl } from './provision.js';
 import { listProfileEntries, installByName, addSourceWithConsent } from './registry.js';
 import { openPath } from './surfaces.js';
-import { surfaceAvailable } from './surface-registry.js';
 import { readSettings, writeSettings, applyWorkspaceSettings } from './settings-store.js';
 
 // The catalog URL (build-injected) + its meta override live in provision.js
@@ -308,13 +307,13 @@ export async function showSetupDialog(opts = {}) {
         done.style.alignSelf = 'flex-end';
         done.addEventListener('click', () => {
           ctx.close(report);
-          // A welcome notebook seeded just now → open it (report.starter is
-          // null when skipped or when one already existed). The lean shell may
-          // not carry the notebook surface (it's installable, not core) — the
-          // project still seeds and sits in the tree for when it does.
+          // A welcome seeded just now → open it (report.starter is null when
+          // skipped or already existing). starterOpenable is false when no
+          // surface in this build can open the seeded mode — it still sits in
+          // the tree for when one arrives (notebook-as-package).
           if (!err && report && report.starter) {
             WKS.refreshTree?.();
-            if (surfaceAvailable('notebook')) openPath(report.starter);
+            if (report.starterOpenable) openPath(report.starter);
           }
         });
         sum.append(sh, sd, done);

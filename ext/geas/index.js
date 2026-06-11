@@ -12027,7 +12027,7 @@ async function _profileProvision(ctx, args) {
   const fail = (report && report.failed) || [];
   if (inst.length) await ctx.stdout(`installed: ${inst.join(', ')}\n`);
   if (!inst.length && !fail.length) await ctx.stdout('nothing to install (shell-only profile)\n');
-  if (report && report.starter) await ctx.stdout(`welcome notebook: ${report.starter}\n`);
+  if (report && report.starter) await ctx.stdout(`welcome: ${report.starter}\n`);
   if (fail.length) {
     await ctx.stderr(`failed: ${fail.join(', ')} (offline? declined source? — re-run to retry)\n`);
     return 1;

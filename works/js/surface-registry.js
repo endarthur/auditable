@@ -408,6 +408,22 @@ export function surfaceAvailable(kind) {
   return _surfaceBlobs.has(kind);
 }
 
+// kindForExtension, but only among kinds whose payload is PRESENT in this
+// build — the fall-through when the default opener for an extension isn't
+// carried (works-core: .md defaults to the absent `doc` editor; preview's
+// rendered-markdown path is the available alternative). Null when nothing
+// spawnable claims the extension.
+export function availableKindForExtension(filename) {
+  const base = String(filename).split(/[\\/]/).pop();
+  const i = base.lastIndexOf('.');
+  const ext = i > 0 ? base.slice(i).toLowerCase() : '';
+  if (!ext) return null;
+  for (const [kind, def] of KINDS) {
+    if (def.extensions && def.extensions.includes(ext) && _surfaceBlobs.has(kind)) return kind;
+  }
+  return null;
+}
+
 // ── Built-in kinds ───────────────────────────────────────────────────
 
 // The Auditable notebook — a project directory (project.json kind:'notebook'
@@ -444,6 +460,12 @@ registerKind('preview', {
   extensions: ['.csv', '.tsv', '.json', '.geojson',
                '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp',
                '.ico', '.avif', '.pdf',
+               // Rendered markdown (read-only; preview's own mini-renderer,
+               // also used for .md inside archives). `doc` registers first so
+               // the editor stays the .md default where it's present; in the
+               // lean works-core (no doc surface) the availability fall-through
+               // in openPath lands .md here — READMEs + the doc-mode welcome.
+               '.md', '.markdown',
                // Archives — the preview surface knows how to render a
                // collapsible entry tree and click-through to inline file
                // rendering (see works/surfaces/preview.html's renderArchive).

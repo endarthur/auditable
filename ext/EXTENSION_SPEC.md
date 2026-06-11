@@ -777,6 +777,18 @@ Each `requires` entry is a bare `@gcu/*` lib name. The activator resolves it fro
 
 `ext/example-service/` is the minimal reference (a service, no surface — just `package.json` + `service.js`, no `works.js`). `ext/workbench/` (`@gcu/workbench`) is a real package contributing **both** a surface (`works.js`) and a service (`gcu.services`). Shell-side machinery: `works/js/extension-services.js` (the scan + activator), `works/js/lib-builtins-loader.js` (pre-install of baked builtin packages). See the works-contribution-registry design for the full model.
 
+## 3.10 Package welcome (`package.json` → `gcu.welcome`)  *(status: designed, not yet honored)*
+
+A package may declare a greeting the shell opens **after an interactive install** (Browse Library / drag-drop):
+
+```json
+"gcu": {
+  "welcome": { "doc": "docs/welcome.md" }
+}
+```
+
+`doc` is a path into the package's installed docs. Inert data — no code runs; the shell just `openPath`s the doc (rendered markdown) once, right after the install that the user personally clicked. Deliberately **not** opened during profile provisioning: a profile install is a batch (its own `welcome` field greets — see the `.gcuprofile` format in the gcu-distributions design); five packages must not spawn five tabs. Not yet read by the shell — reserve the field shape now, wire it when the first surface-only package wants a greeting.
+
 ---
 
 ## 4. Cross-language adapters

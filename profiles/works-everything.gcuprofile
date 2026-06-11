@@ -5,6 +5,10 @@
   "description": "Every first-party Works package in the catalog.",
   "packages": ["@gcu/workbench", "@example/service"],
   "settings": { "appearance": { "theme": "dark" } },
+  "welcome": [
+    { "kind": "notebook" },
+    { "kind": "doc", "content": "# Welcome to Auditable Works\n\nEverything in the first-party catalog is installed. A quick tour:\n\n- **Tools → Terminal** — a real shell (geas): `ls /`, `pkg search`, `profile current`.\n- **Tools → Data workbench** — stream stats over CSV / OMF block models.\n- **Tools → Library** — browse and install content packs and extensions from registry sources.\n- **Tools → Set up / change profile…** — re-provision or add packages any time.\n\nThis profile also ships an **interactive welcome notebook** — it appears once a notebook surface is available in this shell. Delete this file whenever you're done with it." }
+  ],
   "starter": [
     { "type": "md", "code": "# Welcome to Auditable Works\n\nEverything in the first-party catalog is installed. A quick tour:\n\n- **Tools → Terminal** — a real shell (geas): `ls /`, `pkg search`, `profile current`.\n- **Tools → Data workbench** — stream stats over CSV / OMF block models.\n- **Tools → Library** — browse and install content packs and extensions from registry sources.\n- **File → New notebook** — a reactive computational notebook; this page is one.\n\nThe cells below are live — run them (▶ on a cell, or Run all in the toolbar):" },
     { "type": "code", "code": "// Cells form a dependency graph: this one defines `n`,\n// the next one redraws whenever the slider moves.\nconst n = ui.slider(\"points\", { min: 50, max: 2000, value: 400, step: 50 });" },

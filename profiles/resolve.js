@@ -7,8 +7,8 @@
 // just maps package names to registry specs instead of in-repo paths.
 //
 // Merge rules (child over parent): packages = union in extends-then-self order (deduped,
-// first occurrence wins); settings = shallow merge, child keys override; starter = child
-// REPLACES parent if present; base = first defined (self, else inherited).
+// first occurrence wins); settings = shallow merge, child keys override; starter and
+// welcome = child REPLACES parent if present; base = first defined (self, else inherited).
 //
 // See spec_inbox/gcu-distributions-spec.md.
 
@@ -34,6 +34,7 @@ function resolveProfile(name, opts = {}) {
   const packages = [];
   let settings = {};
   let starter = null;
+  let welcome = null;
   let base = prof.base || null;
 
   for (const parent of prof.extends || []) {
@@ -41,12 +42,14 @@ function resolveProfile(name, opts = {}) {
     packages.push(...r.packages);
     settings = { ...settings, ...r.settings };
     if (r.starter && r.starter.length) starter = r.starter;
+    if (r.welcome && r.welcome.length) welcome = r.welcome;
     base = base || r.base;
   }
 
   packages.push(...(prof.packages || []));
   settings = { ...settings, ...(prof.settings || {}) };
   if (prof.starter && prof.starter.length) starter = prof.starter;
+  if (prof.welcome && prof.welcome.length) welcome = prof.welcome;
 
   return {
     name,
@@ -55,6 +58,7 @@ function resolveProfile(name, opts = {}) {
     packages: [...new Set(packages)],
     settings,
     starter: starter || [],
+    welcome: welcome || [],
   };
 }
 
@@ -77,14 +81,15 @@ function resolveToEdition(name, opts = {}) {
 // first-run setup consumes. Unlike resolveToEdition (which needs packages.json
 // `path` entries to bake), provisioning installs packages by NAME from the catalog
 // (the registry entry names ARE the `@gcu/*` package names), so no package index
-// is required. Returns { name, title, base, description, packages, settings, starter }.
+// is required. Returns { name, title, base, description, packages, settings, starter,
+// welcome }.
 function resolveToProvisioned(name, opts = {}) {
   const r = resolveProfile(name, opts);
   const prof = loadProfile(opts.profilesDir || __dirname, name);
   return {
     name: r.name, title: r.title, base: r.base,
     description: prof.description || '',
-    packages: r.packages, settings: r.settings, starter: r.starter,
+    packages: r.packages, settings: r.settings, starter: r.starter, welcome: r.welcome,
   };
 }
 

@@ -12,6 +12,7 @@
 
 import { WKS, setStatus } from './state.js';
 import { provisionPackageAcrossSources, addSourceSilent, addSourceWithConsent, DEFAULT_SOURCE, _setProfileApply } from './registry.js';
+import { surfaceAvailable, availableKindForExtension } from './surface-registry.js';
 import { getInstalled } from './gcudat-install.js';
 import { readSettings, writeSettings, applyWorkspaceSettings } from './settings-store.js';
 import { metaGet, metaSet } from './meta.js';
@@ -86,6 +87,7 @@ export async function provisionProfileSpec(spec, catalogUrl, opts = {}) {
     sources: Array.isArray(spec.sources) ? spec.sources : [],
     settings: spec.settings || {},
     starter: Array.isArray(spec.starter) ? spec.starter : [],
+    welcome: Array.isArray(spec.welcome) ? spec.welcome : [],
   };
   return _provision(prof, catalogUrl, opts);
 }
@@ -131,14 +133,19 @@ async function _provision(prof, catalogUrl, opts = {}) {
     } catch (e) { console.warn('[works] provision: settings apply failed:', e); }
   }
 
-  // Seed the profile's starter cells as a welcome notebook project. Skippable
-  // (the setup checkbox / `profile provision --no-starter`); write-if-absent so
-  // a re-provision never clobbers — or resurrects — an edited/deleted welcome.
-  // report.starter carries the project path when (and only when) seeded now.
+  // Seed the profile's welcome (an ordered list of modes — see _seedWelcome).
+  // Skippable (the setup checkbox / `profile provision --no-starter`);
+  // write-if-absent so a re-provision never clobbers — or resurrects — an
+  // edited/deleted welcome. report.starter carries the seeded path when (and
+  // only when) seeded now; report.starterOpenable says whether THIS build
+  // carries a surface that can open it.
   report.starter = null;
-  if (!opts.skipStarter && Array.isArray(prof.starter) && prof.starter.length) {
-    try { report.starter = await _seedStarter(prof); }
-    catch (e) { console.warn('[works] provision: starter seed failed:', e); }
+  report.starterOpenable = false;
+  if (!opts.skipStarter) {
+    try {
+      const seeded = await _seedWelcome(prof);
+      if (seeded) { report.starter = seeded.path; report.starterOpenable = seeded.openable; }
+    } catch (e) { console.warn('[works] provision: welcome seed failed:', e); }
   }
 
   // Record the marker (re-runnable: a later provision overwrites it).
@@ -149,6 +156,43 @@ async function _provision(prof, catalogUrl, opts = {}) {
 
   setStatus(report.failed.length ? `provisioned ${prof.title} (${report.failed.length} failed)` : `provisioned ${prof.title}`);
   return report;
+}
+
+// ── welcome modes ───────────────────────────────────────────────────
+// A profile's `welcome` is an ORDERED list of alternative greetings:
+//   { kind: 'notebook' }            — seed the `starter` cells as a project
+//   { kind: 'doc', content: '…md…' } — seed inline markdown as welcome.md
+// The first mode whose surface is present in this build seeds (+ reports
+// openable); when none is openable the FIRST valid mode still seeds — it
+// opens once its surface arrives (e.g. the notebook ships as a package).
+// No `welcome` + a non-empty `starter` ≡ [{ kind: 'notebook' }].
+function _welcomeModes(prof) {
+  const list = (Array.isArray(prof.welcome) && prof.welcome.length) ? prof.welcome
+    : ((Array.isArray(prof.starter) && prof.starter.length) ? [{ kind: 'notebook' }] : []);
+  return list.filter((m) => m && (
+    (m.kind === 'notebook' && Array.isArray(prof.starter) && prof.starter.length)
+    || (m.kind === 'doc' && typeof m.content === 'string' && m.content)));
+}
+
+function _modeOpenable(mode) {
+  return mode.kind === 'notebook' ? surfaceAvailable('notebook')
+    : !!availableKindForExtension('welcome.md');
+}
+
+async function _seedWelcome(prof) {
+  const modes = _welcomeModes(prof);
+  if (!modes.length) return null;
+  const mode = modes.find(_modeOpenable) || modes[0];
+  const openable = _modeOpenable(mode);
+  if (mode.kind === 'notebook') {
+    const path = await _seedStarter(prof);
+    return path ? { path, openable } : null;
+  }
+  // doc — inline markdown, write-if-absent (same never-clobber contract).
+  const path = '/projects/welcome.md';
+  if (await WKS.vfs.exists(path).catch(() => false)) return null;
+  await WKS.vfs.writeFile(path, mode.content.replace(/\s+$/, '') + '\n');
+  return { path, openable };
 }
 
 // Write the profile's starter cells as a notebook project (the shape
