@@ -33,6 +33,8 @@ const SKIP = new Set([
   // 'gslib/example_gslib_sgsim.html', // play/pause widget — first realization renders on load, ok
   // Encrypted notebooks ship with a lock screen; auto-cells never run.
   'basics/example_encrypted_password-is-auditable.html',
+  // The gallery page (gen_gallery.js) — static navigation, not a notebook.
+  'index.html',
 ]);
 
 async function discoverExamples(filter) {
