@@ -34,6 +34,7 @@ import { installGlobalFileDrop, installGcupkgBytes } from './file-ops.js';
 import { installShellAuditable, evaluateAllWorksScripts } from './extension-loader.js';
 import { installBuiltinPackages } from './lib-builtins-loader.js';
 import { declareInstalledServices } from './extension-services.js';
+import { registerGcuSw } from '#sw-register';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
@@ -192,19 +193,14 @@ async function boot() {
   // or an already-provisioned workspace. Fire-and-forget over the ready shell.
   maybeShowFirstRunSetup().catch((e) => console.warn('[works] setup:', (e && e.message) || e));
 
-  // PWA: request persistent storage — the workspace (provisioned /lib + every
-  // project) lives in IndexedDB; a controlled PWA + this request keep the browser
-  // from evicting it. Best-effort (absent on file:// / older engines).
-  try { navigator.storage?.persist?.().catch(() => {}); } catch { /* */ }
-
-  // PWA: when the service worker (deploy-only) finds a newer shell in the
-  // background it posts 'works:update-available'. Offer a one-click reload — safe,
-  // since the workspace is in IndexedDB and survives the reload.
-  try {
-    navigator.serviceWorker?.addEventListener('message', (e) => {
-      if (e && e.data && e.data.type === 'works:update-available') _showUpdateBanner();
-    });
-  } catch { /* */ }
+  // PWA: @gcu/sw page-side companion — persistent storage (the workspace
+  // lives in IndexedDB) + the gcu-sw:* update protocol. When the deploy-only
+  // service worker finds a newer shell it posts update-available → the banner;
+  // Reload applies via a COORDINATED reload (every tab lands on the new shell
+  // together). Registration itself is owned by the works repo's injected
+  // snippet (it knows the deploy layout), so no `url` here. All best-effort —
+  // registerGcuSw no-ops on file:// / older engines.
+  WKS.sw = registerGcuSw({ persist: true, onUpdateAvailable: () => _showUpdateBanner() });
 }
 
 let _updateBannerShown = false;
@@ -222,7 +218,7 @@ function _showUpdateBanner() {
   reload.textContent = 'Reload';
   reload.style.cssText = 'font:inherit; font-weight:600; padding:4px 12px; border-radius:5px; cursor:pointer; '
     + 'border:1px solid var(--au-action,#d97a3c); background:var(--au-action,#d97a3c); color:var(--au-surface-deep,#0d1014);';
-  reload.addEventListener('click', () => location.reload());
+  reload.addEventListener('click', () => WKS.sw ? WKS.sw.applyUpdate() : location.reload());
   const dismiss = document.createElement('button');
   dismiss.textContent = '✕';
   dismiss.style.cssText = 'font:inherit; padding:4px 8px; border-radius:5px; cursor:pointer; '

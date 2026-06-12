@@ -1,0 +1,29 @@
+{
+  "name": "@gcu/sw",
+  "version": "0.1.0",
+  "description": "The GCU service worker, extracted from the Auditable Works SW (ep → weir → works lineage): a generator (makeSw(config) → self-contained classic-script sw.js) over a route-table engine — stale-while-revalidate shell with ETag/byte-diff update detection, network-first, cache-first with maxEntries, passthrough (+ Static Routing API enhancement) — plus a page-side companion (registerGcuSw) wrapping the gcu-sw:* protocol: update toast, coordinated multi-tab reload, check-now, status, and the nuke repair hatch. The SW stays event-driven; cadence lives page-side.",
+  "type": "module",
+  "main": "./register.js",
+  "exports": {
+    ".": "./register.js",
+    "./make": "./make.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "sw-core.js",
+    "make.mjs",
+    "register.js"
+  ],
+  "keywords": ["service-worker", "pwa", "offline", "stale-while-revalidate", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gentropic/auditable.git",
+    "directory": "ext/sw"
+  },
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/sw",
+  "bugs": {
+    "url": "https://github.com/gentropic/auditable/issues"
+  }
+}
