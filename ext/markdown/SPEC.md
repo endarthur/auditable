@@ -77,10 +77,23 @@ stack a markdown it *owns* — the `@gcu/yaml` move: not spec-compliance theater
 ### 3.2 Inlines (reading grammar)
 
 - `` `code` `` (backtick runs balance per CommonMark's simple rule)
-- `**bold**` / `__bold__`; `*italic*` / `_italic_` — **simplified flanking**: a run
-  opens if followed by non-space, closes if preceded by non-space; intraword `_` does
-  not trigger (the one flanking rule worth keeping). No `***bold-italic***` resolution
-  gymnastics — `***x***` parses as bold(italic(x)) by greedy-outer rule, documented.
+- `**bold**` / `__bold__`; `*italic*` / `_italic_` — **simplified flanking, frozen by
+  corpus check** (2026-06-11, `experiments/md-emphasis-corpus.mjs`: 2,602 real units —
+  2,502 Jupyter md cells + 100 READMEs — 3,820 emphasis-bearing inline chunks, **100.00%
+  emphasis-skeleton agreement with markdown-it/CommonMark**). The rule, in full:
+  1. A delimiter run *opens* if the next char is non-space, *closes* if the previous
+     char is non-space.
+  2. **Punctuation guard** (the one CommonMark refinement the corpus demanded — without
+     it, `2*$nx$ + 1, 2*$ny$` in math prose grows a spurious italic): a run facing
+     punctuation (`\p{P}\p{S}`) on one side only opens/closes when its other side is
+     space or punctuation, not alphanumeric.
+  3. Intraword `_` never triggers (alphanumeric on the outside kills open/close).
+  4. Neighbor classification is **by code point, not UTF-16 unit** — mathematical
+     alphanumerics (`𝑃_𝑠`) are surrogate pairs and must read as letters.
+  Pairing: nearest same-char opener; openers skipped over are discarded (no
+  cross-nesting); lengths consume 2 (strong) while both sides have ≥2, then 1 (em) —
+  opener from the run's right, closer from its left, so `***x***` = em(strong(x)),
+  matching CommonMark's output shape.
 - `~~strikethrough~~`
 - `[text](url "title")`, `![alt](url "title")`, reference forms (§3.1)
 - Autolinks — `<https://…>` always; bare-URL linkification as an extension (§4)
@@ -258,13 +271,27 @@ budget without lazy-loading.
 - A plugin API (extensions are in-tree; revisit only if a real third-party need appears).
 - MDX/JSX anything.
 
-## 11. Open questions
+## 11. Resolved questions (were open; settled 2026-06-11)
 
-- **Emphasis corpus check.** Before freezing §3.2's simplified flanking, run it against
-  a sample of real .ipynb md cells + top-npm READMEs and count divergences vs
-  markdown-it; tune only if the misrender rate is embarrassing.
-- **`presets.wild` autolink default** — on is friendlier for READMEs, off is safer for
-  prose; decide from the same corpus.
-- **Name** — `@gcu/markdown` here for the lib-slot match; the naming reckoning
-  (`spec_inbox/gcu-naming-reckoning.md`) may shorten to `@gcu/md` at npm-publish time;
-  the directory and slot don't care.
+- **Emphasis rule — frozen** (§3.2). Corpus check ran before any engine code:
+  `experiments/md-emphasis-corpus.mjs` masks code/links/escapes identically for both
+  parsers and diffs "emphasis skeletons" against markdown-it. The naive simplified rule
+  scored 99.97%; its single real-world failure class (`digit*punct` arithmetic prose —
+  exactly what geoscience notebooks are full of) is killed by the punctuation guard,
+  reaching 100.00% over 3,820 chunks. Two engine-relevant findings came free: neighbor
+  checks must be code-point aware (§3.2.4), and `\` before ANY ASCII punctuation is an
+  escape (CommonMark's escapable set), not just before md markers.
+- **`presets.wild` autolink — on**, with GFM-style trailing-punctuation trimming; off
+  in every other preset. Corpus support: 625 of 2,602 units (24%) contain bare URLs.
+- **Name — `@gcu/markdown`.** On the Gruber/CommonMark history: the 2014 objection was
+  to "Standard Markdown" (claiming official status), not to descriptive use of the word —
+  `markdown-it`, `python-markdown`, npm's `markdown` are unchallenged precedent. No
+  registered trademark; the `Markdown.pl` BSD name clause binds derivatives of his code,
+  which this is not. One-line trademark-filing recheck folded into the naming reckoning
+  before npm publish.
+
+**Other corpus notes** (2,602 units): setext headings in 11 units and indented code
+blocks in 37 — the §3.3 removals cost little even on wild content; reference-link defs
+in 16 units — keeping them in the reading grammar (§3.1) is justified; two-space hard
+breaks in 62 — reading-accept confirmed; raw HTML tags in 185 (7%, mostly `<img>`/`<p
+align>` headers in Jupyter) — the known, visible-but-safe degradation of `html: false`.
