@@ -1,0 +1,32 @@
+{
+  "name": "@gcu/markdown",
+  "version": "0.1.0",
+  "description": "The GCU markdown engine: a zero-dependency, regex-free scanner with a source-mapped AST, renderer-rule overrides, and a two-position html toggle (inert by default, no sanitizer ever). Liberal reading grammar, strict authoring lint. One engine for notebook md cells, works surfaces, READMEs, and (eventually) cradle docs and gcu-press typesetting.",
+  "type": "module",
+  "main": "./src/api.js",
+  "exports": {
+    ".": "./src/api.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "SPEC.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["markdown", "parser", "renderer", "ast", "commonmark", "gfm", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gentropic/auditable.git",
+    "directory": "ext/markdown"
+  },
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/markdown",
+  "bugs": {
+    "url": "https://github.com/gentropic/auditable/issues"
+  }
+}

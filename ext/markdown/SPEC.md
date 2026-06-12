@@ -1,7 +1,11 @@
 # `@gcu/markdown` — the GCU markdown engine
 
-**Status:** SPEC — not built. Supersedes the reconstructed `@gcu/md` draft (2026-04,
-re-emitted from Claude web; archived at `spec_inbox/old/gcu-md-spec-reconstructed.md`).
+**Status:** v0.1 BUILT (2026-06-11) — engine + tests shipped; the §8 migration steps
+(renderMd stub, surface forks, gcu-press, cradle) are still pending. The REAL engine
+re-validated at **100.00%** emphasis agreement with markdown-it over the 3,820-chunk
+corpus (`experiments/md-engine-corpus.mjs`). Supersedes the reconstructed `@gcu/md`
+draft (2026-04, re-emitted from Claude web; archived at
+`spec_inbox/old/gcu-md-spec-reconstructed.md`).
 **Package:** `@gcu/markdown` (`ext/markdown/`, bundled to `index.js`; the name matches the
 existing works shared-lib slot, so landing here retires build.js's
 `SHARED_LIB_SOURCE_OVERRIDES.markdown` special-case).
@@ -98,6 +102,12 @@ stack a markdown it *owns* — the `@gcu/yaml` move: not spec-compliance theater
 - `[text](url "title")`, `![alt](url "title")`, reference forms (§3.1)
 - Autolinks — `<https://…>` always; bare-URL linkification as an extension (§4)
 - Hard-break `\`, escapes `\*` etc. for all marker characters
+- **Entities** — numeric (`&#65;` / `&#x41;`, invalid code points → U+FFFD) plus a
+  curated named set (~45 common names: `&nbsp; &amp; &mdash; &deg; &times;` …, the ones
+  wild markdown actually uses — the full HTML list is ~2200 and stays out). Decoded to
+  *text*, which re-escapes at render — decode-to-text cannot inject. Unknown names stay
+  literal. (Added when the engine-corpus run showed entity-bearing Jupyter cells
+  rendering visibly wrong without it.)
 
 ### 3.3 Removals (parse-level, not lint-level — these never parse as markup)
 
