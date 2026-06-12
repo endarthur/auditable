@@ -9,8 +9,14 @@ IIFE-wrapped engine prelude (`_md*` names — the app concat scope has a conflic
 `render` stub). Swap verified: a 455-md-cell old-vs-new diff found ZERO regressions and
 fixed three old-renderer bug classes (`< 1.0`-style prose eaten as pseudo-tags, stray
 spaces around inline code, blank-separated ordered lists numbering 1,1,1,1); examples
-smoke 78/78. Still pending: §8 step 3 (preview/doc surface mini-forks), step 4
-(gcu-press), step 5 (cradle). The REAL engine re-validated at **100.00%** emphasis
+smoke 78/78. **§8.3 SHIPPED too** — the preview/doc mini-forks are deleted: preview
+renders .md with `presets.wild` (markdown joined works-core's CORE_LIBS, +21 KB raw),
+doc's editor preview uses `presets.docs + html:true` (author-is-operator; template raw
+blocks pass through). Landing both in one surface exposed and fixed the runtime
+lib-inliner's two structural flaws (works/js/surface-registry.js): import aliases
+silently vanished, and two libs exporting the same name was a SyntaxError — eligible
+bundles now inline SCOPED (IIFE + destructure of the surface's import clause).
+Still pending: §8 step 4 (gcu-press), step 5 (cradle). The REAL engine re-validated at **100.00%** emphasis
 agreement with markdown-it over the 3,820-chunk corpus
 (`experiments/md-engine-corpus.mjs`). Supersedes the reconstructed `@gcu/md` draft
 (2026-04, re-emitted from Claude web; archived at
