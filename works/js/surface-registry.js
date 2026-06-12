@@ -351,10 +351,44 @@ function _inlineLibsIntoSurface(text, kind) {
     // comment) would terminate the surrounding script tag early and
     // dump the rest as HTML text. Escape it. (markdown.js has a
     // `<script>foo</script>` reference inside a comment that hit this.)
-    const inlined = _rewriteExportToConsts(src)
-      .replace(/<\/script>/g, '<\\/script>');
-    text = text.replace(re,
-      () => `\n/* @gcu/${name} — inlined from the works lib store */\n${inlined}\n`);
+    //
+    // SCOPED inlining (preferred): wrap the bundle in an IIFE returning its
+    // export object and destructure ONLY what the surface's import clause
+    // names (aliases honored). Two libs exporting the same name (markdown's
+    // `render` vs template's `render`) can then coexist in one surface —
+    // previously a duplicate-declaration SyntaxError, and `x as y` aliases
+    // silently vanished. NOT scopable: bundles with interior top-level
+    // `import` lines (strata-app's bare @gcu/* imports must land at module
+    // scope so the later loop iterations inline them — the chained pattern
+    // this loop's ordering comment describes); those keep the legacy flat
+    // inline + post-hoc alias consts.
+    const exportM = src.match(/export\s*\{([^}]+)\};?\s*$/);
+    const canScope = exportM && !/^[ \t]*import[\s{]/m.test(src);
+    if (canScope) {
+      const ret = exportM[1].split(',').map((s) => s.trim()).filter(Boolean)
+        .map((d) => { const m2 = d.match(/^(\S+)\s+as\s+(\S+)$/); return m2 ? `${m2[2]}: ${m2[1]}` : d; })
+        .join(', ');
+      const body = (src.slice(0, exportM.index) + `\nreturn { ${ret} };`)
+        .replace(/<\/script>/g, '<\\/script>');
+      text = text.replace(re, (_m, clause) => {
+        const bind = String(clause || '').split(',').map((s) => s.trim()).filter(Boolean)
+          .map((s) => { const m2 = s.match(/^([\w$]+)\s+as\s+([\w$]+)$/); return m2 ? `${m2[1]}: ${m2[2]}` : s; })
+          .join(', ');
+        return `\nconst { ${bind} } = (() => {\n/* @gcu/${name} — inlined (scoped) from the works lib store */\n${body}\n})();\n`;
+      });
+    } else {
+      const inlined = _rewriteExportToConsts(src)
+        .replace(/<\/script>/g, '<\\/script>');
+      text = text.replace(re, (_m, clause) => {
+        const aliases = [];
+        for (const part of String(clause || '').split(',')) {
+          const am = part.trim().match(/^([\w$]+)\s+as\s+([\w$]+)$/);
+          if (am && am[1] !== am[2]) aliases.push(`const ${am[2]} = ${am[1]};`);
+        }
+        return `\n/* @gcu/${name} — inlined from the works lib store */\n${inlined}\n`
+          + (aliases.length ? aliases.join(' ') + '\n' : '');
+      });
+    }
   }
   // The terminal builds its worker source from the geas TEXT (not its
   // symbols). After inlining, the bundle text is no longer directly

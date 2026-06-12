@@ -296,7 +296,9 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   // surfaces loop): stub/text/preview/inspector/settings/library/terminal. Every heavy
   // surface lib is provisioned, not bundled. (The terminal surface uses @gcu/term — the
   // light 20 KB-gz renderer — not xterm.) See spec_inbox/gcu-distributions-spec.md.
-  const CORE_LIBS = ['abus', 'menu', 'qr', 'capsule', 'vfs', 'term', 'geas', 'proc', 'readline'];
+  // 'markdown' = @gcu/markdown (~13 KB gz) — the preview surface (CORE) renders
+  // .md with it (READMEs, welcome docs), replacing its old line-regex mini-fork.
+  const CORE_LIBS = ['abus', 'menu', 'qr', 'capsule', 'vfs', 'term', 'geas', 'proc', 'readline', 'markdown'];
   // NB: 'strata-app' (the shared strata app core, source-override below) must
   // precede 'loom'/'strata'/'recon'/'archive' — the runtime surface inliner
   // iterates in this order, and inlining strata-app first is what brings its
@@ -778,8 +780,8 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus'] },
     { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus', 'menu'] },
     { kind: 'doc',       file: 'works/surfaces/doc.html',
-      deps: ['abus', 'menu', 'template', 'yaml', 'epub', 'archive'] },
-    { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus'] },
+      deps: ['abus', 'menu', 'markdown', 'template', 'yaml', 'epub', 'archive'] },
+    { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus', 'markdown'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
     { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus'] },
     // NB: the 'workbench' surface is no longer a built-in payload — it ships

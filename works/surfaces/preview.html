@@ -124,6 +124,7 @@ table.csv .col-type { color: var(--au-fg-soft); font-size: 10px; font-weight: 40
 <div id="root"><div id="loading">Loading…</div></div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { render as mdRender, presets as mdPresets } from '../../ext/markdown/index.js';
 
 /* @theme-init */
 
@@ -380,56 +381,11 @@ function jsonLeaf(key, val, type) {
 }
 
 // ── Markdown ────────────────────────────────────────────────────────
-// Tiny subset — headings, bold/italic/code inline, code fences, lists,
-// blockquotes, links. Not CommonMark; good enough for READMEs.
+// @gcu/markdown with the wild preset — the full reading dialect (tables,
+// images, nested lists, autolinked URLs; html inert, math off — a README's
+// `$` is a dollar sign). Replaced the ~45-line line-regex fork (SPEC §8.3).
 function renderMarkdown(text) {
-  const lines = text.split('\n');
-  const out = [];
-  let inCode = false, listType = '';
-  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = ''; } };
-
-  for (const raw of lines) {
-    const line = raw.replace(/\r$/, '');
-    if (line.startsWith('```')) {
-      closeList();
-      if (inCode) { out.push('</code></pre>'); inCode = false; }
-      else { out.push('<pre><code>'); inCode = true; }
-      continue;
-    }
-    if (inCode) { out.push(esc(line) + '\n'); continue; }
-
-    let m;
-    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
-      closeList();
-      const lvl = m[1].length;
-      out.push(`<h${lvl}>${inlineMd(m[2])}</h${lvl}>`);
-    } else if (line.startsWith('> ')) {
-      closeList();
-      out.push(`<blockquote>${inlineMd(line.slice(2))}</blockquote>`);
-    } else if ((m = line.match(/^[-*]\s+(.*)$/))) {
-      if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; }
-      out.push(`<li>${inlineMd(m[1])}</li>`);
-    } else if ((m = line.match(/^\d+\.\s+(.*)$/))) {
-      if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; }
-      out.push(`<li>${inlineMd(m[1])}</li>`);
-    } else if (line.trim() === '') {
-      closeList();
-    } else {
-      closeList();
-      out.push(`<p>${inlineMd(line)}</p>`);
-    }
-  }
-  closeList();
-  if (inCode) out.push('</code></pre>');
-  root.innerHTML = '<div class="md">' + out.join('') + '</div>';
-}
-
-function inlineMd(s) {
-  return esc(s)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  root.innerHTML = '<div class="md">' + mdRender(text, mdPresets.wild) + '</div>';
 }
 
 // ── Image ───────────────────────────────────────────────────────────

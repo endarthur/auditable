@@ -293,6 +293,7 @@
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
 import { MenuBar } from '../../ext/menu/index.js';
+import { render as mdRender, presets as mdPresets } from '../../ext/markdown/index.js';
 import { renderText, registerFilter } from '../../ext/template/index.js';
 import { parse as parseYaml, YamlParseError } from '../../ext/yaml/index.js';
 import { writeEpub, extractDataUrlImages, splitByHeading } from '../../ext/epub/index.js';
@@ -331,65 +332,14 @@ const dirOf    = (p) => { const i = p.lastIndexOf('/'); return i > 0 ? p.slice(0
 const esc = (s) => String(s).replace(/[&<>]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
-// ── Minimal markdown renderer ─────────────────────────────────────────
-//
-// Same approach as preview.html — tiny subset (headings, fences, lists,
-// quotes, links, bold/italic/code-inline). Not CommonMark. Good enough
-// for readable rendering of the kind of markdown people write in
-// reports. Inline-HTML lines (start with `<`) pass through verbatim so
-// template-resolved blocks (<table>, <pre>, <img>) render correctly.
+// ── Markdown rendering ────────────────────────────────────────────────
+// @gcu/markdown with the docs preset + html:true — the editor preview renders
+// the author's OWN document (author-is-operator), and template-resolved
+// blocks ({{…}} filters emit <table>/<pre>/<img>) must pass through raw.
+// Replaced the ~50-line line-regex fork (SPEC §8.3); its raw-HTML-LINE
+// pass-through generalizes to the engine's html:true.
 function renderMarkdown(text) {
-  const lines = text.split('\n');
-  const out = [];
-  let inCode = false, listType = '';
-  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = ''; } };
-  for (const raw of lines) {
-    const line = raw.replace(/\r$/, '');
-    if (line.startsWith('```')) {
-      closeList();
-      if (inCode) { out.push('</code></pre>'); inCode = false; }
-      else { out.push('<pre><code>'); inCode = true; }
-      continue;
-    }
-    if (inCode) { out.push(esc(line) + '\n'); continue; }
-    let m;
-    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
-      closeList();
-      const lvl = m[1].length;
-      out.push(`<h${lvl}>${inlineMd(m[2])}</h${lvl}>`);
-    } else if (line.startsWith('> ')) {
-      closeList();
-      out.push(`<blockquote>${inlineMd(line.slice(2))}</blockquote>`);
-    } else if ((m = line.match(/^[-*]\s+(.*)$/))) {
-      if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; }
-      out.push(`<li>${inlineMd(m[1])}</li>`);
-    } else if ((m = line.match(/^\d+\.\s+(.*)$/))) {
-      if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; }
-      out.push(`<li>${inlineMd(m[1])}</li>`);
-    } else if (line.trim() === '') {
-      closeList();
-    } else if (/^\s*</.test(line)) {
-      // Raw HTML line — emit verbatim so template-resolved tables /
-      // pres / imgs render instead of being paragraph-wrapped and
-      // escaped.
-      closeList();
-      out.push(line);
-    } else {
-      closeList();
-      out.push(`<p>${inlineMd(line)}</p>`);
-    }
-  }
-  closeList();
-  if (inCode) out.push('</code></pre>');
-  return out.join('');
-}
-
-function inlineMd(s) {
-  return esc(s)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return mdRender(text, { ...mdPresets.docs, html: true });
 }
 
 // ── YAML frontmatter ──────────────────────────────────────────────────
