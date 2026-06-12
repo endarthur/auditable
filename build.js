@@ -354,11 +354,11 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     }
   }
 
-  // markdown comes from src/js/ rather than ext/<name>/index.js — same
-  // file used by the notebook's md cells. buildLibPayloads reads via
-  // _libSourcePath which checks this map first.
+  // buildLibPayloads reads via _libSourcePath which checks this map first.
+  // (The 'markdown' override is GONE — @gcu/markdown lives at the
+  // ext/markdown/index.js convention now; src/js/markdown.js is a thin
+  // renderMd wrapper over it. Surfaces import render/presets directly.)
   const SHARED_LIB_SOURCE_OVERRIDES = {
-    markdown: 'src/js/markdown.js',
     // The strata app core (createStrataApp) is shared verbatim between the
     // standalone tool and the Works surface; the surface imports it via
     // '../../tools/strata/js/app.js' and the build inlines it as `strata-app`.
@@ -1487,6 +1487,17 @@ const appDir = path.join(srcDir, 'app');
 // ── Build app runtime (minimal JS without CM6/editor) ──
 function buildAppRuntime() {
   let appJs = processModules(path.join(appDir, 'main.js'), appDir);
+  // Prepend the @gcu/markdown engine, IIFE-wrapped with prefixed names: the
+  // app concat is one shared scope and stubs.js carries a top-level `render`
+  // (sideact's stub), so the engine must not land unprefixed. markdown.js's
+  // stripped import leaves it consuming _mdRender/_mdPresets/_mdSlugify,
+  // which this prelude provides (concat-bundle-isolation pattern).
+  const mdEnginePath = path.join(__dirname, 'ext/markdown/index.js');
+  const mdEngine = fs.readFileSync(mdEnginePath, 'utf8')
+    .replace(/^export\s*\{[\s\S]*?\};?\s*$/m, '');
+  appJs = 'const { render: _mdRender, presets: _mdPresets, slugify: _mdSlugify } = (() => {\n'
+    + mdEngine
+    + '\nreturn { render, presets, slugify };\n})();\n\n' + appJs;
   // inject build-time constants into app runtime
   const pagesUrlVal = process.env.AUDITABLE_PAGES_URL || 'https://gentropic.org/auditable';
   appJs = appJs.replace(
@@ -1653,6 +1664,17 @@ if (fs.existsSync(sideactPath)) {
   let sideactSrc = fs.readFileSync(sideactPath, 'utf8');
   sideactSrc = sideactSrc.replace(/^\n+/, '').replace(/\n+$/, '');
   modules.unshift({ name: 'sideact', source: sideactSrc });
+}
+
+// Add @gcu/markdown bundle as a module entry — src/js/markdown.js (the
+// renderMd wrapper) imports './gcu-markdown.js' which rewrites to
+// '#gcu-markdown' and resolves here. The dev-time stub src/js/gcu-markdown.js
+// is not in main.js and never ships.
+const gcuMdPath = path.join(__dirname, 'ext/markdown/index.js');
+if (fs.existsSync(gcuMdPath)) {
+  let gcuMdSrc = fs.readFileSync(gcuMdPath, 'utf8');
+  gcuMdSrc = gcuMdSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'gcu-markdown', source: gcuMdSrc });
 }
 
 // Add @gcu/proc bundle as a module entry (Phase A: function / module-call /

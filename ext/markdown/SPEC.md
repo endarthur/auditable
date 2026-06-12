@@ -1,10 +1,19 @@
 # `@gcu/markdown` — the GCU markdown engine
 
-**Status:** v0.1 BUILT (2026-06-11) — engine + tests shipped; the §8 migration steps
-(renderMd stub, surface forks, gcu-press, cradle) are still pending. The REAL engine
-re-validated at **100.00%** emphasis agreement with markdown-it over the 3,820-chunk
-corpus (`experiments/md-engine-corpus.mjs`). Supersedes the reconstructed `@gcu/md`
-draft (2026-04, re-emitted from Claude web; archived at
+**Status:** v0.1 BUILT (2026-06-11); **§8 steps 1–2 SHIPPED** — `src/js/markdown.js` is
+the renderMd wrapper (notebook preset; the blacklist sanitizer is DELETED, md cells are
+html-inert), the `SHARED_LIB_SOURCE_OVERRIDES.markdown` special-case is gone (the works
+lib is `ext/markdown/index.js` by convention; docs/reader/dd60 import `render`+`presets`
+directly, gaining footnotes via the docs preset), and the app-export runtime carries an
+IIFE-wrapped engine prelude (`_md*` names — the app concat scope has a conflicting
+`render` stub). Swap verified: a 455-md-cell old-vs-new diff found ZERO regressions and
+fixed three old-renderer bug classes (`< 1.0`-style prose eaten as pseudo-tags, stray
+spaces around inline code, blank-separated ordered lists numbering 1,1,1,1); examples
+smoke 78/78. Still pending: §8 step 3 (preview/doc surface mini-forks), step 4
+(gcu-press), step 5 (cradle). The REAL engine re-validated at **100.00%** emphasis
+agreement with markdown-it over the 3,820-chunk corpus
+(`experiments/md-engine-corpus.mjs`). Supersedes the reconstructed `@gcu/md` draft
+(2026-04, re-emitted from Claude web; archived at
 `spec_inbox/old/gcu-md-spec-reconstructed.md`).
 **Package:** `@gcu/markdown` (`ext/markdown/`, bundled to `index.js`; the name matches the
 existing works shared-lib slot, so landing here retires build.js's

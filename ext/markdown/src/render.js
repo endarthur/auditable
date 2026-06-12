@@ -110,7 +110,8 @@ export const defaultRules = {
   mark: (n, ctx) => `<mark>${ctx.render(n.children)}</mark>`,
   sub: (n, ctx) => `<sub>${ctx.render(n.children)}</sub>`,
   sup: (n, ctx) => `<sup>${ctx.render(n.children)}</sup>`,
-  kbd: (n) => `<kbd>${escapeHtml(n.value)}</kbd>`,
+  // renderMd compat: ++ctrl+enter++ → one pill per key, joined by '+'.
+  kbd: (n) => n.value.split('+').map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join('+'),
 
   link: (n, ctx) => {
     const inner = ctx.render(n.children);
@@ -167,7 +168,11 @@ export function renderAst(ast, opts = {}) {
     },
     headingId(n) {
       if (n.id) return dedupe(n.id);
-      if (!opts.extensions || !opts.extensions.headingIds || !opts.autoIds) return null;
+      // autoIds: true = every level; a number = max level (renderMd compat:
+      // the notebook/docs presets use 3 — h4-h6 stay anchor-less).
+      const auto = opts.autoIds;
+      if (!opts.extensions || !opts.extensions.headingIds || !auto) return null;
+      if (typeof auto === 'number' && n.level > auto) return null;
       const slug = slugify(flattenText(n.children));
       return slug ? dedupe(slug) : null;
     },

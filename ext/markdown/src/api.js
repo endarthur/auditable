@@ -17,14 +17,15 @@ const EXT_ALL = {
 
 // ── presets (SPEC §6) ─────────────────────────────────────────────────
 export const presets = {
-  // auditable notebook md cells — renderMd parity; md renders on open, so inert.
+  // auditable notebook md cells — renderMd parity; md renders on open, so
+  // inert. autoIds: 3 = h1-h3 anchor, h4-h6 stay anchor-less (TOC compat).
   notebook: {
-    html: false, autoIds: true,
+    html: false, autoIds: 3,
     extensions: { tables: true, tasklists: true, strike: true, math: true, admonitions: true, kbd: true, headingIds: true, subsup: true, mark: true },
   },
   // works docs/reader surfaces — notebook + footnotes.
   docs: {
-    html: false, autoIds: true,
+    html: false, autoIds: 3,
     extensions: { tables: true, tasklists: true, strike: true, math: true, admonitions: true, kbd: true, headingIds: true, subsup: true, mark: true, footnotes: true },
   },
   // wild content (READMEs, imported .ipynb): tolerant, linkified, no GCU-isms.

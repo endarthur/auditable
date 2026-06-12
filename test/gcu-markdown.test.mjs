@@ -14,7 +14,9 @@ const wild = (s) => render(s, presets.wild);
 
 test('headings: levels, trailing #s, explicit {#id}, empty', () => {
   assert.equal(nb('# A'), '<h1 id="a">A</h1>\n');
-  assert.equal(nb('###### deep ##'), '<h6 id="deep">deep</h6>\n');
+  assert.equal(nb('###### deep ##'), '<h6>deep</h6>\n');   // autoIds:3 → h4-h6 anchor-less
+  assert.equal(render('###### deep', { ...presets.notebook, autoIds: true }), '<h6 id="deep">deep</h6>\n');
+  assert.match(nb('###### deep {#kept}'), /<h6 id="kept">/);   // explicit id wins at any level
   assert.match(nb('## T {#custom}'), /<h2 id="custom">T<\/h2>/);
   assert.match(nb('##'), /<h2><\/h2>/);
   assert.match(nb('####### seven'), /<p>/);          // 7 hashes = paragraph
@@ -166,7 +168,7 @@ test('math: inline, display, escapes, renderer hook, off in wild', () => {
 });
 
 test('kbd, sub/sup (no spaces), mark, strike odd runs', () => {
-  assert.match(nb('++ctrl+s++'), /<kbd>ctrl\+s<\/kbd>/);
+  assert.match(nb('++ctrl+s++'), /<kbd>ctrl<\/kbd>\+<kbd>s<\/kbd>/);   // pill per key (renderMd compat)
   assert.match(docs('H~2~O x^2^'), /H<sub>2<\/sub>O x<sup>2<\/sup>/);
   assert.equal(docs('a ~not sub~ b').includes('<sub>'), false); // space inside → literal
   assert.match(docs('==hi=='), /<mark>hi<\/mark>/);

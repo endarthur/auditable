@@ -37,8 +37,11 @@ describe('auditable.html build output', () => {
 
   it('has non-empty __APP_RUNTIME__', () => {
     // The built output should have __APP_RUNTIME__ = `...actual code...`
-    // (not the empty placeholder which would be: const __APP_RUNTIME__ = '';  on its own line)
-    assert.match(html, /const __APP_RUNTIME__ = `\/\/ -- state\.js --/, 'APP_RUNTIME should start with state.js module');
+    // (not the empty placeholder). The runtime now opens with the IIFE-wrapped
+    // @gcu/markdown engine prelude (prefixed _md* names — the app concat scope
+    // carries a conflicting `render` stub), then the module concat.
+    assert.match(html, /const __APP_RUNTIME__ = `const \{ render: _mdRender/, 'APP_RUNTIME should start with the markdown engine prelude');
+    assert.ok(html.includes('// -- state.js --'), 'module concat follows the prelude');
   });
 
   it('app runtime contains expected module markers', () => {

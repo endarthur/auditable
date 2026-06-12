@@ -319,7 +319,9 @@
 import { connect } from '../../ext/abus/index.js';
 
 /* @theme-init */
-import { renderMd, slugify } from '../../src/js/markdown.js';
+import { render as mdRender, presets as mdPresets, slugify } from '../../ext/markdown/index.js';
+// @gcu/markdown with the docs preset (notebook dialect + footnotes, html inert).
+const renderMd = (md) => mdRender(md, mdPresets.docs);
 import { Librarian } from '../../ext/librarian/index.js';
 import { highlightCode, scrollToAnchor, decorateHeadings, buildToc, rewireLinks, buildSearchIndex, makeStatePersister } from '../../ext/docview/index.js';
 
