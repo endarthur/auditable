@@ -1384,7 +1384,9 @@ body.locked .present-exit { display: none !important; }
 }
 .cell-ops button:last-child { border-right: none; }
 .cell-ops button:hover { color: var(--au-fg); background: var(--au-surface-raised); }
-.cell-ops-caret { padding: 4px 5px !important; font-size: 9px; }
+/* The add-type caret: a narrow button, but a readable glyph (the itsy 9px one
+   was invisible). */
+.cell-ops-caret { padding: 4px 7px !important; color: var(--au-fg) !important; }
 
 /* Cell-type changer — reflects + converts the selected cell's type. */
 .cell-type-select {
@@ -1422,6 +1424,7 @@ body.locked .present-exit { display: none !important; }
   padding: 5px 14px;
   font: inherit;
   font-size: 12px;
+  text-transform: none;   /* lowercase labels, matching the cell-type dropdown */
   cursor: pointer;
 }
 .add-type-menu button:hover { background: var(--au-action); color: #fff; }
@@ -2582,9 +2585,9 @@ body.presenting .find-bar { display: none !important; }
    covers the rest. What's left is a focused, left-anchored cell toolbar. */
 .in-works .menubar { display: none !important; }
 .in-works .cell-ops { margin-left: 0; }
-.in-works .transport {
-  margin-left: 0;
-}
+/* Editing controls (cell-ops + cell-type) anchor left; the transport (run)
+   anchors right, filling the bar instead of clumping in the middle. */
+.in-works .transport { margin-left: auto; margin-right: 0; }
 
 /* Statusbar in Works: keep notebook-state icons (encryption lock, MCP)
    + the status message ("ran all cells", error counts, etc.). Drop
