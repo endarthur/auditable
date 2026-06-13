@@ -3,7 +3,7 @@
   "title": "Everything",
   "base": "works-core",
   "description": "Every first-party Works package in the catalog.",
-  "packages": ["@gcu/workbench", "@example/service"],
+  "packages": ["@gcu/notebook", "@gcu/workbench", "@example/service"],
   "settings": { "appearance": { "theme": "dark" } },
   "welcome": [
     { "kind": "notebook" },
