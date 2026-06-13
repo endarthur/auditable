@@ -38,14 +38,14 @@ test('resolveToProvisioned returns the runtime shape (names, settings, no packag
   const p = resolveToProvisioned('works-geoscience', { profilesDir: realProfiles });
   assert.equal(p.name, 'works-geoscience');
   assert.equal(p.base, 'works-core');
-  assert.deepEqual(p.packages, ['@gcu/workbench']);   // catalog entry names, as-is
+  assert.deepEqual(p.packages, ['@gcu/notebook', '@gcu/workbench']);   // catalog entry names, as-is (notebook is a package now)
   assert.equal(p.settings.appearance.theme, 'dark');   // works settings nest theme under appearance
   assert.ok(typeof p.description === 'string' && p.description.length);
 });
 
-test('works-everything provisions both first-party packages', () => {
+test('works-everything provisions the first-party packages', () => {
   const p = resolveToProvisioned('works-everything', { profilesDir: realProfiles });
-  assert.deepEqual(p.packages, ['@gcu/workbench', '@example/service']);
+  assert.deepEqual(p.packages, ['@gcu/notebook', '@gcu/workbench', '@example/service']);
 });
 
 test('works-minimal provisions no packages (just the shell)', () => {
