@@ -1643,146 +1643,154 @@ function generateModuleBoot(cm6Src, modules, acornSrc) {
   return js;
 }
 
-// ── Build module registry ──
+// ── Shared module-registry assembler (notebook-as-package phase A) ──
+// Gather + rewrite + inject the auditable notebook's module registry. The
+// single source of truth for "what modules the notebook is made of", consumed
+// by two emitters: the standalone auditable.html target (below — wraps the
+// result in HTML + compression + signature) and, in phase B, the @gcu/notebook
+// package emitter (writes the same modules out as files + an assembly manifest).
+//
+// Returns the fully-injected module list plus the classic IIFE sources (cm6,
+// acorn) the boot prepends ahead of the ES-module registry. No HTML wrapping,
+// no compression, no signing, no base-size pass — those are the consumer's job.
+//
+// Order is load-bearing: the unshift sequence fixes the registry order, and
+// changing it changes the emitted boot byte-for-byte. EXT_MODULE_ENTRIES lists
+// the ext bundles in unshift-call order (final array order is its reverse),
+// preserved exactly from the historical inline form.
+const EXT_MODULE_ENTRIES = [
+  { name: 'vfs',          file: 'ext/vfs/index.js' },
+  { name: 'abus',         file: 'ext/abus/index.js' },
+  { name: 'sideact',      file: 'ext/sideact/index.js' },
+  { name: 'gcu-markdown', file: 'ext/markdown/index.js' },
+  { name: 'proc',         file: 'ext/proc/index.js' },
+  { name: 'coreutils',    file: 'ext/coreutils/index.js' },
+  { name: 'sync',         file: 'ext/sync/index.js' },
+  { name: 'menu',         file: 'ext/menu/index.js' },
+  { name: 'dialog',       file: 'ext/dialog/index.js' },
+  { name: 'term',         file: 'ext/term/index.js' },
+  { name: 'ipynb',        file: 'ext/ipynb/index.js' },
+  { name: 'licenses',     file: 'ext/licenses/index.js' },
+  { name: 'template',     file: 'ext/template/index.js' },
+];
 
-const modules = processModulesAsRegistry(path.join(jsDir, 'main.js'), jsDir, { lean });
+function buildAuditableRegistry(opts) {
+  const { lean, jsDir, srcDir, appRuntime, execModeArg, runOnLoadArg } = opts;
 
-// Add VFS bundle as a module entry (ES module with exports intact)
-const vfsPath = path.join(__dirname, 'ext/vfs/index.js');
-if (fs.existsSync(vfsPath)) {
-  let vfsSrc = fs.readFileSync(vfsPath, 'utf8');
-  vfsSrc = vfsSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'vfs', source: vfsSrc });
+  // ── gather: base src/js modules, then prepend the ext bundles ──
+  const modules = processModulesAsRegistry(path.join(jsDir, 'main.js'), jsDir, { lean });
+  for (const e of EXT_MODULE_ENTRIES) {
+    const p = path.join(__dirname, e.file);
+    if (!fs.existsSync(p)) continue;
+    let src = fs.readFileSync(p, 'utf8');
+    src = src.replace(/^\n+/, '').replace(/\n+$/, '');
+    modules.unshift({ name: e.name, source: src });
+  }
+
+  // CM6 + Acorn — classic IIFE bundles (window.CM6 / window.Acorn), not ES
+  // modules; prepended ahead of the registry boot, never registry entries.
+  const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
+  const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';
+  const acornPath = path.join(__dirname, 'ext/acorn/acorn.min.js');
+  const acornSrc = fs.existsSync(acornPath) ? fs.readFileSync(acornPath, 'utf8') : '';
+
+  // AIR as individual ES-module registry entries (real per-file scope, no
+  // concat flattening) under the #air/... namespace, appended at the end.
+  const airSrcDir = path.join(__dirname, 'ext/air/src');
+  if (fs.existsSync(airSrcDir)) {
+    const airModules = processExtensionAsRegistry('air', airSrcDir);
+    for (const m of airModules) modules.push(m);
+  }
+
+  // ── inject: build-time placeholders (modules opt in by declaring the const) ──
+  const builtins = fs.readFileSync(path.join(srcDir, 'builtins.json'), 'utf8');
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+  const buildDate = buildDateFromGit();
+  const release = process.env.AUDITABLE_RELEASE || 'dev';
+  const pubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
+  const repo = process.env.AUDITABLE_REPO || 'gentropic/auditable';
+  const pagesUrl = process.env.AUDITABLE_PAGES_URL || 'https://gentropic.org/auditable';
+
+  for (const mod of modules) {
+    mod.source = mod.source.replace("'__AUDITABLE_BUILTINS__'", builtins.trim());
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_VERSION__ = '0.0.0';",
+      `const __AUDITABLE_VERSION__ = '${pkg.version || '0.0.0'}';`
+    );
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_RELEASE__ = 'dev';",
+      `const __AUDITABLE_RELEASE__ = '${release}';`
+    );
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_BUILD_DATE__ = 'dev';",
+      `const __AUDITABLE_BUILD_DATE__ = '${buildDate}';`
+    );
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_PUBLIC_KEY__ = '';",
+      `const __AUDITABLE_PUBLIC_KEY__ = '${pubKey}';`
+    );
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_REPO__ = 'gentropic/auditable';",
+      `const __AUDITABLE_REPO__ = '${repo}';`
+    );
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_PAGES_URL__ = 'https://gentropic.org/auditable';",
+      `const __AUDITABLE_PAGES_URL__ = '${pagesUrl}';`
+    );
+    if (execModeArg) {
+      mod.source = mod.source.replace(
+        "const __AUDITABLE_DEFAULT_EXEC_MODE__ = 'reactive';",
+        `const __AUDITABLE_DEFAULT_EXEC_MODE__ = '${execModeArg}';`
+      );
+    }
+    if (runOnLoadArg) {
+      mod.source = mod.source.replace(
+        "const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = 'yes';",
+        `const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = '${runOnLoadArg}';`
+      );
+    }
+  }
+
+  // Inject app runtime as escaped string constant into save module
+  const appRuntimeEscaped = appRuntime.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${').replace(/<\/script>/gi, '<\\/script>');
+  const saveMod = modules.find(m => m.name === 'save');
+  if (saveMod) {
+    saveMod.source = saveMod.source.replace(
+      "const __APP_RUNTIME__ = '';",
+      () => 'const __APP_RUNTIME__ = `' + appRuntimeEscaped + '`;'
+    );
+  }
+
+  // Note: Switchboard font BINARIES are not bundled into the runtime —
+  // they're fetched from Google Fonts on user opt-in (toggle in Settings)
+  // and cached in localStorage. See save.js's fetchSwitchboardFonts().
+  // We DO bundle the OFL.txt license string, since it must accompany any
+  // embedded font payload and is small (~4.5 KB → ~1 KB gzipped).
+  const oflPath = path.join(__dirname, 'ext/switchboard/fonts/OFL.txt');
+  const oflText = fs.existsSync(oflPath) ? fs.readFileSync(oflPath, 'utf8') : '';
+  if (saveMod) {
+    saveMod.source = saveMod.source.replace(
+      "const __SWITCHBOARD_OFL__ = '';",
+      () => 'const __SWITCHBOARD_OFL__ = ' + JSON.stringify(oflText) + ';'
+    );
+  }
+
+  // ── __BUILD_LICENSES__ injection (licenses-spec §7.3) ─────────────────
+  // Read vendor-licenses.json + each entry's licenseFile, assemble a manifest
+  // keyed by package name, inject into every module containing the
+  // `const __BUILD_LICENSES__ = {};` placeholder. The auditable settings panel
+  // and the works workspace settings surface both opt in this way.
+  // Tolerant of missing manifest / missing LICENSE files — warns but proceeds.
+  const _buildLicenses = injectBuildLicenses(modules);
+  console.log(`vendor-licenses: bundled ${Object.keys(_buildLicenses).length} entries (${Object.values(_buildLicenses).filter(e => e.text).length} with text)`);
+
+  return { modules, cm6Src, acornSrc };
 }
 
-// Add @gcu/abus bundle as a module entry (the A-Bus coordination layer —
-// used by the notebook's Works surface adapter)
-const abusPath = path.join(__dirname, 'ext/abus/index.js');
-if (fs.existsSync(abusPath)) {
-  let abusSrc = fs.readFileSync(abusPath, 'utf8');
-  abusSrc = abusSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'abus', source: abusSrc });
-}
-
-// Add sideact bundle as a module entry
-const sideactPath = path.join(__dirname, 'ext/sideact/index.js');
-if (fs.existsSync(sideactPath)) {
-  let sideactSrc = fs.readFileSync(sideactPath, 'utf8');
-  sideactSrc = sideactSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'sideact', source: sideactSrc });
-}
-
-// Add @gcu/markdown bundle as a module entry — src/js/markdown.js (the
-// renderMd wrapper) imports './gcu-markdown.js' which rewrites to
-// '#gcu-markdown' and resolves here. The dev-time stub src/js/gcu-markdown.js
-// is not in main.js and never ships.
-const gcuMdPath = path.join(__dirname, 'ext/markdown/index.js');
-if (fs.existsSync(gcuMdPath)) {
-  let gcuMdSrc = fs.readFileSync(gcuMdPath, 'utf8');
-  gcuMdSrc = gcuMdSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'gcu-markdown', source: gcuMdSrc });
-}
-
-// Add @gcu/proc bundle as a module entry (Phase A: function / module-call /
-// module-service modes — the substrate for worker()/workerPool() builtins
-// and eventually geas's worker harness).
-const procPath = path.join(__dirname, 'ext/proc/index.js');
-if (fs.existsSync(procPath)) {
-  let procSrc = fs.readFileSync(procPath, 'utf8');
-  procSrc = procSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'proc', source: procSrc });
-}
-
-// Add @gcu/coreutils bundle as a module entry (lite VFS shell commands — the notebook
-// shell's `!cmd` fast-path runs these natively over the notebook VFS, no geas worker).
-const coreutilsPath = path.join(__dirname, 'ext/coreutils/index.js');
-if (fs.existsSync(coreutilsPath)) {
-  let coreutilsSrc = fs.readFileSync(coreutilsPath, 'utf8');
-  coreutilsSrc = coreutilsSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'coreutils', source: coreutilsSrc });
-}
-
-// Add @gcu/sync bundle as a module entry (the federation/sync layer — used by
-// the presence consumer; the carrier itself, Trystero, is lazy-loaded on opt-in).
-const syncPath = path.join(__dirname, 'ext/sync/index.js');
-if (fs.existsSync(syncPath)) {
-  let syncSrc = fs.readFileSync(syncPath, 'utf8');
-  syncSrc = syncSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'sync', source: syncSrc });
-}
-
-// Add @gcu/menu bundle as a module entry (ES module with named exports)
-const menuPath = path.join(__dirname, 'ext/menu/index.js');
-if (fs.existsSync(menuPath)) {
-  let menuSrc = fs.readFileSync(menuPath, 'utf8');
-  menuSrc = menuSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'menu', source: menuSrc });
-}
-
-// Add @gcu/dialog bundle as a module entry (ES module with named exports)
-const dialogPath = path.join(__dirname, 'ext/dialog/index.js');
-if (fs.existsSync(dialogPath)) {
-  let dialogSrc = fs.readFileSync(dialogPath, 'utf8');
-  dialogSrc = dialogSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'dialog', source: dialogSrc });
-}
-
-// Add @gcu/term bundle as a module entry (ES module with named exports)
-const termPath = path.join(__dirname, 'ext/term/index.js');
-if (fs.existsSync(termPath)) {
-  let termSrc = fs.readFileSync(termPath, 'utf8');
-  termSrc = termSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'term', source: termSrc });
-}
-
-// Add @gcu/ipynb bundle as a module entry (Jupyter import/export bridge)
-const ipynbPath = path.join(__dirname, 'ext/ipynb/index.js');
-if (fs.existsSync(ipynbPath)) {
-  let ipynbSrc = fs.readFileSync(ipynbPath, 'utf8');
-  ipynbSrc = ipynbSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'ipynb', source: ipynbSrc });
-}
-
-// Add @gcu/licenses bundle as a module entry — used by cell-builtins/modules.js
-// to capture SPDX + LICENSE text alongside every install(), and by the
-// settings Licenses tab to render the aggregate. Pure library; no auditable-
-// internal deps.
-const licensesPath = path.join(__dirname, 'ext/licenses/index.js');
-if (fs.existsSync(licensesPath)) {
-  let licensesSrc = fs.readFileSync(licensesPath, 'utf8');
-  licensesSrc = licensesSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'licenses', source: licensesSrc });
-}
-
-// Add @gcu/template bundle as a module entry — used by the cell-side
-// `template` builtin (cell-builtins/template.js) and any consumer
-// surface (doc / deck / sheet) that renders {{path | filter}} over the
-// notebook VFS.
-const templatePath = path.join(__dirname, 'ext/template/index.js');
-if (fs.existsSync(templatePath)) {
-  let templateSrc = fs.readFileSync(templatePath, 'utf8');
-  templateSrc = templateSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.unshift({ name: 'template', source: templateSrc });
-}
-
-// Read CM6 bundle (classic IIFE, not an ES module — sets window.CM6 via var)
-const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
-const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';
-
-// Read Acorn bundle (IIFE, sets window.Acorn — Parser + tsPlugin for AIR)
-const acornPath = path.join(__dirname, 'ext/acorn/acorn.min.js');
-const acornSrc = fs.existsSync(acornPath) ? fs.readFileSync(acornPath, 'utf8') : '';
-
-// Add AIR as individual ES-module registry entries (real per-file scope, no concat flattening).
-// Each ext/air/src/*.js becomes its own module under the #air/... namespace. This is the same
-// pattern src/js/ uses and avoids the identifier-collision class of bug naive concat is prone to.
-// The concat ext/air/index.js is still produced by ext/air/build.js, but only as the /bundled
-// artifact for npm consumers — Auditable's own runtime no longer loads it.
-const airSrcDir = path.join(__dirname, 'ext/air/src');
-if (fs.existsSync(airSrcDir)) {
-  const airModules = processExtensionAsRegistry('air', airSrcDir);
-  for (const m of airModules) modules.push(m);
-}
+// ── Build module registry (shared assembler) ──
+const { modules, cm6Src, acornSrc } = buildAuditableRegistry({
+  lean, jsDir, srcDir, appRuntime, execModeArg, runOnLoadArg,
+});
 
 // 3. Read CSS and HTML template
 const cssRaw = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
@@ -1837,86 +1845,8 @@ if (fs.existsSync(termDefaultCssPath)) {
 // 4. Inject build-time constants into module sources
 // These placeholders get replaced with environment or computed values.
 // Applied per-module (no-op for modules that don't contain the placeholder).
-const builtins = fs.readFileSync(path.join(srcDir, 'builtins.json'), 'utf8');
-const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-const buildDate = buildDateFromGit();
-const release = process.env.AUDITABLE_RELEASE || 'dev';
-const pubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
-const repo = process.env.AUDITABLE_REPO || 'gentropic/auditable';
-const pagesUrl = process.env.AUDITABLE_PAGES_URL || 'https://gentropic.org/auditable';
-
-for (const mod of modules) {
-  mod.source = mod.source.replace("'__AUDITABLE_BUILTINS__'", builtins.trim());
-  mod.source = mod.source.replace(
-    "const __AUDITABLE_VERSION__ = '0.0.0';",
-    `const __AUDITABLE_VERSION__ = '${pkg.version || '0.0.0'}';`
-  );
-  mod.source = mod.source.replace(
-    "const __AUDITABLE_RELEASE__ = 'dev';",
-    `const __AUDITABLE_RELEASE__ = '${release}';`
-  );
-  mod.source = mod.source.replace(
-    "const __AUDITABLE_BUILD_DATE__ = 'dev';",
-    `const __AUDITABLE_BUILD_DATE__ = '${buildDate}';`
-  );
-  mod.source = mod.source.replace(
-    "const __AUDITABLE_PUBLIC_KEY__ = '';",
-    `const __AUDITABLE_PUBLIC_KEY__ = '${pubKey}';`
-  );
-  mod.source = mod.source.replace(
-    "const __AUDITABLE_REPO__ = 'gentropic/auditable';",
-    `const __AUDITABLE_REPO__ = '${repo}';`
-  );
-  mod.source = mod.source.replace(
-    "const __AUDITABLE_PAGES_URL__ = 'https://gentropic.org/auditable';",
-    `const __AUDITABLE_PAGES_URL__ = '${pagesUrl}';`
-  );
-  if (execModeArg) {
-    mod.source = mod.source.replace(
-      "const __AUDITABLE_DEFAULT_EXEC_MODE__ = 'reactive';",
-      `const __AUDITABLE_DEFAULT_EXEC_MODE__ = '${execModeArg}';`
-    );
-  }
-  if (runOnLoadArg) {
-    mod.source = mod.source.replace(
-      "const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = 'yes';",
-      `const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = '${runOnLoadArg}';`
-    );
-  }
-}
-
-// 4b. Inject app runtime as escaped string constant into save module
-const appRuntimeEscaped = appRuntime.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${').replace(/<\/script>/gi, '<\\/script>');
-const saveMod = modules.find(m => m.name === 'save');
-if (saveMod) {
-  saveMod.source = saveMod.source.replace(
-    "const __APP_RUNTIME__ = '';",
-    () => 'const __APP_RUNTIME__ = `' + appRuntimeEscaped + '`;'
-  );
-}
-
-// Note: Switchboard font BINARIES are not bundled into the runtime —
-// they're fetched from Google Fonts on user opt-in (toggle in Settings)
-// and cached in localStorage. See save.js's fetchSwitchboardFonts().
-// We DO bundle the OFL.txt license string, since it must accompany any
-// embedded font payload and is small (~4.5 KB → ~1 KB gzipped).
-const oflPath = path.join(__dirname, 'ext/switchboard/fonts/OFL.txt');
-const oflText = fs.existsSync(oflPath) ? fs.readFileSync(oflPath, 'utf8') : '';
-if (saveMod) {
-  saveMod.source = saveMod.source.replace(
-    "const __SWITCHBOARD_OFL__ = '';",
-    () => 'const __SWITCHBOARD_OFL__ = ' + JSON.stringify(oflText) + ';'
-  );
-}
-
-// ── __BUILD_LICENSES__ injection (licenses-spec §7.3) ─────────────────
-// Read vendor-licenses.json + each entry's licenseFile, assemble a manifest
-// keyed by package name, inject into every module containing the
-// `const __BUILD_LICENSES__ = {};` placeholder. The auditable settings panel
-// and the works workspace settings surface both opt in this way.
-// Tolerant of missing manifest / missing LICENSE files — warns but proceeds.
-const _buildLicenses = injectBuildLicenses(modules);
-console.log(`vendor-licenses: bundled ${Object.keys(_buildLicenses).length} entries (${Object.values(_buildLicenses).filter(e => e.text).length} with text)`);
+// Build-time placeholder injection, app-runtime/OFL embedding, and
+// __BUILD_LICENSES__ all happen inside buildAuditableRegistry above.
 
 // 5. Assemble final HTML
 function assemble(jsCode) {
