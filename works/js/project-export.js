@@ -46,11 +46,28 @@ function _rebaseOntoSelf(dump, projPath) {
 export async function buildProjectExportHtml(projPath) {
   const title = await _readProjectTitle(projPath);
 
-  // Dump the project + shared /lib (modules). /lib is workspace-wide; the
-  // exported notebook only sees the modules it actually uses lazily, but
-  // including all of /lib mirrors a normal standalone save's behaviour.
+  // Dump the project + shared /lib (the project's load()-able modules). /lib is
+  // workspace-wide, but the BUILTIN packages there (the notebook surface itself,
+  // @gcu/air, workbench, …) are the shell's runtime — the notebook surface IS
+  // this export's runtime — not project data. Excluding them avoids embedding
+  // the whole notebook package (tens of MB) into every export.
   const raw = await serializeVfs(WKS.vfs, [projPath, '/lib']);
-  const dump = _rebaseOntoSelf(raw, projPath);
+  const builtinPrefixes = [];
+  try {
+    const lock = JSON.parse(await WKS.vfs.readFile('/lib/.gcu-lock.json', 'utf8'));
+    for (const [name, rec] of Object.entries((lock && lock.modules) || {})) {
+      if (rec && rec.kind === 'builtin') {
+        const lp = /^@[\w.-]+\/[\w.-]+$/.test(name) ? '/lib/' + name : '/lib/local/' + name;
+        builtinPrefixes.push(lp + '/');
+      }
+    }
+  } catch { /* no lockfile — dump everything */ }
+  const filtered = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (builtinPrefixes.some((bp) => k === bp.slice(0, -1) || k.startsWith(bp))) continue;
+    filtered[k] = v;
+  }
+  const dump = _rebaseOntoSelf(filtered, projPath);
 
   // Fetch the embedded notebook runtime (decompressed at boot to a blob URL).
   const runtime = await fetch(surfaceUrl('notebook')).then((r) => r.text());
@@ -58,12 +75,16 @@ export async function buildProjectExportHtml(projPath) {
   const block = '<!-- auditable notebook data: VFS dump (persistent mounts only) -->\n'
     + '<!--AUDITABLE-VFS\n' + JSON.stringify(dump) + '\nAUDITABLE-VFS-->';
 
-  // Patch <title>, the docTitle input value, and inject the data block.
+  // Patch <title>, the docTitle input value, and inject the data block. The
+  // replacements MUST be function-form: `block` is JSON containing `$&`/`$'`/
+  // `` $` ``/`$1` sequences (module sources are full of `${…}` + regex), which
+  // string-form .replace would interpret as backreference tokens and corrupt
+  // the dump (the $-trap — see CLAUDE.md / feedback_string_replace_dollar_trap).
   return runtime
-    .replace('<title>Auditable</title>', '<title>Auditable — ' + esc(title) + '</title>')
+    .replace('<title>Auditable</title>', () => '<title>Auditable — ' + esc(title) + '</title>')
     .replace('id="docTitle" value="untitled"',
-             'id="docTitle" value="' + esc(title) + '"')
-    .replace('<script>', block + '\n<script>');
+             () => 'id="docTitle" value="' + esc(title) + '"')
+    .replace('<script>', () => block + '\n<script>');
 }
 
 /** Right-click → Export as notebook…: build + trigger a download. */
