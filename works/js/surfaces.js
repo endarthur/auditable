@@ -6,6 +6,23 @@ import { WKS, setStatus } from './state.js';
 import { kindDef, kindForExtension, kindForPath, surfaceUrl, surfaceAvailable, availableKindForExtension } from './surface-registry.js';
 
 const _byUnique = new Map();   // A-Bus unique name → tab id
+let _activeTabId = null;       // the focused tab (last activated) — drives the shell menubar's contextual surface actions
+
+// The focused surface record (or null) — the tab the shell menubar acts on.
+export function getActiveSurface() {
+  return _activeTabId ? (WKS.surfaces.get(_activeTabId) || null) : null;
+}
+
+// Call a method on the active surface's `Notebook` A-Bus interface — the shell
+// menubar driving the focused notebook (Run All, etc.). No-op (returns false)
+// when the active surface isn't a notebook. Fire-and-forget; errors are logged.
+export function callActiveNotebook(member, args = []) {
+  const rec = getActiveSurface();
+  if (!rec || rec.kind !== 'notebook') return false;
+  WKS.worksBus.call({ to: rec.uniqueName, path: '/', interface: 'Notebook', member }, args)
+    .catch((e) => console.warn('[works] notebook ' + member + ' failed:', e));
+  return true;
+}
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const newTabId = () => 't' + Math.random().toString(36).slice(2, 10);
@@ -63,6 +80,7 @@ export function spawnSurface(kind, opts = {}) {
     surfaceKind: kind, path: rec.path,
   });
   WKS.rails.activateTab(tabId);
+  _activeTabId = tabId;
   return tabId;
 }
 
@@ -140,9 +158,14 @@ export function setupSurfaces() {
   // the underlying file → reopen" workflows for volatile paths like /sys/*.
   WKS.rails.on('tab:close', ({ tab, preserved }) => {
     if (preserved || !tab) return;          // dnd move between stacks
+    if (tab.id === _activeTabId) _activeTabId = null;
     const rec = WKS.surfaces.get(tab.id);
     if (!rec) return;
     if (rec.uniqueName) _byUnique.delete(rec.uniqueName);
     WKS.surfaces.delete(tab.id);
   });
+
+  // Track the focused tab so the menubar's contextual surface actions (Run All
+  // on the active notebook, etc.) know what to act on.
+  WKS.rails.on('tab:activate', ({ tab }) => { if (tab) _activeTabId = tab.id; });
 }

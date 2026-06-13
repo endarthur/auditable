@@ -2,7 +2,7 @@
 
 import { MenuBar } from '#menu';
 import { WKS, setStatus } from './state.js';
-import { spawnSurface, openPath } from './surfaces.js';
+import { spawnSurface, openPath, getActiveSurface, callActiveNotebook } from './surfaces.js';
 import { kindDef } from './surface-registry.js';
 import { hasProfilesPayload, showSetupDialog } from './setup.js';
 import { newProject } from './tree.js';
@@ -47,6 +47,22 @@ export function setupMenuBar() {
     { label: 'View', items: () => [
       { label: 'Toggle sidebar', action: 'view:sidebar' },
     ] },
+    // Contextual: drives the ACTIVE notebook surface over A-Bus (its transport
+    // stays on the notebook; the shell can reach the same actions). Items
+    // re-evaluate per menu-open, so they reflect whichever surface is focused.
+    { label: 'Run', items: () => {
+      const rec = getActiveSurface();
+      if (!rec || rec.kind !== 'notebook') {
+        return [{ label: 'Open a notebook to run cells', disabled: true }];
+      }
+      return [
+        { label: 'Run All',  action: 'nb:run-all' },
+        { label: 'Run Cell', action: 'nb:run-cell' },
+        '---',
+        { label: 'Reactive mode (toggle)', action: 'nb:toggle-reactive' },
+        { label: 'Clear all outputs',      action: 'nb:clear-outputs' },
+      ];
+    } },
     { label: 'Tools', items: () => [
       { label: 'Terminal',  action: 'tools:terminal' },
       { label: 'Library',   action: 'tools:library' },
@@ -77,6 +93,10 @@ export function setupMenuBar() {
 
   bar.on('action', async (action) => {
     if (action === 'file:launcher') { spawnSurface('launcher', { title: 'Launcher' }); return; }
+    if (action === 'nb:run-all')         { callActiveNotebook('RunAll'); return; }
+    if (action === 'nb:run-cell')        { callActiveNotebook('RunSelected'); return; }
+    if (action === 'nb:toggle-reactive') { callActiveNotebook('ToggleReactive'); return; }
+    if (action === 'nb:clear-outputs')   { callActiveNotebook('ClearOutputs'); return; }
     if (action === 'project:new') { newProject('/projects'); return; }
     if (action === 'project:import') { importNotebookViaPicker(); return; }
     if (action === 'book:import') { importEpubViaPicker(); return; }

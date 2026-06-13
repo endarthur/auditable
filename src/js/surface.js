@@ -134,6 +134,15 @@ export function installSurfaceContract({ bus, host }) {
         // headerIdx is currently unused (a cell only scrolls as a unit);
         // it's reserved for future per-header anchor scrolling.
         JumpToCell: (cellId /* , headerIdx */) => jumpToCell(cellId),
+
+        // Document-level cell ops the SHELL drives for the active notebook
+        // (the slim cell toolbar keeps the transport; the shell menubar can
+        // also reach these). Thin wrappers over the same globals the toolbar
+        // buttons / keyboard use, so behaviour is identical to acting in-frame.
+        RunAll:         () => { window.runAll?.(); },
+        RunSelected:    () => { window.runSelectedCell?.(); },
+        ToggleReactive: () => { window.toggleAutorun?.(); },
+        ClearOutputs:   () => { window.clearAllOutputs?.(); },
       },
       signals: [],
     },
