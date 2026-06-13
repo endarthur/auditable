@@ -956,7 +956,7 @@ if (target === 'packages') {
       // if ever shipped here, would be a non-covered convenience artifact.
       const integrityCovers = ['assembly.json',
         ...Object.keys(moduleFiles),
-        ...Object.keys(extraFiles).filter((f) => f.endsWith('.html'))];
+        ...Object.keys(extraFiles).filter((f) => f.endsWith('.html') || f.endsWith('.js'))];
       const { bytes } = packGcupkg({
         name: pkgJson.name, version: pkgJson.version,
         description: pkgJson.description, license: pkgJson.license,
@@ -1025,6 +1025,89 @@ if (target === 'packages') {
         assembly: { version: 1, name: '@gcu/air', fragment: { namespace: 'air' }, entries: assemblyEntries },
         moduleFiles, contributes: ['fragment'],
         title: 'AIR compiler IR', tags: ['lib', 'fragment', 'compiler'],
+      });
+    }
+
+    // ── @gcu/notebook — the auditable notebook, as a package ─────────
+    // buildAuditableRegistry's module list emitted as files + an assembly.json
+    // the phase-C works assembler turns into the boot. Shared libs become `lib`
+    // entries (resolved from the shell, not shipped); AIR becomes a `fragment`
+    // entry (@gcu/air); cm6/acorn are `classics`. boot.html is the standalone
+    // shell with marker slots where the runtime scripts get substituted.
+    {
+      const nbSrcDir = path.join(__dirname, 'src');
+      const nbJsDir = path.join(nbSrcDir, 'js');
+      const nbAppDir = path.join(nbSrcDir, 'app');
+      const nbAppRuntime = buildAppRuntime(nbAppDir);
+      const { modules: nbModules } = buildAuditableRegistry({
+        lean, jsDir: nbJsDir, srcDir: nbSrcDir, appRuntime: nbAppRuntime, execModeArg, runOnLoadArg,
+      });
+      const { appCss, editorCss } = buildNotebookCss(nbSrcDir);
+      const template = fs.readFileSync(path.join(nbSrcDir, 'template.html'), 'utf8');
+      const bootHtml = assembleNotebookHtml({
+        appCss, editorCss, template,
+        runtime: [
+          '<script>/*__GCU_CLASSIC_cm6__*/</script>',
+          '<script>/*__GCU_CLASSIC_acorn__*/</script>',
+          '<script>/*__GCU_REGISTRY__*/</script>',
+        ].join('\n'),
+      });
+
+      // Works libs the notebook shares with the shell — NOT emitted as files
+      // (resolved via ensureLibSource at spawn). registry-name == lib-name
+      // except markdown (the notebook imports #gcu-markdown).
+      const NB_LIBS = [
+        { name: 'vfs' }, { name: 'abus' }, { name: 'sideact' },
+        { name: 'markdown', as: 'gcu-markdown' }, { name: 'proc' },
+        { name: 'menu' }, { name: 'term' }, { name: 'ipynb' }, { name: 'template' },
+      ];
+      const libByRegName = new Map(NB_LIBS.map((l) => [l.as || l.name, l]));
+
+      const nbEntries = [];
+      const nbModuleFiles = {};
+      let fragmentEmitted = false;
+      for (const m of nbModules) {
+        if (m.name.startsWith('air/')) {
+          // AIR ships via the @gcu/air fragment — one entry at its array position.
+          if (!fragmentEmitted) { nbEntries.push({ kind: 'fragment', package: '@gcu/air' }); fragmentEmitted = true; }
+          continue;
+        }
+        const lib = libByRegName.get(m.name);
+        if (lib) { nbEntries.push(lib.as ? { kind: 'lib', name: lib.name, as: lib.as } : { kind: 'lib', name: lib.name }); continue; }
+        const file = 'modules/' + m.name + '.js';
+        nbModuleFiles[file] = m.source;
+        nbEntries.push({ kind: 'module', name: m.name, file });
+      }
+
+      const nbVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || '0.0.0';
+      const worksRegister =
+        '// ⚠ GENERATED — @gcu/notebook shell registration (surface kind \'notebook\').\n' +
+        'if (typeof window !== \'undefined\' && window.auditable && window.auditable.registerExtension) {\n' +
+        '  window.auditable.registerExtension({\n' +
+        '    name: \'@gcu/notebook\', version: ' + JSON.stringify(nbVersion) + ',\n' +
+        '    description: \'Auditable notebook — the reactive computational notebook surface.\',\n' +
+        '    surfaces: [{ kind: \'notebook\', label: \'Notebook\', icon: \'▤\', file: \'boot.html\', assemble: true, extensions: [\'html\', \'txt\'] }],\n' +
+        '  });\n}\n';
+
+      packModulePkg({
+        pkgJson: {
+          name: '@gcu/notebook', version: nbVersion,
+          description: 'Auditable notebook — the reactive computational notebook, as a Works surface package.',
+          license: 'MIT',
+          gcu: {
+            surfaces: [{ kind: 'notebook', file: 'boot.html', assemble: true, label: 'Notebook', icon: '▤', extensions: ['html', 'txt'] }],
+            requires: ['cm6', 'acorn', 'vfs', 'abus', 'sideact', 'markdown', 'proc', 'menu', 'term', 'ipynb', 'template'],
+            dependencies: ['@gcu/air'],
+          },
+        },
+        assembly: {
+          version: 1, name: '@gcu/notebook', classics: ['cm6', 'acorn'],
+          entries: nbEntries, injected: { version: nbVersion, buildDate },
+        },
+        moduleFiles: nbModuleFiles,
+        extraFiles: { 'boot.html': bootHtml, 'works.js': worksRegister },
+        contributes: ['surface'],
+        title: 'Auditable Notebook', tags: ['notebook', 'surface', 'flagship'],
       });
     }
 
@@ -1560,7 +1643,9 @@ const jsDir = path.join(srcDir, 'js');
 const appDir = path.join(srcDir, 'app');
 
 // ── Build app runtime (minimal JS without CM6/editor) ──
-function buildAppRuntime() {
+// `appDir` passed in so the packages target (notebook emitter) can call this
+// without the default-branch consts.
+function buildAppRuntime(appDir) {
   let appJs = processModules(path.join(appDir, 'main.js'), appDir);
   // Prepend the @gcu/markdown engine, IIFE-wrapped with prefixed names: the
   // app concat is one shared scope and stubs.js carries a top-level `render`
@@ -1582,7 +1667,7 @@ function buildAppRuntime() {
   return appJs;
 }
 
-const appRuntime = buildAppRuntime();
+const appRuntime = buildAppRuntime(appDir);
 const appRuntimeSize = (Buffer.byteLength(appRuntime, 'utf8') / 1024).toFixed(1);
 console.log(`App runtime: ${appRuntimeSize} KB`);
 
@@ -1724,27 +1809,27 @@ function generateModuleBoot(cm6Src, modules, acornSrc) {
 // no compression, no signing, no base-size pass — those are the consumer's job.
 //
 // Order is load-bearing: the unshift sequence fixes the registry order, and
-// changing it changes the emitted boot byte-for-byte. EXT_MODULE_ENTRIES lists
+// changing it changes the emitted boot byte-for-byte. EXT_MODULE_ENTRIES (local
+// to avoid a module-level TDZ when the packages branch calls this early) lists
 // the ext bundles in unshift-call order (final array order is its reverse),
 // preserved exactly from the historical inline form.
-const EXT_MODULE_ENTRIES = [
-  { name: 'vfs',          file: 'ext/vfs/index.js' },
-  { name: 'abus',         file: 'ext/abus/index.js' },
-  { name: 'sideact',      file: 'ext/sideact/index.js' },
-  { name: 'gcu-markdown', file: 'ext/markdown/index.js' },
-  { name: 'proc',         file: 'ext/proc/index.js' },
-  { name: 'coreutils',    file: 'ext/coreutils/index.js' },
-  { name: 'sync',         file: 'ext/sync/index.js' },
-  { name: 'menu',         file: 'ext/menu/index.js' },
-  { name: 'dialog',       file: 'ext/dialog/index.js' },
-  { name: 'term',         file: 'ext/term/index.js' },
-  { name: 'ipynb',        file: 'ext/ipynb/index.js' },
-  { name: 'licenses',     file: 'ext/licenses/index.js' },
-  { name: 'template',     file: 'ext/template/index.js' },
-];
-
 function buildAuditableRegistry(opts) {
   const { lean, jsDir, srcDir, appRuntime, execModeArg, runOnLoadArg } = opts;
+  const EXT_MODULE_ENTRIES = [
+    { name: 'vfs',          file: 'ext/vfs/index.js' },
+    { name: 'abus',         file: 'ext/abus/index.js' },
+    { name: 'sideact',      file: 'ext/sideact/index.js' },
+    { name: 'gcu-markdown', file: 'ext/markdown/index.js' },
+    { name: 'proc',         file: 'ext/proc/index.js' },
+    { name: 'coreutils',    file: 'ext/coreutils/index.js' },
+    { name: 'sync',         file: 'ext/sync/index.js' },
+    { name: 'menu',         file: 'ext/menu/index.js' },
+    { name: 'dialog',       file: 'ext/dialog/index.js' },
+    { name: 'term',         file: 'ext/term/index.js' },
+    { name: 'ipynb',        file: 'ext/ipynb/index.js' },
+    { name: 'licenses',     file: 'ext/licenses/index.js' },
+    { name: 'template',     file: 'ext/template/index.js' },
+  ];
 
   // ── gather: base src/js modules, then prepend the ext bundles ──
   const modules = processModulesAsRegistry(path.join(jsDir, 'main.js'), jsDir, { lean });
@@ -1856,69 +1941,63 @@ function buildAuditableRegistry(opts) {
   return { modules, cm6Src, acornSrc };
 }
 
-// ── Build module registry (shared assembler) ──
-const { modules, cm6Src, acornSrc } = buildAuditableRegistry({
-  lean, jsDir, srcDir, appRuntime, execModeArg, runOnLoadArg,
-});
+// ── Notebook CSS build (shared) ──
+// Read src/style.css, split on the APP/EDITOR marker, and append the
+// component theme sheets (@gcu/menu, @gcu/dialog, @gcu/term) with their
+// :root swatch blocks stripped so auditable's palette wins. Returns
+// { appCss, editorCss }. Used by the standalone target and the
+// @gcu/notebook package emitter (so boot.html styles match the standalone).
+function buildNotebookCss(srcDir) {
+  const cssRaw = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
+  const cssMarker = '/* ══ APP CSS ABOVE ═══ EDITOR CSS BELOW ══ */';
+  const cssParts = cssRaw.split(cssMarker);
+  let appCss = cssParts[0].trimEnd();
+  const editorCss = cssParts.length > 1 ? cssParts[1].trimStart() : '';
 
-// 3. Read CSS and HTML template
-const cssRaw = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
-const template = fs.readFileSync(path.join(srcDir, 'template.html'), 'utf8');
+  // @gcu/menu — structural + decorative; strip the decorative :root defaults.
+  const menuCssPath = path.join(__dirname, 'ext/menu/menu.css');
+  const menuDefaultCssPath = path.join(__dirname, 'ext/menu/menu-default.css');
+  if (fs.existsSync(menuCssPath)) {
+    appCss += '\n\n' + fs.readFileSync(menuCssPath, 'utf8').trimEnd();
+  }
+  if (fs.existsSync(menuDefaultCssPath)) {
+    let menuDefault = fs.readFileSync(menuDefaultCssPath, 'utf8');
+    menuDefault = menuDefault.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
+    appCss += '\n\n' + menuDefault.trimEnd();
+  }
 
-// 3b. Split CSS on marker into app and editor sections
-const cssMarker = '/* \u2550\u2550 APP CSS ABOVE \u2550\u2550\u2550 EDITOR CSS BELOW \u2550\u2550 */';
-const cssParts = cssRaw.split(cssMarker);
-let appCss = cssParts[0].trimEnd();
-const editorCss = cssParts.length > 1 ? cssParts[1].trimStart() : '';
+  // @gcu/dialog — same :root strip as menu.
+  const dialogCssPath = path.join(__dirname, 'ext/dialog/dialog.css');
+  const dialogDefaultCssPath = path.join(__dirname, 'ext/dialog/dialog-default.css');
+  if (fs.existsSync(dialogCssPath)) {
+    appCss += '\n\n' + fs.readFileSync(dialogCssPath, 'utf8').trimEnd();
+  }
+  if (fs.existsSync(dialogDefaultCssPath)) {
+    let dialogDefault = fs.readFileSync(dialogDefaultCssPath, 'utf8');
+    dialogDefault = dialogDefault.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
+    appCss += '\n\n' + dialogDefault.trimEnd();
+  }
 
-// 3c. Append @gcu/menu structural CSS + decorative rules. The decorative file
-// ships with its own :root defaults — strip those so auditable's palette
-// (mapped to --ui-* in src/style.css) isn't overridden.
-const menuCssPath = path.join(__dirname, 'ext/menu/menu.css');
-const menuDefaultCssPath = path.join(__dirname, 'ext/menu/menu-default.css');
-if (fs.existsSync(menuCssPath)) {
-  appCss += '\n\n' + fs.readFileSync(menuCssPath, 'utf8').trimEnd();
-}
-if (fs.existsSync(menuDefaultCssPath)) {
-  let menuDefault = fs.readFileSync(menuDefaultCssPath, 'utf8');
-  menuDefault = menuDefault.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
-  appCss += '\n\n' + menuDefault.trimEnd();
-}
-
-// 3d. Append @gcu/dialog structural CSS + decorative rules. Same :root strip
-// as menu — auditable's palette already maps to --ui-* in src/style.css.
-const dialogCssPath = path.join(__dirname, 'ext/dialog/dialog.css');
-const dialogDefaultCssPath = path.join(__dirname, 'ext/dialog/dialog-default.css');
-if (fs.existsSync(dialogCssPath)) {
-  appCss += '\n\n' + fs.readFileSync(dialogCssPath, 'utf8').trimEnd();
-}
-if (fs.existsSync(dialogDefaultCssPath)) {
-  let dialogDefault = fs.readFileSync(dialogDefaultCssPath, 'utf8');
-  dialogDefault = dialogDefault.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
-  appCss += '\n\n' + dialogDefault.trimEnd();
-}
-
-// 3e. Append @gcu/term structural + decorative CSS. term-default.css uses
-// .screen rather than :root so no swatches need stripping; the
-// --gcu-term-* custom properties live there and become the cssVarTheme
-// defaults for ui.terminal() cells.
-const termCssPath = path.join(__dirname, 'ext/term/term.css');
-const termDefaultCssPath = path.join(__dirname, 'ext/term/term-default.css');
-if (fs.existsSync(termCssPath)) {
-  appCss += '\n\n' + fs.readFileSync(termCssPath, 'utf8').trimEnd();
-}
-if (fs.existsSync(termDefaultCssPath)) {
-  appCss += '\n\n' + fs.readFileSync(termDefaultCssPath, 'utf8').trimEnd();
+  // @gcu/term — term-default.css uses .screen not :root, so no strip; the
+  // --gcu-term-* properties become the cssVarTheme defaults for ui.terminal().
+  const termCssPath = path.join(__dirname, 'ext/term/term.css');
+  const termDefaultCssPath = path.join(__dirname, 'ext/term/term-default.css');
+  if (fs.existsSync(termCssPath)) {
+    appCss += '\n\n' + fs.readFileSync(termCssPath, 'utf8').trimEnd();
+  }
+  if (fs.existsSync(termDefaultCssPath)) {
+    appCss += '\n\n' + fs.readFileSync(termDefaultCssPath, 'utf8').trimEnd();
+  }
+  return { appCss, editorCss };
 }
 
-// 4. Inject build-time constants into module sources
-// These placeholders get replaced with environment or computed values.
-// Applied per-module (no-op for modules that don't contain the placeholder).
-// Build-time placeholder injection, app-runtime/OFL embedding, and
-// __BUILD_LICENSES__ all happen inside buildAuditableRegistry above.
-
-// 5. Assemble final HTML
-function assemble(jsCode) {
+// ── Notebook HTML shell (shared) ──
+// The auditable notebook page: head boilerplate + first-paint theme +
+// abus-catch + style tags + body template, with `runtime` placed where the
+// runtime scripts go. The standalone target passes a single <script> wrapping
+// cm6+acorn+boot; the @gcu/notebook package's boot.html passes marker scripts
+// the phase-C works assembler substitutes (cm6/acorn sources + the registry).
+function assembleNotebookHtml({ appCss, editorCss, template, runtime }) {
   return `<!DOCTYPE html>
 <!--AUDITABLE-NOTEBOOK-->
 <!--
@@ -1981,13 +2060,31 @@ ${editorCss}
 
 ${template}
 
-<script>
-${jsCode}
-</script>
+${runtime}
 </body>
 <!-- good luck out there -->
 </html>
 `;
+}
+
+// ── Build module registry (shared assembler) ──
+const { modules, cm6Src, acornSrc } = buildAuditableRegistry({
+  lean, jsDir, srcDir, appRuntime, execModeArg, runOnLoadArg,
+});
+
+// 3. Read template + build CSS (shared helpers — boot.html matches this).
+const template = fs.readFileSync(path.join(srcDir, "template.html"), "utf8");
+const { appCss, editorCss } = buildNotebookCss(srcDir);
+
+// 4. Build-time placeholder injection, app-runtime/OFL embedding, and
+// __BUILD_LICENSES__ all happen inside buildAuditableRegistry above.
+
+// 5. Assemble final HTML — the standalone wraps the runtime in one <script>.
+function assemble(jsCode) {
+  return assembleNotebookHtml({
+    appCss, editorCss, template,
+    runtime: '<script>\n' + jsCode + '\n</script>',
+  });
 }
 
 // compute base size then inject it (two-pass: first with placeholder, then with actual value)
