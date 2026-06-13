@@ -23,7 +23,7 @@ import { runAll, runDAG } from './exec.js';
 import { clearAllOutputs as _clearAllOutputs } from './outputs.js';
 import { createEditor } from './cm6.js';
 import { toggleSplitView } from './split.js';
-import { addCellWithUndo, deleteCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook } from './keyboard.js';
+import { addCellWithUndo, deleteCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook, selectCell } from './keyboard.js';
 import { enableEncryption, disableEncryption, changePassphrase, regenerateRecovery, lockNotebook } from './init.js';
 import { refreshPluginList, refreshModuleList } from './settings.js';
 
@@ -126,6 +126,7 @@ window.moveCell = moveCell;
 
 // keyboard / toolbar
 window.addCellWithUndo = addCellWithUndo;
+window.selectCell = selectCell;
 window.deleteCellWithUndo = deleteCellWithUndo;
 window.runSelectedCell = runSelectedCell;
 window.toggleToolbarMenu = toggleToolbarMenu;

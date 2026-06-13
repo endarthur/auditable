@@ -1362,6 +1362,21 @@ body.locked .present-exit { display: none !important; }
   padding: 4px 8px;
 }
 .transport button:last-child { border-right: none; }
+/* Cell-type changer — first in the transport group; reflects + converts the
+   selected cell's type. */
+.cell-type-select {
+  border: none;
+  border-right: 1px solid var(--au-border);
+  background: var(--au-surface-raised);
+  color: var(--au-fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  cursor: pointer;
+  outline: none;
+}
+.cell-type-select:hover { background: var(--au-surface-bright); }
+.cell-type-select:disabled { opacity: 0.5; cursor: default; }
 .transport button.autorun-on {
   background: var(--au-success);
   color: #fff;

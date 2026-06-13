@@ -73,6 +73,7 @@ import './find.js';
 import './split.js';
 import './complete.js';
 import './keyboard.js';
+import './cell-type-toolbar.js';
 import './menubar.js';
 import './goto.js'; // @optional
 import './size-compare.js'; // @optional
