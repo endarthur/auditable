@@ -13,24 +13,39 @@ import { convertCell } from './cell-ops.js';
 import { selectCell } from './keyboard.js';
 import * as hooks from './hooks.js';
 
-const BUILTIN_TYPES = new Set(['code', 'md', 'css', 'html']);
+const BUILTIN_OPTS = [['code', 'code'], ['md', 'md'], ['css', 'css'], ['html', 'html']];
 
-// Reflect the given cell's type in the dropdown (or disable it when nothing's
-// selected). Removes any transient plugin-type option left from a prior sync.
+// (Re)build the dropdown options = the four builtins + every registered
+// non-builtin (plugin / tagged) cell type — the SAME set Edit → Convert offers,
+// so the dropdown is a full convert target list (it owns conversion once the
+// menubar is hidden in works). `currentType` not in the registry is appended so
+// the dropdown never lies about an unknown cell's type. Rebuilt per sync — cheap
+// (a handful of options) and naturally picks up late-registered plugin types.
+function buildOptions(sel, currentType) {
+  const opts = BUILTIN_OPTS.slice();
+  const reg = (typeof window !== 'undefined' && window._cellTypes) || {};
+  for (const [name, h] of Object.entries(reg)) {
+    if (h && h.capabilities && h.capabilities.builtin) continue;   // builtins already listed
+    opts.push([name, (h && h.label) || name]);
+  }
+  if (currentType && !opts.some(([v]) => v === currentType)) opts.push([currentType, currentType]);
+  sel.innerHTML = '';
+  for (const [v, label] of opts) {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = label;
+    sel.appendChild(o);
+  }
+}
+
+// Reflect the selected cell's type in the dropdown (or disable it when nothing's
+// selected).
 function syncSelect(id) {
   const sel = $('#cellTypeSelect');
   if (!sel) return;
-  const extra = sel.querySelector('option[data-extra]');
-  if (extra) extra.remove();
   const cell = id != null ? S.cells.find((c) => c.id === id) : null;
-  if (!cell) { sel.disabled = true; return; }
+  if (!cell) { buildOptions(sel, null); sel.disabled = true; return; }
   sel.disabled = false;
-  if (BUILTIN_TYPES.has(cell.type)) { sel.value = cell.type; return; }
-  // A plugin / tagged cell type — add a transient option so the dropdown shows
-  // the real type (converting TO a plugin type stays an Edit-menu / tag affair).
-  const o = document.createElement('option');
-  o.value = cell.type; o.textContent = cell.type; o.dataset.extra = '1';
-  sel.appendChild(o);
+  buildOptions(sel, cell.type);
   sel.value = cell.type;
 }
 
