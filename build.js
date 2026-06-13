@@ -794,10 +794,11 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
 
   // works-core ships only the core surfaces (terminal/text/preview/inspector/settings/
   // library/stub); every other surface is provisioned, not bundled.
-  const CORE_KINDS = new Set(['stub', 'text', 'preview', 'inspector', 'settings', 'library', 'terminal']);
+  const CORE_KINDS = new Set(['stub', 'launcher', 'text', 'preview', 'inspector', 'settings', 'library', 'terminal']);
   const surfaceParts = [];
   for (const s of [
     { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus'] },
+    { kind: 'launcher',  file: 'works/surfaces/launcher.html',  deps: ['abus'] },
     { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus', 'menu'] },
     { kind: 'doc',       file: 'works/surfaces/doc.html',
       deps: ['abus', 'menu', 'markdown', 'template', 'yaml', 'epub', 'archive'] },

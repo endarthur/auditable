@@ -471,6 +471,11 @@ registerKind('notebook', { label: 'Notebook', icon: '▦', extensions: [] });
 
 registerKind('stub', { label: 'Stub project', icon: '◈', extensions: [] });
 
+// The Launcher — Works' "what do you want to make?" entry point (the JupyterLab
+// Launcher analog). Path-less; spawned from File → Launcher / the tab "+" / an
+// empty-workspace boot. A core surface (carried in every build).
+registerKind('launcher', { label: 'Launcher', icon: '✦', extensions: [] });
+
 // A geas terminal — multi-instance, path-less, spawned from Tools → Terminal
 // or right-click-folder → Open terminal here. Each tab is its own Web Worker
 // running a geas shell with the workspace VFS proxied in.

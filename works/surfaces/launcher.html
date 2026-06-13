@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Launcher</title>
+<style>
+  /* @theme-tokens */
+  html, body { margin: 0; height: 100%; overflow: auto; }
+  body {
+    background: var(--au-surface-deep);
+    color: var(--au-fg);
+    font: 13px/1.5 'Barlow', system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .wrap { width: 100%; max-width: 760px; padding: 38px 28px 48px; box-sizing: border-box; }
+
+  header { margin-bottom: 26px; }
+  header .title {
+    font: 600 22px/1.2 'Space Mono', ui-monospace, monospace;
+    color: var(--au-fg); letter-spacing: -0.01em;
+  }
+  header .sub { color: var(--au-fg-muted); font-size: 13px; margin-top: 4px; }
+
+  .section-label {
+    font: 600 11px/1 'Space Mono', ui-monospace, monospace;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--au-fg-soft); margin: 0 0 12px 2px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+  }
+  .card {
+    display: flex; gap: 12px; align-items: flex-start;
+    padding: 14px 15px;
+    background: var(--au-surface);
+    border: 1px solid var(--au-border);
+    border-radius: 8px;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color .1s, background .1s, transform .05s;
+    font: inherit; color: inherit;
+  }
+  .card:hover { border-color: var(--au-action); background: var(--au-surface-raised); }
+  .card:active { transform: translateY(1px); }
+  .card:focus-visible { outline: 2px solid var(--au-action); outline-offset: 1px; }
+  .card .icon {
+    flex: none; width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 19px; color: var(--au-action);
+    background: var(--au-surface-deep);
+    border: 1px solid var(--au-border); border-radius: 6px;
+  }
+  .card .body { flex: 1; min-width: 0; }
+  .card .label { font-weight: 600; font-size: 13.5px; color: var(--au-fg); }
+  .card .desc { color: var(--au-fg-muted); font-size: 11.5px; line-height: 1.45; margin-top: 3px; }
+
+  .empty { color: var(--au-fg-soft); font-size: 12.5px; padding: 20px 2px; }
+
+  * { scrollbar-width: thin; scrollbar-color: var(--au-border) transparent; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: var(--au-border); border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--au-fg-soft); }
+</style>
+</head>
+<body>
+<!--
+  The Launcher surface — Works' "what do you want to make?" entry point (the
+  JupyterLab Launcher analog). Pure presentation: asks the `works` shell service
+  for the available creatables (Shell.LaunchItems, availability-filtered) and
+  renders a grid; clicking one calls Shell.Launch(id). All curation/dispatch is
+  shell-side (works/js/launcher.js), so the same launcher adapts to any build.
+-->
+<div class="wrap">
+  <header>
+    <div class="title">Auditable Works</div>
+    <div class="sub">A reactive, multi-language workbench. Pick something to create — or open a file from the tree.</div>
+  </header>
+  <div class="section-label">Create</div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">Nothing installed to create yet — add packages from the Library or Tools → Set up.</div>
+</div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+
+/* @theme-init */
+
+const grid = document.getElementById('grid');
+const empty = document.getElementById('empty');
+let bus = null;
+
+function render(items) {
+  grid.innerHTML = '';
+  if (!items || !items.length) { empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  for (const it of items) {
+    const card = document.createElement('button');
+    card.className = 'card';
+    card.type = 'button';
+    card.innerHTML =
+      '<span class="icon"></span>'
+      + '<span class="body"><span class="label"></span><span class="desc"></span></span>';
+    card.querySelector('.icon').textContent = it.icon || '■';
+    card.querySelector('.label').textContent = it.label || it.id;
+    card.querySelector('.desc').textContent = it.desc || '';
+    card.addEventListener('click', async () => {
+      if (!bus) return;
+      try { await bus.call({ to: 'works', path: '/', interface: 'Shell', member: 'Launch' }, [it.id]); }
+      catch (e) { console.warn('[launcher] Launch failed:', e); }
+    });
+    grid.appendChild(card);
+  }
+}
+
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  const { port } = ev.data;
+
+  try { bus = await connect(port, { client: 'launcher-surface' }); }
+  catch (e) { document.body.textContent = 'connect failed: ' + e.message; return; }
+  if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
+
+  try {
+    const items = await bus.call(
+      { to: 'works', path: '/', interface: 'Shell', member: 'LaunchItems' }, []);
+    render(items);
+  } catch (e) { console.warn('[launcher] LaunchItems failed:', e); render([]); }
+
+  bus.expose('/', {
+    Surface: {
+      methods: { Flush: () => {}, CanClose: () => true },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Launcher']);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+
+  window._launcher = { render, items: () => bus.call({ to: 'works', path: '/', interface: 'Shell', member: 'LaunchItems' }, []) };
+});
+</script>
+</body>
+</html>

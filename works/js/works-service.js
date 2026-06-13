@@ -5,6 +5,7 @@
 import { connect } from '#abus';
 import { WKS } from './state.js';
 import { openPath } from './surfaces.js';
+import { launchItems, launch } from './launcher.js';
 import { mountFolder, unmountAt } from './mount.js';
 import { applyWorkspaceSettings, readSettings, writeSettings } from './settings-store.js';
 import { evaluateWorksScript } from './extension-loader.js';
@@ -185,6 +186,10 @@ export async function setupWorksService() {
     Shell: {
       methods: {
         OpenPath: (p) => { openPath(p); },
+        // The Launcher (works/surfaces/launcher.html) drives these: the curated,
+        // availability-filtered creatables + the dispatch. Logic in launcher.js.
+        LaunchItems: () => launchItems(),
+        Launch:      (id) => launch(id),
         Reveal:   () => {},    // Chunk 3 — the file tree
         PickFile: () => null,  // Chunk 3+
         Download: () => {},    // Chunk 3+

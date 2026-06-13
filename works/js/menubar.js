@@ -25,6 +25,7 @@ export function setupMenuBar() {
 
   const bar = new MenuBar(el, () => [
     { label: 'File', items: () => [
+      { label: 'Launcher',         action: 'file:launcher' },
       { label: 'New notebook…',    action: 'project:new' },
       { label: 'Import notebook…', action: 'project:import' },
       { label: 'Import book (EPUB)…', action: 'book:import' },
@@ -75,6 +76,7 @@ export function setupMenuBar() {
   ]);
 
   bar.on('action', async (action) => {
+    if (action === 'file:launcher') { spawnSurface('launcher', { title: 'Launcher' }); return; }
     if (action === 'project:new') { newProject('/projects'); return; }
     if (action === 'project:import') { importNotebookViaPicker(); return; }
     if (action === 'book:import') { importEpubViaPicker(); return; }
