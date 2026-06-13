@@ -300,17 +300,20 @@
   <span class="toolbar-sep"></span>
   <span class="cell-ops">
     <button onclick="addCellWithUndo('code','',S.selectedId)" title="add cell below">+</button>
+    <button class="cell-ops-caret" onclick="toggleAddTypeMenu(this)" title="add a cell of a chosen type…">&#x25be;</button>
     <button onclick="moveCell(S.selectedId,-1)" title="move cell up">&#x2191;</button>
     <button onclick="moveCell(S.selectedId,1)" title="move cell down">&#x2193;</button>
     <button onclick="deleteCellWithUndo(S.selectedId)" title="delete cell">&#x2715;</button>
   </span>
-  <span class="transport">
+  <span class="cell-type">
     <select id="cellTypeSelect" class="cell-type-select" onchange="convertSelectedCellType(this.value)" title="selected cell type">
       <option value="code">code</option>
       <option value="md">md</option>
       <option value="css">css</option>
       <option value="html">html</option>
     </select>
+  </span>
+  <span class="transport">
     <button onclick="runSelectedCell()" title="run cell + advance (Shift+Enter)">&#x23f5;</button>
     <button id="autorunBtn" class="autorun-on" onclick="toggleAutorun()" title="reactive mode &#x2014; cells auto-run on edit">&#x25b6;</button>
     <button onclick="runAll()" title="run all cells">&#x25b6;&#x25b6;</button>

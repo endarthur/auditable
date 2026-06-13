@@ -61,5 +61,48 @@ export function convertSelectedCellType(type) {
   selectCell(id);
 }
 
-if (typeof window !== 'undefined') window.convertSelectedCellType = convertSelectedCellType;
+// The ▾ beside the toolbar + : a popup to ADD a cell of a chosen type below the
+// selected one (the four builtins + registered plugin types). Anchored under the
+// caret button; closes on outside click. Inserts via the same `insertAt` the
+// per-cell insert pickers use.
+export function toggleAddTypeMenu(btn) {
+  const existing = document.getElementById('addTypeMenu');
+  if (existing) { existing.remove(); return; }
+  const menu = document.createElement('div');
+  menu.id = 'addTypeMenu';
+  menu.className = 'add-type-menu';
+  const types = [['code', 'code'], ['md', 'md'], ['css', 'css'], ['html', 'html']];
+  const reg = (typeof window !== 'undefined' && window._cellTypes) || {};
+  for (const [name, h] of Object.entries(reg)) {
+    if (h && h.capabilities && h.capabilities.builtin) continue;
+    types.push([name, (h && h.label) || name]);
+  }
+  for (const [type, label] of types) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.addEventListener('click', () => {
+      window.insertAt?.(S.selectedId != null ? S.selectedId : null, type);
+      menu.remove();
+    });
+    menu.appendChild(b);
+  }
+  const r = btn.getBoundingClientRect();
+  menu.style.left = r.left + 'px';
+  menu.style.top = (r.bottom + 2) + 'px';
+  document.body.appendChild(menu);
+  setTimeout(() => {
+    const close = (e) => {
+      if (!menu.contains(e.target) && e.target !== btn) {
+        menu.remove();
+        document.removeEventListener('mousedown', close);
+      }
+    };
+    document.addEventListener('mousedown', close);
+  }, 0);
+}
+
+if (typeof window !== 'undefined') {
+  window.convertSelectedCellType = convertSelectedCellType;
+  window.toggleAddTypeMenu = toggleAddTypeMenu;
+}
 hooks.on('cell:selected', syncSelect);
