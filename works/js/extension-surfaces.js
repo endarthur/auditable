@@ -20,7 +20,7 @@
 import { WKS } from './state.js';
 import {
   registerKind, unregisterKind, registerExtensionSurface,
-  processSurfaceHtml, setSurfaceBlob,
+  processSurfaceHtml, setSurfaceBlob, ensureLibSource,
 } from './surface-registry.js';
 import {
   registerOpenActionForSurface, unregisterOpenActionForSurface,
@@ -42,6 +42,94 @@ function _normalizeSurfacePath(libRoot, file) {
   return libRoot + '/' + rel;
 }
 
+// ── Assembled surfaces (notebook-as-package) ───────────────────────────
+// A surface entry with `assemble: true` is NOT a static .html payload — it's
+// a module-tree package (e.g. @gcu/notebook) whose `assembly.json` lists the
+// modules + shared libs + classics + fragments that make up the surface. We
+// assemble them into the boot.html shell at registration time: build the
+// `_S` registry + import map (the same runtime boot the standalone
+// auditable.html uses), substitute the boot.html marker slots, and blob it.
+// All parsing happened at pack time; this is mechanical string assembly.
+
+// Build the registry boot block — the runtime half of build.js's
+// generateModuleBoot, replicated here. `reg` maps registry name → source;
+// `order` is the import order. Module sources get `</script>`-escaped (they
+// live inside a <script> tag); classics are spliced raw (minified bundles
+// with no literal </script>), matching the standalone.
+function _buildRegistryBoot(reg, order) {
+  const entries = order.map((n) => {
+    let json = JSON.stringify(reg[n]);
+    json = json.replace(/<\/script>/gi, '<\\/script>');
+    return JSON.stringify(n) + ': ' + json;
+  });
+  return '(async () => {\n' +
+    'const _S = {\n' + entries.join(',\n') + '\n};\n' +
+    'const _O = ' + JSON.stringify(order) + ';\n' +
+    'const _U = {};\n' +
+    'for (const n of _O) {\n' +
+    "  _U[n] = URL.createObjectURL(new Blob([_S[n] + '\\n//# sourceURL=auditable/' + n + '.js\\n'], {type: 'application/javascript'}));\n" +
+    '}\n' +
+    "const _m = document.createElement('script');\n" +
+    "_m.type = 'importmap';\n" +
+    'const _im = {};\n' +
+    "for (const n of _O) _im['#' + n] = _U[n];\n" +
+    "_m.textContent = JSON.stringify({imports: _im});\n" +
+    'document.body.appendChild(_m);\n' +
+    "for (const n of _O) await import(_U[n]);\n" +
+    '_m.remove();\n' +
+    '})();\n';
+}
+
+// Assemble an `assemble: true` surface into its final HTML. Reads the
+// package's assembly.json, resolves every entry to a source (own modules from
+// the package dir, `lib` entries from the shell via ensureLibSource, `fragment`
+// entries by splicing another package's module set), reads boot.html, and
+// substitutes the __GCU_CLASSIC_<name>__ / __GCU_REGISTRY__ marker slots.
+async function _assembleSurface(libRoot, vfs) {
+  const assembly = JSON.parse(await vfs.readFile(libRoot + '/assembly.json', 'utf8'));
+  const order = [];
+  const reg = {};   // registry name → source
+
+  for (const e of (assembly.entries || [])) {
+    if (e.kind === 'module') {
+      reg[e.name] = await vfs.readFile(libRoot + '/' + e.file, 'utf8');
+      order.push(e.name);
+    } else if (e.kind === 'lib') {
+      const src = await ensureLibSource(e.name, vfs);
+      if (src == null) throw new Error(`assemble: lib '${e.name}' not provisioned`);
+      const regName = e.as || e.name;
+      reg[regName] = src;
+      order.push(regName);
+    } else if (e.kind === 'fragment') {
+      // Splice the fragment package's module set in at this position. One
+      // level only (fragments don't nest) — its assembly.json is modules-only.
+      const fragRoot = _libPathFor(e.package);
+      const fragAsm = JSON.parse(await vfs.readFile(fragRoot + '/assembly.json', 'utf8'));
+      for (const fe of (fragAsm.entries || [])) {
+        if (fe.kind !== 'module') continue;
+        reg[fe.name] = await vfs.readFile(fragRoot + '/' + fe.file, 'utf8');
+        order.push(fe.name);
+      }
+    }
+    // unknown kinds ignored
+  }
+
+  // Classic IIFE bundles (cm6, acorn) — resolved from the shell, spliced raw.
+  const classics = {};
+  for (const c of (assembly.classics || [])) {
+    const src = await ensureLibSource(c, vfs);
+    if (src == null) throw new Error(`assemble: classic '${c}' not provisioned`);
+    classics[c] = src;
+  }
+
+  let html = await vfs.readFile(libRoot + '/boot.html', 'utf8');
+  for (const c of (assembly.classics || [])) {
+    html = html.replace('/*__GCU_CLASSIC_' + c + '__*/', () => classics[c]);
+  }
+  html = html.replace('/*__GCU_REGISTRY__*/', () => _buildRegistryBoot(reg, order));
+  return html;
+}
+
 const _activeKinds = new Map();  // manifest.name → Set<kind>  (so unregister can find them)
 
 // Register every surface contribution in `manifest.surfaces[]`. Async
@@ -60,22 +148,33 @@ export async function registerExtensionSurfaces(manifest) {
 
   for (const s of manifest.surfaces) {
     if (!s || !s.kind || !s.file) continue;
-    const surfacePath = _normalizeSurfacePath(libRoot, s.file);
-    let html;
-    try {
-      html = await WKS.vfs.readFile(surfacePath, 'utf8');
-    } catch (e) {
-      console.error(`[works] extension-surfaces: cannot read ${surfacePath} for kind "${s.kind}":`, e.message);
-      continue;
-    }
 
-    // Same pipeline built-ins use — lib inlining + theme substitution.
+    // Assembled surface (notebook-as-package): build from the package's
+    // assembly.json rather than processing a static .html payload.
     let processed;
-    try {
-      processed = processSurfaceHtml(html, s.kind);
-    } catch (e) {
-      console.error(`[works] extension-surfaces: processSurfaceHtml failed for kind "${s.kind}":`, e);
-      continue;
+    if (s.assemble) {
+      try {
+        processed = await _assembleSurface(libRoot, WKS.vfs);
+      } catch (e) {
+        console.error(`[works] extension-surfaces: assemble failed for kind "${s.kind}":`, e);
+        continue;
+      }
+    } else {
+      const surfacePath = _normalizeSurfacePath(libRoot, s.file);
+      let html;
+      try {
+        html = await WKS.vfs.readFile(surfacePath, 'utf8');
+      } catch (e) {
+        console.error(`[works] extension-surfaces: cannot read ${surfacePath} for kind "${s.kind}":`, e.message);
+        continue;
+      }
+      // Same pipeline built-ins use — lib inlining + theme substitution.
+      try {
+        processed = processSurfaceHtml(html, s.kind);
+      } catch (e) {
+        console.error(`[works] extension-surfaces: processSurfaceHtml failed for kind "${s.kind}":`, e);
+        continue;
+      }
     }
 
     const url = URL.createObjectURL(new Blob([processed], { type: 'text/html' }));
