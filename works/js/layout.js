@@ -37,9 +37,16 @@ export function setupLayout() {
     renderEmpty() {
       const d = document.createElement('div');
       d.className = 'works-empty';
-      d.innerHTML =
-        '<p>No surfaces open.</p>' +
-        '<p class="works-empty-hint">Open a project from the sidebar.</p>';
+      const p = document.createElement('p');
+      p.textContent = 'No surfaces open.';
+      const hint = document.createElement('p');
+      hint.className = 'works-empty-hint';
+      hint.textContent = 'Open a project from the sidebar, or:';
+      const btn = document.createElement('button');
+      btn.className = 'works-empty-launcher';
+      btn.textContent = '✦  Launcher';
+      btn.addEventListener('click', () => { try { WKS.spawnSurface('launcher', { title: 'Launcher' }); } catch { /* */ } });
+      d.append(p, hint, btn);
       return d;
     },
   });
@@ -56,6 +63,16 @@ export function setupLayout() {
   };
   WKS.rails.on('layout:change', _scheduleSave);
   WKS.rails.on('tab:activate',  _scheduleSave);
+}
+
+// True when no tab is open anywhere (no rail stack has tabs, no float). Drives
+// the boot "open the Launcher on an empty workspace" behavior.
+export function isLayoutEmpty() {
+  const st = WKS.rails && WKS.rails.state;
+  if (!st) return true;
+  const railHasTabs = (st.rails || []).some((r) => (r.stacks || []).some((s) => (s.tabs || []).length));
+  const floatHasTabs = (st.floats || []).some((f) => f.stack && (f.stack.tabs || []).length);
+  return !railHasTabs && !floatHasTabs;
 }
 
 async function saveLayout() {

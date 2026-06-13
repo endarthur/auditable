@@ -7,7 +7,7 @@ import { WKS, setStatus } from './state.js';
 import { setupBus } from './bus.js';
 import { setupWorkspace } from './workspace.js';
 import { migrateLibraryLayout } from './migrate-library.js';
-import { setupLayout, restoreLayout } from './layout.js';
+import { setupLayout, restoreLayout, isLayoutEmpty } from './layout.js';
 import { setupMenuBar } from './menubar.js';
 import { setupTree, refreshTree, newProject, newFile, duplicateProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
@@ -65,6 +65,11 @@ async function boot() {
   await declareInstalledServices();
   setupSurfaces();             // surface-signal tracking
   await restoreLayout();       // reopen the saved tabs
+  // An empty workspace (fresh, or all tabs closed last session) opens the
+  // Launcher — Works' "what do you want to make?" home (JupyterLab-style). A
+  // returning user's saved tabs reopen above, so this only fires when nothing
+  // was restored. (A first-run setup modal, if any, layers over it.)
+  if (isLayoutEmpty()) { try { spawnSurface('launcher', { title: 'Launcher' }); } catch (e) { console.warn('[works] launcher autostart:', e); } }
 
   // Debug + smoke-test handles.
   WKS.spawnSurface = spawnSurface;

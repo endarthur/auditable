@@ -285,6 +285,17 @@ body {
 }
 .works-empty p { margin: 0; }
 .works-empty-hint { font-size: 12px; }
+.works-empty-launcher {
+  margin-top: 10px;
+  font: 600 13px/1 'Space Mono', ui-monospace, monospace;
+  padding: 8px 18px;
+  border: 1px solid var(--au-border);
+  border-radius: 6px;
+  background: var(--au-surface-raised);
+  color: var(--au-fg);
+  cursor: pointer;
+}
+.works-empty-launcher:hover { border-color: var(--au-action); color: var(--au-action); }
 
 .works-panel-placeholder {
   display: flex;
