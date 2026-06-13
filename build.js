@@ -927,7 +927,10 @@ if (target === 'packages') {
     // it to /lib/@gcu/<lib>/source, where ensureLibSource finds it). These let a
     // provisioned shell install a package's dep-closure (build.js bakes them into
     // works/works-all, but works-core must pull them).
-    const LIB_DEPS = ['flowsheet', 'sluice', 'recon', 'omf1'];   // proc is a works-core CORE_LIB (already baked)
+    // sideact/ipynb/template back @gcu/notebook's requires that AREN'T works-core
+    // CORE_LIBS (vfs/abus/markdown/proc/menu/term are baked → the closure skips
+    // them; cm6/acorn are packed as classic libs above).
+    const LIB_DEPS = ['flowsheet', 'sluice', 'recon', 'omf1', 'sideact', 'ipynb', 'template'];   // proc is a works-core CORE_LIB (already baked)
     const LIB_LICENSE = 'MIT License\n\nCopyright (c) 2026 Arthur Endlein Correia / Geoscientific Chaos Union\n\n'
       + 'Permission is hereby granted, free of charge, to any person obtaining a copy of this software, to deal in it '
       + 'without restriction. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.\n';
@@ -993,6 +996,33 @@ if (target === 'packages') {
       fs.writeFileSync(path.join(outDir, rel), bytes);
       entries.push({ name, kind: 'gcupkg', title: name, description, version, license: 'MIT', contributes: ['lib'], size: bytes.length, url: rel, integrity: sriOfBytes(bytes), tags: ['lib'] });
       console.log(`  packed ${name}@${version} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB)`);
+    }
+
+    // Classic IIFE libs (cm6, acorn) — not ext/<lib>/index.js shaped, so packed
+    // here rather than via LIB_DEPS. index.js IS the IIFE bundle → installs to
+    // /lib/@gcu/<lib>/source where ensureLibSource finds it, and the notebook's
+    // `classics` assembly entries resolve through it. (cm6 is also a baked works
+    // lib; baking acorn into works/works-all pairs with phase C's notebook bake.)
+    const auditableVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || '0.0.0';
+    const CLASSIC_LIB_DEPS = [
+      { name: 'cm6',   file: 'ext/cm6/cm6.min.js',       description: 'CodeMirror 6 — bundled editor (IIFE, sets window.CM6)' },
+      { name: 'acorn', file: 'ext/acorn/acorn.min.js',   description: 'Acorn + acorn-typescript — the JS parser for AIR (IIFE, sets window.Acorn)' },
+    ];
+    for (const lib of CLASSIC_LIB_DEPS) {
+      const srcPath = path.join(__dirname, lib.file);
+      if (!fs.existsSync(srcPath)) { console.error(`packages: ${lib.file} missing — build it first`); process.exit(1); }
+      const name = `@gcu/${lib.name}`;
+      const files = {
+        'package.json': Buffer.from(JSON.stringify({ name, version: auditableVersion, description: lib.description, license: 'MIT', main: 'index.js' }, null, 2)),
+        'index.js': fs.readFileSync(srcPath),
+        'LICENSE': Buffer.from(LIB_LICENSE),
+      };
+      const { bytes } = packGcupkg({ name, version: auditableVersion, description: lib.description, license: 'MIT', files, contributes: ['lib'], integrityCovers: ['index.js'], date });
+      const slug = name.replace(/[@/]/g, '_');
+      const rel = `dist/${slug}.gcupkg`;
+      fs.writeFileSync(path.join(outDir, rel), bytes);
+      entries.push({ name, kind: 'gcupkg', title: name, description: lib.description, version: auditableVersion, license: 'MIT', contributes: ['lib'], size: bytes.length, url: rel, integrity: sriOfBytes(bytes), tags: ['lib', 'classic'] });
+      console.log(`  packed ${name}@${auditableVersion} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB)`);
     }
 
     // ── @gcu/air — the fragment package ──────────────────────────────

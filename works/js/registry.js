@@ -152,6 +152,13 @@ async function isLibProvisioned(name) {
   return WKS.vfs.exists('/lib/@gcu/' + name + '/source').catch(() => false);
 }
 
+// Is a full package already provisioned — installed into /lib (baked builtins
+// also unpack there, so this covers both). `name` is a full @scope/pkg.
+async function isPackageProvisioned(name) {
+  const libPath = /^@[\w.-]+\/[\w.-]+$/.test(name) ? '/lib/' + name : '/lib/local/' + name;
+  return WKS.vfs.exists(libPath + '/package.json').catch(() => false);
+}
+
 // Find a catalog entry by exact name across every configured source. Returns the
 // first match (sources are user-ordered; the code source should precede others).
 async function resolveAcrossSources(name) {
@@ -165,20 +172,29 @@ async function resolveAcrossSources(name) {
   return null;
 }
 
-// After installing a package, pull its declared `requires` lib closure from the
-// configured sources — each missing lib installed SRI-verified, with NO extra
-// consent prompt (the top-level package install was already consented; npm-style
-// transitive-dep install). `requires` are read from gcu.services[].requires.
-// Recurses (a lib could declare its own service requires; ours are leaves).
-// `seen` guards diamonds + cycles. Returns the lib names it installed.
+// After installing a package, pull its declared dep-closure from the configured
+// sources — each missing dep installed SRI-verified, with NO extra consent prompt
+// (the top-level package install was already consented; npm-style transitive
+// install). Two declaration shapes:
+//   • LIB requires — bare lib names from gcu.services[].requires AND the
+//     package-level gcu.requires (the notebook's cm6/acorn/vfs/…). Resolved as
+//     @gcu/<name>, installed as lib-packages.
+//   • PACKAGE dependencies — full @scope/pkg names from gcu.dependencies (the
+//     notebook's @gcu/air fragment). Installed via the gcupkg path, recursing
+//     to close THEIR deps too.
+// `seen` guards diamonds + cycles. Returns the dep names it installed.
 export async function installRequiresClosure(pkgLibPath, seen = new Set()) {
   const installed = [];
   let pkg;
   try { pkg = JSON.parse(await WKS.vfs.readFile(pkgLibPath + '/package.json', 'utf8')); }
   catch { return installed; }
-  const services = pkg && pkg.gcu && Array.isArray(pkg.gcu.services) ? pkg.gcu.services : [];
+  const gcu = (pkg && pkg.gcu) || {};
+  const services = Array.isArray(gcu.services) ? gcu.services : [];
+
+  // Lib requires — service-level + package-level, merged.
   const reqs = new Set();
   for (const svc of services) for (const r of (svc.requires || [])) reqs.add(r);
+  for (const r of (Array.isArray(gcu.requires) ? gcu.requires : [])) reqs.add(r);
 
   for (const r of reqs) {
     if (seen.has(r)) continue;
@@ -189,6 +205,18 @@ export async function installRequiresClosure(pkgLibPath, seen = new Set()) {
     setStatus(`installing dependency @gcu/${r}…`);
     const dest = await installEntry(found.entry, found.base, found.sourceUrl, { skipConfirm: true, asDep: true, seen });
     if (dest) installed.push(r);
+  }
+
+  // Package dependencies — full @scope/pkg names (e.g. @gcu/air).
+  for (const dep of (Array.isArray(gcu.dependencies) ? gcu.dependencies : [])) {
+    if (seen.has(dep)) continue;
+    seen.add(dep);
+    if (await isPackageProvisioned(dep)) continue;
+    const found = await resolveAcrossSources(dep);
+    if (!found) { console.warn(`[works] dep-closure: no source has ${dep}`); continue; }
+    setStatus(`installing dependency ${dep}…`);
+    const dest = await installEntry(found.entry, found.base, found.sourceUrl, { skipConfirm: true, asDep: true, seen });
+    if (dest) installed.push(dep);
   }
   return installed;
 }
