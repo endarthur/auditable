@@ -12,7 +12,7 @@
 
 import { Dialog } from '#dialog';
 import { WKS } from './state.js';
-import { listProfiles, isProvisioned, provisionProfile, provisionProfileSpec, getCatalogUrl } from './provision.js';
+import { listProfiles, getProvisioned, provisionProfile, provisionProfileSpec, getCatalogUrl } from './provision.js';
 import { listProfileEntries, installByName, addSourceWithConsent } from './registry.js';
 import { openPath } from './surfaces.js';
 import { readSettings, writeSettings, applyWorkspaceSettings } from './settings-store.js';
@@ -38,8 +38,15 @@ export async function maybeShowFirstRunSetup() {
     if (typeof window !== 'undefined' && window.__NO_AUTO_SETUP__) return;   // test/embed opt-out
     if (!hasProfilesPayload()) return;
     if ((await listProfiles()).length === 0) return;
-    if (await isProvisioned()) return;
-    await showSetupDialog({ firstRun: true });
+    const marker = await getProvisioned();
+    // Fully provisioned (no outstanding failures) → skip. But a PARTIAL provision
+    // (a prior run interrupted mid-setup left failures in the marker) re-offers
+    // setup so the user can finish — pre-pointed at the same profile. The retry
+    // is cheap + recovering (ensurePackage skips installed packages, completes
+    // missing closures). (#5 re-runnable provisioning.)
+    const partial = marker && Array.isArray(marker.failed) && marker.failed.length > 0;
+    if (marker && !partial) return;
+    await showSetupDialog({ firstRun: !marker, retryProfile: partial ? marker.profile : null });
   } catch (e) { console.warn('[works] first-run setup:', e); }
 }
 
@@ -72,6 +79,9 @@ export async function showSetupDialog(opts = {}) {
   let selected = (online && profiles.find((p) => (p.packages || []).length))
     ? profiles.find((p) => (p.packages || []).length).name
     : (profiles.find((p) => !(p.packages || []).length) || profiles[0]).name;
+  // Retry of a partial provision (#5) — pre-select the profile that was being
+  // provisioned so finishing setup is one click ("Re-provision").
+  if (opts.retryProfile && profiles.some((p) => p.name === opts.retryProfile)) selected = opts.retryProfile;
   let custom = false;
   let customUrl = '';
   let customText = null;   // a .gcuprofile loaded from a local file (takes precedence over the URL)

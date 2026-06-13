@@ -183,12 +183,15 @@ async function resolveAcrossSources(name) {
 //   • PACKAGE dependencies — full @scope/pkg names from gcu.dependencies (the
 //     notebook's @gcu/air fragment). Installed via the gcupkg path, recursing
 //     to close THEIR deps too.
-// `seen` guards diamonds + cycles. Returns the dep names it installed.
+// `seen` guards diamonds + cycles. Returns { installed, missing } — `missing`
+// names deps no configured source could provide (or whose install was declined/
+// failed), so a caller can tell a COMPLETE closure from an interrupted one
+// (re-runnable provisioning, #5). An already-provisioned dep counts as neither.
 export async function installRequiresClosure(pkgLibPath, seen = new Set()) {
-  const installed = [];
+  const installed = [], missing = [];
   let pkg;
   try { pkg = JSON.parse(await WKS.vfs.readFile(pkgLibPath + '/package.json', 'utf8')); }
-  catch { return installed; }
+  catch { return { installed, missing }; }
   const gcu = (pkg && pkg.gcu) || {};
   const services = Array.isArray(gcu.services) ? gcu.services : [];
 
@@ -202,10 +205,10 @@ export async function installRequiresClosure(pkgLibPath, seen = new Set()) {
     seen.add(r);
     if (await isLibProvisioned(r)) continue;
     const found = await resolveAcrossSources('@gcu/' + r);
-    if (!found) { console.warn(`[works] dep-closure: no source has @gcu/${r} (service may not activate)`); continue; }
+    if (!found) { console.warn(`[works] dep-closure: no source has @gcu/${r} (service may not activate)`); missing.push('@gcu/' + r); continue; }
     setStatus(`installing dependency @gcu/${r}…`);
     const dest = await installEntry(found.entry, found.base, found.sourceUrl, { skipConfirm: true, asDep: true, seen });
-    if (dest) installed.push(r);
+    if (dest) installed.push(r); else missing.push('@gcu/' + r);
   }
 
   // Package dependencies — full @scope/pkg names (e.g. @gcu/air).
@@ -214,12 +217,38 @@ export async function installRequiresClosure(pkgLibPath, seen = new Set()) {
     seen.add(dep);
     if (await isPackageProvisioned(dep)) continue;
     const found = await resolveAcrossSources(dep);
-    if (!found) { console.warn(`[works] dep-closure: no source has ${dep}`); continue; }
+    if (!found) { console.warn(`[works] dep-closure: no source has ${dep}`); missing.push(dep); continue; }
     setStatus(`installing dependency ${dep}…`);
     const dest = await installEntry(found.entry, found.base, found.sourceUrl, { skipConfirm: true, asDep: true, seen });
-    if (dest) installed.push(dep);
+    if (dest) installed.push(dep); else missing.push(dep);
   }
-  return installed;
+  return { installed, missing };
+}
+
+// Idempotent provision of one package by name — the re-runnable primitive (#5).
+// Already installed: complete a possibly-interrupted dep-closure (present deps
+// skip, missing ones retry) + re-evaluate its works.js (a surface whose libs
+// arrived late now assembles), returning null if the closure still can't
+// complete (so the caller marks it failed → setup re-offers). Not installed:
+// full install across sources (which runs the closure itself). A network drop
+// mid-setup thus leaves a re-run cheap AND recovering.
+export async function ensurePackage(name, preferredUrl) {
+  const already = await isPackageProvisioned(name);
+  const libPath = already
+    ? (/^@[\w.-]+\/[\w.-]+$/.test(name) ? '/lib/' + name : '/lib/local/' + name)
+    : await provisionPackageAcrossSources(name, preferredUrl);
+  if (!libPath) return null;   // fresh install failed outright
+  // Complete + VERIFY the dep-closure (idempotent: provisioned deps skip). On an
+  // already-installed package this recovers a closure a prior run left unfinished;
+  // on a fresh install it confirms installEntry's closure actually completed
+  // (installEntry swallows closure gaps, so a package installed against a catalog
+  // missing one of its deps would otherwise look fully provisioned). missing.length
+  // → not fully usable → null, so the caller marks it failed + setup re-offers.
+  const { missing } = await installRequiresClosure(libPath);
+  // Re-assemble surfaces for an already-installed package whose libs just arrived
+  // (a fresh install already re-evaluated works.js post-closure inside installEntry).
+  if (already) { try { await evaluateWorksScript(name); } catch (e) { console.warn('[works] ensurePackage re-eval failed for ' + name + ':', e); } }
+  return missing.length ? null : libPath;
 }
 
 async function installEntry(entry, base, sourceUrl, opts = {}) {

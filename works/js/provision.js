@@ -11,7 +11,7 @@
 // monolith instead. Nothing here runs at boot unless setup invokes it.
 
 import { WKS, setStatus } from './state.js';
-import { provisionPackageAcrossSources, addSourceSilent, addSourceWithConsent, DEFAULT_SOURCE, _setProfileApply } from './registry.js';
+import { ensurePackage, addSourceSilent, addSourceWithConsent, DEFAULT_SOURCE, _setProfileApply } from './registry.js';
 import { surfaceAvailable, availableKindForExtension } from './surface-registry.js';
 import { getInstalled } from './gcudat-install.js';
 import { readSettings, writeSettings, applyWorkspaceSettings } from './settings-store.js';
@@ -114,9 +114,13 @@ async function _provision(prof, catalogUrl, opts = {}) {
   for (const pkg of prof.packages || []) {
     setStatus('provisioning ' + pkg + '…');
     try {
-      // Resolve across every configured source — the catalog (preferred) first,
-      // then the rest (gcu-library content, the profile's own sources, …).
-      const dest = await provisionPackageAcrossSources(pkg, opts.preferredSource || catalogUrl);
+      // ensurePackage is idempotent + recovering (#5): an already-installed
+      // package skips the re-download but completes any dep-closure a prior
+      // interrupted run left unfinished (and re-assembles its surface); a
+      // missing one installs across sources (catalog preferred, then the rest).
+      // Returns null when an installed package's closure still can't complete →
+      // marked failed so the re-run / setup re-offer picks it up.
+      const dest = await ensurePackage(pkg, opts.preferredSource || catalogUrl);
       if (dest) report.installed.push(pkg); else report.failed.push(pkg);
     } catch (e) {
       console.warn('[works] provision package', pkg, 'failed:', e);
