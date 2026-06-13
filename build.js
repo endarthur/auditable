@@ -938,6 +938,42 @@ if (target === 'packages') {
 
     const entries = [];
 
+    // Emit a multi-module .gcupkg (notebook-as-package): writes modules/<file>
+    // entries + assembly.json + package.json + LICENSE (+ any extraFiles like
+    // boot.html), integrity over all EXECUTED files (assembly.json + every
+    // module source + any .html/.js extra), packs, writes the artifact, and
+    // pushes the catalog entry. Shared by the @gcu/air fragment and @gcu/notebook.
+    const packModulePkg = ({ pkgJson, assembly, moduleFiles, extraFiles = {}, contributes, title, tags }) => {
+      const files = {
+        'package.json': Buffer.from(JSON.stringify(pkgJson, null, 2) + '\n', 'utf8'),
+        'assembly.json': Buffer.from(JSON.stringify(assembly, null, 2) + '\n', 'utf8'),
+        'LICENSE': Buffer.from(LIB_LICENSE),
+      };
+      for (const [k, v] of Object.entries(moduleFiles)) files[k] = Buffer.from(v, 'utf8');
+      for (const [k, v] of Object.entries(extraFiles)) files[k] = Buffer.isBuffer(v) ? v : Buffer.from(v, 'utf8');
+      // Integrity covers everything the runtime executes: the manifest, every
+      // module source, and executable extras (boot.html). The flat npm bundle,
+      // if ever shipped here, would be a non-covered convenience artifact.
+      const integrityCovers = ['assembly.json',
+        ...Object.keys(moduleFiles),
+        ...Object.keys(extraFiles).filter((f) => f.endsWith('.html'))];
+      const { bytes } = packGcupkg({
+        name: pkgJson.name, version: pkgJson.version,
+        description: pkgJson.description, license: pkgJson.license,
+        files, contributes, integrityCovers, date,
+      });
+      const slug = pkgJson.name.replace(/[@/]/g, '_');
+      const rel = `dist/${slug}.gcupkg`;
+      fs.writeFileSync(path.join(outDir, rel), bytes);
+      entries.push({
+        name: pkgJson.name, kind: 'gcupkg', title: title || pkgJson.name,
+        description: pkgJson.description || '', version: pkgJson.version,
+        license: pkgJson.license || 'MIT', contributes, size: bytes.length,
+        url: rel, integrity: sriOfBytes(bytes), tags: tags || [],
+      });
+      console.log(`  packed ${pkgJson.name}@${pkgJson.version} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB, ${Object.keys(moduleFiles).length} modules)`);
+    };
+
     // Lib-packages first (so the catalog lists deps before the packages that need them).
     for (const lib of LIB_DEPS) {
       const idx = path.join(__dirname, 'ext', lib, 'index.js');
@@ -957,6 +993,39 @@ if (target === 'packages') {
       fs.writeFileSync(path.join(outDir, rel), bytes);
       entries.push({ name, kind: 'gcupkg', title: name, description, version, license: 'MIT', contributes: ['lib'], size: bytes.length, url: rel, integrity: sriOfBytes(bytes), tags: ['lib'] });
       console.log(`  packed ${name}@${version} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB)`);
+    }
+
+    // ── @gcu/air — the fragment package ──────────────────────────────
+    // AIR ships as a set of per-file ES modules (real per-file scope, the
+    // deliberate move off the concat bundle) under the #air/... namespace.
+    // The fragment package carries those module sources + an assembly.json
+    // listing them; phase-C's works assembler splices them into the notebook
+    // registry. The flat ext/air/index.js bundle is NOT shipped here — it's
+    // the npm/worker artifact, and the fragment role only uses the modules.
+    {
+      const airSrcDir = path.join(__dirname, 'ext/air/src');
+      if (!fs.existsSync(airSrcDir)) { console.error('packages: ext/air/src missing'); process.exit(1); }
+      const airModules = processExtensionAsRegistry('air', airSrcDir);   // [{ name:'air/types', source }, …]
+      let airVersion = '0.3.0';
+      try { airVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'ext/air/package.json'), 'utf8')).version || airVersion; } catch { /* */ }
+      const moduleFiles = {};
+      const assemblyEntries = [];
+      for (const m of airModules) {
+        const rel = m.name.replace(/^air\//, '');          // 'types', 'lower/js'
+        const file = 'modules/' + rel + '.js';
+        moduleFiles[file] = m.source;                       // verbatim — phase C reads this straight into the registry
+        assemblyEntries.push({ kind: 'module', name: m.name, file });
+      }
+      packModulePkg({
+        pkgJson: {
+          name: '@gcu/air', version: airVersion,
+          description: 'AIR — the GCU compiler IR (fragment package: per-file modules for runtime assembly)',
+          license: 'MIT', gcu: { fragment: { namespace: 'air' } },
+        },
+        assembly: { version: 1, name: '@gcu/air', fragment: { namespace: 'air' }, entries: assemblyEntries },
+        moduleFiles, contributes: ['fragment'],
+        title: 'AIR compiler IR', tags: ['lib', 'fragment', 'compiler'],
+      });
     }
 
     for (const d of DISTRIBUTABLES) {
