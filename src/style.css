@@ -1403,6 +1403,21 @@ body.locked .present-exit { display: none !important; }
 .cell-type-select:hover { background: var(--au-surface-bright); }
 .cell-type-select:disabled { opacity: 0.5; cursor: default; }
 
+/* Find button — restores Ctrl+F discoverability where the notebook menubar is
+   hidden (works). A document-level action, so it sits apart from the cell-ops. */
+.nb-find {
+  border: 1px solid var(--au-border);
+  border-radius: 4px;
+  background: var(--au-surface-raised);
+  color: var(--au-fg-muted);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.nb-find:hover { color: var(--au-fg); border-color: var(--au-fg-soft); }
+
 /* The "add a cell of type…" popup (the ▾ beside +). */
 .add-type-menu {
   position: fixed;
