@@ -12,6 +12,7 @@ import { installGcupkgBytes } from './file-ops.js';
 import { openPath } from './surfaces.js';
 import { destFor } from './paths.js';
 import { getLibSource } from './surface-registry.js';
+import { evaluateWorksScript } from './extension-loader.js';
 
 export const DEFAULT_SOURCE = {
   url: 'https://raw.githubusercontent.com/gentropic/gcu-library/main/registry.json',
@@ -306,6 +307,14 @@ async function installEntry(entry, base, sourceUrl, opts = {}) {
     // e.g. baked in works/works-all). seen threads through recursion to dedup.
     try { await installRequiresClosure(r.libPath, opts.seen || new Set()); }
     catch (e) { console.warn('[works] dep-closure failed for ' + entry.name + ':', e); }
+    // A package whose works.js ASSEMBLES a surface (assemble:true, e.g.
+    // @gcu/notebook) needs its deps present first — but the works.js eval inside
+    // installGcupkgBytes ran BEFORE the closure above, so that first assemble
+    // failed (libs missing). Re-evaluate now that the closure has populated /lib;
+    // idempotent (shellRegisterExtension replaces the prior registration). No-op
+    // for packages without a works.js or whose first assemble already succeeded.
+    try { await evaluateWorksScript(entry.name); }
+    catch (e) { console.warn('[works] re-eval after dep-closure failed for ' + entry.name + ':', e); }
     setStatus('installed ' + entry.name);
     return r.libPath;
   }

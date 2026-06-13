@@ -96,7 +96,7 @@ async function _assembleSurface(libRoot, vfs) {
       order.push(e.name);
     } else if (e.kind === 'lib') {
       const src = await ensureLibSource(e.name, vfs);
-      if (src == null) throw new Error(`assemble: lib '${e.name}' not provisioned`);
+      if (src == null) { const err = new Error(`assemble: lib '${e.name}' not provisioned`); err._depPending = true; throw err; }
       const regName = e.as || e.name;
       reg[regName] = src;
       order.push(regName);
@@ -118,7 +118,7 @@ async function _assembleSurface(libRoot, vfs) {
   const classics = {};
   for (const c of (assembly.classics || [])) {
     const src = await ensureLibSource(c, vfs);
-    if (src == null) throw new Error(`assemble: classic '${c}' not provisioned`);
+    if (src == null) { const err = new Error(`assemble: classic '${c}' not provisioned`); err._depPending = true; throw err; }
     classics[c] = src;
   }
 
@@ -156,7 +156,14 @@ export async function registerExtensionSurfaces(manifest) {
       try {
         processed = await _assembleSurface(libRoot, WKS.vfs);
       } catch (e) {
-        console.error(`[works] extension-surfaces: assemble failed for kind "${s.kind}":`, e);
+        // A dep not yet in /lib means we're mid-install, before the dep-closure
+        // ran — installEntry re-evaluates this works.js after the closure, when
+        // the assemble succeeds. Expected + recovered, so info not error.
+        if (e && e._depPending) {
+          console.info(`[works] notebook assemble deferred (deps installing): ${e.message}`);
+        } else {
+          console.error(`[works] extension-surfaces: assemble failed for kind "${s.kind}":`, e);
+        }
         continue;
       }
     } else {

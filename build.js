@@ -307,7 +307,7 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   // precede 'loom'/'strata'/'recon'/'archive' — the runtime surface inliner
   // iterates in this order, and inlining strata-app first is what brings its
   // bare @gcu/* imports into the surface text so those libs inline after it.
-  const SHARED_LIBS_BASE = ['abus', 'surface', 'strata-app', 'loom', 'strata', 'over', 'plate', 'sift', 'vfs', 'term', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
+  const SHARED_LIBS_BASE = ['abus', 'surface', 'strata-app', 'loom', 'strata', 'over', 'plate', 'sift', 'vfs', 'term', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'acorn', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).
@@ -377,6 +377,11 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     // the standard <script id="lib-cm6"> path; only the inlining
     // mechanism differs.
     cm6: 'ext/cm6/cm6.min.js',
+    // Acorn (+ acorn-typescript) — the JS parser for AIR. Also a classic IIFE
+    // (sets window.Acorn); the notebook package's `classics` assembly entries
+    // resolve it via ensureLibSource. works/works-all bake it (works-core
+    // provisions @gcu/acorn from the catalog).
+    acorn: 'ext/acorn/acorn.min.js',
   };
 
   // For SHARED_LIB_SOURCE_OVERRIDES entries (like 'markdown' from
@@ -677,6 +682,17 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
       }
       packages.push({ name: pkgJson.name, version: pkgJson.version || '0.0.0', files });
     }
+
+    // @gcu/air (fragment) + @gcu/notebook (surface) — GENERATED packages (not
+    // source dirs), built by the shared hoisted builders (the same file maps
+    // the packages catalog ships). Baked into /lib so works/works-all carry the
+    // notebook + its AIR fragment; works-core omits this payload and provisions
+    // them from the catalog instead. Their lib deps (cm6/acorn baked via
+    // SHARED_LIBS_BASE; vfs/abus/… already baked libs) resolve at assemble time.
+    for (const spec of [buildAirPackageFiles(), buildNotebookPackageFiles()]) {
+      packages.push({ name: spec.name, version: spec.version, files: spec.files });
+    }
+
     if (packages.length === 0) return '';
     console.log(`works: bundling ${packages.length} builtin package(s) (${packages.map((p) => p.name + ' v' + p.version).join(', ')})`);
     const json = JSON.stringify({ version: 1, packages });
@@ -805,7 +821,10 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     { kind: 'plate',     file: 'works/surfaces/plate.html',     deps: ['abus', 'surface', 'plate', 'strata', 'recon', 'archive'] },
     { kind: 'hex',       file: 'works/surfaces/hex.html',       deps: ['abus'] },
     { kind: 'encode',    file: 'works/surfaces/encode.html',    deps: ['abus'] },
-    { kind: 'notebook',  file: 'auditable.html',                deps: null },
+    // NB: the 'notebook' surface is no longer a built-in payload (auditable.html)
+    // — it ships as the @gcu/notebook builtin package (pkg-builtins-payload),
+    // assembled at spawn from its module tree. works no longer depends on a
+    // pre-built auditable.html.
   ]) {
     if (isWorksCore && !CORE_KINDS.has(s.kind)) continue;
     if (isWorksCore && s.deps) {
@@ -813,18 +832,14 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     }
     const sp = path.join(__dirname, s.file);
     if (!fs.existsSync(sp)) {
-      console.error(`Error: surface source ${s.file} not found`
-        + (s.kind === 'notebook' ? ' — build auditable.html first (node build.js).' : '.'));
+      console.error(`Error: surface source ${s.file} not found.`);
       process.exit(1);
     }
     let surfaceHtml = fs.readFileSync(sp, 'utf8');
     if (s.deps) surfaceHtml = rewriteSurfaceToDynamic(surfaceHtml, s.kind, s.deps);
     if (s.extras === 'terminal') surfaceHtml = buildTerminalSurfaceCss(surfaceHtml);
-    // Notebook is auditable.html — uses its own theme cascade, skip injection.
-    if (s.kind !== 'notebook') {
-      surfaceHtml = injectSharedTheme(surfaceHtml);
-      surfaceHtml = injectComponentCss(surfaceHtml, s.deps);
-    }
+    surfaceHtml = injectSharedTheme(surfaceHtml);
+    surfaceHtml = injectComponentCss(surfaceHtml, s.deps);
     const gz = worksZlib.gzipSync(Buffer.from(surfaceHtml, 'utf8'));
     const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
     surfaceParts.push(`<script type="text/plain" id="surface-${s.kind}">\n${b64}\n</script>`);
@@ -941,40 +956,32 @@ if (target === 'packages') {
 
     const entries = [];
 
-    // Emit a multi-module .gcupkg (notebook-as-package): writes modules/<file>
-    // entries + assembly.json + package.json + LICENSE (+ any extraFiles like
-    // boot.html), integrity over all EXECUTED files (assembly.json + every
-    // module source + any .html/.js extra), packs, writes the artifact, and
-    // pushes the catalog entry. Shared by the @gcu/air fragment and @gcu/notebook.
-    const packModulePkg = ({ pkgJson, assembly, moduleFiles, extraFiles = {}, contributes, title, tags }) => {
-      const files = {
-        'package.json': Buffer.from(JSON.stringify(pkgJson, null, 2) + '\n', 'utf8'),
-        'assembly.json': Buffer.from(JSON.stringify(assembly, null, 2) + '\n', 'utf8'),
-        'LICENSE': Buffer.from(LIB_LICENSE),
-      };
-      for (const [k, v] of Object.entries(moduleFiles)) files[k] = Buffer.from(v, 'utf8');
-      for (const [k, v] of Object.entries(extraFiles)) files[k] = Buffer.isBuffer(v) ? v : Buffer.from(v, 'utf8');
-      // Integrity covers everything the runtime executes: the manifest, every
-      // module source, and executable extras (boot.html). The flat npm bundle,
-      // if ever shipped here, would be a non-covered convenience artifact.
-      const integrityCovers = ['assembly.json',
-        ...Object.keys(moduleFiles),
-        ...Object.keys(extraFiles).filter((f) => f.endsWith('.html') || f.endsWith('.js'))];
+    // Pack a builder-produced package spec into a .gcupkg catalog entry. `spec`
+    // is { name, version, description, license, files: {rel→source},
+    // integrityCovers, contributes, title, tags } — the COMPLETE files map the
+    // shared builders (buildAirPackageFiles / buildNotebookPackageFiles)
+    // assembled, the same map the works builtin payload bakes. Integrity covers
+    // whatever the builder declared (assembly.json + module sources + executable
+    // extras); the flat npm bundle, if ever shipped, would be non-covered.
+    const packSpec = (spec) => {
+      const fileBufs = {};
+      for (const [k, v] of Object.entries(spec.files)) fileBufs[k] = Buffer.isBuffer(v) ? v : Buffer.from(v, 'utf8');
       const { bytes } = packGcupkg({
-        name: pkgJson.name, version: pkgJson.version,
-        description: pkgJson.description, license: pkgJson.license,
-        files, contributes, integrityCovers, date,
+        name: spec.name, version: spec.version, description: spec.description,
+        license: spec.license, files: fileBufs, contributes: spec.contributes,
+        integrityCovers: spec.integrityCovers, date,
       });
-      const slug = pkgJson.name.replace(/[@/]/g, '_');
+      const slug = spec.name.replace(/[@/]/g, '_');
       const rel = `dist/${slug}.gcupkg`;
       fs.writeFileSync(path.join(outDir, rel), bytes);
+      const moduleCount = Object.keys(spec.files).filter((f) => f.startsWith('modules/')).length;
       entries.push({
-        name: pkgJson.name, kind: 'gcupkg', title: title || pkgJson.name,
-        description: pkgJson.description || '', version: pkgJson.version,
-        license: pkgJson.license || 'MIT', contributes, size: bytes.length,
-        url: rel, integrity: sriOfBytes(bytes), tags: tags || [],
+        name: spec.name, kind: 'gcupkg', title: spec.title || spec.name,
+        description: spec.description || '', version: spec.version,
+        license: spec.license || 'MIT', contributes: spec.contributes, size: bytes.length,
+        url: rel, integrity: sriOfBytes(bytes), tags: spec.tags || [],
       });
-      console.log(`  packed ${pkgJson.name}@${pkgJson.version} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB, ${Object.keys(moduleFiles).length} modules)`);
+      console.log(`  packed ${spec.name}@${spec.version} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB, ${moduleCount} modules)`);
     };
 
     // Lib-packages first (so the catalog lists deps before the packages that need them).
@@ -1025,121 +1032,11 @@ if (target === 'packages') {
       console.log(`  packed ${name}@${auditableVersion} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB)`);
     }
 
-    // ── @gcu/air — the fragment package ──────────────────────────────
-    // AIR ships as a set of per-file ES modules (real per-file scope, the
-    // deliberate move off the concat bundle) under the #air/... namespace.
-    // The fragment package carries those module sources + an assembly.json
-    // listing them; phase-C's works assembler splices them into the notebook
-    // registry. The flat ext/air/index.js bundle is NOT shipped here — it's
-    // the npm/worker artifact, and the fragment role only uses the modules.
-    {
-      const airSrcDir = path.join(__dirname, 'ext/air/src');
-      if (!fs.existsSync(airSrcDir)) { console.error('packages: ext/air/src missing'); process.exit(1); }
-      const airModules = processExtensionAsRegistry('air', airSrcDir);   // [{ name:'air/types', source }, …]
-      let airVersion = '0.3.0';
-      try { airVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'ext/air/package.json'), 'utf8')).version || airVersion; } catch { /* */ }
-      const moduleFiles = {};
-      const assemblyEntries = [];
-      for (const m of airModules) {
-        const rel = m.name.replace(/^air\//, '');          // 'types', 'lower/js'
-        const file = 'modules/' + rel + '.js';
-        moduleFiles[file] = m.source;                       // verbatim — phase C reads this straight into the registry
-        assemblyEntries.push({ kind: 'module', name: m.name, file });
-      }
-      packModulePkg({
-        pkgJson: {
-          name: '@gcu/air', version: airVersion,
-          description: 'AIR — the GCU compiler IR (fragment package: per-file modules for runtime assembly)',
-          license: 'MIT', gcu: { fragment: { namespace: 'air' } },
-        },
-        assembly: { version: 1, name: '@gcu/air', fragment: { namespace: 'air' }, entries: assemblyEntries },
-        moduleFiles, contributes: ['fragment'],
-        title: 'AIR compiler IR', tags: ['lib', 'fragment', 'compiler'],
-      });
-    }
-
-    // ── @gcu/notebook — the auditable notebook, as a package ─────────
-    // buildAuditableRegistry's module list emitted as files + an assembly.json
-    // the phase-C works assembler turns into the boot. Shared libs become `lib`
-    // entries (resolved from the shell, not shipped); AIR becomes a `fragment`
-    // entry (@gcu/air); cm6/acorn are `classics`. boot.html is the standalone
-    // shell with marker slots where the runtime scripts get substituted.
-    {
-      const nbSrcDir = path.join(__dirname, 'src');
-      const nbJsDir = path.join(nbSrcDir, 'js');
-      const nbAppDir = path.join(nbSrcDir, 'app');
-      const nbAppRuntime = buildAppRuntime(nbAppDir);
-      const { modules: nbModules } = buildAuditableRegistry({
-        lean, jsDir: nbJsDir, srcDir: nbSrcDir, appRuntime: nbAppRuntime, execModeArg, runOnLoadArg,
-      });
-      const { appCss, editorCss } = buildNotebookCss(nbSrcDir);
-      const template = fs.readFileSync(path.join(nbSrcDir, 'template.html'), 'utf8');
-      const bootHtml = assembleNotebookHtml({
-        appCss, editorCss, template,
-        runtime: [
-          '<script>/*__GCU_CLASSIC_cm6__*/</script>',
-          '<script>/*__GCU_CLASSIC_acorn__*/</script>',
-          '<script>/*__GCU_REGISTRY__*/</script>',
-        ].join('\n'),
-      });
-
-      // Works libs the notebook shares with the shell — NOT emitted as files
-      // (resolved via ensureLibSource at spawn). registry-name == lib-name
-      // except markdown (the notebook imports #gcu-markdown).
-      const NB_LIBS = [
-        { name: 'vfs' }, { name: 'abus' }, { name: 'sideact' },
-        { name: 'markdown', as: 'gcu-markdown' }, { name: 'proc' },
-        { name: 'menu' }, { name: 'term' }, { name: 'ipynb' }, { name: 'template' },
-      ];
-      const libByRegName = new Map(NB_LIBS.map((l) => [l.as || l.name, l]));
-
-      const nbEntries = [];
-      const nbModuleFiles = {};
-      let fragmentEmitted = false;
-      for (const m of nbModules) {
-        if (m.name.startsWith('air/')) {
-          // AIR ships via the @gcu/air fragment — one entry at its array position.
-          if (!fragmentEmitted) { nbEntries.push({ kind: 'fragment', package: '@gcu/air' }); fragmentEmitted = true; }
-          continue;
-        }
-        const lib = libByRegName.get(m.name);
-        if (lib) { nbEntries.push(lib.as ? { kind: 'lib', name: lib.name, as: lib.as } : { kind: 'lib', name: lib.name }); continue; }
-        const file = 'modules/' + m.name + '.js';
-        nbModuleFiles[file] = m.source;
-        nbEntries.push({ kind: 'module', name: m.name, file });
-      }
-
-      const nbVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || '0.0.0';
-      const worksRegister =
-        '// ⚠ GENERATED — @gcu/notebook shell registration (surface kind \'notebook\').\n' +
-        'if (typeof window !== \'undefined\' && window.auditable && window.auditable.registerExtension) {\n' +
-        '  window.auditable.registerExtension({\n' +
-        '    name: \'@gcu/notebook\', version: ' + JSON.stringify(nbVersion) + ',\n' +
-        '    description: \'Auditable notebook — the reactive computational notebook surface.\',\n' +
-        '    surfaces: [{ kind: \'notebook\', label: \'Notebook\', icon: \'▤\', file: \'boot.html\', assemble: true, extensions: [\'html\', \'txt\'] }],\n' +
-        '  });\n}\n';
-
-      packModulePkg({
-        pkgJson: {
-          name: '@gcu/notebook', version: nbVersion,
-          description: 'Auditable notebook — the reactive computational notebook, as a Works surface package.',
-          license: 'MIT',
-          gcu: {
-            surfaces: [{ kind: 'notebook', file: 'boot.html', assemble: true, label: 'Notebook', icon: '▤', extensions: ['html', 'txt'] }],
-            requires: ['cm6', 'acorn', 'vfs', 'abus', 'sideact', 'markdown', 'proc', 'menu', 'term', 'ipynb', 'template'],
-            dependencies: ['@gcu/air'],
-          },
-        },
-        assembly: {
-          version: 1, name: '@gcu/notebook', classics: ['cm6', 'acorn'],
-          entries: nbEntries, injected: { version: nbVersion, buildDate },
-        },
-        moduleFiles: nbModuleFiles,
-        extraFiles: { 'boot.html': bootHtml, 'works.js': worksRegister },
-        contributes: ['surface'],
-        title: 'Auditable Notebook', tags: ['notebook', 'surface', 'flagship'],
-      });
-    }
+    // @gcu/air (fragment) + @gcu/notebook (surface) — built by the shared
+    // hoisted builders (the same content the works builtin payload bakes), here
+    // packed into catalog .gcupkgs. air first (the notebook depends on it).
+    packSpec(buildAirPackageFiles());
+    packSpec(buildNotebookPackageFiles());
 
     for (const d of DISTRIBUTABLES) {
       const pkgDir = path.join(__dirname, d.dir);
@@ -2095,6 +1992,125 @@ ${runtime}
 <!-- good luck out there -->
 </html>
 `;
+}
+
+// ── Notebook-as-package content builders (shared) ──
+// Build the @gcu/air and @gcu/notebook package FILE MAPS — the single source
+// of truth for the emitted package content, consumed by TWO sites: the
+// `packages` target (packs each into a .gcupkg catalog entry) and the
+// works/works-all builtin-packages payload (bakes the same files into /lib).
+// Pack-agnostic: each returns { name, version, description, license, files,
+// integrityCovers, contributes, title, tags } where files is the complete
+// { rel → source } map. Hoisted so both target branches can call them.
+function _gcuLicenseText() {
+  return 'MIT License\n\nCopyright (c) 2026 Arthur Endlein Correia / Geoscientific Chaos Union\n\n'
+    + 'Permission is hereby granted, free of charge, to any person obtaining a copy of this software, to deal in it '
+    + 'without restriction. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.\n';
+}
+
+function buildAirPackageFiles() {
+  const airSrcDir = path.join(__dirname, 'ext/air/src');
+  if (!fs.existsSync(airSrcDir)) throw new Error('buildAirPackageFiles: ext/air/src missing');
+  const airModules = processExtensionAsRegistry('air', airSrcDir);   // [{ name:'air/types', source }, …]
+  let version = '0.3.0';
+  try { version = JSON.parse(fs.readFileSync(path.join(__dirname, 'ext/air/package.json'), 'utf8')).version || version; } catch { /* */ }
+  const files = {};
+  const entries = [];
+  for (const m of airModules) {
+    const rel = m.name.replace(/^air\//, '');          // 'types', 'lower/js'
+    const file = 'modules/' + rel + '.js';
+    files[file] = m.source;                            // verbatim — phase C reads straight into the registry
+    entries.push({ kind: 'module', name: m.name, file });
+  }
+  const description = 'AIR — the GCU compiler IR (fragment package: per-file modules for runtime assembly)';
+  const pkgJson = { name: '@gcu/air', version, description, license: 'MIT', gcu: { fragment: { namespace: 'air' } } };
+  const assembly = { version: 1, name: '@gcu/air', fragment: { namespace: 'air' }, entries };
+  files['package.json'] = JSON.stringify(pkgJson, null, 2) + '\n';
+  files['assembly.json'] = JSON.stringify(assembly, null, 2) + '\n';
+  files['LICENSE'] = _gcuLicenseText();
+  const integrityCovers = ['assembly.json', ...Object.keys(files).filter((f) => f.startsWith('modules/'))];
+  return { name: '@gcu/air', version, description, license: 'MIT', files, integrityCovers,
+    contributes: ['fragment'], title: 'AIR compiler IR', tags: ['lib', 'fragment', 'compiler'] };
+}
+
+function buildNotebookPackageFiles() {
+  const nbSrcDir = path.join(__dirname, 'src');
+  const nbJsDir = path.join(nbSrcDir, 'js');
+  const nbAppDir = path.join(nbSrcDir, 'app');
+  const nbAppRuntime = buildAppRuntime(nbAppDir);
+  const { modules: nbModules } = buildAuditableRegistry({
+    lean, jsDir: nbJsDir, srcDir: nbSrcDir, appRuntime: nbAppRuntime, execModeArg, runOnLoadArg,
+  });
+  const { appCss, editorCss } = buildNotebookCss(nbSrcDir);
+  const template = fs.readFileSync(path.join(nbSrcDir, 'template.html'), 'utf8');
+  const bootHtml = assembleNotebookHtml({
+    appCss, editorCss, template,
+    runtime: [
+      '<script>/*__GCU_CLASSIC_cm6__*/</script>',
+      '<script>/*__GCU_CLASSIC_acorn__*/</script>',
+      '<script>/*__GCU_REGISTRY__*/</script>',
+    ].join('\n'),
+  });
+
+  // Works libs shared with the shell — NOT emitted as files (resolved via
+  // ensureLibSource at spawn). registry-name == lib-name except markdown.
+  const NB_LIBS = [
+    { name: 'vfs' }, { name: 'abus' }, { name: 'sideact' },
+    { name: 'markdown', as: 'gcu-markdown' }, { name: 'proc' },
+    { name: 'menu' }, { name: 'term' }, { name: 'ipynb' }, { name: 'template' },
+  ];
+  const libByRegName = new Map(NB_LIBS.map((l) => [l.as || l.name, l]));
+
+  const entries = [];
+  const files = {};
+  let fragmentEmitted = false;
+  for (const m of nbModules) {
+    if (m.name.startsWith('air/')) {
+      if (!fragmentEmitted) { entries.push({ kind: 'fragment', package: '@gcu/air' }); fragmentEmitted = true; }
+      continue;   // AIR ships via the @gcu/air fragment
+    }
+    const lib = libByRegName.get(m.name);
+    if (lib) { entries.push(lib.as ? { kind: 'lib', name: lib.name, as: lib.as } : { kind: 'lib', name: lib.name }); continue; }
+    const file = 'modules/' + m.name + '.js';
+    files[file] = m.source;
+    entries.push({ kind: 'module', name: m.name, file });
+  }
+
+  const version = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || '0.0.0';
+  const buildDate = buildDateFromGit();
+  // Top-level await: the surface ASSEMBLES at registration (reads its module
+  // tree + libs), so importing this works.js must wait for that to finish —
+  // otherwise evaluateWorksScript resolves before the blob is ready and a
+  // just-provisioned notebook reports unavailable. registerExtensionSurfaces
+  // swallows a missing-dep assemble error (logs, no blob); the re-eval after
+  // the dep-closure then assembles for real.
+  const worksRegister =
+    '// ⚠ GENERATED — @gcu/notebook shell registration (surface kind \'notebook\').\n' +
+    'if (typeof window !== \'undefined\' && window.auditable && window.auditable.registerExtension) {\n' +
+    '  await window.auditable.registerExtension({\n' +
+    '    name: \'@gcu/notebook\', version: ' + JSON.stringify(version) + ',\n' +
+    '    description: \'Auditable notebook — the reactive computational notebook surface.\',\n' +
+    '    surfaces: [{ kind: \'notebook\', label: \'Notebook\', icon: \'▦\', file: \'boot.html\', assemble: true, extensions: [] }],\n' +
+    '  });\n}\n';
+  const description = 'Auditable notebook — the reactive computational notebook, as a Works surface package.';
+  const pkgJson = {
+    name: '@gcu/notebook', version, description, license: 'MIT',
+    gcu: {
+      surfaces: [{ kind: 'notebook', file: 'boot.html', assemble: true, label: 'Notebook', icon: '▦', extensions: [] }],
+      requires: ['cm6', 'acorn', 'vfs', 'abus', 'sideact', 'markdown', 'proc', 'menu', 'term', 'ipynb', 'template'],
+      dependencies: ['@gcu/air'],
+    },
+  };
+  const assembly = { version: 1, name: '@gcu/notebook', classics: ['cm6', 'acorn'], entries, injected: { version, buildDate } };
+  files['package.json'] = JSON.stringify(pkgJson, null, 2) + '\n';
+  files['assembly.json'] = JSON.stringify(assembly, null, 2) + '\n';
+  files['boot.html'] = bootHtml;
+  files['works.js'] = worksRegister;
+  files['LICENSE'] = _gcuLicenseText();
+  const integrityCovers = ['assembly.json',
+    ...Object.keys(files).filter((f) => f.startsWith('modules/')), 'boot.html', 'works.js'];
+  return { name: '@gcu/notebook', version, description, license: 'MIT', files, integrityCovers,
+    contributes: ['surface'], title: 'Auditable Notebook', tags: ['notebook', 'surface', 'flagship'] };
 }
 
 // ── Build module registry (shared assembler) ──

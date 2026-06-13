@@ -417,6 +417,10 @@ function _inlineLibsIntoSurface(text, kind) {
 // ~tens of ms total, so boot stays light.
 export async function decompressSurfaces() {
   for (const kind of KINDS.keys()) {
+    // 'notebook' is registered as a routing stub (below) but its surface ships
+    // as the @gcu/notebook package (assembled at spawn), not a built-in payload
+    // — so a missing surface-notebook element is expected, not a bug.
+    if (kind === 'notebook') continue;
     const el = document.getElementById('surface-' + kind);
     if (!el) { console.warn('[works] no embedded payload for surface:', kind); continue; }
     let text = await _decompressEl(el);
