@@ -1377,6 +1377,23 @@ body.locked .present-exit { display: none !important; }
 }
 .cell-type-select:hover { background: var(--au-surface-bright); }
 .cell-type-select:disabled { opacity: 0.5; cursor: default; }
+/* Cell-ops button group (add / move / delete) — part of the slim cell toolbar.
+   Mirrors the transport's bordered-group look. */
+.cell-ops {
+  display: inline-flex;
+  border: 1px solid var(--au-border);
+  margin-right: 6px;
+}
+.cell-ops button {
+  border: none;
+  border-right: 1px solid var(--au-border);
+  padding: 4px 8px;
+  background: none;
+  color: var(--au-fg-muted);
+  cursor: pointer;
+}
+.cell-ops button:last-child { border-right: none; }
+.cell-ops button:hover { color: var(--au-fg); background: var(--au-surface-raised); }
 .transport button.autorun-on {
   background: var(--au-success);
   color: #fff;
@@ -2528,10 +2545,14 @@ body.presenting .find-bar { display: none !important; }
 .in-works [data-works-hide] {
   display: none !important;
 }
-/* Push transport to the far right; menubar naturally anchors at the
-   left now that the separators between are gone. */
+/* Thin-canvas: the notebook's own menubar is hidden in Works — the shell
+   menubar owns File/Run/document ops (contextual to the active notebook over
+   A-Bus), and the slim cell toolbar (cell-ops + cell-type changer + transport)
+   covers the rest. What's left is a focused, left-anchored cell toolbar. */
+.in-works .menubar { display: none !important; }
+.in-works .cell-ops { margin-left: 0; }
 .in-works .transport {
-  margin-left: auto;
+  margin-left: 0;
 }
 
 /* Statusbar in Works: keep notebook-state icons (encryption lock, MCP)

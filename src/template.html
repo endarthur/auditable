@@ -298,6 +298,12 @@
   </span>
   <span class="toolbar-status" id="toolbarStatus"></span>
   <span class="toolbar-sep"></span>
+  <span class="cell-ops">
+    <button onclick="addCellWithUndo('code','',S.selectedId)" title="add cell below">+</button>
+    <button onclick="moveCell(S.selectedId,-1)" title="move cell up">&#x2191;</button>
+    <button onclick="moveCell(S.selectedId,1)" title="move cell down">&#x2193;</button>
+    <button onclick="deleteCellWithUndo(S.selectedId)" title="delete cell">&#x2715;</button>
+  </span>
   <span class="transport">
     <select id="cellTypeSelect" class="cell-type-select" onchange="convertSelectedCellType(this.value)" title="selected cell type">
       <option value="code">code</option>

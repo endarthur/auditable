@@ -3,6 +3,7 @@
 import { MenuBar } from '#menu';
 import { WKS, setStatus } from './state.js';
 import { spawnSurface, openPath, getActiveSurface, callActiveNotebook } from './surfaces.js';
+import { exportProject, exportProjectAsIpynb } from './project-export.js';
 import { kindDef } from './surface-registry.js';
 import { hasProfilesPayload, showSetupDialog } from './setup.js';
 import { newProject } from './tree.js';
@@ -43,6 +44,13 @@ export function setupMenuBar() {
       { label: 'Export workspace…',          action: 'workspace:export' },
       { label: 'Export profile…',            action: 'workspace:export-profile' },
       { label: 'Export THIRD-PARTY-NOTICES…', action: 'workspace:export-notices' },
+      // Contextual: export the ACTIVE notebook as a standalone file (the
+      // notebook's own File→Export is hidden in works; the shell owns it).
+      ...(getActiveSurface()?.kind === 'notebook' ? [
+        '---',
+        { label: 'Export notebook (.html)',  action: 'nb:export-html' },
+        { label: 'Export notebook (.ipynb)', action: 'nb:export-ipynb' },
+      ] : []),
     ] },
     { label: 'View', items: () => [
       { label: 'Toggle sidebar', action: 'view:sidebar' },
@@ -97,6 +105,8 @@ export function setupMenuBar() {
     if (action === 'nb:run-cell')        { callActiveNotebook('RunSelected'); return; }
     if (action === 'nb:toggle-reactive') { callActiveNotebook('ToggleReactive'); return; }
     if (action === 'nb:clear-outputs')   { callActiveNotebook('ClearOutputs'); return; }
+    if (action === 'nb:export-html')  { const r = getActiveSurface(); if (r) await exportProject(r.path); return; }
+    if (action === 'nb:export-ipynb') { const r = getActiveSurface(); if (r) await exportProjectAsIpynb(r.path); return; }
     if (action === 'project:new') { newProject('/projects'); return; }
     if (action === 'project:import') { importNotebookViaPicker(); return; }
     if (action === 'book:import') { importEpubViaPicker(); return; }
