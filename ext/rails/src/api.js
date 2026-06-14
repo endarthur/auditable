@@ -73,6 +73,11 @@ export function createRails(host, options = {}) {
     dragThreshold: options.dragThreshold ?? 4,
     tabPosition: options.tabPosition ?? 'top',
     dropZones: options.dropZones ?? {},
+    // Opt-in "+" button at the end of every tab strip. When true, each strip
+    // renders a new-tab affordance that emits `strip:newtab` ({ stack }); the
+    // consumer decides what to spawn (e.g. a launcher) into that stack. Off by
+    // default so existing rails hosts are unchanged.
+    newTabButton: options.newTabButton ?? false,
   };
 
   const events = new Map();

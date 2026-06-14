@@ -160,6 +160,11 @@
 }
 .rails-overflow-btn[hidden] { display: none; }
 
+.rails-newtab-btn {
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
 .rails-strip:focus { outline: none; }
 
 .rails-tab {

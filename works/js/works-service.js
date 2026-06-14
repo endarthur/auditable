@@ -6,6 +6,7 @@ import { connect } from '#abus';
 import { WKS } from './state.js';
 import { openPath } from './surfaces.js';
 import { launchItems, launch } from './launcher.js';
+import { onSurfacesChanged } from './surface-registry.js';
 import { mountFolder, unmountAt } from './mount.js';
 import { applyWorkspaceSettings, readSettings, writeSettings } from './settings-store.js';
 import { evaluateWorksScript } from './extension-loader.js';
@@ -262,7 +263,7 @@ export async function setupWorksService() {
           return o;
         },
       },
-      signals: ['MountChanged', 'SettingsChanged', 'NotebookPublicChanged'],
+      signals: ['MountChanged', 'SettingsChanged', 'NotebookPublicChanged', 'LaunchItemsChanged'],
     },
     // Workspace-level settings (theme, font, …) stored at /etc/works.json.
     // The settings surface owns the UI; any other surface (notebook in
@@ -347,4 +348,19 @@ export async function setupWorksService() {
   vfs.on('unmount', (ev) => bus.signal(
     { path: '/', interface: 'Shell', member: 'MountChanged' },
     [ev.path, 'unmount']));
+
+  // Surface availability changes → Shell.LaunchItemsChanged. A provision /
+  // install / uninstall flips surfaceAvailable for one or more kinds, which
+  // changes what Shell.LaunchItems returns. The Launcher surface subscribes
+  // and re-queries so its grid stays live without a reload. Microtask-coalesced
+  // so a multi-package provision fires the signal once, not per setSurfaceBlob.
+  let _launchSignalQueued = false;
+  onSurfacesChanged(() => {
+    if (_launchSignalQueued) return;
+    _launchSignalQueued = true;
+    Promise.resolve().then(() => {
+      _launchSignalQueued = false;
+      bus.signal({ path: '/', interface: 'Shell', member: 'LaunchItemsChanged' }, []);
+    });
+  });
 }

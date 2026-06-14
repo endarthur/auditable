@@ -7,7 +7,7 @@
 
 import { createRails } from '#rails';
 import { WKS } from './state.js';
-import { createSurface } from './surfaces.js';
+import { createSurface, spawnSurface } from './surfaces.js';
 
 const LAYOUT_PATH = '/home/.works/layout.json';
 let _saveTimer = null;
@@ -17,6 +17,7 @@ export function setupLayout() {
 
   WKS.rails = createRails(el, {
     initialState: { rails: [], floats: [] },
+    newTabButton: true,   // "+" at the end of every strip → opens the Launcher
 
     renderPanel(tab) {
       if (tab.kind === 'surface') {
@@ -63,6 +64,14 @@ export function setupLayout() {
   };
   WKS.rails.on('layout:change', _scheduleSave);
   WKS.rails.on('tab:activate',  _scheduleSave);
+
+  // The strip "+" button → a Launcher in THAT stack (the user's "what next?"
+  // entry point, per-tab-bar). spawnSurface targets the originating stack so
+  // the launcher lands where the click was, not in some default stack.
+  WKS.rails.on('strip:newtab', ({ stack }) => {
+    try { spawnSurface('launcher', { title: 'Launcher' }, { to: 'stack', stackId: stack.id }); }
+    catch (e) { console.warn('[works] strip:newtab launch failed:', e); }
+  });
 }
 
 // True when no tab is open anywhere (no rail stack has tabs, no float). Drives

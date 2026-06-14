@@ -431,7 +431,26 @@ function buildStripWrap(inst, stack) {
   const strip = buildStrip(inst, stack);
   const overflowBtn = buildOverflowBtn(inst, stack, strip);
   wrap.append(strip, overflowBtn);
+  // Opt-in new-tab button (config.newTabButton). Lives in the strip wrap next
+  // to the overflow button so it never scrolls away with the tabs. Emits
+  // `strip:newtab` ({ stack }) — the host spawns into that specific stack.
+  if (inst.config.newTabButton) wrap.append(buildNewTabBtn(inst, stack));
   return wrap;
+}
+
+function buildNewTabBtn(inst, stack) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'rails-newtab-btn';
+  btn.textContent = '+'; // +
+  btn.setAttribute('aria-label', 'New tab');
+  btn.title = 'New tab';
+  btn.tabIndex = -1;
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    inst._emit('strip:newtab', { stack });
+  });
+  return btn;
 }
 
 function buildOverflowBtn(inst, stack, strip) {
@@ -1829,6 +1848,11 @@ function createRails(host, options = {}) {
     dragThreshold: options.dragThreshold ?? 4,
     tabPosition: options.tabPosition ?? 'top',
     dropZones: options.dropZones ?? {},
+    // Opt-in "+" button at the end of every tab strip. When true, each strip
+    // renders a new-tab affordance that emits `strip:newtab` ({ stack }); the
+    // consumer decides what to spawn (e.g. a launcher) into that stack. Off by
+    // default so existing rails hosts are unchanged.
+    newTabButton: options.newTabButton ?? false,
   };
 
   const events = new Map();

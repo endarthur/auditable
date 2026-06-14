@@ -70,7 +70,7 @@ export function createSurface(tabId, kind, opts = {}) {
 }
 
 // Spawn a surface of `kind` into a new rails tab. Returns the tab id.
-export function spawnSurface(kind, opts = {}) {
+export function spawnSurface(kind, opts = {}, target) {
   const tabId = newTabId();
   const rec = createSurface(tabId, kind, opts);
   WKS.rails.addTab({
@@ -78,7 +78,7 @@ export function spawnSurface(kind, opts = {}) {
     // Consumer payload — serialized with the layout, read back by
     // renderPanel to re-create the surface on restore.
     surfaceKind: kind, path: rec.path,
-  });
+  }, target);   // target (a rails MoveTarget) lands the tab in a specific stack
   WKS.rails.activateTab(tabId);
   _activeTabId = tabId;
   return tabId;

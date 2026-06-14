@@ -15,6 +15,21 @@ const _themeAssets = { css: null, init: null };  // populated by decompressLibs(
 // (Slice 2 will reach into _extensionSurfaces from kindForPath).
 const _extensionSurfaces = new Map();   // kind → { manifest, def }
 
+// Listeners notified whenever surface AVAILABILITY changes — a kind gained or
+// lost its payload (_surfaceBlobs mutated). The shell subscribes to re-emit
+// Shell.LaunchItemsChanged so live consumers (the Launcher) re-query after a
+// provision / install / uninstall. Kept bus- and DOM-free here: just callbacks.
+const _surfacesChangedListeners = new Set();
+export function onSurfacesChanged(fn) {
+  _surfacesChangedListeners.add(fn);
+  return () => _surfacesChangedListeners.delete(fn);
+}
+function _notifySurfacesChanged() {
+  for (const fn of _surfacesChangedListeners) {
+    try { fn(); } catch (e) { console.error('[works] onSurfacesChanged listener:', e); }
+  }
+}
+
 export function registerKind(kind, def) {
   KINDS.set(kind, {
     label:      def.label || kind,
@@ -38,6 +53,7 @@ export function unregisterKind(kind) {
   if (url) {
     try { URL.revokeObjectURL(url); } catch { /* ignore */ }
     _surfaceBlobs.delete(kind);
+    _notifySurfacesChanged();   // availability changed (a payload was dropped)
   }
 }
 
@@ -62,7 +78,7 @@ export function kindsForRouting() {
 // + the boot script. Built-ins skip these (substituted at build time).
 export function themeAssets() { return { css: _themeAssets.css, init: _themeAssets.init }; }
 export function libSources()  { return _libSources; }
-export function setSurfaceBlob(kind, url) { _surfaceBlobs.set(kind, url); }
+export function setSurfaceBlob(kind, url) { _surfaceBlobs.set(kind, url); _notifySurfacesChanged(); }
 export function registerExtensionSurface(kind, manifest, def) {
   _extensionSurfaces.set(kind, { manifest, def });
 }
@@ -427,6 +443,7 @@ export async function decompressSurfaces() {
     text = _inlineLibsIntoSurface(text, kind);
     _surfaceBlobs.set(kind, URL.createObjectURL(new Blob([text], { type: 'text/html' })));
   }
+  _notifySurfacesChanged();   // built-in payloads now available (boot-time)
 }
 
 // The blob URL for a surface kind — synchronous; decompressSurfaces() must
