@@ -1137,7 +1137,7 @@ function updateFloatDrag(inst, ev, float, grabOffset) {
   const ly = ev.clientY - wsRect.top;
   let best = null, bestScore = Infinity;
   for (const z of drag.zones) {
-    const r = z.rect;
+    const r = z.hit || z.rect;   // tab-insert hit is wider than its caret visual
     if (lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) {
       const area = r.w * r.h;
       const score = z.priority === 'body-append' ? area + 1e9 : area;
@@ -1338,7 +1338,7 @@ function updateTabDrag(inst, ev) {
 
   let best = null, bestScore = Infinity;
   for (const z of drag.zones) {
-    const r = z.rect;
+    const r = z.hit || z.rect;   // tab-insert hit is wider than its caret visual
     if (lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) {
       const area = r.w * r.h;
       const score = z.priority === 'body-append' ? area + 1e9
@@ -1557,10 +1557,12 @@ function computeZones(inst, tab, touch) {
 // Expand narrow drop zones so they remain usable with finger-sized pointers.
 function inflateZonesForTouch(zones) {
   for (const z of zones) {
-    // tab-insert is narrowest (6px). Expand to ~20px.
+    // tab-insert halves are already wide; nudge the hit rect a touch more so
+    // finger-sized pointers comfortably cover the boundary.
     if (z.type === 'tab-insert') {
-      z.rect.x -= 7;
-      z.rect.w += 14;
+      const t = z.hit || z.rect;
+      t.x -= 4;
+      t.w += 8;
     }
     // new-rail and new-stack gaps — widen from 18px to 30px.
     if (z.type === 'new-rail' || z.type === 'new-stack') {
@@ -1651,26 +1653,45 @@ function collectStackInternalZones(zones, stackEl, stack, wsRect, enabled) {
   if (strip) {
     const stripRect = strip.getBoundingClientRect();
     const stripVisible = stripRect.width > 0 && stripRect.height > 0;
+    const top = stripRect.top - wsRect.top;
+    const h = stripRect.height;
+    const tabEls = stripVisible ? strip.querySelectorAll('.rails-tab') : [];
 
-    if (stripVisible && enabled('tab-append-strip')) {
-      zones.push({ type: 'tab-append', stackId: stack.id,
-        rect: { x: stripRect.left - wsRect.left, y: stripRect.top - wsRect.top,
-                w: stripRect.width, h: stripRect.height } });
-    }
-
-    if (stripVisible && enabled('tab-insert')) {
-      const tabEls = strip.querySelectorAll('.rails-tab');
-      const inserts = [];
+    // Each tab is split into two half-width INSERT targets — left half inserts
+    // before it, right half after — so anywhere over a tab is a precise drop
+    // point (no more 6px slivers). The wide `hit` rect drives detection; the
+    // thin `rect` is just a 2px caret drawn at the boundary, so the tabs stay
+    // fully visible during the drag (the target paints nothing). This is the
+    // VS-Code / browser tab-reorder model.
+    if (stripVisible && enabled('tab-insert') && tabEls.length) {
       tabEls.forEach((t, ti) => {
         const r = t.getBoundingClientRect();
-        inserts.push({ x: r.left, at: ti });
+        const x = r.left - wsRect.left;
+        const mid = r.width / 2;
+        zones.push({ type: 'tab-insert', stackId: stack.id, at: ti,
+          rect: { x: x - 1, y: top, w: 2, h },
+          hit:  { x, y: top, w: mid, h } });
+        zones.push({ type: 'tab-insert', stackId: stack.id, at: ti + 1,
+          rect: { x: x + r.width - 1, y: top, w: 2, h },
+          hit:  { x: x + mid, y: top, w: r.width - mid, h } });
       });
-      inserts.push({ x: stripRect.right, at: tabEls.length });
-      inserts.forEach(ins => {
-        zones.push({ type: 'tab-insert', stackId: stack.id, at: ins.at,
-          rect: { x: ins.x - wsRect.left - 3, y: stripRect.top - wsRect.top,
-                  w: 6, h: stripRect.height } });
-      });
+    }
+
+    // Append zone — only the EMPTY strip space past the last tab (or the whole
+    // strip when there are no tabs). It never overlaps a tab, so it can't hide
+    // one. With tab-insert disabled it falls back to covering the whole strip.
+    if (stripVisible && enabled('tab-append-strip')) {
+      if (!tabEls.length || !enabled('tab-insert')) {
+        zones.push({ type: 'tab-append', stackId: stack.id,
+          rect: { x: stripRect.left - wsRect.left, y: top, w: stripRect.width, h } });
+      } else {
+        const lastRight = tabEls[tabEls.length - 1].getBoundingClientRect().right - wsRect.left;
+        const stripRight = stripRect.right - wsRect.left;
+        if (stripRight - lastRight > 2) {
+          zones.push({ type: 'tab-append', stackId: stack.id,
+            rect: { x: lastRight, y: top, w: stripRight - lastRight, h } });
+        }
+      }
     }
   }
 

@@ -421,8 +421,8 @@ Computed at drag start from the current layout.
 |------|-------|----------------|
 | `new-rail` | 18px-wide vertical strip between rails and at outer left/right edges | Create new rail with one stack containing the dragged tab |
 | `new-stack` | 18px-tall horizontal strip between stacks in a rail, and at rail top/bottom edges | Create new stack in that rail with the dragged tab |
-| `tab-insert` | 6px-wide vertical strip at each tab's leading edge in any strip (rail-stack or float), plus trailing edge | Insert the tab at that index in that stack |
-| `tab-append` (strip) | The whole tab strip — rail-stack or float | Append tab to that stack |
+| `tab-insert` | Each tab splits into two half-width targets — left half inserts before it, right half after — across the whole strip (rail-stack or float). The hit target is half a tab wide; the highlight is a thin 2px caret at the boundary, so tabs stay visible during the drag | Insert the tab at that index in that stack |
+| `tab-append` (strip) | Only the empty strip space past the last tab (or the whole strip when it has no tabs / `tab-insert` is disabled) — so it never overlaps a tab | Append tab to that stack |
 | `tab-append` (body) | The whole panel body area — rail-stack or float — lowest priority | Append tab to that stack |
 | `new-float` | Everywhere inside the workspace not covered by a higher-priority zone | Create new float at cursor position with the dragged tab |
 | `float-titlebar` | The titlebar of each existing float | Append tab to that float's stack |
