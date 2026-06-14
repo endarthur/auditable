@@ -190,7 +190,9 @@ export async function setupWorksService() {
         // The Launcher (works/surfaces/launcher.html) drives these: the curated,
         // availability-filtered creatables + the dispatch. Logic in launcher.js.
         LaunchItems: () => launchItems(),
-        Launch:      (id) => launch(id),
+        // fromTabId (the calling launcher's own tab) → open the new surface in
+        // that launcher's stack, not a default one.
+        Launch:      (id, fromTabId) => launch(id, fromTabId),
         Reveal:   () => {},    // Chunk 3 — the file tree
         PickFile: () => null,  // Chunk 3+
         Download: () => {},    // Chunk 3+

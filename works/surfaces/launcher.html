@@ -94,6 +94,7 @@ import { connect } from '../../ext/abus/index.js';
 const grid = document.getElementById('grid');
 const empty = document.getElementById('empty');
 let bus = null;
+let myTabId = null;   // this launcher's own tab — so cards open in its stack
 
 function render(items) {
   grid.innerHTML = '';
@@ -111,7 +112,7 @@ function render(items) {
     card.querySelector('.desc').textContent = it.desc || '';
     card.addEventListener('click', async () => {
       if (!bus) return;
-      try { await bus.call({ to: 'works', path: '/', interface: 'Shell', member: 'Launch' }, [it.id]); }
+      try { await bus.call({ to: 'works', path: '/', interface: 'Shell', member: 'Launch' }, [it.id, myTabId]); }
       catch (e) { console.warn('[launcher] Launch failed:', e); }
     });
     grid.appendChild(card);
@@ -122,6 +123,7 @@ window.addEventListener('message', async (ev) => {
   if (ev.source !== window.parent) return;
   if (!ev.data || ev.data.type !== 'abus:welcome') return;
   const { port } = ev.data;
+  myTabId = ev.data.tab && ev.data.tab.id || null;
 
   try { bus = await connect(port, { client: 'launcher-surface' }); }
   catch (e) { document.body.textContent = 'connect failed: ' + e.message; return; }

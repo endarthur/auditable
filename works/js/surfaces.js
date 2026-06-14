@@ -27,6 +27,27 @@ export function callActiveNotebook(member, args = []) {
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const newTabId = () => 't' + Math.random().toString(36).slice(2, 10);
 
+// The id of the stack (docked or float) that holds `tabId`, or null. Lets a
+// surface ask the shell to spawn a sibling INTO its own stack (the launcher
+// opening a card next to itself) without rails exposing a tab→stack lookup.
+export function stackIdForTab(tabId) {
+  const st = WKS.rails && WKS.rails.state;
+  if (!st || !tabId) return null;
+  for (const rail of st.rails || [])
+    for (const stack of rail.stacks || [])
+      if ((stack.tabs || []).some((t) => t.id === tabId)) return stack.id;
+  for (const float of st.floats || [])
+    if (float.stack && (float.stack.tabs || []).some((t) => t.id === tabId)) return float.stack.id;
+  return null;
+}
+
+// A rails MoveTarget that lands a new tab in the same stack as `tabId`, or
+// undefined (→ default placement) when the stack can't be resolved.
+export function targetForTab(tabId) {
+  const stackId = stackIdForTab(tabId);
+  return stackId ? { to: 'stack', stackId } : undefined;
+}
+
 // Create a surface (iframe + A-Bus channel + record) for a given tab id.
 // Used by spawnSurface for a brand-new tab, and by layout.js renderPanel
 // when a tab is being restored from a saved layout.
@@ -86,7 +107,7 @@ export function spawnSurface(kind, opts = {}, target) {
 
 // Open a VFS path in a surface, resolving its kind via the registry. One
 // tab per path — re-opening an already-open path just activates its tab.
-export async function openPath(p) {
+export async function openPath(p, target) {
   for (const rec of WKS.surfaces.values()) {
     if (rec.path === p) { WKS.rails.activateTab(rec.tabId); return rec.tabId; }
   }
@@ -129,7 +150,7 @@ export async function openPath(p) {
       return null;
     }
   }
-  return spawnSurface(kind, { path: p, title });
+  return spawnSurface(kind, { path: p, title }, target);
 }
 
 // Reflect a surface's Surface-interface signals onto its tab + record.

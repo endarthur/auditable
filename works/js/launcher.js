@@ -7,31 +7,33 @@
 // works-all). Exposed to surfaces via the `works` service's Shell.LaunchItems /
 // Shell.Launch methods.
 
-import { spawnSurface, openPath } from './surfaces.js';
+import { spawnSurface, openPath, targetForTab } from './surfaces.js';
 import { newProject } from './tree.js';
 import { surfaceAvailable } from './surface-registry.js';
 
 // The curated creatables. `kind` gates on whether THIS build carries the
-// surface; `run` performs the create/spawn. Order = display order.
+// surface; `run(target)` performs the create/spawn, placing the new surface at
+// `target` (a rails MoveTarget) — the launcher passes the stack it lives in so
+// a card opens next to the launcher, not in some default stack. Order = display.
 const ITEMS = [
   { id: 'notebook', kind: 'notebook', label: 'Notebook', icon: '▦',
     desc: 'A reactive computational notebook — JS, Python, and more in one document.',
-    run: async () => { const p = await newProject('/projects'); if (p) await openPath(p); } },
+    run: async (target) => { const p = await newProject('/projects'); if (p) await openPath(p, target); } },
   { id: 'terminal', kind: 'terminal', label: 'Terminal', icon: '▶',
     desc: 'A geas shell over the workspace filesystem.',
-    run: () => spawnSurface('terminal', { title: 'Terminal' }) },
+    run: (target) => spawnSurface('terminal', { title: 'Terminal' }, target) },
   { id: 'workbench', kind: 'workbench', label: 'Data Workbench', icon: '▤',
     desc: 'Schema, summary stats, grade-tonnage, and swaths over CSV / OMF block models.',
-    run: () => spawnSurface('workbench', { title: 'Data Workbench' }) },
+    run: (target) => spawnSurface('workbench', { title: 'Data Workbench' }, target) },
   { id: 'library', kind: 'library', label: 'Browse Library', icon: '▥',
     desc: 'Install content packs and extensions from registry sources.',
-    run: () => spawnSurface('library', { title: 'Library' }) },
+    run: (target) => spawnSurface('library', { title: 'Library' }, target) },
   { id: 'docs', kind: 'docs', label: 'Documentation', icon: '◳',
     desc: 'GCU guides and reference.',
-    run: () => spawnSurface('docs', { title: 'Documentation' }) },
+    run: (target) => spawnSurface('docs', { title: 'Documentation' }, target) },
   { id: 'settings', kind: 'settings', label: 'Settings', icon: '⚙',
     desc: 'Theme, fonts, and workspace preferences.',
-    run: () => spawnSurface('settings', { title: 'Settings' }) },
+    run: (target) => spawnSurface('settings', { title: 'Settings' }, target) },
 ];
 
 // The items this build can actually create — the surface renders these.
@@ -40,9 +42,11 @@ export function launchItems() {
     .map(({ id, label, icon, desc }) => ({ id, label, icon, desc }));
 }
 
-// Perform a launch by id (no-op for an unknown / unavailable id).
-export async function launch(id) {
+// Perform a launch by id (no-op for an unknown / unavailable id). `fromTabId`
+// is the calling launcher's own tab — the new surface opens in that launcher's
+// stack so it appears right where the user clicked.
+export async function launch(id, fromTabId) {
   const it = ITEMS.find((x) => x.id === id);
   if (!it || !surfaceAvailable(it.kind)) return;
-  await it.run();
+  await it.run(fromTabId ? targetForTab(fromTabId) : undefined);
 }
