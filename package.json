@@ -19,7 +19,7 @@
     "build:works": "node build.js && node build.js --target=works",
     "build:gcu-press": "node ext/gcu-press/build.js && node build.js --target=gcu-press",
     "build:rv": "node ext/rv/build.js && node build.js --target=rv",
-    "test": "node --no-warnings --test \"test/!(adder-wasm).test.*\"",
+    "test": "node --no-warnings --test --test-force-exit \"test/!(adder-wasm).test.*\"",
     "test:wasm": "node --no-warnings --test-force-exit test/adder-wasm.test.mjs",
     "test:examples": "node test/examples-smoke.mjs",
     "test:all": "npm test && npm run test:wasm"
