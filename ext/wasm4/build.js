@@ -18,6 +18,7 @@ const path = require('path');
   const rasterSrc = fs.readFileSync(path.join(dir, 'raster.atra'), 'utf8');
   const cartSrc = fs.readFileSync(path.join(dir, 'cart-demo.atra'), 'utf8');
   const host = fs.readFileSync(path.join(dir, 'host.mjs'), 'utf8');
+  const apu = fs.readFileSync(path.join(dir, 'apu.js'), 'utf8');
 
   // The rasterizer imports the shared memory (__memory → env.memory); the cart
   // self-declares + exports its own.
@@ -32,6 +33,7 @@ const path = require('path');
 // / host.mjs.
 
 ${host}
+${apu}
 // ── baked wasm modules (base64) ─────────────────────────────────────────────
 export const RASTER_B64 = ${JSON.stringify(b64(rasterBytes))};
 export const DEMO_CART_B64 = ${JSON.stringify(b64(demoBytes))};

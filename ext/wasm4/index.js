@@ -40,7 +40,7 @@ export const BUTTON_1 = 0x01, BUTTON_2 = 0x02;
 export const BUTTON_LEFT = 0x10, BUTTON_RIGHT = 0x20, BUTTON_UP = 0x40, BUTTON_DOWN = 0x80;
 export const SYSTEM_PRESERVE_FRAMEBUFFER = 0x01;
 
-export function createConsole({ cartBytes, rasterBytes, fontBytes, fontBase = FONT_BASE }) {
+export function createConsole({ cartBytes, rasterBytes, fontBytes, fontBase = FONT_BASE, onTone }) {
   let raster = null;   // filled in just below; the env closures read it lazily.
 
   // The drawing half of `env` dispatches to the atra rasterizer. blit/blitSub/
@@ -54,7 +54,9 @@ export function createConsole({ cartBytes, rasterBytes, fontBytes, fontBase = FO
     oval:  (x, y, w, h) => raster.oval(x, y, w, h),
     rect:  (x, y, w, h) => raster.rect(x, y, w, h),
     text:  (strPtr, x, y) => raster.text(strPtr, x, y),
-    tone() {},
+    // Audio is a host concern (WebAudio), not pixel-pushing — forward to the
+    // injected sink (the surface passes an @gcu/wasm4 APU's tone). Pure here.
+    tone:  (frequency, duration, volume, flags) => { if (onTone) onTone(frequency, duration, volume, flags); },
     diskr: () => 0,
     diskw: () => 0,
     trace() {},
@@ -110,9 +112,113 @@ export function createConsole({ cartBytes, rasterBytes, fontBytes, fontBase = FO
   };
 }
 
+// @gcu/wasm4 — the APU (audio). A faithful-enough WASM-4 synth on WebAudio:
+// 4 channels (2 pulse w/ duty cycle, 1 triangle, 1 noise), an ADSR envelope,
+// an optional frequency slide, and L/C/R pan. createAPU takes an AudioContext
+// (the surface owns it + resumes it on a user gesture); tone() decodes the
+// packed WASM-4 args and schedules one note. No DOM beyond AudioContext, so the
+// engine stays pure — the surface passes apu.tone as createConsole's onTone.
+//
+//   tone(frequency, duration, volume, flags)  — the WASM-4 env.tone packing:
+//     frequency: freq1 | (freq2 << 16)        (freq2 = slide target, 0 = none)
+//     duration:  sustain | release<<8 | decay<<16 | attack<<24   (frames @ 60Hz)
+//     volume:    sustain | peak<<8             (0-100; peak defaults 100 if 0)
+//     flags:     channel(0-3) | mode<<2 (pulse duty) | pan<<4 (0 C, 1 L, 2 R)
+
+const DUTY = [0.125, 0.25, 0.5, 0.75];
+
+function pulseWave(ctx, duty) {
+  // Fourier coefficients of a unit pulse of the given duty cycle.
+  const N = 32;
+  const real = new Float32Array(N + 1);
+  const imag = new Float32Array(N + 1);
+  for (let n = 1; n <= N; n++) real[n] = (2 / (n * Math.PI)) * Math.sin(n * Math.PI * duty);
+  return ctx.createPeriodicWave(real, imag, { disableNormalization: false });
+}
+
+export function createAPU(ctx, opts = {}) {
+  const master = ctx.createGain();
+  master.gain.value = opts.master == null ? 0.3 : opts.master;
+  master.connect(ctx.destination);
+
+  const waves = DUTY.map((d) => pulseWave(ctx, d));
+
+  let noiseBuf = null;
+  function noise() {
+    if (noiseBuf) return noiseBuf;
+    const len = (ctx.sampleRate * 0.5) | 0;
+    noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    return noiseBuf;
+  }
+
+  function tone(frequency, duration, volume, flags) {
+    const freq1 = frequency & 0xffff;
+    const freq2 = (frequency >> 16) & 0xffff;
+    const attack = (duration >> 24) & 0xff;
+    const decay = (duration >> 16) & 0xff;
+    const release = (duration >> 8) & 0xff;
+    const sustain = duration & 0xff;
+    const peak = ((volume >> 8) & 0xff) || 100;
+    const sus = volume & 0xff;
+    const channel = flags & 0x3;
+    const mode = (flags >> 2) & 0x3;
+    const pan = (flags >> 4) & 0x3;
+
+    const F = 1 / 60;
+    const aT = attack * F, dT = decay * F, sT = sustain * F, rT = release * F;
+    const total = aT + dT + sT + rT;
+    if (total <= 0) return;
+
+    const t0 = Math.max(ctx.currentTime, 0);
+    let src;
+    if (channel === 3) {
+      src = ctx.createBufferSource();
+      src.buffer = noise();
+      src.loop = true;
+      // Map the frequency to a playback rate (approximate — WASM-4's noise is an
+      // LFSR; white noise resampled is a close-enough game-audio stand-in).
+      src.playbackRate.value = Math.min(4, Math.max(0.1, freq1 / 1000));
+    } else {
+      src = ctx.createOscillator();
+      if (channel === 2) src.type = 'triangle';
+      else src.setPeriodicWave(waves[mode]);
+      src.frequency.setValueAtTime(freq1, t0);
+      if (freq2 > 0) src.frequency.linearRampToValueAtTime(freq2, t0 + total);
+    }
+
+    const env = ctx.createGain();
+    const pv = peak / 100, sv = sus / 100;
+    env.gain.setValueAtTime(0, t0);
+    env.gain.linearRampToValueAtTime(pv, t0 + aT);          // attack → peak
+    env.gain.linearRampToValueAtTime(sv, t0 + aT + dT);     // decay → sustain
+    env.gain.setValueAtTime(sv, t0 + aT + dT + sT);         // hold sustain
+    env.gain.linearRampToValueAtTime(0, t0 + total);        // release → 0
+
+    src.connect(env);
+    if (pan !== 0 && ctx.createStereoPanner) {
+      const p = ctx.createStereoPanner();
+      p.pan.value = pan === 1 ? -1 : 1;
+      env.connect(p);
+      p.connect(master);
+    } else {
+      env.connect(master);
+    }
+    src.start(t0);
+    src.stop(t0 + total + 0.02);
+  }
+
+  return {
+    tone,
+    setMaster(v) { master.gain.value = v; },
+    get context() { return ctx; },
+  };
+}
+
 // ── baked wasm modules (base64) ─────────────────────────────────────────────
 export const RASTER_B64 = "AGFzbQEAAAABKgVgA39/fwBgBH9/f38AYAN/f38Bf2AJf39/f39/f39/AGAGf39/f39/AAIPAQNlbnYGbWVtb3J5AgABAwsKAAAAAQEBAgMEAAdQCgVzZXRweAAABWhsaW5lAAEFdmxpbmUAAgRyZWN0AAMEbGluZQAEBG92YWwABQdibGl0X3B4AAYHYmxpdFN1YgAHBGJsaXQACAR0ZXh0AAkKwgoKbQEEfyAAQQBIBEAPCyAAQZ8BSgRADwsgAUEASARADwsgAUGfAUoEQA8LQaABIAFBKGxqIABBAnVqIQMgAEEDcUECbCEEIAMtAAAhBUEDIAR0IQYgBSAGQX9zcSACQQNxIAR0ciEFIAMgBToAAAtDAQN/QRQvAAAhAyADQQ9xIQQgBEEARgRADwsgACEFAkADQCAFIAAgAmpODQEgBSABIARBAWsQACAFQQFqIQUMAAsLC0MBA39BFC8AACEDIANBD3EhBCAEQQBGBEAPCyABIQUCQANAIAUgASACak4NASAAIAUgBEEBaxAAIAVBAWohBQwACwsL4wEBBX9BFC8AACEEIARBD3EhBSAEQQR1QQ9xIQYgBUEARwRAIAEhCAJAA0AgCCABIANqTg0BIAAhBwJAA0AgByAAIAJqTg0BIAcgCCAFQQFrEAAgB0EBaiEHDAALCyAIQQFqIQgMAAsLCyAGQQBHBEAgACEHAkADQCAHIAAgAmpODQEgByABIAZBAWsQACAHIAEgA2pBAWsgBkEBaxAAIAdBAWohBwwACwsgASEIAkADQCAIIAEgA2pODQEgACAIIAZBAWsQACAAIAJqQQFrIAggBkEBaxAAIAhBAWohCAwACwsLC94BAQp/QRQvAAAhBCAEQQ9xIQUgBUEARgRADwsgACEMIAEhDSACIABrIQYgBkEASARAQQAgBmshBgsgAyABayEHIAdBAEgEQEEAIAdrIQcLIAAgAkgEQEEBIQgFQQBBAWshCAsgASADSARAQQEhCQVBAEEBayEJCyAGIAdrIQoCQANAQQFFDQEgDCANIAVBAWsQACAMIAJGBEAgDSADRgRADAMLC0ECIApsIQsgC0EAIAdrSgRAIAogB2shCiAMIAhqIQwLIAsgBkgEQCAKIAZqIQogDSAJaiENCwwACwsLzgEBDX9BFC8AACEEIARBD3EhBSAFIQYgBkEARgRAIARBBHVBD3EhBgsgBkEARgRADwsgAkECbSEJIANBAm0hCiAAIAlqIQcgASAKaiEIIAkgCWwgCmwgCmwhECABIQwCQANAIAwgASADak4NASAAIQsCQANAIAsgACACak4NASALIAdrIQ0gDCAIayEOIA0gDWwgCmwgCmwgDiAObCAJbCAJbGohDyAPIBBMBEAgCyAMIAZBAWsQAAsgC0EBaiELDAALCyAMQQFqIQwMAAsLC0QBBH8gASACbCEDIAAgA0EDdWotAAAhBCADQQdxIQUgAkEBRgRAIARBByAFa3VBAXEhBgUgBEEGIAVrdUEDcSEGCyAGC9oBAQx/IAhBAXFBAWohCSAIQQJxIQogCEEEcSELIAhBCHEhDEEULwAAIQ1BACEOAkADQCAOIARODQFBACEPAkADQCAPIANODQEgACAGIA5qIAdsIAUgD2pqIAkQBiEQIA0gEEEEbHVBD3EhESARQQBHBEAgDyESIA4hEyAKQQBHBEAgA0EBayASayESCyALQQBHBEAgBEEBayATayETCyAMQQBHBEAgEiEUIBMhEiAUIRMLIAEgEmogAiATaiARQQFrEAALIA9BAWohDwwACwsgDkEBaiEODAALCwsWACAAIAEgAiADIARBAEEAIAMgBRAHC30BBH9BACEDIAIhBEEAIQUCQANAQQFFDQEgACAFai0AACEGIAZBAEYEQAwCCyAGQQpGBEBBACEDIARBCGohBAUgBkEgTgRAQYC4AyABIANBCGxqIARBCEEIQQAgBkEga0EIbEEIQQAQBwsgA0EBaiEDCyAFQQFqIQUMAAsLCw==";
-export const DEMO_CART_B64 = "AGFzbQEAAAABEQNgBH9/f38AYAN/f38AYAAAAhcCA2VudgRyZWN0AAADZW52BHRleHQAAQMDAgICBQMBAAEGCwJ/AUEAC38BQQALBxsDBXN0YXJ0AAIGdXBkYXRlAAMGbWVtb3J5AgAKgQICUgEBf0EEIQAgAEEAQQRsakGsuOgANgIAIABBAUEEbGpB3c70AjYCACAAQQJBBGxqQdP8xAU2AgAgAEEDQQRsakHX+r0HNgIAQcwAJABBzAAkAQurAQEBf0EWLQAAIQAgAEEQcUEARwRAIwBBAWskAAsgAEEgcUEARwRAIwBBAWokAAsgAEHAAHFBAEcEQCMBQQFrJAELIABBgAFxQQBHBEAjAUEBaiQBCyMAQQBIBEBBACQACyMAQZgBSgRAQZgBJAALIwFBAEgEQEEAJAELIwFBmAFKBEBBmAEkAQtBFEHCADsAACMAIwFBCEEIEABBFEEEOwAAQaAzQQRBBBABCwsMAQBBoDMLBU1PVkUA";
+export const DEMO_CART_B64 = "AGFzbQEAAAABEQNgBH9/f38AYAN/f38AYAAAAiIDA2VudgRyZWN0AAADZW52BHRleHQAAQNlbnYEdG9uZQAAAwMCAgIFAwEAAQYQA38BQQALfwFBAAt/AUEACwcbAwVzdGFydAADBnVwZGF0ZQAEBm1lbW9yeQIACqgCAlIBAX9BBCEAIABBAEEEbGpBrLjoADYCACAAQQFBBGxqQd3O9AI2AgAgAEECQQRsakHT/MQFNgIAIABBA0EEbGpB1/q9BzYCAEHMACQAQcwAJAEL0gEBAX9BFi0AACEAIABBEHFBAEcEQCMAQQFrJAALIABBIHFBAEcEQCMAQQFqJAALIABBwABxQQBHBEAjAUEBayQBCyAAQYABcUEARwRAIwFBAWokAQsjAEEASARAQQAkAAsjAEGYAUoEQEGYASQACyMBQQBIBEBBACQBCyMBQZgBSgRAQZgBJAELIABBAXFBAEcEQCMCQQFxQQBGBEBBuANBhBBB0ABBABACCwsgACQCQRRBwgA7AAAjACMBQQhBCBAAQRRBBDsAAEGgM0EEQQQQAQsLDAEAQaAzCwVNT1ZFAA==";
 export const FONT_B64 = "///////////Hx8fPz//P/5OTk///////kwGTk5MBk//vgy+D6QPv/51bN+/ZtXP/jycnjyUzgf/Pz8////////Pnz8/P5/P/n8/n5+fPn///k8cBx5P////n54Hn5//////////Pz5////+B////////////z8///fv379+/f//Hszk5OZvH/+fH5+fn54H/gznxw4cfAf+B8+fD+TmD/+PDkzMB8/P/Az8D+fk5g//Dnz8DOTmD/wE58+fPz8//hzsbh2F5g/+DOTmB+fOH///Pz//Pz////8/P/8/Pn//z58+fz+fz////Af8B////n8/n8+fPn/+DATnzx//H/4N9RVVBf4P/x5M5OQE5Of8DOTkDOTkD/8OZPz8/mcP/BzM5OTkzB/8BPz8DPz8B/wE/PwM/Pz//wZ8/MTmZwf85OTkBOTk5/4Hn5+fn54H/+fn5+fk5g/85MycPByMx/5+fn5+fn4H/OREBASk5Of85GQkBITE5/4M5OTk5OYP/Azk5OQM/P/+DOTk5ITOF/wM5OTEHIzH/hzM/g/k5g/+B5+fn5+fn/zk5OTk5OYP/OTk5EYPH7/85OSkBARE5/zkRg8eDETn/mZmZw+fn5/8B8ePHjx8B/8PPz8/Pz8P/f7/f7/f7/f+H5+fn5+eH/8eT/////////////////wHv9///////////g/mBOYH/Pz8DOTk5g////4E/Pz+B//n5gTk5OYH///+DOQE/g//x54Hn5+fn////gTk5gfmDPz8DOTk5Of/n/8fn5+eB//P/4/Pz8/OHPz8xAwcjMf/H5+fn5+eB////A0lJSUn///8DOTk5Of///4M5OTmD////Azk5Az8///+BOTmB+fn//5GPn5+f////gz+D+QP/5+eB5+fn5////zk5OTmB////mZmZw+f///9JSUlJgf///zkBxwE5////OTk5gfmD//8B48ePAf/z5+fP5+fz/+fn5+fn5+f/n8/P58/Pn////49F4///////////k5P/gykpESkpg/+DOQkRITmD//////////////////////+DESF9IRGD/4MRCX0JEYP/gxE5VRERg/+DERFVORGD////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////5//n58fHx//vgykvKYPv/8OZnwOfnwH//6Xb29ul//+ZmcOB54Hn/+fn5//n5+f/w5mH2+GZw/+T/////////8O9Zl5eZr3Dh8OTw///////yZMnk8n/////gfn5///////////////DvUZaRlq9w4P/////////79fv///////n54Hn5/+B/8fz58P/////w+fzx//////37///////////MzMzMwk/wZW1lcH19f/////Pz/////////////fP58fnw//////Hk5PH//////8nk8mTJ///vTu3rdmxff+9O7ep3btx/x271y3ZsX3/x//HnzkBg//f78eTOQE5//fvx5M5ATn/x5PHkzkBOf/Lp8eTOQE5/5P/x5M5ATn/79fHkzkBOf/BhychBych/8OZPz+Zw/fP3+8BPwM/Af/37wE/Az8B/8eTAT8DPwH/k/8BPwM/Af/v94Hn5+eB//fvgefn54H/58OB5+fngf+Z/4Hn5+eB/4eTmQmZk4f/y6cZCQEhMf/f74M5OTmD//fvgzk5OYP/x5ODOTk5g//Lp4M5OTmD/5P/gzk5OYP//7vX79e7//+DOTEpGTmD/9/vOTk5OYP/9+85OTk5g//Hk/85OTmD/5P/OTk5OYP/9++ZmcPn5/8/Azk5OQM//8OZmZOZiZP/3++D+YE5gf/374P5gTmB/8eTg/mBOYH/y6eD+YE5gf+T/4P5gTmB/+/Xg/mBOYH///+D6YEvg////4E/P4H3z9/vgzkBP4P/9++DOQE/g//Hk4M5AT+D/5P/gzkBP4P/3+//x+fngf/37//H5+eB/8eT/8fn54H/k//H5+fngf+bh2eDOTmD/8unAzk5OTn/3++DOTk5g//374M5OTmD/8eTgzk5OYP/y6eDOTk5g/+T/4M5OTmD///n/4H/5/////+DMSkZg//f7zk5OTmB//fvOTk5OYH/x5P/OTk5gf+T/zk5OTmB//fvOTk5gfmDPz8DOTkDPz+T/zk5OYH5gw==";
 
 export function bytesFromB64(s) {

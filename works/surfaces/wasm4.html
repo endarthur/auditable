@@ -44,6 +44,7 @@
   <span class="title">WASM-4</span>
   <span class="spacer"></span>
   <span class="msg" id="msg">arrows / WASD · X · Z</span>
+  <button id="sound" title="Toggle sound">🔊</button>
   <button id="reset">Reset</button>
 </header>
 <div class="stage">
@@ -52,7 +53,7 @@
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
 import { bootSurface } from '../../ext/surface/index.js';
-import { createConsole, RASTER_WASM, DEMO_CART_WASM, FONT_BYTES, SCREEN, BUTTON_LEFT, BUTTON_RIGHT, BUTTON_UP, BUTTON_DOWN, BUTTON_1, BUTTON_2 } from '../../ext/wasm4/index.js';
+import { createConsole, createAPU, RASTER_WASM, DEMO_CART_WASM, FONT_BYTES, SCREEN, BUTTON_LEFT, BUTTON_RIGHT, BUTTON_UP, BUTTON_DOWN, BUTTON_1, BUTTON_2 } from '../../ext/wasm4/index.js';
 
 /* @theme-init */
 
@@ -66,6 +67,16 @@ let raf = 0;
 let running = false;
 let pad = 0;          // keyboard button bitmask
 
+// ── audio: an @gcu/wasm4 APU on WebAudio, created lazily on the first user
+//    gesture (browser autoplay policy blocks an AudioContext before then) ──
+let actx = null, apu = null, muted = false, toneCount = 0;
+function ensureAudio() {
+  if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+  try { actx = new (window.AudioContext || window.webkitAudioContext)(); apu = createAPU(actx); }
+  catch { actx = null; apu = null; }
+}
+function onTone(f, d, v, fl) { toneCount++; if (!muted && apu) apu.tone(f, d, v, fl); }
+
 // ── keyboard → gamepad bits (physical keys via e.code) ───────────────────
 const KEYS = {
   ArrowLeft: BUTTON_LEFT, KeyA: BUTTON_LEFT,
@@ -75,7 +86,7 @@ const KEYS = {
   KeyX: BUTTON_1, Period: BUTTON_1,
   KeyZ: BUTTON_2, Comma: BUTTON_2,
 };
-addEventListener('keydown', (e) => { const b = KEYS[e.code]; if (b) { pad |= b; e.preventDefault(); } });
+addEventListener('keydown', (e) => { ensureAudio(); const b = KEYS[e.code]; if (b) { pad |= b; e.preventDefault(); } });
 addEventListener('keyup', (e) => { const b = KEYS[e.code]; if (b) { pad &= ~b; e.preventDefault(); } });
 
 // ── gamepad (polled each frame — Permissions-Policy default `self` lets a
@@ -127,12 +138,12 @@ function stop() { running = false; if (raf) cancelAnimationFrame(raf); raf = 0; 
 
 function run(cartBytes) {
   stop();
-  con = createConsole({ cartBytes, rasterBytes: RASTER_WASM, fontBytes: FONT_BYTES });
+  con = createConsole({ cartBytes, rasterBytes: RASTER_WASM, fontBytes: FONT_BYTES, onTone });
   con.start();
   running = true;
   tick();
   // Test/debug hook — works-smoke / verify reach in via this.
-  window._wasm4 = { console: con, getPixel: (x, y) => con.getPixel(x, y), setPad: (b) => { pad = b; } };
+  window._wasm4 = { console: con, getPixel: (x, y) => con.getPixel(x, y), setPad: (b) => { pad = b; }, toneCount: () => toneCount, ensureAudio };
 }
 
 async function loadCart(bus, tabPath) {
@@ -162,9 +173,15 @@ bootSurface({
       document.querySelector('.stage').innerHTML =
         '<div class="err">console failed: ' + (e && e.message || e) + '</div>';
     }
-    canvas.addEventListener('click', () => canvas.focus());
+    canvas.addEventListener('click', () => { ensureAudio(); canvas.focus(); });
     canvas.focus();
     document.getElementById('reset').addEventListener('click', () => { run(cartBytes); canvas.focus(); });
+    document.getElementById('sound').addEventListener('click', () => {
+      muted = !muted;
+      if (apu) apu.setMaster(muted ? 0 : 0.3);
+      document.getElementById('sound').textContent = muted ? '🔇' : '🔊';
+      canvas.focus();
+    });
     const name = (tab.path && /\.(w4|wasm)$/i.test(tab.path))
       ? tab.path.split('/').filter(Boolean).pop() : 'WASM-4';
     bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [name]);

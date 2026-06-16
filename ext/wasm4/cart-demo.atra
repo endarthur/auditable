@@ -4,6 +4,7 @@
 
 import function rect(x, y, w, h: i32) from env
 import function text(str, x, y: i32) from env
+import function tone(frequency, duration, volume, flags: i32) from env
 
 ! Label bytes placed ABOVE the IO+framebuffer region (ends at 0x19A0) via a
 ! based data segment, so they survive the per-frame framebuffer clear.
@@ -15,6 +16,7 @@ end layout
 
 var px: i32
 var py: i32
+var prevg: i32
 
 subroutine start()
 var p: layout Pal
@@ -40,6 +42,14 @@ begin
   if (px > 152) then px := 152 end if
   if (py < 0) then py := 0 end if
   if (py > 152) then py := 152 end if
+  ! beep on BUTTON_1 (X, 0x01) press edge: 440Hz, sustain 4 + release 8 frames,
+  ! volume 80, channel 0 (pulse, 12.5% duty).
+  if ((g & 1) /= 0) then
+    if ((prevg & 1) == 0) then
+      call tone(440, 2052, 80, 0)
+    end if
+  end if
+  prevg := g
   call wasm.store16(20, 0x42)         ! DRAW_COLORS @ 0x14: fill=2, outline=4
   call rect(px, py, 8, 8)
   call wasm.store16(20, 0x04)         ! text: fg nibble0=4 → idx3, transparent bg

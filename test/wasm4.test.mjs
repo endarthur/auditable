@@ -145,7 +145,7 @@ describe('wasm4 text', () => {
     c.start();
     c.frame();
     assert.strictEqual(c.getPixel(79, 79), 1, 'rect unaffected by blank font');
-    // Label region empty (font is zeros at 0xDC00).
+    // Label region empty (the host baselines the font region to 0xFF = blank).
     let any = false;
     for (let y = 4; y < 12; y++) for (let x = 4; x < 40; x++) if (c.getPixel(x, y) !== 0) any = true;
     assert.ok(!any, 'no text pixels without a font');
@@ -153,5 +153,27 @@ describe('wasm4 text', () => {
 
   it('packFont produces 224 glyphs × 8 bytes (0x20-0xFF)', () => {
     assert.strictEqual(font.packFont().length, (0xff - 0x20 + 1) * 8);
+  });
+});
+
+describe('wasm4 audio (tone wiring)', () => {
+  it('cart imports env.tone', () => {
+    const im = WebAssembly.Module.imports(new WebAssembly.Module(cartBytes));
+    assert.ok(im.some((i) => i.module === 'env' && i.name === 'tone'));
+  });
+
+  it('tone() reaches onTone on the X press edge, once per press', () => {
+    const calls = [];
+    const c = createConsole({ cartBytes, rasterBytes, fontBytes: font.packFont(), onTone: (...a) => calls.push(a) });
+    c.start();
+    c.frame();                          // no input → no beep
+    assert.strictEqual(calls.length, 0);
+    c.setGamepad(0, 0x01); c.frame();   // X down (press edge) → 1 beep
+    c.frame();                          // X still held → no new beep
+    assert.strictEqual(calls.length, 1, 'one beep per press');
+    assert.deepStrictEqual(calls[0], [440, 2052, 80, 0]);
+    c.setGamepad(0, 0); c.frame();      // release
+    c.setGamepad(0, 0x01); c.frame();   // press again → another beep
+    assert.strictEqual(calls.length, 2);
   });
 });

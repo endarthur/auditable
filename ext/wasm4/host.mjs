@@ -35,7 +35,7 @@ export const BUTTON_1 = 0x01, BUTTON_2 = 0x02;
 export const BUTTON_LEFT = 0x10, BUTTON_RIGHT = 0x20, BUTTON_UP = 0x40, BUTTON_DOWN = 0x80;
 export const SYSTEM_PRESERVE_FRAMEBUFFER = 0x01;
 
-export function createConsole({ cartBytes, rasterBytes, fontBytes, fontBase = FONT_BASE }) {
+export function createConsole({ cartBytes, rasterBytes, fontBytes, fontBase = FONT_BASE, onTone }) {
   let raster = null;   // filled in just below; the env closures read it lazily.
 
   // The drawing half of `env` dispatches to the atra rasterizer. blit/blitSub/
@@ -49,7 +49,9 @@ export function createConsole({ cartBytes, rasterBytes, fontBytes, fontBase = FO
     oval:  (x, y, w, h) => raster.oval(x, y, w, h),
     rect:  (x, y, w, h) => raster.rect(x, y, w, h),
     text:  (strPtr, x, y) => raster.text(strPtr, x, y),
-    tone() {},
+    // Audio is a host concern (WebAudio), not pixel-pushing — forward to the
+    // injected sink (the surface passes an @gcu/wasm4 APU's tone). Pure here.
+    tone:  (frequency, duration, volume, flags) => { if (onTone) onTone(frequency, duration, volume, flags); },
     diskr: () => 0,
     diskw: () => 0,
     trace() {},
