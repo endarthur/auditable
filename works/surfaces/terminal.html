@@ -24,6 +24,7 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 import { VFS, AbusBackend } from '../../ext/vfs/index.js';
 
 /* @theme-init */
@@ -58,17 +59,13 @@ function showError(msg) {
 }
 
 // Wait for the shell's abus:welcome.
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent || !ev.data) return;
-  if (ev.data.type !== 'abus:welcome') return;
-
-  let bus;
-  try { bus = await connect(ev.data.port, { client: 'terminal' }); }
-  catch (e) { showError('A-Bus connect failed: ' + e.message); return; }
-  installThemeSubscription(bus);
-
-  const tab = ev.data.tab || {};
-  try { await bus.claim('terminal-' + (tab.id || 'unknown')); } catch {}
+bootSurface({
+  connect,
+  client: 'terminal',
+  onConnect: (b) => installThemeSubscription(b),
+  makeHost: () => ({}),   // terminals have no document; geas owns its own cwd
+  mount: async ({ bus, tab: tabIn }) => {
+  const tab = tabIn || {};
   const startCwd = tab.path && tab.path !== '/' ? tab.path : '/home';
 
   // @gcu/term — model + DOM renderer + input layer (replaces xterm.js). The grid is
@@ -309,21 +306,9 @@ window.addEventListener('message', async (ev) => {
     }
   })();
 
-  // §5.2 Surface contract.
-  bus.expose('/', {
-    Surface: {
-      methods: {
-        Flush:     () => { /* terminals have no document to flush */ },
-        CanClose:  () => true,
-        Relocated: () => { /* nothing to do — geas's cwd is independent */ },
-      },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
-    },
-  });
   const basename = (p) => p.split('/').filter(Boolean).pop() || p;
   const title = startCwd === '/home' ? 'Terminal' : 'Terminal — ' + basename(startCwd);
   bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [title]);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
 
   // Test hooks — surface-internal, only intended for works-smoke.
   window._term = term;
@@ -331,6 +316,7 @@ window.addEventListener('message', async (ev) => {
   window._surfaceVfs = vfs;   // smoke-test hook (write to /tmp before pkg install)
 
   hiddenEl.focus();
+  },
 });
 </script>
 </body>

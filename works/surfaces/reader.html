@@ -318,6 +318,7 @@
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 
 /* @theme-init */
 import { render as mdRender, presets as mdPresets, slugify } from '../../ext/markdown/index.js';
@@ -458,21 +459,17 @@ function runSearch() {
 async function activateHit(hit) { closeSearch(); await reader.loadChapter(hit.doc.chapterIndex, hit.doc.anchor || null); }
 
 // ── boot ────────────────────────────────────────────────────────────
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent) return;
-  if (!ev.data || ev.data.type !== 'abus:welcome') return;
-
-  try { bus = await connect(ev.data.port, { client: 'reader-surface' }); }
-  catch (e) { document.body.innerHTML = '<div class="err">connect failed: ' + (e.message || e) + '</div>'; return; }
-  try { await bus.claim('reader-' + (ev.data.tab && ev.data.tab.id || 'unknown')); } catch {}
-  if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
-  bus.expose('/', {
-    Surface: { methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} }, signals: ['DirtyChanged', 'TitleChanged', 'Ready'] },
-  });
+bootSurface({
+  connect,
+  client: 'reader',
+  onConnect: (b) => { if (typeof installThemeSubscription === 'function') installThemeSubscription(b); },
+  makeHost: () => ({}),   // reader viewer — persists its own reading state
+  mount: async ({ bus: b, tab }) => {
+  bus = b;
 
   // Pass the raw path to reader-core, which resolves it: a book.json, a dir
   // holding one, or a bare document file (.pdf/.md/.html → synthesized book).
-  const tabPath = (ev.data.tab && ev.data.tab.path) || '/';
+  const tabPath = (tab && tab.path) || '/';
 
   const vfsRead = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'utf8']);
   // 'bytes' is mandatory — without an encoding the VFS UTF-8-decodes the file and
@@ -601,7 +598,7 @@ window.addEventListener('message', async (ev) => {
   });
 
   bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [reader.book.title || reader.slug]);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+  },
 });
 </script>
 </body>

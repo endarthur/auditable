@@ -292,6 +292,7 @@
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 import { MenuBar } from '../../ext/menu/index.js';
 import { render as mdRender, presets as mdPresets } from '../../ext/markdown/index.js';
 import { renderText, registerFilter } from '../../ext/template/index.js';
@@ -1203,22 +1204,20 @@ const bar = new MenuBar(menubarEl, () => [
 bar.on('action', (a) => { const fn = actions[a]; if (fn) fn(); });
 
 // ── A-Bus connect ─────────────────────────────────────────────────────
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent) return;
-  if (!ev.data || ev.data.type !== 'abus:welcome') return;
-  const { port, tab } = ev.data;
-
+bootSurface({
+  connect,
+  client: 'doc',
+  onConnect: (b) => installThemeSubscription(b),
+  // Editor host: Flush persists; Relocated re-points the bound path.
+  makeHost: () => ({
+    flush: () => flush(),
+    relocate: (p) => { filePath = p; projectDir = dirOf(p); sPath.textContent = p; },
+  }),
+  mount: async ({ bus: b, tab }) => {
+  bus = b;
   filePath = tab.path;
   projectDir = dirOf(filePath);
   sPath.textContent = filePath;
-
-  try { bus = await connect(port, { client: 'doc-surface' }); }
-  catch (e) {
-    previewRoot.innerHTML = '<div class="template-error">connect failed: ' + esc(e.message) + '</div>';
-    return;
-  }
-  installThemeSubscription(bus);
-  try { await bus.claim('doc-' + (tab.id || 'unknown')); } catch {}
 
   busVfs = makeBusVfs();
   view = makeEditor('');
@@ -1256,23 +1255,11 @@ window.addEventListener('message', async (ev) => {
     'view:reading':      () => setMode('reading'),
   };
 
-  // Surface contract (§5.2)
-  bus.expose('/', {
-    Surface: {
-      methods: {
-        Flush:     () => flush(),
-        CanClose:  () => true,
-        Relocated: (p) => { filePath = p; projectDir = dirOf(p); sPath.textContent = p; },
-      },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
-    },
-  });
-
   // Initial title — renderNow will replace this with the frontmatter
   // title (if any) on first paint; emit a fallback here so the tab has
   // a sensible label between Ready and the first render completing.
   emitSig('TitleChanged', [basename(filePath)]);
-  emitSig('Ready', []);
+  },
 });
 </script>
 </body>
