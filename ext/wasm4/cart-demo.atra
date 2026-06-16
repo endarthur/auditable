@@ -3,6 +3,11 @@
 ! freestanding WASM-4 cart (exports start/update/memory, imports env.rect).
 
 import function rect(x, y, w, h: i32) from env
+import function text(str, x, y: i32) from env
+
+! Label bytes placed ABOVE the IO+framebuffer region (ends at 0x19A0) via a
+! based data segment, so they survive the per-frame framebuffer clear.
+data lbl, lbllen = @0x19A0 "MOVE\0"
 
 layout Pal
   c: i32[4]
@@ -37,4 +42,6 @@ begin
   if (py > 152) then py := 152 end if
   call wasm.store16(20, 0x42)         ! DRAW_COLORS @ 0x14: fill=2, outline=4
   call rect(px, py, 8, 8)
+  call wasm.store16(20, 0x04)         ! text: fg nibble0=4 → idx3, transparent bg
+  call text(lbl, 4, 4)
 end

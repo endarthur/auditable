@@ -52,7 +52,7 @@
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
 import { bootSurface } from '../../ext/surface/index.js';
-import { createConsole, RASTER_WASM, DEMO_CART_WASM, SCREEN, BUTTON_LEFT, BUTTON_RIGHT, BUTTON_UP, BUTTON_DOWN, BUTTON_1, BUTTON_2 } from '../../ext/wasm4/index.js';
+import { createConsole, RASTER_WASM, DEMO_CART_WASM, FONT_BYTES, SCREEN, BUTTON_LEFT, BUTTON_RIGHT, BUTTON_UP, BUTTON_DOWN, BUTTON_1, BUTTON_2 } from '../../ext/wasm4/index.js';
 
 /* @theme-init */
 
@@ -127,7 +127,7 @@ function stop() { running = false; if (raf) cancelAnimationFrame(raf); raf = 0; 
 
 function run(cartBytes) {
   stop();
-  con = createConsole({ cartBytes, rasterBytes: RASTER_WASM });
+  con = createConsole({ cartBytes, rasterBytes: RASTER_WASM, fontBytes: FONT_BYTES });
   con.start();
   running = true;
   tick();

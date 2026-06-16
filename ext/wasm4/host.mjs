@@ -27,13 +27,14 @@ export const SYSTEM_FLAGS = 0x1f;   // u8
 export const FRAMEBUFFER = 0xa0;    // 160×160 @ 2bpp, 40 bytes/row = 6400 bytes
 export const FB_BYTES = 6400;
 export const SCREEN = 160;
+export const FONT_BASE = 0xdc00;    // the rasterizer's font (host-written, reserved)
 
 // Button bits.
 export const BUTTON_1 = 0x01, BUTTON_2 = 0x02;
 export const BUTTON_LEFT = 0x10, BUTTON_RIGHT = 0x20, BUTTON_UP = 0x40, BUTTON_DOWN = 0x80;
 export const SYSTEM_PRESERVE_FRAMEBUFFER = 0x01;
 
-export function createConsole({ cartBytes, rasterBytes }) {
+export function createConsole({ cartBytes, rasterBytes, fontBytes, fontBase = FONT_BASE }) {
   let raster = null;   // filled in just below; the env closures read it lazily.
 
   // The drawing half of `env` dispatches to the atra rasterizer. blit/blitSub/
@@ -46,7 +47,7 @@ export function createConsole({ cartBytes, rasterBytes }) {
     vline: (x, y, len) => raster.vline(x, y, len),
     oval:  (x, y, w, h) => raster.oval(x, y, w, h),
     rect:  (x, y, w, h) => raster.rect(x, y, w, h),
-    text() {},
+    text:  (strPtr, x, y) => raster.text(strPtr, x, y),
     tone() {},
     diskr: () => 0,
     diskw: () => 0,
@@ -64,6 +65,10 @@ export function createConsole({ cartBytes, rasterBytes }) {
 
   const mem = new Uint8Array(memory.buffer);
   const dv = new DataView(memory.buffer);
+
+  // The font lives in a reserved high region (survives frame-clears, which only
+  // touch the framebuffer). Written once here; text() reads it from FONT_BASE.
+  if (fontBytes) mem.set(fontBytes, fontBase);
 
   function start() { if (typeof cart.exports.start === 'function') cart.exports.start(); }
 

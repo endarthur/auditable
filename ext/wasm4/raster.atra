@@ -175,3 +175,46 @@ subroutine blit(sprite, x, y, w, h, flags: i32)
 begin
   call blitSub(sprite, x, y, w, h, 0, 0, w, flags)
 end
+
+! text: draw a NUL-terminated string at (x,y) using the 8×8 font the host wrote
+! at FONT_BASE (0xDC00). Set bits use DRAW_COLORS nibble 0 (fg), clear bits
+! nibble 1 (bg); nibble 0 = transparent. \n wraps. Lowercase → uppercase.
+subroutine text(strPtr, x, y: i32)
+var dcbits, fg, bg, col, cy, ci, c, addr, row, bits, bx, dc: i32
+begin
+  dcbits := wasm.load16_u(20)
+  fg := dcbits & 15
+  bg := (dcbits >> 4) & 15
+  col := 0
+  cy := y
+  ci := 0
+  while (1)
+    c := wasm.load8_u(strPtr + ci)
+    if (c == 0) then break end if
+    if (c == 10) then
+      col := 0
+      cy := cy + 8
+    else
+      if (c >= 97) then
+        if (c <= 122) then c := c - 32 end if
+      end if
+      if (c >= 32) then
+        if (c <= 95) then
+          addr := 56320 + (c - 32) * 8
+          for row := 0, 8
+            bits := wasm.load8_u(addr + row)
+            for bx := 0, 8
+              dc := bg
+              if (((bits >> (7 - bx)) & 1) /= 0) then dc := fg end if
+              if (dc /= 0) then
+                call setpx(x + col * 8 + bx, cy + row, dc - 1)
+              end if
+            end for
+          end for
+        end if
+      end if
+      col := col + 1
+    end if
+    ci := ci + 1
+  end while
+end

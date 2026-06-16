@@ -12,6 +12,7 @@ const path = require('path');
 
 (async () => {
   const { atra } = await import('../atra/index.js');
+  const font = require('./font.js');
   const dir = __dirname;
 
   const rasterSrc = fs.readFileSync(path.join(dir, 'raster.atra'), 'utf8');
@@ -22,6 +23,7 @@ const path = require('path');
   // self-declares + exports its own.
   const rasterBytes = atra.compile(rasterSrc, { __memory: true });
   const demoBytes = atra.compile(cartSrc);
+  const fontBytes = font.packFont();
   const b64 = (u8) => Buffer.from(u8).toString('base64');
 
   const out = `// @gcu/wasm4 — BUILD OUTPUT (ext/wasm4/build.js). The host engine
@@ -33,6 +35,7 @@ ${host}
 // ── baked wasm modules (base64) ─────────────────────────────────────────────
 export const RASTER_B64 = ${JSON.stringify(b64(rasterBytes))};
 export const DEMO_CART_B64 = ${JSON.stringify(b64(demoBytes))};
+export const FONT_B64 = ${JSON.stringify(b64(fontBytes))};
 
 export function bytesFromB64(s) {
   if (typeof atob === 'function') {
@@ -46,8 +49,9 @@ export function bytesFromB64(s) {
 
 export const RASTER_WASM = bytesFromB64(RASTER_B64);
 export const DEMO_CART_WASM = bytesFromB64(DEMO_CART_B64);
+export const FONT_BYTES = bytesFromB64(FONT_B64);
 `;
 
   fs.writeFileSync(path.join(dir, 'index.js'), out);
-  console.log(`Built ext/wasm4/index.js — raster ${rasterBytes.length}B, demo cart ${demoBytes.length}B`);
+  console.log(`Built ext/wasm4/index.js — raster ${rasterBytes.length}B, demo cart ${demoBytes.length}B, font ${fontBytes.length}B`);
 })().catch((e) => { console.error(e); process.exit(1); });

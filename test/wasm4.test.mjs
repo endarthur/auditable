@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { atra } from '../ext/atra/index.js';
 import { createConsole, BUTTON_RIGHT, BUTTON_DOWN } from '../ext/wasm4/host.mjs';
+import font from '../ext/wasm4/font.js';
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const rasterSrc = readFileSync(join(dir, '../ext/wasm4/raster.atra'), 'utf8');
@@ -122,5 +123,35 @@ describe('wasm4 rasterizer — blit / blitSub', () => {
     r.blitSub(SP, 20, 20, 2, 1, 1, 0, 4, 1);
     assert.strictEqual(px(20, 20), 2);
     assert.strictEqual(px(21, 20), 3);
+  });
+});
+
+describe('wasm4 text', () => {
+  it('the demo renders its MOVE label when a font is provided', () => {
+    const c = createConsole({ cartBytes, rasterBytes, fontBytes: font.packFont() });
+    c.start();
+    c.frame();
+    // "MOVE" at (4,4) with DRAW_COLORS 0x04 → idx 3. The rect is at center
+    // (76,76), so any idx-3 pixel in the top-left label region is text.
+    let found = false;
+    for (let y = 4; y < 12 && !found; y++)
+      for (let x = 4; x < 40 && !found; x++)
+        if (c.getPixel(x, y) === 3) found = true;
+    assert.ok(found, 'MOVE text drew idx-3 pixels');
+  });
+
+  it('no font → text() draws nothing but does not crash; rect still draws', () => {
+    const c = createConsole({ cartBytes, rasterBytes });   // no fontBytes
+    c.start();
+    c.frame();
+    assert.strictEqual(c.getPixel(79, 79), 1, 'rect unaffected by blank font');
+    // Label region empty (font is zeros at 0xDC00).
+    let any = false;
+    for (let y = 4; y < 12; y++) for (let x = 4; x < 40; x++) if (c.getPixel(x, y) !== 0) any = true;
+    assert.ok(!any, 'no text pixels without a font');
+  });
+
+  it('packFont produces 64 glyphs × 8 bytes', () => {
+    assert.strictEqual(font.packFont().length, (0x5f - 0x20 + 1) * 8);
   });
 });
