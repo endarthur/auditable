@@ -36,6 +36,17 @@ near-identical lifecycle). Those are v0.1.
   - `theme` ownership (the `@theme-init` injection still provides
     `installThemeSubscription`, passed via `onConnect`).
 
+**Adoption (2026-06-16).** `bootSurface` is now the universal handshake base: all
+15 built-in Works surfaces (stub, settings, preview, encode, launcher, text,
+inspector, hex, library, docs, terminal, patchbay, reader/book, dd60, doc) boot
+through it, in addition to strata + plate. The trivial viewers/tools pass an empty
+host (`makeHost: () => ({})` → default `Flush`/`CanClose`/`Relocated`); editors
+(text, doc, patchbay) supply `flush`/`relocate`. `createWorksHost` (the
+lifecycle+selection adapter) stays a *separate* opt-in used only by the
+selection-linking surfaces (strata, plate) — most surfaces need only `bootSurface`
+with a small inline host. `'surface'` is in the build's `CORE_LIBS`, so works-core
+carries it (~6 KB).
+
 ## Core vs capability (what plate settled)
 
 plate is read-mostly — it barely touches file-I/O — which answered HOST.md's open

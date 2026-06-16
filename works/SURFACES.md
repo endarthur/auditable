@@ -226,11 +226,47 @@ both.
 
 ## 5. The boot template
 
-The handler shape every surface follows:
+**Use `@gcu/surface`'s `bootSurface` — don't hand-roll the handshake.** As of
+2026-06-16 all 15 built-in surfaces boot through it; it encapsulates the
+welcome→connect→claim→expose→Ready order (including the classic footgun: emitting
+`Ready` before the contract is exposed) so you can't get it wrong:
 
 ```js
 import { connect } from '@gcu/abus';
+import { bootSurface } from '@gcu/surface';
 
+bootSurface({
+  connect,
+  client: 'my-surface-kind',
+  onConnect: (bus) => installThemeSubscription(bus),   // optional, post-connect
+  // Per-surface §5.2 behaviour lives here. A trivial viewer/tool passes `{}`
+  // (defaults: Flush → undefined, CanClose → true, Relocated → noop). An
+  // editor supplies flush + relocate. Created BEFORE mount, so closures over
+  // app state set in mount are fine (the shell only calls these post-Ready).
+  makeHost: (bus) => ({
+    flush:    async () => { /* save now */ },
+    relocate: (newPath) => { /* re-point the bound path */ },
+  }),
+  mount: async ({ bus, tab }) => {
+    // Initialise UI, read tab.path, wire handlers, then emit TitleChanged.
+    bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [title]);
+  },
+});
+```
+
+`bootSurface` exposes the `Surface` interface for you (from the host's
+`flush`/`canClose`/`relocate`), runs `mount`, then emits `Ready` LAST. It only
+exposes the `Surface` interface — a surface that needs another exposed interface
+adds it inside `mount` (subscriptions and outbound calls have always lived in
+`mount`/the body). One caveat: `onConnect` is **not awaited**, so anything that
+must complete *before* the UI mounts (e.g. an awaited theme apply so a canvas
+reads tokens on first paint, as patchbay needs) belongs at the top of `mount`,
+not in `onConnect`.
+
+Under the hood `bootSurface` is the raw handler below (for reference — you
+should not write this by hand):
+
+```js
 window.addEventListener('message', async (ev) => {
   // §7.1 — adopt the welcome only from our own parent.
   if (ev.source !== window.parent) return;

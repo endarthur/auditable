@@ -13,6 +13,11 @@ real consumers (strata + plate):
   Surface lifecycle (dirty / flush / title) and the cross-surface
   **selection/linking** channel.
 
+As of 2026-06-16 **`bootSurface` is the universal handshake base — all 15 built-in
+Works surfaces boot through it**, not just strata + plate. Most pass a small inline
+host (trivial viewers/tools pass `{}`); `createWorksHost` stays the opt-in adapter
+for the selection-linking surfaces (strata, plate) that need the brushing channel.
+
 > The standalone host (FSAA/download) stays in `tools/strata` until a second
 > standalone tool needs it (one consumer ≠ an abstraction). The notebook's
 > VFS-project host (`src/js/host.js`, `provideVFS`/`persist`) is a different,
@@ -84,7 +89,9 @@ what lets one core span standalone, loose-file, and project modes.
 
 `node ext/surface/build.js` → `ext/surface/index.js`. Pure tests:
 `test/surface.test.mjs` (createWorksHost over a fake bus). `bootSurface` is
-covered by `test/strata-link-smoke.mjs` + `test/plate-strata-link-smoke.mjs`.
+covered by `test/strata-link-smoke.mjs` + `test/plate-strata-link-smoke.mjs`, and
+— since the universal-base rollout — by the full `test/works-smoke.mjs` (every
+built-in surface boots through it).
 
 ## License
 
