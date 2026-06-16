@@ -21,60 +21,40 @@
 <div id="status">stub surface — waiting for welcome…</div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 
 /* @theme-init */
 
 const statusEl = document.getElementById('status');
 
-window.addEventListener('message', async (ev) => {
-  // §7.1 — adopt the welcome port only from our own parent.
-  if (ev.source !== window.parent) return;
-  if (!ev.data || ev.data.type !== 'abus:welcome') return;
-  const { port, tab } = ev.data;
+bootSurface({
+  connect,
+  client: 'stub',
+  onConnect: (bus) => installThemeSubscription(bus),
+  // Trivial surface — no document, no dirty state. The default §5.2 methods
+  // (Flush → undefined, CanClose → true, Relocated → noop) are exactly right.
+  makeHost: () => ({}),
+  mount: async ({ bus, tab }) => {
+    // Prove the surface → works → VFS path: write a probe file through the
+    // `works` service and read it back.
+    let vfsOk = false;
+    try {
+      const probe = '/projects/.stub-probe';
+      const payload = 'hello from ' + tab.id;
+      await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Write' },
+        [probe, payload]);
+      const back = await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+        [probe]);
+      vfsOk = (back === payload);
+    } catch (e) {
+      statusEl.textContent = 'works/VFS call failed: ' + e.message;
+    }
 
-  let bus;
-  try {
-    bus = await connect(port, { client: 'stub-surface' });
-  } catch (e) {
-    statusEl.textContent = 'connect failed: ' + e.message;
-    return;
-  }
-  installThemeSubscription(bus);
-  try { await bus.claim('stub-' + (tab.id || 'unknown')); } catch {}
-
-  // The §5.2 Surface contract.
-  bus.expose('/', {
-    Surface: {
-      methods: {
-        Flush:     () => {},
-        CanClose:  () => true,
-        Relocated: (_p) => { /* adopt the new working directory */ },
-      },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
-    },
-  });
-
-  // Prove the surface → works → VFS path: write a probe file through the
-  // `works` service and read it back.
-  let vfsOk = false;
-  try {
-    const probe = '/projects/.stub-probe';
-    const payload = 'hello from ' + tab.id;
-    await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Write' },
-      [probe, payload]);
-    const back = await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' },
-      [probe]);
-    vfsOk = (back === payload);
-  } catch (e) {
-    statusEl.textContent = 'works/VFS call failed: ' + e.message;
-  }
-
-  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
-    ['Stub ' + tab.id]);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
-
-  statusEl.textContent = 'stub surface — ' + bus.uniqueName
-    + (vfsOk ? ' · works/VFS OK' : ' · works/VFS failed');
+    bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
+      ['Stub ' + tab.id]);
+    statusEl.textContent = 'stub surface — ' + bus.uniqueName
+      + (vfsOk ? ' · works/VFS OK' : ' · works/VFS failed');
+  },
 });
 </script>
 </body>

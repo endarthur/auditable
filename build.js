@@ -302,7 +302,7 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   // light 20 KB-gz renderer — not xterm.) See spec_inbox/gcu-distributions-spec.md.
   // 'markdown' = @gcu/markdown (~13 KB gz) — the preview surface (CORE) renders
   // .md with it (READMEs, welcome docs), replacing its old line-regex mini-fork.
-  const CORE_LIBS = ['abus', 'menu', 'qr', 'capsule', 'vfs', 'term', 'geas', 'proc', 'readline', 'markdown'];
+  const CORE_LIBS = ['abus', 'surface', 'menu', 'qr', 'capsule', 'vfs', 'term', 'geas', 'proc', 'readline', 'markdown'];
   // NB: 'strata-app' (the shared strata app core, source-override below) must
   // precede 'loom'/'strata'/'recon'/'archive' — the runtime surface inliner
   // iterates in this order, and inlining strata-app first is what brings its
@@ -797,14 +797,14 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   const CORE_KINDS = new Set(['stub', 'launcher', 'text', 'preview', 'inspector', 'settings', 'library', 'terminal']);
   const surfaceParts = [];
   for (const s of [
-    { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus'] },
+    { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus', 'surface'] },
     { kind: 'launcher',  file: 'works/surfaces/launcher.html',  deps: ['abus'] },
     { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus', 'menu'] },
     { kind: 'doc',       file: 'works/surfaces/doc.html',
       deps: ['abus', 'menu', 'markdown', 'template', 'yaml', 'epub', 'archive'] },
     { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus', 'markdown'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
-    { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus'] },
+    { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus', 'surface'] },
     // NB: the 'workbench' surface is no longer a built-in payload — it ships
     // inside the @gcu/workbench builtin package (pkg-builtins-payload below),
     // installed into /lib at boot and registered as a contributed surface.

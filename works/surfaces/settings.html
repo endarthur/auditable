@@ -193,6 +193,7 @@
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 
 /* @theme-init */
 
@@ -474,63 +475,50 @@ function wireUpdates() {
   });
 }
 
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent) return;
-  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+bootSurface({
+  connect,
+  client: 'settings',
+  onConnect: (b) => installThemeSubscription(b),
+  // No bound document — the default §5.2 methods (Flush noop, CanClose true,
+  // Relocated noop) are correct; settings persists via the works Settings
+  // interface, not a surface flush.
+  makeHost: () => ({}),
+  mount: async ({ bus: b }) => {
+    bus = b;   // the load*/save* helpers close over the module-level bus
 
-  try { bus = await connect(ev.data.port, { client: 'settings-surface' }); }
-  catch (e) {
-    document.body.innerHTML = '<div style="padding:20px;color:var(--au-error)">'
-      + 'settings surface failed: ' + (e.message || e) + '</div>';
-    return;
-  }
-  try { await bus.claim('settings-' + (ev.data.tab && ev.data.tab.id || 'unknown')); } catch {}
-  installThemeSubscription(bus);
+    await loadSettings();
+    await loadMounts();
+    await loadBusGrants();
+    await loadLicenses();
+    await loadUpdates();
 
-  bus.expose('/', {
-    Surface: {
-      methods: {
-        Flush:     () => {},
-        CanClose:  () => true,
-        Relocated: () => {},
-      },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
-    },
-  });
+    // Auto-save on every change.
+    $('theme').addEventListener('change', saveSettings);
+    $('fontSize').addEventListener('change', saveSettings);
+    $('confirmDataPack').addEventListener('change', saveSettings);
+    wireUpdates();
 
-  await loadSettings();
-  await loadMounts();
-  await loadBusGrants();
-  await loadLicenses();
-  await loadUpdates();
+    $('addMount').addEventListener('click', async () => {
+      try {
+        await bus.call(
+          { to: 'works', path: '/', interface: 'Shell', member: 'MountFolder' },
+          []);
+        await loadMounts();
+      } catch (e) {
+        alert('Mount failed: ' + (e.message || e));
+      }
+    });
 
-  // Auto-save on every change.
-  $('theme').addEventListener('change', saveSettings);
-  $('fontSize').addEventListener('change', saveSettings);
-  $('confirmDataPack').addEventListener('change', saveSettings);
-  wireUpdates();
+    $('aboutBtn').addEventListener('click', () => {
+      bus.call({ to: 'works', path: '/', interface: 'Shell', member: 'OpenAbout' }, [])
+        .catch(() => { /* */ });
+    });
 
-  $('addMount').addEventListener('click', async () => {
-    try {
-      await bus.call(
-        { to: 'works', path: '/', interface: 'Shell', member: 'MountFolder' },
-        []);
-      await loadMounts();
-    } catch (e) {
-      alert('Mount failed: ' + (e.message || e));
-    }
-  });
+    bus.subscribe({ interface: 'Shell', member: 'MountChanged', from: 'works' },
+      () => loadMounts());
 
-  $('aboutBtn').addEventListener('click', () => {
-    bus.call({ to: 'works', path: '/', interface: 'Shell', member: 'OpenAbout' }, [])
-      .catch(() => { /* */ });
-  });
-
-  bus.subscribe({ interface: 'Shell', member: 'MountChanged', from: 'works' },
-    () => loadMounts());
-
-  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Settings']);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+    bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Settings']);
+  },
 });
 </script>
 </body>
