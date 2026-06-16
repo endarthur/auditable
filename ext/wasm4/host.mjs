@@ -28,6 +28,7 @@ export const FRAMEBUFFER = 0xa0;    // 160×160 @ 2bpp, 40 bytes/row = 6400 byte
 export const FB_BYTES = 6400;
 export const SCREEN = 160;
 export const FONT_BASE = 0xdc00;    // the rasterizer's font (host-written, reserved)
+export const FONT_SHEET_BYTES = 1792;  // 224 glyphs (0x20-0xFF) × 8 rows
 
 // Button bits.
 export const BUTTON_1 = 0x01, BUTTON_2 = 0x02;
@@ -67,7 +68,10 @@ export function createConsole({ cartBytes, rasterBytes, fontBytes, fontBase = FO
   const dv = new DataView(memory.buffer);
 
   // The font lives in a reserved high region (survives frame-clears, which only
-  // touch the framebuffer). Written once here; text() reads it from FONT_BASE.
+  // touch the framebuffer). Written once here; text() blits glyphs from it. The
+  // font is inverted (on-pixel = 0 bit), so a zeroed region would draw SOLID
+  // blocks — baseline to 0xFF (all-off = blank) before overlaying the real font.
+  mem.fill(0xff, fontBase, fontBase + FONT_SHEET_BYTES);
   if (fontBytes) mem.set(fontBytes, fontBase);
 
   function start() { if (typeof cart.exports.start === 'function') cart.exports.start(); }

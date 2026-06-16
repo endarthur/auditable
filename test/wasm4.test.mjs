@@ -151,7 +151,7 @@ describe('wasm4 text', () => {
     assert.ok(!any, 'no text pixels without a font');
   });
 
-  it('packFont produces 64 glyphs × 8 bytes', () => {
-    assert.strictEqual(font.packFont().length, (0x5f - 0x20 + 1) * 8);
+  it('packFont produces 224 glyphs × 8 bytes (0x20-0xFF)', () => {
+    assert.strictEqual(font.packFont().length, (0xff - 0x20 + 1) * 8);
   });
 });

@@ -94,6 +94,13 @@
       "homepage": "https://github.com/cscott/seek-bzip",
       "description": "Pure-JS bzip2 decoder used by @gcu/archive for .bz2 / .tar.bz2 read. Decode-only — see SPEC §8. Concatenated from 4 upstream CommonJS files into a single ESM bundle at ext/archive/vendor/seek-bzip.module.mjs (regenerable via the header comment's vendoring notes).",
       "licenseFile": "ext/archive/vendor/LICENSE-seek-bzip"
+    },
+    "wasm4": {
+      "spdx": "MIT",
+      "version": "main",
+      "homepage": "https://github.com/aduros/wasm4",
+      "description": "The WASM-4 fantasy console's 8×8 system font — a DATA asset (1792 bytes, 224 glyphs 0x20-0xFF) extracted from the native runtime's font[] array (runtimes/native/src/framebuffer.c) and baked into @gcu/wasm4 (ext/wasm4/font.js). Used so the wasm4 surface renders real carts' text() with faithful glyph metrics. No upstream code is vendored — the rasterizer/host/APU are first-party (SPEC-wasm4 §7).",
+      "licenseFile": "ext/wasm4/LICENSE-wasm4.txt"
     }
   }
 }
