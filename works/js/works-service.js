@@ -306,6 +306,28 @@ export async function setupWorksService() {
         Snapshot: () => WKS.broker.inspect(),
       },
     },
+    // PWA self-update — the settings surface drives the @gcu/sw page-side
+    // client (WKS.sw, set up in init.js) over A-Bus, since the surface is a
+    // sandboxed iframe and can't reach the shell's SW client directly. Every
+    // method no-ops / returns null when no service worker controls the page
+    // (file://, first uncontrolled load, unsupported engines) — the surface
+    // renders an "unavailable" state on a null Status.
+    Updates: {
+      methods: {
+        Status:       () => (WKS.sw ? WKS.sw.status() : null),
+        CheckNow:     () => (WKS.sw ? WKS.sw.checkNow() : null),
+        SetAutoCheck: (v) => { if (WKS.sw) WKS.sw.setAutoCheck(!!v); },
+        ApplyUpdate:  () => { if (WKS.sw) WKS.sw.applyUpdate(); },
+        // Nuke unregisters the SW, so there's no gcu-sw:reload broadcast to
+        // ride — the shell reloads itself once caches are cleared.
+        Nuke: async () => {
+          if (!WKS.sw) return null;
+          const r = await WKS.sw.nuke();
+          try { if (typeof location !== 'undefined') location.reload(); } catch { /* */ }
+          return r;
+        },
+      },
+    },
     // Build-time vendored license inventory — used by the workspace settings
     // surface (and future tools like `geas licenses`). Returns the standard
     // table shape; static for now, will grow when pkg integration lands and

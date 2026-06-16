@@ -97,6 +97,11 @@
   }
   .lic-row.open .text { display: block; }
   .lic-row a { color: var(--au-info); }
+  .upd-ver { color: var(--au-fg); }
+  .upd-ver code { color: var(--au-info); }
+  .upd-ok { color: var(--au-success); }
+  .upd-found { color: var(--au-action); }
+  .hint a { color: var(--au-info); }
 </style>
 </head>
 <body>
@@ -159,6 +164,27 @@
     Click a row to view the LICENSE text.
   </div>
 
+  <h2>Updates</h2>
+  <div id="updStatus" class="upd-ver" style="margin-bottom:8px">Checking…</div>
+  <div class="row">
+    <label for="autoCheck">Check automatically</label>
+    <input type="checkbox" id="autoCheck">
+  </div>
+  <div class="actions">
+    <button id="checkNow">Check now</button>
+    <button id="applyUpdate" style="display:none">Reload to apply</button>
+  </div>
+  <div id="updMsg" class="hint"></div>
+  <div class="actions" style="margin-top:10px">
+    <button id="nukeCache" class="danger">Reset app cache…</button>
+  </div>
+  <div class="hint">
+    Reset clears the offline app cache and reloads — your workspace and files
+    are untouched. Still stuck? The
+    <a href="https://gentropic.org/hyper" target="_blank" rel="noopener">storage inspector</a>
+    is the hard-recovery escape.
+  </div>
+
   <h2>About</h2>
   <div class="actions">
     <button id="aboutBtn">About Auditable Works…</button>
@@ -192,6 +218,7 @@ async function loadSettings() {
   $('theme').value = settings.appearance?.theme || 'dark';
   $('fontSize').value = settings.appearance?.fontSize || 13;
   $('confirmDataPack').checked = settings.confirmDataPackInstall === true;
+  $('autoCheck').checked = settings.updates?.autoCheck !== false;
 }
 
 async function saveSettings() {
@@ -202,6 +229,7 @@ async function saveSettings() {
     fontSize: parseInt($('fontSize').value, 10) || 13,
   };
   settings.confirmDataPackInstall = $('confirmDataPack').checked;
+  settings.updates = { ...(settings.updates || {}), autoCheck: $('autoCheck').checked };
   await bus.call(
     { to: 'works', path: '/', interface: 'Settings', member: 'Set' }, [settings]);
   flashSaved('saved');
@@ -385,6 +413,67 @@ async function loadLicenses() {
   }
 }
 
+function updCall(member, args = []) {
+  return bus.call({ to: 'works', path: '/', interface: 'Updates', member }, args);
+}
+
+async function loadUpdates() {
+  const statusEl = $('updStatus');
+  let st = null;
+  try { st = await updCall('Status'); } catch { /* */ }
+  const supported = st && typeof st === 'object';
+  // Check now is a live action that needs a service worker controlling the
+  // page; the auto-check *preference* is always settable (it takes effect once
+  // installed as a PWA), so it's never disabled.
+  $('checkNow').disabled = !supported;
+  if (!supported) {
+    statusEl.innerHTML = 'Offline updates aren’t active here — this build is running '
+      + 'from a file, or the app hasn’t finished installing. Launch from '
+      + '<a href="https://gentropic.org/works" target="_blank" rel="noopener">gentropic.org/works</a> '
+      + 'for an auto-updating install.';
+    return;
+  }
+  statusEl.innerHTML = 'Installed: <code>' + esc(st.cache || st.app || 'unknown') + '</code>';
+}
+
+function wireUpdates() {
+  $('checkNow').addEventListener('click', async () => {
+    const btn = $('checkNow');
+    const msg = $('updMsg');
+    btn.disabled = true;
+    msg.className = 'hint';
+    msg.textContent = 'Checking…';
+    let r = null;
+    try { r = await updCall('CheckNow'); } catch { /* */ }
+    btn.disabled = false;
+    if (!r) { msg.textContent = 'Could not check — the service worker isn’t active.'; return; }
+    if (r.changed) {
+      msg.innerHTML = '<span class="upd-found">An update is ready.</span> Reload to apply it.';
+      $('applyUpdate').style.display = '';
+    } else {
+      msg.innerHTML = '<span class="upd-ok">You’re up to date.</span>';
+    }
+  });
+
+  $('applyUpdate').addEventListener('click', () => {
+    // Coordinated reload — every open tab lands on the new shell together.
+    updCall('ApplyUpdate').catch(() => { /* */ });
+  });
+
+  $('autoCheck').addEventListener('change', async () => {
+    try { await updCall('SetAutoCheck', [$('autoCheck').checked]); } catch { /* */ }
+    await saveSettings();
+  });
+
+  $('nukeCache').addEventListener('click', async () => {
+    if (!confirm('Reset the app cache and reload?\n\nYour workspace and files are not affected.')) return;
+    $('nukeCache').disabled = true;
+    // The shell deletes caches + unregisters the SW, then reloads itself — so
+    // this call typically never returns (the page navigates away).
+    try { await updCall('Nuke'); } catch { /* */ }
+  });
+}
+
 window.addEventListener('message', async (ev) => {
   if (ev.source !== window.parent) return;
   if (!ev.data || ev.data.type !== 'abus:welcome') return;
@@ -413,11 +502,13 @@ window.addEventListener('message', async (ev) => {
   await loadMounts();
   await loadBusGrants();
   await loadLicenses();
+  await loadUpdates();
 
   // Auto-save on every change.
   $('theme').addEventListener('change', saveSettings);
   $('fontSize').addEventListener('change', saveSettings);
   $('confirmDataPack').addEventListener('change', saveSettings);
+  wireUpdates();
 
   $('addMount').addEventListener('click', async () => {
     try {

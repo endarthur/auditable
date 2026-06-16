@@ -26,6 +26,13 @@ const DEFAULTS = Object.freeze({
     showLineNumbers: true,
     showStatusBar: true,
   },
+  // PWA self-update. autoCheck gates the @gcu/sw service worker's background
+  // revalidation of the shell. The SW resets its own flag when it restarts,
+  // so the shell re-applies this on boot (init.js) — that's what makes the
+  // Settings toggle actually stick across reloads.
+  updates: {
+    autoCheck: true,
+  },
 });
 
 function _merge(base, over) {

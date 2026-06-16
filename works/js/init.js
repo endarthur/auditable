@@ -35,6 +35,7 @@ import { installShellAuditable, evaluateAllWorksScripts } from './extension-load
 import { installBuiltinPackages } from './lib-builtins-loader.js';
 import { declareInstalledServices } from './extension-services.js';
 import { registerGcuSw } from '#sw-register';
+import { readSettings } from './settings-store.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
@@ -208,6 +209,13 @@ async function boot() {
   // snippet (it knows the deploy layout), so no `url` here. All best-effort —
   // registerGcuSw no-ops on file:// / older engines.
   WKS.sw = registerGcuSw({ persist: true, onUpdateAvailable: () => _showUpdateBanner() });
+  // Re-apply the persisted auto-check preference. The service worker resets
+  // its own _autoCheck flag whenever it restarts, so the shell settings are
+  // the source of truth across reloads — that's what makes the Settings →
+  // Updates toggle actually stick. Fire-and-forget; best-effort.
+  readSettings(WKS.vfs)
+    .then((s) => { if (WKS.sw && s && s.updates) WKS.sw.setAutoCheck(s.updates.autoCheck !== false); })
+    .catch(() => { /* */ });
 }
 
 let _updateBannerShown = false;
