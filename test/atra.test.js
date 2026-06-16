@@ -1779,3 +1779,45 @@ describe('call return()', () => {
     });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// data segments — based placement (`= @offset "…"`)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('data segments — based placement', () => {
+  const read = (inst, p, n) =>
+    String.fromCharCode(...new Uint8Array(inst.exports.memory.buffer).slice(p, p + n));
+
+  it('unbased data packs from offset 0 (unchanged)', () => {
+    const inst = new WebAssembly.Instance(new WebAssembly.Module(compileSource(`
+      data s, n = "AB"
+      function p(): i32 begin p := s end
+    `)), {});
+    assert.strictEqual(inst.exports.p(), 0);
+    assert.strictEqual(read(inst, 0, 2), 'AB');
+  });
+
+  it('based @offset lands the segment at the explicit address', () => {
+    const inst = new WebAssembly.Instance(new WebAssembly.Module(compileSource(`
+      data s, n = @0x19A0 "SCORE"
+      function p(): i32 begin p := s end
+      function len(): i32 begin len := n end
+    `)), {});
+    assert.strictEqual(inst.exports.p(), 0x19A0);
+    assert.strictEqual(inst.exports.len(), 5);
+    assert.strictEqual(read(inst, 0x19A0, 5), 'SCORE');
+  });
+
+  it('a based segment does not advance the running counter for later unbased segments', () => {
+    const inst = new WebAssembly.Instance(new WebAssembly.Module(compileSource(`
+      data hi, hn = @0x19A0 "HI"
+      data lo, ln = "ABCD"
+      function hip(): i32 begin hip := hi end
+      function lop(): i32 begin lop := lo end
+    `)), {});
+    assert.strictEqual(inst.exports.hip(), 0x19A0);
+    assert.strictEqual(inst.exports.lop(), 0);   // unbased still starts at 0
+    assert.strictEqual(read(inst, 0, 4), 'ABCD');
+    assert.strictEqual(read(inst, 0x19A0, 2), 'HI');
+  });
+});

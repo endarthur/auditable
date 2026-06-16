@@ -106,13 +106,24 @@ export function parse(tokens) {
     eat(TOK.PUNC, ',');
     const lenName = eat(TOK.ID).value;
     eat(TOK.OP, '=');
-    // optional memory bank qualifier: data p, n = io "text"
+    // optional memory bank qualifier: data p, n = io "text" (also before a
+    // based @offset: data p, n = io @0x19A0 "text").
     let bank = null;
-    if (at(TOK.ID) && tokens[pos + 1] && tokens[pos + 1].type === TOK.STR) {
+    if (at(TOK.ID) && tokens[pos + 1] &&
+        (tokens[pos + 1].type === TOK.STR ||
+         (tokens[pos + 1].type === TOK.OP && tokens[pos + 1].value === '@'))) {
       bank = eat(TOK.ID).value;
     }
+    // optional based placement: data p, n = @0x19A0 "text" — lands the segment
+    // at an explicit byte offset (e.g. above a cart's IO/framebuffer region)
+    // instead of packing from 0 upward. ptrName binds to this offset.
+    let offset = null;
+    if (at(TOK.OP, '@')) {
+      eat(TOK.OP, '@');
+      offset = Number(eat(TOK.NUM).value);
+    }
     const strTok = eat(TOK.STR);
-    return { type: 'DataDecl', ptrName, lenName, bank, bytes: strTok.value };
+    return { type: 'DataDecl', ptrName, lenName, bank, offset, bytes: strTok.value };
   }
 
   // Parse function type signature: function(x: f64, y: f64): f64

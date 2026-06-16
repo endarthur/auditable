@@ -700,13 +700,24 @@ function parse(tokens) {
     eat(TOK.PUNC, ',');
     const lenName = eat(TOK.ID).value;
     eat(TOK.OP, '=');
-    // optional memory bank qualifier: data p, n = io "text"
+    // optional memory bank qualifier: data p, n = io "text" (also before a
+    // based @offset: data p, n = io @0x19A0 "text").
     let bank = null;
-    if (at(TOK.ID) && tokens[pos + 1] && tokens[pos + 1].type === TOK.STR) {
+    if (at(TOK.ID) && tokens[pos + 1] &&
+        (tokens[pos + 1].type === TOK.STR ||
+         (tokens[pos + 1].type === TOK.OP && tokens[pos + 1].value === '@'))) {
       bank = eat(TOK.ID).value;
     }
+    // optional based placement: data p, n = @0x19A0 "text" — lands the segment
+    // at an explicit byte offset (e.g. above a cart's IO/framebuffer region)
+    // instead of packing from 0 upward. ptrName binds to this offset.
+    let offset = null;
+    if (at(TOK.OP, '@')) {
+      eat(TOK.OP, '@');
+      offset = Number(eat(TOK.NUM).value);
+    }
     const strTok = eat(TOK.STR);
-    return { type: 'DataDecl', ptrName, lenName, bank, bytes: strTok.value };
+    return { type: 'DataDecl', ptrName, lenName, bank, offset, bytes: strTok.value };
   }
 
   // Parse function type signature: function(x: f64, y: f64): f64
@@ -1690,12 +1701,18 @@ function codegen(ast, interpValues, userImports) {
   for (const node of ast.body) {
     if (node.type === 'DataDecl') {
       const memIdx = node.bank ? memoryIndex[node.bank] : 0;
-      dataConsts[node.ptrName] = dataOffset;
+      // A based decl (`= @0x19A0 "…"`) lands at its explicit offset and does
+      // not disturb the running counter; an unbased decl packs from 0 upward.
+      const based = node.offset != null;
+      const segOffset = based ? node.offset : dataOffset;
+      dataConsts[node.ptrName] = segOffset;
       dataConsts[node.lenName] = node.bytes.length;
-      dataSegments.push({ memIndex: memIdx, offset: dataOffset, bytes: node.bytes });
-      dataOffset += node.bytes.length;
-      // Align to 4 bytes for next segment
-      dataOffset = (dataOffset + 3) & ~3;
+      dataSegments.push({ memIndex: memIdx, offset: segOffset, bytes: node.bytes });
+      if (!based) {
+        dataOffset += node.bytes.length;
+        // Align to 4 bytes for next segment
+        dataOffset = (dataOffset + 3) & ~3;
+      }
     }
   }
 

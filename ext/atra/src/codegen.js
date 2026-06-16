@@ -207,12 +207,18 @@ export function codegen(ast, interpValues, userImports) {
   for (const node of ast.body) {
     if (node.type === 'DataDecl') {
       const memIdx = node.bank ? memoryIndex[node.bank] : 0;
-      dataConsts[node.ptrName] = dataOffset;
+      // A based decl (`= @0x19A0 "…"`) lands at its explicit offset and does
+      // not disturb the running counter; an unbased decl packs from 0 upward.
+      const based = node.offset != null;
+      const segOffset = based ? node.offset : dataOffset;
+      dataConsts[node.ptrName] = segOffset;
       dataConsts[node.lenName] = node.bytes.length;
-      dataSegments.push({ memIndex: memIdx, offset: dataOffset, bytes: node.bytes });
-      dataOffset += node.bytes.length;
-      // Align to 4 bytes for next segment
-      dataOffset = (dataOffset + 3) & ~3;
+      dataSegments.push({ memIndex: memIdx, offset: segOffset, bytes: node.bytes });
+      if (!based) {
+        dataOffset += node.bytes.length;
+        // Align to 4 bytes for next segment
+        dataOffset = (dataOffset + 3) & ~3;
+      }
     }
   }
 

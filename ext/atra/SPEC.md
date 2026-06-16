@@ -55,7 +55,7 @@ Four numeric types, matching WebAssembly's value types:
 | `f32` | 32-bit float             | 4     |
 | `f64` | 64-bit double precision  | 8     |
 
-No strings. No booleans (use `i32`, where 0 = false, nonzero = true). No pointers. No heap. Structs are available via `layout` declarations — they describe memory layouts but don't introduce new Wasm types. This is a numerical kernel language.
+No string type or operations (raw byte `data` segments do exist — see Data segments). No booleans (use `i32`, where 0 = false, nonzero = true). No pointers. No heap. Structs are available via `layout` declarations — they describe memory layouts but don't introduce new Wasm types. This is a numerical kernel language.
 
 ---
 
@@ -932,6 +932,31 @@ m.__layouts.Particle.pos
 ```
 
 This metadata enables JS code to read/write layout-structured memory without hardcoding offsets.
+
+---
+
+## Data segments
+
+atra has no string *type* and no string operations — but it does emit raw byte
+**data segments**, which is how string *bytes* get into linear memory (for a host
+to read, or for APIs like WASM-4's `text` that take a `(ptr)` into memory):
+
+```
+data ptr, len = "HI THERE\0"        ! binds ptr → offset, len → byte length
+data ptr, len = bank "…"             ! into a named memory bank (multi-memory)
+data ptr, len = @0x19A0 "SCORE"      ! BASED: lands at an explicit byte offset
+```
+
+`"…"` literals support the usual escapes (`\n`, `\0`, `\t`, `\\`, …) and `'x'`
+char literals exist in the lexer. `ptr` and `len` become compile-time `i32`
+constants (immutable wasm globals, zero runtime cost). Using any `data` decl puts
+the module in local-memory mode (it self-declares + exports `"memory"`).
+
+**Placement.** Unbased decls pack from offset `0` upward (4-byte aligned). A
+**based** decl (`= @<offset> "…"`) lands its bytes at an explicit address and does
+*not* disturb the running counter — so inline strings can sit *above* a fixed
+memory map (e.g. WASM-4's IO + framebuffer region, which ends at `0x19A0`) instead
+of clobbering it. The offset accepts decimal or `0x` hex.
 
 ---
 
