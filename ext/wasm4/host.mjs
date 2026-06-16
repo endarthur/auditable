@@ -39,7 +39,8 @@ export function createConsole({ cartBytes, rasterBytes }) {
   // The drawing half of `env` dispatches to the atra rasterizer. blit/blitSub/
   // text/tone are phase-2 (sprites/font/APU) — stubbed so any cart still runs.
   const env = {
-    blit() {}, blitSub() {},
+    blit:    (sprite, x, y, w, h, flags) => raster.blit(sprite, x, y, w, h, flags),
+    blitSub: (sprite, x, y, w, h, sx, sy, stride, flags) => raster.blitSub(sprite, x, y, w, h, sx, sy, stride, flags),
     line:  (x1, y1, x2, y2) => raster.line(x1, y1, x2, y2),
     hline: (x, y, len) => raster.hline(x, y, len),
     vline: (x, y, len) => raster.vline(x, y, len),

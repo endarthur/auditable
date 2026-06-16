@@ -85,3 +85,42 @@ describe('wasm4 headless engine', () => {
     assert.notStrictEqual(c.getPixel(76, 79), 0, 'old trail preserved');
   });
 });
+
+describe('wasm4 rasterizer — blit / blitSub', () => {
+  // Instantiate the rasterizer directly over a private memory to unit-test the
+  // sprite path (the engine wires env.blit → these).
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const r = atra({ memory })`${rasterSrc}`;
+  const mem = new Uint8Array(memory.buffer);
+  const dv = new DataView(memory.buffer);
+  const px = (x, y) => (mem[0xa0 + y * 40 + (x >> 2)] >> ((x & 3) * 2)) & 3;
+  const clear = () => mem.fill(0, 0xa0, 0xa0 + 6400);
+  const SP = 0xc000;
+  // 4×4 2bpp sprite, row 0 values [1,2,3,0] (MSB-first = 0x6C), rows 1-3 zero.
+  mem[SP] = 0x6c;
+  dv.setUint16(0x14, 0x4320, true);   // v0 transparent, v1→idx1, v2→idx2, v3→idx3
+
+  it('blit maps 2bpp values through DRAW_COLORS nibbles', () => {
+    clear();
+    r.blit(SP, 10, 10, 4, 4, 1);
+    assert.strictEqual(px(10, 10), 1);
+    assert.strictEqual(px(11, 10), 2);
+    assert.strictEqual(px(12, 10), 3);
+    assert.strictEqual(px(13, 10), 0, 'value 0 = transparent');
+    assert.strictEqual(px(10, 11), 0, 'empty sprite row');
+  });
+
+  it('FLIP_X mirrors across the sprite width', () => {
+    clear();
+    r.blit(SP, 10, 10, 4, 4, 1 | 2);
+    assert.strictEqual(px(13, 10), 1, 'leftmost value now at right edge');
+    assert.strictEqual(px(11, 10), 3);
+  });
+
+  it('blitSub draws a sub-region by srcX/stride', () => {
+    clear();
+    r.blitSub(SP, 20, 20, 2, 1, 1, 0, 4, 1);
+    assert.strictEqual(px(20, 20), 2);
+    assert.strictEqual(px(21, 20), 3);
+  });
+});

@@ -122,3 +122,56 @@ begin
     end for
   end for
 end
+
+! Read one bpp-bit sprite pixel value at linear pixel index `idx` (sprites are
+! packed MSB-first, no per-row padding — blitSub supplies the stride).
+function blit_px(sprite, idx, bpp: i32): i32
+var bit, b, shift: i32
+begin
+  bit := idx * bpp
+  b := wasm.load8_u(sprite + (bit >> 3))
+  shift := bit & 7
+  if (bpp == 1) then
+    blit_px := (b >> (7 - shift)) & 1
+  else
+    blit_px := (b >> (6 - shift)) & 3
+  end if
+end
+
+! blitSub: draw a w×h region of a sprite sheet (rooted at srcX,srcY, sheet width
+! = stride px) at (x,y). flags: bit0 BLIT_2BPP, bit1 FLIP_X, bit2 FLIP_Y,
+! bit3 ROTATE (v1: transpose — true 90° corner cases are a TODO). Each source
+! value selects a DRAW_COLORS nibble; nibble 0 = transparent.
+subroutine blitSub(sprite, x, y, w, h, srcX, srcY, stride, flags: i32)
+var bpp, flipx, flipy, rot, dcbits, sy, sx, sval, dc, tx, ty, tmp: i32
+begin
+  bpp := (flags & 1) + 1
+  flipx := flags & 2
+  flipy := flags & 4
+  rot := flags & 8
+  dcbits := wasm.load16_u(20)
+  for sy := 0, h
+    for sx := 0, w
+      sval := blit_px(sprite, (srcY + sy) * stride + (srcX + sx), bpp)
+      dc := (dcbits >> (sval * 4)) & 15
+      if (dc /= 0) then
+        tx := sx
+        ty := sy
+        if (flipx /= 0) then tx := w - 1 - tx end if
+        if (flipy /= 0) then ty := h - 1 - ty end if
+        if (rot /= 0) then
+          tmp := tx
+          tx := ty
+          ty := tmp
+        end if
+        call setpx(x + tx, y + ty, dc - 1)
+      end if
+    end for
+  end for
+end
+
+! blit: whole sprite (blitSub with src 0,0 and stride = w).
+subroutine blit(sprite, x, y, w, h, flags: i32)
+begin
+  call blitSub(sprite, x, y, w, h, 0, 0, w, flags)
+end
