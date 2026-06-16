@@ -1,0 +1,124 @@
+! @gcu/wasm4 rasterizer — draws into the shared WASM-4 framebuffer (0xA0, 2bpp,
+! 40 bytes/row). DRAW_COLORS @ 0x14: nibble0 = fill, nibble1 = outline; a nibble
+! value of 0 = transparent, 1..4 → framebuffer palette index 0..3 (nibble - 1).
+
+subroutine setpx(x, y, ci: i32)
+var addr, shift, b, mask: i32
+begin
+  if (x < 0) then call return() end if
+  if (x > 159) then call return() end if
+  if (y < 0) then call return() end if
+  if (y > 159) then call return() end if
+  addr := 160 + y * 40 + (x >> 2)
+  shift := (x & 3) * 2
+  b := wasm.load8_u(addr)
+  mask := 3 << shift
+  b := (b & (~mask)) | ((ci & 3) << shift)
+  call wasm.store8(addr, b)
+end
+
+subroutine hline(x, y, len: i32)
+var dc, c, i: i32
+begin
+  dc := wasm.load16_u(20)
+  c := dc & 15
+  if (c == 0) then call return() end if
+  for i := x, x + len
+    call setpx(i, y, c - 1)
+  end for
+end
+
+subroutine vline(x, y, len: i32)
+var dc, c, i: i32
+begin
+  dc := wasm.load16_u(20)
+  c := dc & 15
+  if (c == 0) then call return() end if
+  for i := y, y + len
+    call setpx(x, i, c - 1)
+  end for
+end
+
+subroutine rect(x, y, w, h: i32)
+var dc, fillc, linec, px, py: i32
+begin
+  dc := wasm.load16_u(20)
+  fillc := dc & 15
+  linec := (dc >> 4) & 15
+  if (fillc /= 0) then
+    for py := y, y + h
+      for px := x, x + w
+        call setpx(px, py, fillc - 1)
+      end for
+    end for
+  end if
+  if (linec /= 0) then
+    for px := x, x + w
+      call setpx(px, y, linec - 1)
+      call setpx(px, y + h - 1, linec - 1)
+    end for
+    for py := y, y + h
+      call setpx(x, py, linec - 1)
+      call setpx(x + w - 1, py, linec - 1)
+    end for
+  end if
+end
+
+subroutine line(x1, y1, x2, y2: i32)
+var dc, c, dx, dy, sx, sy, err, e2, x, y: i32
+begin
+  dc := wasm.load16_u(20)
+  c := dc & 15
+  if (c == 0) then call return() end if
+  x := x1
+  y := y1
+  dx := x2 - x1
+  if (dx < 0) then dx := 0 - dx end if
+  dy := y2 - y1
+  if (dy < 0) then dy := 0 - dy end if
+  if (x1 < x2) then sx := 1 else sx := 0 - 1 end if
+  if (y1 < y2) then sy := 1 else sy := 0 - 1 end if
+  err := dx - dy
+  while (1)
+    call setpx(x, y, c - 1)
+    if (x == x2) then
+      if (y == y2) then break end if
+    end if
+    e2 := 2 * err
+    if (e2 > (0 - dy)) then
+      err := err - dy
+      x := x + sx
+    end if
+    if (e2 < dx) then
+      err := err + dx
+      y := y + sy
+    end if
+  end while
+end
+
+! Fill oval inscribed in (x,y,w,h). v1: solid fill (fillc, else outline color);
+! integer point-in-ellipse test. Outline-only ovals are a TODO.
+subroutine oval(x, y, w, h: i32)
+var dc, fillc, c, cx, cy, rx, ry, px, py, ddx, ddy, lhs, rhs: i32
+begin
+  dc := wasm.load16_u(20)
+  fillc := dc & 15
+  c := fillc
+  if (c == 0) then c := (dc >> 4) & 15 end if
+  if (c == 0) then call return() end if
+  rx := w / 2
+  ry := h / 2
+  cx := x + rx
+  cy := y + ry
+  rhs := rx * rx * ry * ry
+  for py := y, y + h
+    for px := x, x + w
+      ddx := px - cx
+      ddy := py - cy
+      lhs := ddx * ddx * ry * ry + ddy * ddy * rx * rx
+      if (lhs <= rhs) then
+        call setpx(px, py, c - 1)
+      end if
+    end for
+  end for
+end

@@ -1,0 +1,40 @@
+! @gcu/wasm4 demo cart — a controllable 8×8 block. Reads GAMEPAD1 (0x16),
+! moves a position held in global vars, draws it with rect. Compiles to a
+! freestanding WASM-4 cart (exports start/update/memory, imports env.rect).
+
+import function rect(x, y, w, h: i32) from env
+
+layout Pal
+  c: i32[4]
+end layout
+
+var px: i32
+var py: i32
+
+subroutine start()
+var p: layout Pal
+begin
+  p := 4                    ! PALETTE @ 0x04 — 4 × u32 (0x00RRGGBB)
+  p.c[0] := 0x1a1c2c
+  p.c[1] := 0x5d275d
+  p.c[2] := 0xb13e53
+  p.c[3] := 0xef7d57
+  px := 76
+  py := 76
+end
+
+subroutine update()
+var g: i32
+begin
+  g := wasm.load8_u(22)               ! GAMEPAD1 @ 0x16
+  if ((g & 16) /= 0) then px := px - 1 end if    ! LEFT  0x10
+  if ((g & 32) /= 0) then px := px + 1 end if    ! RIGHT 0x20
+  if ((g & 64) /= 0) then py := py - 1 end if    ! UP    0x40
+  if ((g & 128) /= 0) then py := py + 1 end if   ! DOWN  0x80
+  if (px < 0) then px := 0 end if
+  if (px > 152) then px := 152 end if
+  if (py < 0) then py := 0 end if
+  if (py > 152) then py := 152 end if
+  call wasm.store16(20, 0x42)         ! DRAW_COLORS @ 0x14: fill=2, outline=4
+  call rect(px, py, 8, 8)
+end
