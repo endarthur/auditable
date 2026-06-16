@@ -576,6 +576,12 @@ registerKind('hex', { label: 'Hex viewer', icon: '⬡', universal: true,
 // transforms + SHA-1/256/512 via Web Crypto. No extensions (not a file opener).
 registerKind('encode', { label: 'Encode / Hash', icon: '⇄', extensions: [] });
 
+// WASM-4 fantasy console — runs a conformant .wasm cart (any source language)
+// over the @gcu/wasm4 engine; spawns with a baked demo cart when path-less.
+// Claims `.w4` (the cart marker) — `.wasm` stays with the hex viewer (generic
+// binary), since a cart is one kind of .wasm among many.
+registerKind('wasm4', { label: 'WASM-4', icon: '◰', extensions: ['.w4'] });
+
 // The A-Bus inspector — a diagnostic surface, spawned from the Debug menu
 // (not tied to a VFS path).
 registerKind('inspector', { label: 'A-Bus Inspector', icon: '◉', extensions: [] });

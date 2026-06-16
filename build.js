@@ -307,7 +307,7 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   // precede 'loom'/'strata'/'recon'/'archive' — the runtime surface inliner
   // iterates in this order, and inlining strata-app first is what brings its
   // bare @gcu/* imports into the surface text so those libs inline after it.
-  const SHARED_LIBS_BASE = ['abus', 'surface', 'strata-app', 'loom', 'strata', 'over', 'plate', 'sift', 'vfs', 'term', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'acorn', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
+  const SHARED_LIBS_BASE = ['abus', 'surface', 'strata-app', 'loom', 'strata', 'over', 'plate', 'sift', 'vfs', 'term', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'acorn', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1', 'wasm4'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).
@@ -822,6 +822,7 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     { kind: 'plate',     file: 'works/surfaces/plate.html',     deps: ['abus', 'surface', 'plate', 'strata', 'recon', 'archive'] },
     { kind: 'hex',       file: 'works/surfaces/hex.html',       deps: ['abus', 'surface'] },
     { kind: 'encode',    file: 'works/surfaces/encode.html',    deps: ['abus', 'surface'] },
+    { kind: 'wasm4',     file: 'works/surfaces/wasm4.html',     deps: ['abus', 'surface', 'wasm4'] },
     // NB: the 'notebook' surface is no longer a built-in payload (auditable.html)
     // — it ships as the @gcu/notebook builtin package (pkg-builtins-payload),
     // assembled at spawn from its module tree. works no longer depends on a

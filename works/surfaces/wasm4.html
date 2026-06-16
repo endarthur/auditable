@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>WASM-4</title>
+<style>
+  /* @theme-tokens */
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--au-surface-deep, #0d1014); color: var(--au-fg, #e6e9ec);
+    font: 12px/1.4 ui-monospace, 'Space Mono', monospace;
+    display: flex; flex-direction: column; height: 100%;
+  }
+  header {
+    flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 5px 10px; border-bottom: 1px solid var(--au-border, #2a313a);
+    background: var(--au-surface-raised, #1b2026);
+  }
+  header .title { font-weight: 600; }
+  header .spacer { flex: 1; }
+  header button {
+    background: var(--au-surface-bright, #242b33); color: var(--au-fg, #e6e9ec);
+    border: 1px solid var(--au-border, #2a313a); border-radius: 3px;
+    padding: 3px 10px; font: inherit; cursor: pointer;
+  }
+  header .msg { color: var(--au-fg-soft, #9aa3ad); font-size: 11px; }
+  .stage {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    min-height: 0; padding: 12px;
+  }
+  /* 160×160 internal resolution, scaled up crisp. */
+  canvas {
+    image-rendering: pixelated; image-rendering: crisp-edges;
+    width: min(100%, calc(100vh - 80px)); height: auto; aspect-ratio: 1 / 1;
+    background: #000; outline: none;
+    box-shadow: 0 0 0 1px var(--au-border, #2a313a);
+  }
+  .err { padding: 20px; color: var(--au-fault, #e5534b); }
+  * { scrollbar-width: thin; scrollbar-color: var(--au-border) transparent; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">WASM-4</span>
+  <span class="spacer"></span>
+  <span class="msg" id="msg">arrows / WASD · X · Z</span>
+  <button id="reset">Reset</button>
+</header>
+<div class="stage">
+  <canvas id="screen" width="160" height="160" tabindex="0"></canvas>
+</div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
+import { createConsole, RASTER_WASM, DEMO_CART_WASM, SCREEN, BUTTON_LEFT, BUTTON_RIGHT, BUTTON_UP, BUTTON_DOWN, BUTTON_1, BUTTON_2 } from '../../ext/wasm4/index.js';
+
+/* @theme-init */
+
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d', { alpha: false });
+const img = ctx.createImageData(SCREEN, SCREEN);
+const msg = document.getElementById('msg');
+
+let con = null;       // the console
+let raf = 0;
+let running = false;
+let pad = 0;          // keyboard button bitmask
+
+// ── keyboard → gamepad bits (physical keys via e.code) ───────────────────
+const KEYS = {
+  ArrowLeft: BUTTON_LEFT, KeyA: BUTTON_LEFT,
+  ArrowRight: BUTTON_RIGHT, KeyD: BUTTON_RIGHT,
+  ArrowUp: BUTTON_UP, KeyW: BUTTON_UP,
+  ArrowDown: BUTTON_DOWN, KeyS: BUTTON_DOWN,
+  KeyX: BUTTON_1, Period: BUTTON_1,
+  KeyZ: BUTTON_2, Comma: BUTTON_2,
+};
+addEventListener('keydown', (e) => { const b = KEYS[e.code]; if (b) { pad |= b; e.preventDefault(); } });
+addEventListener('keyup', (e) => { const b = KEYS[e.code]; if (b) { pad &= ~b; e.preventDefault(); } });
+
+// ── gamepad (polled each frame — Permissions-Policy default `self` lets a
+//    same-origin surface iframe read getGamepads without an `allow` attr) ──
+function pollGamepad() {
+  let g = 0;
+  const pads = (navigator.getGamepads && navigator.getGamepads()) || [];
+  const gp = pads[0];
+  if (!gp) return 0;
+  const a = gp.axes, b = gp.buttons;
+  const down = (i) => b[i] && b[i].pressed;
+  if (down(14) || a[0] < -0.5) g |= BUTTON_LEFT;
+  if (down(15) || a[0] > 0.5) g |= BUTTON_RIGHT;
+  if (down(12) || a[1] < -0.5) g |= BUTTON_UP;
+  if (down(13) || a[1] > 0.5) g |= BUTTON_DOWN;
+  if (down(0)) g |= BUTTON_1;
+  if (down(1)) g |= BUTTON_2;
+  return g;
+}
+
+// ── present: framebuffer (2bpp) → palette → RGBA → canvas ────────────────
+function present() {
+  const mem = new Uint8Array(con.memory.buffer);
+  const pal = [con.getPalette(0), con.getPalette(1), con.getPalette(2), con.getPalette(3)];
+  const d = img.data;
+  let di = 0;
+  for (let y = 0; y < SCREEN; y++) {
+    const row = 0xa0 + y * 40;
+    for (let x = 0; x < SCREEN; x++) {
+      const rgb = pal[(mem[row + (x >> 2)] >> ((x & 3) * 2)) & 3];
+      d[di++] = (rgb >> 16) & 0xff;
+      d[di++] = (rgb >> 8) & 0xff;
+      d[di++] = rgb & 0xff;
+      d[di++] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function tick() {
+  if (!running) return;
+  con.setGamepad(0, pad | pollGamepad());
+  con.frame();
+  present();
+  raf = requestAnimationFrame(tick);
+}
+
+function stop() { running = false; if (raf) cancelAnimationFrame(raf); raf = 0; }
+
+function run(cartBytes) {
+  stop();
+  con = createConsole({ cartBytes, rasterBytes: RASTER_WASM });
+  con.start();
+  running = true;
+  tick();
+  // Test/debug hook — works-smoke / verify reach in via this.
+  window._wasm4 = { console: con, getPixel: (x, y) => con.getPixel(x, y), setPad: (b) => { pad = b; } };
+}
+
+async function loadCart(bus, tabPath) {
+  if (tabPath && /\.(w4|wasm)$/i.test(tabPath)) {
+    try {
+      const bytes = await bus.call(
+        { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [tabPath, 'bytes']);
+      if (bytes instanceof Uint8Array) return bytes;
+      if (bytes && bytes.buffer) return new Uint8Array(bytes.buffer);
+    } catch (e) { msg.textContent = 'cart load failed — running demo'; }
+  }
+  return DEMO_CART_WASM;
+}
+
+addEventListener('pagehide', stop);
+
+bootSurface({
+  connect,
+  client: 'wasm4',
+  onConnect: (b) => { if (typeof installThemeSubscription === 'function') installThemeSubscription(b); },
+  makeHost: () => ({}),   // a player — no document to flush
+  mount: async ({ bus, tab }) => {
+    const cartBytes = await loadCart(bus, tab.path);
+    try {
+      run(cartBytes);
+    } catch (e) {
+      document.querySelector('.stage').innerHTML =
+        '<div class="err">console failed: ' + (e && e.message || e) + '</div>';
+    }
+    canvas.addEventListener('click', () => canvas.focus());
+    canvas.focus();
+    document.getElementById('reset').addEventListener('click', () => { run(cartBytes); canvas.focus(); });
+    const name = (tab.path && /\.(w4|wasm)$/i.test(tab.path))
+      ? tab.path.split('/').filter(Boolean).pop() : 'WASM-4';
+    bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [name]);
+  },
+});
+</script>
+</body>
+</html>
