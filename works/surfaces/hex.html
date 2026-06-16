@@ -162,6 +162,7 @@
 <div class="ctxmenu hidden" id="ctx"></div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 
 /* @theme-init */
 
@@ -358,48 +359,41 @@ ctx.addEventListener('click', (e) => {
 window.addEventListener('mousedown', (e) => { if (!ctx.contains(e.target)) ctx.classList.add('hidden'); });
 
 // ── A-Bus boot ────────────────────────────────────────────────────────
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent) return;
-  if (!ev.data || ev.data.type !== 'abus:welcome') return;
-  const { port, tab } = ev.data;
-
-  filePath = tab.path || '';
-  $('st-path').textContent = filePath;
-
-  try { bus = await connect(port, { client: 'hex-surface' }); }
-  catch (e) { document.body.textContent = 'connect failed: ' + e.message; return; }
-  if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
-
-  try {
-    const data = await bus.call(
-      { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [filePath, 'bytes']);
-    bytes = data instanceof Uint8Array ? data
-          : (data && data.buffer) ? new Uint8Array(data.buffer)
-          : new Uint8Array(0);
-  } catch { bytes = new Uint8Array(0); }
-
-  cursor = selStart = selEnd = 0;
-  layout();
-  updateInspector();
-  updateStatus();
-
-  bus.expose('/', {
-    Surface: {
-      methods: {
-        Flush:     () => {},          // read-only — nothing to persist
-        CanClose:  () => true,
-        Relocated: (p) => { filePath = p; $('st-path').textContent = p;
-          bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [basename(p)]); },
-      },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+bootSurface({
+  connect,
+  client: 'hex',
+  onConnect: (b) => { if (typeof installThemeSubscription === 'function') installThemeSubscription(b); },
+  // Read-only viewer: nothing to flush; Relocated updates the bound path + title.
+  makeHost: (b) => ({
+    relocate: (p) => {
+      filePath = p; $('st-path').textContent = p;
+      b.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [basename(p)]);
     },
-  });
-  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [basename(filePath)]);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+  }),
+  mount: async ({ bus: b, tab }) => {
+    bus = b;
+    filePath = tab.path || '';
+    $('st-path').textContent = filePath;
 
-  // Test/debug hook — works-smoke reaches in via this.
-  window._hex = { get bytes() { return bytes; }, setCursor, gotoOffset,
-    state: () => ({ cursor, selStart, selEnd, bytesPerRow, len: bytes.length }) };
+    try {
+      const data = await bus.call(
+        { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [filePath, 'bytes']);
+      bytes = data instanceof Uint8Array ? data
+            : (data && data.buffer) ? new Uint8Array(data.buffer)
+            : new Uint8Array(0);
+    } catch { bytes = new Uint8Array(0); }
+
+    cursor = selStart = selEnd = 0;
+    layout();
+    updateInspector();
+    updateStatus();
+
+    bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [basename(filePath)]);
+
+    // Test/debug hook — works-smoke reaches in via this.
+    window._hex = { get bytes() { return bytes; }, setCursor, gotoOffset,
+      state: () => ({ cursor, selStart, selEnd, bytesPerRow, len: bytes.length }) };
+  },
 });
 </script>
 </body>

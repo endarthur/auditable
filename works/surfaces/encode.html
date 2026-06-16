@@ -109,6 +109,7 @@
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 
 /* @theme-init */
 
@@ -188,25 +189,16 @@ window._enc = {
 };
 
 // ── A-Bus boot (tool surface — no file) ───────────────────────────────
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent) return;
-  if (!ev.data || ev.data.type !== 'abus:welcome') return;
-  let bus;
-  try { bus = await connect(ev.data.port, { client: 'encode-surface' }); }
-  catch (e) { document.body.textContent = 'connect failed: ' + e.message; return; }
-  if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
-
-  render();
-  $('input').focus();
-
-  bus.expose('/', {
-    Surface: {
-      methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
-    },
-  });
-  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Encode / Hash']);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+bootSurface({
+  connect,
+  client: 'encode',
+  onConnect: (bus) => { if (typeof installThemeSubscription === 'function') installThemeSubscription(bus); },
+  makeHost: () => ({}),   // stateless tool — no document
+  mount: async ({ bus }) => {
+    render();
+    $('input').focus();
+    bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Encode / Hash']);
+  },
 });
 </script>
 </body>

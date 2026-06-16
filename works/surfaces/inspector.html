@@ -149,6 +149,7 @@
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 
 /* @theme-init */
 
@@ -199,52 +200,42 @@ function medianLatency(key) {
 
 // ── Boot ─────────────────────────────────────────────────────────────
 
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent) return;             // §7.1
-  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+bootSurface({
+  connect,
+  client: 'inspector',
+  onConnect: (b) => installThemeSubscription(b),
+  makeHost: () => ({}),   // diagnostics viewer — no document
+  mount: async ({ bus: b }) => {
+    bus = b;
 
-  try { bus = await connect(ev.data.port, { client: 'inspector' }); }
-  catch (e) { $('detail').textContent = 'connect failed: ' + e.message; return; }
-  installThemeSubscription(bus);
+    // Subscribe to the broker's diagnostic stream BEFORE the first snapshot
+    // so we don't miss any peers that announce themselves between calls.
+    bus.subscribe({ interface: 'Monitor', member: 'Traffic',    from: 'bus' }, onTraffic);
+    bus.subscribe({ interface: 'Monitor', member: 'PeerJoined', from: 'bus' }, onPeerJoined);
+    bus.subscribe({ interface: 'Monitor', member: 'PeerLeft',   from: 'bus' }, onPeerLeft);
 
-  try { await bus.claim('inspector-' + (ev.data.tab && ev.data.tab.id || 'unknown')); }
-  catch { /* duplicate or invalid — non-fatal */ }
+    $('refresh').addEventListener('click', refresh);
+    $('pause').addEventListener('click', togglePause);
+    $('clear').addEventListener('click', clearLog);
+    $('export').addEventListener('click', exportLog);
+    for (const id of ['filter-peers', 'filter-subs', 'filter-log']) {
+      $(id).addEventListener('input', () => {
+        if (id === 'filter-peers') renderPeers();
+        else if (id === 'filter-subs') renderSubs(lastSubs);
+        else renderLog();
+      });
+    }
 
-  bus.expose('/', {
-    Surface: {
-      methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
-    },
-  });
+    await refresh();
 
-  // Subscribe to the broker's diagnostic stream BEFORE the first snapshot
-  // so we don't miss any peers that announce themselves between calls.
-  bus.subscribe({ interface: 'Monitor', member: 'Traffic',    from: 'bus' }, onTraffic);
-  bus.subscribe({ interface: 'Monitor', member: 'PeerJoined', from: 'bus' }, onPeerJoined);
-  bus.subscribe({ interface: 'Monitor', member: 'PeerLeft',   from: 'bus' }, onPeerLeft);
+    bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
+      ['A-Bus Inspector']);
 
-  $('refresh').addEventListener('click', refresh);
-  $('pause').addEventListener('click', togglePause);
-  $('clear').addEventListener('click', clearLog);
-  $('export').addEventListener('click', exportLog);
-  for (const id of ['filter-peers', 'filter-subs', 'filter-log']) {
-    $(id).addEventListener('input', () => {
-      if (id === 'filter-peers') renderPeers();
-      else if (id === 'filter-subs') renderSubs(lastSubs);
-      else renderLog();
-    });
-  }
-
-  await refresh();
-
-  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
-    ['A-Bus Inspector']);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
-
-  // Periodic refresh of the snapshot — picks up subscription churn we
-  // can't fully derive from the stream alone (unsubscribe doesn't fire
-  // a signal we can attribute to a specific filter).
-  setInterval(refresh, 2000);
+    // Periodic refresh of the snapshot — picks up subscription churn we
+    // can't fully derive from the stream alone (unsubscribe doesn't fire
+    // a signal we can attribute to a specific filter).
+    setInterval(refresh, 2000);
+  },
 });
 
 // ── Snapshot ─────────────────────────────────────────────────────────

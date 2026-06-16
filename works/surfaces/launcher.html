@@ -88,6 +88,7 @@
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 
 /* @theme-init */
 
@@ -119,41 +120,34 @@ function render(items) {
   }
 }
 
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent) return;
-  if (!ev.data || ev.data.type !== 'abus:welcome') return;
-  const { port } = ev.data;
-  myTabId = ev.data.tab && ev.data.tab.id || null;
+bootSurface({
+  connect,
+  client: 'launcher',
+  onConnect: (b) => { if (typeof installThemeSubscription === 'function') installThemeSubscription(b); },
+  makeHost: () => ({}),
+  mount: async ({ bus: b, tab }) => {
+    bus = b;
+    myTabId = tab.id || null;
 
-  try { bus = await connect(port, { client: 'launcher-surface' }); }
-  catch (e) { document.body.textContent = 'connect failed: ' + e.message; return; }
-  if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
+    async function refresh() {
+      try {
+        const items = await bus.call(
+          { to: 'works', path: '/', interface: 'Shell', member: 'LaunchItems' }, []);
+        render(items);
+      } catch (e) { console.warn('[launcher] LaunchItems failed:', e); render([]); }
+    }
+    await refresh();
 
-  async function refresh() {
-    try {
-      const items = await bus.call(
-        { to: 'works', path: '/', interface: 'Shell', member: 'LaunchItems' }, []);
-      render(items);
-    } catch (e) { console.warn('[launcher] LaunchItems failed:', e); render([]); }
-  }
-  await refresh();
+    // Stay live: a provision / install / uninstall changes what's creatable.
+    // The shell emits Shell.LaunchItemsChanged; re-query + re-render so newly
+    // provisioned surfaces (notebook, workbench, …) appear without a reload.
+    bus.subscribe({ interface: 'Shell', member: 'LaunchItemsChanged', from: 'works' },
+      () => refresh());
 
-  // Stay live: a provision / install / uninstall changes what's creatable.
-  // The shell emits Shell.LaunchItemsChanged; re-query + re-render so newly
-  // provisioned surfaces (notebook, workbench, …) appear without a reload.
-  bus.subscribe({ interface: 'Shell', member: 'LaunchItemsChanged', from: 'works' },
-    () => refresh());
+    bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Launcher']);
 
-  bus.expose('/', {
-    Surface: {
-      methods: { Flush: () => {}, CanClose: () => true },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
-    },
-  });
-  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Launcher']);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
-
-  window._launcher = { render, items: () => bus.call({ to: 'works', path: '/', interface: 'Shell', member: 'LaunchItems' }, []) };
+    window._launcher = { render, items: () => bus.call({ to: 'works', path: '/', interface: 'Shell', member: 'LaunchItems' }, []) };
+  },
 });
 </script>
 </body>

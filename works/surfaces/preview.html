@@ -124,6 +124,7 @@ table.csv .col-type { color: var(--au-fg-soft); font-size: 10px; font-weight: 40
 <div id="root"><div id="loading">Loading…</div></div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 import { render as mdRender, presets as mdPresets } from '../../ext/markdown/index.js';
 
 /* @theme-init */
@@ -167,66 +168,51 @@ let currentBus = null;
 let currentSourcePath = null;
 let cachedEntries = null;   // memoize the entry list within a session
 
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent || !ev.data || ev.data.type !== 'abus:welcome') return;
-  const { port, tab } = ev.data;
+bootSurface({
+  connect,
+  client: 'preview',
+  onConnect: (bus) => installThemeSubscription(bus),
+  makeHost: () => ({}),   // read-only viewer
+  mount: async ({ bus, tab }) => {
+    const path = tab.path;
+    const name = basename(path);
+    const ext = extOf(name);
+    const readText = () => bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [path, 'utf8']);
+    // MUST pass 'bytes' — VFS.Read without an encoding hits the backend's
+    // default (TextDecoder().decode()), which UTF-8-launders binary contents
+    // and substitutes U+FFFD for non-UTF-8 bytes. Same trap we hit earlier in
+    // the archive arc; the lesson applies to image + PDF previews too.
+    const readBytes = () => bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [path, 'bytes']);
 
-  let bus;
-  try { bus = await connect(port, { client: 'preview' }); }
-  catch (e) { showError('A-Bus connect failed: ' + e.message); return; }
-  installThemeSubscription(bus);
-  try { await bus.claim('preview-' + (tab.id || 'unknown')); } catch {}
+    // Expose bus so the archive renderer (called later) can also invoke
+    // Archive.List / Archive.Read / Archive.Extract.
+    currentBus = bus;
+    currentSourcePath = path;
 
-  const path = tab.path;
-  const name = basename(path);
-  const ext = extOf(name);
-  const readText = () => bus.call(
-    { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [path, 'utf8']);
-  // MUST pass 'bytes' — VFS.Read without an encoding hits the backend's
-  // default (TextDecoder().decode()), which UTF-8-launders binary contents
-  // and substitutes U+FFFD for non-UTF-8 bytes. Same trap we hit earlier in
-  // the archive arc; the lesson applies to image + PDF previews too.
-  const readBytes = () => bus.call(
-    { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [path, 'bytes']);
-
-  // Expose bus so the archive renderer (called later) can also invoke
-  // Archive.List / Archive.Read / Archive.Extract.
-  currentBus = bus;
-  currentSourcePath = path;
-
-  try {
-    if (archiveExtMatches(name)) {
-      await renderArchive(path);
-    } else if (ext === '.csv' || ext === '.tsv') {
-      renderCsv(await readText(), ext === '.tsv' ? '\t' : ',');
-    } else if (ext === '.json' || ext === '.geojson') {
-      renderJson(await readText());
-    } else if (ext === '.md' || ext === '.markdown') {
-      renderMarkdown(await readText());
-    } else if (IMAGE_EXTS.includes(ext)) {
-      renderImage(await readBytes(), ext);
-    } else if (ext === '.pdf') {
-      renderPdf(await readBytes());
-    } else {
-      showError('No preview available for ' + (ext || 'this file'));
+    try {
+      if (archiveExtMatches(name)) {
+        await renderArchive(path);
+      } else if (ext === '.csv' || ext === '.tsv') {
+        renderCsv(await readText(), ext === '.tsv' ? '\t' : ',');
+      } else if (ext === '.json' || ext === '.geojson') {
+        renderJson(await readText());
+      } else if (ext === '.md' || ext === '.markdown') {
+        renderMarkdown(await readText());
+      } else if (IMAGE_EXTS.includes(ext)) {
+        renderImage(await readBytes(), ext);
+      } else if (ext === '.pdf') {
+        renderPdf(await readBytes());
+      } else {
+        showError('No preview available for ' + (ext || 'this file'));
+      }
+    } catch (e) {
+      showError('read failed: ' + (e.message || e));
     }
-  } catch (e) {
-    showError('read failed: ' + (e.message || e));
-  }
 
-  // §5.2 Surface contract — read-only viewer.
-  bus.expose('/', {
-    Surface: {
-      methods: {
-        Flush:     () => {},
-        CanClose:  () => true,
-        Relocated: () => {},
-      },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
-    },
-  });
-  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [name]);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+    bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [name]);
+  },
 });
 
 // ── CSV ─────────────────────────────────────────────────────────────

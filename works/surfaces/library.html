@@ -148,6 +148,7 @@
 
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 import { toSVG } from '../../ext/qr/index.js';
 import { encodeInlineI, fragmentEncode } from '../../ext/capsule/index.js';
 /* @theme-init */
@@ -327,13 +328,13 @@ async function shareEntry(e) {
   } catch (err) { $('credit').textContent = 'share failed: ' + (err.message || err); }
 }
 
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent || !ev.data || ev.data.type !== 'abus:welcome') return;
-  try { bus = await connect(ev.data.port, { client: 'library-surface' }); }
-  catch (e) { document.body.innerHTML = '<div class="err" style="padding:24px">connect failed: ' + (e.message || e) + '</div>'; return; }
-  try { await bus.claim('library-' + (ev.data.tab && ev.data.tab.id || 'x')); } catch {}
-  if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
-  bus.expose('/', { Surface: { methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} }, signals: ['DirtyChanged', 'TitleChanged', 'Ready'] } });
+bootSurface({
+  connect,
+  client: 'library',
+  onConnect: (b) => { if (typeof installThemeSubscription === 'function') installThemeSubscription(b); },
+  makeHost: () => ({}),
+  mount: async ({ bus: b }) => {
+   bus = b;
 
   // smart-view nav
   for (const el of document.querySelectorAll('.nav-item'))
@@ -377,7 +378,7 @@ window.addEventListener('message', async (ev) => {
   await loadPrefs();
   loadAll();
   bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Library']);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+  },
 });
 </script>
 </body>

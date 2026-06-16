@@ -798,30 +798,30 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   const surfaceParts = [];
   for (const s of [
     { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus', 'surface'] },
-    { kind: 'launcher',  file: 'works/surfaces/launcher.html',  deps: ['abus'] },
-    { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus', 'menu'] },
+    { kind: 'launcher',  file: 'works/surfaces/launcher.html',  deps: ['abus', 'surface'] },
+    { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus', 'surface', 'menu'] },
     { kind: 'doc',       file: 'works/surfaces/doc.html',
       deps: ['abus', 'menu', 'markdown', 'template', 'yaml', 'epub', 'archive'] },
-    { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus', 'markdown'] },
-    { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
+    { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus', 'surface', 'markdown'] },
+    { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus', 'surface'] },
     { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus', 'surface'] },
     // NB: the 'workbench' surface is no longer a built-in payload — it ships
     // inside the @gcu/workbench builtin package (pkg-builtins-payload below),
     // installed into /lib at boot and registered as a contributed surface.
     { kind: 'docs',      file: 'works/surfaces/docs.html',
-      deps: ['abus', 'markdown', 'librarian', 'docview'] },
+      deps: ['abus', 'surface', 'markdown', 'librarian', 'docview'] },
     { kind: 'book',      file: 'works/surfaces/reader.html',
       deps: ['abus', 'markdown', 'docview', 'librarian', 'katex', 'reader-core'] },
     { kind: 'dd60',      file: 'works/surfaces/dd60.html',
       deps: ['abus', 'markdown', 'docview', 'librarian', 'katex', 'reader-core'] },
-    { kind: 'library',   file: 'works/surfaces/library.html', deps: ['abus', 'qr', 'capsule'] },
+    { kind: 'library',   file: 'works/surfaces/library.html', deps: ['abus', 'surface', 'qr', 'capsule'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'vfs', 'term', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'sideact', 'patchbay', 'menu'] },
     { kind: 'strata',    file: 'works/surfaces/strata.html',    deps: ['abus', 'surface', 'strata-app'] },
     { kind: 'plate',     file: 'works/surfaces/plate.html',     deps: ['abus', 'surface', 'plate', 'strata', 'recon', 'archive'] },
-    { kind: 'hex',       file: 'works/surfaces/hex.html',       deps: ['abus'] },
-    { kind: 'encode',    file: 'works/surfaces/encode.html',    deps: ['abus'] },
+    { kind: 'hex',       file: 'works/surfaces/hex.html',       deps: ['abus', 'surface'] },
+    { kind: 'encode',    file: 'works/surfaces/encode.html',    deps: ['abus', 'surface'] },
     // NB: the 'notebook' surface is no longer a built-in payload (auditable.html)
     // — it ships as the @gcu/notebook builtin package (pkg-builtins-payload),
     // assembled at spawn from its module tree. works no longer depends on a

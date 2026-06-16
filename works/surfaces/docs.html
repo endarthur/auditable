@@ -317,6 +317,7 @@
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface } from '../../ext/surface/index.js';
 
 /* @theme-init */
 import { render as mdRender, presets as mdPresets, slugify } from '../../ext/markdown/index.js';
@@ -636,25 +637,14 @@ function renderSidebar() {
   }
 }
 
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent) return;
-  if (!ev.data || ev.data.type !== 'abus:welcome') return;
-
-  try { bus = await connect(ev.data.port, { client: 'docs-surface' }); }
-  catch (e) {
-    document.body.innerHTML = '<div class="err">connect failed: ' + (e.message || e) + '</div>';
-    return;
-  }
-  try { await bus.claim('docs-' + (ev.data.tab && ev.data.tab.id || 'unknown')); } catch {}
-
+bootSurface({
+  connect,
+  client: 'docs',
+  onConnect: (b) => installThemeSubscription(b),
+  makeHost: () => ({}),   // docs persists its own state via the persister
+  mount: async ({ bus: b }) => {
+  bus = b;
   persister = makeStatePersister(bus, STATE_PATH);
-  installThemeSubscription(bus);
-bus.expose('/', {
-    Surface: {
-      methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
-    },
-  });
 
   // Load the manifest first; everything else hangs off it.
   try {
@@ -767,7 +757,7 @@ bus.expose('/', {
   });
 
   bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Documentation']);
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+  },
 });
 </script>
 </body>
