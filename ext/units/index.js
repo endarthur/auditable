@@ -1,7 +1,7 @@
-// @gcu/units — Unit conversion primitives for geoscience
-// Auto-generated from ext/units/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/units — Unit conversion for length, mass, area, volume, angle, grade, density, and magnetic quantities. Sieve mesh conversions, drill core utilities, formatting helpers.
 
-// -- convert.js --
+// ── src/convert.js ──
 
 // Unit dimension registry and convert function
 
@@ -155,7 +155,7 @@ const magnetic = {
   uTToNT: v => convert(v, 'uT', 'nT'),
 };
 
-// -- sieve.js --
+// ── src/sieve.js ──
 
 // Tyler / ASTM mesh ↔ µm lookup table
 
@@ -228,7 +228,7 @@ const sieve = {
   },
 };
 
-// -- core.js --
+// ── src/core.js ──
 
 // DCDMA wireline diamond core sizes
 
@@ -304,7 +304,7 @@ const core = {
   },
 };
 
-// -- format.js --
+// ── src/format.js ──
 
 // Format values with unit labels and auto-scaling
 
@@ -371,13 +371,23 @@ function format(value, unit, opts) {
   if (displayUnit === 'pct') return numStr + '%';
   return numStr + ' ' + label;
 }
+
+// ── src/main.js ──
+
+// @gcu/units — entry point
+
 export {
-  // convert
-  UNITS, convert, length, mass, grade, density, area, volume, angle, magnetic,
-  // sieve
+  UNITS,
+  convert,
+  length,
+  mass,
+  grade,
+  density,
+  area,
+  volume,
+  angle,
+  magnetic,
   sieve,
-  // core
   core,
-  // format
   format,
 };

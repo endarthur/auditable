@@ -1,8 +1,7 @@
-// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/menu/src/  Build: node ext/menu/build.js
-// @gcu/menu — popup menus and menubars
-// Menu.show, Menu.dismiss, Menu.dropdown, MenuBar. Zero dependencies.
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/menu — Popup menus and menubars: context menus, dropdowns, submenus, MenuBar. Promise-resolving show(), CSS-variable themed, full keyboard, drag-aware, ~250 LOC. Zero dependencies.
 
-// -- helpers.js --
+// ── src/helpers.js ──
 
 // @gcu/menu — pure helpers. Zero DOM, zero imports.
 // Used internally by menu.js; exported for test access.
@@ -52,7 +51,7 @@ function findByPrefix(items, prefix, from) {
   return -1;
 }
 
-// -- menu.js --
+// ── src/menu.js ──
 
 // @gcu/menu — Menu primitive: positioned, dismissable list of actions.
 // Used for context menus, dropdowns, submenus, and as the engine behind
@@ -743,7 +742,7 @@ function teardown() {
   }
 }
 
-// -- menubar.js --
+// ── src/menubar.js ──
 
 // @gcu/menu — MenuBar: horizontal strip of triggers, each opens a Menu.
 
@@ -997,10 +996,16 @@ class MenuBar {
   }
 }
 
-// -- main.js --
+// ── src/main.js ──
 
-// @gcu/menu — import manifest (build concat order). The build script reads
-// these import statements to determine the order in which files are
-// concatenated into ext/menu/index.js.
+// @gcu/menu — package entry: build concat manifest + the curated public
+// surface (the names the bundle exports; matches the old hand-written footer).
 
-export { Menu, show, dismiss, dropdown, isOpen, MenuBar };
+export {
+  Menu,
+  show,
+  dismiss,
+  dropdown,
+  isOpen,
+  MenuBar,
+};

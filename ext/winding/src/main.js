@@ -113,3 +113,5 @@ class Winding {
 }
 
 export { Winding, buildBVH };
+// CPU math helpers — part of the curated public surface (matches the old footer).
+export { evaluateCPU, solidAngle, windingBrute, windingBVH } from './cpu.js';

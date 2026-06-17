@@ -1,7 +1,7 @@
-// WINDING — Generalized Winding Number Block Model Evaluator
-// Auto-generated from ext/winding/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/winding — Generalized winding number solid containment for triangle meshes. CPU + WebGPU evaluators with BVH acceleration and optional Web Worker offload.
 
-// -- bvh.js --
+// ── src/bvh.js ──
 
 // BVH (Bounding Volume Hierarchy) construction for triangle meshes
 // Flat array layout for GPU-friendly traversal
@@ -181,7 +181,7 @@ function partialSort(vertices, triangles, indices, lo, hi, mid, axis) {
   else if (store > mid) partialSort(vertices, triangles, indices, lo, store, mid, axis);
 }
 
-// -- cpu.js --
+// ── src/cpu.js ──
 
 // CPU winding number evaluation
 // Used for testing and as fallback when WebGPU is unavailable
@@ -350,7 +350,7 @@ async function evaluateCPU(vertices, triangles, bvhNodes, triIndices, blockModel
   return { proportions, flags };
 }
 
-// -- gpu.js --
+// ── src/gpu.js ──
 
 // WebGPU winding number evaluation
 
@@ -638,12 +638,10 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
   return { flags };
 }
 
-// -- worker.js --
+// ── src/worker.js ──
 
 // Web Worker for off-main-thread winding number evaluation (CPU and GPU paths)
 // Worker blob inlines all evaluation code via Function.toString() + JSON.stringify()
-
-
 
 
 function createWindingWorker(opts = {}) {
@@ -788,13 +786,10 @@ function evaluateWorker(worker, meshName, blockModel, opts = {}) {
   });
 }
 
-// -- main.js --
+// ── src/main.js ──
 
 // WINDING — Generalized Winding Number Block Model Evaluator
 // Main API: Winding.create({ device?, worker?, gpu? }), setMesh(), evaluate()
-
-
-
 
 
 class Winding {
@@ -902,4 +897,14 @@ class Winding {
     }
   }
 }
-export { Winding, buildBVH, evaluateCPU, solidAngle, windingBrute, windingBVH };
+
+// CPU math helpers — part of the curated public surface (matches the old footer).
+
+export {
+  Winding,
+  buildBVH,
+  evaluateCPU,
+  solidAngle,
+  windingBrute,
+  windingBVH,
+};

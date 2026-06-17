@@ -1,8 +1,7 @@
-// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/dialog/src/  Build: node ext/dialog/build.js
-// @gcu/dialog — modal dialogs (confirm, prompt, alert, custom forms)
-// Promise-resolving show(), focus trap, stacking, ARIA. Zero dependencies.
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/dialog — Modal dialogs: confirm, prompt, alert, custom forms. Promise-resolving show(), focus trap, stacking, ARIA. CSS-variable themed. Zero dependencies.
 
-// -- helpers.js --
+// ── src/helpers.js ──
 
 // @gcu/dialog — pure helpers. Zero DOM, exported for tests.
 
@@ -48,7 +47,7 @@ function validateValue(value, validator) {
   return { valid: true, error: null };
 }
 
-// -- dialog.js --
+// ── src/dialog.js ──
 
 // @gcu/dialog — modal dialog primitive.
 // Centered modal with backdrop, focus trap, stacking, animation, ARIA.
@@ -403,11 +402,10 @@ function dismissAll() {
 // Open dialogs count (test/debug helper).
 function openCount() { return _stack.length; }
 
-// -- convenience.js --
+// ── src/convenience.js ──
 
 // @gcu/dialog — convenience APIs: confirm, prompt, alert.
 // Built on the Dialog primitive. Each returns a promise.
-
 
 
 // ── confirm ──────────────────────────────────────────────────────────────
@@ -561,14 +559,16 @@ function makeButtonRow(buttons, ctx) {
   return row;
 }
 
-// -- main.js --
+// ── src/main.js ──
 
-// @gcu/dialog — import manifest (build concat order). The build script reads
-// these import statements to determine the order in which files are
-// concatenated into ext/dialog/index.js.
-Dialog.confirm    = confirm;
-Dialog.prompt     = prompt;
-Dialog.alert      = alert;
-Dialog.dismissAll = dismissAll;
+// @gcu/dialog — package entry: build concat manifest + the curated public
+// surface (the names the bundle exports; matches the old hand-written footer).
 
-export { Dialog, confirm, prompt, alert, dismissAll, openCount };
+export {
+  Dialog,
+  dismissAll,
+  openCount,
+  confirm,
+  prompt,
+  alert,
+};

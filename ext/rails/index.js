@@ -1,8 +1,7 @@
-// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/rails/src/  Build: node ext/rails/build.js
-// @gcu/rails — layout engine for docked tab-based workspaces
-// Rails, stacks, tabs. Panels never reparent. Zero dependencies.
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/rails — Layout engine for docked tab-based workspaces with floating groups. Rails, stacks, tabs, floats — no recursion, no popout. Panels never reparent, so iframes and canvases survive every drag. Zero dependencies.
 
-// -- state.js --
+// ── src/state.js ──
 
 // @gcu/rails — state operations
 // Pure functions over the State tree. Zero DOM, zero imports.
@@ -236,7 +235,7 @@ function emptyState() {
   return { rails: [], floats: [] };
 }
 
-// -- render.js --
+// ── src/render.js ──
 
 // @gcu/rails — chrome rendering + content positioning + panel cache
 // DOM-touching. Expects an instance object holding host/chromeLayer/contentLayer/state/panels/callbacks.
@@ -878,11 +877,10 @@ function setFloatBoundsInPlace(inst, floatId, bounds) {
   reposition(inst);
 }
 
-// -- drag.js --
+// ── src/drag.js ──
 
 // @gcu/rails — tab drag, splitter drag, float drag/resize, drop zones, Escape-cancel
 // All drag state lives on the instance (inst.drag); no module-scoped mutables.
-
 
 
 const HOVER_ACTIVATE_DELAY_MS = 500;
@@ -1822,10 +1820,11 @@ function findStackById(state, stackId) {
   return null;
 }
 
-// -- api.js --
+// ── src/api.js ──
 
 // @gcu/rails — public API: createRails()
 // Assembles an instance, wires event delegation, and returns the public surface.
+
 
 
 
@@ -2470,9 +2469,17 @@ function toCamel(s) {
   return s.replace(/[:-](.)/g, (_, c) => c.toUpperCase());
 }
 
-// -- main.js --
+// ── src/main.js ──
 
-// @gcu/rails — concat build manifest.
-// Import order below doubles as concat order for build.js.
+// @gcu/rails — package entry: build concat manifest + the curated public
+// surface (the names the bundle exports; matches the old hand-written footer).
 
-export { createRails, findTab, findStack, findRail, emptyState, validateState, freshId };
+export {
+  createRails,
+  findTab,
+  findStack,
+  findRail,
+  emptyState,
+  validateState,
+  freshId,
+};

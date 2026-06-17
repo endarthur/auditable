@@ -1,7 +1,9 @@
-// @gcu/dialog — import manifest (build concat order). The build script reads
-// these import statements to determine the order in which files are
-// concatenated into ext/dialog/index.js.
+// @gcu/dialog — package entry: build concat manifest + the curated public
+// surface (the names the bundle exports; matches the old hand-written footer).
 
 import './helpers.js';
 import './dialog.js';
 import './convenience.js';
+
+export { Dialog, dismissAll, openCount } from './dialog.js';
+export { confirm, prompt, alert } from './convenience.js';

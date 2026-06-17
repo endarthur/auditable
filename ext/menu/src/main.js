@@ -1,7 +1,9 @@
-// @gcu/menu — import manifest (build concat order). The build script reads
-// these import statements to determine the order in which files are
-// concatenated into ext/menu/index.js.
+// @gcu/menu — package entry: build concat manifest + the curated public
+// surface (the names the bundle exports; matches the old hand-written footer).
 
 import './helpers.js';
 import './menu.js';
 import './menubar.js';
+
+export { Menu, show, dismiss, dropdown, isOpen } from './menu.js';
+export { MenuBar } from './menubar.js';

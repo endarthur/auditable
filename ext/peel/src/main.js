@@ -120,3 +120,5 @@ class Peel {
 }
 
 export { Peel, buildBVH };
+// CPU/geometry helpers — part of the curated public surface (matches the old footer).
+export { evaluateCPU, rayTriangle, rayAABB, peelColumnBrute, peelColumnBVH, AXIS_MAP } from './cpu.js';

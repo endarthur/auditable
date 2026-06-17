@@ -1,7 +1,7 @@
-// PEEL — Depth Peeling Surface Intersection Engine
-// Auto-generated from ext/peel/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/peel — Depth-peeling surface intersection engine for triangle meshes. CPU + WebGPU evaluators with BVH acceleration and optional Web Worker offload. Designed for geological section construction and similar column-query workloads.
 
-// -- bvh.js --
+// ── src/bvh.js ──
 
 // BVH (Bounding Volume Hierarchy) construction for triangle meshes
 // Flat array layout for GPU-friendly traversal
@@ -181,7 +181,7 @@ function partialSort(vertices, triangles, indices, lo, hi, mid, axis) {
   else if (store > mid) partialSort(vertices, triangles, indices, lo, store, mid, axis);
 }
 
-// -- cpu.js --
+// ── src/cpu.js ──
 
 // CPU depth peeling evaluation
 // Moller-Trumbore ray-triangle intersection + BVH ray traversal + interval classification
@@ -492,7 +492,7 @@ async function evaluateCPU(vertices, triangles, bvhNodes, triIndices, blockModel
   return { flags, overflow: overflowCount };
 }
 
-// -- gpu.js --
+// ── src/gpu.js ──
 
 // WebGPU depth peeling evaluation
 
@@ -968,12 +968,10 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
   return { flags, overflow };
 }
 
-// -- worker.js --
+// ── src/worker.js ──
 
 // Web Worker for off-main-thread depth peeling evaluation (CPU and GPU paths)
 // Worker blob inlines all evaluation code via Function.toString() + JSON.stringify()
-
-
 
 
 function createPeelWorker(opts = {}) {
@@ -1176,13 +1174,10 @@ function evaluateWorker(worker, meshName, blockModel, opts = {}) {
   });
 }
 
-// -- main.js --
+// ── src/main.js ──
 
 // PEEL — Depth Peeling Surface Intersection Engine
 // Main API: Peel.create({ device?, worker?, gpu? }), setMesh(), evaluate()
-
-
-
 
 
 class Peel {
@@ -1297,4 +1292,16 @@ class Peel {
     }
   }
 }
-export { Peel, buildBVH, evaluateCPU, rayTriangle, rayAABB, peelColumnBrute, peelColumnBVH, AXIS_MAP };
+
+// CPU/geometry helpers — part of the curated public surface (matches the old footer).
+
+export {
+  Peel,
+  buildBVH,
+  evaluateCPU,
+  rayTriangle,
+  rayAABB,
+  peelColumnBrute,
+  peelColumnBVH,
+  AXIS_MAP,
+};
