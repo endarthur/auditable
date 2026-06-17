@@ -1,6 +1,7 @@
-// @gcu/voxmesh — built from src/
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/voxmesh — Greedy voxel meshing for block models and volumetric data. Binning, bucket aggregation, chunked meshing, convenience helpers. Produces triangle meshes for rendering.
 
-// ── bin.js ──
+// ── src/bin.js ──
 
 // @gcu/voxmesh — binning: discretize continuous values into bin IDs
 
@@ -53,7 +54,7 @@ function discretize(values, breaks) {
   return out;
 }
 
-// ── chunk.js ──
+// ── src/chunk.js ──
 
 // @gcu/voxmesh — chunking: spatial partitioning of grid into sub-ranges
 
@@ -96,7 +97,7 @@ function chunkRange(chunks, chunkIndex) {
   };
 }
 
-// ── bucket.js ──
+// ── src/bucket.js ──
 
 // @gcu/voxmesh — bucketing: collect populated blocks into per-chunk buckets + ghost cells
 
@@ -179,7 +180,7 @@ function addGhosts(chunks, buckets) {
   }
 }
 
-// ── mesh.js ──
+// ── src/mesh.js ──
 
 // @gcu/voxmesh — greedy mesher: face culling + quad merging
 
@@ -539,12 +540,9 @@ function meshSection(gridDef, compactVar, binIds, plane) {
   };
 }
 
-// ── convenience.js ──
+// ── src/convenience.js ──
 
 // @gcu/voxmesh — convenience wrappers and incremental updates
-
-
-
 
 
 function prepare(gridDef, compactVar, opts) {
@@ -631,16 +629,23 @@ function rebin(prepared, opts) {
   return { affected: meshes, meshes, binIds: newBinIds, breaks };
 }
 
-// ── exports ──
+// ── src/main.js ──
+
+
+
 export {
-  // binning
-  binBreaks, binQuantiles, discretize,
-  // chunking
-  chunk, chunkId, chunkRange,
-  // bucketing
-  bucket, addGhosts,
-  // meshing
-  meshChunk, meshAll, meshSection,
-  // convenience
-  prepare, diffBins, rebin,
+  binBreaks,
+  binQuantiles,
+  discretize,
+  chunk,
+  chunkId,
+  chunkRange,
+  bucket,
+  addGhosts,
+  meshChunk,
+  meshAll,
+  meshSection,
+  prepare,
+  diffBins,
+  rebin,
 };

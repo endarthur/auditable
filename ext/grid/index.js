@@ -1,6 +1,7 @@
-// @gcu/grid — built from src/
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/grid — Regular block-model grid utilities: geometry (index/flat conversion, centroids, rotation), selections (masks, boolean ops), compacting, operations (map, reduce, histogram, grade-tonnage), spatial queries (slices, shells, regridding).
 
-// ── geometry.js ──
+// ── src/geometry.js ──
 
 // @gcu/grid — geometry: index conversion, coordinate computation, grid properties
 
@@ -285,7 +286,7 @@ function subgrid(g, ranges) {
   return { gridDef: newGrid, parentIndices, childIndices };
 }
 
-// ── selection.js ──
+// ── src/selection.js ──
 
 // @gcu/grid — selection: masks, scatter/gather, surface helpers
 
@@ -481,7 +482,7 @@ function maskNotNaN(variable) {
   return mask;
 }
 
-// ── compact.js ──
+// ── src/compact.js ──
 
 // @gcu/grid — compact variables: alignment, reduction, domain operations
 
@@ -700,7 +701,7 @@ function domainFromCategorical(categorical, code) {
   return new Int32Array(result);
 }
 
-// ── operations.js ──
+// ── src/operations.js ──
 
 // @gcu/grid — variable operations: map, stats, histogram, grade-tonnage, swath plots
 
@@ -936,7 +937,7 @@ function swathPlot(variable, gridDef, opts) {
   return { positions, values, counts };
 }
 
-// ── spatial.js ──
+// ── src/spatial.js ──
 
 // @gcu/grid — spatial queries: columns, slices, shells, morphology, nearest, reblocking
 
@@ -1351,29 +1352,88 @@ function regrid(sourceG, sourceVar, targetG, opts) {
   return out;
 }
 
-// ── exports ──
+// ── src/main.js ──
+
+
+
 export {
-  // geometry
-  ijk, flatIndex, isValid, ijkBatch, flatIndexBatch,
-  centroid, corners, centroids, centroidsSubset,
-  locate, locateBatch,
-  nBlocks, blockVolume, boundingBox, isCompatible, subgrid,
-  _rotMatrix, _applyRot, _invertRot,
-  // selection
-  maskToIndices, indicesToMask,
-  union, intersection, difference, invert, maskCount, equal,
-  scatter, gather, take, reindex,
-  maskAbove, maskBelow, maskBetween, maskFromClassification,
-  maskWhere, maskAboveValue, maskBelowValue, maskEqualTo, maskInRange, maskNotNaN,
-  // compact
-  align, reduce, dilute, sum, mean, min, max, countPresent,
-  unionIndices, intersectionIndices, differenceIndices, restrict,
-  dominantDomain, domainFromCategorical,
-  // operations
-  map, mapMasked, combine, stats, histogram, weightedStats, gradeTonnage, swathPlot,
-  // spatial
-  column, sliceI, sliceJ, sliceK, slicePlane,
-  shellGrid, erodeGrid, dilateGrid,
-  nearestPopulated, nearestPopulatedBatch,
-  upscale, downscale, regrid,
+  ijk,
+  flatIndex,
+  isValid,
+  ijkBatch,
+  flatIndexBatch,
+  _rotMatrix,
+  _applyRot,
+  _invertRot,
+  centroid,
+  corners,
+  centroids,
+  centroidsSubset,
+  locate,
+  locateBatch,
+  nBlocks,
+  blockVolume,
+  boundingBox,
+  isCompatible,
+  subgrid,
+  maskToIndices,
+  indicesToMask,
+  union,
+  intersection,
+  difference,
+  invert,
+  maskCount,
+  equal,
+  scatter,
+  gather,
+  take,
+  reindex,
+  maskAbove,
+  maskBelow,
+  maskBetween,
+  maskFromClassification,
+  maskWhere,
+  maskAboveValue,
+  maskBelowValue,
+  maskEqualTo,
+  maskInRange,
+  maskNotNaN,
+  align,
+  reduce,
+  dilute,
+  sum,
+  mean,
+  min,
+  max,
+  countPresent,
+  unionIndices,
+  intersectionIndices,
+  differenceIndices,
+  restrict,
+  dominantDomain,
+  domainFromCategorical,
+  map,
+  mapMasked,
+  combine,
+  stats,
+  histogram,
+  weightedStats,
+  gradeTonnage,
+  swathPlot,
+  column,
+  sliceI,
+  sliceJ,
+  sliceK,
+  slicePlane,
+  shell,
+  erode,
+  dilate,
+  shellGrid,
+  erodeGrid,
+  dilateGrid,
+  nearestPopulated,
+  nearestPopulatedBatch,
+  upscale,
+  downscale,
+  regrid,
 };

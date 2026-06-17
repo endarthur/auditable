@@ -1,7 +1,7 @@
-// @gcu/loom — virtualized canvas grid renderer (rich async cell provider)
-// Auto-generated from ext/loom/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/loom — A virtualized canvas grid renderer behind a rich, async cell provider. Windows over millions of rows; cells carry state + type (auditability made visual); host-agnostic mount drops into a standalone page or an iframe surface unchanged. The interlace of warp (columns) and weft (rows) into the visible fabric of a table.
 
-// -- model.js --
+// ── src/model.js ──
 
 // @gcu/loom — model: the rich cell, the enums, and small pure value helpers.
 //
@@ -105,7 +105,7 @@ function selEquals(a, b) {
   return na.r0 === nb.r0 && na.c0 === nb.c0 && na.r1 === nb.r1 && na.c1 === nb.c1;
 }
 
-// -- geometry.js --
+// ── src/geometry.js ──
 
 // @gcu/loom — geometry: column-width model + virtualization math.
 //
@@ -208,7 +208,7 @@ function cellAt(metrics, x, y) {
   return { row: rowAtY(metrics, y), col: Math.max(0, colAtX(metrics, x)) };
 }
 
-// -- memory-provider.js --
+// ── src/memory-provider.js ──
 
 // @gcu/loom — memory-provider: a trivial in-memory reference provider.
 //
@@ -292,7 +292,7 @@ function createMemoryProvider(spec) {
   };
 }
 
-// -- render.js --
+// ── src/render.js ──
 
 // @gcu/loom — render: the canvas paint core (browser-only).
 //
@@ -308,7 +308,6 @@ function createMemoryProvider(spec) {
 // the body as calque does — the body holds data rows only.
 //
 // All functions take the instance `g`; no module globals → grids coexist.
-
 
 
 const PAD = 6;
@@ -526,7 +525,7 @@ function paint(g) {
   paintRowHeaders(g, r0, r1, sy, vh);
 }
 
-// -- grid.js --
+// ── src/grid.js ──
 
 // @gcu/loom — grid: the host-agnostic createGrid factory (browser-only).
 //
@@ -540,8 +539,6 @@ function paint(g) {
 // This is the de-risk slice: scaffold + virtualized scroll + select + edit +
 // refresh + a first-class selection object. Deferred (second pass, additive):
 // column resize, zoom, frozen header rows, hover tooltips, copy/paste.
-
-
 
 
 const SPACER_CAP = 16000000; // browser max element dimension, roughly
@@ -860,32 +857,50 @@ function createGrid(element, provider, options = {}) {
   };
 }
 
+// ── src/main.js ──
+
+// @gcu/loom — a virtualized canvas grid renderer behind a rich async cell
+// provider. The loom interlaces warp (columns) and weft (rows) into the visible
+// fabric of cells — a host-agnostic render core extracted from the calque
+// spreadsheet grid and reseamed for strata: read = provider.cellAt (async-shaped,
+// windowed), write = provider.commit (to an overlay), cells carry state+type so
+// auditability is visual, and mount(el, provider) drops into a standalone page
+// or a Works surface unchanged. The forcing-function renderer behind strata
+// (and, eventually, a retrofitted calque — two consumers keep it honest).
+//
+// Module manifest (build concat order):
+//   model.js           — PENDING sentinel, CellState/CellType enums, helpers (pure)
+//   geometry.js        — column-width + virtualization math (pure)
+//   memory-provider.js — trivial in-memory reference provider (pure)
+//   render.js          — canvas paint core (browser)
+//   grid.js            — createGrid factory: scaffold, events, edit→commit (browser)
+
 export {
+  PENDING,
   CellState,
   CellType,
-  DARK_COLORS,
-  LIGHT_COLORS,
-  PENDING,
-  cellAt,
-  colAtX,
-  colIndex,
   colLetter,
-  colW,
-  colXAt,
-  createGrid,
-  createMemoryProvider,
+  colIndex,
   fmtVal,
   inferType,
   normSel,
-  paint,
+  selEquals,
+  colW,
+  colXAt,
+  colAtX,
+  visibleColRange,
+  totalWidth,
+  rowAtY,
+  rowYAt,
+  visibleRowRange,
+  totalHeight,
+  cellAt,
+  createMemoryProvider,
+  DARK_COLORS,
+  LIGHT_COLORS,
   paintCells,
   paintColHeaders,
   paintRowHeaders,
-  rowAtY,
-  rowYAt,
-  selEquals,
-  totalHeight,
-  totalWidth,
-  visibleColRange,
-  visibleRowRange,
+  paint,
+  createGrid,
 };
