@@ -936,6 +936,12 @@ For quick reference and in case Claude Code or a future reviewer wants the decis
 
 ## 21. AIR prerequisites
 
+> **Shipped.** §21.1–21.4 landed in `@gcu/air 0.3.0`, AND the self-host step is done: `ext/air/build.js`
+> now emits an `export { … }` footer so the air *bundle* (`ext/air/index.js`) carries its public API.
+> `core.js` + `merge.js` import `parseModule`/`extractImports`/`extractExports` from `../../air/index.js`
+> (the built artifact) instead of reaching into `../../air/src/api.js` — @gcu/build consumes air as a
+> proper package. (The bundle's browser-init stays `window`-guarded, so it imports cleanly in node.)
+
 Four small additions to `@gcu/air`'s public API land alongside or before `@gcu/build` v1. They are independently useful (other consumers benefit), bounded (~30 LOC total in `ext/air/src/api.js`), and feed AIR's existing domain — AIR already parses and walks ASTs; these just expose more of what it already does.
 
 Ship as `@gcu/air 0.3.0`. None are breaking changes.

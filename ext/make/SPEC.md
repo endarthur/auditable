@@ -52,36 +52,66 @@ Lift the `REPO_TARGETS` array out of `make.js` into discovered, per-root/per-pac
 `make.yaml` files. The record is *exactly* today's `{ name, out, cmd, deps, inputs }` — sourced
 from YAML (via `@gcu/yaml`) instead of a JS array:
 
+As BUILT — `@gcu/yaml` is a strict subset, so block sequences + quoted scalars (no `[a, b]` flow).
+The real `ext/wasm4/make.yaml` (a per-package toolchain; targets namespaced `wasm4:*`, paths relative
+to the package dir, the recipe module relative too):
+
 ```yaml
-# ext/wasm4/gcu-make.yaml — an atra/wasm4 toolchain package
+# ext/wasm4/make.yaml — an atra/wasm4 toolchain package
 targets:
-  mathlib:                          # minimax transcendentals, atra → wasm
-    out: build/mathlib.wasm
-    run: "@gcu/atra#compile"        # a GCU FUNCTION recipe (see §3) → builds in-browser too
-    inputs: [src/mathlib.atra]
+  raster:
+    out: "build/raster.wasm"
+    run: "../atra/atrac.js#compileRecipe"   # a GCU FUNCTION recipe (§3) — in-process, vfs-portable
+    opts:
+      __memory: true                         # the rasterizer imports the shared framebuffer memory
+    inputs:
+      - "raster.atra"
   cart:
-    out: build/cart.wasm
-    run: "@gcu/atra#compile"
-    deps: [mathlib]
-    inputs: [src/cart.atra, src/mathlib.atra]
-  pack:
-    out: dist/wasm4-demo.gcupkg
-    cmd: [node, pack.js, build/cart.wasm]   # a subprocess recipe (CLI path)
-    deps: [cart]
+    out: "build/cart-demo.wasm"
+    run: "../atra/atrac.js#compileRecipe"
+    inputs:
+      - "cart-demo.atra"
 ```
 
 ```yaml
-# auditable/gcu-make.yaml — the repo targets, moved out of make.js (the dogfood:
-# proves @gcu/make has nothing auditable-specific left inside it). Managed @gcu/build
+# auditable/make.yaml — the repo targets, moved out of make.js (the dogfood: proves
+# @gcu/make has nothing auditable-specific left inside it). Managed @gcu/build
 # packages stay AUTO-DISCOVERED + edge-DERIVED — you only declare the non-derivable.
 targets:
-  auditable: { out: auditable.html, cmd: [node, build.js],
-               inputs: ["src/**", "ext/*/index.js", "build.js"] }
-  works:     { out: works.html, cmd: [node, build.js, --target=works], deps: [auditable],
-               inputs: ["works/**", "ext/*/index.js", "auditable.html", "build.js"] }
-  examples:  { out: null, cmd: [node, gen_examples.js], deps: [auditable],
-               inputs: ["examples/defs/**", "auditable.html"],
-               check: ["examples/**/*.html"] }   # drift pathspec (skips random-DEK crypto demo)
+  auditable:
+    out: "auditable.html"
+    cmd:
+      - "node"
+      - "build.js"
+    inputs:
+      - "src/**"
+      - "ext/*/index.js"
+      - "build.js"
+  works:
+    out: "works.html"
+    deps:
+      - "auditable"
+    cmd:
+      - "node"
+      - "build.js"
+      - "--target=works"
+    inputs:
+      - "works/**"
+      - "ext/*/index.js"
+      - "auditable.html"
+      - "build.js"
+  examples:                       # no out: → many outputs (input/dep-gated)
+    deps:
+      - "auditable"
+    cmd:
+      - "node"
+      - "gen_examples.js"
+    inputs:
+      - "examples/defs/**"
+      - "auditable.html"
+    check:                        # drift pathspecs (skips the random-DEK crypto demo)
+      - "examples/"
+      - ":(exclude)examples/basics/example_encrypted_password-is-auditable.html"
 ```
 
 `inputs:` globs replace the JS `inputs(root)` functions. **Hybrid: derive where possible
