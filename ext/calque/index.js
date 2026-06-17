@@ -1,8 +1,7 @@
-// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/calque/src/  Build: node ext/calque/build.js
-// @auditable/calque — spreadsheet language
-// Minimal array-oriented language that compiles to xlsx.
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/calque — Calque — a spreadsheet language that compiles to xlsx. Tagged-template `calque` parses formulas, evaluates, and renders as tables. Language spec at ext/calque/SPEC.md.
 
-// -- highlight.js --
+// ── src/highlight.js ──
 
 // Syntax highlighting — tokenizer + completions for auditable editor integration
 //
@@ -337,7 +336,7 @@ function calqueCompletions(code, cursor, prefix) {
   return items;
 }
 
-// -- lex.js --
+// ── src/lex.js ──
 
 // Lexer — structured tokenizer for the parser
 //
@@ -597,7 +596,7 @@ function lex(source) {
   return tokens;
 }
 
-// -- parse.js --
+// ── src/parse.js ──
 
 // Parser — recursive descent + Pratt precedence
 //
@@ -1096,7 +1095,7 @@ function parse(tokens) {
   return parseProgram();
 }
 
-// -- stdlib.js --
+// ── src/stdlib.js ──
 
 // Standard library — runtime functions operating on calque values
 //
@@ -1694,14 +1693,12 @@ stdlib.mod = function(val, divisor) {
   }, val, divisor);
 };
 
-// -- eval.js --
+// ── src/eval.js ──
 
 // Evaluator — AST → typed array results
 //
 // Walks the AST produced by parse.js, evaluates expressions using
 // stdlib functions and broadcasting. Produces a scope of bindings.
-
-
 
 
 let _imports = {};
@@ -2028,7 +2025,7 @@ function evalExpr(node, scope, parentScope) {
   }
 }
 
-// -- layout.js --
+// ── src/layout.js ──
 
 // Layout engine — assign grid positions to bindings
 //
@@ -2192,7 +2189,7 @@ function getLabel(directive, isCol) {
   return 'above';
 }
 
-// -- codegen.js --
+// ── src/codegen.js ──
 
 // Codegen — AST → xlsx formula strings + workbook assembly
 //
@@ -2767,7 +2764,7 @@ function findBindingAST(ast, sheetName, bindingName) {
   return null;
 }
 
-// -- grid.js --
+// ── src/grid.js ──
 
 // Grid renderer — calque result → DOM table display
 //
@@ -2775,7 +2772,6 @@ function findBindingAST(ast, sheetName, bindingName) {
 // Multiple sheets get tab buttons to switch between them.
 // When layout directives (@below, @right, @anchor) are used,
 // renders a spreadsheet-style positioned grid.
-
 
 
 function grid(result) {
@@ -3034,18 +3030,11 @@ function renderBare(section) {
   return t;
 }
 
-// -- api.js --
+// ── src/api.js ──
 
 // Public API — tagged template, .run, .parse, .lex, self-registration
 //
 // Pipeline: source → lex → parse → evaluate → { bindings, exports, sheets, scope }
-
-
-
-
-
-
-
 
 
 function toSource(stringsOrSource, values) {
@@ -3136,4 +3125,10 @@ if (typeof window !== 'undefined') {
   }
 }
 
-export { calque };
+// ── src/main.js ──
+
+// calque — ES module entry point (import order doubles as build manifest)
+
+export {
+  calque,
+};

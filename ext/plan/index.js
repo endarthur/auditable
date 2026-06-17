@@ -1,7 +1,7 @@
-// @gcu/plan — Project management primitives for Auditable notebooks
-// Auto-generated from ext/plan/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/plan — Project scheduling and analysis: CPM, PERT, Monte Carlo, EVM, S-curves, resource leveling, sensitivity. Working calendars with holidays (pt-BR built-in). SVG Gantt and analysis rendering.
 
-// -- calendar.js --
+// ── src/calendar.js ──
 
 // Calendar engine — all scheduling flows through these functions
 
@@ -142,7 +142,7 @@ function getBlockedDays(start, end, calendar, resource) {
   return result;
 }
 
-// -- pert.js --
+// ── src/pert.js ──
 
 // PERT three-point estimation
 
@@ -171,7 +171,7 @@ function effectiveDuration(task) {
   return task.duration || 0;
 }
 
-// -- graph.js --
+// ── src/graph.js ──
 
 // Dependency graph utilities
 
@@ -309,11 +309,9 @@ function successors(taskId, tasks) {
   return [...visited];
 }
 
-// -- schedule.js --
+// ── src/schedule.js ──
 
 // CPM scheduler — forward/backward pass, float, critical path
-
-
 
 
 function schedule(tasks, calendar, projectStart, resources) {
@@ -420,10 +418,9 @@ function schedule(tasks, calendar, projectStart, resources) {
   return { scheduled: result, criticalPath, projectEnd, projectDuration };
 }
 
-// -- resource.js --
+// ── src/resource.js ──
 
 // Resource conflict detection and simple leveling
-
 
 
 // Detect resource conflicts (overlapping tasks for same resource)
@@ -509,10 +506,9 @@ function levelResources(scheduledTasks, calendar, resources) {
   return schedule(tasks, calendar, projectStart, resources);
 }
 
-// -- scurve.js --
+// ── src/scurve.js ──
 
 // S-curve generator — cumulative progress over time
-
 
 
 function scurve(scheduledTasks, options = {}) {
@@ -673,10 +669,9 @@ function _bucketLabel(date, bucket) {
   return _fmtDate(date);
 }
 
-// -- evm.js --
+// ── src/evm.js ──
 
 // Earned Value Management
-
 
 
 function evm(scheduledTasks, statusDate, calendar) {
@@ -735,12 +730,9 @@ function _calendarDayFraction(start, current, end) {
   return Math.max(0, elapsed / total);
 }
 
-// -- analysis.js --
+// ── src/analysis.js ──
 
 // Analysis functions — schedule, resource, math models, progress tracking
-
-
-
 
 
 // ── Group 1: Schedule Analysis ──
@@ -1409,7 +1401,7 @@ function compress(input, budget, options = {}) {
   };
 }
 
-// -- workflow.js --
+// ── src/workflow.js ──
 
 // Workflow engine — process templates, instantiation, stage-gate tracking
 
@@ -1620,10 +1612,9 @@ function throughput(workflow, instances, resources, calendar) {
   };
 }
 
-// -- montecarlo.js --
+// ── src/montecarlo.js ──
 
 // Monte Carlo schedule simulation with seedable PRNG
-
 
 
 // xoshiro128** — fast 32-bit seedable PRNG
@@ -1902,10 +1893,9 @@ function _stdDevDays(dates) {
   return Math.sqrt(variance) / (1000 * 60 * 60 * 24); // convert ms to days
 }
 
-// -- render.js --
+// ── src/render.js ──
 
 // SVG renderers — all produce SVG strings
-
 
 
 // ── SVG helpers ──
@@ -2811,10 +2801,9 @@ function deadlineRiskPlot(mcResult, deadlines, options = {}) {
   return _svg(width, height, svg);
 }
 
-// -- xlsx.js --
+// ── src/xlsx.js ──
 
 // XLSX export adapter — uses @sheet if available
-
 
 
 function planToXLSX(scheduleResult, scurveData, options = {}) {
@@ -2861,7 +2850,7 @@ function planToXLSX(scheduleResult, scurveData, options = {}) {
   return sheet.writeXLSX(wb);
 }
 
-// -- holidays-br.js --
+// ── src/holidays-br.js ──
 
 // Brazilian holidays — federal, state, and municipal
 // Returns arrays of { date: 'YYYY-MM-DD', label } compatible with plan calendar format
@@ -3072,7 +3061,7 @@ function brazilMunicipalities() {
   return Object.keys(MUNICIPAL_HOLIDAYS).sort();
 }
 
-// -- format.js --
+// ── src/format.js ──
 
 // .plan file format — parse, serialize, template instancing, calendar preset resolution
 
@@ -3324,40 +3313,74 @@ function buildSchedulerTasks(planTasks) {
   }
   return tasks;
 }
+
+// ── src/main.js ──
+
+// @gcu/plan — entry point
+
 export {
-  // calendar
-  isWorkingDay, addWorkingDays, workingDays, nextWorkingDay, getBlockedDays,
-  // pert
-  pertExpected, pertStdDev, pertVariance, effectiveDuration,
-  // graph
-  topoSort, detectCycles, predecessors, successors,
-  // schedule
+  isWorkingDay,
+  addWorkingDays,
+  workingDays,
+  nextWorkingDay,
+  getBlockedDays,
+  pertExpected,
+  pertStdDev,
+  pertVariance,
+  effectiveDuration,
+  topoSort,
+  detectCycles,
+  predecessors,
+  successors,
   schedule,
-  // resource
-  detectConflicts, levelResources,
-  // scurve
+  detectConflicts,
+  levelResources,
   scurve,
-  // evm
   evm,
-  // workflow
-  instantiate, instantiateBatch, compose, stageGateMatrix, throughput,
-  // montecarlo
-  monteCarlo, createRng, samplePert,
-  // analysis
-  whatIf, delayImpact, nearCritical, slackBudget, scopeDrift, bufferStatus,
-  busFactor, switchingOverhead, meetingCost, constraint,
-  brooksLaw, littlesLaw, multiProjectFragmentation,
-  burndown, health, compress,
-  // render
-  gantt, scurvePlot, resourceHistogram, stageGateView, workflowDiagram, monteCarloPlot,
-  tornadoPlot, burndownPlot, deadlineRiskPlot,
-  // xlsx
+  whatIf,
+  delayImpact,
+  nearCritical,
+  slackBudget,
+  scopeDrift,
+  bufferStatus,
+  busFactor,
+  switchingOverhead,
+  meetingCost,
+  constraint,
+  brooksLaw,
+  littlesLaw,
+  multiProjectFragmentation,
+  burndown,
+  health,
+  compress,
+  instantiate,
+  instantiateBatch,
+  compose,
+  stageGateMatrix,
+  throughput,
+  monteCarlo,
+  createRng,
+  samplePert,
+  gantt,
+  scurvePlot,
+  resourceHistogram,
+  stageGateView,
+  workflowDiagram,
+  monteCarloPlot,
+  tornadoPlot,
+  burndownPlot,
+  deadlineRiskPlot,
   planToXLSX,
-  // holidays
-  brazilHolidays, brazilCalendar, brazilMunicipalities, federalHolidays,
-  // format
-  parsePlan, serializePlan, buildSchedulerTasks,
+  brazilHolidays,
+  brazilCalendar,
+  brazilMunicipalities,
+  federalHolidays,
+  parsePlan,
+  serializePlan,
+  buildSchedulerTasks,
   resolveCalendarPreset,
-  instancePlanTemplate, propagateTemplate,
-  isLinkedPlanTask, unlinkPlanTask,
+  instancePlanTemplate,
+  propagateTemplate,
+  isLinkedPlanTask,
+  unlinkPlanTask,
 };

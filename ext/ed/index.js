@@ -1,8 +1,6 @@
-// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/ed/src/  Build: node ext/ed/build.js
-// @gcu/ed — POSIX-style line editor with GNU-ish sanded edges.
-// "ed is the standard text editor."
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
 
-// -- buffer.js --
+// ── src/buffer.js ──
 
 // buffer.js — the in-memory document model for ed.
 //
@@ -113,7 +111,7 @@ function replaceLine(buf, n, text) {
   buf.dirty = true;
 }
 
-// -- regex.js --
+// ── src/regex.js ──
 
 // regex.js — translate ed-flavoured patterns to JS RegExp.
 //
@@ -217,7 +215,7 @@ function applySubstitute(line, re, repl, global) {
   return line.replace(re, jsRepl);
 }
 
-// -- address.js --
+// ── src/address.js ──
 
 // address.js — parse and resolve ed addresses.
 //
@@ -379,7 +377,7 @@ function resolveDest(line, buf) {
   return { dest, rest };
 }
 
-// -- commands.js --
+// ── src/commands.js ──
 
 // commands.js — ed command implementations.
 //
@@ -701,12 +699,10 @@ function cmdToggleP(state, range, rest, ctx) {
   state.showPrompt = !state.showPrompt;
 }
 
-// -- api.js --
+// ── src/api.js ──
 
 // api.js — ed main loop. Exposed as runEd(argv, ctx); geas's pkg
 // command pattern wraps this into a one-line builtin.
-
-
 
 
 // Per-command default range when the user gave no address.
@@ -887,4 +883,11 @@ async function runEd(argv, ctx) {
   return 0;
 }
 
-export { runEd };
+// ── src/main.js ──
+
+// @gcu/ed — ES module entry. Build manifest order: leaf utilities
+// first, then composites, then api.
+
+export {
+  runEd,
+};

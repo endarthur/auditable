@@ -1,8 +1,6 @@
-// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/readline/src/  Build: node ext/readline/build.js
-// @gcu/readline — GNU-readline-minimum line editor with fish-style autosuggest
-// and tab completion. Drop-in for @gcu/geas's makeLineEditor.
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
 
-// -- keys.js --
+// ── src/keys.js ──
 
 // keys.js — parse a stream of input bytes into key events.
 //
@@ -213,7 +211,7 @@ function parseKeys(chunk, state) {
   return { events, leftover: '' };
 }
 
-// -- editor.js --
+// ── src/editor.js ──
 
 // editor.js — buffer + cursor model and editing operations.
 //
@@ -438,7 +436,7 @@ function acceptSuggestionWord(ed) {
   ed.suggestion = ed.suggestion.slice(slice.length);
 }
 
-// -- render.js --
+// ── src/render.js ──
 
 // render.js — draw the editor buffer to the terminal adapter.
 //
@@ -579,7 +577,7 @@ function renderNewline(adapter) {
   adapter.write('\r\n');
 }
 
-// -- api.js --
+// ── src/api.js ──
 
 // api.js — public createReadline entry point. Matches the
 // makeLineEditor shape so callers can swap one for the other:
@@ -592,7 +590,6 @@ function renderNewline(adapter) {
 //     onPersistHistory: async (line) => { ... },
 //   });
 //   const { line, eof } = await readLine({ prompt: '$ ' });
-
 
 
 const DEFAULTS = {
@@ -840,4 +837,15 @@ function _longestCommonPrefix(strs) {
   return p;
 }
 
-export { parseKeys, createReadline };
+// ── src/main.js ──
+
+// @gcu/readline — ES module entry point (import order doubles as
+// build manifest, matching the @gcu/geas pattern).
+//
+// Drop-in replacement for geas's makeLineEditor. See ../README.md
+// and the api.js for the public surface.
+
+export {
+  parseKeys,
+  createReadline,
+};

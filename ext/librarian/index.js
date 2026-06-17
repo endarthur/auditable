@@ -1,7 +1,6 @@
-// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/librarian/src/  Build: node ext/librarian/build.js
-// @gcu/librarian — BM25F text search with fuzzy / synonyms / proximity.
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
 
-// -- tokenize.js --
+// ── src/tokenize.js ──
 
 // Tokenizer. Lower-case ASCII split on non-alphanumeric boundaries,
 // stopword filter, optional Unicode passthrough so CJK / accented
@@ -46,7 +45,7 @@ function tokenizeStrings(text) {
   return tokenize(text).map((t) => t.token);
 }
 
-// -- fuzzy.js --
+// ── src/fuzzy.js ──
 
 // Damerau-Levenshtein edit distance, bounded for efficiency: aborts when
 // distance exceeds `max`. Used both for the fuzzy-match step at query
@@ -107,7 +106,7 @@ function nearTerms(target, dictionary, max) {
   return hits;
 }
 
-// -- csr.js --
+// ── src/csr.js ──
 
 // The unified lean index — a compact, typed-array, CSR-style inverted index
 // that is the SOLE index representation. v1's niceties return as opt-in flags
@@ -144,7 +143,6 @@ function nearTerms(target, dictionary, max) {
 //
 // nnz = total posting entries. Built in two passes (count → fill). Cache-
 // friendly (scoring streams contiguous memory) and packs to raw bytes (pack.js).
-
 
 
 // Mirror search.js (v1) exactly — the parity gate guards against drift.
@@ -575,7 +573,7 @@ function suggestCsr(index, query, maxEdits = 2) {
   return suggestions.join(' ');
 }
 
-// -- search.js --
+// ── src/search.js ──
 
 // Query-time search. The nested-Map v1 scorer is RETIRED; search/suggest are
 // thin wrappers over the unified CSR engine (csr.js), which implements BM25(F)
@@ -591,7 +589,7 @@ function suggest(index, query, maxEdits = 2) {
   return suggestCsr(index, query, maxEdits);
 }
 
-// -- serialize.js --
+// ── src/serialize.js ──
 
 // JSON serialise / deserialise for the CSR index — the debug + tiny-docpack
 // form. For real persistence use pack()/unpack() (binary, zero-copy reload);
@@ -663,7 +661,7 @@ function deserialize(json, opts = {}) {
   };
 }
 
-// -- scan.js --
+// ── src/scan.js ──
 
 // The scan path — instant first-keystroke + cold/deep substring fallback.
 //
@@ -829,7 +827,7 @@ function scan(b, query, opts = {}) {
   return out.slice(0, limit);
 }
 
-// -- incremental.js --
+// ── src/incremental.js ──
 
 // Incremental lifecycle — the segment model in miniature (§4 of the spec): an
 // immutable packed CSR base + a small mutable delta + periodic merge. Makes a
@@ -1058,7 +1056,7 @@ function compact(index) {
   return index;
 }
 
-// -- index.js --
+// ── src/index.js ──
 
 // Index construction. The nested-Map v1 representation is RETIRED — the unified
 // typed-array CSR engine (csr.js) is the sole index representation. This module
@@ -1073,7 +1071,6 @@ function compact(index) {
 //                         incremental cousin.
 
 
-
 const buildIndex = buildCsrIndex;
 
 function mergeIndexes(indexes) {
@@ -1083,7 +1080,7 @@ function mergeIndexes(indexes) {
   return mergeCsr(segs, opts);
 }
 
-// -- pack.js --
+// ── src/pack.js ──
 
 // Binary persistence — pack(index) -> ArrayBuffer / unpack(buf) -> index.
 //
@@ -1224,16 +1221,9 @@ function unpack(buf, opts = {}) {
   };
 }
 
-// -- api.js --
+// ── src/api.js ──
 
 // Public Librarian API. Pure functions; no hidden state.
-
-
-
-
-
-
-
 
 
 const Librarian = {
@@ -1255,4 +1245,13 @@ const Librarian = {
   unpack,
 };
 
-export { Librarian };
+// ── src/main.js ──
+
+// @gcu/librarian — ES module entry. Build manifest order = concat order: leaf
+// utilities first, then the CSR engine, then modules that build on it, then the
+// public api. index.js (a re-export of the CSR engine) sits after csr.js +
+// incremental.js since it references both.
+
+export {
+  Librarian,
+};

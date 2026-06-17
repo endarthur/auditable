@@ -1,7 +1,7 @@
-// @gcu/yaml — Strict, auditable subset of YAML 1.2
-// Auto-generated from ext/yaml/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/yaml — A strict, auditable subset of YAML 1.2 for hand-authored configuration. Tag-free conforming documents round-trip identically through vanilla YAML parsers. Tags are opaque metadata; no parse-time resolution, no RCE surface.
 
-// -- types.js --
+// ── src/types.js ──
 
 // AST node shape and error class for @gcu/yaml.
 //
@@ -80,7 +80,7 @@ function mapEntry(key, value) {
 
 const MAX_DEPTH = 64;
 
-// -- lex.js --
+// ── src/lex.js ──
 
 // Lexer for @gcu/yaml.
 //
@@ -676,14 +676,13 @@ function parseQuotedKey(content, lineNumber, columnBase) {
   }
 }
 
-// -- parse.js --
+// ── src/parse.js ──
 
 // Parser for @gcu/yaml.
 //
 // Recursive descent over the line records produced by preprocess().
 // Each block (map or sequence) lives at one indent level; entries within a
 // block all share that indent. Nested blocks sit at indent + 2.
-
 
 
 function parse(text) {
@@ -1288,7 +1287,7 @@ function parseBlockScalar(ctx, indent, openerLine, chomp) {
   });
 }
 
-// -- emit.js --
+// ── src/emit.js ──
 
 // Canonical emitter for @gcu/yaml.
 //
@@ -1585,10 +1584,9 @@ function emitBlockScalarBody(text, indent, out) {
   }
 }
 
-// -- api.js --
+// ── src/api.js ──
 
 // Public surface for @gcu/yaml.
-
 
 
 
@@ -1607,8 +1605,35 @@ function check(text) {
 function format(text) {
   return emit(parse(text));
 }
+
+// ── src/main.js ──
+
+// @gcu/yaml — Strict subset of YAML 1.2
+//
+// Module manifest. Each file is a small piece of the pipeline:
+//   types.js  — AST node factories, YamlParseError
+//   lex.js    — line preprocessor + scalar/key/tag tokenizers
+//   parse.js  — recursive-descent parser over lines
+//   emit.js   — canonical emitter (pure AST → bytes)
+//   api.js    — public surface: parse, emit, check, format
+
 export {
-  parse, emit, check, format,
   YamlParseError,
-  scalar, mapNode, seqNode,
+  scalar,
+  mapNode,
+  seqNode,
+  mapEntry,
+  MAX_DEPTH,
+  preprocess,
+  splitComment,
+  isCommentOnly,
+  commentBody,
+  tryParseTag,
+  tryParseBareKey,
+  parseValueText,
+  parseQuotedKey,
+  parse,
+  emit,
+  check,
+  format,
 };

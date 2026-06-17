@@ -1,8 +1,7 @@
-// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/sheet/src/  Build: node ext/sheet/build.js
-// @auditable/sheet — xlsx IO
-// Read and write xlsx files in the browser. Zero dependencies.
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/sheet — XLSX file reader and writer in pure JavaScript. Zero runtime dependencies — bundles its own zip and XML handling.
 
-// -- zip.js --
+// ── src/zip.js ──
 
 // ── CRC32 ──
 
@@ -193,7 +192,7 @@ async function zip(entries) {
   return result;
 }
 
-// -- xml.js --
+// ── src/xml.js ──
 
 // ── XML builder ──
 
@@ -303,7 +302,7 @@ function findAll(node, tagName) {
   return results;
 }
 
-// -- util.js --
+// ── src/util.js ──
 
 // ── Cell address helpers ──
 
@@ -356,7 +355,7 @@ function serialToDate(serial) {
   return new Date(EPOCH + adjusted * MS_PER_DAY);
 }
 
-// -- reader.js --
+// ── src/reader.js ──
 
 // ── Shared strings ──
 
@@ -667,7 +666,7 @@ async function read(source, options) {
   return { sheets };
 }
 
-// -- writer.js --
+// ── src/writer.js ──
 
 const XML_HEADER = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
 
@@ -1129,13 +1128,9 @@ async function write(workbook) {
   return zip(parts);
 }
 
-// -- api.js --
+// ── src/api.js ──
 
 // Public API — assembles the sheet object from all modules
-
-
-
-
 
 
 const sheet = {
@@ -1147,4 +1142,10 @@ const sheet = {
   _tag: tag, _escape: escape, _parseXml: parseXml, _find: find, _findAll: findAll,
 };
 
-export { sheet };
+// ── src/main.js ──
+
+// sheet — ES module entry point (import order doubles as build manifest)
+
+export {
+  sheet,
+};

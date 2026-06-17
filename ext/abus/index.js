@@ -1,7 +1,7 @@
-// @gcu/abus — D-Bus-shaped coordination bus for Auditable Works
-// Auto-generated from ext/abus/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/abus — A D-Bus-shaped coordination bus for in-browser workspaces: methods, signals, and an introspectable hierarchy of named peers over MessagePort transports. A pure synchronous broker plus a client. Zero dependencies.
 
-// -- protocol.js --
+// ── src/protocol.js ──
 
 // @gcu/abus — wire protocol constants, validation, shared helpers.
 //
@@ -78,7 +78,7 @@ function makeIdGen() {
   return () => ++n;
 }
 
-// -- broker.js --
+// ── src/broker.js ──
 
 // @gcu/abus — the broker.
 //
@@ -498,7 +498,7 @@ function createBroker() {
   return { connect, disconnect, stats, inspect, declareService };
 }
 
-// -- client.js --
+// ── src/client.js ──
 
 // @gcu/abus — the client.
 //
@@ -924,15 +924,26 @@ async function connect(port, opts = {}) {
     watchAlive, openStream, close,
   };
 }
+
+// ── src/main.js ──
+
+// @gcu/abus — a D-Bus-shaped coordination bus for Auditable Works panels,
+// notebooks, and workers.
+//
+// Module manifest:
+//   protocol.js — wire constants, name/path validation, AbusError, helpers
+//   broker.js   — createBroker(): the name registry + pure synchronous router
+//   client.js   — connect(): the peer-facing bus (calls, signals, expose, …)
+
 export {
-  connect,
-  createBroker,
-  AbusError,
-  ERR,
-  BUS_NAME,
   PROTOCOL_VERSION,
-  matchesFilter,
+  BUS_NAME,
+  ERR,
   isValidName,
   isValidPath,
+  AbusError,
+  matchesFilter,
   makeIdGen,
+  createBroker,
+  connect,
 };
