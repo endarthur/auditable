@@ -6,11 +6,12 @@
 // tests — it touches no fs and no environment globals beyond an optional parser.
 //
 // It reuses @gcu/air's parser config + import/export extraction (SPEC §21).
-// Phase 1 imports those from air's SOURCE (../../air/src/api.js), NOT the bare
-// '@gcu/air' bundle — the bundle is strip-only and has no export footer yet
-// (the footer fix + the self-host path is phase 2).
+// Self-host: imports those from air's BUNDLE (../../air/index.js) — the bundle now
+// carries an `export { … }` footer (ext/air/build.js), so @gcu/build consumes air's
+// published surface as an artifact rather than reaching into its src/ tree. The
+// bundle's browser-init is window-guarded, so it imports cleanly in node.
 
-import { parseModule, extractImports, extractExports } from '../../air/src/api.js';
+import { parseModule, extractImports, extractExports } from '../../air/index.js';
 import { classify } from './resolve.js';
 import { renameCollisions } from './rename.js';
 import { collectRenamePatches } from './scope.js';

@@ -19,11 +19,32 @@ for (const line of mainSrc.split('\n')) {
   if (m) importPaths.push(m[1]);
 }
 
+// Collect the bundle's public surface across all source files, so the generated
+// index.js can carry a real `export { … }` footer (lets @gcu/build and other
+// consumers import air's API from the bundle instead of reaching into src/).
+const exportedNames = new Set();
+
 const chunks = [];
 for (const relPath of importPaths) {
   const filePath = path.join(srcDir, relPath);
   let src = fs.readFileSync(filePath, 'utf8');
   const basename = relPath.replace(/\//g, '_');
+
+  // Collect exported names BEFORE stripping the `export` keywords below.
+  // Declaration exports: export [async] function|const|let|var|class NAME
+  for (const m of src.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z0-9_$]+)/gm)) {
+    exportedNames.add(m[1]);
+  }
+  // Export-list blocks: export { A, B as C, … } (single- or multi-line; air has
+  // no `export … from` re-exports, so every listed name is a local binding).
+  for (const m of src.matchAll(/^export\s*\{([^}]*)\}\s*;?\s*$/gm)) {
+    for (let part of m[1].split(',')) {
+      part = part.replace(/\/\/.*$/gm, '').trim(); // drop inline comments
+      if (!part) continue;
+      const name = part.split(/\s+as\s+/).pop().trim(); // exported-as name
+      if (/^[A-Za-z0-9_$]+$/.test(name)) exportedNames.add(name);
+    }
+  }
 
   // Strip import lines (single-line and multi-line)
   src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
@@ -50,7 +71,11 @@ const header = '// \u26a0 GENERATED FILE \u2014 DO NOT EDIT. Source: ext/air/src
   + '// @gcu/air \u2014 Auditable Intermediate Representation\n'
   + '// SSA IR for JS/TS analysis, type propagation, and optimized emission.\n';
 
-const output = header + '\n' + chunks.join('\n\n') + '\n';
+const footer = '// -- bundle exports (generated) --\n\nexport {\n'
+  + [...exportedNames].sort().map((n) => `  ${n},`).join('\n')
+  + '\n};\n';
+
+const output = header + '\n' + chunks.join('\n\n') + '\n\n' + footer;
 
 const outPath = path.join(__dirname, 'index.js');
 fs.writeFileSync(outPath, output);

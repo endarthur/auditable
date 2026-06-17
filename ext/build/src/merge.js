@@ -17,7 +17,7 @@
 // @bundle-share is per-package (already resolved inside each build), so it's
 // ignored here — everything is name-by-name.
 
-import { parseModule } from '../../air/src/api.js';
+import { parseModule } from '../../air/index.js'; // air's bundle (self-host; see core.js)
 import { renameCollisions } from './rename.js';
 import { collectRenamePatches } from './scope.js';
 import { stmtDelete, exportPrefixStrip, declaredNames, declSitePatches } from './rewrite.js';
