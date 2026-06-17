@@ -18,6 +18,19 @@ export function compile(source) {
 }
 
 /**
+ * @gcu/make recipe: compile the first .atra input to raw Wasm bytes.
+ * Pure transform (no fs) — gcu-make reads the inputs and writes the output, so
+ * the same recipe runs over node-fs today and a @gcu/vfs adapter in-browser.
+ * @param {{path:string,text:string,bytes:Uint8Array}[]} inputs
+ * @param {object} [opts] — forwarded to atra.compile (e.g. { __memory: true })
+ * @returns {Uint8Array}
+ */
+export function compileRecipe(inputs, opts = {}) {
+  if (!inputs || !inputs.length) throw new Error('compileRecipe: expected at least one .atra input');
+  return atra.compile(inputs[0].text, opts);
+}
+
+/**
  * Extract routines and dependency map from atra source.
  * @param {string} source — atra source code
  * @returns {{ sources: Object<string,string>, deps: Object<string,string[]>, all: string }}

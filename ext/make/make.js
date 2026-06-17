@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { parse as parseYaml } from '../yaml/index.js';
 
 const isManagedBuild = (txt) => /@gcu\/build|build\/src\/main\.js/.test(txt);
@@ -156,10 +157,53 @@ export function loadTargets(root, log = () => {}) {
     name,
     out: t.out ?? null,
     cmd: t.cmd,
+    run: t.run ?? null,
+    opts: t.opts || {},
     deps: t.deps || [],
     inputs: (r) => globFiles(r, t.inputs),
     checkPaths: t.check,
   }));
+}
+
+// ── run: recipes — in-process GCU-function builds ───────────────────────────
+// A target may declare `run: "<module>#<export>"` instead of `cmd:` — a GCU
+// function invoked in-process (no subprocess). The named export is a PURE
+// transform `recipe(inputs, opts) -> Uint8Array | string | { relpath: data }`;
+// gcu-make owns all file I/O, so the same recipe runs over node-fs today and a
+// @gcu/vfs adapter in-browser (the @gcu/build §1.4 pure-core+adapter shape).
+//   <module> = `@gcu/<name>` → ext/<name>/index.js, or a path relative to root.
+function parseRecipeSpec(spec) {
+  const hash = spec.lastIndexOf('#');
+  if (hash < 0) throw new Error(`gcu-make: bad recipe "${spec}" — expected "<module>#<export>"`);
+  return { module: spec.slice(0, hash), exportName: spec.slice(hash + 1) };
+}
+function recipeModuleUrl(moduleSpec, root) {
+  const m = moduleSpec.startsWith('@gcu/')
+    ? path.join(root, 'ext', moduleSpec.slice('@gcu/'.length), 'index.js')
+    : path.join(root, moduleSpec);
+  return pathToFileURL(m).href;
+}
+export async function runRecipe(t, root, importer = (u) => import(u)) {
+  const { module: moduleSpec, exportName } = parseRecipeSpec(t.run);
+  const mod = await importer(recipeModuleUrl(moduleSpec, root));
+  const fn = mod[exportName];
+  if (typeof fn !== 'function') throw new Error(`gcu-make: recipe "${t.run}" — no export "${exportName}"`);
+  const inputs = t.inputs(root).map((f) => {
+    const bytes = fs.readFileSync(f);
+    return { path: path.relative(root, f).split(path.sep).join('/'), text: bytes.toString('utf8'), bytes: new Uint8Array(bytes) };
+  });
+  const result = await fn(inputs, t.opts || {});
+  const write = (rel, data) => {
+    const out = path.join(root, rel);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, typeof data === 'string' ? data : Buffer.from(data));
+  };
+  if (result && typeof result === 'object' && !(result instanceof Uint8Array) && !Buffer.isBuffer(result)) {
+    for (const [rel, data] of Object.entries(result)) write(rel, data); // multi-output map (keys rel to root)
+  } else {
+    if (!t.out) throw new Error(`gcu-make: recipe "${t.name}" returned a single blob but declared no out:`);
+    write(t.out, result);
+  }
 }
 
 // Cross-package dependency edges, derived from source: a package depends on
@@ -213,20 +257,23 @@ function saveCache(extDir, cache) { fs.writeFileSync(cachePath(extDir), JSON.str
  * unchanged ones.
  * @param {{ extDir:string, only?:string[], force?:boolean, noTargets?:boolean,
  *           targets?:object[], log?:(s:string)=>void, run?:(pkg)=>void,
- *           runTarget?:(t)=>void }} opts
- *   run/runTarget — injectable runners (default: `node …`); tests stub them.
- *   A target is `{ name, out, cmd, deps, inputs(root), checkPaths? }`; out:null =
- *   many outputs (input/dep-gated only); checkPaths = git pathspecs for --check drift.
- * @returns {{ order, built, skipped, edges, targets:{order,built,skipped} }}
+ *           runTarget?:(t)=>void|Promise }} opts
+ *   run/runTarget — injectable runners (default: subprocess for cmd:, in-process
+ *   recipe for run:); tests stub them.
+ *   A target is `{ name, out, cmd|run, opts, deps, inputs(root), checkPaths? }`;
+ *   out:null = many outputs (input/dep-gated only); checkPaths = git pathspecs.
+ * @returns {Promise<{ order, built, skipped, edges, targets:{order,built,skipped} }>}
  */
-export function make(opts) {
+export async function make(opts) {
   const { extDir, only, force, log = () => {} } = opts;
   const root = path.resolve(extDir, '..');
   const run = opts.run || ((pkg) => execFileSync('node', [pkg.buildJs], { stdio: 'inherit' }));
-  // A target's cmd is a full argv whose first element is the executable
+  // A cmd: target's cmd is a full argv whose first element is the executable
   // (e.g. ['node', 'build.js', '--target=works']) — so make.yaml can drive any
-  // toolchain, not just node.
-  const runTarget = opts.runTarget || ((t) => execFileSync(t.cmd[0], t.cmd.slice(1), { cwd: root, stdio: 'inherit' }));
+  // toolchain. A run: target invokes a GCU function in-process (no subprocess).
+  const runTarget = opts.runTarget || ((t) => t.run
+    ? runRecipe(t, root)
+    : execFileSync(t.cmd[0], t.cmd.slice(1), { cwd: root, stdio: 'inherit' }));
 
   const pkgs = discover(extDir);
   const byName = new Map(pkgs.map((p) => [p.name, p]));
@@ -270,7 +317,7 @@ export function make(opts) {
     const key = '#' + t.name;
     const isDirty = force || outMissing || cache[key] !== hash || depDirty;
     dirty.set(t.name, isDirty);
-    if (isDirty) { log(`build ${t.name} (target)`); runTarget(t); cache[key] = hash; tBuilt.push(t.name); }
+    if (isDirty) { log(`build ${t.name} (target)`); await runTarget(t); cache[key] = hash; tBuilt.push(t.name); }
     else { log(`skip  ${t.name} (target, up to date)`); tSkipped.push(t.name); }
   }
 

@@ -190,3 +190,7 @@ landing/lib/
 /packages/
 examples/**/*.html
 examples/**/*.recovery.txt
+
+# gcu-make run: recipe demo output (wasm4-cart target in make.yaml) — a
+# demonstration artifact regenerated from ext/wasm4/cart-demo.atra.
+ext/wasm4/build/

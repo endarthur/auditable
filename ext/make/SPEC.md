@@ -99,12 +99,28 @@ catra project, ep, weir — drops a `make.yaml` and gets the content-hash increm
 engine for free. (It's already its own package with a `gcu-make` bin; this is what makes it
 *usable* outside the monorepo.)
 
-### 3. `run:` — GCU-function recipes (in-browser builds)
+### 3. `run:` — GCU-function recipes (in-browser builds) — BUILT
+
+> **Built.** A target may declare `run: "<module>#<export>"` instead of `cmd:`. The named export is
+> a **pure transform** `recipe(inputs, opts) → Uint8Array | string | { relpath: data }`; gcu-make
+> owns all file I/O (reads `inputs`, writes the return), so the *same* recipe runs over node-fs today
+> and a `@gcu/vfs` adapter in-browser/geas — the `@gcu/build` §1.4 pure-core+adapter shape (option 1
+> over "recipe owns its own I/O"). A single blob → the target's `out:`; a map → each key written
+> relative to root. `<module>` = `@gcu/<name>` (→ `ext/<name>/index.js`) or a path relative to root.
+> `make()` is now async (recipes + the future vfs path are async). `inputs` arrive as
+> `{path, text, bytes}` so a recipe picks text or bytes; `opts:` in the target is passed through.
+>
+> First recipe: `ext/atra/atrac.js#compileRecipe` (a 3-line wrapper over `atra.compile`, in atra's
+> tooling entry — NOT the embedded index.js, so no auditable cascade). Dogfood: the `wasm4-cart`
+> target in `make.yaml` compiles `cart-demo.atra → .wasm` entirely in-process. **Deferred:** the
+> per-package `make.yaml` discovery (path-rebased to each package dir) the wasm4 example below
+> assumes — today recipe targets live in the root `make.yaml` with root-relative paths.
 
 `cmd: [...]` is a subprocess (Node CLI, today). `run: "@gcu/atra#compile"` is a **GCU function** —
 imported + invoked over a vfs/memory adapter, no subprocess. This is how `@gcu/make` compiles atra
 **inside Works, air-gapped, no Node** — the same self-hosting ethos as `@gcu/build`'s vfs adapter
-(`@gcu/build` §1.4). Recipe contract (sketch): `run(inputs[], outPath, opts) → bytes`. This is the
+(`@gcu/build` §1.4). Recipe contract (as built): `recipe(inputs, opts) → bytes | string | {relpath:
+data}` (gcu-make owns I/O — option 1, not the sketch's `run(inputs[], outPath, opts)`). This is the
 axis Make structurally cannot have — it's shell all the way down.
 
 ### 4. `make` in geas

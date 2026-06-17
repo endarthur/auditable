@@ -49,7 +49,7 @@ if (flags.has('--graph')) {
 try {
   if (flags.has('--check')) {
     // rebuild everything, then assert the committed outputs match (no drift).
-    const r = make({ extDir, force: true, noTargets, log });
+    const r = await make({ extDir, force: true, noTargets, log });
     const declared = loadTargets(root, log) || [];
     const outs = r.order.map((n) => path.relative(root, path.join(extDir, n, 'index.js')));
     const targetPaths = (r.targets.order || []).flatMap((n) => {
@@ -63,7 +63,7 @@ try {
     }
     log('all bundles + targets reproducible from source ✓');
   } else {
-    const r = make({ extDir, only, force: flags.has('--force'), noTargets, log });
+    const r = await make({ extDir, only, force: flags.has('--force'), noTargets, log });
     const t = r.targets;
     log(`${r.built.length} package(s) built, ${r.skipped.length} up to date` +
       (noTargets ? '' : `; ${t.built.length} target(s) built, ${t.skipped.length} up to date`));

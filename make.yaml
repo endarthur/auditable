@@ -93,6 +93,19 @@ targets:
       - "profiles/auditable-geo.gcuprofile"
       - "profiles/auditable-py.gcuprofile"
 
+  # Dogfood for `run:` recipes (gcu-make roadmap part 3): compile the wasm4 demo
+  # cart (.atra) to a standalone .wasm via @gcu/atra's compileRecipe — a pure GCU
+  # function run IN-PROCESS (no subprocess), gcu-make doing the file I/O. The same
+  # recipe runs over a @gcu/vfs adapter in-browser/geas later. Output gitignored
+  # (a demonstration; the surface bakes its own cart copy). NB the recipe lives in
+  # atrac.js (atra's tooling entry) not the embedded index.js, so this touches no
+  # auditable cascade — hence the explicit module path rather than @gcu/atra#….
+  wasm4-cart:
+    out: "ext/wasm4/build/cart-demo.wasm"
+    run: "ext/atra/atrac.js#compileRecipe"
+    inputs:
+      - "ext/wasm4/cart-demo.atra"
+
   # The 79 examples each embed a compressed runtime copy -> stale on every
   # auditable.html change. gen_examples.js reads build/auditable.html. Many
   # outputs (no out:), input/dep-gated. check: excludes the crypto demo (it
