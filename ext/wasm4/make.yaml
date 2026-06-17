@@ -1,0 +1,27 @@
+# @gcu/wasm4 build targets — a per-package make.yaml.
+#
+# Compiles the atra modules to standalone .wasm via @gcu/make `run:` recipes: a
+# pure GCU function (atra's compileRecipe) invoked IN-PROCESS, no subprocess, with
+# gcu-make doing the file I/O. The same recipes run over a @gcu/vfs adapter
+# in-browser/geas later (the @gcu/build §1.4 pure-core+adapter shape).
+#
+# Targets here are namespaced wasm4:* by gcu-make. Paths (inputs/out, and the
+# relative run: module ../atra/atrac.js) resolve against THIS package dir. The
+# recipe lives in atra's tooling entry (atrac.js), not the embedded index.js, so
+# it touches no auditable cascade. Output is gitignored (a demonstration — the
+# wasm4 surface bakes its own base64 cart/raster copies via build.js).
+
+targets:
+  raster:
+    out: "build/raster.wasm"
+    run: "../atra/atrac.js#compileRecipe"
+    opts:
+      __memory: true        # the rasterizer imports the shared framebuffer memory
+    inputs:
+      - "raster.atra"
+
+  cart:
+    out: "build/cart-demo.wasm"
+    run: "../atra/atrac.js#compileRecipe"
+    inputs:
+      - "cart-demo.atra"

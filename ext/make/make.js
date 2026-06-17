@@ -136,10 +136,6 @@ export function globFiles(root, patterns) {
   return [...out];
 }
 
-// Load declared targets from the root's make.yaml. Returns the same target shape
-// the engine consumes ({ name, out, cmd, deps, inputs(root), checkPaths }), with
-// glob `inputs:` resolved through globFiles and `check:` mapped to checkPaths.
-// Returns null when no makefile exists (→ a generic repo runs packages only).
 // @gcu/yaml's parse() returns an AST (node tree); collapse it to a plain JS value.
 function yamlToJS(node) {
   if (!node) return null;
@@ -148,21 +144,47 @@ function yamlToJS(node) {
   if (node.kind === 'map') return Object.fromEntries(node.entries.map((e) => [yamlToJS(e.key), yamlToJS(e.value)]));
   return null;
 }
-export function loadTargets(root, log = () => {}) {
-  const mk = findMakefile(root, log);
-  if (!mk) return null;
+
+// Read one makefile (at baseDir) into engine targets. Paths in inputs:/out:/check:
+// and a relative run: module are resolved against baseDir; @gcu/<name> recipe
+// modules resolve against root. Package targets are namespaced "<prefix><name>"
+// and their sibling deps namespaced to match. The engine consumes root-relative
+// out:/checkPaths and inputs() returning absolute paths, so we rebase here.
+function readMakefile(root, baseDir, prefix, log) {
+  const mk = findMakefile(baseDir, log);
+  if (!mk) return [];
   const doc = yamlToJS(parseYaml(fs.readFileSync(mk, 'utf8')));
   const targets = (doc && doc.targets) || {};
+  const relBase = path.relative(root, baseDir);
+  const toRoot = (p) => (relBase ? path.join(relBase, p) : p).split(path.sep).join('/');
   return Object.entries(targets).map(([name, t]) => ({
-    name,
-    out: t.out ?? null,
+    name: prefix + name,
+    baseDir,
+    out: t.out != null ? toRoot(t.out) : null,
     cmd: t.cmd,
     run: t.run ?? null,
     opts: t.opts || {},
-    deps: t.deps || [],
-    inputs: (r) => globFiles(r, t.inputs),
-    checkPaths: t.check,
+    deps: (t.deps || []).map((d) => (prefix && !d.includes(':')) ? prefix + d : d),
+    inputs: () => globFiles(baseDir, t.inputs),
+    checkPaths: t.check ? t.check.map((c) => (c.startsWith(':') ? c : toRoot(c))) : undefined,
   }));
+}
+
+// Load declared targets: the repo-root make.yaml (bare names) plus any per-package
+// ext/<pkg>/make.yaml (namespaced "<pkg>:<target>", paths relative to the package
+// dir — so a package owns its own build graph, e.g. ext/wasm4 compiling carts).
+// Returns null when NO makefile exists anywhere (→ a generic repo runs packages only).
+export function loadTargets(root, log = () => {}) {
+  const out = [...readMakefile(root, root, '', log)];
+  const extDir = path.join(root, 'ext');
+  if (fs.existsSync(extDir)) {
+    for (const pkg of fs.readdirSync(extDir).sort()) {
+      const dir = path.join(extDir, pkg);
+      if (!fs.statSync(dir).isDirectory()) continue;
+      out.push(...readMakefile(root, dir, pkg + ':', log));
+    }
+  }
+  return out.length ? out : null;
 }
 
 // ── run: recipes — in-process GCU-function builds ───────────────────────────
@@ -171,21 +193,22 @@ export function loadTargets(root, log = () => {}) {
 // transform `recipe(inputs, opts) -> Uint8Array | string | { relpath: data }`;
 // gcu-make owns all file I/O, so the same recipe runs over node-fs today and a
 // @gcu/vfs adapter in-browser (the @gcu/build §1.4 pure-core+adapter shape).
-//   <module> = `@gcu/<name>` → ext/<name>/index.js, or a path relative to root.
+//   <module> = `@gcu/<name>` → ext/<name>/index.js (root-based), or a path
+//   relative to the target's baseDir (the package dir, or root for root targets).
 function parseRecipeSpec(spec) {
   const hash = spec.lastIndexOf('#');
   if (hash < 0) throw new Error(`gcu-make: bad recipe "${spec}" — expected "<module>#<export>"`);
   return { module: spec.slice(0, hash), exportName: spec.slice(hash + 1) };
 }
-function recipeModuleUrl(moduleSpec, root) {
+function recipeModuleUrl(moduleSpec, root, baseDir) {
   const m = moduleSpec.startsWith('@gcu/')
     ? path.join(root, 'ext', moduleSpec.slice('@gcu/'.length), 'index.js')
-    : path.join(root, moduleSpec);
+    : path.join(baseDir || root, moduleSpec);
   return pathToFileURL(m).href;
 }
 export async function runRecipe(t, root, importer = (u) => import(u)) {
   const { module: moduleSpec, exportName } = parseRecipeSpec(t.run);
-  const mod = await importer(recipeModuleUrl(moduleSpec, root));
+  const mod = await importer(recipeModuleUrl(moduleSpec, root, t.baseDir));
   const fn = mod[exportName];
   if (typeof fn !== 'function') throw new Error(`gcu-make: recipe "${t.run}" — no export "${exportName}"`);
   const inputs = t.inputs(root).map((f) => {

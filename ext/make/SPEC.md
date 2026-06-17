@@ -44,8 +44,9 @@ graph to read, and lives in a package that shouldn't have to edit the central `m
 > inputs(root), checkPaths }` shape, with glob `inputs:` resolved through `globFiles` and `check:`
 > mapped to `checkPaths`. Names resolve `make.yaml` → `gcu-make.yaml` → `makefile.yaml` (first wins,
 > warns on multiple). NB `@gcu/yaml` is a strict subset: **block sequences only** (no `[a, b]`
-> flow), **scalars quoted**. The per-package toolchain case below (wasm4 carts) waits on `run:`
-> recipes (part 3).
+> flow), **scalars quoted**. Per-package `ext/<pkg>/make.yaml` files are discovered too — their
+> targets are namespaced `<pkg>:<target>`, with inputs/out/check and relative `run:` modules
+> resolved against the package dir, so a package owns its own build graph (see `ext/wasm4/make.yaml`).
 
 Lift the `REPO_TARGETS` array out of `make.js` into discovered, per-root/per-package
 `make.yaml` files. The record is *exactly* today's `{ name, out, cmd, deps, inputs }` — sourced
@@ -111,10 +112,8 @@ engine for free. (It's already its own package with a `gcu-make` bin; this is wh
 > `{path, text, bytes}` so a recipe picks text or bytes; `opts:` in the target is passed through.
 >
 > First recipe: `ext/atra/atrac.js#compileRecipe` (a 3-line wrapper over `atra.compile`, in atra's
-> tooling entry — NOT the embedded index.js, so no auditable cascade). Dogfood: the `wasm4-cart`
-> target in `make.yaml` compiles `cart-demo.atra → .wasm` entirely in-process. **Deferred:** the
-> per-package `make.yaml` discovery (path-rebased to each package dir) the wasm4 example below
-> assumes — today recipe targets live in the root `make.yaml` with root-relative paths.
+> tooling entry — NOT the embedded index.js, so no auditable cascade). Dogfood: `ext/wasm4/make.yaml`
+> (a per-package makefile) compiles `raster.atra` + `cart-demo.atra → .wasm` entirely in-process.
 
 `cmd: [...]` is a subprocess (Node CLI, today). `run: "@gcu/atra#compile"` is a **GCU function** —
 imported + invoked over a vfs/memory adapter, no subprocess. This is how `@gcu/make` compiles atra

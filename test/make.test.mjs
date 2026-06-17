@@ -227,6 +227,39 @@ test('loadTargets: parses make.yaml → engine target shape (glob inputs, check�
   }
 });
 
+test('loadTargets: per-package make.yaml — namespaced, paths rebased to the package dir', () => {
+  const r = fs.mkdtempSync(path.join(os.tmpdir(), 'gcu-perpkg-'));
+  try {
+    fs.mkdirSync(path.join(r, 'ext', 'wid', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(r, 'ext', 'wid', 'a.in'), 'x');
+    // root makefile (bare names)
+    fs.writeFileSync(path.join(r, 'make.yaml'),
+      'targets:\n  root1:\n    out: "r.html"\n    cmd:\n      - "node"\n      - "b.js"\n    inputs:\n      - "b.js"\n');
+    // per-package makefile (namespaced wid:*, paths relative to ext/wid)
+    fs.writeFileSync(path.join(r, 'ext', 'wid', 'make.yaml'),
+      'targets:\n' +
+      '  art:\n' +
+      '    out: "build/art.bin"\n' +
+      '    run: "../tool.js#make"\n' +
+      '    deps:\n      - "prep"\n' +
+      '    inputs:\n      - "a.in"\n' +
+      '  prep:\n' +
+      '    out: "build/prep.bin"\n' +
+      '    cmd:\n      - "node"\n      - "p.js"\n' +
+      '    inputs:\n      - "a.in"\n');
+    const t = loadTargets(r);
+    const names = t.map((x) => x.name);
+    assert.deepEqual(names, ['root1', 'wid:art', 'wid:prep'], 'root bare, package namespaced');
+    const art = t.find((x) => x.name === 'wid:art');
+    assert.equal(art.out, 'ext/wid/build/art.bin', 'out rebased to root-relative');
+    assert.deepEqual(art.deps, ['wid:prep'], 'sibling dep namespaced');
+    const ins = art.inputs(r).map((f) => path.relative(r, f).split(path.sep).join('/'));
+    assert.deepEqual(ins, ['ext/wid/a.in'], 'inputs resolve against the package dir');
+  } finally {
+    fs.rmSync(r, { recursive: true, force: true });
+  }
+});
+
 // ── run: recipes (in-process GCU-function builds) ───────────────────────────
 
 test('make: run: recipe — pure transform, gcu-make owns I/O (single + multi-output)', async () => {
