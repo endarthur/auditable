@@ -13,7 +13,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { make, discover, deriveEdges, topoOrder, REPO_TARGETS } from './make.js';
+import { make, discover, deriveEdges, topoOrder, loadTargets } from './make.js';
 
 const extDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = path.resolve(extDir, '..');
@@ -37,11 +37,12 @@ if (flags.has('--graph')) {
     const deps = [...edges.get(n)];
     console.log(`  ${n}${deps.length ? '  ←  ' + deps.join(', ') : ''}`);
   }
-  console.log(`\n  ── targets (non-package root builds) ──`);
-  for (const t of REPO_TARGETS) {
+  const targets = loadTargets(root, log) || [];
+  console.log(`\n  ── targets (make.yaml — non-package root builds) ──`);
+  for (const t of targets) {
     console.log(`  ${t.name}${t.deps && t.deps.length ? '  ←  ' + t.deps.join(', ') : ''}  →  ${t.out || t.cmd.join(' ')}`);
   }
-  console.log(`\n${pkgs.length} managed package(s) + ${REPO_TARGETS.length} target(s); auditable's inputs include ext/*/index.js, so a package change cascades to works.`);
+  console.log(`\n${pkgs.length} managed package(s) + ${targets.length} target(s); auditable's inputs include ext/*/index.js, so a package change cascades to works.`);
   process.exit(0);
 }
 
@@ -49,9 +50,10 @@ try {
   if (flags.has('--check')) {
     // rebuild everything, then assert the committed outputs match (no drift).
     const r = make({ extDir, force: true, noTargets, log });
+    const declared = loadTargets(root, log) || [];
     const outs = r.order.map((n) => path.relative(root, path.join(extDir, n, 'index.js')));
     const targetPaths = (r.targets.order || []).flatMap((n) => {
-      const t = REPO_TARGETS.find((x) => x.name === n);
+      const t = declared.find((x) => x.name === n);
       return t.checkPaths || (t.out ? [t.out] : []);
     });
     const drift = execFileSync('git', ['diff', '--name-only', '--', ...outs, ...targetPaths], { cwd: root, encoding: 'utf8' }).trim();

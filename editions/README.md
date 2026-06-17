@@ -15,4 +15,4 @@ yields byte-identical output.
 
 The lean `auditable.html` at the repo root stays the canonical app; editions are
 batteries-included distributables built on top of it. Adding one is a small entry in
-`build.js`'s `EDITIONS` table plus a line in gcu-make's `REPO_TARGETS`.
+`build.js`'s `EDITIONS` table plus a target in the repo's `make.yaml`.

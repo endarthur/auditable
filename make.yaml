@@ -1,0 +1,114 @@
+# @gcu/make targets for the auditable repo.
+#
+# These are the non-@gcu/build root builds — the multi-target bundler, not uniform
+# @gcu/build wrappers — so they can't be derived and are declared here. Managed
+# @gcu/build packages stay auto-discovered + edge-derived (you don't list them).
+#
+# inputs: are globs (** = any depth, * = within a segment). auditable's inputs
+# include every ext/*/index.js, so a package rebuild cascades auditable -> works.
+# cmd: is a full argv (first element = the executable). Omit out: for many-output
+# targets (gated on inputs/deps only); check: are git pathspecs for --check drift.
+#
+# (@gcu/yaml is a strict subset: block sequences only, scalars quoted.)
+
+targets:
+  auditable:
+    out: "auditable.html"
+    cmd:
+      - "node"
+      - "build.js"
+    inputs:
+      - "src/**"
+      - "ext/*/index.js"
+      - "build.js"
+
+  works:
+    out: "works.html"
+    deps:
+      - "auditable"
+    cmd:
+      - "node"
+      - "build.js"
+      - "--target=works"
+    inputs:
+      - "works/**"
+      - "ext/*/index.js"
+      - "auditable.html"
+      - "build.js"
+
+  works-all:
+    out: "works-all.html"
+    deps:
+      - "auditable"
+    cmd:
+      - "node"
+      - "build.js"
+      - "--target=works-all"
+    inputs:
+      - "works/**"
+      - "ext/*/index.js"
+      - "auditable.html"
+      - "build.js"
+
+  # Editions: the base notebook with a curated ext set embedded for offline use.
+  # Built from build/auditable.html (the cleartext sibling the auditable target
+  # writes) + the embedded ext bundles. Reproducible (git-date build) -> --check-safe.
+  auditable-py:
+    out: "editions/auditable-py.html"
+    deps:
+      - "auditable"
+    cmd:
+      - "node"
+      - "build.js"
+      - "--target=auditable-py"
+    inputs:
+      - "build/auditable.html"
+      - "ext/adder/index.js"
+      - "ext/plot/index.js"
+      - "ext/sadpan/index.js"
+      - "build.js"
+      - "make_example.js"
+      - "profiles/resolve.js"
+      - "profiles/packages.json"
+      - "profiles/auditable-py.gcuprofile"
+
+  auditable-geo:
+    out: "editions/auditable-geo.html"
+    deps:
+      - "auditable"
+    cmd:
+      - "node"
+      - "build.js"
+      - "--target=auditable-geo"
+    inputs:
+      - "build/auditable.html"
+      - "ext/adder/index.js"
+      - "ext/plot/index.js"
+      - "ext/sadpan/index.js"
+      - "ext/atra/lib/gslib.js"
+      - "build.js"
+      - "make_example.js"
+      - "profiles/resolve.js"
+      - "profiles/packages.json"
+      - "profiles/auditable-geo.gcuprofile"
+      - "profiles/auditable-py.gcuprofile"
+
+  # The 79 examples each embed a compressed runtime copy -> stale on every
+  # auditable.html change. gen_examples.js reads build/auditable.html. Many
+  # outputs (no out:), input/dep-gated. check: excludes the crypto demo (it
+  # re-encrypts with a random DEK/IV each run -> non-deterministic).
+  examples:
+    deps:
+      - "auditable"
+    cmd:
+      - "node"
+      - "gen_examples.js"
+    inputs:
+      - "examples/defs/**"
+      - "build/auditable.html"
+      - "gen_examples.js"
+      - "make_example.js"
+    check:
+      - "examples/"
+      - ":(exclude)examples/basics/example_encrypted_password-is-auditable.html"
+      - ":(exclude)examples/basics/example_encrypted_password-is-auditable.recovery.txt"

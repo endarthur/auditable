@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { parse as parseYaml } from '../yaml/index.js';
 
 const isManagedBuild = (txt) => /@gcu\/build|build\/src\/main\.js/.test(txt);
 
@@ -52,27 +53,6 @@ function srcHash(srcDir) {
   return h.digest('hex');
 }
 
-// ── repo targets ──────────────────────────────────────────────────────────
-// The non-@gcu/build root builds (auditable.html, works, works-all) can't be
-// derived like packages — they're the multi-target bundler, not uniform @gcu/build
-// wrappers — so they're declared. Each lists its build command + the input set
-// whose change should retrigger it. Crucially auditable's inputs include every
-// ext/*/index.js, so a PACKAGE rebuild → auditable rebuilds → works rebuild: the
-// "forgot to rebuild the dependent" cascade, made automatic.
-
-function filesUnder(dir) {
-  if (!fs.existsSync(dir)) return [];
-  const out = [];
-  for (const ent of fs.readdirSync(dir, { recursive: true, withFileTypes: true })) {
-    if (ent.isFile()) out.push(path.join(ent.parentPath || ent.path, ent.name));
-  }
-  return out;
-}
-function extBundles(root) {
-  const ext = path.join(root, 'ext');
-  if (!fs.existsSync(ext)) return [];
-  return fs.readdirSync(ext).map((n) => path.join(ext, n, 'index.js')).filter((f) => fs.existsSync(f));
-}
 function hashFiles(files) {
   const h = crypto.createHash('sha256');
   for (const f of [...files].sort()) {
@@ -83,51 +63,104 @@ function hashFiles(files) {
   return h.digest('hex');
 }
 
-export const REPO_TARGETS = [
-  { name: 'auditable', out: 'auditable.html', cmd: ['build.js'], deps: [],
-    inputs: (root) => [...filesUnder(path.join(root, 'src')), ...extBundles(root), path.join(root, 'build.js')] },
-  { name: 'works', out: 'works.html', cmd: ['build.js', '--target=works'], deps: ['auditable'],
-    inputs: (root) => [...filesUnder(path.join(root, 'works')), ...extBundles(root), path.join(root, 'auditable.html'), path.join(root, 'build.js')] },
-  { name: 'works-all', out: 'works-all.html', cmd: ['build.js', '--target=works-all'], deps: ['auditable'],
-    inputs: (root) => [...filesUnder(path.join(root, 'works')), ...extBundles(root), path.join(root, 'auditable.html'), path.join(root, 'build.js')] },
-  // Editions (editions/auditable-<name>.html): the base notebook with a curated ext
-  // set embedded for offline use. Built from build/auditable.html (written by the
-  // auditable target) + the embedded ext bundles, so a change to any of those re-bakes
-  // the edition. Reproducible (git-date build), so it's safe under --check.
-  { name: 'auditable-py', out: 'editions/auditable-py.html', cmd: ['build.js', '--target=auditable-py'], deps: ['auditable'],
-    inputs: (root) => [
-      path.join(root, 'build', 'auditable.html'),
-      path.join(root, 'ext/adder/index.js'), path.join(root, 'ext/plot/index.js'), path.join(root, 'ext/sadpan/index.js'),
-      path.join(root, 'build.js'), path.join(root, 'make_example.js'),
-      path.join(root, 'profiles/resolve.js'), path.join(root, 'profiles/packages.json'),
-      path.join(root, 'profiles/auditable-py.gcuprofile'),
-    ] },
-  { name: 'auditable-geo', out: 'editions/auditable-geo.html', cmd: ['build.js', '--target=auditable-geo'], deps: ['auditable'],
-    inputs: (root) => [
-      path.join(root, 'build', 'auditable.html'),
-      path.join(root, 'ext/adder/index.js'), path.join(root, 'ext/plot/index.js'), path.join(root, 'ext/sadpan/index.js'), path.join(root, 'ext/atra/lib/gslib.js'),
-      path.join(root, 'build.js'), path.join(root, 'make_example.js'),
-      path.join(root, 'profiles/resolve.js'), path.join(root, 'profiles/packages.json'),
-      path.join(root, 'profiles/auditable-geo.gcuprofile'), path.join(root, 'profiles/auditable-py.gcuprofile'),
-    ] },
-  // The 79 examples each embed a compressed copy of the runtime, so they go stale on
-  // every auditable.html change — gen_examples.js reads build/auditable.html (the
-  // cleartext sibling build.js also writes). out:null = many files, not one; the dir
-  // always exists so it's input/dep-gated only. checkPaths feeds the --check drift
-  // diff but excludes the crypto demo (re-encrypts with a random DEK/IV every run).
-  { name: 'examples', out: null, cmd: ['gen_examples.js'], deps: ['auditable'],
-    inputs: (root) => [
-      ...filesUnder(path.join(root, 'examples', 'defs')),
-      path.join(root, 'build', 'auditable.html'),
-      path.join(root, 'gen_examples.js'),
-      path.join(root, 'make_example.js'),
-    ],
-    checkPaths: [
-      'examples/',
-      ':(exclude)examples/basics/example_encrypted_password-is-auditable.html',
-      ':(exclude)examples/basics/example_encrypted_password-is-auditable.recovery.txt',
-    ] },
-];
+// ── targets (make.yaml) ─────────────────────────────────────────────────────
+// The non-@gcu/build root builds (auditable.html → works/works-all + editions +
+// examples) can't be derived like packages — they're the multi-target bundler,
+// not uniform @gcu/build wrappers — so they're DECLARED, in a per-root make.yaml.
+// Managed @gcu/build packages stay auto-discovered + edge-derived; you only write
+// down the irreducible non-derivable part. Crucially auditable's inputs include
+// every ext/*/index.js, so a PACKAGE rebuild → auditable rebuilds → works rebuild:
+// the "forgot to rebuild the dependent" cascade, made automatic.
+//
+// Moving these out of make.js is what makes @gcu/make a GENERIC bin: any repo (a
+// wasm4 game, catra, ep) drops a make.yaml and gets the incremental + drift engine.
+
+// Accepted makefile names, in resolution order. `make.yaml` is canonical (it pairs
+// with the `make` command the way package.json pairs with npm); the others are
+// recognized aliases.
+export const MAKEFILE_NAMES = ['make.yaml', 'gcu-make.yaml', 'makefile.yaml'];
+
+// Find the root's makefile. First-found wins; warns if more than one is present.
+export function findMakefile(root, log = () => {}) {
+  const present = MAKEFILE_NAMES.filter((n) => fs.existsSync(path.join(root, n)));
+  if (present.length > 1) log(`multiple makefiles present (${present.join(', ')}); using ${present[0]}`);
+  return present.length ? path.join(root, present[0]) : null;
+}
+
+// Minimal glob → matched files, relative to root. Supports `**` (any depth,
+// crosses `/`), `*`/`?` (within a segment), and literal paths (existence check,
+// no walk). Each pattern walks only its literal-prefix subtree, so resolving
+// `src/**` touches src/ — not the whole repo (no .git/node_modules traversal).
+function globToRegExp(pat) {
+  let re = '';
+  const s = pat.replace(/\\/g, '/');
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '*') {
+      if (s[i + 1] === '*') { re += '.*'; i++; if (s[i + 1] === '/') i++; } // ** (optionally **/)
+      else re += '[^/]*';
+    } else if (c === '?') re += '[^/]';
+    else if ('.+^${}()|[]\\'.includes(c)) re += '\\' + c;
+    else re += c;
+  }
+  return new RegExp('^' + re + '$');
+}
+function* walkFiles(dir) {
+  if (!fs.existsSync(dir)) return;
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fp = path.join(dir, ent.name);
+    if (ent.isDirectory()) yield* walkFiles(fp);
+    else if (ent.isFile()) yield fp;
+  }
+}
+export function globFiles(root, patterns) {
+  const out = new Set();
+  for (const pat of patterns || []) {
+    if (!/[*?]/.test(pat)) { // literal path — no walk
+      const fp = path.join(root, pat);
+      if (fs.existsSync(fp) && fs.statSync(fp).isFile()) out.add(fp);
+      continue;
+    }
+    const re = globToRegExp(pat);
+    const pre = [];
+    for (const seg of pat.split('/')) { if (/[*?]/.test(seg)) break; pre.push(seg); }
+    const base = path.join(root, ...pre);
+    if (!fs.existsSync(base)) continue;
+    const start = fs.statSync(base).isDirectory() ? base : path.dirname(base);
+    for (const f of walkFiles(start)) {
+      const rel = path.relative(root, f).split(path.sep).join('/');
+      if (re.test(rel)) out.add(f);
+    }
+  }
+  return [...out];
+}
+
+// Load declared targets from the root's make.yaml. Returns the same target shape
+// the engine consumes ({ name, out, cmd, deps, inputs(root), checkPaths }), with
+// glob `inputs:` resolved through globFiles and `check:` mapped to checkPaths.
+// Returns null when no makefile exists (→ a generic repo runs packages only).
+// @gcu/yaml's parse() returns an AST (node tree); collapse it to a plain JS value.
+function yamlToJS(node) {
+  if (!node) return null;
+  if (node.kind === 'scalar') return node.value;
+  if (node.kind === 'seq') return node.items.map(yamlToJS);
+  if (node.kind === 'map') return Object.fromEntries(node.entries.map((e) => [yamlToJS(e.key), yamlToJS(e.value)]));
+  return null;
+}
+export function loadTargets(root, log = () => {}) {
+  const mk = findMakefile(root, log);
+  if (!mk) return null;
+  const doc = yamlToJS(parseYaml(fs.readFileSync(mk, 'utf8')));
+  const targets = (doc && doc.targets) || {};
+  return Object.entries(targets).map(([name, t]) => ({
+    name,
+    out: t.out ?? null,
+    cmd: t.cmd,
+    deps: t.deps || [],
+    inputs: (r) => globFiles(r, t.inputs),
+    checkPaths: t.check,
+  }));
+}
 
 // Cross-package dependency edges, derived from source: a package depends on
 // another managed package if its src imports it as `@gcu/<name>` (bare) or
@@ -190,7 +223,10 @@ export function make(opts) {
   const { extDir, only, force, log = () => {} } = opts;
   const root = path.resolve(extDir, '..');
   const run = opts.run || ((pkg) => execFileSync('node', [pkg.buildJs], { stdio: 'inherit' }));
-  const runTarget = opts.runTarget || ((t) => execFileSync('node', t.cmd, { cwd: root, stdio: 'inherit' }));
+  // A target's cmd is a full argv whose first element is the executable
+  // (e.g. ['node', 'build.js', '--target=works']) — so make.yaml can drive any
+  // toolchain, not just node.
+  const runTarget = opts.runTarget || ((t) => execFileSync(t.cmd[0], t.cmd.slice(1), { cwd: root, stdio: 'inherit' }));
 
   const pkgs = discover(extDir);
   const byName = new Map(pkgs.map((p) => [p.name, p]));
@@ -225,7 +261,7 @@ export function make(opts) {
   // ── repo targets (auditable.html → works → works-all). Run after packages so
   //    a package rebuild is reflected in auditable's input hash; targets in dep
   //    order so works sees a freshly-built auditable.html. ──
-  const targets = opts.noTargets ? [] : (opts.targets || REPO_TARGETS);
+  const targets = opts.noTargets ? [] : (opts.targets || loadTargets(root, log) || []);
   const tBuilt = [], tSkipped = [];
   for (const t of targets) {
     const hash = hashFiles(t.inputs(root));

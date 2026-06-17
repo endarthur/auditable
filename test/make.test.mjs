@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { discover, deriveEdges, topoOrder, make } from '../ext/make/make.js';
+import { discover, deriveEdges, topoOrder, make, findMakefile, globFiles, loadTargets, MAKEFILE_NAMES } from '../ext/make/make.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const buildMain = pathToFileURL(path.join(root, 'ext', 'build', 'src', 'main.js')).href;
@@ -148,5 +148,81 @@ test('make: injectable runner reports order without spawning', () => {
     assert.deepEqual(r.built, ['core', 'app']);
   } finally {
     fs.rmSync(ext, { recursive: true, force: true });
+  }
+});
+
+// ── make.yaml (declarative targets) ─────────────────────────────────────────
+
+test('findMakefile: resolution order (make.yaml wins), warns on multiple', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gcu-mk-'));
+  try {
+    assert.equal(findMakefile(dir), null, 'none present → null');
+    fs.writeFileSync(path.join(dir, 'gcu-make.yaml'), 'targets:\n');
+    assert.equal(path.basename(findMakefile(dir)), 'gcu-make.yaml', 'alias used when alone');
+    fs.writeFileSync(path.join(dir, 'make.yaml'), 'targets:\n');
+    let warned = '';
+    assert.equal(path.basename(findMakefile(dir, (s) => { warned = s; })), 'make.yaml', 'canonical wins');
+    assert.match(warned, /multiple makefiles/);
+    assert.deepEqual(MAKEFILE_NAMES, ['make.yaml', 'gcu-make.yaml', 'makefile.yaml']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('globFiles: ** (any depth), * (one segment), literal', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gcu-glob-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'src', 'sub'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'ext', 'a'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'ext', 'b'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'top.js'), '');
+    fs.writeFileSync(path.join(dir, 'src', 'sub', 'deep.js'), '');
+    fs.writeFileSync(path.join(dir, 'ext', 'a', 'index.js'), '');
+    fs.writeFileSync(path.join(dir, 'ext', 'b', 'index.js'), '');
+    fs.writeFileSync(path.join(dir, 'ext', 'b', 'other.js'), '');
+    fs.writeFileSync(path.join(dir, 'root.txt'), '');
+    const rel = (fs2) => fs2.map((f) => path.relative(dir, f).split(path.sep).join('/')).sort();
+    assert.deepEqual(rel(globFiles(dir, ['src/**'])), ['src/sub/deep.js', 'src/top.js'], '** crosses /');
+    assert.deepEqual(rel(globFiles(dir, ['ext/*/index.js'])), ['ext/a/index.js', 'ext/b/index.js'], '* is one segment');
+    assert.deepEqual(rel(globFiles(dir, ['root.txt'])), ['root.txt'], 'literal');
+    assert.deepEqual(rel(globFiles(dir, ['nope.js'])), [], 'missing literal → empty');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadTargets: parses make.yaml → engine target shape (glob inputs, check→checkPaths)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gcu-lt-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'ext', 'x'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'ext', 'x', 'index.js'), '');
+    fs.writeFileSync(path.join(dir, 'build.js'), '');
+    assert.equal(loadTargets(dir), null, 'no makefile → null (generic repo: packages only)');
+    fs.writeFileSync(path.join(dir, 'make.yaml'),
+      'targets:\n' +
+      '  app:\n' +
+      '    out: "app.html"\n' +
+      '    deps:\n' +
+      '      - "lib"\n' +
+      '    cmd:\n' +
+      '      - "node"\n' +
+      '      - "build.js"\n' +
+      '      - "--target=app"\n' +
+      '    inputs:\n' +
+      '      - "ext/*/index.js"\n' +
+      '      - "build.js"\n' +
+      '    check:\n' +
+      '      - "app.html"\n');
+    const t = loadTargets(dir);
+    assert.equal(t.length, 1);
+    assert.equal(t[0].name, 'app');
+    assert.equal(t[0].out, 'app.html');
+    assert.deepEqual(t[0].deps, ['lib']);
+    assert.deepEqual(t[0].cmd, ['node', 'build.js', '--target=app']);
+    assert.deepEqual(t[0].checkPaths, ['app.html']);
+    const ins = t[0].inputs(dir).map((f) => path.relative(dir, f).split(path.sep).join('/')).sort();
+    assert.deepEqual(ins, ['build.js', 'ext/x/index.js'], 'glob inputs resolve against root');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

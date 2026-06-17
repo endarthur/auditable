@@ -19,11 +19,14 @@ order, skipping the unchanged.
 - **Content-hash incremental** — `.gcu-make.cache.json` (gitignored); rebuild only changed +
   downstream-of-changed. Orchestrates by spawning each `build.js` — the per-package config stays the
   single source of truth (no duplication).
-- **Declared `REPO_TARGETS`** (in `make.js`) for the non-uniform root builds — `auditable.html →
-  works / works-all / examples`, each `{ name, out, cmd, deps, inputs(root), checkPaths? }`,
-  content-gated, run after the packages. The keystone: auditable's `inputs` include every
-  `ext/*/index.js`, so a package rebuild → auditable rebuilds → works rebuilds — the
-  "forgot-to-rebuild-the-embedded-notebook" staleness is structural.
+- **Declared targets** (the repo's `make.yaml`) for the non-uniform root builds — `auditable.html →
+  works / works-all / examples`, each `{ name, out, cmd, deps, inputs, check? }` (glob `inputs:`,
+  `cmd:` a full argv), content-gated, run after the packages. The keystone: auditable's `inputs`
+  include every `ext/*/index.js`, so a package rebuild → auditable rebuilds → works rebuilds — the
+  "forgot-to-rebuild-the-embedded-notebook" staleness is structural. (Roadmap parts 1+2, below, are
+  BUILT: targets moved out of `make.js` into `make.yaml`, so `@gcu/make` carries nothing
+  repo-specific — it's a generic bin. Accepted makefile names: `make.yaml` (canonical) /
+  `gcu-make.yaml` / `makefile.yaml`.)
 - **CLI** (`bin: gcu-make`): `[--force | --check | --graph | --no-targets | --quiet] [pkg…]`.
   `--check` = force-rebuild + assert no git drift (the CI invariant).
 
@@ -34,10 +37,18 @@ The forcing function: **atra carts** (the `@gcu/wasm4` build — `SPEC-wasm4.md`
 specced not built) is the second that confirms the shape. A `.atra → .wasm` step has no import
 graph to read, and lives in a package that shouldn't have to edit the central `make.js`. So:
 
-### 1. Per-package declarative targets (`gcu-make.yaml`)
+### 1. Per-package declarative targets (`make.yaml`) — BUILT
+
+> **Built.** The repo-root `auditable/make.yaml` replaces the old `REPO_TARGETS` JS array;
+> `loadTargets(root)` parses it (via `@gcu/yaml`) into the same `{ name, out, cmd, deps,
+> inputs(root), checkPaths }` shape, with glob `inputs:` resolved through `globFiles` and `check:`
+> mapped to `checkPaths`. Names resolve `make.yaml` → `gcu-make.yaml` → `makefile.yaml` (first wins,
+> warns on multiple). NB `@gcu/yaml` is a strict subset: **block sequences only** (no `[a, b]`
+> flow), **scalars quoted**. The per-package toolchain case below (wasm4 carts) waits on `run:`
+> recipes (part 3).
 
 Lift the `REPO_TARGETS` array out of `make.js` into discovered, per-root/per-package
-`gcu-make.yaml` files. The record is *exactly* today's `{ name, out, cmd, deps, inputs }` — sourced
+`make.yaml` files. The record is *exactly* today's `{ name, out, cmd, deps, inputs }` — sourced
 from YAML (via `@gcu/yaml`) instead of a JS array:
 
 ```yaml
@@ -76,11 +87,15 @@ targets:
 (import graphs), declare where you must (no graph to read — `.atra→.wasm`, packing, signing).**
 You write config only for the irreducible part.
 
-### 2. Standalone — read `gcu-make.yaml` from any root
+### 2. Standalone — read `make.yaml` from any root — BUILT
+
+> **Built.** `REPO_TARGETS` is deleted from `make.js`; `make()` reads targets via
+> `loadTargets(root)` (→ `[]` when no makefile, so a generic repo just runs its packages). Nothing
+> auditable-specific remains in `@gcu/make`.
 
 Once §1 lands, the *only* auditable-specific thing in `@gcu/make` is gone (it's in
-`auditable/gcu-make.yaml` now). `@gcu/make` becomes a **generic bin**: any repo — a wasm4 game, a
-catra project, ep, weir — drops a `gcu-make.yaml` and gets the content-hash incremental + drift
+`auditable/make.yaml` now). `@gcu/make` becomes a **generic bin**: any repo — a wasm4 game, a
+catra project, ep, weir — drops a `make.yaml` and gets the content-hash incremental + drift
 engine for free. (It's already its own package with a `gcu-make` bin; this is what makes it
 *usable* outside the monorepo.)
 
