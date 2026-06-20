@@ -588,3 +588,121 @@ test('openStream delivers data chunks then ends', async () => {
     assert.equal(result, 'done');
   } finally { h.teardown(); }
 });
+
+// ── capability authorization (works-capability-security-spec §4) ────────
+// A gated service is default-deny: a call needs a broker-issued grant. Grants
+// are host-only (createBroker returns gate/grant/revoke; never on the wire).
+
+// Stand up a gated 'vault' service + a caller; returns both + the broker.
+async function vaultHarness() {
+  const h = harness();
+  const svc = await h.join({ client: 'vaultsvc' });
+  await svc.bus.claim('vault');
+  svc.bus.expose('/', { Secret: {
+    methods: { Read: (p) => 'secret:' + p, Write: () => 'wrote' },
+  } });
+  h.broker.gate('vault');
+  const caller = await h.join({ client: 'cli' });
+  await settle();
+  return { h, svc, caller };
+}
+
+test('capability: gated service denies an ungranted call', async () => {
+  const { h, caller } = await vaultHarness();
+  try {
+    await assert.rejects(
+      caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Read' }, ['/x']),
+      (e) => e instanceof AbusError && e.code === ERR.AccessDenied);
+  } finally { h.teardown(); }
+});
+
+test('capability: a matching grant lets the call through; revoke re-denies', async () => {
+  const { h, caller } = await vaultHarness();
+  try {
+    const gid = h.broker.grant(caller.brokerUnique, { to: 'vault', interface: 'Secret', member: 'Read' });
+    assert.equal(
+      await caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Read' }, ['/x']),
+      'secret:/x');
+    // grant is member-scoped: Write is still denied
+    await assert.rejects(
+      caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Write' }, []),
+      (e) => e.code === ERR.AccessDenied);
+    // revoke → denied again
+    assert.equal(h.broker.revoke(gid), true);
+    await assert.rejects(
+      caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Read' }, ['/x']),
+      (e) => e.code === ERR.AccessDenied);
+  } finally { h.teardown(); }
+});
+
+test('capability: member wildcard grants the whole interface', async () => {
+  const { h, caller } = await vaultHarness();
+  try {
+    h.broker.grant(caller.brokerUnique, { to: 'vault', interface: 'Secret', member: '*' });
+    assert.equal(await caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Read' }, ['/a']), 'secret:/a');
+    assert.equal(await caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Write' }, []), 'wrote');
+  } finally { h.teardown(); }
+});
+
+test('capability: scope (pathPrefix) confines a grant to matching args', async () => {
+  const { h, caller } = await vaultHarness();
+  try {
+    h.broker.grant(caller.brokerUnique, { to: 'vault', interface: 'Secret', member: 'Read', scope: { pathPrefix: '/ok' } });
+    assert.equal(await caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Read' }, ['/ok/x']), 'secret:/ok/x');
+    await assert.rejects(
+      caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Read' }, ['/nope']),
+      (e) => e.code === ERR.AccessDenied);
+  } finally { h.teardown(); }
+});
+
+test('capability: an ungated service is unaffected (back-compat)', async () => {
+  const h = harness();
+  try {
+    const svc = await h.join({ client: 'opensvc' });
+    await svc.bus.claim('open');
+    svc.bus.expose('/', { Echo: { methods: { Say: (s) => s } } });
+    const caller = await h.join({ client: 'cli' });
+    await settle();
+    // 'open' was never gated → any peer calls freely, no grant needed
+    assert.equal(await caller.bus.call({ to: 'open', path: '/', interface: 'Echo', member: 'Say' }, ['hi']), 'hi');
+  } finally { h.teardown(); }
+});
+
+test('capability: gating cannot be bypassed by addressing the owner unique', async () => {
+  const { h, caller } = await vaultHarness();
+  try {
+    const vaultUnique = await caller.bus.getNameOwner('vault');   // discoverable
+    assert.ok(vaultUnique && vaultUnique[0] === ':');
+    await assert.rejects(
+      caller.bus.call({ to: vaultUnique, path: '/', interface: 'Secret', member: 'Read' }, ['/x']),
+      (e) => e.code === ERR.AccessDenied, 'direct-unique addressing is still gated');
+  } finally { h.teardown(); }
+});
+
+test('capability: grant/revoke are host-only, not reachable over the wire', async () => {
+  const { h, caller } = await vaultHarness();
+  try {
+    // No Bus.Grant method exists — a peer cannot grant itself.
+    await assert.rejects(
+      caller.bus.call({ to: 'bus', path: '/', interface: 'Bus', member: 'Grant' }, [caller.brokerUnique, { to: 'vault' }]),
+      (e) => e.code === ERR.UnknownMember);
+    // and the call is still denied (it didn't sneak a grant in)
+    await assert.rejects(
+      caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Read' }, ['/x']),
+      (e) => e.code === ERR.AccessDenied);
+  } finally { h.teardown(); }
+});
+
+test('capability: a peer-by-clientId grant survives across reconnects', async () => {
+  const h = harness();
+  try {
+    const svc = await h.join({ client: 'vaultsvc' });
+    await svc.bus.claim('vault');
+    svc.bus.expose('/', { Secret: { methods: { Read: (p) => 'secret:' + p } } });
+    h.broker.gate('vault');
+    h.broker.grant('trusted-app', { to: 'vault', interface: 'Secret', member: '*' });  // by clientId
+    const caller = await h.join({ client: 'trusted-app' });
+    await settle();
+    assert.equal(await caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Read' }, ['/x']), 'secret:/x');
+  } finally { h.teardown(); }
+});

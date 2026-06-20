@@ -116,6 +116,79 @@ function createBroker() {
   // activation so concurrent first-calls coalesce onto one run.
   const declared = new Map();
 
+  // ── capability authorization (works-capability-security-spec §4) ─────
+  // A "gated" well-known name is default-deny: a call to it is forwarded only
+  // if the caller holds a matching grant. Grants live HERE in the broker —
+  // peers cannot read, forge, or enumerate them; only the HOST (the shell,
+  // after user consent) issues them via grant()/gate(), which are returned
+  // from createBroker but never exposed on the wire. Ungated names pass
+  // unchanged (staged rollout — services migrate behind capabilities one at a
+  // time, converging toward the spec's default-deny end state).
+  const gatedNames = new Map();   // wellKnownName -> policy ({} reserved; presence = gated)
+  const grants = [];              // { id, grantee, to, interface, member, scope }
+  let nextGrantId = 0;
+
+  function scopeOk(scope, msg) {
+    if (!scope) return true;
+    // Seed scope predicate: a path prefix matched against the first string arg.
+    // Real per-service scope predicates arrive with the migrating services.
+    if (scope.pathPrefix != null) {
+      const a0 = msg.args && msg.args[0];
+      if (typeof a0 !== 'string' || !a0.startsWith(scope.pathPrefix)) return false;
+    }
+    return true;
+  }
+  // The gated service this call hits: msg.to as a gated well-known name, or a
+  // gated name owned by the resolved target unique (closes the direct-':N'
+  // bypass — a caller can't dodge gating by addressing the owner's unique name).
+  function gatedNameFor(msg, targetUnique) {
+    if (gatedNames.has(msg.to)) return msg.to;
+    if (targetUnique) {
+      for (const name of gatedNames.keys()) if (owners.get(name) === targetUnique) return name;
+    }
+    return null;
+  }
+  // True if `fromUnique` may make call `msg` (resolved to `targetUnique`).
+  function authorize(fromUnique, msg, targetUnique) {
+    const g = gatedNameFor(msg, targetUnique);
+    if (!g) return true;                         // ungated → pass
+    const clientId = clientIds.get(fromUnique) || '';
+    return grants.some((gr) =>
+      (gr.grantee === fromUnique || (clientId && gr.grantee === clientId)) &&
+      gr.to === g &&
+      (gr.interface === '*' || gr.interface === msg.interface) &&
+      (gr.member === '*' || gr.member === msg.member) &&
+      scopeOk(gr.scope, msg));
+  }
+
+  // Host API (not on the wire). Mark a well-known name capability-gated.
+  function gate(name, policy) { gatedNames.set(name, policy || {}); }
+  // Issue a grant to a peer (by unique name ':N' for a session grant, or by
+  // clientId for a grant that survives reconnects). cap = { to, interface?,
+  // member?, scope? }; interface/member default to '*'. Returns a grant id.
+  function grant(grantee, cap) {
+    if (!grantee || !cap || !cap.to) throw new Error('grant: grantee and cap.to are required');
+    const id = `g${++nextGrantId}`;
+    grants.push({
+      id, grantee, to: cap.to,
+      interface: cap.interface || '*',
+      member: cap.member || '*',
+      scope: cap.scope || null,
+    });
+    return id;
+  }
+  function revoke(id) {
+    const i = grants.findIndex((g) => g.id === id);
+    if (i < 0) return false;
+    grants.splice(i, 1);
+    return true;
+  }
+  function revokeAll(grantee) {
+    let n = 0;
+    for (let i = grants.length - 1; i >= 0; i--) if (grants[i].grantee === grantee) { grants.splice(i, 1); n++; }
+    return n;
+  }
+
   function post(uniqueName, msg) {
     const port = ports.get(uniqueName);
     if (!port) return;
@@ -221,6 +294,16 @@ function createBroker() {
         const target = (typeof msg.to === 'string' && msg.to[0] === ':')
           ? (ports.has(msg.to) ? msg.to : null)
           : owners.get(msg.to);
+        // Capability check (default-deny for gated names). Runs BEFORE cold→hot
+        // activation, so an unauthorized caller never even activates a gated
+        // service. authorize() handles target===null via the well-known name.
+        if (!authorize(fromUnique, msg, target)) {
+          emitTraffic({ kind: 'denied', from: fromUnique, to: msg.to,
+            path: msg.path, interface: msg.interface, member: msg.member, msgId: msg.id });
+          replyErr(msg, fromUnique, ERR.AccessDenied,
+            `not authorized to call ${msg.to}.${msg.interface}.${msg.member}`);
+          return;
+        }
         if (!target) {
           // Cold→hot: a declared-but-not-yet-live service activates on first call.
           if (typeof msg.to === 'string' && declared.has(msg.to)) {
@@ -417,6 +500,9 @@ function createBroker() {
     for (let i = subs.length - 1; i >= 0; i--) {
       if (subs[i].subscriber === unique) subs.splice(i, 1);
     }
+    // Drop its session grants (those keyed by this unique name). Grants keyed
+    // by clientId persist — they're for stable principals across reconnects.
+    revokeAll(unique);
     // Release every well-known name it owned.
     for (const [name, owner] of [...owners]) {
       if (owner === unique) {
@@ -461,6 +547,8 @@ function createBroker() {
       subscriptions: subs.map((s) => ({
         subscriber: s.subscriber, subId: s.subId, filter: s.filter,
       })),
+      gated: [...gatedNames.keys()],
+      grants: grants.map((g) => ({ ...g })),
     };
   }
 
@@ -495,7 +583,7 @@ function createBroker() {
     route(fromUnique, msg);   // now resolves through the owner table
   }
 
-  return { connect, disconnect, stats, inspect, declareService };
+  return { connect, disconnect, stats, inspect, declareService, gate, grant, revoke, revokeAll };
 }
 
 // ── src/client.js ──
