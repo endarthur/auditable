@@ -337,6 +337,12 @@ export async function setupWorksService() {
         Status:     () => (WKS.mcp ? WKS.mcp.status() : { state: 'unavailable' }),
         Connect:    (portToken) => { if (WKS.mcp) WKS.mcp.connect(portToken); },
         Disconnect: () => { if (WKS.mcp) WKS.mcp.disconnect(); },
+        // Per-agent scoped grants (the consent backend — the Settings panel
+        // grants/revokes after the user approves a scope). GrantAgent confines
+        // an agent's workspace writes to pathPrefix; reads stay open.
+        GrantAgent:     (identity, pathPrefix) => WKS.grantAgent(identity, { pathPrefix }),
+        RevokeAgent:    (identity) => WKS.revokeAgent(identity),
+        ListAgentGrants: () => WKS.listAgentGrants(),
       },
       signals: ['StateChanged'],
     },

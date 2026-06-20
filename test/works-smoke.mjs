@@ -215,16 +215,34 @@ const agentMcp = await page.evaluate(async () => {
   const W = window.WKS;
   try { await W.vfs.mkdir('/projects', { recursive: true }); } catch {}
   await W.vfs.writeFile('/projects/agent-probe.txt', 'hello agent');
-  const agentBus = await W.connectAgentPeer('smoke');
+  const agentBus = await W.connectAgentPeer('smoke');   // clientId 'agent:smoke' → a gated principal
   const tools = W.worksTools(agentBus);
   const tree = tools.find((t) => t.name === 'worksTree');
   const read = tools.find((t) => t.name === 'worksReadFile');
+  const write = tools.find((t) => t.name === 'worksWriteFile');
   const listed = await tree.execute({ path: '/projects' });
   const got = await read.execute({ path: '/projects/agent-probe.txt' });
+
+  const denied = (e) => (e && e.code === 'Error.AccessDenied') || /access ?denied|not authorized/i.test(String(e && e.message || e));
+  // write is gated for agents → denied without a grant
+  let deniedNoGrant = false;
+  try { await write.execute({ path: '/projects/agent-wrote.txt', content: 'x' }); } catch (e) { deniedNoGrant = denied(e); }
+  // consent: grant scoped to /projects → in-scope write lands, out-of-scope denied
+  W.grantAgent('smoke', { pathPrefix: '/projects' });
+  let wroteInScope = false;
+  try { await write.execute({ path: '/projects/agent-wrote.txt', content: 'agent wrote this' }); wroteInScope = true; } catch { /* */ }
+  let deniedOutScope = false;
+  try { await write.execute({ path: '/sys/agent-escape.txt', content: 'x' }); } catch (e) { deniedOutScope = denied(e); }
+  const wroteContent = await W.vfs.readFile('/projects/agent-wrote.txt', 'utf8').catch(() => null);
+  // a non-agent principal (the shell's own bus) writes VFS freely — not gated
+  let plainWrite = false;
+  try { await W.worksBus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Write' }, ['/projects/plain.txt', 'plain']); plainWrite = true; } catch { /* */ }
+
   return {
     toolNames: tools.map((t) => t.name),
     hasProbe: (listed.entries || []).some((e) => (e && e.name ? e.name : e) === 'agent-probe.txt'),
     content: got.content,
+    deniedNoGrant, wroteInScope, wroteContent, deniedOutScope, plainWrite,
   };
 });
 
@@ -1706,6 +1724,10 @@ const checks = {
   'numen: agent tool set (worksTree + worksReadFile)': agentMcp.toolNames.includes('worksTree') && agentMcp.toolNames.includes('worksReadFile'),
   'numen: agent peer lists the workspace over A-Bus': agentMcp.hasProbe === true,
   'numen: agent peer reads a file over A-Bus': agentMcp.content === 'hello agent',
+  'numen: agent write DENIED without a grant (gated)': agentMcp.deniedNoGrant === true,
+  'numen: granted+scoped agent write lands in /projects': agentMcp.wroteInScope === true && agentMcp.wroteContent === 'agent wrote this',
+  'numen: agent write outside the granted scope is denied': agentMcp.deniedOutScope === true,
+  'numen: a non-agent principal writes VFS freely (not gated)': agentMcp.plainWrite === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),

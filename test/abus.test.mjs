@@ -730,3 +730,44 @@ test('capability: per-interface gating leaves the name\'s other interfaces open'
     assert.equal(await caller.bus.call({ to: 'multi', path: '/', interface: 'Locked', member: 'Secret' }, []), 'shh');
   } finally { h.teardown(); }
 });
+
+test('capability: member + principal filters gate writes for agents only (surfaces pass)', async () => {
+  const h = harness();
+  try {
+    const svc = await h.join({ client: 'vfssvc' });
+    await svc.bus.claim('store');
+    svc.bus.expose('/', { Files: { methods: { Read: (p) => 'r:' + p, Write: (p) => 'w:' + p } } });
+    // gate Write ONLY for agent: principals — Read + non-agent callers pass (no big bang)
+    h.broker.gate('store', { interfaces: ['Files'], members: ['Write'], principals: ['agent:'] });
+    const surface = await h.join({ client: 'notebook' });
+    const agent = await h.join({ client: 'agent:claude' });
+    await settle();
+    assert.equal(await surface.bus.call({ to: 'store', path: '/', interface: 'Files', member: 'Write' }, ['/a']), 'w:/a', 'surface write passes (not gated)');
+    assert.equal(await agent.bus.call({ to: 'store', path: '/', interface: 'Files', member: 'Read' }, ['/a']), 'r:/a', 'agent read passes (member not gated)');
+    await assert.rejects(
+      agent.bus.call({ to: 'store', path: '/', interface: 'Files', member: 'Write' }, ['/a']),
+      (e) => e.code === ERR.AccessDenied, 'agent write denied without a grant');
+    h.broker.grant('agent:claude', { to: 'store', interface: 'Files', member: 'Write', scope: { pathPrefix: '/ok' } });
+    assert.equal(await agent.bus.call({ to: 'store', path: '/', interface: 'Files', member: 'Write' }, ['/ok/a']), 'w:/ok/a', 'agent write in scope passes');
+    await assert.rejects(
+      agent.bus.call({ to: 'store', path: '/', interface: 'Files', member: 'Write' }, ['/no/a']),
+      (e) => e.code === ERR.AccessDenied, 'agent write out of scope denied');
+  } finally { h.teardown(); }
+});
+
+test('capability: multiple gate policies on one name compose', async () => {
+  const h = harness();
+  try {
+    const svc = await h.join({ client: 'svc' });
+    await svc.bus.claim('multi2');
+    svc.bus.expose('/', { A: { methods: { M: () => 'a' } }, B: { methods: { M: () => 'b' } } });
+    h.broker.gate('multi2', { interfaces: ['A'] });                          // A: everyone
+    h.broker.gate('multi2', { interfaces: ['B'], principals: ['agent:'] });   // B: agents only
+    const plain = await h.join({ client: 'plain' });
+    const agent = await h.join({ client: 'agent:x' });
+    await settle();
+    await assert.rejects(plain.bus.call({ to: 'multi2', path: '/', interface: 'A', member: 'M' }, []), (e) => e.code === ERR.AccessDenied);
+    assert.equal(await plain.bus.call({ to: 'multi2', path: '/', interface: 'B', member: 'M' }, []), 'b', 'B open to non-agents');
+    await assert.rejects(agent.bus.call({ to: 'multi2', path: '/', interface: 'B', member: 'M' }, []), (e) => e.code === ERR.AccessDenied, 'B gated for agents');
+  } finally { h.teardown(); }
+});

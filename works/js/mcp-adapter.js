@@ -53,7 +53,38 @@ export function worksTools(agentBus) {
         return { path: input.path, content: await vfs('Read', [input.path, 'utf8']) };
       },
     },
+    {
+      // A WRITE tool — gated by the broker (works.VFS.Write is gated for agent
+      // principals). Without a consented grant it returns AccessDenied; with a
+      // path-scoped grant it writes only within the granted prefix.
+      name: 'worksWriteFile',
+      description: 'Write a text file to the Works workspace (requires a granted, scoped capability).',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
+      annotations: { destructiveHint: true, title: 'Write workspace file' },
+      execute: async (input) => {
+        await vfs('Write', [input.path, String(input.content ?? '')]);
+        return { path: input.path, written: true };
+      },
+    },
   ];
+}
+
+// ── consent backend — scoped grants per agent identity ──
+// The shell (post user consent) grants an agent a scoped capability over the
+// workspace. The grant is keyed by the agent's clientId ('agent:<identity>') so
+// it survives reconnects + maps 1:1 onto numen's per-agent (multichannel)
+// identity. Reads are ungated; this grant lets the agent's WRITES through the
+// VFS gate, confined to pathPrefix. The Settings panel + a consent dialog call
+// these; they don't need the shim (so works-smoke can exercise the gate directly).
+export function grantAgent(identity, opts = {}) {
+  return WKS.broker.grant('agent:' + (identity || 'default'), {
+    to: 'works', interface: 'VFS', member: '*',
+    scope: opts.pathPrefix ? { pathPrefix: opts.pathPrefix } : null,
+  });
+}
+export function revokeAgent(identity) { return WKS.broker.revokeAll('agent:' + (identity || 'default')); }
+export function listAgentGrants() {
+  return (WKS.broker.inspect().grants || []).filter((g) => String(g.grantee).startsWith('agent:'));
 }
 
 // Wire the shell as an MCP endpoint: connect the (single, spine) agent peer,

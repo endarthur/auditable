@@ -12,4 +12,9 @@ export function setupBus() {
   // Gate just that interface (VFS/Shell/Updates stay open — no big bang); the
   // shell grants the trusted built-in inspector surface at spawn (surfaces.js).
   WKS.broker.gate('works', { interfaces: ['Inspect'] });
+  // Agent writes are gated (capability-security §4): an MCP agent (clientId
+  // 'agent:*') needs a consented, scoped grant to mutate the workspace VFS.
+  // Surfaces share works.VFS but aren't 'agent:' principals, so they pass
+  // freely — the principal filter avoids a big-bang gate of the hot path.
+  WKS.broker.gate('works', { interfaces: ['VFS'], members: ['Write', 'MkDir', 'Move', 'Delete'], principals: ['agent:'] });
 }

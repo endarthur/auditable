@@ -11,7 +11,7 @@ import { setupLayout, restoreLayout, isLayoutEmpty } from './layout.js';
 import { setupMenuBar } from './menubar.js';
 import { setupTree, refreshTree, newProject, newFile, duplicateProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
-import { setupWorksMcp, connectAgentPeer, worksTools } from './mcp-adapter.js';
+import { setupWorksMcp, connectAgentPeer, worksTools, grantAgent, revokeAgent, listAgentGrants } from './mcp-adapter.js';
 import { setupSurfaces, spawnSurface, openPath, getActiveSurface, callActiveNotebook } from './surfaces.js';
 import { decompressLibs, decompressSurfaces, installSharedLibsToVfs } from './surface-registry.js';
 import { installDocsToVfs } from './docs-loader.js';
@@ -84,6 +84,9 @@ async function boot() {
   WKS.callActiveNotebook = callActiveNotebook;  // drive the active notebook over A-Bus (Run All, etc.)
   WKS.connectAgentPeer = connectAgentPeer;      // numen-for-Works: a gated agent A-Bus peer
   WKS.worksTools = worksTools;                   // numen-for-Works: the agent tool set (over a peer)
+  WKS.grantAgent = grantAgent;                   // consent backend: scope an agent's workspace writes
+  WKS.revokeAgent = revokeAgent;
+  WKS.listAgentGrants = listAgentGrants;
   WKS.refreshTree = refreshTree;
   WKS.newProject = newProject;
   WKS.duplicateProject = duplicateProject;
