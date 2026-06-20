@@ -25,6 +25,7 @@ import './layout.js';
 import './surfaces.js';
 import './launcher.js';
 import './works-service.js';
+import './mcp-adapter.js';
 import './import.js';
 import './book-import.js';
 import './gcudat-install.js';

@@ -11,6 +11,7 @@ import { setupLayout, restoreLayout, isLayoutEmpty } from './layout.js';
 import { setupMenuBar } from './menubar.js';
 import { setupTree, refreshTree, newProject, newFile, duplicateProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
+import { setupWorksMcp, connectAgentPeer, worksTools } from './mcp-adapter.js';
 import { setupSurfaces, spawnSurface, openPath, getActiveSurface, callActiveNotebook } from './surfaces.js';
 import { decompressLibs, decompressSurfaces, installSharedLibsToVfs } from './surface-registry.js';
 import { installDocsToVfs } from './docs-loader.js';
@@ -64,6 +65,10 @@ async function boot() {
   // used; works-core ships none of these packages, so it carries none of their code.
   // (works-contribution-registry-spec — the declarative, provisionable model.)
   await declareInstalledServices();
+  // numen-for-Works: register the shell's MCP tools through the numen shim, if
+  // present. No-op without the shim (the live transport isn't wired yet) — the
+  // gated-agent-peer machinery is here and exercised by works-smoke regardless.
+  try { await setupWorksMcp(); } catch (e) { console.warn('[works] mcp:', e); }
   setupSurfaces();             // surface-signal tracking
   await restoreLayout();       // reopen the saved tabs
   // An empty workspace (fresh, or all tabs closed last session) opens the
@@ -77,6 +82,8 @@ async function boot() {
   WKS.openPath = openPath;
   WKS.getActiveSurface = getActiveSurface;      // the focused surface record
   WKS.callActiveNotebook = callActiveNotebook;  // drive the active notebook over A-Bus (Run All, etc.)
+  WKS.connectAgentPeer = connectAgentPeer;      // numen-for-Works: a gated agent A-Bus peer
+  WKS.worksTools = worksTools;                   // numen-for-Works: the agent tool set (over a peer)
   WKS.refreshTree = refreshTree;
   WKS.newProject = newProject;
   WKS.duplicateProject = duplicateProject;

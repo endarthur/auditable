@@ -207,6 +207,27 @@ if (inspectorFrame) {
     () => document.querySelectorAll('#peers .peer').length);
 }
 
+// ── numen-for-Works: gated agent peer + read-only tools (spine) ───────
+// The agent is a gated A-Bus peer; a tool call routes THROUGH that peer to the
+// works VFS (never WKS.* directly), so the broker governs it. Read-only tools
+// hit ungated VFS → pass; gating + per-agent grants come with the write tools.
+const agentMcp = await page.evaluate(async () => {
+  const W = window.WKS;
+  try { await W.vfs.mkdir('/projects', { recursive: true }); } catch {}
+  await W.vfs.writeFile('/projects/agent-probe.txt', 'hello agent');
+  const agentBus = await W.connectAgentPeer('smoke');
+  const tools = W.worksTools(agentBus);
+  const tree = tools.find((t) => t.name === 'worksTree');
+  const read = tools.find((t) => t.name === 'worksReadFile');
+  const listed = await tree.execute({ path: '/projects' });
+  const got = await read.execute({ path: '/projects/agent-probe.txt' });
+  return {
+    toolNames: tools.map((t) => t.name),
+    hasProbe: (listed.entries || []).some((e) => (e && e.name ? e.name : e) === 'agent-probe.txt'),
+    content: got.content,
+  };
+});
+
 // ── Persistence across a reload (Chunk 5) ─────────────────────────────
 await page.evaluate(async () => {
   const W = window.WKS;
@@ -1647,6 +1668,10 @@ const checks = {
   // Inspect.Snapshot got through the gate (an ungranted surface would be denied).
   'capability: works.Inspect is gated': inspectorOpen.gatedInspect === true,
   'inspector renders the registry (granted Inspect got through)': inspectorPeerRows > 0,
+  // numen-for-Works spine: agent = gated A-Bus peer; tools route through it.
+  'numen: agent tool set (worksTree + worksReadFile)': agentMcp.toolNames.includes('worksTree') && agentMcp.toolNames.includes('worksReadFile'),
+  'numen: agent peer lists the workspace over A-Bus': agentMcp.hasProbe === true,
+  'numen: agent peer reads a file over A-Bus': agentMcp.content === 'hello agent',
   // Persistence (Chunk 5)
   'workspace survives a reload':      persist.projExists && persist.note === 'survives reload',
   'tree shows projects after reload': persist.treeHasProj,
