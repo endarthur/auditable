@@ -63,10 +63,16 @@ export function createSurface(tabId, kind, opts = {}) {
   // postMessage/A-Bus. The broker connection + VFS already ride A-Bus and
   // event.source identity checks are cross-origin-safe, so this is
   // low-breakage; the red-team probe in works-smoke is the regression guard.
-  // allow-downloads: surfaces export files. Permissions-Policy `allow`:
-  // device APIs some surfaces need (wasm4 gamepad, terminal clipboard).
-  // Set before src so it governs the one-and-only load.
-  iframe.setAttribute('sandbox', 'allow-scripts allow-downloads');
+  // Token set (audited against every surface's needs, not just the works
+  // subset smoke runs): allow-downloads (export), allow-modals (native
+  // alert/confirm/prompt — text discard-confirm, settings reset-confirm, hex
+  // goto-prompt), allow-popups + -to-escape-sandbox (settings' external
+  // target=_blank links open as real tabs, not sandboxed-null). NONE of these
+  // grant realm reach — the credential-isolation TCB (no allow-same-origin)
+  // holds. Permissions-Policy `allow`: device APIs (wasm4 gamepad, terminal +
+  // others' clipboard). Set before src so it governs the one-and-only load.
+  iframe.setAttribute('sandbox',
+    'allow-scripts allow-downloads allow-modals allow-popups allow-popups-to-escape-sandbox');
   iframe.setAttribute('allow', 'gamepad; clipboard-read; clipboard-write');
   // The surface's embedded payload (§15.1), decompressed to a blob URL at
   // boot. Set before the iframe enters the DOM, so its one and only load is
