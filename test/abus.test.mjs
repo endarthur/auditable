@@ -706,3 +706,27 @@ test('capability: a peer-by-clientId grant survives across reconnects', async ()
     assert.equal(await caller.bus.call({ to: 'vault', path: '/', interface: 'Secret', member: 'Read' }, ['/x']), 'secret:/x');
   } finally { h.teardown(); }
 });
+
+test('capability: per-interface gating leaves the name\'s other interfaces open', async () => {
+  const h = harness();
+  try {
+    const svc = await h.join({ client: 'multisvc' });
+    await svc.bus.claim('multi');
+    svc.bus.expose('/', {
+      Open:   { methods: { Hi: () => 'hi' } },
+      Locked: { methods: { Secret: () => 'shh' } },
+    });
+    h.broker.gate('multi', { interfaces: ['Locked'] });   // gate ONLY Locked
+    const caller = await h.join({ client: 'cli' });
+    await settle();
+    // ungated interface of a gated name → passes, no grant
+    assert.equal(await caller.bus.call({ to: 'multi', path: '/', interface: 'Open', member: 'Hi' }, []), 'hi');
+    // gated interface → denied without a grant
+    await assert.rejects(
+      caller.bus.call({ to: 'multi', path: '/', interface: 'Locked', member: 'Secret' }, []),
+      (e) => e.code === ERR.AccessDenied);
+    // grant → passes
+    h.broker.grant(caller.brokerUnique, { to: 'multi', interface: 'Locked', member: '*' });
+    assert.equal(await caller.bus.call({ to: 'multi', path: '/', interface: 'Locked', member: 'Secret' }, []), 'shh');
+  } finally { h.teardown(); }
+});

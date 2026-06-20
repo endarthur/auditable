@@ -194,6 +194,7 @@ const inspectorOpen = await page.evaluate(async () => {
     tabId,
     brokerPeers: (snap.peers || []).length,
     brokerHasSubs: Array.isArray(snap.subscriptions),
+    gatedInspect: (snap.gated || []).includes('works'),   // capability gate wired?
     ready: rec ? rec.ready : false,
   };
 });
@@ -1641,7 +1642,11 @@ const checks = {
   // A-Bus inspector surface
   'broker.inspect() returns peers':   inspectorOpen.brokerPeers > 0 && inspectorOpen.brokerHasSubs,
   'inspector surface opens':          inspectorOpen.ready === true,
-  'inspector renders the registry':   inspectorPeerRows > 0,
+  // Capability §4: the gate is wired (works.Inspect is gated) AND the shell's
+  // spawn-grant works — the inspector renders rows only if its granted
+  // Inspect.Snapshot got through the gate (an ungranted surface would be denied).
+  'capability: works.Inspect is gated': inspectorOpen.gatedInspect === true,
+  'inspector renders the registry (granted Inspect got through)': inspectorPeerRows > 0,
   // Persistence (Chunk 5)
   'workspace survives a reload':      persist.projExists && persist.note === 'survives reload',
   'tree shows projects after reload': persist.treeHasProj,

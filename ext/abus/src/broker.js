@@ -57,13 +57,23 @@ export function createBroker() {
     }
     return true;
   }
+  // Does a gate policy cover this interface? No `interfaces` list = the whole
+  // name is gated; a list = only those interfaces (so e.g. 'works'.Inspect can
+  // be gated while VFS/Shell stay open — interface-granular gating).
+  function policyGates(policy, iface) {
+    if (!policy || !policy.interfaces) return true;
+    return policy.interfaces.includes(iface);
+  }
   // The gated service this call hits: msg.to as a gated well-known name, or a
   // gated name owned by the resolved target unique (closes the direct-':N'
   // bypass — a caller can't dodge gating by addressing the owner's unique name).
+  // Honors per-interface policy, so an ungated interface of a gated name passes.
   function gatedNameFor(msg, targetUnique) {
-    if (gatedNames.has(msg.to)) return msg.to;
+    if (gatedNames.has(msg.to) && policyGates(gatedNames.get(msg.to), msg.interface)) return msg.to;
     if (targetUnique) {
-      for (const name of gatedNames.keys()) if (owners.get(name) === targetUnique) return name;
+      for (const [name, pol] of gatedNames) {
+        if (owners.get(name) === targetUnique && policyGates(pol, msg.interface)) return name;
+      }
     }
     return null;
   }
@@ -81,6 +91,8 @@ export function createBroker() {
   }
 
   // Host API (not on the wire). Mark a well-known name capability-gated.
+  // policy.interfaces (optional) = gate only those interfaces of the name;
+  // omitted = gate the whole name. e.g. gate('works', { interfaces: ['Inspect'] }).
   function gate(name, policy) { gatedNames.set(name, policy || {}); }
   // Issue a grant to a peer (by unique name ':N' for a session grant, or by
   // clientId for a grant that survives reconnects). cap = { to, interface?,

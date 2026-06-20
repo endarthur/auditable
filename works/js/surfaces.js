@@ -8,6 +8,14 @@ import { kindDef, kindForExtension, kindForPath, surfaceUrl, surfaceAvailable, a
 const _byUnique = new Map();   // A-Bus unique name → tab id
 let _activeTabId = null;       // the focused tab (last activated) — drives the shell menubar's contextual surface actions
 
+// Capability grants the shell issues to its own trusted built-in surfaces at
+// spawn (capability-security §4). Keyed by surface kind → the scoped caps that
+// kind legitimately needs to reach gated services. This is the TCB vouching for
+// built-ins; anything not listed gets no privileged capability. Keep it minimal.
+const PRIVILEGED_GRANTS = {
+  inspector: [{ to: 'works', interface: 'Inspect', member: '*' }],
+};
+
 // The focused surface record (or null) — the tab the shell menubar acts on.
 export function getActiveSurface() {
   return _activeTabId ? (WKS.surfaces.get(_activeTabId) || null) : null;
@@ -84,6 +92,13 @@ export function createSurface(tabId, kind, opts = {}) {
   const ch = new MessageChannel();
   const uniqueName = WKS.broker.connect(ch.port1);
   _byUnique.set(uniqueName, tabId);
+
+  // Capability-security §4: the shell (the TCB) vouches for its own built-in
+  // surfaces — privileged capabilities are granted here by trusted kind, at
+  // spawn, scoped to exactly what that kind needs. Untrusted principals
+  // (notebooks, installed .gcupkg surfaces) get nothing here; they go through
+  // the consent flow instead. Today: only the inspector reaches gated Inspect.
+  for (const cap of (PRIVILEGED_GRANTS[kind] || [])) WKS.broker.grant(uniqueName, cap);
 
   const rec = {
     tabId, kind, uniqueName, iframe,
