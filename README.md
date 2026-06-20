@@ -158,7 +158,7 @@ settings travel with the file. execution mode can also be overridden globally vi
 
 ## examples
 
-the `examples/` directory contains 79 self-contained notebooks organized by category. browse them live at [gentropic.org/auditable/examples](https://gentropic.org/auditable/examples/), or open any `.html` file directly -- no server required.
+the `examples/` directory contains 81 self-contained notebooks organized by category. browse them live at [gentropic.org/auditable/examples](https://gentropic.org/auditable/examples/), or open any `.html` file directly -- no server required.
 
 **basics/** -- core auditable features
 
