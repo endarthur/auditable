@@ -57,6 +57,17 @@ export function createSurface(tabId, kind, opts = {}) {
 
   const iframe = document.createElement('iframe');
   iframe.className = 'works-surface-frame';
+  // Real isolation (works-capability-security-spec §3 / §9 ★ TCB boundary):
+  // sandbox WITHOUT allow-same-origin → an opaque origin, so a surface
+  // physically cannot reach the shell realm (window.parent.WKS) — only
+  // postMessage/A-Bus. The broker connection + VFS already ride A-Bus and
+  // event.source identity checks are cross-origin-safe, so this is
+  // low-breakage; the red-team probe in works-smoke is the regression guard.
+  // allow-downloads: surfaces export files. Permissions-Policy `allow`:
+  // device APIs some surfaces need (wasm4 gamepad, terminal clipboard).
+  // Set before src so it governs the one-and-only load.
+  iframe.setAttribute('sandbox', 'allow-scripts allow-downloads');
+  iframe.setAttribute('allow', 'gamepad; clipboard-read; clipboard-write');
   // The surface's embedded payload (§15.1), decompressed to a blob URL at
   // boot. Set before the iframe enters the DOM, so its one and only load is
   // the real surface — no about:blank phase, no double-fired welcome.

@@ -1497,16 +1497,14 @@ const dataToggle = await page.evaluate(async (arr) => {
   return { setReadBack, prompted, cancelled: !!(r && r.cancelled), landed };
 }, toggleDataArr);
 
-// ── Red-team: realm isolation (capability-security spec §1/§9) ────────
+// ── Red-team: realm isolation (capability-security spec §1/§9 ★ — ENFORCED) ──
 // From INSIDE a surface's realm, try to reach the shell realm
 // (window.parent.WKS). Same-origin → the property read succeeds (NO isolation);
-// cross/opaque-origin → SecurityError. Surfaces today load from shell-created
-// blob: URLs, which are SAME-ORIGIN with the shell — so over HTTP a surface CAN
-// reach the shell realm, broker, and VFS. This is the §9 ★ TCB gap, executable.
-// Reported below as EXPECTED-FAIL rather than a hard `checks` entry, so the smoke
-// isn't left permanently red while the sandbox fix is pending; once createSurface
-// adds `sandbox` (without allow-same-origin) the reach becomes a SecurityError
-// and these should be PROMOTED into `checks` as hard regression guards.
+// cross/opaque-origin → SecurityError. createSurface now sandboxes surfaces
+// WITHOUT allow-same-origin (works/js/surfaces.js), so every surface is an
+// opaque origin and the reach is a SecurityError on BOTH http and file://. The
+// results below are hard `checks` entries (the §9 ★ TCB regression guard) — if a
+// future change drops the sandbox attribute, `reached` goes true and smoke fails.
 async function realmProbe() {
   const tabId = await page.evaluate(async () => {
     const W = window.WKS;
@@ -1617,6 +1615,13 @@ const checks = {
   'menu bar rendered':         shell.menubarFilled,
   'works service created':     shell.worksBus,
   'shell reports ready':       shell.status === 'Auditable Works — ready',
+  // Capability-security spec §9 ★ — the TCB boundary, now ENFORCED. A surface
+  // is a sandboxed (opaque-origin) iframe, so from inside its realm a property
+  // read of window.parent.WKS must throw (SecurityError), not reach the shell's
+  // broker/VFS. Promoted from an expected-fail report once createSurface began
+  // sandboxing the iframe (works/js/surfaces.js). This is the regression guard.
+  'red-team: HTTP surface cannot reach the shell realm':   httpRealm.reached === false,
+  'red-team: file:// surface cannot reach the shell realm': fileRealm.reached === false,
   // Chunk 2
   'surface handshakes (Ready)':       surface.ready === true,
   'surface unique name assigned':     /^:\d+$/.test(surface.uniqueName),
@@ -1822,16 +1827,15 @@ if (errors.length) {
 console.log('status: ' + JSON.stringify(shell.status)
   + ' | surface: ' + JSON.stringify(surface));
 
-console.log('--- red-team: realm isolation (capability-security §1/§9 — expected-fail until sandbox) ---');
+console.log('--- red-team: realm isolation (capability-security §1/§9 ★ — ENFORCED, hard checks) ---');
 console.log(`  HTTP    surface→shell reach: ${httpRealm.reached}`
   + (httpRealm.reached
-      ? `  ⚠ GAP — same-origin blob: URL, no isolation (broker=${httpRealm.broker} vfs=${httpRealm.vfs})`
+      ? `  ⚠ GAP — surface reached the shell realm (broker=${httpRealm.broker} vfs=${httpRealm.vfs})`
       : `  ✓ isolated (${httpRealm.error || 'unreachable'})`));
 console.log(`  file:// surface→shell reach: ${fileRealm.reached}`
   + (fileRealm.reached
-      ? '  ⚠ reachable'
-      : `  ✓ isolated (incidental blob:null opaque origin — ${fileRealm.error || 'unreachable'})`));
-console.log('  target: both false; promote to hard `checks` once createSurface sandboxes the iframe.');
+      ? '  ⚠ GAP — surface reached the shell realm'
+      : `  ✓ isolated (${fileRealm.error || 'unreachable'})`));
 
 await browser.close();
 server.close();
