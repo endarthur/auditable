@@ -228,7 +228,64 @@ const {
   openSearchPanel, closeSearchPanel, searchKeymap, search,
   bracketMatching, indentOnInput,
   javascript, css: cssLang, python, html: htmlLang,
+  syntaxHighlighting, HighlightStyle, StreamLanguage, tags,
 } = CM6;
+
+// GCU syntax colors — one HighlightStyle for both themes (the --au-* tokens flip
+// with [data-theme]). Mirrors the notebook's palette (src/js/cm6.js). minimalSetup
+// ships no highlighting, so without this the editor shows structure but no color.
+const gcuHighlight = HighlightStyle.define([
+  { tag: tags.keyword, color: 'var(--au-selected)' },
+  { tag: tags.string, color: 'var(--au-success)' },
+  { tag: tags.number, color: 'var(--au-warn)' },
+  { tag: tags.bool, color: 'var(--au-warn)' },
+  { tag: tags.null, color: 'var(--au-warn)' },
+  { tag: tags.comment, color: 'var(--au-fg-soft)', fontStyle: 'italic' },
+  { tag: tags.function(tags.variableName), color: 'var(--au-info)' },
+  { tag: tags.function(tags.propertyName), color: 'var(--au-info)' },
+  { tag: tags.definition(tags.variableName), color: 'var(--au-fg)' },
+  { tag: tags.constant(tags.variableName), color: 'var(--au-warn)' },
+  { tag: tags.operator, color: 'var(--au-fg-muted)' },
+  { tag: tags.punctuation, color: 'var(--au-fg-soft)' },
+  { tag: tags.propertyName, color: 'var(--au-info)' },
+  { tag: tags.variableName, color: 'var(--au-fg)' },
+  { tag: tags.typeName, color: 'var(--au-info)' },
+  { tag: tags.className, color: 'var(--au-info)' },
+  { tag: tags.tagName, color: 'var(--au-info)' },
+  { tag: tags.attributeName, color: 'var(--au-info)' },
+]);
+
+// atra (@gcu/atra) StreamLanguage — a compact line tokenizer for .atra files.
+// The CANONICAL tokenizer lives in ext/atra/src/highlight.js (used by notebook
+// atra cells); this is a self-contained editor approximation so the text surface
+// can highlight .atra without pulling in atra's compiler. Keyword/type/builtin
+// sets mirror highlight.js — stable, but if atra's vocabulary grows, update here.
+const ATRA_KW = new Set(['function','subroutine','begin','end','var','const','if','then','else','for','while','do','break','and','or','not','mod','import','export','call','array','true','false','from','tailcall','return','layout','packed','memory','case','of']);
+const ATRA_TY = new Set(['i32','i64','f32','f64','f64x2','f32x4','i32x4','i64x2']);
+const ATRA_FN = new Set(['sin','cos','sqrt','abs','floor','ceil','ln','exp','pow','min','max','trunc','nearest','copysign','select','clz','ctz','popcnt','rotl','rotr','memory_size','memory_grow','memory_copy','memory_fill']);
+const atraLang = StreamLanguage.define({
+  token(stream) {
+    if (stream.eatSpace()) return null;
+    if (stream.match('//')) { stream.skipToEnd(); return 'comment'; }
+    if (stream.match(/^"(?:[^"\\]|\\.)*"?/)) return 'string';
+    if (stream.match(/^0x[0-9a-fA-F]+|^\d+\.?\d*(?:[eE][+-]?\d+)?/)) return 'number';
+    if (stream.match(/^[A-Za-z_][A-Za-z0-9_]*/)) {
+      const w = stream.current();
+      if (ATRA_KW.has(w)) return (w === 'true' || w === 'false') ? 'bool' : 'keyword';
+      if (ATRA_TY.has(w)) return 'typeName';
+      if (ATRA_FN.has(w)) return 'builtin';
+      return 'variableName';
+    }
+    if (stream.match(/^[-+*/%<>=!&|^~]+/)) return 'operator';
+    stream.next();
+    return null;
+  },
+  tokenTable: {
+    keyword: tags.keyword, typeName: tags.typeName, builtin: tags.function(tags.variableName),
+    string: tags.string, number: tags.number, comment: tags.comment,
+    operator: tags.operator, variableName: tags.variableName, bool: tags.bool,
+  },
+});
 
 const statusBar = document.getElementById('statusbar');
 const sDirty    = document.getElementById('status-dirty');
@@ -261,6 +318,8 @@ function langForPath(p) {
     case 'json':
       // CM6's javascript() handles JSON well enough — no separate JSON pkg.
       return { name: 'JSON', ext: javascript() };
+    case 'atra':
+      return { name: 'atra', ext: atraLang };
     default:
       return { name: '', ext: [] };
   }
@@ -376,6 +435,7 @@ function makeEditor(initialText, languageExt) {
       doc: initialText,
       extensions: [
         minimalSetup,
+        syntaxHighlighting(gcuHighlight),
         history(),
         drawSelection(),
         highlightActiveLine(),

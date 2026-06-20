@@ -542,7 +542,7 @@ registerKind('text', {
   icon:       '▤',
   universal:  true,
   extensions: ['.txt', '.json', '.js', '.css', '.html',
-               '.csv', '.log', '.xml', '.yaml', '.yml'],
+               '.csv', '.log', '.xml', '.yaml', '.yml', '.atra'],
   extensionlessNames: ['LICENSE', 'README', 'COPYING', 'NOTICE',
                        'AUTHORS', 'CONTRIBUTORS', 'CHANGELOG', 'CHANGES',
                        'MAKEFILE', 'DOCKERFILE'],
