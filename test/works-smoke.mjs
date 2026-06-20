@@ -240,6 +240,28 @@ const mcpProbe = await page.evaluate(async () => {
   return { hasShim, hasControl: !!W.mcp, status };
 });
 
+// The Settings "Agent access" panel renders + reflects the shim status.
+const settingsTab = await page.evaluate(async () => {
+  const W = window.WKS;
+  const id = W.spawnSurface('settings', { title: 'Settings' });
+  const rec = W.surfaces.get(id);
+  const dl = Date.now() + 10000;
+  while (rec && !rec.ready && Date.now() < dl) await new Promise((r) => setTimeout(r, 50));
+  return id;
+});
+const settingsFrame2 = await surfaceFrame(settingsTab);
+let mcpPanel = { found: false, statusText: '' };
+if (settingsFrame2) {
+  await settingsFrame2.evaluate(() => new Promise((r) => setTimeout(r, 300)));
+  mcpPanel = await settingsFrame2.evaluate(() => {
+    const status = document.getElementById('mcpStatus');
+    return {
+      found: !!(status && document.getElementById('mcpKey') && document.getElementById('mcpConnect')),
+      statusText: status ? status.textContent : '',
+    };
+  });
+}
+
 // ── Persistence across a reload (Chunk 5) ─────────────────────────────
 await page.evaluate(async () => {
   const W = window.WKS;
@@ -1687,6 +1709,7 @@ const checks = {
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),
+  'numen: Settings "Agent access" panel renders + reflects status': mcpPanel.found === true && /disconnected|connecting|connected/.test(mcpPanel.statusText),
   // Persistence (Chunk 5)
   'workspace survives a reload':      persist.projExists && persist.note === 'survives reload',
   'tree shows projects after reload': persist.treeHasProj,

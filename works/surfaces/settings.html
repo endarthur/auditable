@@ -185,6 +185,24 @@
     is the hard-recovery escape.
   </div>
 
+  <h2>Agent access (MCP)</h2>
+  <div id="mcpStatus" class="upd-ver" style="margin-bottom:8px">Checking…</div>
+  <div class="row">
+    <label for="mcpKey">Bridge key</label>
+    <input type="text" id="mcpKey" placeholder="port:token (e.g. 7803:abc123…)" style="flex:1;min-width:180px">
+  </div>
+  <div class="actions">
+    <button id="mcpConnect">Connect</button>
+    <button id="mcpDisconnect" style="display:none">Disconnect</button>
+  </div>
+  <div id="mcpMsg" class="hint"></div>
+  <div class="hint">
+    Lets an external agent (e.g. Claude Code, via the @gcu/numen bridge) drive this
+    workspace. Start the bridge —
+    <code>node ../numen/numen-bridge.js --app works --port 7803</code> — then paste its
+    <code>port:token</code> here. The agent acts only through capability grants you approve.
+  </div>
+
   <h2>About</h2>
   <div class="actions">
     <button id="aboutBtn">About Auditable Works…</button>
@@ -475,6 +493,41 @@ function wireUpdates() {
   });
 }
 
+// ── Agent access (MCP/numen) ──
+const mcpCall = (member, args = []) => bus.call({ to: 'works', path: '/', interface: 'Mcp', member }, args);
+
+function renderMcp(state) {
+  const st = (state && state.state) || 'disconnected';
+  const statusEl = $('mcpStatus');
+  if (st === 'unavailable') {
+    statusEl.textContent = 'Agent access isn’t available in this build.';
+    $('mcpConnect').disabled = true; $('mcpKey').disabled = true;
+    return;
+  }
+  statusEl.innerHTML = 'Status: <code>' + esc(st) + '</code>';
+  const connected = st === 'connected';
+  $('mcpConnect').style.display = connected ? 'none' : '';
+  $('mcpDisconnect').style.display = connected ? '' : 'none';
+}
+
+async function loadMcp() {
+  let st = null;
+  try { st = await mcpCall('Status'); } catch { /* */ }
+  renderMcp(st);
+}
+
+function wireMcp() {
+  $('mcpConnect').addEventListener('click', async () => {
+    const key = $('mcpKey').value.trim();
+    const msg = $('mcpMsg');
+    if (!/^\d+:.+/.test(key)) { msg.className = 'hint'; msg.textContent = 'Format: port:token (e.g. 7803:abc…)'; return; }
+    msg.className = 'hint'; msg.textContent = 'Connecting…';
+    try { await mcpCall('Connect', [key]); msg.textContent = ''; }
+    catch { msg.textContent = 'Connect failed — is the bridge running?'; }
+  });
+  $('mcpDisconnect').addEventListener('click', () => { mcpCall('Disconnect').catch(() => { /* */ }); });
+}
+
 bootSurface({
   connect,
   client: 'settings',
@@ -491,12 +544,17 @@ bootSurface({
     await loadBusGrants();
     await loadLicenses();
     await loadUpdates();
+    await loadMcp();
+    // Live status from the shell shim (works.Mcp.StateChanged).
+    bus.subscribe({ from: 'works', interface: 'Mcp', member: 'StateChanged' },
+      (m) => renderMcp({ state: (m.args || [])[0] }));
 
     // Auto-save on every change.
     $('theme').addEventListener('change', saveSettings);
     $('fontSize').addEventListener('change', saveSettings);
     $('confirmDataPack').addEventListener('change', saveSettings);
     wireUpdates();
+    wireMcp();
 
     $('addMount').addEventListener('click', async () => {
       try {
