@@ -3,6 +3,10 @@
     "auditable": {
       "command": "node",
       "args": ["../numen/numen-bridge.js", "--app", "auditable", "--port", "7802"]
+    },
+    "works": {
+      "command": "node",
+      "args": ["../numen/numen-bridge.js", "--app", "works", "--port", "7803"]
     }
   }
 }

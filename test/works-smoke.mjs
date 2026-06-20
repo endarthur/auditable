@@ -228,6 +228,18 @@ const agentMcp = await page.evaluate(async () => {
   };
 });
 
+// numen live transport: the shell vendors the numen shim, so
+// navigator.modelContext exists + setupWorksMcp registered tools, and the
+// settings panel can drive the connection over works.Mcp. (The actual bridge
+// connect is manual — needs a running numen-bridge.)
+const mcpProbe = await page.evaluate(async () => {
+  const W = window.WKS;
+  const hasShim = !!(navigator.modelContext && typeof navigator.modelContext.registerTool === 'function');
+  let status = null;
+  try { status = await W.worksBus.call({ to: 'works', path: '/', interface: 'Mcp', member: 'Status' }, []); } catch (e) { status = { error: String(e && e.message || e) }; }
+  return { hasShim, hasControl: !!W.mcp, status };
+});
+
 // ── Persistence across a reload (Chunk 5) ─────────────────────────────
 await page.evaluate(async () => {
   const W = window.WKS;
@@ -1672,6 +1684,9 @@ const checks = {
   'numen: agent tool set (worksTree + worksReadFile)': agentMcp.toolNames.includes('worksTree') && agentMcp.toolNames.includes('worksReadFile'),
   'numen: agent peer lists the workspace over A-Bus': agentMcp.hasProbe === true,
   'numen: agent peer reads a file over A-Bus': agentMcp.content === 'hello agent',
+  // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
+  'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
+  'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),
   // Persistence (Chunk 5)
   'workspace survives a reload':      persist.projExists && persist.note === 'survives reload',
   'tree shows projects after reload': persist.treeHasProj,

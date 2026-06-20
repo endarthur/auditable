@@ -2,6 +2,7 @@
 // the registry/boot order, so init.js (the entry) must come last.
 
 import './state.js';
+import './shim.js';   // @gcu/numen shim — installs navigator.modelContext (side-effect IIFE)
 import './paths.js';
 import './meta.js';
 import './export-dialog.js';

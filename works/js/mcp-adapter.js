@@ -56,13 +56,33 @@ export function worksTools(agentBus) {
   ];
 }
 
-// Wire the shell as an MCP endpoint: connect the (single, spine) agent peer and
-// register its tools through navigator.modelContext (the numen shim). No-op when
-// the shim isn't present (e.g. this build/origin carries no MCP transport yet) —
-// so calling it at boot is always safe. Returns the agent context or null.
+// Wire the shell as an MCP endpoint: connect the (single, spine) agent peer,
+// register its tools through navigator.modelContext (the numen shim), and expose
+// a small control (WKS.mcp) the Settings "Agent access" panel drives over A-Bus
+// (the panel is a sandboxed surface; it can't reach the shim directly). No-op
+// when the shim isn't present, so calling it at boot is always safe.
 export async function setupWorksMcp() {
   const mc = (typeof navigator !== 'undefined') && navigator.modelContext;
   if (!mc || typeof mc.registerTool !== 'function') return null;
+
+  // The shim's control global (gcuWebMCP/gcuMCP). The host connects OUT to the
+  // numen bridge with a PORT:TOKEN the user pastes in Settings.
+  const ctl = (typeof window !== 'undefined') && (window.gcuMCP || window.gcuWebMCP);
+  if (ctl) {
+    ctl.name = 'works';   // a stable per-app id for the bridge
+    // Mirror the shim's state onto the `works` service's Mcp.StateChanged signal,
+    // so the sandboxed Settings panel updates live.
+    ctl.onStateChange = (state) => {
+      try { WKS.worksBus && WKS.worksBus.signal({ path: '/', interface: 'Mcp', member: 'StateChanged' }, [state]); } catch { /* */ }
+    };
+  }
+  // The control the works service's Mcp interface delegates to (works-service.js).
+  WKS.mcp = {
+    connect: (portToken) => { if (ctl) ctl.connect(portToken); },
+    disconnect: () => { if (ctl && typeof ctl.disconnect === 'function') ctl.disconnect(); },
+    status: () => ({ state: (ctl && ctl.state) || 'disconnected' }),
+  };
+
   const agentBus = await connectAgentPeer('default');
   for (const tool of worksTools(agentBus)) mc.registerTool(tool);
   if (typeof mc.notifyToolsChanged === 'function') mc.notifyToolsChanged();

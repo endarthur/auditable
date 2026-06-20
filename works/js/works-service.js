@@ -328,6 +328,18 @@ export async function setupWorksService() {
         },
       },
     },
+    // numen-for-Works — the settings "Agent access" panel drives the shell's
+    // MCP/numen connection (WKS.mcp, set up in mcp-adapter.js) over A-Bus, since
+    // the surface is sandboxed and can't reach the shim directly. Status returns
+    // { state: 'unavailable' } when the shim isn't present (no MCP this build).
+    Mcp: {
+      methods: {
+        Status:     () => (WKS.mcp ? WKS.mcp.status() : { state: 'unavailable' }),
+        Connect:    (portToken) => { if (WKS.mcp) WKS.mcp.connect(portToken); },
+        Disconnect: () => { if (WKS.mcp) WKS.mcp.disconnect(); },
+      },
+      signals: ['StateChanged'],
+    },
     // Build-time vendored license inventory — used by the workspace settings
     // surface (and future tools like `geas licenses`). Returns the standard
     // table shape; static for now, will grow when pkg integration lands and
