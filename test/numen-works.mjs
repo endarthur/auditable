@@ -1,8 +1,9 @@
-// End-to-end numen-for-Works: spawn the REAL numen bridge, load works.html in
-// Playwright connected to it, and drive the bridge's MCP stdio side (the side
-// Claude Code normally drives) to call a Works tool — asserting the page
-// actually executes it and returns the workspace tree. The full live loop,
-// automated. Guarded on ../numen being present. Run: node test/numen-works.mjs (NOT in npm test — needs ../numen + Playwright; guarded skip if absent)
+// End-to-end numen-for-Works: spawn the VENDORED numen bridge (test/vendor),
+// load works.html in Playwright connected to it, and drive the bridge's MCP
+// stdio side (the side Claude Code normally drives) to call a Works tool —
+// asserting the page actually executes it and returns the workspace tree. The
+// full live loop, automated + self-contained (no ../numen). Not in npm test
+// (spawns a process + Playwright). Run: node test/numen-works.mjs
 import { chromium } from 'playwright';
 import http from 'http';
 import fs from 'fs';
@@ -12,8 +13,8 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const bridgePath = path.join(root, '..', 'numen', 'numen-bridge.js');
-if (!fs.existsSync(bridgePath)) { console.log('SKIP — ../numen/numen-bridge.js not present'); process.exit(0); }
+const bridgePath = path.join(__dirname, 'vendor', 'numen-bridge.js');   // vendored — self-contained, no ../numen dep
+if (!fs.existsSync(bridgePath)) { console.log('SKIP — test/vendor/numen-bridge.js missing'); process.exit(0); }
 
 const PORT = 7803, TOKEN = 'testtoken-' + Date.now().toString(36);
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json', '.css': 'text/css' };
