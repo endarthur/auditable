@@ -1,0 +1,30 @@
+{
+  "name": "@gcu/gsjs",
+  "version": "0.1.0",
+  "description": "Modern geostatistics for the browser — the evolving sibling to the frozen @gcu/gslib oracle. Exposes intermediate kriging state (the BlockEstimateTensor: weights + sample indices + variance + status), GPU-accelerated realization + aggregation, and a decoupled search neighborhood. JS-on-browser brokers WebGPU + runtime-compiled atra/WASM.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./realize": "./realize.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "realize.js",
+    "gsjs.atra",
+    "README.md"
+  ],
+  "keywords": ["geostatistics", "kriging", "block-model", "webgpu", "gslib", "mining", "geology", "wasm", "atra", "auditable", "gcu"],
+  "license": "CC0-1.0",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gentropic/auditable.git",
+    "directory": "ext/gsjs"
+  },
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/gsjs",
+  "bugs": {
+    "url": "https://github.com/gentropic/auditable/issues"
+  }
+}
