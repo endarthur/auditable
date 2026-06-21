@@ -14,6 +14,10 @@ import { kriging } from '../ext/gsjs/index.js';
 import { kt3d } from '../ext/gslib/index.js';
 import { stats, histogram, swath, gradeTonnage } from '../ext/gsjs/aggregate.js';
 import { cpuBackend, getBackend, setBackend } from '../ext/gsjs/backend.js';
+import {
+  recipe, variogram, search, ok, sk, sk_lvm, none, topcut, hgr,
+  fromJSON, run, estimate, evaluate,
+} from '../ext/gsjs/index.js';
 
 const close = (a, b, eps = 1e-12) => Math.abs(a - b) <= eps;
 
@@ -266,4 +270,178 @@ test('categories — auto-categorize; uniform per-point dims == kt3d', () => {
   assert.equal(rm.n_categories, 3); // (10,10,10),(20,20,10),(5,5,5)
   const rmz = realize(rm, rm.values);
   for (let t = 0; t < rm.n_targets; t++) if (rm.status[t] === STATUS.OK) assert.ok(Number.isFinite(rmz[t]), `target ${t} not finite`);
+});
+
+// ── recipe API: JSON round-trip + the executor (estimate → evaluate) ──
+// SYNTH as host rows + the canonical compact vocab. The recipe layer adds NO
+// numerical drift: run() must equal a hand-driven kriging()+realize() to f64.
+const SROWS = SYNTH.data.map(([X, Y, Z, AU]) => ({ X, Y, Z, AU }));
+const RVARIO = () => variogram([{ type: 'spherical', cc: 0.9, aa: 30 }], { c0: 0.1 });
+const RSEARCH = () => search({ radius: 50, ndmin: 1, ndmax: 8 });
+function baseRecipe(extra = {}) {
+  return recipe({
+    data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU' }, source: 'synth.csv' },
+    block_grid: { ...SYNTH.grid, discretization: [1, 1, 1] },
+    default_model: ok({ variogram: RVARIO(), search: RSEARCH(), realization: none() }),
+    output: { aggregations: [] },
+    ...extra,
+  });
+}
+
+test('recipe — builders emit compact GSLIB vocab; toJSON↔fromJSON round-trips', () => {
+  const r = baseRecipe({ output: { distances: true, aggregations: [{ kind: 'stats' }, { kind: 'gradeTonnage', cutoffs: [0, 2.5] }] } });
+  const j = r.toJSON();
+  assert.equal(j.default_model.variogram.c0, 0.1);
+  assert.deepEqual(j.default_model.variogram.structures[0].anis, [1, 1]);   // isotropic default
+  assert.deepEqual(j.default_model.variogram.structures[0].ang, [0, 0, 0]);
+  assert.equal(j.default_model.ktype, 'OK');
+  assert.equal(j.output.distances, true);
+  // round-trip is idempotent
+  assert.deepEqual(fromJSON(j).toJSON(), j);
+});
+
+test('recipe — anis/ang translate to kriging rangeMinor/rangeVert/angles', () => {
+  const r = recipe({
+    data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU' } },
+    block_grid: { ...SYNTH.grid },
+    default_model: ok({
+      variogram: variogram([{ type: 'spherical', cc: 1, aa: 100, anis: [0.5, 0.25], ang: [30, 10, 5] }]),
+      search: search({ radius: 80, anis: [0.5, 0.25], ang: [30, 10, 5], ndmin: 1, ndmax: 8 }),
+    }),
+    output: {},
+  });
+  const s = r.toJSON().default_model.variogram.structures[0];
+  assert.deepEqual(s.anis, [0.5, 0.25]);
+  assert.deepEqual(s.ang, [30, 10, 5]);
+});
+
+test('recipe — run() == hand-driven kriging()+realize() to f64 (no drift)', () => {
+  const r = baseRecipe();
+  const res = run(r, { rows: SROWS });
+  const tdir = kriging({ ...SYNTH, ktype: 'OK' });
+  const edir = realize(tdir, tdir.values);
+  let maxErr = 0, nOK = 0;
+  for (let i = 0; i < res.estimates.length; i++) {
+    if (res.status[i] !== STATUS.OK) continue;
+    nOK++;
+    maxErr = Math.max(maxErr, Math.abs(res.estimates[i] - edir[i]));
+  }
+  assert.ok(nOK >= 12, `only ${nOK} OK`);
+  assert.equal(maxErr, 0, `recipe drift ${maxErr}`);
+});
+
+test('recipe — evaluate() cap override re-realizes WITHOUT re-kriging (== direct topcut)', () => {
+  const kr = estimate(baseRecipe(), { rows: SROWS });
+  const capped = evaluate(kr, { _default: { transform: 'topcut', transform_params: { cap: 2.5 } } });
+  const tdir = kriging({ ...SYNTH, ktype: 'OK' });
+  const edir = realize(tdir, tdir.values, { transform: 'topcut', params: { cap: 2.5 } });
+  let maxErr = 0;
+  for (let i = 0; i < capped.estimates.length; i++) {
+    if (capped.status[i] !== STATUS.OK) continue;
+    maxErr = Math.max(maxErr, Math.abs(capped.estimates[i] - edir[i]));
+  }
+  assert.equal(maxErr, 0, `cap re-realize drift ${maxErr}`);
+});
+
+test('recipe — output.aggregations wired in run()', () => {
+  const r = baseRecipe({
+    output: {
+      aggregations: [
+        { kind: 'stats' },
+        { kind: 'gradeTonnage', cutoffs: [0, 2.5] },
+        { kind: 'swath', axis: 'x' },
+        { kind: 'histogram', min: 0, max: 5, nbins: 5, name: 'h' },
+      ],
+    },
+  });
+  const res = run(r, { rows: SROWS });
+  assert.ok(res.aggregations.stats.n >= 12);
+  assert.ok(res.aggregations.gradeTonnage.tonnage[0] >= res.aggregations.gradeTonnage.tonnage[1]);
+  assert.equal(res.aggregations.swath_x.mean.length, SYNTH.grid.nx);
+  assert.equal(res.aggregations.h.counts.length, 5);
+});
+
+test('recipe — multi-domain: sift `where` selects samples, blockDomains selects blocks', () => {
+  const { nx, ny, nz } = SYNTH.grid;
+  const nxyz = nx * ny * nz;
+  const blockDomains = new Array(nxyz);
+  for (let iz = 0, idx = 0; iz < nz; iz++) for (let iy = 0; iy < ny; iy++) for (let ix = 0; ix < nx; ix++, idx++) blockDomains[idx] = ix < 2 ? 'HG' : 'LG';
+  const rows = SROWS.map((rr, i) => ({ ...rr, D: i % 2 === 0 ? 'HG' : 'LG' }));
+  const r = recipe({
+    data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU', domain: 'D' } },
+    block_grid: { ...SYNTH.grid },
+    domains: [
+      { id: 'HG', where: "D == 'HG'", model: ok({ variogram: RVARIO(), search: RSEARCH() }) },
+      { id: 'LG', where: "D == 'LG'", model: ok({ variogram: RVARIO(), search: RSEARCH() }) },
+    ],
+    output: { aggregations: [{ kind: 'stats' }] },
+  });
+  // `where` strings serialize to sift specs and round-trip
+  const j = r.toJSON();
+  assert.equal(j.domains[0].where.form, 'spec');
+  assert.deepEqual(fromJSON(j).toJSON(), j);
+
+  const res = run(r, { rows, blockDomains });
+  assert.equal(res.domains.map((d) => d.id).join(','), 'HG,LG');
+  const nOK = [...res.status].filter((s) => s === STATUS.OK).length;
+  assert.ok(nOK >= 12, `multi-domain OK ${nOK}`);
+  assert.equal(res.aggregations.stats.n, nOK);
+});
+
+test('recipe — domains[] requires ctx.blockDomains', () => {
+  const r = recipe({
+    data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU', domain: 'D' } },
+    block_grid: { ...SYNTH.grid },
+    domains: [{ id: 'A', where: "D == 'A'", model: ok({ variogram: RVARIO(), search: RSEARCH() }) }],
+    output: {},
+  });
+  assert.throws(() => run(r, { rows: SROWS }), /blockDomains/);
+});
+
+test('recipe — construction-time validation throws on bad models', () => {
+  const good = { variogram: RVARIO(), search: RSEARCH() };
+  // ndmax < ndmin
+  assert.throws(() => baseRecipe({ default_model: ok({ variogram: RVARIO(), search: search({ radius: 50, ndmin: 8, ndmax: 2 }) }) }), /ndmax ≥ ndmin/);
+  // negative range
+  assert.throws(() => variogram([{ type: 'spherical', cc: 1, aa: -5 }]) && baseRecipe({ default_model: ok({ variogram: variogram([{ type: 'spherical', cc: 1, aa: -5 }]), search: RSEARCH() }) }), /range aa must be > 0/);
+  // SK without numeric mean
+  assert.throws(() => baseRecipe({ default_model: sk({ ...good, sk_mean: 'oops' }) }), /SK needs a numeric sk_mean/);
+  // topcut without cap
+  assert.throws(() => baseRecipe({ default_model: ok({ ...good, realization: { transform: 'topcut', transform_params: {} } }) }), /topcut needs cap/);
+  // unknown aggregation
+  assert.throws(() => baseRecipe({ output: { aggregations: [{ kind: 'bogus' }] } }), /unknown aggregation/);
+});
+
+test('recipe — SK scalar mean run() == kt3d SK', () => {
+  const r = baseRecipe({ default_model: sk({ variogram: RVARIO(), search: RSEARCH(), sk_mean: 2.5 }) });
+  const res = run(r, { rows: SROWS });
+  const ref = kt3d({ ...SYNTH, ktype: 'SK', skmean: 2.5 });
+  let maxErr = 0;
+  for (let i = 0; i < res.estimates.length; i++) {
+    if (res.status[i] !== STATUS.OK || ref.est[i] === -999) continue;
+    maxErr = Math.max(maxErr, Math.abs(res.estimates[i] - ref.est[i]));
+  }
+  assert.ok(maxErr < 1e-9, `SK recipe drift ${maxErr}`);
+});
+
+test('recipe — hgr builder picks hard/soft; SK_LVM builds but run() rejects', () => {
+  assert.equal(hgr({ cap: 30, d_thresh: 50, grade_thresh: 12 }).transform, 'hgr_hard');
+  assert.equal(hgr({ cap: 30, d_max: 100, grade_thresh: 12 }).transform, 'hgr_soft');
+  // SK_LVM is artifact-complete but not executable yet (kriging() has no ktype 2)
+  const r = baseRecipe({ default_model: sk_lvm({ variogram: RVARIO(), search: RSEARCH(), sk_mean: 'MEAN' }) });
+  assert.throws(() => run(r, { rows: SROWS }), /SK_LVM/);
+});
+
+test('recipe — function `where` works in-memory but refuses to serialize', () => {
+  const { nx, ny, nz } = SYNTH.grid;
+  const blockDomains = new Array(nx * ny * nz).fill('A');
+  const r = recipe({
+    data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU' } },
+    block_grid: { ...SYNTH.grid },
+    domains: [{ id: 'A', where: (row) => row.AU != null, model: ok({ variogram: RVARIO(), search: RSEARCH() }) }],
+    output: {},
+  });
+  const res = run(r, { rows: SROWS, blockDomains });   // runs fine in memory
+  assert.ok([...res.status].filter((s) => s === STATUS.OK).length >= 12);
+  assert.throws(() => r.toJSON(), /can't be serialized/);  // but the artifact refuses it
 });

@@ -19,8 +19,8 @@ atra/WASM), not a backend lock.
 | Targets + categories (grid / mask / points / sub-blocked) | ✅ |
 | CPU aggregations (stats / histogram / swath / grade-tonnage) | ✅ |
 | Swappable backend seam (`cpuBackend` default) | ✅ |
-| **Recipe API** (JSON spec + builder eDSL) | ⏳ next |
-| Reactive cell wiring (notebook integration) | ⏳ |
+| Recipe API (JSON spec + builder eDSL, `run`/`estimate`/`evaluate`) | ✅ |
+| Reactive cell wiring (notebook integration) | ⏳ next |
 | Neighbourhood module (SPEC-neigh: sectors/per-hole/bench/kd-tree) | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
@@ -74,6 +74,59 @@ category, so cost scales with the number of *distinct* geometries.
 **Backend seam** (`getBackend`/`setBackend`): `cpuBackend` is the default and the
 oracle a future WebGPU/atra backend validates against, per kernel.
 
+## Recipe API
+
+A recipe is a **JSON-serializable estimation spec** — the shippable, diffable,
+language-independent artifact (a regulator diffs two versions; a non-JS consumer
+reads it). A composable JS eDSL builds it; `toJSON()`/`fromJSON()` round-trip.
+
+```js
+import { recipe, variogram, search, ok, sk, topcut, hgr, none,
+         run, estimate, evaluate, fromJSON } from '@gcu/gsjs';
+
+const r = recipe({
+  data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU', domain: 'DOMAIN' }, source: 'dh.csv' },
+  block_grid: { nx: 200, ny: 200, nz: 50, xmn: 5, ymn: 5, zmn: 50,
+                xsiz: 10, ysiz: 10, zsiz: 10, discretization: [3, 3, 1] },
+  domains: [
+    { id: 'HG', where: "DOMAIN == 'HG'",          // sift predicate — serializable
+      model: ok({
+        variogram: variogram([{ type: 'spherical', cc: 0.7, aa: 80,
+                                anis: [0.5, 0.3], ang: [45, 0, 0] }], { c0: 0.1 }),
+        search:    search({ radius: 100, anis: [0.5, 0.3], ang: [45, 0, 0], ndmin: 4, ndmax: 20 }),
+        realization: hgr({ cap: 35, d_thresh: 60, grade_thresh: 12 }),
+      }) },
+    { id: 'LG', where: "DOMAIN == 'LG'", model: ok({ /* … */ }) },
+  ],
+  output: { distances: true, aggregations: [
+    { kind: 'stats' }, { kind: 'gradeTonnage', cutoffs: [0.5, 1, 2] }, { kind: 'swath', axis: 'x' },
+  ] },
+});
+
+r.toJSON();                          // the canonical artifact (ship/review/diff)
+const r2 = fromJSON(r.toJSON());     // rebuild executable recipe (idempotent)
+
+// staged: estimate() is expensive (search + solve, per domain); evaluate() is
+// the cheap tail (realize + aggregate) a live cap/HGR slider re-runs alone.
+const kr  = estimate(r, { rows, blockDomains });           // rows = host data; blockDomains = per-block id
+const res = evaluate(kr, { HG: { transform_params: { cap: 28 } } });  // slider → re-realize, NO re-krige
+// or all at once:
+const full = run(r, { rows, blockDomains });
+// res.estimates (Float64Array[nxyz]) · res.status · res.aggregations.{stats,gradeTonnage,swath_x} · res.domains[]
+```
+
+**Canonical JSON** uses the compact GSLIB vocab (`{c0, structures:[{type, cc, aa,
+anis:[ay/ax,az/ax], ang:[strike,dip,plunge]}]}`); the executor translates it to
+`kriging()`'s verbose form. `where` is a **@gcu/sift** predicate (typed string →
+JSON spec) so the artifact stays self-contained — a raw JS-function `where` runs
+in memory but `toJSON()` refuses it. Domains assign **samples** via `where` (over
+data rows) and **blocks** via host-supplied `ctx.blockDomains` (per-block id);
+unmatched blocks fall to `default_model` or stay `NOT_ATTEMPTED`. `run()` adds no
+numerical drift — it equals a hand-driven `kriging()`+`realize()` to f64.
+Construction-time validation throws on bad models (range > 0, ndmax ≥ ndmin, …).
+SK_LVM builds (artifact-complete) but `run()` rejects it until kriging() gains
+ktype 2.
+
 ## Build & test
 
 ```
@@ -87,8 +140,10 @@ wire `build.js` into `gcu-make`.
 
 ## Resume pointer
 
-Next: the **recipe API** — `recipe()` / `variogram()` / `ok()` / `sk()` / `hgr()`
-builders producing a JSON-serializable spec (`toJSON`/`fromJSON`), with
-construction-time validation, on top of the target-based `kriging()`. Shape is
-specced in `spec_inbox/gsjs-SPEC.md` §"Recipe API". Then reactive cell wiring;
-then M3 (neighbourhood). State tracked in the `project_gsjs_started` memory.
+Recipe API shipped (`recipe.js` — builders + `toJSON`/`fromJSON` + staged
+`estimate`/`evaluate`/`run`, validated f64 vs hand-driven kriging, multi-domain,
+30/30 tests). Next: **reactive cell wiring** — a notebook surface where a recipe
+cell feeds `estimate()` once and cap/HGR sliders re-run only `evaluate()` (the
+staged split is built for exactly this). Then M3 (neighbourhood, SPEC-neigh);
+M-last WebGPU backend. Plus: wire `ext/gsjs/build.js` into gcu-make; LVM (ktype
+2); Walker Lake demo. State tracked in the `project_gsjs_started` memory.

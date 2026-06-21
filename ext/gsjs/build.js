@@ -17,6 +17,11 @@ const gsjsSrc = fs.readFileSync(path.join(dir, 'gsjs.atra'), 'utf8');
 
 let out = bundle(gslibSrc + '\n' + gsjsSrc, { name: 'gsjs' });
 out += '\n' + fs.readFileSync(path.join(dir, 'api.js'), 'utf8');
+// recipe.js is concatenated AFTER api.js — it references kriging/realize/STATUS/
+// stats/histogram/swath/gradeTonnage from the bundle's module scope. Its only
+// import (@gcu/sift, the serializable `where` selector) survives into index.js;
+// a future browser bundle inlines sift (already a /usr/lib builtin).
+out += '\n' + fs.readFileSync(path.join(dir, 'recipe.js'), 'utf8');
 
 fs.writeFileSync(path.join(dir, 'index.js'), out);
 console.log(`Built ext/gsjs/index.js (${(out.length / 1024).toFixed(1)} KB)`);
