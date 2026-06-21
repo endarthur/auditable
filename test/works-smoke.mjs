@@ -442,9 +442,13 @@ const surfaceTools = await page.evaluate(async () => {
     && docHits.hits.length > 0 && String(docHits.hits[0].path || '').startsWith('/usr/share/doc/');
   const ex = await exTool.execute({});
   const examplesShapeOk = !!ex && typeof ex.available === 'boolean' && Array.isArray(ex.examples);
+  // the new orientation doc is embedded + findable (a phrase unique to it)
+  const archHits = await searchTool.execute({ query: 'browser is the kernel' });
+  const orientationDocOk = archHits.available === true
+    && (archHits.hits || []).some((h) => /architecture/i.test(String(h.path || '')));
 
   W.revokeAgent('stool');
-  return { hasTools, readOk, mutateDenied, mutateOk, unknownErr, validationCaught, postInstallOk, docsSearchOk, examplesShapeOk };
+  return { hasTools, readOk, mutateDenied, mutateOk, unknownErr, validationCaught, postInstallOk, docsSearchOk, examplesShapeOk, orientationDocOk };
 });
 
 // numen live transport: the shell vendors the numen shim, so
@@ -1972,6 +1976,7 @@ const checks = {
   // docs search (agent grounding over the embedded corpus)
   'numen: agent searches embedded docs (ranked hits w/ paths)': surfaceTools.docsSearchOk === true,
   'numen: worksListExamples returns the manifest shape': surfaceTools.examplesShapeOk === true,
+  'numen: orientation doc (architecture.md) embedded + findable': surfaceTools.orientationDocOk === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),
