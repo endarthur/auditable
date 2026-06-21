@@ -1,27 +1,45 @@
-// ext/gsjs/build.js — co-compiles gslib.atra (FROZEN) + gsjs.atra into the gsjs
-// wasm bundle, appends api.js, emits ext/gsjs/index.js.
+// ext/gsjs/build.js — two stages, self-owned (gsjs is the model for undoing
+// atra's cross-package build reach):
 //
-// Self-owned on purpose: gslib's dist is currently built by ext/atra/build.js
-// reaching across packages (a coupling to undo eventually). gsjs owns its build
-// here — it reads gslib.atra only as a static-link dependency (the fork reuses
-// gslib's kernels in gsjs's own wasm), never editing it.
+//   1. atra → wasm module. gslib.atra (FROZEN, static-link dep — the fork reuses
+//      its kernels) + gsjs.atra are compiled by atrac's `bundleRecipe` (a pure
+//      gcu-make recipe) into src/_wasm.js (instantiate/alloc/read·write helpers +
+//      embedded bytes). gslib is read only as a dependency — ext/gslib is never
+//      edited. _wasm.js is a generated build intermediate (gitignored).
+//   2. JS layer → @gcu/build. realize/aggregate/backend/api/recipe (+ @gcu/sift,
+//      inlined collision-safe via the rename pass, the over↔dimensions pattern)
+//      bundle into a self-contained ESM at ext/gsjs/index.js — browser-loadable
+//      (`load('@gcu/gsjs')`), no relative imports left to resolve.
+//
+// gcu-make auto-discovers this as a @gcu/build package (stage 2) and orchestrates
+// it in the derived graph. A .atra edit isn't tracked as a bundle input, so run
+// `node ext/gsjs/build.js` (or gcu-make --force) after editing the atra sources.
 
-import { bundle } from '../atra/atrac.js';
+import { bundle } from '../build/src/main.js';
+import { bundleRecipe } from '../atra/atrac.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const gslibSrc = fs.readFileSync(path.join(dir, '..', 'gslib', 'gslib.atra'), 'utf8');
-const gsjsSrc = fs.readFileSync(path.join(dir, 'gsjs.atra'), 'utf8');
+const read = (...p) => fs.readFileSync(path.join(dir, ...p), 'utf8');
 
-let out = bundle(gslibSrc + '\n' + gsjsSrc, { name: 'gsjs' });
-out += '\n' + fs.readFileSync(path.join(dir, 'api.js'), 'utf8');
-// recipe.js is concatenated AFTER api.js — it references kriging/realize/STATUS/
-// stats/histogram/swath/gradeTonnage from the bundle's module scope. Its only
-// import (@gcu/sift, the serializable `where` selector) survives into index.js;
-// a future browser bundle inlines sift (already a /usr/lib builtin).
-out += '\n' + fs.readFileSync(path.join(dir, 'recipe.js'), 'utf8');
+// ── stage 1: atra → src/_wasm.js (same recipe gcu-make would run) ──
+const wasmInputs = [
+  { path: '../gslib/gslib.atra', text: read('..', 'gslib', 'gslib.atra') },
+  { path: 'gsjs.atra', text: read('gsjs.atra') },
+];
+fs.writeFileSync(
+  path.join(dir, 'src', '_wasm.js'),
+  '// ⚠ GENERATED — atra→wasm bundle (gslib.atra + gsjs.atra). Regenerate: node ext/gsjs/build.js\n'
+    + bundleRecipe(wasmInputs, { name: 'gsjs' }),
+);
 
-fs.writeFileSync(path.join(dir, 'index.js'), out);
-console.log(`Built ext/gsjs/index.js (${(out.length / 1024).toFixed(1)} KB)`);
+// ── stage 2: @gcu/build the JS layer, inlining @gcu/sift ──
+const r = await bundle({
+  at: import.meta.url,
+  inline: ['../sift/src/predicate.js'],
+  sourcemap: false,
+  meta: false,
+});
+console.log(`Built ext/gsjs/index.js (${(r.code.length / 1024).toFixed(1)} KB, ${r.meta.exports.length} exports)`);

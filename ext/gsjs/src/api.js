@@ -1,6 +1,6 @@
-// @gcu/gsjs high-level API — appended to the wasm bundle by build.js, so the
-// runtime helpers (alloc, writeF64/I32, readF64/I32, growMemory, instantiate)
-// are in module scope from the bundle.
+// @gcu/gsjs high-level API. The wasm runtime helpers (instantiate, alloc,
+// write/read F64/I32, growMemory) come from ./_wasm.js — the generated module
+// build.js emits from gslib.atra + gsjs.atra via atrac's bundleRecipe.
 //
 // kriging() mirrors @gcu/gslib's kt3d setup (memory, super-block search) but
 // runs over a TARGET LIST with block-dimension CATEGORIES, and reads back the
@@ -11,12 +11,10 @@
 //   kriging({ grid, mask })            — only active blocks (sparse output)
 //   kriging({ points })                — arbitrary targets; per-point dims OK
 //
-// Scope v1: SK + OK. See spec_inbox/gsjs-SPEC.md.
+// Scope v1: SK + OK. See spec_inbox/gsjs-SPEC.md. The public surface (realize,
+// aggregations, backend, kriging, recipe, …) is assembled by src/main.js.
 
-import { realize, makeTransform, STATUS } from './realize.js';
-export { realize, makeTransform, STATUS };
-export { stats, histogram, swath, gradeTonnage } from './aggregate.js';
-export { cpuBackend, getBackend, setBackend } from './backend.js';
+import { instantiate, alloc, writeF64, writeI32, readF64, readI32, growMemory } from './_wasm.js';
 
 const _VARIO_TYPES = {
   spherical: 1, exponential: 2, gaussian: 3, power: 4, hole: 5,

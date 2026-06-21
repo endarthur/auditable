@@ -6,13 +6,10 @@
 // The eDSL (recipe/variogram/search/ok/sk/…) is just a convenient JS way to
 // BUILD that JSON; toJSON() emits the canonical form, fromJSON() rebuilds it.
 //
-// This file is CONCATENATED into the gsjs bundle after api.js (like api.js
-// itself), so `kriging` is already in module scope (api.js declares it locally).
-// realize/STATUS/aggregations are pulled from the standalone sibling modules —
-// api.js exposes them via `export { } from …` re-exports, which create no local
-// binding, so we import them directly here. Plus @gcu/sift (the serializable
-// `where` selector). When gsjs is browser-bundled, sift must be inlined (it
-// already ships as a /usr/lib builtin + `load('@gcu/sift')`).
+// @gcu/build bundles src/ into a self-contained ESM, so this module imports
+// what it uses (kriging, realize, the aggregations) from siblings normally. The
+// `where` selector is @gcu/sift, imported from its source so @gcu/build's `inline`
+// pass folds it into the bundle collision-safe (the over↔dimensions pattern).
 //
 // Canonical JSON (compact GSLIB vocab, per SPEC §"Core data structures"):
 //   { data: { columns:{x,y,z,value,domain?,sk_mean?,dh_id?}, source? },
@@ -30,13 +27,10 @@
 // cheap tail: estimate() (expensive — search+solve, per domain) → evaluate()
 // (cheap — realize + aggregate). Spec: spec_inbox/gsjs-SPEC.md §"Recipe API".
 
-import { parsePredicate, evaluatePredicate, validatePredicate } from '../sift/index.js';
+import { parsePredicate, evaluatePredicate, validatePredicate } from '../../sift/src/predicate.js';
 import { stats, histogram, swath, gradeTonnage } from './aggregate.js';
-// NB: `realize`, `STATUS`, `kriging` are NOT imported here — api.js already
-// `import`s realize/STATUS (binding them in this concatenated module) and
-// declares kriging locally, so re-importing would be a redeclaration error.
-// The aggregate fns above ARE safe to import: api.js only `export … from`s them
-// (a re-export, which creates no local binding to collide with).
+import { realize, STATUS } from './realize.js';
+import { kriging } from './api.js';
 
 const _TRANSFORMS = new Set(['none', 'topcut', 'hgr_hard', 'hgr_soft']);
 const _KTYPES = new Set(['OK', 'SK', 'SK_LVM']);

@@ -6,17 +6,14 @@
   "main": "index.js",
   "exports": {
     ".": "./index.js",
-    "./realize": "./realize.js",
-    "./aggregate": "./aggregate.js",
-    "./backend": "./backend.js",
+    "./realize": "./src/realize.js",
+    "./aggregate": "./src/aggregate.js",
+    "./backend": "./src/backend.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
-    "realize.js",
-    "aggregate.js",
-    "backend.js",
-    "recipe.js",
+    "src",
     "gsjs.atra",
     "README.md"
   ],

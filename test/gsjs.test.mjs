@@ -9,11 +9,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { realize, makeTransform, STATUS } from '../ext/gsjs/realize.js';
+import { realize, makeTransform, STATUS } from '../ext/gsjs/src/realize.js';
 import { kriging } from '../ext/gsjs/index.js';
 import { kt3d } from '../ext/gslib/index.js';
-import { stats, histogram, swath, gradeTonnage } from '../ext/gsjs/aggregate.js';
-import { cpuBackend, getBackend, setBackend } from '../ext/gsjs/backend.js';
+import { stats, histogram, swath, gradeTonnage } from '../ext/gsjs/src/aggregate.js';
+import { cpuBackend, getBackend, setBackend } from '../ext/gsjs/src/backend.js';
 import {
   recipe, variogram, search, ok, sk, sk_lvm, none, topcut, hgr,
   fromJSON, run, estimate, evaluate,
