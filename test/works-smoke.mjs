@@ -253,11 +253,22 @@ const agentMcp = await page.evaluate(async () => {
   try { await W.worksBus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Write' }, ['/projects/plain.txt', 'plain']); plainWrite = true; } catch { /* */ }
   delete window.__agentConsent__;
 
+  // ── desktop tools (ungated observe / navigate / run) ──
+  const openPathTool = tools.find((t) => t.name === 'worksOpenPath');
+  const listSurfacesTool = tools.find((t) => t.name === 'worksListSurfaces');
+  const runNotebookTool = tools.find((t) => t.name === 'worksRunNotebook');
+  const openedRes = await openPathTool.execute({ path: '/projects/agent-wrote.txt' });
+  const surfaceList = (await listSurfacesTool.execute({})).surfaces || [];
+  const openedListed = surfaceList.some((s) => s.path === '/projects/agent-wrote.txt');
+  // the just-opened text file is the active surface, not a notebook → graceful no-run
+  const runRes = await runNotebookTool.execute({});
+
   return {
     toolNames: tools.map((t) => t.name),
     hasProbe: (listed.entries || []).some((e) => (e && e.name ? e.name : e) === 'agent-probe.txt'),
     content: got.content,
     deniedNoGrant, consentWrote, consentContent, wroteInScope, wroteContent, deniedOutScope, grantsListed, plainWrite,
+    openedOk: openedRes.opened === true, openedListed, runGraceful: !!runRes && runRes.ran === false,
   };
 });
 
@@ -1745,6 +1756,11 @@ const checks = {
   'numen: agent write outside the granted scope is denied': agentMcp.deniedOutScope === true,
   'numen: agent grant is listed (Settings revoke UI backing)': agentMcp.grantsListed === true,
   'numen: a non-agent principal writes VFS freely (not gated)': agentMcp.plainWrite === true,
+  // desktop tools: observe / navigate / run
+  'numen: agent desktop tools (listSurfaces + openPath + runNotebook)':
+    ['worksListSurfaces', 'worksOpenPath', 'worksRunNotebook'].every((n) => agentMcp.toolNames.includes(n)),
+  'numen: agent opens a path → surface appears in the desktop list': agentMcp.openedOk === true && agentMcp.openedListed === true,
+  'numen: runNotebook on a non-notebook returns gracefully': agentMcp.runGraceful === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),

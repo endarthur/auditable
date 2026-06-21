@@ -47,6 +47,8 @@ export async function connectAgentPeer(identity) {
 export function worksTools(agentBus, identity = 'default') {
   const vfs = (member, args) =>
     agentBus.call({ to: 'works', path: '/', interface: 'VFS', member }, args);
+  const shell = (member, args) =>
+    agentBus.call({ to: 'works', path: '/', interface: 'Shell', member }, args);
   return [
     {
       name: 'worksTree',
@@ -66,6 +68,31 @@ export function worksTools(agentBus, identity = 'default') {
       execute: async (input) => {
         return { path: input.path, content: await vfs('Read', [input.path, 'utf8']) };
       },
+    },
+    {
+      // Observe the desktop — what's open (read-only, ungated).
+      name: 'worksListSurfaces',
+      description: 'List the surfaces (tabs) open on the Works desktop, with the focused one flagged.',
+      inputSchema: { type: 'object', properties: {} },
+      annotations: { readOnlyHint: true, title: 'Open surfaces' },
+      execute: async () => ({ surfaces: await shell('ListSurfaces', []) }),
+    },
+    {
+      // Navigate — open a file/project in its surface (notebook, doc, preview…).
+      name: 'worksOpenPath',
+      description: 'Open a file or project from the Works workspace in its surface (notebook, doc, preview, …).',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      annotations: { title: 'Open in Works' },
+      execute: async (input) => ({ path: input.path, opened: await shell('OpenPath', [input.path]) }),
+    },
+    {
+      // Drive — run a notebook's cells. With a path it opens+runs that notebook;
+      // with none it runs the focused notebook. Returns { ran, … }.
+      name: 'worksRunNotebook',
+      description: 'Run all cells of a notebook. Pass a path to open and run it, or omit to run the focused notebook.',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+      annotations: { title: 'Run notebook' },
+      execute: async (input) => shell('RunNotebook', [(input && input.path) || null]),
     },
     {
       // A WRITE tool — gated by the broker (works.VFS.Write is gated for agent

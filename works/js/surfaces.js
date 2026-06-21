@@ -32,6 +32,57 @@ export function callActiveNotebook(member, args = []) {
   return true;
 }
 
+// A snapshot of the open surfaces — what an observer (the shell menubar, an
+// agent's worksListSurfaces) can see on the desktop. `active` flags the focused
+// tab. Read-only; no realm access.
+export function listSurfaces() {
+  const out = [];
+  for (const rec of WKS.surfaces.values())
+    out.push({ kind: rec.kind, path: rec.path, title: rec.title, active: rec.tabId === _activeTabId });
+  return out;
+}
+
+// Resolve once a tab's surface has signalled Ready (or after `timeout` ms) — so
+// the shell can drive a freshly-opened surface without racing its boot.
+function waitTabReady(tabId, timeout = 4000) {
+  const rec = WKS.surfaces.get(tabId);
+  if (!rec) return Promise.resolve(false);
+  if (rec.ready) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      const r = WKS.surfaces.get(tabId);
+      if (!r) { clearInterval(iv); resolve(false); }
+      else if (r.ready) { clearInterval(iv); resolve(true); }
+      else if (Date.now() - t0 > timeout) { clearInterval(iv); resolve(false); }
+    }, 50);
+  });
+}
+
+// Open a notebook (if `path` is given) and run all its cells; with no path, run
+// the focused notebook. Drives the surface by its own tab — not "whatever's
+// active" — so it's race-free for a just-opened notebook. Returns { ran, … }.
+export async function runNotebookAt(path) {
+  let tabId = null;
+  if (path) {
+    tabId = await openPath(path);
+    if (!tabId) return { ran: false, reason: 'no surface for ' + path };
+    await waitTabReady(tabId);
+  } else {
+    const rec = getActiveSurface();
+    tabId = rec && rec.tabId;
+  }
+  const rec = tabId && WKS.surfaces.get(tabId);
+  if (!rec || rec.kind !== 'notebook') return { ran: false, reason: 'not a notebook' };
+  try {
+    await WKS.worksBus.call(
+      { to: rec.uniqueName, path: '/', interface: 'Notebook', member: 'RunAll' }, []);
+    return { ran: true, path: rec.path };
+  } catch (e) {
+    return { ran: false, reason: String((e && e.message) || e) };
+  }
+}
+
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const newTabId = () => 't' + Math.random().toString(36).slice(2, 10);
 

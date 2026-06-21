@@ -4,7 +4,7 @@
 
 import { connect } from '#abus';
 import { WKS } from './state.js';
-import { openPath } from './surfaces.js';
+import { openPath, listSurfaces, runNotebookAt } from './surfaces.js';
 import { launchItems, launch } from './launcher.js';
 import { onSurfacesChanged } from './surface-registry.js';
 import { mountFolder, unmountAt } from './mount.js';
@@ -186,7 +186,12 @@ export async function setupWorksService() {
     // Desktop operations a surface may request.
     Shell: {
       methods: {
-        OpenPath: (p) => { openPath(p); },
+        OpenPath: async (p) => !!(await openPath(p)),
+        // Observe + drive the desktop (the shell menubar, and an agent's
+        // worksListSurfaces/worksRunNotebook tools). ListSurfaces is read-only;
+        // RunNotebook opens (if given a path) + runs a notebook by its own tab.
+        ListSurfaces: () => listSurfaces(),
+        RunNotebook:  (p) => runNotebookAt(p || null),
         // The Launcher (works/surfaces/launcher.html) drives these: the curated,
         // availability-filtered creatables + the dispatch. Logic in launcher.js.
         LaunchItems: () => launchItems(),
