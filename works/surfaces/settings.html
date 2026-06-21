@@ -97,6 +97,29 @@
   }
   .lic-row.open .text { display: block; }
   .lic-row a { color: var(--au-info); }
+  .audit-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 10px 0 4px; color: var(--au-fg-muted); font-size: 11px;
+  }
+  .audit-clear {
+    padding: 2px 8px; font-size: 11px;
+  }
+  .audit-list {
+    border: 1px solid var(--au-border); border-radius: 3px;
+    background: var(--au-surface-raised); max-height: 220px; overflow: auto;
+  }
+  .audit-row {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 4px 8px; border-bottom: 1px solid var(--au-border-soft);
+    font-size: 11px;
+  }
+  .audit-row:last-child { border-bottom: none; }
+  .audit-row .when { color: var(--au-fg-soft); flex: none; min-width: 56px; }
+  .audit-row .tool { color: var(--au-info); flex: none; min-width: 116px; }
+  .audit-row .summary { color: var(--au-fg-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .audit-row .verdict { flex: none; font-size: 10px; letter-spacing: 0.5px; }
+  .audit-row .ok    { color: var(--au-success); }
+  .audit-row .denied { color: var(--au-error); }
   .upd-ver { color: var(--au-fg); }
   .upd-ver code { color: var(--au-info); }
   .upd-ok { color: var(--au-success); }
@@ -207,6 +230,14 @@
     Folders an agent may <em>write</em> to. Reads are always allowed. You're
     prompted to approve a folder the first time an agent writes; revoke any time.
     Grants last until you revoke them or reload the workspace.
+  </div>
+  <div class="audit-head">
+    <span>Recent agent activity</span>
+    <button id="auditClear" class="audit-clear">Refresh</button>
+  </div>
+  <div class="audit-list" id="agentAuditList"></div>
+  <div class="hint">
+    Every agent action this session (newest first). In-memory only — cleared on reload.
   </div>
 
   <h2>About</h2>
@@ -359,6 +390,48 @@ async function loadBusGrants() {
       }
     });
     row.append(path, type, btn);
+    el.appendChild(row);
+  }
+}
+
+function fmtWhen(ts) {
+  try {
+    const d = new Date(ts);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+      + ':' + String(d.getSeconds()).padStart(2, '0');
+  } catch { return ''; }
+}
+
+async function loadAuditLog() {
+  const el = $('agentAuditList');
+  if (!el) return;
+  let log = [];
+  try { log = await mcpCall('GetAuditLog') || []; } catch { /* */ }
+  el.innerHTML = '';
+  if (!log.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.style.padding = '6px 8px';
+    empty.textContent = 'No agent activity yet.';
+    el.appendChild(empty);
+    return;
+  }
+  // Newest first.
+  for (let i = log.length - 1; i >= 0; i--) {
+    const e = log[i];
+    const row = document.createElement('div');
+    row.className = 'audit-row';
+    const when = document.createElement('span');
+    when.className = 'when'; when.textContent = fmtWhen(e.ts);
+    const tool = document.createElement('span');
+    tool.className = 'tool'; tool.textContent = e.tool + (e.identity && e.identity !== 'default' ? ' · ' + e.identity : '');
+    const summary = document.createElement('span');
+    summary.className = 'summary'; summary.textContent = e.summary || '';
+    summary.title = (e.summary || '') + (e.error ? '  —  ' + e.error : '');
+    const verdict = document.createElement('span');
+    verdict.className = 'verdict ' + (e.ok ? 'ok' : 'denied');
+    verdict.textContent = e.ok ? 'ok' : 'denied';
+    row.append(when, tool, summary, verdict);
     el.appendChild(row);
   }
 }
@@ -590,11 +663,15 @@ bootSurface({
     await loadUpdates();
     await loadMcp();
     await loadAgentGrants();
-    // Live status + grants from the shell (works.Mcp.StateChanged/GrantsChanged).
+    await loadAuditLog();
+    $('auditClear')?.addEventListener('click', () => loadAuditLog());
+    // Live status + grants + audit from the shell (works.Mcp.*).
     bus.subscribe({ from: 'works', interface: 'Mcp', member: 'StateChanged' },
       (m) => renderMcp({ state: (m.args || [])[0] }));
     bus.subscribe({ from: 'works', interface: 'Mcp', member: 'GrantsChanged' },
       () => loadAgentGrants());
+    bus.subscribe({ from: 'works', interface: 'Mcp', member: 'AuditChanged' },
+      () => loadAuditLog());
 
     // Auto-save on every change.
     $('theme').addEventListener('change', saveSettings);

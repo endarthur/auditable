@@ -263,12 +263,19 @@ const agentMcp = await page.evaluate(async () => {
   // the just-opened text file is the active surface, not a notebook → graceful no-run
   const runRes = await runNotebookTool.execute({});
 
+  // audit log: every tool call above was logged (tools are withAudit-wrapped)
+  const audit = (W.getAuditLog && W.getAuditLog()) || [];
+
   return {
     toolNames: tools.map((t) => t.name),
     hasProbe: (listed.entries || []).some((e) => (e && e.name ? e.name : e) === 'agent-probe.txt'),
     content: got.content,
     deniedNoGrant, consentWrote, consentContent, wroteInScope, wroteContent, deniedOutScope, grantsListed, plainWrite,
     openedOk: openedRes.opened === true, openedListed, runGraceful: !!runRes && runRes.ran === false,
+    auditCount: audit.length,
+    auditHasWrite: audit.some((e) => e.tool === 'worksWriteFile'),
+    auditHasDenied: audit.some((e) => e.ok === false),
+    auditHasGrant: audit.some((e) => e.tool === 'grant'),
   };
 });
 
@@ -1762,6 +1769,10 @@ const checks = {
     ['worksListSurfaces', 'worksOpenPath', 'worksRunNotebook'].every((n) => agentMcp.toolNames.includes(n)),
   'numen: agent opens a path → surface appears in the desktop list': agentMcp.openedOk === true && agentMcp.openedListed === true,
   'numen: runNotebook on a non-notebook returns gracefully': agentMcp.runGraceful === true,
+  // audit log (observability)
+  'numen: agent actions are audited (log populated incl. writes)': agentMcp.auditCount > 0 && agentMcp.auditHasWrite === true,
+  'numen: a denied action is recorded in the audit log': agentMcp.auditHasDenied === true,
+  'numen: grants are recorded in the audit log': agentMcp.auditHasGrant === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),

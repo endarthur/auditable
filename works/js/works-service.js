@@ -348,8 +348,10 @@ export async function setupWorksService() {
         GrantAgent:     (identity, pathPrefix) => WKS.grantAgent(identity, { pathPrefix }),
         RevokeAgent:    (identity) => WKS.revokeAgent(identity),
         ListAgentGrants: () => WKS.listAgentGrants(),
+        // The agent-action ledger (observability) — the Settings panel renders it.
+        GetAuditLog:     () => (WKS.getAuditLog ? WKS.getAuditLog() : []),
       },
-      signals: ['StateChanged', 'GrantsChanged'],
+      signals: ['StateChanged', 'GrantsChanged', 'AuditChanged'],
     },
     // Build-time vendored license inventory — used by the workspace settings
     // surface (and future tools like `geas licenses`). Returns the standard

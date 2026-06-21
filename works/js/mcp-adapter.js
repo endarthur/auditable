@@ -30,6 +30,49 @@ function emitMcp(member, args) {
   try { WKS.worksBus && WKS.worksBus.signal({ path: '/', interface: 'Mcp', member }, args); } catch { /* */ }
 }
 
+// ── agent audit log ──
+// A bounded record of every agent action — the observability layer that makes
+// opening up more tools safe to reason about. In-memory only (not persisted):
+// it's a session ledger, cleared on reload. Newest entries last.
+const AUDIT_CAP = 250;
+const _auditLog = [];
+
+function logAgentAction(entry) {
+  _auditLog.push({ ts: Date.now(), ...entry });
+  if (_auditLog.length > AUDIT_CAP) _auditLog.splice(0, _auditLog.length - AUDIT_CAP);
+  emitMcp('AuditChanged', []);
+}
+export function getAuditLog() { return _auditLog.map((e) => ({ ...e })); }
+
+// A compact one-line summary of a tool call's input for the log.
+function summarizeArgs(input) {
+  if (!input || typeof input !== 'object') return '';
+  if (input.path) return String(input.path);
+  try { const s = JSON.stringify(input); return s.length > 80 ? s.slice(0, 77) + '…' : s; }
+  catch { return ''; }
+}
+
+// Wrap a tool so every call is logged (outcome + a short arg summary). The
+// wrapped execute is otherwise identical, so gating/consent inside the original
+// still runs; we just record allowed/denied around it.
+function withAudit(identity, tool) {
+  const orig = tool.execute;
+  return {
+    ...tool,
+    execute: async (input, client) => {
+      const summary = summarizeArgs(input);
+      try {
+        const r = await orig(input, client);
+        logAgentAction({ tool: tool.name, identity, summary, ok: true });
+        return r;
+      } catch (e) {
+        logAgentAction({ tool: tool.name, identity, summary, ok: false, error: String((e && e.message) || e) });
+        throw e;
+      }
+    },
+  };
+}
+
 // Connect a gated A-Bus peer representing one agent identity. Its calls route
 // through the broker → authorized against this agent's grants. clientId carries
 // the identity so per-agent grants (granted by clientId) survive reconnects.
@@ -118,7 +161,7 @@ export function worksTools(agentBus, identity = 'default') {
         return { path, written: true };
       },
     },
-  ];
+  ].map((t) => withAudit(identity, t));   // every agent action is logged
 }
 
 // Reactive consent: prompt the user to grant the agent a path-scoped write
@@ -211,11 +254,13 @@ export function grantAgent(identity, opts = {}) {
     scope: opts.pathPrefix ? { pathPrefix: opts.pathPrefix } : null,
   });
   emitMcp('GrantsChanged', [listAgentGrants()]);
+  logAgentAction({ tool: 'grant', identity: identity || 'default', summary: 'write · ' + (opts.pathPrefix || 'entire workspace'), ok: true });
   return id;
 }
 export function revokeAgent(identity) {
   const n = WKS.broker.revokeAll('agent:' + (identity || 'default'));
   emitMcp('GrantsChanged', [listAgentGrants()]);
+  logAgentAction({ tool: 'revoke', identity: identity || 'default', summary: n + ' grant(s)', ok: true });
   return n;
 }
 export function listAgentGrants() {

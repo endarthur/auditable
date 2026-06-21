@@ -11,7 +11,7 @@ import { setupLayout, restoreLayout, isLayoutEmpty } from './layout.js';
 import { setupMenuBar } from './menubar.js';
 import { setupTree, refreshTree, newProject, newFile, duplicateProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
-import { setupWorksMcp, connectAgentPeer, worksTools, grantAgent, revokeAgent, listAgentGrants } from './mcp-adapter.js';
+import { setupWorksMcp, connectAgentPeer, worksTools, grantAgent, revokeAgent, listAgentGrants, getAuditLog } from './mcp-adapter.js';
 import { setupSurfaces, spawnSurface, openPath, getActiveSurface, callActiveNotebook } from './surfaces.js';
 import { decompressLibs, decompressSurfaces, installSharedLibsToVfs } from './surface-registry.js';
 import { installDocsToVfs } from './docs-loader.js';
@@ -87,6 +87,7 @@ async function boot() {
   WKS.grantAgent = grantAgent;                   // consent backend: scope an agent's workspace writes
   WKS.revokeAgent = revokeAgent;
   WKS.listAgentGrants = listAgentGrants;
+  WKS.getAuditLog = getAuditLog;                 // observability: the agent-action ledger
   WKS.refreshTree = refreshTree;
   WKS.newProject = newProject;
   WKS.duplicateProject = duplicateProject;
