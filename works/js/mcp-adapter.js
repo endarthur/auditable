@@ -246,6 +246,11 @@ export async function setupWorksMcp() {
   WKS.mcp = {
     connect: (portToken) => { if (ctl) ctl.connect(portToken); },
     disconnect: () => { if (ctl && typeof ctl.disconnect === 'function') ctl.disconnect(); },
+    // Inject a FileSystemDirectoryHandle → the shim uses the fs (folder) transport
+    // (file://- and PWA-friendly; no localhost / port). The folder picker needs
+    // user activation, so the SHELL MENUBAR drives this (a sandboxed surface's
+    // A-Bus call can't carry activation). connect('fs:<token>') follows.
+    useFolder: (handle) => { if (ctl) ctl.folder = handle || null; },
     status: () => ({ state: (ctl && ctl.state) || 'disconnected' }),
   };
 

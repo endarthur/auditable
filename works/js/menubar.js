@@ -14,12 +14,39 @@ import { mountFolder } from './mount.js';
 import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
 import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js';
 import { openDiskFile, mountDiskFile } from './disk.js';
-import { confirm as dlgConfirm, prompt as dlgPrompt, Dialog } from '#dialog';
+import { confirm as dlgConfirm, prompt as dlgPrompt, alert as dlgAlert, Dialog } from '#dialog';
 import { showAbout } from './about.js';
 import { openLibraryDialog } from './registry.js';
 import { exportProfileSpec } from './provision.js';
 import { getExamplesManifest } from './examples-loader.js';
 import { aggregateLicenses, formatNoticesFile } from '#licenses';
+
+// Connect an external agent over a SHARED FOLDER (numen's fs transport — the
+// file://- and PWA-friendly path, no localhost). Pick the folder the bridge
+// watches (`numen-bridge --transport fs --dir <folder>`), inject it into the
+// shim, then connect with the bridge's machine token. The folder picker must
+// run inside this click's user activation, so it goes FIRST (the token prompt,
+// which needs no activation, follows).
+async function connectAgentFolder() {
+  if (!WKS.mcp || WKS.mcp.status().state === 'unavailable') {
+    await dlgAlert('Agent access isn’t available in this build.'); return;
+  }
+  let handle;
+  try {
+    handle = await window.showDirectoryPicker({ id: 'numen-agent', mode: 'readwrite' });
+  } catch { return; }   // user cancelled the picker
+  WKS.mcp.useFolder(handle);
+  const token = await dlgPrompt(
+    'Paste the bridge token (from `numen-bridge --transport fs`). The folder you '
+    + 'picked must be the one the bridge watches.', '');
+  if (!token) { WKS.mcp.useFolder(null); return; }   // backed out → don't leave a dangling folder
+  try {
+    WKS.mcp.connect('fs:' + String(token).trim());
+    setStatus('Agent folder connecting…');
+  } catch (e) {
+    await dlgAlert('Connect failed: ' + (e.message || e));
+  }
+}
 
 export function setupMenuBar() {
   const el = document.getElementById('works-menubar');
@@ -81,6 +108,11 @@ export function setupMenuBar() {
       { label: 'New rack',  action: 'tools:patchbay' },
       // Lean works-core only: provision / change the distribution profile.
       ...(hasProfilesPayload() ? [{ label: 'Set up / change profile…', action: 'tools:setup' }] : []),
+      // Agent access over a shared folder (numen fs transport) — only when the
+      // MCP shim is present and the browser can pick a folder. The picker needs
+      // user activation, which a click here carries (a surface's A-Bus call can't).
+      ...((window.gcuMCP && typeof window.showDirectoryPicker === 'function')
+        ? [{ label: 'Connect agent folder…', action: 'tools:agentfolder' }] : []),
       { label: 'Settings…', action: 'tools:settings' },
     ] },
     { label: 'Debug', items: () => [
@@ -140,6 +172,7 @@ export function setupMenuBar() {
     if (action === 'tools:encode') { spawnSurface('encode', { title: 'Encode / Hash' }); return; }
     if (action === 'tools:patchbay') { await newRack(); return; }
     if (action === 'tools:setup' || action === 'help:gettingstarted') { await showSetupDialog({}); return; }
+    if (action === 'tools:agentfolder') { await connectAgentFolder(); return; }
     if (action === 'tools:settings') {
       // Single-instance: focus the existing settings tab if any.
       for (const rec of WKS.surfaces.values()) {

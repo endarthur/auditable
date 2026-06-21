@@ -281,7 +281,8 @@ const mcpProbe = await page.evaluate(async () => {
   const hasShim = !!(navigator.modelContext && typeof navigator.modelContext.registerTool === 'function');
   let status = null;
   try { status = await W.worksBus.call({ to: 'works', path: '/', interface: 'Mcp', member: 'Status' }, []); } catch (e) { status = { error: String(e && e.message || e) }; }
-  return { hasShim, hasControl: !!W.mcp, status, hasFsChannel: typeof globalThis.GcuFsChannel !== 'undefined' };
+  return { hasShim, hasControl: !!W.mcp, status, hasFsChannel: typeof globalThis.GcuFsChannel !== 'undefined',
+    hasUseFolder: !!(W.mcp && typeof W.mcp.useFolder === 'function') };
 });
 
 // The Settings "Agent access" panel renders + reflects the shim status.
@@ -1765,6 +1766,7 @@ const checks = {
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),
   'numen: fs transport available (GcuFsChannel vendored)': mcpProbe.hasFsChannel === true,
+  'numen: fs folder-connect backing present (WKS.mcp.useFolder)': mcpProbe.hasUseFolder === true,
   'numen: Settings "Agent access" panel renders + reflects status': mcpPanel.found === true && /disconnected|connecting|connected/.test(mcpPanel.statusText),
   // Persistence (Chunk 5)
   'workspace survives a reload':      persist.projExists && persist.note === 'survives reload',
