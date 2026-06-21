@@ -20,6 +20,21 @@ import { WKS } from './state.js';
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// base64 ↔ bytes — binary file content crosses the MCP boundary as base64 (tool
+// results are JSON). Chunked to avoid call-stack limits on large buffers.
+const toB64 = (buf) => {
+  const a = buf instanceof Uint8Array ? buf : new Uint8Array(buf || []);
+  let s = '';
+  for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode.apply(null, a.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+const fromB64 = (b64) => {
+  const s = atob(String(b64 || ''));
+  const a = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
+  return a;
+};
+
 // The broker denies a gated call it can't authorize with code 'Error.AccessDenied'
 // (the message reads "not authorized to call …" — match the CODE, not the prose).
 const isAccessDenied = (e) =>
@@ -92,6 +107,18 @@ export function worksTools(agentBus, identity = 'default') {
     agentBus.call({ to: 'works', path: '/', interface: 'VFS', member }, args);
   const shell = (member, args) =>
     agentBus.call({ to: 'works', path: '/', interface: 'Shell', member }, args);
+  // A gated VFS mutation: try it; on AccessDenied, ask the user to consent to a
+  // folder scope (defaults to `scopePath`'s folder) and retry once. The broker
+  // is the enforcement point — this just turns a denial into a consent prompt.
+  const gated = async (member, args, scopePath) => {
+    try { return await vfs(member, args); }
+    catch (e) {
+      if (!isAccessDenied(e)) throw e;
+      const ok = await requestWriteConsent(identity, scopePath);
+      if (!ok) throw e;
+      return vfs(member, args);
+    }
+  };
   return [
     {
       name: 'worksTree',
@@ -111,6 +138,24 @@ export function worksTools(agentBus, identity = 'default') {
       execute: async (input) => {
         return { path: input.path, content: await vfs('Read', [input.path, 'utf8']) };
       },
+    },
+    {
+      name: 'worksStat',
+      description: 'Stat a workspace path — whether it exists, and if so its kind/size.',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      annotations: { readOnlyHint: true, title: 'Stat path' },
+      execute: async (input) => {
+        const exists = await vfs('Exists', [input.path]);
+        if (!exists) return { path: input.path, exists: false };
+        return { path: input.path, exists: true, stat: await vfs('Stat', [input.path]) };
+      },
+    },
+    {
+      name: 'worksReadBinary',
+      description: 'Read a binary file from the workspace, returned as base64.',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      annotations: { readOnlyHint: true, title: 'Read binary file' },
+      execute: async (input) => ({ path: input.path, base64: toB64(await vfs('Read', [input.path, 'bytes'])) }),
     },
     {
       // Observe the desktop — what's open (read-only, ungated).
@@ -146,19 +191,53 @@ export function worksTools(agentBus, identity = 'default') {
       inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
       annotations: { destructiveHint: true, title: 'Write workspace file' },
       execute: async (input) => {
-        const path = input.path;
-        const content = String(input.content ?? '');
-        try {
-          await vfs('Write', [path, content]);
-        } catch (e) {
-          // Denied for want of a grant → ask the user to consent to a scope,
-          // then retry once. Any other failure (or a declined prompt) propagates.
-          if (!isAccessDenied(e)) throw e;
-          const ok = await requestWriteConsent(identity, path);
-          if (!ok) throw e;
-          await vfs('Write', [path, content]);
-        }
-        return { path, written: true };
+        await gated('Write', [input.path, String(input.content ?? '')], input.path);
+        return { path: input.path, written: true };
+      },
+    },
+    {
+      name: 'worksWriteBinary',
+      description: 'Write a binary file (base64-encoded) to the workspace (requires a granted, scoped capability).',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' }, base64: { type: 'string' } }, required: ['path', 'base64'] },
+      annotations: { destructiveHint: true, title: 'Write binary file' },
+      execute: async (input) => {
+        await gated('Write', [input.path, fromB64(input.base64)], input.path);
+        return { path: input.path, written: true };
+      },
+    },
+    {
+      name: 'worksMakeDir',
+      description: 'Create a directory (and any missing parents) in the workspace (gated).',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      annotations: { title: 'Make directory' },
+      execute: async (input) => {
+        await gated('MkDir', [input.path], input.path);
+        return { path: input.path, created: true };
+      },
+    },
+    {
+      name: 'worksMove',
+      description: 'Move/rename a workspace file or folder (gated — both source and destination must be in a granted scope).',
+      inputSchema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] },
+      annotations: { destructiveHint: true, title: 'Move / rename' },
+      execute: async (input) => {
+        // The broker's seed scope only inspects the call's FIRST arg (Move's
+        // `from`), so a grant on `from` wouldn't confine the destination.
+        // Ensure `to` is in a granted scope first (consent for its folder if
+        // not), THEN the broker-gated Move confines `from`.
+        await ensureWriteScope(identity, input.to);
+        await gated('Move', [input.from, input.to], input.from);
+        return { from: input.from, to: input.to, moved: true };
+      },
+    },
+    {
+      name: 'worksDelete',
+      description: 'Delete a workspace file or folder, recursively (gated, destructive).',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      annotations: { destructiveHint: true, title: 'Delete path' },
+      execute: async (input) => {
+        await gated('Delete', [input.path], input.path);
+        return { path: input.path, deleted: true };
       },
     },
   ].map((t) => withAudit(identity, t));   // every agent action is logged
@@ -207,8 +286,8 @@ async function requestWriteConsent(identity, path) {
       const intro = document.createElement('div');
       intro.style.cssText = 'color:var(--au-fg-soft); font-size:12px; line-height:1.5;';
       intro.innerHTML = 'The connected agent (<code>' + esc(identity) + '</code>) wants to write:<br>'
-        + '<code>' + esc(path) + '</code><br>Grant it write access to a folder? Reads stay open; '
-        + 'the grant lasts until you revoke it or reload.';
+        + '<code>' + esc(path) + '</code><br>Grant it access to <strong>create, modify, move, and '
+        + 'delete</strong> files in a folder? Reads stay open; the grant lasts until you revoke it or reload.';
       wrap.appendChild(intro);
 
       const list = document.createElement('div');
@@ -239,6 +318,25 @@ async function requestWriteConsent(identity, path) {
     },
   });
   return applyGrant(await dialog.show());
+}
+
+// Does the agent already hold a grant whose scope covers `path`? Mirrors the
+// broker's scopeOk (startsWith pathPrefix) — used to confine a Move's
+// destination, which the broker's first-arg-only seed scope doesn't inspect.
+function inScope(identity, path) {
+  const grants = (WKS.broker.inspect().grants || [])
+    .filter((g) => g.grantee === 'agent:' + (identity || 'default') && g.to === 'works');
+  return grants.some((g) => !g.scope || g.scope.pathPrefix == null || String(path).startsWith(g.scope.pathPrefix));
+}
+
+// Ensure `path` is in a granted write scope, prompting consent for its folder if
+// not. Throws AccessDenied when consent is declined. (The broker still gates the
+// actual call; this is the extra check the broker's seed scope can't make.)
+async function ensureWriteScope(identity, path) {
+  if (inScope(identity, path)) return true;
+  const ok = await requestWriteConsent(identity, path);
+  if (!ok) { const e = new Error('Access denied: ' + path); e.code = 'Error.AccessDenied'; throw e; }
+  return true;
 }
 
 // ── consent backend — scoped grants per agent identity ──

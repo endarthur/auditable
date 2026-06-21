@@ -263,6 +263,35 @@ const agentMcp = await page.evaluate(async () => {
   // the just-opened text file is the active surface, not a notebook → graceful no-run
   const runRes = await runNotebookTool.execute({});
 
+  // ── file CRUD (gated; the agent still holds the /projects grant from above) ──
+  const mkdirTool = tools.find((t) => t.name === 'worksMakeDir');
+  const moveTool = tools.find((t) => t.name === 'worksMove');
+  const deleteTool = tools.find((t) => t.name === 'worksDelete');
+  const statTool = tools.find((t) => t.name === 'worksStat');
+  const readBinTool = tools.find((t) => t.name === 'worksReadBinary');
+  const writeBinTool = tools.find((t) => t.name === 'worksWriteBinary');
+
+  let mkdirOk = false;
+  try { await mkdirTool.execute({ path: '/projects/agent-dir' }); mkdirOk = await W.vfs.exists('/projects/agent-dir'); } catch { /* */ }
+  let moveOk = false;
+  try { await moveTool.execute({ from: '/projects/agent-wrote.txt', to: '/projects/agent-dir/moved.txt' }); moveOk = await W.vfs.exists('/projects/agent-dir/moved.txt'); } catch { /* */ }
+  // binary round-trip (bytes 0,1,2,3)
+  let binOk = false;
+  try {
+    await writeBinTool.execute({ path: '/projects/agent.bin', base64: 'AAECAw==' });
+    const r = await readBinTool.execute({ path: '/projects/agent.bin' });
+    binOk = r.base64 === 'AAECAw==';
+  } catch { /* */ }
+  const statOk = (await statTool.execute({ path: '/projects/agent.bin' })).exists === true;
+  const statMissing = (await statTool.execute({ path: '/projects/nope.xyz' })).exists === false;
+  let deleteOk = false;
+  try { await deleteTool.execute({ path: '/projects/agent.bin' }); deleteOk = !(await W.vfs.exists('/projects/agent.bin')); } catch { /* */ }
+  // move's DESTINATION is scope-checked (broker only gates `from`): out-of-scope `to` is denied
+  window.__agentConsent__ = () => null;
+  let moveOutDenied = false;
+  try { await moveTool.execute({ from: '/projects/agent-dir/moved.txt', to: '/sys/escape.txt' }); } catch (e) { moveOutDenied = denied(e); }
+  delete window.__agentConsent__;
+
   // audit log: every tool call above was logged (tools are withAudit-wrapped)
   const audit = (W.getAuditLog && W.getAuditLog()) || [];
 
@@ -276,6 +305,7 @@ const agentMcp = await page.evaluate(async () => {
     auditHasWrite: audit.some((e) => e.tool === 'worksWriteFile'),
     auditHasDenied: audit.some((e) => e.ok === false),
     auditHasGrant: audit.some((e) => e.tool === 'grant'),
+    mkdirOk, moveOk, binOk, statOk, statMissing, deleteOk, moveOutDenied,
   };
 });
 
@@ -1773,6 +1803,13 @@ const checks = {
   'numen: agent actions are audited (log populated incl. writes)': agentMcp.auditCount > 0 && agentMcp.auditHasWrite === true,
   'numen: a denied action is recorded in the audit log': agentMcp.auditHasDenied === true,
   'numen: grants are recorded in the audit log': agentMcp.auditHasGrant === true,
+  // file CRUD (gated mutations + reads)
+  'numen: agent mkdir within scope': agentMcp.mkdirOk === true,
+  'numen: agent move within scope': agentMcp.moveOk === true,
+  'numen: agent binary write+read round-trips (base64)': agentMcp.binOk === true,
+  'numen: agent stat reports exists / missing': agentMcp.statOk === true && agentMcp.statMissing === true,
+  'numen: agent delete within scope': agentMcp.deleteOk === true,
+  'numen: move destination outside the granted scope is denied': agentMcp.moveOutDenied === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),
