@@ -5,6 +5,7 @@
 import { connect } from '#abus';
 import { WKS } from './state.js';
 import { openPath, listSurfaces, runNotebookAt, callNotebookAt, callSurfaceAt, spawnSurface, closeSurfaceAt } from './surfaces.js';
+import { searchDocs, suggestDocs, listExamples } from './docs-search.js';
 import { launchItems, launch } from './launcher.js';
 import { onSurfacesChanged, kindDef } from './surface-registry.js';
 import { newProject } from './tree.js';
@@ -391,6 +392,17 @@ export async function setupWorksService() {
       methods: {
         Read:   (path, kind, iface, member, args) => callSurfaceAt(kind, path, iface, member, args || []),
         Mutate: (path, kind, iface, member, args) => callSurfaceAt(kind, path, iface, member, args || []),
+      },
+    },
+
+    // Documentation search over the embedded /usr/share/doc corpus (works +
+    // works-all; works-core reports unavailable). Read-only. Backs the agent's
+    // worksSearchDocs / worksListExamples and any future in-shell consumer.
+    Docs: {
+      methods: {
+        Search:       (query, limit) => searchDocs(query, limit),
+        Suggest:      (query) => suggestDocs(query),
+        ListExamples: () => listExamples(),
       },
     },
     // Build-time vendored license inventory — used by the workspace settings

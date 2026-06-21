@@ -24,6 +24,7 @@ import './extension-loader.js';
 import './lib-builtins-loader.js';
 import './extension-services.js';
 import './surface-tools.js';
+import './docs-search.js';
 import './layout.js';
 import './surfaces.js';
 import './launcher.js';

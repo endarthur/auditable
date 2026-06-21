@@ -431,8 +431,20 @@ const surfaceTools = await page.evaluate(async () => {
   const declared = await W.registerPackageSurfaceTools('@smoke/probe2');
   const postInstallOk = declared.includes('smokeProbe2')
     && ((await listTool.execute({})).tools || []).some((t) => t.name === 'smokeProbe2');
+
+  // docs search — the agent grounds itself in the embedded /usr/share/doc corpus
+  // (works build carries docs + librarian/docview in /usr/lib; examples are
+  // works-all only, so here ListExamples just returns the shape).
+  const searchTool = tools.find((t) => t.name === 'worksSearchDocs');
+  const exTool = tools.find((t) => t.name === 'worksListExamples');
+  const docHits = await searchTool.execute({ query: 'A-Bus' });
+  const docsSearchOk = docHits.available === true && Array.isArray(docHits.hits)
+    && docHits.hits.length > 0 && String(docHits.hits[0].path || '').startsWith('/usr/share/doc/');
+  const ex = await exTool.execute({});
+  const examplesShapeOk = !!ex && typeof ex.available === 'boolean' && Array.isArray(ex.examples);
+
   W.revokeAgent('stool');
-  return { hasTools, readOk, mutateDenied, mutateOk, unknownErr, validationCaught, postInstallOk };
+  return { hasTools, readOk, mutateDenied, mutateOk, unknownErr, validationCaught, postInstallOk, docsSearchOk, examplesShapeOk };
 });
 
 // numen live transport: the shell vendors the numen shim, so
@@ -1957,6 +1969,9 @@ const checks = {
   'numen: unknown surface tool errors gracefully': surfaceTools.unknownErr === true,
   'numen: surface tool input validated shell-side (bad call rejected pre-surface)': surfaceTools.validationCaught === true,
   'numen: post-install agentTools registration is live (no reload)': surfaceTools.postInstallOk === true,
+  // docs search (agent grounding over the embedded corpus)
+  'numen: agent searches embedded docs (ranked hits w/ paths)': surfaceTools.docsSearchOk === true,
+  'numen: worksListExamples returns the manifest shape': surfaceTools.examplesShapeOk === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),

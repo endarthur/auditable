@@ -128,6 +128,8 @@ export function worksTools(agentBus, identity = 'default') {
     agentBus.call({ to: 'works', path: '/', interface: 'Shell', member }, args);
   const nb = (member, args) =>
     agentBus.call({ to: 'works', path: '/', interface: 'Notebook', member }, args);
+  const docs = (member, args) =>
+    agentBus.call({ to: 'works', path: '/', interface: 'Docs', member }, args);
   // A gated mutation: try the call; on AccessDenied, ask the user to consent to
   // a folder scope (defaults to `scopePath`'s folder) and retry once. The broker
   // is the enforcement point — this just turns a denial into a consent prompt.
@@ -179,6 +181,24 @@ export function worksTools(agentBus, identity = 'default') {
       inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
       annotations: { readOnlyHint: true, title: 'Read binary file' },
       execute: async (input) => ({ path: input.path, base64: toB64(await vfs('Read', [input.path, 'bytes'])) }),
+    },
+    {
+      // Ground yourself in the REAL, current Auditable docs (offline, embedded) —
+      // search them instead of relying on memory. Returns ranked hits with the
+      // full doc path; read one with worksReadFile. (Unavailable on lean builds
+      // that don't carry docs.)
+      name: 'worksSearchDocs',
+      description: 'Search the embedded Auditable/Works documentation (architecture, APIs, surfaces, the @gcu/* libs). Returns ranked hits with their doc path + section; read a hit with worksReadFile. Prefer this over memory for anything about how the stack works.',
+      inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' } }, required: ['query'] },
+      annotations: { readOnlyHint: true, title: 'Search docs' },
+      execute: async (input) => docs('Search', [input.query, input.limit || 12]),
+    },
+    {
+      name: 'worksListExamples',
+      description: 'List the bundled example notebooks (by category) — title, description, and path. Open one with worksOpenPath. (Available on the everything build; empty otherwise.)',
+      inputSchema: { type: 'object', properties: {} },
+      annotations: { readOnlyHint: true, title: 'List examples' },
+      execute: async () => docs('ListExamples', []),
     },
     {
       // Observe the desktop — what's open (read-only, ungated).
