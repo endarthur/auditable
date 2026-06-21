@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard — living styleguide</title>
+<!-- The canonical tokens. Everything below reads --au-* (never --sw-*, never hex)
+     — so this page is also a reference implementation of the §6 patterns + a drift
+     detector: if a token changes in switchboard.css, this page shows it. -->
+<link rel="stylesheet" href="./switchboard.css">
+<style>
+  /* ── styleguide chrome — reads only --au-* (dogfoods the contract) ── */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--au-surface); color: var(--au-fg);
+    font-family: var(--au-font-sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 0 20px 96px; }
+  header {
+    position: sticky; top: 0; z-index: var(--au-z-dropdown);
+    display: flex; align-items: baseline; gap: 14px;
+    padding: 16px 0 14px; margin-bottom: 8px;
+    background: var(--au-surface); border-bottom: 1px solid var(--au-border);
+  }
+  header h1 { font-family: var(--au-font-mono); font-size: 18px; margin: 0; }
+  header .ver { font-family: var(--au-font-mono); font-size: 12px; color: var(--au-fg-soft); }
+  header .spacer { flex: 1; }
+  h2 {
+    font-family: var(--au-font-mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--au-action);
+    margin: 40px 0 14px; padding-bottom: 6px; border-bottom: 1px solid var(--au-border-soft);
+  }
+  h3 { font-size: 13px; color: var(--au-fg-muted); margin: 22px 0 10px; font-weight: 600; }
+  .grid { display: grid; gap: 10px; }
+  .cols-4 { grid-template-columns: repeat(4, 1fr); }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .mono { font-family: var(--au-font-mono); }
+  .soft { color: var(--au-fg-soft); font-size: 12px; }
+  code { font-family: var(--au-font-mono); font-size: 0.9em; color: var(--au-info); }
+
+  /* swatches */
+  .sw { border: 1px solid var(--au-border); border-radius: var(--au-radius); overflow: hidden; }
+  .sw .chip { height: 56px; }
+  .sw .cap { padding: 6px 8px; font-family: var(--au-font-mono); font-size: 11px; }
+  .sw .cap b { display: block; color: var(--au-fg); }
+  .sw .cap span { color: var(--au-fg-soft); }
+
+  /* accent rows */
+  .accent { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--au-border-soft); }
+  .accent:last-child { border-bottom: 0; }
+  .accent .solid, .accent .softc { width: 42px; height: 30px; border-radius: var(--au-radius); border: 1px solid var(--au-border); }
+  .accent .role { font-family: var(--au-font-mono); font-size: 13px; min-width: 96px; }
+  .accent .desc { color: var(--au-fg-soft); font-size: 13px; }
+
+  /* ── §6 component patterns (faithful to SPEC), all on --au-* ── */
+  .panel { background: var(--au-surface-raised); border: 1px solid var(--au-border); border-radius: var(--au-radius-lg); padding: 14px 16px; }
+  .panel-header { font-family: var(--au-font-mono); font-size: 12px; color: var(--au-fg-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+
+  .btn { font-family: var(--au-font-sans); font-size: 13px; cursor: pointer; min-height: 32px; padding: 6px 14px;
+    border-radius: var(--au-radius); border: 1px solid var(--au-border); background: var(--au-surface-bright); color: var(--au-fg);
+    transition: filter var(--au-dur) var(--au-ease), border-color var(--au-dur) var(--au-ease); }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:focus-visible { outline: 2px solid var(--au-action); outline-offset: 1px; }
+  .btn.primary { background: var(--au-action); border-color: var(--au-action); color: #fff; }
+  .btn.tap { min-height: var(--au-tap); min-width: var(--au-tap); }
+
+  .badge { display: inline-block; font-family: var(--au-font-mono); font-size: 11px; letter-spacing: 0.5px; padding: 1px 7px; border-radius: var(--au-radius); border: 1px solid; }
+  .badge.action  { color: var(--au-action);   background: var(--au-action-soft);   border-color: var(--au-action); }
+  .badge.info    { color: var(--au-info);      background: var(--au-info-soft);     border-color: var(--au-info); }
+  .badge.go      { color: var(--au-success);   background: var(--au-success-soft);  border-color: var(--au-success); }
+  .badge.caution { color: var(--au-warn);      background: var(--au-warn-soft);     border-color: var(--au-warn); }
+  .badge.fault   { color: var(--au-error);     background: var(--au-error-soft);    border-color: var(--au-error); }
+  .badge.selected{ color: var(--au-selected);  background: var(--au-selected-soft); border-color: var(--au-selected); }
+
+  .field label { display: block; font-size: 12px; color: var(--au-fg-muted); margin-bottom: 4px; }
+  .field input { font: inherit; width: 100%; padding: 7px 9px; color: var(--au-fg);
+    background: var(--au-surface-bright); border: 1px solid var(--au-border); border-radius: var(--au-radius); }
+  .field input:focus { outline: none; border-color: var(--au-action); box-shadow: 0 0 0 3px var(--au-action-soft); }
+
+  .readout { background: var(--au-surface-deep); border: 1px solid var(--au-border); border-radius: var(--au-radius-lg); overflow: hidden; }
+  .readout-top { display: flex; justify-content: space-between; font-family: var(--au-font-mono); font-size: 11px; color: var(--au-fg-muted); padding: 8px 12px; border-bottom: 1px solid var(--au-border-soft); }
+  .readout-body { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--au-border-soft); }
+  .gauge { background: var(--au-surface-deep); padding: 10px 12px; }
+  .gauge .label { font-family: var(--au-font-mono); font-size: 10px; color: var(--au-fg-soft); text-transform: uppercase; }
+  .gauge .value { font-family: var(--au-font-mono); font-size: 22px; font-variant-numeric: tabular-nums; }
+  .gauge .value .unit { font-size: 11px; color: var(--au-fg-soft); margin-left: 2px; }
+  .gauge.go .value { color: var(--au-success); }
+  .gauge.caution .value { color: var(--au-warn); }
+  .gauge.fault .value { color: var(--au-error); }
+
+  .term { background: var(--au-surface-deep); border: 1px solid var(--au-border); border-radius: var(--au-radius-lg); padding: 12px 14px; font-family: var(--au-font-mono); font-size: 13px; line-height: 1.6; }
+  .term .prompt { color: var(--au-info); } .term .user { color: var(--au-action); }
+  .term .ok { color: var(--au-success); } .term .warn { color: var(--au-warn); } .term .err { color: var(--au-error); } .term .dim { color: var(--au-fg-soft); }
+  .term .cursor { display: inline-block; width: 0.55em; height: 1.05em; background: var(--au-action); vertical-align: text-bottom; animation: blink 1.05s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* motion demo */
+  .motion-box { width: 100%; height: 54px; border-radius: var(--au-radius); background: var(--au-surface-bright); border: 1px solid var(--au-border);
+    display: grid; place-items: center; font-size: 12px; color: var(--au-fg-soft);
+    transition: transform var(--au-dur) var(--au-ease), background var(--au-dur) var(--au-ease); }
+  .motion-box:hover { transform: translateX(10px); background: var(--au-action-soft); border-color: var(--au-action); color: var(--au-action); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Switchboard</h1>
+    <span class="ver" id="ver">v1.1.0 · living styleguide</span>
+    <span class="spacer"></span>
+    <button class="btn" id="themeBtn">◐ theme</button>
+  </header>
+
+  <p class="soft">Every element below reads only <code>--au-*</code> tokens — no <code>--sw-*</code>, no hard-coded hex (SPEC §6.0). Flip the theme to watch the whole language re-skin through one attribute. If this page looks wrong, a token drifted.</p>
+
+  <h2>Surfaces</h2>
+  <div class="grid cols-4">
+    <div class="sw"><div class="chip" style="background:var(--au-surface-deep)"></div><div class="cap"><b>deep</b><span>--au-surface-deep</span></div></div>
+    <div class="sw"><div class="chip" style="background:var(--au-surface)"></div><div class="cap"><b>surface</b><span>--au-surface</span></div></div>
+    <div class="sw"><div class="chip" style="background:var(--au-surface-raised)"></div><div class="cap"><b>raised</b><span>--au-surface-raised</span></div></div>
+    <div class="sw"><div class="chip" style="background:var(--au-surface-bright)"></div><div class="cap"><b>bright</b><span>--au-surface-bright</span></div></div>
+  </div>
+  <h3>Text &amp; lines</h3>
+  <div class="panel">
+    <div style="color:var(--au-fg)">fg — primary text <span class="mono soft">--au-fg</span></div>
+    <div style="color:var(--au-fg-muted)">fg-muted — secondary <span class="mono soft">--au-fg-muted</span></div>
+    <div style="color:var(--au-fg-soft)">fg-soft — hints / labels <span class="mono soft">--au-fg-soft</span></div>
+    <hr style="border:0;border-top:1px solid var(--au-border);margin:10px 0"><span class="soft">border · </span>
+    <hr style="border:0;border-top:1px solid var(--au-rule);margin:10px 0"><span class="soft">rule (heavier)</span>
+  </div>
+
+  <h2>Accents — hard role mapping</h2>
+  <div class="panel">
+    <div class="accent"><div class="solid" style="background:var(--au-action)"></div><div class="softc" style="background:var(--au-action-soft)"></div><div class="role">action</div><div class="desc">orange — the one primary action; links, focus</div></div>
+    <div class="accent"><div class="solid" style="background:var(--au-info)"></div><div class="softc" style="background:var(--au-info-soft)"></div><div class="role">info</div><div class="desc">teal — neutral/informational, prompts</div></div>
+    <div class="accent"><div class="solid" style="background:var(--au-success)"></div><div class="softc" style="background:var(--au-success-soft)"></div><div class="role">go</div><div class="desc">green — success, ok, ready</div></div>
+    <div class="accent"><div class="solid" style="background:var(--au-warn)"></div><div class="softc" style="background:var(--au-warn-soft)"></div><div class="role">caution</div><div class="desc">amber — warnings, deprecation, stale</div></div>
+    <div class="accent"><div class="solid" style="background:var(--au-error)"></div><div class="softc" style="background:var(--au-error-soft)"></div><div class="role">fault</div><div class="desc">red — errors, destructive</div></div>
+    <div class="accent"><div class="solid" style="background:var(--au-selected)"></div><div class="softc" style="background:var(--au-selected-soft)"></div><div class="role">selected</div><div class="desc">indigo — selection, active state</div></div>
+  </div>
+  <p class="soft">Solid + <code>-soft</code> tint per accent. The mapping is the stability anchor — an accent means exactly one thing (SPEC §3 / §10).</p>
+
+  <h2>Typography</h2>
+  <div class="grid cols-2">
+    <div class="panel"><div class="panel-header">mono · --au-font-mono</div><div class="mono" style="font-size:18px">Space Mono 0123456789</div><div class="mono soft">tabular-nums · readouts, code, equipment labels</div></div>
+    <div class="panel"><div class="panel-header">sans · --au-font-sans</div><div style="font-size:18px">Barlow — prose &amp; UI chrome</div><div class="soft">body copy, buttons, descriptions</div></div>
+  </div>
+
+  <h2>Components</h2>
+  <h3>Buttons</h3>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+    <button class="btn primary">Primary</button>
+    <button class="btn">Default</button>
+    <button class="btn tap">⊕</button>
+    <span class="soft">last is <code>--au-tap</code> (44px) sized · hover/focus use <code>--au-dur</code>/<code>--au-ease</code></span>
+  </div>
+  <h3>Badges</h3>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <span class="badge action">ACTION</span><span class="badge info">INFO</span><span class="badge go">GO</span>
+    <span class="badge caution">STALE</span><span class="badge fault">FAULT</span><span class="badge selected">SELECTED</span>
+  </div>
+  <h3>Form field</h3>
+  <div class="panel field" style="max-width:320px"><label for="f">Cutoff grade</label><input id="f" value="0.45" spellcheck="false"></div>
+  <h3>Device readout</h3>
+  <div class="readout">
+    <div class="readout-top"><span>DEVICE READOUT · NODE-03</span><span>UPLINK ◉</span></div>
+    <div class="readout-body">
+      <div class="gauge go"><div class="label">Signal</div><div class="value">-42<span class="unit">dBm</span></div></div>
+      <div class="gauge caution"><div class="label">Temp</div><div class="value">71<span class="unit">°C</span></div></div>
+      <div class="gauge fault"><div class="label">Errors</div><div class="value">3<span class="unit">/s</span></div></div>
+    </div>
+  </div>
+  <p class="soft">State classes colour the <em>value</em> only — never the label, never the cell. (The id-band stripe was removed in 1.0.1.)</p>
+  <h3>Terminal</h3>
+  <div class="term">
+    <div><span class="prompt">gcu:~/est</span> <span class="user">$</span> krige --domain 3</div>
+    <div><span class="ok">✓</span> 775,000 blocks above cutoff</div>
+    <div><span class="warn">⚠</span> 12 holes below min-samples</div>
+    <div><span class="err">✗</span> variogram sill unset <span class="dim"># using default</span></div>
+    <div><span class="prompt">gcu:~/est</span> <span class="user">$</span> <span class="cursor"></span></div>
+  </div>
+
+  <h2>Other tokens</h2>
+  <div class="grid cols-2">
+    <div class="panel">
+      <div class="panel-header">radius</div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <div style="width:60px;height:40px;background:var(--au-surface-bright);border:1px solid var(--au-border);border-radius:var(--au-radius)"></div><span class="soft">--au-radius (3px)</span>
+        <div style="width:60px;height:40px;background:var(--au-surface-bright);border:1px solid var(--au-border);border-radius:var(--au-radius-lg)"></div><span class="soft">--au-radius-lg (4px)</span>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">motion · hover</div>
+      <div class="motion-box">hover me — --au-dur / --au-ease</div>
+    </div>
+  </div>
+  <p class="soft"><b>z-index ladder</b> (theme-independent): <code>--au-z-raised</code> 10 · <code>-dropdown</code> 100 · <code>-overlay</code> 1000 · <code>-modal</code> 2000 · <code>-shield</code> max. This page's sticky header uses <code>--au-z-dropdown</code>. <b>Motion</b> respects <code>prefers-reduced-motion</code> (the box + cursor freeze under it).</p>
+
+</div>
+<script>
+  // Theme toggle — the one bit of JS a styleguide earns. Flips data-theme on
+  // <html>; everything re-skins through the token cascade, no other code.
+  document.getElementById('themeBtn').addEventListener('click', function () {
+    var h = document.documentElement;
+    h.setAttribute('data-theme', h.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+</script>
+</body>
+</html>
