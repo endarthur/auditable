@@ -102,6 +102,34 @@
     transition: background var(--au-dur) var(--au-ease), border-color var(--au-dur) var(--au-ease), color var(--au-dur) var(--au-ease); }
   .motion-box:hover { background: var(--au-action-soft); border-color: var(--au-action); color: var(--au-action); }
 
+  /* interaction states */
+  .btn:active { filter: brightness(0.92); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+  .btn.s-hover { filter: brightness(1.08); }            /* forced views so all states show at once */
+  .btn.s-active { filter: brightness(0.92); }
+  .btn.s-focus { outline: 2px solid var(--au-action); outline-offset: 1px; }
+  .states { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .states .st { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+  .states .st span { font-family: var(--au-font-mono); font-size: 10px; color: var(--au-fg-soft); }
+
+  /* contrast table */
+  .ctab { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .ctab th { text-align: left; font-family: var(--au-font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--au-fg-soft); padding: 6px 8px; border-bottom: 1px solid var(--au-border); }
+  .ctab td { padding: 6px 8px; border-bottom: 1px solid var(--au-border-soft); }
+  .ctab .ratio { font-family: var(--au-font-mono); font-variant-numeric: tabular-nums; }
+  .ctab .swatch { display: inline-block; width: 1.4em; height: 1.4em; border-radius: var(--au-radius); border: 1px solid var(--au-border); vertical-align: middle; margin-right: 8px; font-family: var(--au-font-mono); font-weight: 700; text-align: center; line-height: 1.4em; font-size: 12px; }
+  .tag { font-family: var(--au-font-mono); font-size: 10px; letter-spacing: 0.5px; padding: 1px 6px; border-radius: var(--au-radius); border: 1px solid; }
+  .tag.pass { color: var(--au-success); background: var(--au-success-soft); border-color: var(--au-success); }
+  .tag.mid  { color: var(--au-warn);    background: var(--au-warn-soft);    border-color: var(--au-warn); }
+  .tag.fail { color: var(--au-error);   background: var(--au-error-soft);   border-color: var(--au-error); }
+  .tag.ref  { color: var(--au-fg-soft); border-color: var(--au-border); }
+
+  /* glyphs */
+  .glyphs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .glyph { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border: 1px solid var(--au-border-soft); border-radius: var(--au-radius); }
+  .glyph .g { font-family: var(--au-font-mono); font-size: 18px; width: 1.2em; text-align: center; }
+  .glyph .m { font-size: 13px; } .glyph .m .n { font-family: var(--au-font-mono); font-size: 11px; color: var(--au-fg-soft); }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
   }
@@ -160,6 +188,15 @@
     <button class="btn tap">⊕</button>
     <span class="soft">last is <code>--au-tap</code> (44px) sized · hover/focus use <code>--au-dur</code>/<code>--au-ease</code></span>
   </div>
+  <h3>Interaction states</h3>
+  <div class="states">
+    <div class="st"><button class="btn">Button</button><span>default</span></div>
+    <div class="st"><button class="btn s-hover">Button</button><span>hover</span></div>
+    <div class="st"><button class="btn s-active">Button</button><span>active</span></div>
+    <div class="st"><button class="btn s-focus">Button</button><span>focus-visible</span></div>
+    <div class="st"><button class="btn" disabled>Button</button><span>disabled</span></div>
+  </div>
+  <p class="soft">hover = brightness +8% · active = −8% · focus-visible = 2px <code>--au-action</code> outline · disabled = 50% opacity + <code>not-allowed</code>. (Inputs: focus = 3px <code>--au-action-soft</code> ring, §6.4.) SPEC §6.7.</p>
   <h3>Badges</h3>
   <div style="display:flex;gap:8px;flex-wrap:wrap">
     <span class="badge action">ACTION</span><span class="badge info">INFO</span><span class="badge go">GO</span>
@@ -202,13 +239,69 @@
   </div>
   <p class="soft"><b>z-index ladder</b> (theme-independent): <code>--au-z-raised</code> 10 · <code>-dropdown</code> 100 · <code>-overlay</code> 1000 · <code>-modal</code> 2000 · <code>-shield</code> max. This page's sticky header uses <code>--au-z-dropdown</code>. <b>Motion</b> respects <code>prefers-reduced-motion</code> (the box + cursor freeze under it).</p>
 
+  <h2>Contrast — live (WCAG 2.1)</h2>
+  <p class="soft">Computed from the <em>resolved</em> tokens in the current theme — flip the theme and these recompute. Text tiers must meet AA (4.5:1). Accents are reference: an accent is used as text only when paired with a glyph/position (§8), so below-AA there is expected, not a fault.</p>
+  <div class="panel">
+    <h3 style="margin-top:0">Text on surface — must pass AA</h3>
+    <table class="ctab"><thead><tr><th>pairing</th><th>ratio</th><th>level</th></tr></thead><tbody id="cText"></tbody></table>
+    <h3>Accents on surface — reference (glyph-paired)</h3>
+    <table class="ctab"><thead><tr><th>pairing</th><th>ratio</th><th>level</th></tr></thead><tbody id="cAccent"></tbody></table>
+  </div>
+
+  <h2>Glyphs</h2>
+  <p class="soft">GCU uses unicode glyphs — no icon font. The canonical status/action set; each pairs with its accent so meaning never rides on colour alone (§8).</p>
+  <div class="glyphs">
+    <div class="glyph"><span class="g" style="color:var(--au-success)">✓</span><span class="m">ok / go <span class="n">success, ready</span></span></div>
+    <div class="glyph"><span class="g" style="color:var(--au-warn)">⚠</span><span class="m">caution <span class="n">warning, stale</span></span></div>
+    <div class="glyph"><span class="g" style="color:var(--au-error)">✗</span><span class="m">fault <span class="n">error, failed</span></span></div>
+    <div class="glyph"><span class="g" style="color:var(--au-action)">◉</span><span class="m">live / active <span class="n">connection, status</span></span></div>
+    <div class="glyph"><span class="g" style="color:var(--au-action)">⊕</span><span class="m">add / new <span class="n">create (FAB)</span></span></div>
+    <div class="glyph"><span class="g">▸ ▾</span><span class="m">collapse / expand <span class="n">disclosure</span></span></div>
+    <div class="glyph"><span class="g">↗</span><span class="m">open / pop out <span class="n">external, expand</span></span></div>
+    <div class="glyph"><span class="g">◐</span><span class="m">theme <span class="n">light / dark toggle</span></span></div>
+  </div>
+
 </div>
 <script>
-  // Theme toggle — the one bit of JS a styleguide earns. Flips data-theme on
-  // <html>; everything re-skins through the token cascade, no other code.
+  // ── Live WCAG contrast — computed from the RESOLVED tokens, so it backs §8's
+  // claims and recomputes per theme. A probe element reads the real rgb the
+  // cascade produces (custom props store the literal var(), not the resolved
+  // color — so we must read getComputedStyle off an element using the token). ──
+  var probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:0;height:0';
+  document.body.appendChild(probe);
+  function parseRgb(s) { var m = String(s).match(/(\d+)\D+(\d+)\D+(\d+)/); return m ? [+m[1], +m[2], +m[3]] : [0, 0, 0]; }
+  function lum(c) { var f = function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); }
+  function ratio(fg, bg) { var a = lum(fg), b = lum(bg), hi = Math.max(a, b), lo = Math.min(a, b); return (hi + 0.05) / (lo + 0.05); }
+  function pairRatio(fgVar, bgVar) {
+    probe.style.color = 'var(' + fgVar + ')'; probe.style.backgroundColor = 'var(' + bgVar + ')';
+    var cs = getComputedStyle(probe); return ratio(parseRgb(cs.color), parseRgb(cs.backgroundColor));
+  }
+  function level(r, strict) {
+    if (r >= 7) return ['AAA', 'pass'];
+    if (r >= 4.5) return ['AA', 'pass'];
+    if (r >= 3) return ['AA large', strict ? 'fail' : 'mid'];
+    return ['below AA', strict ? 'fail' : 'ref'];
+  }
+  function row(name, v, r, strict) {
+    var lv = level(r, strict);
+    return '<tr><td><span class="swatch" style="color:var(' + v + ');background:var(--au-surface)">A</span>' + name + ' on surface</td>'
+      + '<td class="ratio">' + r.toFixed(2) + ':1</td><td><span class="tag ' + lv[1] + '">' + lv[0] + '</span></td></tr>';
+  }
+  var TEXT = [['--au-fg', 'fg'], ['--au-fg-muted', 'fg-muted'], ['--au-fg-soft', 'fg-soft']];
+  var ACC = [['--au-action', 'action'], ['--au-info', 'info'], ['--au-success', 'go'], ['--au-warn', 'caution'], ['--au-error', 'fault'], ['--au-selected', 'selected']];
+  function buildContrast() {
+    document.getElementById('cText').innerHTML = TEXT.map(function (t) { return row(t[1], t[0], pairRatio(t[0], '--au-surface'), true); }).join('');
+    document.getElementById('cAccent').innerHTML = ACC.map(function (a) { return row(a[1], a[0], pairRatio(a[0], '--au-surface'), false); }).join('');
+  }
+  buildContrast();
+
+  // Theme toggle — flips data-theme on <html>; everything re-skins through the
+  // cascade, and the contrast table recomputes against the new theme's colors.
   document.getElementById('themeBtn').addEventListener('click', function () {
     var h = document.documentElement;
     h.setAttribute('data-theme', h.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    buildContrast();
   });
 </script>
 </body>

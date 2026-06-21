@@ -296,6 +296,22 @@ State classes on `.gauge` (`go`, `caution`, `fault`) colour the **value** only �
 
 Cursor: 0.55em × 1.05em solid block in `--sw-orange`, blinking at 1.05s with `steps(1)`. (Crucially `steps(1)`, not a smooth transition — the cursor should jump, not fade.)
 
+### 6.7 Interaction states
+
+The states every interactive component shares (transitions use `--au-dur` /
+`--au-ease`; all freeze under `prefers-reduced-motion`, §8):
+
+| State | Treatment |
+|---|---|
+| hover | `brightness(1.08)` (lighten); cursor `pointer` |
+| active | `brightness(0.92)` (press) — never a transform/bounce |
+| focus-visible | buttons: 2px `--au-action` outline, 1px offset · inputs: 3px `--au-action-soft` ring (§6.4) |
+| disabled | `opacity: 0.5` + `cursor: not-allowed`; no hover/active response |
+| selected | `--au-selected` (indigo) border/tint — the one accent reserved for it (§3) |
+
+No positional motion on hover/active — depth and feedback come from brightness +
+border, the same restraint as "no drop shadows." See it live in `styleguide.html`.
+
 ---
 
 ## 7. Theme switching
@@ -319,12 +335,12 @@ Hard requirements:
 
 - **All text against its primary surface ≥ WCAG AA (4.5:1).** Most pairings hit AAA (7:1+).
 - **All six accents distinguishable under deuteranopia, protanopia, and tritanopia simulation.** Tested via CIE ΔE2000.
-- **Never carry meaning in colour alone.** Status colours are always paired with an icon, glyph, badge text, or position. A red value without an `✗` or "FAULT" label is non-compliant.
+- **Never carry meaning in colour alone.** Status colours are always paired with an icon, glyph, badge text, or position. A red value without an `✗` or "FAULT" label is non-compliant. The canonical status/action glyph set (`✓` go · `⚠` caution · `✗` fault · `◉` live · `⊕` add · …) is unicode (no icon font) — rostered in `styleguide.html`.
 - **Focus states are visible.** Inputs get the 3px `--sw-orange-soft` ring. Buttons get a 2px outline of `--sw-orange` on `:focus-visible`.
 - **Hit targets:** ≥ `--sw-tap` (44×44px) on touch (`pointer: coarse` — the handheld/FieldWorks builds); ≥ 32×32px on fine pointers (desktop). Never below 44 on a touch surface.
 - **Honor `prefers-reduced-motion`.** Transitions/animations use `--au-dur*` + `--au-ease`; under `@media (prefers-reduced-motion: reduce)` components drop them to ~0. (The terminal cursor blink may stay — it carries state, not decoration.)
 
-Contrast reference, dark mode on basalt `#0E1012` (representative — re-measure when shipping):
+Contrast reference, dark mode on basalt `#0E1012` (representative — re-measure when shipping; `styleguide.html` computes these **live per theme**, flagging any text tier below AA):
 
 | Token       | Hex       | Ratio   | Level |
 |-------------|-----------|---------|-------|
@@ -386,7 +402,7 @@ Switchboard follows semver:
 
 Current: **1.1.0**. The accent mapping (orange=action, teal=info, green=go, amber=caution, red=fault, indigo=selected) is the stability anchor — it does not change in 1.x.
 
-**1.1.0** — additive (MINOR; existing tokens stable). New token groups in `:root`: z-index ladder (`--sw-z-*`), motion (`--sw-dur*` / `--sw-ease`), touch target (`--sw-tap`), each with an `--au-*` mirror. New: §4 touch/mobile guidance, §6 complete-by-reference component catalog, §8 `prefers-reduced-motion` requirement + 44px touch target. §11 now documents the two-layer naming and **canonicalizes `--au-*` as the shared GCU semantic vocabulary** (clarifies the cross-app contract; not a rename — a true neutral-prefix rename would be a future MAJOR). A living styleguide (`styleguide.html`) renders the whole language in both themes.
+**1.1.0** — additive (MINOR; existing tokens stable). New token groups in `:root`: z-index ladder (`--sw-z-*`), motion (`--sw-dur*` / `--sw-ease`), touch target (`--sw-tap`), each with an `--au-*` mirror. New: §4 touch/mobile guidance, §6 complete-by-reference component catalog, §8 `prefers-reduced-motion` requirement + 44px touch target. §11 now documents the two-layer naming and **canonicalizes `--au-*` as the shared GCU semantic vocabulary** (clarifies the cross-app contract; not a rename — a true neutral-prefix rename would be a future MAJOR). New **§6.7 interaction states** (hover/active/focus/disabled/selected — filling the slot the removed band vacated), and **§8 names the unicode glyph set**. A living styleguide (`styleguide.html`) renders the whole language in both themes — and adds **live per-theme WCAG contrast** (flagging any text tier below AA), the interaction-state matrix, and the glyph roster.
 
 **1.0.1** — removed the *module identification band* (the six-accent stripe) from the device readout and as a standalone component. Treated as a PATCH/doc-fix, not the MAJOR a component removal would normally be (above): the band was only ever spec text — never implemented in `switchboard.css`, never used by a surface — so nothing consuming the language breaks. It was decorative inheritance from the original RelayKVM draft that didn't earn its place against the functional-over-decorative rule.
 
