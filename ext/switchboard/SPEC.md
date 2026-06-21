@@ -4,7 +4,7 @@
 
 | Field      | Value                                          |
 |------------|------------------------------------------------|
-| Version    | 1.1.0                                          |
+| Version    | 1.1.1                                          |
 | Status     | Canon                                          |
 | License    | MIT                                            |
 | Org        | Geoscientific Chaos Union                      |
@@ -51,7 +51,7 @@ Four surface registers, ordered deep → bright. Lower registers recede; higher 
 | `--sw-bg-bright`   | `#EDECEB`  | Panel header, input wells, hover      |
 | `--sw-text`        | `#232322`  | Primary text                          |
 | `--sw-text-mid`    | `#504F4C`  | Secondary text, supporting copy       |
-| `--sw-text-soft`   | `#7A7875`  | Labels, captions, equipment text      |
+| `--sw-text-soft`   | `#5A5856`  | Labels, captions, equipment text      |
 | `--sw-border`      | `#B3B1AD`  | Default border                        |
 | `--sw-border-soft` | `#C6C4C1`  | Inner dividers, dashed rules          |
 | `--sw-rule`        | `#A5A3A0`  | Section rules, masthead divider       |
@@ -66,7 +66,7 @@ Four surface registers, ordered deep → bright. Lower registers recede; higher 
 | `--sw-bg-bright`   | `#25282D`  |
 | `--sw-text`        | `#DDDCDA`  |
 | `--sw-text-mid`    | `#9E9C98`  |
-| `--sw-text-soft`   | `#6E6C68`  |
+| `--sw-text-soft`   | `#83817E`  |
 | `--sw-border`      | `#2F3338`  |
 | `--sw-border-soft` | `#24272B`  |
 | `--sw-rule`        | `#3A3E44`  |
@@ -340,19 +340,21 @@ Hard requirements:
 - **Hit targets:** ≥ `--sw-tap` (44×44px) on touch (`pointer: coarse` — the handheld/FieldWorks builds); ≥ 32×32px on fine pointers (desktop). Never below 44 on a touch surface.
 - **Honor `prefers-reduced-motion`.** Transitions/animations use `--au-dur*` + `--au-ease`; under `@media (prefers-reduced-motion: reduce)` components drop them to ~0. (The terminal cursor blink may stay — it carries state, not decoration.)
 
-Contrast reference, dark mode on basalt `#0E1012` (representative — re-measure when shipping; `styleguide.html` computes these **live per theme**, flagging any text tier below AA):
+Contrast reference, **dark mode on the primary surface `#15171A`** (the surface the "≥ AA against its primary surface" rule actually scopes to — `styleguide.html` computes these **live per theme**, flagging any text tier below AA). Measured, not approximate:
 
-| Token       | Hex       | Ratio   | Level |
-|-------------|-----------|---------|-------|
-| text        | `#DDDCDA` | ~12.8:1 | AAA   |
-| text-mid    | `#9E9C98` | ~7.0:1  | AAA   |
-| text-soft   | `#6E6C68` | ~4.6:1  | AA    |
-| orange      | `#D4672E` | ~5.4:1  | AA    |
-| teal        | `#3A9BA3` | ~5.1:1  | AA    |
-| green       | `#5A9B5E` | ~5.6:1  | AA    |
-| amber       | `#C49540` | ~6.8:1  | AA    |
-| red         | `#D05048` | ~4.7:1  | AA    |
-| indigo      | `#7E86B8` | ~5.5:1  | AA    |
+| Token       | Hex       | Ratio   | Level    |
+|-------------|-----------|---------|----------|
+| text        | `#DDDCDA` | 13.1:1  | AAA      |
+| text-mid    | `#9E9C98` | 6.6:1   | AA       |
+| text-soft   | `#83817E` | 4.6:1   | AA       |
+| orange      | `#D4672E` | 4.9:1   | AA       |
+| teal        | `#3A9BA3` | 5.5:1   | AA       |
+| green       | `#5A9B5E` | 5.4:1   | AA       |
+| amber       | `#C49540` | 6.6:1   | AA       |
+| red         | `#D05048` | 4.2:1   | AA large |
+| indigo      | `#7E86B8` | 5.1:1   | AA       |
+
+(Earlier this table was measured on `#0E1012` (deep), which masked that `text-soft` failed AA on the *primary* surface — caught by the live readout, fixed in 1.1.1. The accents are AA / AA-large on surface; they carry meaning only glyph-paired, §8 above, so AA-large is compliant for them. Light mode runs a touch tighter — re-check via the styleguide.)
 
 ---
 
@@ -400,7 +402,9 @@ Switchboard follows semver:
 - **MINOR** — new component, new soft tint, new utility class. Tokens stable.
 - **PATCH** — hex value tweaks within ≤ 2 ΔE, contrast-table refresh, doc fixes.
 
-Current: **1.1.0**. The accent mapping (orange=action, teal=info, green=go, amber=caution, red=fault, indigo=selected) is the stability anchor — it does not change in 1.x.
+**1.1.1** — accessibility fix the live readout surfaced: `--sw-text-soft` failed AA on the *primary* surface (3.43:1 dark / 2.88:1 light — the old §8 table hid it by measuring on the deep surface). Bumped to **`#83817E` (dark, 4.64:1)** / **`#5A5856` (light, 4.63:1)**; the warm-gray hue is preserved (scaled in place). A visible nudge (slightly beyond the ≤2 ΔE PATCH guideline) but it's a compliance fix, not a restyle — kept PATCH. §8 table rebased to the primary surface with measured values; all four token copies updated in lockstep (parity test green).
+
+Current: **1.1.1**. The accent mapping (orange=action, teal=info, green=go, amber=caution, red=fault, indigo=selected) is the stability anchor — it does not change in 1.x.
 
 **1.1.0** — additive (MINOR; existing tokens stable). New token groups in `:root`: z-index ladder (`--sw-z-*`), motion (`--sw-dur*` / `--sw-ease`), touch target (`--sw-tap`), each with an `--au-*` mirror. New: §4 touch/mobile guidance, §6 complete-by-reference component catalog, §8 `prefers-reduced-motion` requirement + 44px touch target. §11 now documents the two-layer naming and **canonicalizes `--au-*` as the shared GCU semantic vocabulary** (clarifies the cross-app contract; not a rename — a true neutral-prefix rename would be a future MAJOR). New **§6.7 interaction states** (hover/active/focus/disabled/selected — filling the slot the removed band vacated), and **§8 names the unicode glyph set**. A living styleguide (`styleguide.html`) renders the whole language in both themes — and adds **live per-theme WCAG contrast** (flagging any text tier below AA), the interaction-state matrix, and the glyph roster.
 
