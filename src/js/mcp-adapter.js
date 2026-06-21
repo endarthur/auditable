@@ -25,7 +25,7 @@ import { notifyDirty } from './editor.js';
 
 import { setMsg } from './ui.js';
 import { fsWrite, fsRead, validatePath } from './fs.js';
-import { setCellCode } from './cell-ops.js';
+import { setCellCode, deleteCell } from './cell-ops.js';
 import { cryptoIsLocked } from './crypto.js';
 import { BUILTIN_HELP } from './complete.js';
 import { Dialog } from '#dialog';
@@ -752,9 +752,11 @@ async function _mcpUpdateCellSource(input, client) {
     throw new Error('Provide either code (full replacement) or patches (array of {old, new})');
   }
 
-  // Show diff confirmation — skipped for // %mcp rw cells (pre-approved edits).
+  // Show diff confirmation — skipped for // %mcp rw cells (pre-approved edits)
+  // and for the Works agent bridge (input._skipConfirm — the shell already
+  // obtained a scoped, consented capability for this notebook's folder).
   const oldCode = cell.code || '';
-  if (access !== 'rw') {
+  if (access !== 'rw' && !input._skipConfirm) {
     const accepted = await _mcpConfirm(
       `Update cell ${index}` + (parseCellName(cell.code) ? ` (${parseCellName(cell.code)})` : ''),
       _mcpSimpleDiff(oldCode, newCode),
@@ -791,15 +793,17 @@ async function _mcpAddCell(input) {
   const code = input.code || '';
   const pos = input.position;
 
-  // Show confirmation
-  const posLabel = typeof pos === 'number' ? `at index ${pos}` : 'at end';
-  const preview = code.length > 200 ? code.slice(0, 200) + '...' : code;
-  const accepted = await _mcpConfirm(
-    `Add ${type} cell ${posLabel}`,
-    preview || '(empty cell)',
-    'cell'
-  );
-  if (!accepted) throw new Error('User rejected cell creation.');
+  // Show confirmation — skipped for the Works agent bridge (input._skipConfirm).
+  if (!input._skipConfirm) {
+    const posLabel = typeof pos === 'number' ? `at index ${pos}` : 'at end';
+    const preview = code.length > 200 ? code.slice(0, 200) + '...' : code;
+    const accepted = await _mcpConfirm(
+      `Add ${type} cell ${posLabel}`,
+      preview || '(empty cell)',
+      'cell'
+    );
+    if (!accepted) throw new Error('User rejected cell creation.');
+  }
 
   let afterId = null;
   if (typeof pos === 'number' && pos >= 0 && pos < S.cells.length) {
@@ -852,6 +856,31 @@ function _mcpGetDAG() {
              _mcpReadable(_mcpCellAccess(S.cells[e.to]));
     }),
   };
+}
+
+// ── Works agent bridge ──
+// The Works shell relays an external agent's notebook ops here over A-Bus
+// (works/js/surfaces.js callNotebookAt → src/js/surface.js Notebook interface).
+// These reuse the SAME %mcp access checks as the MCP tools — read-only/private
+// cells stay protected — but SKIP the per-cell confirm dialog: the Works layer
+// already obtained a scoped, consented capability for this notebook's folder,
+// so re-confirming each cell would be a second consent (the "one consent, not
+// two" rule). Cells are addressed by 0-based index, same as the MCP tools.
+export function worksBridgeListCells() { return _mcpListCells(); }
+export function worksBridgeGetSource(input) { return _mcpGetCellSource(input); }
+export function worksBridgeGetOutput(input) { return _mcpGetCellOutput(input); }
+export function worksBridgeGetDAG() { return _mcpGetDAG(); }
+export function worksBridgeSetSource(input) { return _mcpUpdateCellSource({ ...input, _skipConfirm: true }); }
+export function worksBridgeAddCell(input) { return _mcpAddCell({ ...input, _skipConfirm: true }); }
+export async function worksBridgeRunCell(input) {
+  const { cell } = _mcpRequireRead(input);
+  await runDAG([cell.id], true);
+  return { ok: true, errors: _mcpCollectErrors() };
+}
+export function worksBridgeDeleteCell(input) {
+  const { cell, index } = _mcpRequireWrite(input);   // throws on read-only/private
+  deleteCell(cell.id);
+  return { ok: true, deletedIndex: index };
 }
 
 // ── Tool: getNotebookStatus ──
@@ -1034,7 +1063,7 @@ if (navigator.modelContext && window.__auditable_mcp) {
     annotations: { title: 'Run cell' },
     execute: _mcpAudited('runCell', async (input) => {
       const { cell, index, access } = _mcpRequireRead(input);
-      if (access !== 'rw') {
+      if (access !== 'rw' && !input._skipConfirm) {
         const accepted = await _mcpConfirm(
           `Run cell ${index}` + (parseCellName(cell.code) ? ` (${parseCellName(cell.code)})` : ''),
           '(executes the cell and its downstream dependents)',

@@ -292,6 +292,37 @@ const agentMcp = await page.evaluate(async () => {
   try { await moveTool.execute({ from: '/projects/agent-dir/moved.txt', to: '/sys/escape.txt' }); } catch (e) { moveOutDenied = denied(e); }
   delete window.__agentConsent__;
 
+  // ── notebook content loop (read→edit→run→observe) on a real notebook ──
+  // The agent holds the /projects grant; a notebook under it is editable.
+  const nbCellsTool = tools.find((t) => t.name === 'worksNotebookCells');
+  const nbSourceTool = tools.find((t) => t.name === 'worksNotebookSource');
+  const nbEditTool = tools.find((t) => t.name === 'worksNotebookEditCell');
+  const nbRunTool = tools.find((t) => t.name === 'worksNotebookRunCell');
+  const nbOutputTool = tools.find((t) => t.name === 'worksNotebookOutput');
+  const nbAddTool = tools.find((t) => t.name === 'worksNotebookAddCell');
+  const nbDeleteTool = tools.find((t) => t.name === 'worksNotebookDeleteCell');
+
+  let nbHasCells = false, nbSourceRoundtrip = false, nbOutputValue = null,
+    nbDeletedOk = false, nbReadOnlyDenied = false, nbErr = null;
+  try {
+    const nbPath = await W.newProject('/projects', 'AgentNb');   // a notebook project (under the grant)
+    const cells = await nbCellsTool.execute({ path: nbPath });
+    nbHasCells = Array.isArray(cells.cells);
+    // add a code cell, edit it to a deterministic expression, run, read output
+    const added = await nbAddTool.execute({ path: nbPath, type: 'code', code: '0' });
+    const idx = added.index;
+    await nbEditTool.execute({ path: nbPath, index: idx, code: 'const answer = 21 * 2' });
+    nbSourceRoundtrip = (await nbSourceTool.execute({ path: nbPath, index: idx })).source === 'const answer = 21 * 2';
+    await nbRunTool.execute({ path: nbPath, index: idx });
+    nbOutputValue = (await nbOutputTool.execute({ path: nbPath, index: idx })).value;
+    // a read-only (// %mcp) cell refuses edits (notebook's own access control)
+    const ro = await nbAddTool.execute({ path: nbPath, type: 'code', code: '// %mcp\nconst locked = 1' });
+    try { await nbEditTool.execute({ path: nbPath, index: ro.index, code: 'const locked = 2' }); }
+    catch { nbReadOnlyDenied = true; }
+    await nbDeleteTool.execute({ path: nbPath, index: idx });
+    nbDeletedOk = true;
+  } catch (e) { nbErr = String((e && e.message) || e); }
+
   // audit log: every tool call above was logged (tools are withAudit-wrapped)
   const audit = (W.getAuditLog && W.getAuditLog()) || [];
 
@@ -306,6 +337,7 @@ const agentMcp = await page.evaluate(async () => {
     auditHasDenied: audit.some((e) => e.ok === false),
     auditHasGrant: audit.some((e) => e.tool === 'grant'),
     mkdirOk, moveOk, binOk, statOk, statMissing, deleteOk, moveOutDenied,
+    nbHasCells, nbSourceRoundtrip, nbOutputValue, nbDeletedOk, nbReadOnlyDenied, nbErr,
   };
 });
 
@@ -1810,6 +1842,12 @@ const checks = {
   'numen: agent stat reports exists / missing': agentMcp.statOk === true && agentMcp.statMissing === true,
   'numen: agent delete within scope': agentMcp.deleteOk === true,
   'numen: move destination outside the granted scope is denied': agentMcp.moveOutDenied === true,
+  // notebook content loop (read → edit → run → observe)
+  'numen: agent lists a notebook\'s cells': agentMcp.nbHasCells === true,
+  'numen: agent edits a cell + source round-trips': agentMcp.nbSourceRoundtrip === true,
+  'numen: agent runs a cell + reads its output (=42)': agentMcp.nbOutputValue === 42,
+  'numen: agent deletes a cell': agentMcp.nbDeletedOk === true,
+  'numen: a read-only (// %mcp) cell refuses agent edits': agentMcp.nbReadOnlyDenied === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),

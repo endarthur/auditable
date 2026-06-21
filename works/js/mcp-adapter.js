@@ -107,16 +107,20 @@ export function worksTools(agentBus, identity = 'default') {
     agentBus.call({ to: 'works', path: '/', interface: 'VFS', member }, args);
   const shell = (member, args) =>
     agentBus.call({ to: 'works', path: '/', interface: 'Shell', member }, args);
-  // A gated VFS mutation: try it; on AccessDenied, ask the user to consent to a
-  // folder scope (defaults to `scopePath`'s folder) and retry once. The broker
+  const nb = (member, args) =>
+    agentBus.call({ to: 'works', path: '/', interface: 'Notebook', member }, args);
+  // A gated mutation: try the call; on AccessDenied, ask the user to consent to
+  // a folder scope (defaults to `scopePath`'s folder) and retry once. The broker
   // is the enforcement point — this just turns a denial into a consent prompt.
-  const gated = async (member, args, scopePath) => {
-    try { return await vfs(member, args); }
+  // Works for any gated interface (VFS writes, Notebook cell edits).
+  const gated = async (iface, member, args, scopePath) => {
+    const call = () => agentBus.call({ to: 'works', path: '/', interface: iface, member }, args);
+    try { return await call(); }
     catch (e) {
       if (!isAccessDenied(e)) throw e;
       const ok = await requestWriteConsent(identity, scopePath);
       if (!ok) throw e;
-      return vfs(member, args);
+      return call();
     }
   };
   return [
@@ -182,6 +186,59 @@ export function worksTools(agentBus, identity = 'default') {
       annotations: { title: 'Run notebook' },
       execute: async (input) => shell('RunNotebook', [(input && input.path) || null]),
     },
+    // ── notebook content loop (the read→run→observe→fix loop) ──
+    // All address cells by 0-based index and honor the notebook's own %mcp
+    // access (read-only/private cells stay protected). Reads + RunCell are open;
+    // edits (Edit/Add/Delete) are broker-gated for agents + folder-consented.
+    {
+      name: 'worksNotebookCells',
+      description: 'List a notebook\'s cells (index, type, access level, name, defines) for the notebook at `path`.',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      annotations: { readOnlyHint: true, title: 'Notebook cells' },
+      execute: async (input) => nb('ListCells', [input.path]),
+    },
+    {
+      name: 'worksNotebookSource',
+      description: 'Read a cell\'s source from the notebook at `path` (0-based index).',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' }, index: { type: 'integer' } }, required: ['path', 'index'] },
+      annotations: { readOnlyHint: true, title: 'Read cell source' },
+      execute: async (input) => nb('GetSource', [input.path, input.index]),
+    },
+    {
+      name: 'worksNotebookOutput',
+      description: 'Read a cell\'s last output/result from the notebook at `path` (0-based index).',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' }, index: { type: 'integer' }, format: { type: 'string' } }, required: ['path', 'index'] },
+      annotations: { readOnlyHint: true, title: 'Read cell output' },
+      execute: async (input) => nb('GetOutput', [input.path, input.index, input.format ? { format: input.format } : undefined]),
+    },
+    {
+      name: 'worksNotebookRunCell',
+      description: 'Run a single cell (and its downstream dependents) in the notebook at `path` (0-based index).',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' }, index: { type: 'integer' } }, required: ['path', 'index'] },
+      annotations: { title: 'Run cell' },
+      execute: async (input) => nb('RunCell', [input.path, input.index]),
+    },
+    {
+      name: 'worksNotebookEditCell',
+      description: 'Replace a cell\'s source (full `code`, or `patches`: [{old,new}]) in the notebook at `path`. Gated — read-only/private cells are refused; first edit prompts for a folder grant.',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' }, index: { type: 'integer' }, code: { type: 'string' }, patches: { type: 'array' } }, required: ['path', 'index'] },
+      annotations: { destructiveHint: true, title: 'Edit cell' },
+      execute: async (input) => gated('Notebook', 'SetCell', [input.path, input.index, input.code, input.patches], input.path),
+    },
+    {
+      name: 'worksNotebookAddCell',
+      description: 'Add a cell (type: code|md|css|html) to the notebook at `path`, optionally at a 0-based `position`. Gated.',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' }, type: { type: 'string' }, code: { type: 'string' }, position: { type: 'integer' } }, required: ['path', 'type'] },
+      annotations: { title: 'Add cell' },
+      execute: async (input) => gated('Notebook', 'AddCell', [input.path, input.type, input.code || '', input.position], input.path),
+    },
+    {
+      name: 'worksNotebookDeleteCell',
+      description: 'Delete a cell from the notebook at `path` (0-based index). Gated, destructive.',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' }, index: { type: 'integer' } }, required: ['path', 'index'] },
+      annotations: { destructiveHint: true, title: 'Delete cell' },
+      execute: async (input) => gated('Notebook', 'DeleteCell', [input.path, input.index], input.path),
+    },
     {
       // A WRITE tool — gated by the broker (works.VFS.Write is gated for agent
       // principals). Without a consented grant it returns AccessDenied; with a
@@ -191,7 +248,7 @@ export function worksTools(agentBus, identity = 'default') {
       inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
       annotations: { destructiveHint: true, title: 'Write workspace file' },
       execute: async (input) => {
-        await gated('Write', [input.path, String(input.content ?? '')], input.path);
+        await gated('VFS', 'Write', [input.path, String(input.content ?? '')], input.path);
         return { path: input.path, written: true };
       },
     },
@@ -201,7 +258,7 @@ export function worksTools(agentBus, identity = 'default') {
       inputSchema: { type: 'object', properties: { path: { type: 'string' }, base64: { type: 'string' } }, required: ['path', 'base64'] },
       annotations: { destructiveHint: true, title: 'Write binary file' },
       execute: async (input) => {
-        await gated('Write', [input.path, fromB64(input.base64)], input.path);
+        await gated('VFS', 'Write', [input.path, fromB64(input.base64)], input.path);
         return { path: input.path, written: true };
       },
     },
@@ -211,7 +268,7 @@ export function worksTools(agentBus, identity = 'default') {
       inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
       annotations: { title: 'Make directory' },
       execute: async (input) => {
-        await gated('MkDir', [input.path], input.path);
+        await gated('VFS', 'MkDir', [input.path], input.path);
         return { path: input.path, created: true };
       },
     },
@@ -226,7 +283,7 @@ export function worksTools(agentBus, identity = 'default') {
         // Ensure `to` is in a granted scope first (consent for its folder if
         // not), THEN the broker-gated Move confines `from`.
         await ensureWriteScope(identity, input.to);
-        await gated('Move', [input.from, input.to], input.from);
+        await gated('VFS', 'Move', [input.from, input.to], input.from);
         return { from: input.from, to: input.to, moved: true };
       },
     },
@@ -236,7 +293,7 @@ export function worksTools(agentBus, identity = 'default') {
       inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
       annotations: { destructiveHint: true, title: 'Delete path' },
       execute: async (input) => {
-        await gated('Delete', [input.path], input.path);
+        await gated('VFS', 'Delete', [input.path], input.path);
         return { path: input.path, deleted: true };
       },
     },
@@ -348,7 +405,10 @@ async function ensureWriteScope(identity, path) {
 // these; they don't need the shim (so works-smoke can exercise the gate directly).
 export function grantAgent(identity, opts = {}) {
   const id = WKS.broker.grant('agent:' + (identity || 'default'), {
-    to: 'works', interface: 'VFS', member: '*',
+    // interface:'*' so ONE folder grant authorizes both VFS writes and notebook
+    // cell edits within scope (Inspect has no path arg → its scope check fails →
+    // still denied, so '*' doesn't leak the topology). The scope confines by path.
+    to: 'works', interface: '*', member: '*',
     scope: opts.pathPrefix ? { pathPrefix: opts.pathPrefix } : null,
   });
   emitMcp('GrantsChanged', [listAgentGrants()]);

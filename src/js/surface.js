@@ -7,6 +7,10 @@
 
 import { connect } from './abus.js';
 import * as hooks from './hooks.js';
+import {
+  worksBridgeListCells, worksBridgeGetSource, worksBridgeGetOutput, worksBridgeGetDAG,
+  worksBridgeSetSource, worksBridgeAddCell, worksBridgeRunCell, worksBridgeDeleteCell,
+} from './mcp-adapter.js';
 
 const _title = () => document.getElementById('docTitle')?.value || 'untitled';
 
@@ -143,6 +147,20 @@ export function installSurfaceContract({ bus, host }) {
         RunSelected:    () => { window.runSelectedCell?.(); },
         ToggleReactive: () => { window.toggleAutorun?.(); },
         ClearOutputs:   () => { window.clearAllOutputs?.(); },
+
+        // The Works agent bridge (numen-for-Works). The shell relays an external
+        // agent's notebook ops to these — they reuse the notebook's own %mcp
+        // access checks (read-only/private cells stay protected) but skip the
+        // per-cell confirm (the shell already obtained a scoped, consented
+        // capability). Cells are addressed by 0-based index.
+        ListCells:  () => worksBridgeListCells(),
+        GetSource:  (index) => worksBridgeGetSource({ index }),
+        GetOutput:  (index, opts) => worksBridgeGetOutput({ index, ...(opts || {}) }),
+        GetDAG:     () => worksBridgeGetDAG(),
+        SetSource:  (index, code, patches) => worksBridgeSetSource(patches ? { index, patches } : { index, code }),
+        AddCell:    (type, code, position) => worksBridgeAddCell({ type, code, position }),
+        RunCell:    (index) => worksBridgeRunCell({ index }),
+        DeleteCell: (index) => worksBridgeDeleteCell({ index }),
       },
       signals: [],
     },

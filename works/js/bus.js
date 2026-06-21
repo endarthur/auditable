@@ -17,4 +17,9 @@ export function setupBus() {
   // Surfaces share works.VFS but aren't 'agent:' principals, so they pass
   // freely — the principal filter avoids a big-bang gate of the hot path.
   WKS.broker.gate('works', { interfaces: ['VFS'], members: ['Write', 'MkDir', 'Move', 'Delete'], principals: ['agent:'] });
+  // Notebook EDITS are gated the same way (numen-for-Works notebook bridge): an
+  // agent needs a grant covering the notebook's folder to change cells. Reads
+  // (ListCells/GetSource/GetOutput/GetDAG) and RunCell stay open. The per-folder
+  // grant is interface:'*', so one consent covers both VFS writes and cell edits.
+  WKS.broker.gate('works', { interfaces: ['Notebook'], members: ['SetCell', 'AddCell', 'DeleteCell'], principals: ['agent:'] });
 }

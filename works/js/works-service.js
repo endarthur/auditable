@@ -4,7 +4,7 @@
 
 import { connect } from '#abus';
 import { WKS } from './state.js';
-import { openPath, listSurfaces, runNotebookAt } from './surfaces.js';
+import { openPath, listSurfaces, runNotebookAt, callNotebookAt } from './surfaces.js';
 import { launchItems, launch } from './launcher.js';
 import { onSurfacesChanged } from './surface-registry.js';
 import { mountFolder, unmountAt } from './mount.js';
@@ -352,6 +352,24 @@ export async function setupWorksService() {
         GetAuditLog:     () => (WKS.getAuditLog ? WKS.getAuditLog() : []),
       },
       signals: ['StateChanged', 'GrantsChanged', 'AuditChanged'],
+    },
+
+    // numen-for-Works notebook bridge — relays an agent's notebook ops (by
+    // notebook PATH) to that notebook surface's own Notebook interface, which
+    // applies the notebook's %mcp access checks. Reads are open; edits
+    // (SetCell/AddCell/DeleteCell) are gated for agent principals (bus.js) and
+    // confined by the same per-folder grant as VFS writes.
+    Notebook: {
+      methods: {
+        ListCells:  (path) => callNotebookAt(path, 'ListCells'),
+        GetSource:  (path, index) => callNotebookAt(path, 'GetSource', [index]),
+        GetOutput:  (path, index, opts) => callNotebookAt(path, 'GetOutput', [index, opts]),
+        GetDAG:     (path) => callNotebookAt(path, 'GetDAG'),
+        RunCell:    (path, index) => callNotebookAt(path, 'RunCell', [index]),
+        SetCell:    (path, index, code, patches) => callNotebookAt(path, 'SetSource', [index, code, patches]),
+        AddCell:    (path, type, code, position) => callNotebookAt(path, 'AddCell', [type, code, position]),
+        DeleteCell: (path, index) => callNotebookAt(path, 'DeleteCell', [index]),
+      },
     },
     // Build-time vendored license inventory — used by the workspace settings
     // surface (and future tools like `geas licenses`). Returns the standard
