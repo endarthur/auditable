@@ -4,7 +4,7 @@
 
 | Field      | Value                                          |
 |------------|------------------------------------------------|
-| Version    | 1.2.0                                          |
+| Version    | 1.2.1                                          |
 | Status     | Canon                                          |
 | License    | MIT                                            |
 | Org        | Geoscientific Chaos Union                      |
@@ -334,7 +334,7 @@ Persistence and system-preference detection (`prefers-color-scheme`) are applica
 Hard requirements:
 
 - **All text against its primary surface ≥ WCAG AA (4.5:1).** Most pairings hit AAA (7:1+).
-- **All six accents distinguishable under deuteranopia, protanopia, and tritanopia simulation.** Tested via CIE ΔE2000.
+- **Colour is never the only channel — that is the actual CVD guarantee.** The six accents are **not** all pairwise distinguishable by hue under colour-vision deficiency, and *cannot* be: six semantic accents with three in the warm band (action/caution/fault = orange/amber/red) collapse under red-green CVD (the styleguide's ΔE2000 + Machado-CVD matrix shows exactly which pairs, per theme — several drop below ΔE 10 under protan/deutan). So accessibility does **not** rest on telling accents apart by colour. It rests on the rule above: status is *always* paired with a glyph / text / position, so a hue-collapsed pair stays distinguishable by its `✓`/`⚠`/`✗`/label. Secondary aid: the palette maximizes **lightness** separation (which CVD largely preserves) within the AA-on-surface constraint. The matrix is the live check for "where is colour load-bearing" — those cells *must* carry a glyph.
 - **Never carry meaning in colour alone.** Status colours are always paired with an icon, glyph, badge text, or position. A red value without an `✗` or "FAULT" label is non-compliant. The canonical status/action glyph set (`✓` go · `⚠` caution · `✗` fault · `◉` live · `⊕` add · …) is unicode (no icon font) — rostered in `styleguide.html`.
 - **Focus states are visible.** Inputs get the 3px `--sw-orange-soft` ring. Buttons get a 2px outline of `--sw-orange` on `:focus-visible`.
 - **Hit targets:** ≥ `--sw-tap` (44×44px) on touch (`pointer: coarse` — the handheld/FieldWorks builds); ≥ 32×32px on fine pointers (desktop). Never below 44 on a touch surface.
@@ -401,6 +401,8 @@ Switchboard follows semver:
 - **MAJOR** — token name changes, semantic remapping of an accent, removing a component.
 - **MINOR** — new component, new soft tint, new utility class. Tokens stable.
 - **PATCH** — hex value tweaks within ≤ 2 ΔE, contrast-table refresh, doc fixes.
+
+**1.2.1** — **distinguishability matrix + honest CVD doc.** Added a live ΔE2000 + Machado-CVD accent matrix to `styleguide.html` (per theme, flags pairs that collapse). It proved §8's old claim ("all six distinguishable via ΔE2000") **false** — under red-green CVD the warm trio (action/caution/fault) drops to ΔE 2–6. §8 rewritten to the truth: six semantic accents can't all be hue-distinct under CVD, so the *never-colour-alone* glyph-pairing is the actual guarantee; lightness separation is the secondary aid. No token change (the accent *re-tune* to maximize lightness separation is the next step, 1.3.0). Tooling + doc → PATCH.
 
 **1.2.0** — **light accents darkened to clear AA as text on the primary surface.** The readout showed the light six at 3.38–4.69:1 (all but indigo below AA-normal) — fine for glyph-paired status, but accent *text* (links use `info`, headers use `action`) was sub-AA. Darkened each just to ~4.55:1, hue preserved (scaled toward black), indigo left (already 4.69): orange `#B54E1A→#954015`, teal `#1B6B72→#196369`, green `#3D7340→#356437`, amber `#8E6518→#755314`, red `#A8312A→#A43029`. Light-only (dark accents already pass); `-soft` tints unchanged (badge/fill contrast only improves — darker accent on the same pale tint). MINOR not PATCH: a coordinated, *visible* palette shift, though names + semantics are stable (orange is still action). The muted equipment palette absorbs the darkening as "deeper," not "muddier" — but `amber`/`orange` shifted most; if either loses character, give *that one* a text-only `-ink` variant rather than the whole set going two-tier. All four token copies updated; parity green.
 

@@ -130,6 +130,17 @@
   .glyph .g { font-family: var(--au-font-mono); font-size: 18px; width: 1.2em; text-align: center; }
   .glyph .m { font-size: 13px; } .glyph .m .n { font-family: var(--au-font-mono); font-size: 11px; color: var(--au-fg-soft); }
 
+  /* distinguishability matrix */
+  .dem { border-collapse: collapse; font-family: var(--au-font-mono); font-size: 11px; }
+  .dem th, .dem td { padding: 5px 8px; text-align: center; border: 1px solid var(--au-border-soft); min-width: 40px; }
+  .dem th { color: var(--au-fg-soft); font-weight: 600; }
+  .dem th.cw { width: 16px; padding: 4px; }
+  .dem th .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; }
+  .dem td.diag { background: var(--au-surface-bright); color: var(--au-fg-soft); }
+  .dem td.pass { color: var(--au-success); }
+  .dem td.warn { color: var(--au-warn); background: var(--au-warn-soft); }
+  .dem td.fail { color: var(--au-error); background: var(--au-error-soft); font-weight: 700; }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
   }
@@ -248,6 +259,11 @@
     <table class="ctab"><thead><tr><th>pairing</th><th>ratio</th><th>level</th></tr></thead><tbody id="cAccent"></tbody></table>
   </div>
 
+  <h2>Distinguishability — ΔE2000 + CVD</h2>
+  <p class="soft">Minimum ΔE2000 between each accent pair across normal vision <em>and</em> simulated protan / deutan / tritan (Machado 2009) — the worst case. Higher = easier to tell apart. <strong>A low cell means the two accents are confusable</strong> for someone with that colour vision; there they're separated only by glyph / text / position (§8), never colour alone. Recomputes per theme.</p>
+  <div class="panel" style="overflow-x:auto"><table class="dem" id="dem"></table></div>
+  <p class="soft" id="demNote"></p>
+
   <h2>Glyphs</h2>
   <p class="soft">GCU uses unicode glyphs — no icon font. The canonical status/action set; each pairs with its accent so meaning never rides on colour alone (§8).</p>
   <div class="glyphs">
@@ -296,12 +312,67 @@
   }
   buildContrast();
 
+  // ── Distinguishability: ΔE2000 across normal + simulated CVD (Machado 2009).
+  // Shows where two accents collapse — i.e. where colour alone is not enough and
+  // the §8 glyph-pairing is doing the real work. ──
+  function lin(c) { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+  function lin2xyz(r, g, b) { return [0.4124 * r + 0.3576 * g + 0.1805 * b, 0.2126 * r + 0.7152 * g + 0.0722 * b, 0.0193 * r + 0.1192 * g + 0.9505 * b]; }
+  function xyz2lab(X, Y, Z) { var f = function (t) { return t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116; }; var fx = f(X / 0.95047), fy = f(Y / 1), fz = f(Z / 1.08883); return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)]; }
+  var CVD = {
+    protan: [[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216], [-0.003882, -0.048116, 1.051998]],
+    deutan: [[0.367322, 0.860646, -0.227968], [0.280085, 0.672501, 0.047413], [-0.011820, 0.042940, 0.968881]],
+    tritan: [[1.255528, -0.076749, -0.178779], [-0.078411, 0.930809, 0.147602], [0.004733, 0.691367, 0.303900]],
+  };
+  function labOf(rgb, cond) {
+    var L = rgb.map(lin);
+    if (cond !== 'normal') { var m = CVD[cond]; L = m.map(function (row) { return Math.max(0, Math.min(1, row[0] * L[0] + row[1] * L[1] + row[2] * L[2])); }); }
+    return xyz2lab.apply(null, lin2xyz(L[0], L[1], L[2]));
+  }
+  function dE2000(l1, l2) {
+    var L1 = l1[0], a1 = l1[1], b1 = l1[2], L2 = l2[0], a2 = l2[1], b2 = l2[2];
+    var avgL = (L1 + L2) / 2, C1 = Math.hypot(a1, b1), C2 = Math.hypot(a2, b2), avgC = (C1 + C2) / 2;
+    var G = 0.5 * (1 - Math.sqrt(Math.pow(avgC, 7) / (Math.pow(avgC, 7) + Math.pow(25, 7))));
+    var a1p = a1 * (1 + G), a2p = a2 * (1 + G), C1p = Math.hypot(a1p, b1), C2p = Math.hypot(a2p, b2), avgCp = (C1p + C2p) / 2;
+    var h = function (ap, bp) { var d = Math.atan2(bp, ap) * 180 / Math.PI; return d < 0 ? d + 360 : d; };
+    var h1p = h(a1p, b1), h2p = h(a2p, b2), dLp = L2 - L1, dCp = C2p - C1p, dhp = 0;
+    if (C1p * C2p !== 0) { dhp = h2p - h1p; if (dhp > 180) dhp -= 360; else if (dhp < -180) dhp += 360; }
+    var dHp = 2 * Math.sqrt(C1p * C2p) * Math.sin(dhp * Math.PI / 360);
+    var avghp = h1p + h2p; if (C1p * C2p !== 0) { if (Math.abs(h1p - h2p) > 180) avghp += (avghp < 360 ? 360 : -360); avghp /= 2; }
+    var T = 1 - 0.17 * Math.cos((avghp - 30) * Math.PI / 180) + 0.24 * Math.cos(2 * avghp * Math.PI / 180) + 0.32 * Math.cos((3 * avghp + 6) * Math.PI / 180) - 0.20 * Math.cos((4 * avghp - 63) * Math.PI / 180);
+    var Sl = 1 + (0.015 * Math.pow(avgL - 50, 2)) / Math.sqrt(20 + Math.pow(avgL - 50, 2)), Sc = 1 + 0.045 * avgCp, Sh = 1 + 0.015 * avgCp * T;
+    var dT = 30 * Math.exp(-Math.pow((avghp - 275) / 25, 2)), Rc = 2 * Math.sqrt(Math.pow(avgCp, 7) / (Math.pow(avgCp, 7) + Math.pow(25, 7))), Rt = -Rc * Math.sin(2 * dT * Math.PI / 180);
+    return Math.sqrt(Math.pow(dLp / Sl, 2) + Math.pow(dCp / Sc, 2) + Math.pow(dHp / Sh, 2) + Rt * (dCp / Sc) * (dHp / Sh));
+  }
+  var ACCV = [['act', '--au-action'], ['info', '--au-info'], ['go', '--au-success'], ['cau', '--au-warn'], ['flt', '--au-error'], ['sel', '--au-selected']];
+  var CONDS = ['normal', 'protan', 'deutan', 'tritan'];
+  function rgbOf(v) { probe.style.color = 'var(' + v + ')'; return parseRgb(getComputedStyle(probe).color); }
+  function cls(d) { return d < 10 ? 'fail' : d < 20 ? 'warn' : 'pass'; }
+  function buildMatrix() {
+    var labs = ACCV.map(function (a) { var rgb = rgbOf(a[1]); var o = {}; CONDS.forEach(function (c) { o[c] = labOf(rgb, c); }); return o; });
+    var html = '<tr><th class="cw"></th>' + ACCV.map(function (a) { return '<th>' + a[0] + '</th>'; }).join('') + '</tr>';
+    var fails = 0;
+    for (var i = 0; i < ACCV.length; i++) {
+      html += '<tr><th>' + ACCV[i][0] + '</th>';
+      for (var j = 0; j < ACCV.length; j++) {
+        if (i === j) { html += '<td class="diag">—</td>'; continue; }
+        var mn = Math.min.apply(null, CONDS.map(function (c) { return dE2000(labs[i][c], labs[j][c]); }));
+        var k = cls(mn); if (k === 'fail' && i < j) fails++;
+        html += '<td class="' + k + '">' + mn.toFixed(0) + '</td>';
+      }
+      html += '</tr>';
+    }
+    document.getElementById('dem').innerHTML = html;
+    document.getElementById('demNote').innerHTML = '<span class="' + (fails ? 'err' : 'ok') + '">' + fails + ' pair(s) collapse</span> (min ΔE &lt; 10) under at least one condition — those rely on glyph-pairing (§8). green ≥ 20 · amber 10–20 · red &lt; 10. Six semantic accents (three warm) can’t all be CVD-distinct by hue; lightness separation + glyphs carry it.';
+  }
+  buildMatrix();
+
   // Theme toggle — flips data-theme on <html>; everything re-skins through the
-  // cascade, and the contrast table recomputes against the new theme's colors.
+  // cascade, and both tables recompute against the new theme's colors.
   document.getElementById('themeBtn').addEventListener('click', function () {
     var h = document.documentElement;
     h.setAttribute('data-theme', h.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
     buildContrast();
+    buildMatrix();
   });
 </script>
 </body>
