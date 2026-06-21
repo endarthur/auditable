@@ -4,7 +4,7 @@
 
 | Field      | Value                                          |
 |------------|------------------------------------------------|
-| Version    | 1.1.1                                          |
+| Version    | 1.2.0                                          |
 | Status     | Canon                                          |
 | License    | MIT                                            |
 | Org        | Geoscientific Chaos Union                      |
@@ -81,11 +81,11 @@ Six functional accents. Each has a desaturated **soft** variant used for tinted 
 
 | Accent | Semantic   | Light hex  | Light soft | Dark hex   | Dark soft  |
 |--------|------------|------------|------------|------------|------------|
-| Orange | **Action** — you initiated it; primary buttons; ET-foam | `#B54E1A` | `#E8D8CF` | `#D4672E` | `#2E1F18` |
-| Teal   | **Info** — links, info badges, terminal prompt           | `#1B6B72` | `#CEE2E4` | `#3A9BA3` | `#16272A` |
-| Green  | **Go** — success, connected, verified, GO                | `#3D7340` | `#D2E4D4` | `#5A9B5E` | `#18261A` |
-| Amber  | **Caution** — weak signal, low battery, pending          | `#8E6518` | `#E4DCCC` | `#C49540` | `#2A2316` |
-| Red    | **Fault** — error, dead device, failed auth              | `#A8312A` | `#E8D6D4` | `#D05048` | `#2C1A18` |
+| Orange | **Action** — you initiated it; primary buttons; ET-foam | `#954015` | `#E8D8CF` | `#D4672E` | `#2E1F18` |
+| Teal   | **Info** — links, info badges, terminal prompt           | `#196369` | `#CEE2E4` | `#3A9BA3` | `#16272A` |
+| Green  | **Go** — success, connected, verified, GO                | `#356437` | `#D2E4D4` | `#5A9B5E` | `#18261A` |
+| Amber  | **Caution** — weak signal, low battery, pending          | `#755314` | `#E4DCCC` | `#C49540` | `#2A2316` |
+| Red    | **Fault** — error, dead device, failed auth              | `#A43029` | `#E8D6D4` | `#D05048` | `#2C1A18` |
 | Indigo | **Selected** — focus, standby, idle, highlighted         | `#4E5580` | `#D8D9E2` | `#7E86B8` | `#1E2030` |
 
 CSS variable naming: `--sw-{name}` for the accent, `--sw-{name}-soft` for the tint. Example: `--sw-orange`, `--sw-orange-soft`.
@@ -401,6 +401,8 @@ Switchboard follows semver:
 - **MAJOR** — token name changes, semantic remapping of an accent, removing a component.
 - **MINOR** — new component, new soft tint, new utility class. Tokens stable.
 - **PATCH** — hex value tweaks within ≤ 2 ΔE, contrast-table refresh, doc fixes.
+
+**1.2.0** — **light accents darkened to clear AA as text on the primary surface.** The readout showed the light six at 3.38–4.69:1 (all but indigo below AA-normal) — fine for glyph-paired status, but accent *text* (links use `info`, headers use `action`) was sub-AA. Darkened each just to ~4.55:1, hue preserved (scaled toward black), indigo left (already 4.69): orange `#B54E1A→#954015`, teal `#1B6B72→#196369`, green `#3D7340→#356437`, amber `#8E6518→#755314`, red `#A8312A→#A43029`. Light-only (dark accents already pass); `-soft` tints unchanged (badge/fill contrast only improves — darker accent on the same pale tint). MINOR not PATCH: a coordinated, *visible* palette shift, though names + semantics are stable (orange is still action). The muted equipment palette absorbs the darkening as "deeper," not "muddier" — but `amber`/`orange` shifted most; if either loses character, give *that one* a text-only `-ink` variant rather than the whole set going two-tier. All four token copies updated; parity green.
 
 **1.1.1** — accessibility fix the live readout surfaced: `--sw-text-soft` failed AA on the *primary* surface (3.43:1 dark / 2.88:1 light — the old §8 table hid it by measuring on the deep surface). Bumped to **`#83817E` (dark, 4.64:1)** / **`#5A5856` (light, 4.63:1)**; the warm-gray hue is preserved (scaled in place). A visible nudge (slightly beyond the ≤2 ΔE PATCH guideline) but it's a compliance fix, not a restyle — kept PATCH. §8 table rebased to the primary surface with measured values; all four token copies updated in lockstep (parity test green).
 

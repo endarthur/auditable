@@ -20,11 +20,11 @@
   --sw-border:      #B3B1AD;
   --sw-border-soft: #C6C4C1;
   --sw-rule:        #A5A3A0;
-  --sw-orange:      #B54E1A;  --sw-orange-soft: #E8D8CF;
-  --sw-teal:        #1B6B72;  --sw-teal-soft:   #CEE2E4;
-  --sw-green:       #3D7340;  --sw-green-soft:  #D2E4D4;
-  --sw-amber:       #8E6518;  --sw-amber-soft:  #E4DCCC;
-  --sw-red:         #A8312A;  --sw-red-soft:    #E8D6D4;
+  --sw-orange:      #954015;  --sw-orange-soft: #E8D8CF;
+  --sw-teal:        #196369;  --sw-teal-soft:   #CEE2E4;
+  --sw-green:       #356437;  --sw-green-soft:  #D2E4D4;
+  --sw-amber:       #755314;  --sw-amber-soft:  #E4DCCC;
+  --sw-red:         #A43029;  --sw-red-soft:    #E8D6D4;
   --sw-indigo:      #4E5580;  --sw-indigo-soft: #D8D9E2;
   --sw-mono:        'Space Mono', 'JetBrains Mono', 'Consolas', monospace;
   --sw-sans:        'Barlow', system-ui, sans-serif;
