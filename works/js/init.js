@@ -35,6 +35,7 @@ import { installGlobalFileDrop, installGcupkgBytes } from './file-ops.js';
 import { installShellAuditable, evaluateAllWorksScripts } from './extension-loader.js';
 import { installBuiltinPackages } from './lib-builtins-loader.js';
 import { declareInstalledServices } from './extension-services.js';
+import { buildSurfaceToolRegistry, registerSurfaceTools } from './surface-tools.js';
 import { registerGcuSw } from '#sw-register';
 import { readSettings } from './settings-store.js';
 
@@ -65,6 +66,9 @@ async function boot() {
   // used; works-core ships none of these packages, so it carries none of their code.
   // (works-contribution-registry-spec — the declarative, provisionable model.)
   await declareInstalledServices();
+  // Surface-contributed agent tools: scan /lib for gcu.agentTools into the
+  // registry the worksListSurfaceTools/worksCallSurfaceTool meta-tools serve.
+  await buildSurfaceToolRegistry();
   // numen-for-Works: register the shell's MCP tools through the numen shim, if
   // present. No-op without the shim (the live transport isn't wired yet) — the
   // gated-agent-peer machinery is here and exercised by works-smoke regardless.
@@ -89,6 +93,7 @@ async function boot() {
   WKS.revokeAgent = revokeAgent;
   WKS.listAgentGrants = listAgentGrants;
   WKS.getAuditLog = getAuditLog;                 // observability: the agent-action ledger
+  WKS.registerSurfaceTools = registerSurfaceTools; // surface tools: programmatic/post-install registry add
   WKS.refreshTree = refreshTree;
   WKS.newProject = newProject;
   WKS.duplicateProject = duplicateProject;

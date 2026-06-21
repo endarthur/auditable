@@ -92,22 +92,29 @@ export function closeSurfaceAt(path) {
   return false;
 }
 
-// Call a member on a notebook's `Notebook` A-Bus interface, resolved by PATH:
-// reuse an already-open notebook for that path, else open one and wait for it
-// to be Ready. Returns the member's result (await-able, unlike the fire-and-
-// forget callActiveNotebook). Used by the numen-for-Works notebook bridge.
-export async function callNotebookAt(path, member, args = []) {
+// Call a member on a surface's A-Bus interface, resolved by KIND + PATH: reuse an
+// already-open surface of that kind for the path, else open one and wait for it to
+// be Ready. Returns the member's result (await-able, unlike the fire-and-forget
+// callActiveNotebook). The generic relay behind the numen-for-Works surface tools
+// (and the notebook bridge — see callNotebookAt).
+export async function callSurfaceAt(kind, path, iface, member, args = []) {
   let rec = null;
   for (const r of WKS.surfaces.values())
-    if (r.path === path && r.kind === 'notebook') { rec = r; break; }
+    if (r.path === path && r.kind === kind) { rec = r; break; }
   if (!rec) {
     const tabId = await openPath(path);
-    if (!tabId) throw new Error('no notebook surface for ' + path);
+    if (!tabId) throw new Error('no ' + kind + ' surface for ' + path);
     await waitTabReady(tabId);
     rec = WKS.surfaces.get(tabId);
   }
-  if (!rec || rec.kind !== 'notebook') throw new Error('not a notebook: ' + path);
-  return WKS.worksBus.call({ to: rec.uniqueName, path: '/', interface: 'Notebook', member }, args);
+  if (!rec || rec.kind !== kind) throw new Error('not a ' + kind + ' surface: ' + path);
+  return WKS.worksBus.call({ to: rec.uniqueName, path: '/', interface: iface, member }, args);
+}
+
+// The notebook bridge — a thin caller of the generic relay (kind 'notebook',
+// interface 'Notebook'). Kept for the existing works.Notebook interface.
+export async function callNotebookAt(path, member, args = []) {
+  return callSurfaceAt('notebook', path, 'Notebook', member, args);
 }
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;

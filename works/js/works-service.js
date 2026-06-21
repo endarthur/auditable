@@ -4,7 +4,7 @@
 
 import { connect } from '#abus';
 import { WKS } from './state.js';
-import { openPath, listSurfaces, runNotebookAt, callNotebookAt, spawnSurface, closeSurfaceAt } from './surfaces.js';
+import { openPath, listSurfaces, runNotebookAt, callNotebookAt, callSurfaceAt, spawnSurface, closeSurfaceAt } from './surfaces.js';
 import { launchItems, launch } from './launcher.js';
 import { onSurfacesChanged, kindDef } from './surface-registry.js';
 import { newProject } from './tree.js';
@@ -378,6 +378,19 @@ export async function setupWorksService() {
         SetCell:    (path, index, code, patches) => callNotebookAt(path, 'SetSource', [index, code, patches]),
         AddCell:    (path, type, code, position) => callNotebookAt(path, 'AddCell', [type, code, position]),
         DeleteCell: (path, index) => callNotebookAt(path, 'DeleteCell', [index]),
+      },
+    },
+
+    // Surface-contributed agent tools — the generic relay (works-agent-tools-spec).
+    // The agent's worksCallSurfaceTool dispatcher (mcp-adapter) resolves a declared
+    // tool to (kind, interface, member) and routes here, by PATH (first arg → the
+    // broker's scope check). Two members so gating is by-member: Read is open,
+    // Mutate is gated for agent principals (bus.js) — the manifest's `gated` flag
+    // picks which. Both relay to the surface's own A-Bus interface via callSurfaceAt.
+    SurfaceTools: {
+      methods: {
+        Read:   (path, kind, iface, member, args) => callSurfaceAt(kind, path, iface, member, args || []),
+        Mutate: (path, kind, iface, member, args) => callSurfaceAt(kind, path, iface, member, args || []),
       },
     },
     // Build-time vendored license inventory — used by the workspace settings

@@ -380,6 +380,46 @@ const multiAgent = await page.evaluate(async () => {
   return { aliceOk, bobDenied, cachedSame, distinct };
 });
 
+// surface-contributed agent tools (works-agent-tools-spec, thin slice). Register
+// test tools that target the NOTEBOOK surface's existing A-Bus interface (an
+// existing consumer — proves the generic relay without a bespoke test surface),
+// then drive them through the meta-tools (worksListSurfaceTools / Call).
+const surfaceTools = await page.evaluate(async () => {
+  const W = window.WKS;
+  const denied = (e) => (e && e.code === 'Error.AccessDenied') || /access ?denied|not authorized/i.test(String(e && e.message || e));
+  W.registerSurfaceTools('@smoke/probe', [
+    { name: 'smokeNbCells', surface: 'notebook', interface: 'Notebook', member: 'ListCells', args: [], gated: false,
+      description: 'list cells', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+    { name: 'smokeNbAdd', surface: 'notebook', interface: 'Notebook', member: 'AddCell', args: ['type', 'code'], gated: true,
+      description: 'add a cell', inputSchema: { type: 'object', properties: { path: { type: 'string' }, type: { type: 'string' }, code: { type: 'string' } }, required: ['path', 'type'] } },
+  ]);
+  const agentBus = await W.connectAgentPeer('stool');
+  const tools = W.worksTools(agentBus, 'stool');
+  const listTool = tools.find((t) => t.name === 'worksListSurfaceTools');
+  const callTool = tools.find((t) => t.name === 'worksCallSurfaceTool');
+  const listed = (await listTool.execute({})).tools || [];
+  const hasTools = ['smokeNbCells', 'smokeNbAdd'].every((n) => listed.some((t) => t.name === n));
+
+  const nbPath = await W.newProject('/projects', 'SurfToolNb');
+  // generic READ path → notebook ListCells (ungated)
+  const cells = await callTool.execute({ name: 'smokeNbCells', path: nbPath });
+  const readOk = Array.isArray(cells.cells);
+  // generic MUTATE (gated) without a grant → denied (auto-deny consent)
+  window.__agentConsent__ = () => null;
+  let mutateDenied = false;
+  try { await callTool.execute({ name: 'smokeNbAdd', path: nbPath, type: 'code', code: 'const surfTool = 7' }); } catch (e) { mutateDenied = denied(e); }
+  delete window.__agentConsent__;
+  // grant stool /projects → the same gated mutate lands
+  W.grantAgent('stool', { pathPrefix: '/projects' });
+  let mutateOk = false;
+  try { const r = await callTool.execute({ name: 'smokeNbAdd', path: nbPath, type: 'code', code: 'const surfTool = 7' }); mutateOk = typeof r.index === 'number'; } catch { /* */ }
+  // unknown tool → graceful error
+  let unknownErr = false;
+  try { await callTool.execute({ name: 'nope', path: nbPath }); } catch { unknownErr = true; }
+  W.revokeAgent('stool');
+  return { hasTools, readOk, mutateDenied, mutateOk, unknownErr };
+});
+
 // numen live transport: the shell vendors the numen shim, so
 // navigator.modelContext exists + setupWorksMcp registered tools, and the
 // settings panel can drive the connection over works.Mcp. (The actual bridge
@@ -1894,6 +1934,12 @@ const checks = {
   // multichannel: per-agent identity isolation
   'numen: per-identity tool sets are distinct + cached': multiAgent.distinct === true && multiAgent.cachedSame === true,
   'numen: a grant to one agent does not authorize another': multiAgent.aliceOk === true && multiAgent.bobDenied === true,
+  // surface-contributed agent tools (the generic relay + meta-tools)
+  'numen: surface tools registered + listed via meta-tool': surfaceTools.hasTools === true,
+  'numen: surface tool READ routes through the generic relay': surfaceTools.readOk === true,
+  'numen: surface tool MUTATE denied without a grant': surfaceTools.mutateDenied === true,
+  'numen: surface tool MUTATE lands with a scoped grant': surfaceTools.mutateOk === true,
+  'numen: unknown surface tool errors gracefully': surfaceTools.unknownErr === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),

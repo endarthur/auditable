@@ -23,6 +23,7 @@ import './context-menu-registry.js';
 import './extension-loader.js';
 import './lib-builtins-loader.js';
 import './extension-services.js';
+import './surface-tools.js';
 import './layout.js';
 import './surfaces.js';
 import './launcher.js';

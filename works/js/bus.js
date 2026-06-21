@@ -22,4 +22,9 @@ export function setupBus() {
   // (ListCells/GetSource/GetOutput/GetDAG) and RunCell stay open. The per-folder
   // grant is interface:'*', so one consent covers both VFS writes and cell edits.
   WKS.broker.gate('works', { interfaces: ['Notebook'], members: ['SetCell', 'AddCell', 'DeleteCell'], principals: ['agent:'] });
+  // Surface-contributed agent tools (works-agent-tools-spec): the relay's Mutate
+  // member is gated for agents (Read is open). A declared tool's `gated` flag
+  // routes it to Mutate; the same per-folder grant + consent as VFS/Notebook
+  // applies (path is the relay's first arg → the broker's scope check).
+  WKS.broker.gate('works', { interfaces: ['SurfaceTools'], members: ['Mutate'], principals: ['agent:'] });
 }

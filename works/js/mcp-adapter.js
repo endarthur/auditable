@@ -17,6 +17,7 @@
 import { connect } from '#abus';
 import { Dialog } from '#dialog';
 import { WKS } from './state.js';
+import { listSurfaceTools, getSurfaceTool } from './surface-tools.js';
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -225,6 +226,37 @@ export function worksTools(agentBus, identity = 'default') {
       inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
       annotations: { title: 'Close surface' },
       execute: async (input) => shell('CloseSurface', [input.path]),
+    },
+    // ── surface-contributed tools (the extensible verb surface) ──
+    // Packages declare `gcu.agentTools`; these two STATIC meta-tools make the
+    // declared (and dynamically-added) set reachable from ANY MCP client,
+    // including ones that don't refresh tools/list mid-session. listSurfaceTools
+    // returns the live registry; callSurfaceTool routes a named tool through the
+    // gated agent peer to the surface's own A-Bus interface (Read = open,
+    // Mutate = gated + folder-consented, picked by the tool's `gated` flag).
+    {
+      name: 'worksListSurfaceTools',
+      description: 'List surface-contributed agent tools available in this workspace (declared by installed packages). Each entry\'s name + inputSchema tell you how to call it via worksCallSurfaceTool.',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+      annotations: { readOnlyHint: true, title: 'List surface tools' },
+      execute: async (input) => ({ tools: listSurfaceTools(input && input.path) }),
+    },
+    {
+      name: 'worksCallSurfaceTool',
+      description: 'Invoke a surface-contributed tool by name (see worksListSurfaceTools). `path` selects the target surface; pass the tool\'s declared inputs alongside. Mutating tools require a granted, scoped capability (you\'ll be prompted to approve a folder).',
+      inputSchema: { type: 'object', properties: { name: { type: 'string' }, path: { type: 'string' } }, required: ['name', 'path'] },
+      annotations: { title: 'Call surface tool' },
+      execute: async (input) => {
+        const entry = getSurfaceTool(input.name);
+        if (!entry) throw new Error('unknown surface tool: ' + input.name);
+        const methodArgs = entry.args.map((k) => input[k]);   // positional per the manifest
+        const relayArgs = [input.path, entry.surface, entry.interface, entry.member, methodArgs];
+        // gated tools → SurfaceTools.Mutate (broker-gated → consent on denial);
+        // read tools → SurfaceTools.Read (open). Both route through the agent peer.
+        return entry.gated
+          ? gated('SurfaceTools', 'Mutate', relayArgs, input.path)
+          : agentBus.call({ to: 'works', path: '/', interface: 'SurfaceTools', member: 'Read' }, relayArgs);
+      },
     },
     // ── notebook content loop (the read→run→observe→fix loop) ──
     // All address cells by 0-based index and honor the notebook's own %mcp
