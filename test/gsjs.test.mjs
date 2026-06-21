@@ -17,7 +17,7 @@ import { cpuBackend, getBackend, setBackend } from '../ext/gsjs/src/backend.js';
 import {
   recipe, variogram, search, ok, sk, sk_lvm, none, topcut, hgr,
   fromJSON, run, estimate, evaluate,
-  createNeighborhood, indexSamples, select, setrot, sqdist,
+  createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
 } from '../ext/gsjs/index.js';
 import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow } from '../ext/gslib/index.js';
 
@@ -477,11 +477,18 @@ test('neigh — JS setrot/sqdist match gslib wasm (faithful port)', () => {
   for (const [a1, a2, a3, an1, an2] of [[30, 0, 0, 0.5, 0.3], [120, 20, 10, 0.7, 0.4], [0, 0, 0, 1, 1], [255, -15, 5, 0.6, 0.9]]) {
     lib.gslib.setrot(a1, a2, a3, an1, an2, 0, pRot);
     const wasmRot = gReadF64(mem, pRot, 9);
-    const jsRot = setrot(a1, a2, a3, an1, an2);
-    // BIT-IDENTICAL: atra's sin/cos ARE JS Math imports, and the port uses gslib's
-    // exact truncated-pi literal (3.141592654), so the matrices agree to f64 ULP.
-    // (The earlier ~1e-10 gap was Math.PI vs gslib's pi, not trig precision.)
+    // FAITHFUL mode (GSLIB_PI) is BIT-IDENTICAL: atra's sin/cos ARE JS Math imports,
+    // and faithful uses gslib's exact truncated-pi literal, so the matrices agree to
+    // f64 ULP. (The earlier ~1e-10 gap was Math.PI vs gslib's pi, not trig precision.)
+    const jsRot = setrot(a1, a2, a3, an1, an2, GSLIB_PI);
     for (let i = 0; i < 9; i++) assert.ok(Math.abs(wasmRot[i] - jsRot[i]) < 1e-15, `rot[${i}] ${wasmRot[i]} vs ${jsRot[i]}`);
+    // The ACCURATE default (Math.PI) genuinely diverges from the oracle — so the
+    // faithful flag is doing real work (and gsjs's default is the better π).
+    const accRot = setrot(a1, a2, a3, an1, an2);
+    if (a1 % 90 !== 0 || a2 !== 0 || a3 !== 0) {  // skip cases where the π factor cancels
+      let maxDiff = 0; for (let i = 0; i < 9; i++) maxDiff = Math.max(maxDiff, Math.abs(wasmRot[i] - accRot[i]));
+      assert.ok(maxDiff > 1e-12, `accurate π should differ from gslib oracle (got ${maxDiff})`);
+    }
     for (const [x1, y1, z1, x2, y2, z2] of [[10, 20, 0, 35, 12, 5], [0, 0, 0, 100, 50, 20], [-5, 8, 3, 40, -10, 12]]) {
       const wasmD = lib.gslib.sqdist(x1, y1, z1, x2, y2, z2, 0, pRot);
       const jsD = sqdist(x1, y1, z1, x2, y2, z2, jsRot);
@@ -551,4 +558,13 @@ test('neigh — anisotropic ellipsoid actually excludes (vs isotropic)', () => {
   indexSamples(an, samples);
   const r = select(an, [0, 0, 0]);
   assert.ok(r.n === 2 && [...r.ranks].includes(1) && ![...r.ranks].includes(2), `expected E kept, N dropped; got ${[...r.ranks]}`);
+});
+
+test('neigh — faithful flag threads gslib π; default is accurate (modern)', () => {
+  const args = [35, 0, 0, 0.5, 1.0];  // angle 35, anis1=50/100, anis2=100/100
+  const faithful = createNeighborhood({ radius: 100, radiusMinor: 50, angle: 35, faithful: true });
+  const modern = createNeighborhood({ radius: 100, radiusMinor: 50, angle: 35 });
+  assert.deepEqual([...faithful.rotmat], [...setrot(...args, GSLIB_PI)]);   // oracle-parity π
+  assert.deepEqual([...modern.rotmat], [...setrot(...args)]);                // accurate default (Math.PI)
+  assert.notDeepEqual([...modern.rotmat], [...faithful.rotmat]);             // the flag does real work
 });

@@ -1085,20 +1085,24 @@ class KDTree {
 // super-block permutation to thread. Spec: spec_inbox/SPEC-neigh.md §4.
 
 
-// gslib.atra's setrot uses a TRUNCATED pi literal (3.141592654, faithful to
-// GSLIB's setrot.for) — NOT Math.PI. atra's own sin/cos are JS Math imports
-// (accurate), so matching this constant makes the port BIT-IDENTICAL to gslib's
-// wasm setrot — which is what lets select() be bit-identical to gsjs.kriging's
-// selection (M3c). Using Math.PI here would diverge ~1e-10 at the ellipsoid edge.
+// GSLIB's setrot.for uses a TRUNCATED pi literal (3.141592654) — a 1998 Fortran
+// artifact. gsjs is the MODERN library, so setrot defaults to Math.PI (accurate);
+// pass GSLIB_PI to reproduce gslib's wasm setrot BIT-IDENTICALLY. The gap is
+// ~1e-10 — geometrically negligible, but it flips boundary samples, which is what
+// bit-identity tracks. Use faithful (GSLIB_PI) for oracle-parity validation and
+// when feeding gsjs's gslib-wasm kriging fork (so selection matches its search);
+// use the accurate default everywhere else. (atra's sin/cos are themselves JS
+// Math imports, so this pi literal is the ONLY divergence — not trig precision.)
 const GSLIB_PI = 3.141592654;
-const DEG = GSLIB_PI / 180;
 
 // Port of gslib.setrot (gslib.atra:196) — the anisotropic rotation matrix.
 // GSLIB angle convention: ang1=azimuth (CW from N), ang2=dip, ang3=rake. Returns
 // a 9-element row-major 3×3; anisotropy ratios fold into rows 2 and 3, so that
 // applying it to a coordinate yields a space where Euclidean distance² == the
 // anisotropic sqdist. anis1 = minorRange/majorRange, anis2 = vertRange/majorRange.
-function setrot(ang1, ang2, ang3, anis1, anis2) {
+// `pi` selects accurate (Math.PI, default) vs faithful (GSLIB_PI) angle scaling.
+function setrot(ang1, ang2, ang3, anis1, anis2, pi = Math.PI) {
+  const DEG = pi / 180;
   const alpha = (ang1 >= 0 && ang1 < 270 ? (90 - ang1) : (450 - ang1)) * DEG;
   const beta = -ang2 * DEG;
   const theta = ang3 * DEG;
@@ -1133,9 +1137,11 @@ function rotApply(R, x, y, z) {
 
 // createNeighborhood(opts) — the moving-ellipsoid neighbourhood (M3a). Same
 // search vocabulary gsjs's kriging uses, so it composes with a recipe later:
-//   { radius, radiusMinor?, radiusVert?, angle?, angle2?, angle3?, ndmin?, ndmax? }
-// radiusMinor/radiusVert default to radius (isotropic). The rotation matrix is
-// built once here; samples are bound (and the tree built once) via indexSamples.
+//   { radius, radiusMinor?, radiusVert?, angle?, angle2?, angle3?, ndmin?, ndmax?, faithful? }
+// radiusMinor/radiusVert default to radius (isotropic). `faithful:true` uses
+// gslib's truncated π (oracle parity / wasm-kriging-fork consistency); default is
+// accurate Math.PI. The rotation matrix is built once here; samples are bound
+// (and the tree built once) via indexSamples.
 function createNeighborhood(opts = {}) {
   if (!(opts.radius > 0)) throw new Error('gsjs.neigh: radius must be > 0');
   const radius = opts.radius;
@@ -1144,10 +1150,12 @@ function createNeighborhood(opts = {}) {
   const ndmin = opts.ndmin != null ? opts.ndmin : 1;
   const ndmax = opts.ndmax != null ? opts.ndmax : Infinity;
   if (!(ndmax >= ndmin) || !(ndmin >= 1)) throw new Error('gsjs.neigh: need ndmax ≥ ndmin ≥ 1');
+  const faithful = !!opts.faithful;
   return {
     type: opts.type || 'moving',
+    faithful,
     radius, radiusMinor, radiusVert,
-    rotmat: setrot(opts.angle || 0, opts.angle2 || 0, opts.angle3 || 0, radiusMinor / radius, radiusVert / radius),
+    rotmat: setrot(opts.angle || 0, opts.angle2 || 0, opts.angle3 || 0, radiusMinor / radius, radiusVert / radius, faithful ? GSLIB_PI : Math.PI),
     ndmin, ndmax,
     _tree: null, _n: 0, _ox: null, _oy: null, _oz: null,
   };
@@ -1850,6 +1858,7 @@ export {
   setBackend,
   getBackend,
   kriging,
+  GSLIB_PI,
   setrot,
   sqdist,
   createNeighborhood,
