@@ -4,9 +4,10 @@
 
 import { connect } from '#abus';
 import { WKS } from './state.js';
-import { openPath, listSurfaces, runNotebookAt, callNotebookAt } from './surfaces.js';
+import { openPath, listSurfaces, runNotebookAt, callNotebookAt, spawnSurface, closeSurfaceAt } from './surfaces.js';
 import { launchItems, launch } from './launcher.js';
-import { onSurfacesChanged } from './surface-registry.js';
+import { onSurfacesChanged, kindDef } from './surface-registry.js';
+import { newProject } from './tree.js';
 import { mountFolder, unmountAt } from './mount.js';
 import { applyWorkspaceSettings, readSettings, writeSettings } from './settings-store.js';
 import { evaluateWorksScript } from './extension-loader.js';
@@ -192,6 +193,14 @@ export async function setupWorksService() {
         // RunNotebook opens (if given a path) + runs a notebook by its own tab.
         ListSurfaces: () => listSurfaces(),
         RunNotebook:  (p) => runNotebookAt(p || null),
+        // Desktop control (agent worksSpawnSurface/worksNewNotebook/worksClose).
+        // SpawnSurface/CloseSurface are UI (ungated); NewNotebook scaffolds a
+        // project under /projects (audited). All return a small status object.
+        SpawnSurface: (kind, title) => kindDef(kind)
+          ? { ok: true, kind, tabId: spawnSurface(kind, title ? { title } : {}) }
+          : { ok: false, reason: 'unknown surface kind: ' + kind },
+        NewNotebook:  async (title) => ({ ok: true, path: await newProject('/projects', title || 'Untitled') }),
+        CloseSurface: (p) => ({ ok: closeSurfaceAt(p) }),
         // The Launcher (works/surfaces/launcher.html) drives these: the curated,
         // availability-filtered creatables + the dispatch. Logic in launcher.js.
         LaunchItems: () => launchItems(),

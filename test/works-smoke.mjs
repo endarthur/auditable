@@ -323,6 +323,22 @@ const agentMcp = await page.evaluate(async () => {
     nbDeletedOk = true;
   } catch (e) { nbErr = String((e && e.message) || e); }
 
+  // ── desktop control (spawn / new notebook / close) ──
+  const spawnTool = tools.find((t) => t.name === 'worksSpawnSurface');
+  const newNbTool = tools.find((t) => t.name === 'worksNewNotebook');
+  const closeTool = tools.find((t) => t.name === 'worksCloseSurface');
+  let spawnOk = false, newNbOk = false, closeOk = false, dcErr = null;
+  try {
+    const sp = await spawnTool.execute({ kind: 'stub', title: 'Agent Stub' });
+    spawnOk = sp.ok === true && typeof sp.tabId === 'string';
+    const nn = await newNbTool.execute({ title: 'AgentNew' });
+    newNbOk = nn.ok === true && typeof nn.path === 'string' && await W.vfs.exists(nn.path + '/project.json');
+    // open a known file as a tab, then close it by path
+    await openPathTool.execute({ path: '/projects/consented.txt' });
+    const cl = await closeTool.execute({ path: '/projects/consented.txt' });
+    closeOk = cl.ok === true;
+  } catch (e) { dcErr = String((e && e.message) || e); }
+
   // audit log: every tool call above was logged (tools are withAudit-wrapped)
   const audit = (W.getAuditLog && W.getAuditLog()) || [];
 
@@ -338,6 +354,7 @@ const agentMcp = await page.evaluate(async () => {
     auditHasGrant: audit.some((e) => e.tool === 'grant'),
     mkdirOk, moveOk, binOk, statOk, statMissing, deleteOk, moveOutDenied,
     nbHasCells, nbSourceRoundtrip, nbOutputValue, nbDeletedOk, nbReadOnlyDenied, nbErr,
+    spawnOk, newNbOk, closeOk, dcErr,
   };
 });
 
@@ -1848,6 +1865,10 @@ const checks = {
   'numen: agent runs a cell + reads its output (=42)': agentMcp.nbOutputValue === 42,
   'numen: agent deletes a cell': agentMcp.nbDeletedOk === true,
   'numen: a read-only (// %mcp) cell refuses agent edits': agentMcp.nbReadOnlyDenied === true,
+  // desktop control (spawn / new notebook / close)
+  'numen: agent spawns a surface by kind': agentMcp.spawnOk === true,
+  'numen: agent creates a new notebook project': agentMcp.newNbOk === true,
+  'numen: agent closes a surface by path': agentMcp.closeOk === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),

@@ -186,6 +186,28 @@ export function worksTools(agentBus, identity = 'default') {
       annotations: { title: 'Run notebook' },
       execute: async (input) => shell('RunNotebook', [(input && input.path) || null]),
     },
+    {
+      // Set up the desktop — spawn a surface by kind (terminal, inspector, …).
+      name: 'worksSpawnSurface',
+      description: 'Open a new surface on the Works desktop by kind (e.g. terminal, inspector, settings, launcher).',
+      inputSchema: { type: 'object', properties: { kind: { type: 'string' }, title: { type: 'string' } }, required: ['kind'] },
+      annotations: { title: 'Spawn surface' },
+      execute: async (input) => shell('SpawnSurface', [input.kind, input.title]),
+    },
+    {
+      name: 'worksNewNotebook',
+      description: 'Create a new, empty notebook project under /projects and return its path.',
+      inputSchema: { type: 'object', properties: { title: { type: 'string' } } },
+      annotations: { title: 'New notebook' },
+      execute: async (input) => shell('NewNotebook', [(input && input.title) || null]),
+    },
+    {
+      name: 'worksCloseSurface',
+      description: 'Close the surface (tab) showing a given workspace path.',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      annotations: { title: 'Close surface' },
+      execute: async (input) => shell('CloseSurface', [input.path]),
+    },
     // ── notebook content loop (the read→run→observe→fix loop) ──
     // All address cells by 0-based index and honor the notebook's own %mcp
     // access (read-only/private cells stay protected). Reads + RunCell are open;

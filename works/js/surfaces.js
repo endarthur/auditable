@@ -83,6 +83,15 @@ export async function runNotebookAt(path) {
   }
 }
 
+// Close the surface (tab) showing `path`, if open. Goes through rails' normal
+// close (which flushes via the Surface contract). Returns whether one closed.
+export function closeSurfaceAt(path) {
+  for (const r of WKS.surfaces.values()) {
+    if (r.path === path) { WKS.rails.closeTab(r.tabId); return true; }
+  }
+  return false;
+}
+
 // Call a member on a notebook's `Notebook` A-Bus interface, resolved by PATH:
 // reuse an already-open notebook for that path, else open one and wait for it
 // to be Ready. Returns the member's result (await-able, unlike the fire-and-
