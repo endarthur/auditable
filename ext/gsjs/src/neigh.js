@@ -20,50 +20,9 @@
 
 import { KDTree } from '../../scitra/src/spatial/kdtree.js';
 import { STATUS } from './realize.js';
-
-// GSLIB's setrot.for uses a TRUNCATED pi literal (3.141592654) — a 1998 Fortran
-// artifact. gsjs is the MODERN library, so setrot defaults to Math.PI (accurate);
-// pass GSLIB_PI to reproduce gslib's wasm setrot BIT-IDENTICALLY. The gap is
-// ~1e-10 — geometrically negligible, but it flips boundary samples, which is what
-// bit-identity tracks. Use faithful (GSLIB_PI) for oracle-parity validation and
-// when feeding gsjs's gslib-wasm kriging fork (so selection matches its search);
-// use the accurate default everywhere else. (atra's sin/cos are themselves JS
-// Math imports, so this pi literal is the ONLY divergence — not trig precision.)
-export const GSLIB_PI = 3.141592654;
-
-// Port of gslib.setrot (gslib.atra:196) — the anisotropic rotation matrix.
-// GSLIB angle convention: ang1=azimuth (CW from N), ang2=dip, ang3=rake. Returns
-// a 9-element row-major 3×3; anisotropy ratios fold into rows 2 and 3, so that
-// applying it to a coordinate yields a space where Euclidean distance² == the
-// anisotropic sqdist. anis1 = minorRange/majorRange, anis2 = vertRange/majorRange.
-// `pi` selects accurate (Math.PI, default) vs faithful (GSLIB_PI) angle scaling.
-export function setrot(ang1, ang2, ang3, anis1, anis2, pi = Math.PI) {
-  const DEG = pi / 180;
-  const alpha = (ang1 >= 0 && ang1 < 270 ? (90 - ang1) : (450 - ang1)) * DEG;
-  const beta = -ang2 * DEG;
-  const theta = ang3 * DEG;
-  const sina = Math.sin(alpha), sinb = Math.sin(beta), sint = Math.sin(theta);
-  const cosa = Math.cos(alpha), cosb = Math.cos(beta), cost = Math.cos(theta);
-  const afac1 = 1 / Math.max(anis1, 1e-20);
-  const afac2 = 1 / Math.max(anis2, 1e-20);
-  return [
-    cosb * cosa, cosb * sina, -sinb,
-    afac1 * (-cost * sina + sint * sinb * cosa), afac1 * (cost * cosa + sint * sinb * sina), afac1 * (sint * cosb),
-    afac2 * (sint * sina + cost * sinb * cosa), afac2 * (-sint * cosa + cost * sinb * sina), afac2 * (cost * cosb),
-  ];
-}
-
-// Port of gslib.sqdist (gslib.atra:245) — squared anisotropic distance between
-// (x1,y1,z1) and (x2,y2,z2) under rotation matrix R.
-export function sqdist(x1, y1, z1, x2, y2, z2, R) {
-  const dx = x1 - x2, dy = y1 - y2, dz = z1 - z2;
-  let s = 0;
-  for (let i = 0; i < 3; i++) {
-    const c = R[i * 3] * dx + R[i * 3 + 1] * dy + R[i * 3 + 2] * dz;
-    s += c * c;
-  }
-  return s;
-}
+import { sqdist, applyAnis, toRotmat, GSLIB_PI } from './orient.js';
+// setrot/sqdist/orientation conventions live in orient.js (one-way dep); main.js
+// exports orient.js's surface, so the package surface is unchanged.
 
 // Apply R to a coordinate → its transformed-space position (Euclidean distance
 // there == anisotropic sqdist here). Used to build the kd-tree.
@@ -89,16 +48,16 @@ function sectorOf(S, rotPure, dx, dy, dz) {
   return w;
 }
 
-// createNeighborhood(opts) — the moving-ellipsoid neighbourhood (M3a). Same
-// search vocabulary gsjs's kriging uses, so it composes with a recipe later:
-//   { radius, radiusMinor?, radiusVert?, angle?, angle2?, angle3?, ndmin?, ndmax?,
-//     faithful?, sectors? }
+// createNeighborhood(opts) — the moving-ellipsoid neighbourhood. Orientation is
+// convention-driven (see orient.js):
+//   { radius, radiusMinor?, radiusVert?,           ranges: major / intermediate / minor
+//     convention?, ndmin?, ndmax?, faithful?, sectors?, ...orientationParams }
+//   convention 'gslib' (default): { azimuth | angle, dip | angle2, rake | angle3 }
+//   convention 'leapfrog':        { dip, dipAzimuth, pitch }   (pitch from strike)
 // radiusMinor/radiusVert default to radius (isotropic). `faithful:true` uses
-// gslib's truncated π (oracle parity / wasm-kriging-fork consistency); default is
-// accurate Math.PI. `sectors: { n, maxPer?, minPer?, minFilled?, hemispheres? }`
-// turns on angular-sector balancing (declustering): at most maxPer kept per
-// sector, status INSUFFICIENT unless minFilled sectors each hold ≥ minPer. The
-// rotation matrix is built once here; samples are bound via indexSamples.
+// gslib's truncated π (oracle parity / wasm-kriging-fork consistency; gslib
+// convention only). `sectors: { n, maxPer?, minPer?, minFilled?, hemispheres? }`
+// turns on angular-sector declustering. The rotation matrix is built once here.
 export function createNeighborhood(opts = {}) {
   if (!(opts.radius > 0)) throw new Error('gsjs.neigh: radius must be > 0');
   const radius = opts.radius;
@@ -110,7 +69,15 @@ export function createNeighborhood(opts = {}) {
   const faithful = !!opts.faithful;
   const pi = faithful ? GSLIB_PI : Math.PI;
 
-  let sectors = null, rotPure = null;
+  // orientation → pure (orthonormal) rotation; gslib accepts legacy angle/angle2/angle3.
+  const convention = opts.convention || 'gslib';
+  const orientParams = convention === 'gslib'
+    ? { azimuth: opts.azimuth != null ? opts.azimuth : (opts.angle || 0), dip: opts.dip != null ? opts.dip : (opts.angle2 || 0), rake: opts.rake != null ? opts.rake : (opts.angle3 || 0) }
+    : opts;
+  const rotPure = toRotmat(convention, orientParams, pi);
+  const rotmat = applyAnis(rotPure, radiusMinor / radius, radiusVert / radius);
+
+  let sectors = null;
   if (opts.sectors) {
     const s = opts.sectors;
     const n = s.n != null ? s.n : 8;
@@ -123,16 +90,14 @@ export function createNeighborhood(opts = {}) {
     if (!(minPer >= 1) || minPer > maxPer) throw new Error('gsjs.neigh: need 1 ≤ sectors.minPer ≤ maxPer');
     if (!(minFilled >= 0)) throw new Error('gsjs.neigh: sectors.minFilled must be ≥ 0');
     sectors = { n, maxPer, minPer, minFilled, hemispheres, count: hemispheres ? 2 * n : n };
-    // pure rotation (anis=1) → sectors are true angular wedges in the ellipsoid frame
-    rotPure = setrot(opts.angle || 0, opts.angle2 || 0, opts.angle3 || 0, 1, 1, pi);
   }
 
   return {
     type: opts.type || 'moving',
-    faithful,
+    convention, faithful,
     radius, radiusMinor, radiusVert,
-    rotmat: setrot(opts.angle || 0, opts.angle2 || 0, opts.angle3 || 0, radiusMinor / radius, radiusVert / radius, pi),
-    ndmin, ndmax, sectors, _rotPure: rotPure,
+    rotmat, ndmin, ndmax, sectors,
+    _rotPure: rotPure,   // pure orientation (anis removed) — used by sector binning
     _tree: null, _n: 0, _ox: null, _oy: null, _oz: null,
   };
 }

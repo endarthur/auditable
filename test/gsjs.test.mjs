@@ -18,6 +18,7 @@ import {
   recipe, variogram, search, ok, sk, sk_lvm, none, topcut, hgr,
   fromJSON, run, estimate, evaluate,
   createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
+  leapfrogToRotmat, toRotmat, applyAnis,
 } from '../ext/gsjs/index.js';
 import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow } from '../ext/gslib/index.js';
 
@@ -616,4 +617,63 @@ test('neigh — sectors decluster (cap per sector) + minFilled gates status', ()
   indexSamples(mp, samples);
   const rmp = select(mp, [0, 0, 0]);
   assert.ok(rmp.filled < 3 && rmp.status === STATUS.INSUFFICIENT_DATA, `filled ${rmp.filled}`);
+});
+
+// ── orientation conventions (orient.js) ──
+// The canonical form is the orthonormal rotation matrix (rows = major/semi-major/
+// minor axes in world coords; X=East, Y=North, Z=up). Leapfrog is validated against
+// hand-derived structural geometry; the gslib convention must equal the legacy path.
+
+const vclose = (a, b, eps = 1e-9) => a.every((v, i) => Math.abs(v - b[i]) <= eps);
+const dot3 = (m, i, j) => m[i * 3] * m[j * 3] + m[i * 3 + 1] * m[j * 3 + 1] + m[i * 3 + 2] * m[j * 3 + 2];
+
+test('orient — leapfrog axes match hand-derived structural geometry', () => {
+  const S = Math.SQRT1_2;
+  // dip 45° toward East (dipAz 90), pitch 0 → major along strike. RHR strike for
+  // dipAz 90 is North; down-dip is East-and-down.
+  let R = leapfrogToRotmat({ dipAzimuth: 90, dip: 45, pitch: 0 });
+  assert.ok(vclose(R.slice(0, 3), [0, 1, 0]), `major ${R.slice(0, 3)}`);      // North (strike)
+  assert.ok(vclose(R.slice(3, 6), [S, 0, -S]), `semimaj ${R.slice(3, 6)}`);   // down-dip
+  // pitch 90 → major swings to down-dip
+  R = leapfrogToRotmat({ dipAzimuth: 90, dip: 45, pitch: 90 });
+  assert.ok(vclose(R.slice(0, 3), [S, 0, -S]), `major@90 ${R.slice(0, 3)}`);
+  // dip 30° toward North (dipAz 0), pitch 0 → major along strike = West (RHR)
+  R = leapfrogToRotmat({ dipAzimuth: 0, dip: 30, pitch: 0 });
+  assert.ok(vclose(R.slice(0, 3), [-1, 0, 0]), `major ${R.slice(0, 3)}`);     // West
+  assert.ok(vclose(R.slice(3, 6), [0, Math.cos(Math.PI / 6), -0.5]), `semimaj ${R.slice(3, 6)}`); // down-dip N+down
+});
+
+test('orient — leapfrog R is orthonormal + a proper rotation (det +1)', () => {
+  for (const p of [{ dip: 0, dipAzimuth: 0, pitch: 0 }, { dip: 60, dipAzimuth: 215, pitch: 35 }, { dip: 90, dipAzimuth: 130, pitch: 70 }]) {
+    const R = leapfrogToRotmat(p);
+    for (let i = 0; i < 3; i++) assert.ok(Math.abs(dot3(R, i, i) - 1) < 1e-12, `row ${i} not unit`);
+    assert.ok(Math.abs(dot3(R, 0, 1)) < 1e-12 && Math.abs(dot3(R, 0, 2)) < 1e-12 && Math.abs(dot3(R, 1, 2)) < 1e-12, 'rows not orthogonal');
+    const det = R[0] * (R[4] * R[8] - R[5] * R[7]) - R[1] * (R[3] * R[8] - R[5] * R[6]) + R[2] * (R[3] * R[7] - R[4] * R[6]);
+    assert.ok(Math.abs(det - 1) < 1e-12, `det ${det}`);
+  }
+});
+
+test('orient — gslib convention == legacy angle path (no regression)', () => {
+  const legacy = createNeighborhood({ radius: 160, radiusMinor: 70, radiusVert: 120, angle: 30, angle2: 12, angle3: 5 });
+  const named = createNeighborhood({ radius: 160, radiusMinor: 70, radiusVert: 120, convention: 'gslib', azimuth: 30, dip: 12, rake: 5 });
+  assert.deepEqual([...named.rotmat], [...legacy.rotmat]);
+  assert.deepEqual([...named._rotPure], [...legacy._rotPure]);
+  // and the pure path equals setrot with anis folded in by applyAnis
+  assert.deepEqual([...legacy.rotmat], [...applyAnis(setrot(30, 12, 5, 1, 1), 70 / 160, 120 / 160)]);
+  // toRotmat('gslib') is just setrot at anis=1
+  assert.deepEqual([...toRotmat('gslib', { azimuth: 30, dip: 12, rake: 5 })], [...setrot(30, 12, 5, 1, 1)]);
+});
+
+test('neigh — leapfrog convention runs + applies anisotropy on the right axis', () => {
+  // shallow N-S elongation: dip 0 (horizontal), pitch 0 → major along strike (W);
+  // make the strike axis long and the perpendicular short, confirm the ellipsoid
+  // excludes the across-strike sample.
+  const samples = [[0, 0, 0], [80, 0, 0], [0, 80, 0]];   // origin, E, N
+  // dipAz 0 dip 0 → strike (major) = W/E line; radiusMinor squeezes the N-S (semimajor)
+  const nb = createNeighborhood({ convention: 'leapfrog', dip: 0, dipAzimuth: 0, pitch: 0, radius: 100, radiusMinor: 50, ndmin: 1, ndmax: 9 });
+  indexSamples(nb, samples);
+  const r = select(nb, [0, 0, 0]);
+  // major axis is E-W (strike), so the E sample (idx 1, along major, range 100) is in;
+  // the N sample (idx 2, along the squeezed semi-major, range 50) is out at distance 80.
+  assert.ok([...r.ranks].includes(1) && ![...r.ranks].includes(2), `expected E kept / N dropped; got ${[...r.ranks]}`);
 });

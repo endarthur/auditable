@@ -637,6 +637,129 @@ function kriging(opts) {
   };
 }
 
+// ── src/orient.js ──
+
+// @gcu/gsjs — orientation conventions. The search ellipsoid / variogram anisotropy
+// can be oriented in several mutually-incompatible parameterizations (GSLIB
+// azimuth/dip/rake, Leapfrog dip/dip-azimuth/pitch, Isatis's nine, …). This module
+// is the registry that maps each to ONE canonical form — the orthonormal 3×3
+// rotation matrix whose ROWS are the ellipsoid axes in world coordinates:
+//   row0 = major (Maximum range), row1 = semi-major (Intermediate), row2 = minor.
+// World frame: X = East, Y = North, Z = up. `sqdist` / the kd-tree consume the
+// matrix (after anisotropy scaling), so conversions go THROUGH the matrix — we
+// never hand-derive cross-convention angle trig.
+//
+// Convention facts pinned by research (2026-06-21, see SPEC-neigh + memory):
+//   GSLIB  — intrinsic Z·X·Y, major = North at zero, dip POSITIVE-UP (the quirk).
+//            Our setrot port (validated f64 vs gslib wasm). 'gslib' producer.
+//   Leapfrog — intrinsic Z·X·Z clockwise (dipAz·Z, dip·X, pitch·Z); pitch measured
+//            FROM STRIKE (pitch 0 → major along strike, 90 → down-dip), per
+//            Seequent's developer rotation schema. Built here by DIRECT geometric
+//            construction of the axis vectors (no Euler sign ambiguity).
+//   Isatis.neo — nine named conventions + a conversion tool; same matrix-canonical
+//            idea. Future producers slot in here as data (axis order + signs).
+//
+// UNVERIFIED-vs-real-Leapfrog (single-line toggles, flagged): the strike SENSE
+// (right-hand-rule, dipAz−90) and the pitch sign. Confirm against a real Leapfrog
+// export when convenient; the geometry below is self-consistent with the docs.
+
+// GSLIB's setrot.for uses a TRUNCATED pi literal (3.141592654) — a 1998 Fortran
+// artifact. The 'gslib' producer defaults to Math.PI (modern) and takes GSLIB_PI
+// for bit-identical oracle parity (atra's sin/cos are JS Math imports, so this
+// literal is the only divergence). Leapfrog etc. always use Math.PI.
+const GSLIB_PI = 3.141592654;
+
+// ── GSLIB setrot / sqdist (the validated baseline, ported from gslib.atra) ──
+
+// Port of gslib.setrot (gslib.atra:196). GSLIB angle convention: ang1=azimuth
+// (CW from N), ang2=dip, ang3=rake. Row-major 3×3; anisotropy ratios fold into
+// rows 2,3 (anis1=minorRange/majorRange, anis2=vertRange/majorRange). `pi` picks
+// accurate (Math.PI) vs faithful (GSLIB_PI).
+function setrot(ang1, ang2, ang3, anis1, anis2, pi = Math.PI) {
+  const DEG = pi / 180;
+  const alpha = (ang1 >= 0 && ang1 < 270 ? (90 - ang1) : (450 - ang1)) * DEG;
+  const beta = -ang2 * DEG;
+  const theta = ang3 * DEG;
+  const sina = Math.sin(alpha), sinb = Math.sin(beta), sint = Math.sin(theta);
+  const cosa = Math.cos(alpha), cosb = Math.cos(beta), cost = Math.cos(theta);
+  const afac1 = 1 / Math.max(anis1, 1e-20);
+  const afac2 = 1 / Math.max(anis2, 1e-20);
+  return [
+    cosb * cosa, cosb * sina, -sinb,
+    afac1 * (-cost * sina + sint * sinb * cosa), afac1 * (cost * cosa + sint * sinb * sina), afac1 * (sint * cosb),
+    afac2 * (sint * sina + cost * sinb * cosa), afac2 * (-sint * cosa + cost * sinb * sina), afac2 * (cost * cosb),
+  ];
+}
+
+// Port of gslib.sqdist (gslib.atra:245) — squared anisotropic distance under R.
+function sqdist(x1, y1, z1, x2, y2, z2, R) {
+  const dx = x1 - x2, dy = y1 - y2, dz = z1 - z2;
+  let s = 0;
+  for (let i = 0; i < 3; i++) {
+    const c = R[i * 3] * dx + R[i * 3 + 1] * dy + R[i * 3 + 2] * dz;
+    s += c * c;
+  }
+  return s;
+}
+
+// Scale an orthonormal rotation R (rows = major/semi-major/minor axes) into the
+// anisotropic distance matrix sqdist wants: rows 1,2 divided by the range ratios
+// (so distance along a short axis counts more). Identical to setrot's afac folding.
+function applyAnis(R, anis1, anis2) {
+  const a1 = 1 / Math.max(anis1, 1e-20), a2 = 1 / Math.max(anis2, 1e-20);
+  return [
+    R[0], R[1], R[2],
+    a1 * R[3], a1 * R[4], a1 * R[5],
+    a2 * R[6], a2 * R[7], a2 * R[8],
+  ];
+}
+
+// ── vector helpers ──
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const scale = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+// horizontal unit vector at azimuth (radians, CW from North): East=sin, North=cos
+const unitH = (azRad) => [Math.sin(azRad), Math.cos(azRad), 0];
+
+// ── Leapfrog producer (direct geometric construction) ──
+//
+// leapfrogToRotmat({ dip, dipAzimuth, pitch }) → orthonormal R (pure rotation).
+// dip = angle below horizontal of the major-semimajor plane; dipAzimuth = compass
+// direction of dip (CW from N); pitch = angle of the major axis IN the plane,
+// measured from strike (0 → along strike, 90 → down-dip). Built straight from
+// these meanings — pitch-from-strike falls out by construction, so there's no
+// Euler-order/sign trap. Strike uses the right-hand rule (dip to the right →
+// strike = dipAzimuth − 90°); see the UNVERIFIED note up top.
+function leapfrogToRotmat({ dip = 0, dipAzimuth = 0, pitch = 0 } = {}) {
+  const r = Math.PI / 180;
+  const az = dipAzimuth * r, dp = dip * r, pt = pitch * r;
+  const cd = Math.cos(dp), sd = Math.sin(dp);
+  const strike = unitH(az - Math.PI / 2);                       // RHR strike
+  const downdip = [Math.sin(az) * cd, Math.cos(az) * cd, -sd];  // toward dipAz, plunging down
+  const cp = Math.cos(pt), sp = Math.sin(pt);
+  const major = add(scale(strike, cp), scale(downdip, sp));     // pitch from strike
+  const semimajor = add(scale(strike, -sp), scale(downdip, cp));// in-plane ⟂ to major
+  const minor = cross(major, semimajor);                        // plane normal — right-handed (det +1)
+  return [...major, ...semimajor, ...minor];
+}
+
+// ── convention dispatcher ──
+//
+// toRotmat(convention, params, pi?) → orthonormal R (rows = major/semi-major/minor).
+//   'gslib'    { azimuth, dip, rake }      — the validated baseline (pi-flag aware)
+//   'leapfrog' { dip, dipAzimuth, pitch }  — geometric construction
+// Anisotropy is applied separately (applyAnis) so this stays pure orientation.
+function toRotmat(convention, params = {}, pi = Math.PI) {
+  switch (convention) {
+    case 'gslib':
+      return setrot(params.azimuth || 0, params.dip || 0, params.rake || 0, 1, 1, pi);
+    case 'leapfrog':
+      return leapfrogToRotmat(params);
+    default:
+      throw new Error(`gsjs.orient: unknown convention '${convention}'`);
+  }
+}
+
 // ── ../scitra/src/spatial/kdtree.js ──
 
 // KDTree — k-dimensional binary tree for fast nearest-neighbor and
@@ -1084,50 +1207,8 @@ class KDTree {
 // gslib.atra) so gsjs owns the gather end-to-end in original sample order — no
 // super-block permutation to thread. Spec: spec_inbox/SPEC-neigh.md §4.
 
-
-// GSLIB's setrot.for uses a TRUNCATED pi literal (3.141592654) — a 1998 Fortran
-// artifact. gsjs is the MODERN library, so setrot defaults to Math.PI (accurate);
-// pass GSLIB_PI to reproduce gslib's wasm setrot BIT-IDENTICALLY. The gap is
-// ~1e-10 — geometrically negligible, but it flips boundary samples, which is what
-// bit-identity tracks. Use faithful (GSLIB_PI) for oracle-parity validation and
-// when feeding gsjs's gslib-wasm kriging fork (so selection matches its search);
-// use the accurate default everywhere else. (atra's sin/cos are themselves JS
-// Math imports, so this pi literal is the ONLY divergence — not trig precision.)
-const GSLIB_PI = 3.141592654;
-
-// Port of gslib.setrot (gslib.atra:196) — the anisotropic rotation matrix.
-// GSLIB angle convention: ang1=azimuth (CW from N), ang2=dip, ang3=rake. Returns
-// a 9-element row-major 3×3; anisotropy ratios fold into rows 2 and 3, so that
-// applying it to a coordinate yields a space where Euclidean distance² == the
-// anisotropic sqdist. anis1 = minorRange/majorRange, anis2 = vertRange/majorRange.
-// `pi` selects accurate (Math.PI, default) vs faithful (GSLIB_PI) angle scaling.
-function setrot(ang1, ang2, ang3, anis1, anis2, pi = Math.PI) {
-  const DEG = pi / 180;
-  const alpha = (ang1 >= 0 && ang1 < 270 ? (90 - ang1) : (450 - ang1)) * DEG;
-  const beta = -ang2 * DEG;
-  const theta = ang3 * DEG;
-  const sina = Math.sin(alpha), sinb = Math.sin(beta), sint = Math.sin(theta);
-  const cosa = Math.cos(alpha), cosb = Math.cos(beta), cost = Math.cos(theta);
-  const afac1 = 1 / Math.max(anis1, 1e-20);
-  const afac2 = 1 / Math.max(anis2, 1e-20);
-  return [
-    cosb * cosa, cosb * sina, -sinb,
-    afac1 * (-cost * sina + sint * sinb * cosa), afac1 * (cost * cosa + sint * sinb * sina), afac1 * (sint * cosb),
-    afac2 * (sint * sina + cost * sinb * cosa), afac2 * (-sint * cosa + cost * sinb * sina), afac2 * (cost * cosb),
-  ];
-}
-
-// Port of gslib.sqdist (gslib.atra:245) — squared anisotropic distance between
-// (x1,y1,z1) and (x2,y2,z2) under rotation matrix R.
-function sqdist(x1, y1, z1, x2, y2, z2, R) {
-  const dx = x1 - x2, dy = y1 - y2, dz = z1 - z2;
-  let s = 0;
-  for (let i = 0; i < 3; i++) {
-    const c = R[i * 3] * dx + R[i * 3 + 1] * dy + R[i * 3 + 2] * dz;
-    s += c * c;
-  }
-  return s;
-}
+// setrot/sqdist/orientation conventions live in orient.js (one-way dep); main.js
+// exports orient.js's surface, so the package surface is unchanged.
 
 // Apply R to a coordinate → its transformed-space position (Euclidean distance
 // there == anisotropic sqdist here). Used to build the kd-tree.
@@ -1153,16 +1234,16 @@ function sectorOf(S, rotPure, dx, dy, dz) {
   return w;
 }
 
-// createNeighborhood(opts) — the moving-ellipsoid neighbourhood (M3a). Same
-// search vocabulary gsjs's kriging uses, so it composes with a recipe later:
-//   { radius, radiusMinor?, radiusVert?, angle?, angle2?, angle3?, ndmin?, ndmax?,
-//     faithful?, sectors? }
+// createNeighborhood(opts) — the moving-ellipsoid neighbourhood. Orientation is
+// convention-driven (see orient.js):
+//   { radius, radiusMinor?, radiusVert?,           ranges: major / intermediate / minor
+//     convention?, ndmin?, ndmax?, faithful?, sectors?, ...orientationParams }
+//   convention 'gslib' (default): { azimuth | angle, dip | angle2, rake | angle3 }
+//   convention 'leapfrog':        { dip, dipAzimuth, pitch }   (pitch from strike)
 // radiusMinor/radiusVert default to radius (isotropic). `faithful:true` uses
-// gslib's truncated π (oracle parity / wasm-kriging-fork consistency); default is
-// accurate Math.PI. `sectors: { n, maxPer?, minPer?, minFilled?, hemispheres? }`
-// turns on angular-sector balancing (declustering): at most maxPer kept per
-// sector, status INSUFFICIENT unless minFilled sectors each hold ≥ minPer. The
-// rotation matrix is built once here; samples are bound via indexSamples.
+// gslib's truncated π (oracle parity / wasm-kriging-fork consistency; gslib
+// convention only). `sectors: { n, maxPer?, minPer?, minFilled?, hemispheres? }`
+// turns on angular-sector declustering. The rotation matrix is built once here.
 function createNeighborhood(opts = {}) {
   if (!(opts.radius > 0)) throw new Error('gsjs.neigh: radius must be > 0');
   const radius = opts.radius;
@@ -1174,7 +1255,15 @@ function createNeighborhood(opts = {}) {
   const faithful = !!opts.faithful;
   const pi = faithful ? GSLIB_PI : Math.PI;
 
-  let sectors = null, rotPure = null;
+  // orientation → pure (orthonormal) rotation; gslib accepts legacy angle/angle2/angle3.
+  const convention = opts.convention || 'gslib';
+  const orientParams = convention === 'gslib'
+    ? { azimuth: opts.azimuth != null ? opts.azimuth : (opts.angle || 0), dip: opts.dip != null ? opts.dip : (opts.angle2 || 0), rake: opts.rake != null ? opts.rake : (opts.angle3 || 0) }
+    : opts;
+  const rotPure = toRotmat(convention, orientParams, pi);
+  const rotmat = applyAnis(rotPure, radiusMinor / radius, radiusVert / radius);
+
+  let sectors = null;
   if (opts.sectors) {
     const s = opts.sectors;
     const n = s.n != null ? s.n : 8;
@@ -1187,16 +1276,14 @@ function createNeighborhood(opts = {}) {
     if (!(minPer >= 1) || minPer > maxPer) throw new Error('gsjs.neigh: need 1 ≤ sectors.minPer ≤ maxPer');
     if (!(minFilled >= 0)) throw new Error('gsjs.neigh: sectors.minFilled must be ≥ 0');
     sectors = { n, maxPer, minPer, minFilled, hemispheres, count: hemispheres ? 2 * n : n };
-    // pure rotation (anis=1) → sectors are true angular wedges in the ellipsoid frame
-    rotPure = setrot(opts.angle || 0, opts.angle2 || 0, opts.angle3 || 0, 1, 1, pi);
   }
 
   return {
     type: opts.type || 'moving',
-    faithful,
+    convention, faithful,
     radius, radiusMinor, radiusVert,
-    rotmat: setrot(opts.angle || 0, opts.angle2 || 0, opts.angle3 || 0, radiusMinor / radius, radiusVert / radius, pi),
-    ndmin, ndmax, sectors, _rotPure: rotPure,
+    rotmat, ndmin, ndmax, sectors,
+    _rotPure: rotPure,   // pure orientation (anis removed) — used by sector binning
     _tree: null, _n: 0, _ox: null, _oy: null, _oz: null,
   };
 }
@@ -1906,7 +1993,8 @@ function run(R, ctx = {}, overrides = {}) {
 // stats, histogram, swath, gradeTonnage
 // cpuBackend, getBackend, setBackend
 // kriging
-// createNeighborhood, indexSamples, select, setrot, sqdist
+// setrot, sqdist, applyAnis, toRotmat, leapfrogToRotmat, GSLIB_PI
+// createNeighborhood, indexSamples, select
 // recipe, variogram, search, ok/sk/sk_lvm, none/topcut/hgr, fromJSON, run/estimate/evaluate
 
 export {
@@ -1924,6 +2012,9 @@ export {
   GSLIB_PI,
   setrot,
   sqdist,
+  applyAnis,
+  leapfrogToRotmat,
+  toRotmat,
   createNeighborhood,
   indexSamples,
   select,
