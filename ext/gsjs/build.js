@@ -38,7 +38,10 @@ fs.writeFileSync(
 // ── stage 2: @gcu/build the JS layer, inlining @gcu/sift ──
 const r = await bundle({
   at: import.meta.url,
-  inline: ['../sift/src/predicate.js'],
+  inline: [
+    '../sift/src/predicate.js',          // the serializable `where` selector (recipe.js)
+    '../scitra/src/spatial/kdtree.js',   // the neighbourhood's spatial index (neigh.js)
+  ],
   sourcemap: false,
   meta: false,
 });

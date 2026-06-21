@@ -11,4 +11,5 @@ export * from './realize.js';     // STATUS, makeTransform, realize
 export * from './aggregate.js';   // stats, histogram, swath, gradeTonnage
 export * from './backend.js';     // cpuBackend, getBackend, setBackend
 export * from './api.js';         // kriging
+export * from './neigh.js';       // createNeighborhood, indexSamples, select, setrot, sqdist
 export * from './recipe.js';      // recipe, variogram, search, ok/sk/sk_lvm, none/topcut/hgr, fromJSON, run/estimate/evaluate

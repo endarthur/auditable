@@ -17,7 +17,9 @@ import { cpuBackend, getBackend, setBackend } from '../ext/gsjs/src/backend.js';
 import {
   recipe, variogram, search, ok, sk, sk_lvm, none, topcut, hgr,
   fromJSON, run, estimate, evaluate,
+  createNeighborhood, indexSamples, select, setrot, sqdist,
 } from '../ext/gsjs/index.js';
+import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow } from '../ext/gslib/index.js';
 
 const close = (a, b, eps = 1e-12) => Math.abs(a - b) <= eps;
 
@@ -444,4 +446,112 @@ test('recipe — function `where` works in-memory but refuses to serialize', () 
   const res = run(r, { rows: SROWS, blockDomains });   // runs fine in memory
   assert.ok([...res.status].filter((s) => s === STATUS.OK).length >= 12);
   assert.throws(() => r.toJSON(), /can't be serialized/);  // but the artifact refuses it
+});
+
+// ── M3a: the search neighbourhood (moving ellipsoid, kd-tree backend) ──
+// SPEC-neigh §4. The gate: select() is bit-identical to a brute-force ellipsoid
+// scan (clustered data, ties, anisotropy, rotation). Plus a faithfulness check —
+// the JS setrot/sqdist port matches gslib's frozen wasm originals.
+
+function rng32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+// brute-force reference: every sample inside the ellipsoid, distance-sorted, tie-
+// broken by original index, capped at ndmax. Uses the SAME sqdist as select() —
+// the point is identical metric, different algorithm (full scan vs kd-tree).
+function bruteSelect(samples, target, R, radius, ndmax) {
+  const r2 = radius * radius, cand = [];
+  for (let i = 0; i < samples.length; i++) {
+    const d2 = sqdist(target[0], target[1], target[2], samples[i][0], samples[i][1], samples[i][2], R);
+    if (d2 <= r2) cand.push({ i, d2 });
+  }
+  cand.sort((a, b) => (a.d2 - b.d2) || (a.i - b.i));
+  return cand.slice(0, ndmax).map((c) => c.i);
+}
+
+test('neigh — JS setrot/sqdist match gslib wasm (faithful port)', () => {
+  const mem = new WebAssembly.Memory({ initial: 4 });
+  const lib = gslibInstantiate({ memory: mem });
+  const st = { off: 65536 };
+  const pRot = gAlloc(st, 9);
+  gGrow(mem, st.off);
+  for (const [a1, a2, a3, an1, an2] of [[30, 0, 0, 0.5, 0.3], [120, 20, 10, 0.7, 0.4], [0, 0, 0, 1, 1], [255, -15, 5, 0.6, 0.9]]) {
+    lib.gslib.setrot(a1, a2, a3, an1, an2, 0, pRot);
+    const wasmRot = gReadF64(mem, pRot, 9);
+    const jsRot = setrot(a1, a2, a3, an1, an2);
+    // ~1e-9 tol: atra's wasm sin/cos are a polynomial approx (JS Math is actually
+    // MORE precise), so the matrices agree to trig-runtime precision, not ULP. The
+    // port formula is correct (a transpose/sign slip would diverge by O(1)). NB for
+    // M3c: bit-identical SELECTION vs gsjs.kriging will need the neighbourhood to
+    // share gslib's exact trig (or accept boundary samples differing at this level).
+    for (let i = 0; i < 9; i++) assert.ok(Math.abs(wasmRot[i] - jsRot[i]) < 1e-8, `rot[${i}] ${wasmRot[i]} vs ${jsRot[i]}`);
+    for (const [x1, y1, z1, x2, y2, z2] of [[10, 20, 0, 35, 12, 5], [0, 0, 0, 100, 50, 20], [-5, 8, 3, 40, -10, 12]]) {
+      const wasmD = lib.gslib.sqdist(x1, y1, z1, x2, y2, z2, 0, pRot);
+      const jsD = sqdist(x1, y1, z1, x2, y2, z2, jsRot);
+      // relative tol: the only divergence is sin/cos last-ULP between the wasm and
+      // JS math runtimes, amplified by squaring — faithful to ~1e-10 relative.
+      assert.ok(Math.abs(wasmD - jsD) <= 1e-8 * Math.abs(wasmD) + 1e-9, `sqdist ${wasmD} vs ${jsD}`);
+    }
+  }
+});
+
+test('neigh — select() is bit-identical to a brute-force ellipsoid scan', () => {
+  const rng = rng32(99);
+  // clustered samples + a regular grid (the grid forces exact-distance TIES, so
+  // the deterministic tie-break is genuinely exercised).
+  const samples = [];
+  for (let c = 0; c < 5; c++) { const cx = rng() * 500, cy = rng() * 500; for (let k = 0; k < 14; k++) samples.push([cx + (rng() - 0.5) * 60, cy + (rng() - 0.5) * 60, 0]); }
+  for (let gx = 50; gx <= 450; gx += 50) for (let gy = 50; gy <= 450; gy += 50) samples.push([gx, gy, 0]);
+
+  const configs = [
+    { radius: 120 },                                                        // isotropic
+    { radius: 160, radiusMinor: 70, radiusVert: 999, angle: 30 },           // anisotropic + rotated (2D)
+    { radius: 200, radiusMinor: 90, radiusVert: 140, angle: 115, angle2: 20, angle3: 10 }, // full 3D
+  ];
+  let checks = 0;
+  for (const cfg of configs) {
+    for (const ndmax of [4, 12, 1e9]) {
+      const nb = createNeighborhood({ ...cfg, ndmin: 1, ndmax });
+      indexSamples(nb, samples);
+      for (let t = 0; t < 60; t++) {
+        const target = [rng() * 500, rng() * 500, 0];
+        const got = [...select(nb, target).ranks];
+        const exp = bruteSelect(samples, target, nb.rotmat, cfg.radius, ndmax);
+        assert.deepEqual(got, exp, `cfg ${JSON.stringify(cfg)} ndmax ${ndmax} target ${target}`);
+        checks++;
+      }
+      // targets sitting EXACTLY on grid samples → maximal ties
+      for (let gx = 100; gx <= 400; gx += 100) {
+        const got = [...select(nb, [gx, gx, 0]).ranks];
+        const exp = bruteSelect(samples, [gx, gx, 0], nb.rotmat, cfg.radius, ndmax);
+        assert.deepEqual(got, exp, `tie target ${gx}`);
+        checks++;
+      }
+    }
+  }
+  assert.ok(checks > 500, `only ${checks} comparisons`);
+});
+
+test('neigh — ndmin status + ndmax cap + tie-break order', () => {
+  const samples = [[0, 0, 0], [10, 0, 0], [0, 10, 0], [100, 100, 0]];
+  const nb = createNeighborhood({ radius: 30, ndmin: 2, ndmax: 2 });
+  indexSamples(nb, samples);
+  const s = select(nb, [0, 0, 0]);
+  assert.equal(s.n, 2);                       // 3 inside radius, capped to ndmax
+  assert.equal(s.status, STATUS.OK);
+  assert.deepEqual([...s.ranks], [0, 1]);      // self (d=0), then [10,0,0]/[0,10,0] tie → lower index
+  const far = select(nb, [100, 100, 0]);
+  assert.equal(far.status, STATUS.INSUFFICIENT_DATA);  // only 1 inside, < ndmin
+  assert.equal(far.n, 1);
+});
+
+test('neigh — anisotropic ellipsoid actually excludes (vs isotropic)', () => {
+  const samples = [[0, 0, 0], [80, 0, 0], [0, 80, 0]];   // E and N at equal range
+  indexSamples(createNeighborhood({ radius: 100, ndmin: 1, ndmax: 9 }), samples);
+  const iso = select(indexSamples(createNeighborhood({ radius: 100 }), samples), [0, 0, 0]);
+  assert.equal(iso.n, 3);                                 // isotropic: both reached
+  // major axis E-W (angle 90 → azimuth East), minor N-S squeezed to 0.5 → N sample at 80 is out
+  const an = createNeighborhood({ radius: 100, radiusMinor: 50, angle: 90, ndmin: 1, ndmax: 9 });
+  indexSamples(an, samples);
+  const r = select(an, [0, 0, 0]);
+  assert.ok(r.n === 2 && [...r.ranks].includes(1) && ![...r.ranks].includes(2), `expected E kept, N dropped; got ${[...r.ranks]}`);
 });

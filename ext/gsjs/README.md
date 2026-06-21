@@ -23,7 +23,8 @@ atra/WASM), not a backend lock.
 | Browser-loadable bundle (`@gcu/build` + gcu-make, sift inlined) | ✅ |
 | Notebook examples (live top-cut · domains · artifact + swath/GT) | ✅ |
 | Reactive cell wiring (estimate once → slider `onInput` re-realizes) | ✅ |
-| Neighbourhood module (SPEC-neigh: sectors/per-hole/bench/kd-tree) | ⏳ |
+| Neighbourhood M3a — moving ellipsoid, kd-tree, deterministic tie-break | ✅ |
+| Neighbourhood M3b/c — sectors/per-hole/bench/capping + kriging integration | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
 
@@ -145,8 +146,15 @@ wire `build.js` into `gcu-make`.
 Recipe API + browser-loadable bundle + three notebook examples shipped (live
 top-cut, domains, artifact+swath/GT — all browser-verified; the reactive split
 proven: estimate once, slider `onInput` re-realizes in ~0.5 ms vs ~35 ms krige).
-The build is on `@gcu/build` + gcu-make (sift inlined; atra→wasm via atrac's
-`bundleRecipe`). Next: **M3 — the neighbourhood module** (SPEC-neigh: sectors /
-per-hole / bench / kd-tree). Then M-last WebGPU backend (drop-in, validated vs
-the CPU oracle). Plus: LVM (ktype 2); a real Walker Lake dataset. State tracked
-in the `project_gsjs_started` memory.
+The build is on `@gcu/build` + gcu-make (sift + scitra's KDTree inlined; atra→wasm
+via atrac's `bundleRecipe`). **M3a shipped** — the search neighbourhood foundation
+(`neigh.js`: `createNeighborhood`/`indexSamples`/`select` for the moving ellipsoid,
+scitra kd-tree built in `setrot`-transformed coords so the ellipsoid is a sphere
+query, deterministic tie-break; bit-identical to a brute-force scan, ported
+setrot/sqdist faithful vs gslib wasm). Next: **M3b** — the selection-policy passes
+(nsect sectors, per-hole cap, min-distance, distance-restricted capping) + unique +
+bench; then **M3c** — feed `select()` into the kriging fork (the kt3d decoupling →
+octant/sector kriging, `ext/gslib` untouched). NB for M3c: bit-identical selection
+vs `gsjs.kriging` needs the neighbourhood to share gslib's exact (wasm) trig — JS
+`Math` is *more* precise than atra's polynomial sin/cos (~1e-9 boundary divergence).
+Then M-last WebGPU backend. State tracked in the `project_gsjs_started` memory.
