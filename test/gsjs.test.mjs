@@ -185,7 +185,7 @@ test('aggregate.swath — mean per axis slice', () => {
   const grid = { nx: 2, ny: 2, nz: 1, xmn: 5, ymn: 5, zmn: 0, xsiz: 10, ysiz: 10, zsiz: 10 };
   const est = Float64Array.from([1, 2, 3, 4]);
   const st = Uint8Array.from([STATUS.OK, STATUS.OK, STATUS.OK, STATUS.OK]);
-  const sw = swath(est, st, grid, { axis: 'x' });
+  const sw = swath(est, st, { grid }, { axis: 'x' });
   assert.deepEqual([...sw.mean], [2, 3]);   // ix0: (1+3)/2 ; ix1: (2+4)/2
   assert.deepEqual([...sw.count], [2, 2]);
   assert.deepEqual([...sw.centers], [5, 15]);
@@ -212,4 +212,58 @@ test('pipeline — kriging → realize → stats/GT (CPU, GPU-free)', () => {
   assert.ok(s.n >= 12 && s.mean > 1 && s.mean < 4, `stats off: ${JSON.stringify(s)}`);
   const gt = gradeTonnage(est, r.status, { cutoffs: [0, 2.5] });
   assert.ok(gt.tonnage[0] >= gt.tonnage[1], 'tonnage must be monotone in cutoff');
+});
+
+// ── targets + categories: mask / points / per-point dims, vs the oracle ──
+test('mask — sparse run matches kt3d at active blocks only', () => {
+  const ref = kt3d({ ...SYNTH, ktype: 'OK' });
+  const { nx, ny, nz } = SYNTH.grid;
+  const mask = new Array(nx * ny * nz).fill(false);
+  for (let i = 0; i < mask.length; i++) if (i % nx < 2) mask[i] = true; // left half
+  const r = kriging({ ...SYNTH, ktype: 'OK', mask });
+  const realized = realize(r, r.values);
+  assert.equal(r.n_targets, mask.filter(Boolean).length);
+  let maxErr = 0, nOK = 0;
+  for (let t = 0; t < r.n_targets; t++) {
+    if (r.status[t] !== STATUS.OK) continue;
+    nOK++;
+    maxErr = Math.max(maxErr, Math.abs(realized[t] - ref.est[r.gridIndex[t]]));
+  }
+  assert.ok(nOK >= 6, `nOK ${nOK}`);
+  assert.ok(maxErr < 1e-9, `mask maxErr ${maxErr}`);
+});
+
+function gridCentres(extra = []) {
+  const { nx, ny, nz, xmn, ymn, zmn, xsiz, ysiz, zsiz } = SYNTH.grid;
+  const pts = [];
+  for (let iz = 0; iz < nz; iz++) for (let iy = 0; iy < ny; iy++) for (let ix = 0; ix < nx; ix++)
+    pts.push([xmn + ix * xsiz, ymn + iy * ysiz, zmn + iz * zsiz, ...extra]);
+  return pts;
+}
+const PCFG = { data: SYNTH.data, variogram: SYNTH.variogram, search: SYNTH.search, ktype: 'OK' };
+
+test('points — kriging at grid centres == kt3d (point, disc 1)', () => {
+  const ref = kt3d({ ...SYNTH, ktype: 'OK' });
+  const r = kriging({ ...PCFG, points: gridCentres() });
+  const realized = realize(r, r.values);
+  assert.equal(r.n_targets, ref.est.length);
+  let maxErr = 0, nOK = 0;
+  for (let t = 0; t < r.n_targets; t++) { if (r.status[t] !== STATUS.OK) continue; nOK++; maxErr = Math.max(maxErr, Math.abs(realized[t] - ref.est[t])); }
+  assert.ok(nOK >= 12 && maxErr < 1e-9, `points nOK ${nOK} maxErr ${maxErr}`);
+});
+
+test('categories — auto-categorize; uniform per-point dims == kt3d', () => {
+  const ref = kt3d({ ...SYNTH, ktype: 'OK' });
+  const ru = kriging({ ...PCFG, points: gridCentres([10, 10, 10]) }); // uniform dims → 1 cat
+  assert.equal(ru.n_categories, 1);
+  const realized = realize(ru, ru.values);
+  let maxErr = 0;
+  for (let t = 0; t < ru.n_targets; t++) { if (ru.status[t] !== STATUS.OK) continue; maxErr = Math.max(maxErr, Math.abs(realized[t] - ref.est[t])); }
+  assert.ok(maxErr < 1e-9, `uniform-dims maxErr ${maxErr}`);
+
+  // mixed per-point dims → distinct categories, all estimates finite
+  const rm = kriging({ ...PCFG, points: [[5, 5, 0, 10, 10, 10], [15, 5, 0, 20, 20, 10], [25, 25, 0, 10, 10, 10], [15, 25, 0, 5, 5, 5]] });
+  assert.equal(rm.n_categories, 3); // (10,10,10),(20,20,10),(5,5,5)
+  const rmz = realize(rm, rm.values);
+  for (let t = 0; t < rm.n_targets; t++) if (rm.status[t] === STATUS.OK) assert.ok(Number.isFinite(rmz[t]), `target ${t} not finite`);
 });
