@@ -4,6 +4,8 @@
 
 Used by everything that ships under the GCU org — Auditable, ep, Arborist, `@gcu/plan`, the handheld platform. If you're building a GCU tool's UI (in this repo or another), **this is the front door.**
 
+**See it:** open [`styleguide.html`](styleguide.html) in any browser — the whole language (surfaces, the six accents, typography, every component, the tokens) rendered in both themes, no build. It reads only `--au-*`, so it doubles as a live drift check.
+
 ## The toolkit — two tiers
 
 Switchboard is a *toolkit*, not a runtime widget framework. That distinction is deliberate (SPEC §9): it composes with whatever idiom the host tool already uses — CodeMirror chrome, a native canvas, firmware-rendered keypad UI — without dragging in a component runtime. So the toolkit is two tiers, and Switchboard is the umbrella + the contract over both:
