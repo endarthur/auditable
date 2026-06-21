@@ -82,6 +82,7 @@ nav:
   - Auditable Works:
     - Overview: works.md
     - geas (Terminal): geas.md
+    - Agent Access (numen): works-agent.md
   - Design:
     - Switchboard: switchboard.md
   - Advanced:

@@ -2,6 +2,11 @@
 
 Connect AI agents (like Claude Code) to a running auditable notebook. The MCP (Model Context Protocol) bridge lets agents read cells, edit source, set widgets, run code, and access the notebook filesystem — all under your control.
 
+!!! tip "Driving the whole desktop?"
+    This page is the **standalone-notebook** bridge. To connect an agent to the
+    entire **Auditable Works** workspace — files, surfaces, and every notebook,
+    under A-Bus capability grants — see [Agent Access (numen for Works)](works-agent.md).
+
 ---
 
 ## Quick start

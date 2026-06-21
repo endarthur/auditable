@@ -96,7 +96,8 @@ Top menu bar (the `@gcu/menu` MenuBar). Items:
 | Item | Effect |
 |---|---|
 | Terminal | Spawn a `geas` terminal surface. |
-| Settings… | Open the workspace settings surface. |
+| Connect agent folder… | Connect an AI agent over a shared folder. See [Agent Access](works-agent.md). (Shown only when the numen shim + folder picker are available.) |
+| Settings… | Open the workspace settings surface — incl. **Agent access** (connect a bridge, manage grants, view the audit log). |
 
 ### Debug
 
@@ -123,10 +124,12 @@ Top menu bar (the `@gcu/menu` MenuBar). Items:
 The shell hosts the A-Bus broker; every surface is a peer. Surfaces address each other (and the shell) over A-Bus method calls and signals — see [@gcu/abus/SPEC.md](https://github.com/gentropic/auditable/blob/main/ext/abus/SPEC.md). The shell exposes a `works` service at `/` with three interfaces:
 
 - `VFS` — `Read`, `Write`, `MkDir`, `Stat`, `List`, `Move`, `Delete`. Surfaces use this to read/write workspace files.
-- `Shell` — `OpenSurface`, `SpawnSurface`, layout management.
-- `Inspect` — surface lifecycle hooks for the inspector.
+- `Shell` — `OpenPath`, `SpawnSurface`, `ListSurfaces`, `RunNotebook`, mounts, registry/profiles, layout management.
+- `Notebook` — drive a notebook by path: `ListCells`, `GetSource`, `GetOutput`, `RunCell`, `SetCell`, `AddCell`, `DeleteCell`.
+- `Inspect` — the broker topology (gated; granted to the inspector surface at spawn).
+- `Mcp` — agent connection + per-agent grants + the audit log (drives the Settings panel).
 
-The A-Bus inspector surface (Debug → A-Bus inspector) shows every call, return, signal, and subscription on the bus in real time. Useful when wiring a new surface.
+The broker is also the **capability boundary**: most calls pass freely, but gated members are default-deny until a matching grant is issued. Today VFS *writes* and Notebook *edits* are gated for **agent** principals — see [Agent Access](works-agent.md). The A-Bus inspector surface (Debug → A-Bus inspector) shows every call, return, signal, and subscription on the bus in real time.
 
 ## Settings
 
@@ -202,6 +205,7 @@ The legacy `works:*` postMessage bridge and the lightweight-JSON notebook format
 
 ## See also
 
+- [Agent Access (numen)](works-agent.md) — connect an AI agent to the desktop, gated + consented + audited.
 - [SURFACES.md](https://github.com/gentropic/auditable/blob/main/works/SURFACES.md) — how to author a new surface kind.
 - [@gcu/abus SPEC](https://github.com/gentropic/auditable/blob/main/ext/abus/SPEC.md) — the IPC backbone.
 - [@gcu/vfs](https://github.com/gentropic/auditable/tree/main/ext/vfs) — the workspace filesystem.
