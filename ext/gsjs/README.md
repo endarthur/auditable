@@ -20,7 +20,9 @@ atra/WASM), not a backend lock.
 | CPU aggregations (stats / histogram / swath / grade-tonnage) | ✅ |
 | Swappable backend seam (`cpuBackend` default) | ✅ |
 | Recipe API (JSON spec + builder eDSL, `run`/`estimate`/`evaluate`) | ✅ |
-| Reactive cell wiring (notebook integration) | ⏳ next |
+| Browser-loadable bundle (`@gcu/build` + gcu-make, sift inlined) | ✅ |
+| Notebook examples (live top-cut · domains · artifact + swath/GT) | ✅ |
+| Reactive cell wiring (estimate once → slider `onInput` re-realizes) | ✅ |
 | Neighbourhood module (SPEC-neigh: sectors/per-hole/bench/kd-tree) | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
@@ -140,10 +142,11 @@ wire `build.js` into `gcu-make`.
 
 ## Resume pointer
 
-Recipe API shipped (`recipe.js` — builders + `toJSON`/`fromJSON` + staged
-`estimate`/`evaluate`/`run`, validated f64 vs hand-driven kriging, multi-domain,
-30/30 tests). Next: **reactive cell wiring** — a notebook surface where a recipe
-cell feeds `estimate()` once and cap/HGR sliders re-run only `evaluate()` (the
-staged split is built for exactly this). Then M3 (neighbourhood, SPEC-neigh);
-M-last WebGPU backend. Plus: wire `ext/gsjs/build.js` into gcu-make; LVM (ktype
-2); Walker Lake demo. State tracked in the `project_gsjs_started` memory.
+Recipe API + browser-loadable bundle + three notebook examples shipped (live
+top-cut, domains, artifact+swath/GT — all browser-verified; the reactive split
+proven: estimate once, slider `onInput` re-realizes in ~0.5 ms vs ~35 ms krige).
+The build is on `@gcu/build` + gcu-make (sift inlined; atra→wasm via atrac's
+`bundleRecipe`). Next: **M3 — the neighbourhood module** (SPEC-neigh: sectors /
+per-hole / bench / kd-tree). Then M-last WebGPU backend (drop-in, validated vs
+the CPU oracle). Plus: LVM (ktype 2); a real Walker Lake dataset. State tracked
+in the `project_gsjs_started` memory.

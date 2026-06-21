@@ -1,0 +1,113 @@
+/// auditable
+/// title: gsjs — domained estimation (a model per zone)
+/// module: @gcu/gsjs ext/gsjs/index.js
+/// settings: {"theme":"dark","fontSize":13,"width":"900","editorView":"yes"}
+
+/// md
+# gsjs — a separate model per geological domain
+
+Real deposits aren't one population. A high-grade zone and its low-grade halo have different grade distributions and different continuity, so they get **estimated separately** — samples from one domain must not smear into the other.
+
+A `gsjs` recipe expresses this with `domains[]`. Each domain assigns its **samples** with a [`@gcu/sift`](ext/sift/README.md) `where` predicate (a *serializable* selector — it survives `toJSON()`, unlike a JS function) and its **blocks** with a host-supplied per-block domain code. Below: a HG core (short range, higher grade) inside an ellipse, a LG halo (longer range) outside. The **HG top-cut** slider re-realizes *only the HG domain*.
+
+/// code collapsed
+// %collapsed
+// synthetic two-domain deposit: a high-grade elliptical core + a low-grade halo.
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const rng = mulberry32(11);
+const EXTENT = 500;
+// HG = inside this ellipse (centre 250,250); LG = outside.
+function inHG(x,y){ const dx=(x-250)/175, dy=(y-250)/115; return dx*dx + dy*dy <= 1; }
+const cores = [[210,250,8,55],[300,250,10,45],[250,300,6,60]];
+function trueGrade(x,y){
+  if (inHG(x,y)) { let g=2.5; for (const [ax,ay,pk,r] of cores){ const d2=(x-ax)**2+(y-ay)**2; g+=pk*Math.exp(-d2/(2*r*r)); } return g; }
+  return 0.3 + 0.5*Math.exp(-(((x-250)**2+(y-250)**2))/(2*260*260));  // smooth low halo
+}
+const N = 90;
+const rows = [];
+for (let i=0;i<N;i++){
+  const x = rng()*EXTENT, y = rng()*EXTENT;
+  const dom = inHG(x,y) ? "HG" : "LG";
+  const grade = Math.max(0, trueGrade(x,y) * (0.7 + 0.7*rng()));
+  rows.push({ X:x, Y:y, Z:0, AU:grade, DOMAIN:dom });
+}
+
+/// code
+// the domained recipe: HG and LG each get their own variogram + search. `where`
+// selects each domain's SAMPLES (a serializable sift predicate); the per-block
+// domain code (passed to estimate) selects each domain's BLOCKS.
+const gsjs = await load("@gcu/gsjs");
+const grid = { nx:50, ny:50, nz:1, xmn:5, ymn:5, zmn:0, xsiz:10, ysiz:10, zsiz:10 };
+
+const model = (cc, aa, radius) => gsjs.ok({
+  variogram: gsjs.variogram([{ type:"spherical", cc, aa }], { c0:0.12 }),
+  search: gsjs.search({ radius, ndmin:2, ndmax:20 }),
+});
+
+const r = gsjs.recipe({
+  data: { columns: { x:"X", y:"Y", z:"Z", value:"AU", domain:"DOMAIN" } },
+  block_grid: { ...grid, discretization:[2,2,1] },
+  domains: [
+    { id:"HG", where:"DOMAIN == 'HG'", model: model(1.0, 90, 170) },   // short range, high grade
+    { id:"LG", where:"DOMAIN == 'LG'", model: model(0.7, 190, 280) },  // long range, low grade
+  ],
+  output: { aggregations: [{ kind:"stats" }] },
+});
+
+// per-block domain code, parallel to the grid (HG inside the ellipse, else LG)
+function inHGblock(ix, iy){ const x=grid.xmn+ix*grid.xsiz, y=grid.ymn+iy*grid.ysiz; const dx=(x-250)/175, dy=(y-250)/115; return dx*dx+dy*dy<=1; }
+const blockDomains = new Array(grid.nx*grid.ny);
+for (let iy=0,idx=0; iy<grid.ny; iy++) for (let ix=0; ix<grid.nx; ix++,idx++) blockDomains[idx] = inHGblock(ix,iy) ? "HG" : "LG";
+
+const kriged = gsjs.estimate(r, { rows, blockDomains });   // both domains kriged, once
+
+// the `where` predicates serialize — this recipe IS a reviewable JSON artifact
+const wherePreview = r.toJSON().domains.map(d => `${d.id}: ${JSON.stringify(d.where.root)}`).join("  ·  ");
+
+/// code
+// map of the domained estimate + the HG-only top-cut slider.
+const size = Math.min(480, window.innerWidth - 80);
+const cw = size / grid.nx;
+const map = ui.canvas(size, size);
+const mctx = map.getContext("2d");
+const readout = document.createElement("div");
+readout.style.cssText = "font-family:monospace;font-size:12px;margin-top:6px;line-height:1.5";
+ui.display(readout);
+
+const base = gsjs.evaluate(kriged, {});
+let vmax = 0;
+for (let i=0;i<base.estimates.length;i++) if (base.status[i]===gsjs.STATUS.OK) vmax = Math.max(vmax, base.estimates[i]);
+
+function drawBoundary(){
+  mctx.strokeStyle = "rgba(255,255,255,0.55)"; mctx.lineWidth = 1.5; mctx.beginPath();
+  for (let a=0;a<=64;a++){ const t=a/64*2*Math.PI; const x=250+175*Math.cos(t), y=250+115*Math.sin(t); const px=x/EXTENT*size, py=(1-y/EXTENT)*size; a?mctx.lineTo(px,py):mctx.moveTo(px,py); }
+  mctx.stroke();
+}
+
+function update(hgCap){
+  const { estimates, status, domains } = gsjs.evaluate(kriged, { HG:{ transform:"topcut", transform_params:{ cap:hgCap } } });
+  for (let iy=0;iy<grid.ny;iy++) for (let ix=0;ix<grid.nx;ix++){
+    const idx = iy*grid.nx+ix;
+    mctx.fillStyle = status[idx]!==gsjs.STATUS.OK ? "#1a1a1a" : std.viridis(Math.min(1, estimates[idx]/vmax));
+    mctx.fillRect(ix*cw, (grid.ny-1-iy)*cw, cw+0.5, cw+0.5);
+  }
+  drawBoundary();
+  for (const s of rows){   // samples coloured by domain
+    mctx.beginPath(); mctx.arc(s.X/EXTENT*size, (1-s.Y/EXTENT)*size, 2.6, 0, 7);
+    mctx.fillStyle = s.DOMAIN==="HG" ? "#e08a3c" : "#5aa0e0"; mctx.fill();
+    mctx.strokeStyle = "#000"; mctx.lineWidth = 0.8; mctx.stroke();
+  }
+  const mean = (d)=>{ let s=0,n=0; for (let i=0;i<d.estimates.length;i++){ if (kriged.status[d.gridIndex?d.gridIndex[i]:i]!==gsjs.STATUS.OK) continue; s+=d.estimates[i]; n++; } return n?s/n:NaN; };
+  const hg = domains.find(d=>d.id==="HG"), lg = domains.find(d=>d.id==="LG");
+  readout.innerHTML =
+    `HG top-cut <b>${hgCap.toFixed(1)}</b> g/t &nbsp;·&nbsp; HG mean <b>${mean(hg).toFixed(2)}</b> &nbsp;·&nbsp; LG mean <b>${mean(lg).toFixed(2)}</b> g/t<br>` +
+    `<span style="color:#888">serialized where →</span> ${wherePreview}`;
+}
+
+ui.slider("HG top-cut (g/t)", Math.round(vmax*0.6), { min:1, max:Math.ceil(vmax), step:0.5, onInput:update });
+update(Math.round(vmax*0.6));
+
+/// md
+**What domaining buys you.** The LG halo samples (blue) never enter the HG estimate and vice-versa — `where` partitions the data, the block code partitions the targets, and `gsjs` runs an independent kriging system per domain with that domain's variogram and search. Capping the HG domain (the slider) leaves LG untouched, because `evaluate()`'s override is keyed by domain id: `{ HG: { transform_params: { cap } } }`.
+
+Because `where` is a structured sift predicate (not a JS arrow), the whole recipe is a **serializable artifact** — `r.toJSON()` round-trips through `gsjs.fromJSON()`, so it can be shipped, diffed, and reviewed. The [full-tour example](example_gsjs_tour.html) shows that artifact alongside swath and grade–tonnage QA. The single-domain [live top-cut](example_gsjs_cap.html) is the place to start.

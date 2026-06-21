@@ -1,0 +1,108 @@
+/// auditable
+/// title: gsjs — the recipe artifact + QA (swath, grade–tonnage, HGR)
+/// module: @gcu/gsjs ext/gsjs/index.js
+/// settings: {"theme":"dark","fontSize":13,"width":"900","editorView":"yes"}
+
+/// md
+# gsjs — the recipe as a shippable artifact
+
+A `gsjs` recipe is **JSON** — `r.toJSON()` is the canonical, language-independent estimation spec a regulator can diff and a non-JS consumer can read. This tour builds one, round-trips it through `gsjs.fromJSON()`, runs it, and checks it the way an estimator does: a **swath plot** (does the estimate reproduce the data trend?) and a **grade–tonnage** curve.
+
+It also shows the second transform family: **HGR** (high-grade restriction) — a *distance-aware* cap that only tames high grades far from data. Like top-cut, it's a free re-realize.
+
+/// code collapsed
+// %collapsed
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const rng = mulberry32(23);
+const EXTENT = 500;
+const anomalies = [[140,160,7,75],[360,290,10,55],[250,400,5,95]];
+function trueGrade(x,y){ let g=0.5 + 0.0035*x; for (const [ax,ay,pk,r] of anomalies){ const d2=(x-ax)**2+(y-ay)**2; g+=pk*Math.exp(-d2/(2*r*r)); } return g; }
+const N = 75;
+const rows = [];
+for (let i=0;i<N;i++){ const x=rng()*EXTENT, y=rng()*EXTENT; rows.push({ X:x, Y:y, Z:0, AU:Math.max(0, trueGrade(x,y)*(0.6+0.9*rng())) }); }
+
+/// code
+// build the recipe → show it AS its JSON artifact → round-trip → run.
+const gsjs = await load("@gcu/gsjs");
+const grid = { nx:50, ny:50, nz:1, xmn:5, ymn:5, zmn:0, xsiz:10, ysiz:10, zsiz:10 };
+
+const recipe = gsjs.recipe({
+  data: { columns: { x:"X", y:"Y", z:"Z", value:"AU" }, source:"drillholes.csv" },
+  block_grid: { ...grid, discretization:[2,2,1] },
+  default_model: gsjs.ok({
+    variogram: gsjs.variogram([{ type:"spherical", cc:1.0, aa:120 }], { c0:0.15 }),
+    search: gsjs.search({ radius:200, ndmin:2, ndmax:24 }),
+    realization: gsjs.hgr({ cap:6, d_thresh:80, grade_thresh:4 }),   // distance-aware cap
+  }),
+  output: {
+    distances: true,                                                 // HGR needs per-sample distance
+    aggregations: [
+      { kind:"swath", axis:"x" },
+      { kind:"gradeTonnage", cutoffs:[0.5,1,1.5,2,3,4,5] },
+    ],
+  },
+});
+
+const artifact = JSON.stringify(recipe.toJSON(), null, 2);
+const roundTrips = JSON.stringify(gsjs.fromJSON(recipe.toJSON()).toJSON()) === JSON.stringify(recipe.toJSON());
+
+const kriged = gsjs.estimate(recipe, { rows });   // expensive stage, once
+
+/// code collapsed
+// %collapsed
+// the artifact, rendered. this JSON is the whole estimation — ship it, diff it.
+const pre = document.createElement("pre");
+pre.style.cssText = "font-family:monospace;font-size:11px;max-height:280px;overflow:auto;background:#141414;padding:10px;border-radius:4px;line-height:1.4";
+pre.textContent = artifact;
+ui.display(pre);
+ui.display(`fromJSON(toJSON) round-trips: ${roundTrips ? "✓" : "✗"}`);
+
+/// code
+// QA views — swath (estimate vs data trend) + grade–tonnage. The HGR distance
+// threshold slider re-realizes both, live (no re-krige).
+const W = Math.min(440, window.innerWidth - 80);
+const swc = ui.canvas(W, 170); const sctx = swc.getContext("2d");
+const gtc = ui.canvas(W, 170); const gctx = gtc.getContext("2d");
+const readout = document.createElement("div");
+readout.style.cssText = "font-family:monospace;font-size:12px;margin-top:6px";
+ui.display(readout);
+
+// data swath: bin sample grades along x (the trend the estimate should track)
+const NB = 10;
+const dSum = new Float64Array(NB), dCnt = new Int32Array(NB);
+for (const s of rows){ let b=Math.floor(s.X/EXTENT*NB); if (b<0)b=0; if (b>=NB)b=NB-1; dSum[b]+=s.AU; dCnt[b]++; }
+const dataMean = Array.from({length:NB}, (_,b)=> dCnt[b]?dSum[b]/dCnt[b]:NaN);
+
+function axes(ctx, title){ ctx.fillStyle="#141414"; ctx.fillRect(0,0,W,170); ctx.fillStyle="#888"; ctx.font="11px monospace"; ctx.fillText(title, 8, 14); }
+function line(ctx, xs, ys, xmax, ymax, color, lw){ ctx.strokeStyle=color; ctx.lineWidth=lw; ctx.beginPath(); for (let i=0;i<xs.length;i++){ if (!isFinite(ys[i])) continue; const X=34+(xs[i]/xmax)*(W-48), Y=158-(ys[i]/ymax)*140; i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); } ctx.stroke(); }
+
+function update(dThresh){
+  const { estimates, status, aggregations } = gsjs.evaluate(kriged,
+    { _default:{ transform:"hgr_hard", transform_params:{ cap:6, d_thresh:dThresh, grade_thresh:4 } } });
+
+  // swath: estimate (amber) vs data (white dots)
+  const sw = aggregations.swath_x;
+  const ymax = Math.max(...sw.mean.filter(isFinite), ...dataMean.filter(isFinite)) * 1.1;
+  axes(sctx, "swath along X — estimate (amber) vs data (white)");
+  line(sctx, [...sw.centers], [...sw.mean], EXTENT, ymax, "#c89b3c", 2);
+  for (let b=0;b<NB;b++){ if (!isFinite(dataMean[b])) continue; const X=34+((b+0.5)/NB*EXTENT/EXTENT)*(W-48), Y=158-(dataMean[b]/ymax)*140; sctx.fillStyle="#fff"; sctx.beginPath(); sctx.arc(X,Y,2.5,0,7); sctx.fill(); }
+
+  // grade–tonnage
+  const gt = aggregations.gradeTonnage;
+  axes(gctx, "grade–tonnage — grade (amber) · tonnage (blue)");
+  line(gctx, [...gt.cutoffs], [...gt.grade], gt.cutoffs[gt.cutoffs.length-1], Math.max(...gt.grade.filter(isFinite))*1.1, "#c89b3c", 2);
+  line(gctx, [...gt.cutoffs], [...gt.tonnage], gt.cutoffs[gt.cutoffs.length-1], gt.tonnage[0]||1, "#3a6ea5", 1.5);
+
+  let s=0,n=0; for (let i=0;i<estimates.length;i++) if (status[i]===gsjs.STATUS.OK){ s+=estimates[i]; n++; }
+  readout.innerHTML = `HGR distance threshold <b>${dThresh.toFixed(0)} m</b> &nbsp;·&nbsp; mean estimate <b>${(s/n).toFixed(3)}</b> g/t &nbsp;·&nbsp; <span style="color:#888">caps grades > 4 g/t only beyond this distance</span>`;
+}
+
+ui.slider("HGR distance (m)", 80, { min:0, max:300, step:10, onInput:update });
+update(80);
+
+/// md
+**Reading it.** The **swath** is the standard reproduction check — the estimate (amber) should follow the binned data trend (white) along the axis; large departures flag a search or variogram problem. The **grade–tonnage** curve is the deliverable: tonnage and mean grade above each cut-off.
+
+The **HGR distance slider** drives `d_thresh`: a sample's grade is only capped if it exceeds `grade_thresh` *and* sits farther than `d_thresh` from the block — so isolated far-field high grades stop projecting, while well-supported ones are kept. Because it's linear in the sample values, it re-realizes for free, like top-cut.
+
+Everything here flows from one JSON artifact. Start with the [live top-cut](example_gsjs_cap.html); see [domained estimation](example_gsjs_domains.html) for per-zone models.
