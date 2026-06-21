@@ -154,7 +154,8 @@ query, deterministic tie-break; bit-identical to a brute-force scan, ported
 setrot/sqdist faithful vs gslib wasm). Next: **M3b** — the selection-policy passes
 (nsect sectors, per-hole cap, min-distance, distance-restricted capping) + unique +
 bench; then **M3c** — feed `select()` into the kriging fork (the kt3d decoupling →
-octant/sector kriging, `ext/gslib` untouched). NB for M3c: bit-identical selection
-vs `gsjs.kriging` needs the neighbourhood to share gslib's exact (wasm) trig — JS
-`Math` is *more* precise than atra's polynomial sin/cos (~1e-9 boundary divergence).
-Then M-last WebGPU backend. State tracked in the `project_gsjs_started` memory.
+octant/sector kriging, `ext/gslib` untouched). The port is **bit-identical** to
+gslib's wasm `setrot`/`sqdist` (f64 ULP) — atra's sin/cos *are* JS `Math` imports,
+and the port matches gslib's truncated-π literal `3.141592654` — so M3c's
+bit-identical-selection contract is reachable with no trig reconciliation. Then
+M-last WebGPU backend. State tracked in the `project_gsjs_started` memory.

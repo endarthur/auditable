@@ -478,18 +478,15 @@ test('neigh — JS setrot/sqdist match gslib wasm (faithful port)', () => {
     lib.gslib.setrot(a1, a2, a3, an1, an2, 0, pRot);
     const wasmRot = gReadF64(mem, pRot, 9);
     const jsRot = setrot(a1, a2, a3, an1, an2);
-    // ~1e-9 tol: atra's wasm sin/cos are a polynomial approx (JS Math is actually
-    // MORE precise), so the matrices agree to trig-runtime precision, not ULP. The
-    // port formula is correct (a transpose/sign slip would diverge by O(1)). NB for
-    // M3c: bit-identical SELECTION vs gsjs.kriging will need the neighbourhood to
-    // share gslib's exact trig (or accept boundary samples differing at this level).
-    for (let i = 0; i < 9; i++) assert.ok(Math.abs(wasmRot[i] - jsRot[i]) < 1e-8, `rot[${i}] ${wasmRot[i]} vs ${jsRot[i]}`);
+    // BIT-IDENTICAL: atra's sin/cos ARE JS Math imports, and the port uses gslib's
+    // exact truncated-pi literal (3.141592654), so the matrices agree to f64 ULP.
+    // (The earlier ~1e-10 gap was Math.PI vs gslib's pi, not trig precision.)
+    for (let i = 0; i < 9; i++) assert.ok(Math.abs(wasmRot[i] - jsRot[i]) < 1e-15, `rot[${i}] ${wasmRot[i]} vs ${jsRot[i]}`);
     for (const [x1, y1, z1, x2, y2, z2] of [[10, 20, 0, 35, 12, 5], [0, 0, 0, 100, 50, 20], [-5, 8, 3, 40, -10, 12]]) {
       const wasmD = lib.gslib.sqdist(x1, y1, z1, x2, y2, z2, 0, pRot);
       const jsD = sqdist(x1, y1, z1, x2, y2, z2, jsRot);
-      // relative tol: the only divergence is sin/cos last-ULP between the wasm and
-      // JS math runtimes, amplified by squaring — faithful to ~1e-10 relative.
-      assert.ok(Math.abs(wasmD - jsD) <= 1e-8 * Math.abs(wasmD) + 1e-9, `sqdist ${wasmD} vs ${jsD}`);
+      // bit-identical rotmat (above) + identical formula → agree to f64 ULP.
+      assert.ok(Math.abs(wasmD - jsD) <= 1e-9 * Math.abs(wasmD) + 1e-12, `sqdist ${wasmD} vs ${jsD}`);
     }
   }
 });

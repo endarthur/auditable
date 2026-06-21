@@ -21,7 +21,13 @@
 import { KDTree } from '../../scitra/src/spatial/kdtree.js';
 import { STATUS } from './realize.js';
 
-const DEG = Math.PI / 180;
+// gslib.atra's setrot uses a TRUNCATED pi literal (3.141592654, faithful to
+// GSLIB's setrot.for) — NOT Math.PI. atra's own sin/cos are JS Math imports
+// (accurate), so matching this constant makes the port BIT-IDENTICAL to gslib's
+// wasm setrot — which is what lets select() be bit-identical to gsjs.kriging's
+// selection (M3c). Using Math.PI here would diverge ~1e-10 at the ellipsoid edge.
+const GSLIB_PI = 3.141592654;
+const DEG = GSLIB_PI / 180;
 
 // Port of gslib.setrot (gslib.atra:196) — the anisotropic rotation matrix.
 // GSLIB angle convention: ang1=azimuth (CW from N), ang2=dip, ang3=rake. Returns

@@ -22,6 +22,35 @@ Application          (e.g. gslib_gamv.atra)
 
 Math kernels (gamv, cova3, etc.) are shared between browser and WASI targets unchanged.
 
+## Math builtins: the libm gap (roadmap)
+
+Principle 3 ("kernels stay pure, host-agnostic") holds for *arithmetic* but **not for
+transcendentals**. atra's `sin`, `cos`, `ln`, `exp`, `pow`, `atan2` are **imported from
+the JS host's `Math`** (codegen `MATH_BUILTINS` → the bundle's `_math = {sin: Math.sin,
+…}`). Only `sqrt`/`abs`/`floor`/`ceil`/`trunc`/`min`/`max`/… map to native wasm opcodes.
+
+So any kernel that touches a transcendental — `setrot` (sin/cos rotations), `cova3`
+(gaussian/exponential variograms via `exp`), `gamv`, etc. — silently depends on a JS
+host. A **non-JS host has no `Math.*` to import** and those kernels won't instantiate:
+
+- WASI runtimes (Wasmtime / Wasmer) — the very target this stdlib is *for*.
+- Standalone wasm, a `@gcu/wasm4` cart in a non-JS engine, `wat+rw` output.
+- **vindo**'s static → pure-wasm target. (vindo's *comptime* `sin` table-baking is
+  host-eval at compile time, fine; runtime trig on a pure-wasm target hits this gap.)
+
+**Fix: a DIY libm in atra** — accurate `sin`/`cos`/`ln`/`exp`/`pow`/`atan2` (fdlibm-grade
+/ correctly-rounded), behind the same builtin names, selected when targeting a non-JS
+host; the browser keeps importing JS `Math` by default (fast, accurate). The choice is
+**accurate-and-consistent on the wasm side**, never degrading a JS caller to match a worse
+wasm approximation.
+
+Bit-identity payoff: a single shared atra libm makes the JS-host and WASI-host paths
+produce identical numbers (today only the JS-host path exists), and keeps **`@gcu/gsjs`'s
+CPU-JS path bit-identical to its wasm kriging path** — that path already matches because
+atra's JS-host import *is* `Math` and gsjs ports gslib's exact π literal (`3.141592654`);
+a DIY libm must preserve that bit-identity (it's a validation requirement, not just a
+port). See `spec_inbox/SPEC-vindo.md` and the gsjs neighbourhood (`ext/gsjs/src/neigh.js`).
+
 ## Implementation status
 
 ### Phase 1: Language additions (do now)
