@@ -97,6 +97,24 @@ export async function connectAgentPeer(identity) {
   return connect(ch.port2, { client: 'agent:' + (identity || 'default') });
 }
 
+// One gated peer + tool set PER agent identity (numen multichannel: folder =
+// identity). The shim carries each calling channel's identity into
+// tool.execute(input, client) as client.identity; the registered dispatcher
+// tools resolve it to that identity's own peer here. Cached so an identity keeps
+// one peer (its grants, keyed by clientId, persist across calls). 'default' is
+// the single-channel (ws/http or single-folder) sugar.
+const _agentToolsByIdentity = new Map();
+export async function agentToolsFor(identity) {
+  identity = identity || 'default';
+  let tools = _agentToolsByIdentity.get(identity);
+  if (!tools) {
+    const bus = await connectAgentPeer(identity);
+    tools = worksTools(bus, identity);
+    _agentToolsByIdentity.set(identity, tools);
+  }
+  return tools;
+}
+
 // The Works tool set. Each tool's execute routes through the agent's A-Bus peer
 // (works.VFS) — never WKS.* — so the broker gates it. Tools are pure of
 // shell-realm access by construction. Writes are gated for agent principals;
@@ -466,6 +484,13 @@ export async function setupWorksMcp() {
     ctl.onStateChange = (state) => {
       try { WKS.worksBus && WKS.worksBus.signal({ path: '/', interface: 'Mcp', member: 'StateChanged' }, [state]); } catch { /* */ }
     };
+    // Multichannel: log each agent channel's connect/disconnect by identity, so
+    // the audit trail shows WHICH agent is on (folder = identity).
+    if ('onChannelState' in ctl) {
+      ctl.onChannelState = (id, state, identity) => {
+        logAgentAction({ tool: 'channel', identity: identity || id || 'default', summary: state, ok: state !== 'error' });
+      };
+    }
   }
   // The control the works service's Mcp interface delegates to (works-service.js).
   WKS.mcp = {
@@ -479,8 +504,25 @@ export async function setupWorksMcp() {
     status: () => ({ state: (ctl && ctl.state) || 'disconnected' }),
   };
 
-  const agentBus = await connectAgentPeer('default');
-  for (const tool of worksTools(agentBus, 'default')) mc.registerTool(tool);
+  // Register DISPATCHER tools: one per tool name (schemas are identity-
+  // independent), each routing at call time to the calling channel's identity
+  // (client.identity) → that agent's own gated peer + grants. So N agents over N
+  // fs channels each act under their own scoped capabilities through one registry.
+  const defaultTools = await agentToolsFor('default');   // names + schemas (+ seeds the cache)
+  for (const def of defaultTools) {
+    mc.registerTool({
+      name: def.name,
+      description: def.description,
+      inputSchema: def.inputSchema,
+      annotations: def.annotations,
+      execute: async (input, client) => {
+        const tools = await agentToolsFor((client && client.identity) || 'default');
+        const tool = tools.find((t) => t.name === def.name);
+        if (!tool) throw new Error('no such tool: ' + def.name);
+        return tool.execute(input, client);
+      },
+    });
+  }
   if (typeof mc.notifyToolsChanged === 'function') mc.notifyToolsChanged();
-  return { agentBus };
+  return { agentToolsFor };
 }

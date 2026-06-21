@@ -358,6 +358,28 @@ const agentMcp = await page.evaluate(async () => {
   };
 });
 
+// numen multichannel: per-agent identity isolation. Each identity (folder =
+// identity) gets its own gated peer + grant set via WKS.agentToolsFor; a grant
+// to one agent must not authorize another.
+const multiAgent = await page.evaluate(async () => {
+  const W = window.WKS;
+  const denied = (e) => (e && e.code === 'Error.AccessDenied') || /access ?denied|not authorized/i.test(String(e && e.message || e));
+  window.__agentConsent__ = () => null;   // no interactive consent in headless
+  const alice = await W.agentToolsFor('alice');
+  const bob = await W.agentToolsFor('bob');
+  const aliceWrite = alice.find((t) => t.name === 'worksWriteFile');
+  const bobWrite = bob.find((t) => t.name === 'worksWriteFile');
+  W.grantAgent('alice', { pathPrefix: '/projects' });   // grant alice only
+  let aliceOk = false, bobDenied = false;
+  try { await aliceWrite.execute({ path: '/projects/alice.txt', content: 'a' }); aliceOk = await W.vfs.exists('/projects/alice.txt'); } catch { /* */ }
+  try { await bobWrite.execute({ path: '/projects/bob.txt', content: 'b' }); } catch (e) { bobDenied = denied(e); }
+  const cachedSame = (await W.agentToolsFor('alice')) === alice;
+  const distinct = alice !== bob;
+  W.revokeAgent('alice');
+  delete window.__agentConsent__;
+  return { aliceOk, bobDenied, cachedSame, distinct };
+});
+
 // numen live transport: the shell vendors the numen shim, so
 // navigator.modelContext exists + setupWorksMcp registered tools, and the
 // settings panel can drive the connection over works.Mcp. (The actual bridge
@@ -1869,6 +1891,9 @@ const checks = {
   'numen: agent spawns a surface by kind': agentMcp.spawnOk === true,
   'numen: agent creates a new notebook project': agentMcp.newNbOk === true,
   'numen: agent closes a surface by path': agentMcp.closeOk === true,
+  // multichannel: per-agent identity isolation
+  'numen: per-identity tool sets are distinct + cached': multiAgent.distinct === true && multiAgent.cachedSame === true,
+  'numen: a grant to one agent does not authorize another': multiAgent.aliceOk === true && multiAgent.bobDenied === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),
