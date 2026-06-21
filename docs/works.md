@@ -207,6 +207,7 @@ The legacy `works:*` postMessage bridge and the lightweight-JSON notebook format
 
 - [Agent Access (numen)](works-agent.md) — connect an AI agent to the desktop, gated + consented + audited.
 - [SURFACES.md](https://github.com/gentropic/auditable/blob/main/works/SURFACES.md) — how to author a new surface kind.
+- [works/AGENT.md](https://github.com/gentropic/auditable/blob/main/works/AGENT.md) — *implementing* the agent integration (tools, gates, consent, multichannel).
 - [@gcu/abus SPEC](https://github.com/gentropic/auditable/blob/main/ext/abus/SPEC.md) — the IPC backbone.
 - [@gcu/vfs](https://github.com/gentropic/auditable/tree/main/ext/vfs) — the workspace filesystem.
 - [@gcu/rails](https://github.com/gentropic/auditable/tree/main/ext/rails) — the layout engine.
