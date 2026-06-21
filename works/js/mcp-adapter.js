@@ -17,7 +17,7 @@
 import { connect } from '#abus';
 import { Dialog } from '#dialog';
 import { WKS } from './state.js';
-import { listSurfaceTools, getSurfaceTool } from './surface-tools.js';
+import { listSurfaceTools, getSurfaceTool, validateToolInput } from './surface-tools.js';
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -249,6 +249,11 @@ export function worksTools(agentBus, identity = 'default') {
       execute: async (input) => {
         const entry = getSurfaceTool(input.name);
         if (!entry) throw new Error('unknown surface tool: ' + input.name);
+        // Validate shell-side against the tool's declared inputSchema BEFORE
+        // routing — the generic call can't be schema-checked by the harness, so
+        // we do it here, in the trusted adapter, before the surface is touched.
+        const verr = validateToolInput(entry, input);
+        if (verr) throw new Error(verr);
         const methodArgs = entry.args.map((k) => input[k]);   // positional per the manifest
         const relayArgs = [input.path, entry.surface, entry.interface, entry.member, methodArgs];
         // gated tools → SurfaceTools.Mutate (broker-gated → consent on denial);

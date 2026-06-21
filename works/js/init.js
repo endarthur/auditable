@@ -35,7 +35,7 @@ import { installGlobalFileDrop, installGcupkgBytes } from './file-ops.js';
 import { installShellAuditable, evaluateAllWorksScripts } from './extension-loader.js';
 import { installBuiltinPackages } from './lib-builtins-loader.js';
 import { declareInstalledServices } from './extension-services.js';
-import { buildSurfaceToolRegistry, registerSurfaceTools } from './surface-tools.js';
+import { buildSurfaceToolRegistry, registerSurfaceTools, registerPackageSurfaceTools } from './surface-tools.js';
 import { registerGcuSw } from '#sw-register';
 import { readSettings } from './settings-store.js';
 
@@ -93,7 +93,8 @@ async function boot() {
   WKS.revokeAgent = revokeAgent;
   WKS.listAgentGrants = listAgentGrants;
   WKS.getAuditLog = getAuditLog;                 // observability: the agent-action ledger
-  WKS.registerSurfaceTools = registerSurfaceTools; // surface tools: programmatic/post-install registry add
+  WKS.registerSurfaceTools = registerSurfaceTools; // surface tools: programmatic registry add
+  WKS.registerPackageSurfaceTools = registerPackageSurfaceTools; // surface tools: register one /lib package's gcu.agentTools (post-install)
   WKS.refreshTree = refreshTree;
   WKS.newProject = newProject;
   WKS.duplicateProject = duplicateProject;

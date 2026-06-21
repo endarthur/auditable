@@ -416,8 +416,23 @@ const surfaceTools = await page.evaluate(async () => {
   // unknown tool → graceful error
   let unknownErr = false;
   try { await callTool.execute({ name: 'nope', path: nbPath }); } catch { unknownErr = true; }
+  // shell-side input validation: smokeNbAdd requires `type` — omit it → rejected
+  // HERE (before the surface is touched), with a validation message
+  let validationCaught = false;
+  try { await callTool.execute({ name: 'smokeNbAdd', path: nbPath }); }
+  catch (e) { validationCaught = /invalid input|missing required/i.test(String((e && e.message) || e)); }
+  // post-install registration: write a /lib package manifest with gcu.agentTools,
+  // register it live, and confirm it surfaces via the meta-tool (no reload)
+  await W.vfs.mkdir('/lib/@smoke/probe2', { recursive: true });
+  await W.vfs.writeFile('/lib/@smoke/probe2/package.json', JSON.stringify({
+    name: '@smoke/probe2',
+    gcu: { agentTools: [{ name: 'smokeProbe2', surface: 'notebook', interface: 'Notebook', member: 'ListCells', args: [] }] },
+  }));
+  const declared = await W.registerPackageSurfaceTools('@smoke/probe2');
+  const postInstallOk = declared.includes('smokeProbe2')
+    && ((await listTool.execute({})).tools || []).some((t) => t.name === 'smokeProbe2');
   W.revokeAgent('stool');
-  return { hasTools, readOk, mutateDenied, mutateOk, unknownErr };
+  return { hasTools, readOk, mutateDenied, mutateOk, unknownErr, validationCaught, postInstallOk };
 });
 
 // numen live transport: the shell vendors the numen shim, so
@@ -1940,6 +1955,8 @@ const checks = {
   'numen: surface tool MUTATE denied without a grant': surfaceTools.mutateDenied === true,
   'numen: surface tool MUTATE lands with a scoped grant': surfaceTools.mutateOk === true,
   'numen: unknown surface tool errors gracefully': surfaceTools.unknownErr === true,
+  'numen: surface tool input validated shell-side (bad call rejected pre-surface)': surfaceTools.validationCaught === true,
+  'numen: post-install agentTools registration is live (no reload)': surfaceTools.postInstallOk === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,
   'numen: works.Mcp.Status reachable, shim present': !!(mcpProbe.status && mcpProbe.status.state && mcpProbe.status.state !== 'unavailable'),

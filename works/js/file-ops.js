@@ -13,6 +13,7 @@ import { parseGcupkg, installGcupkg, gcupkgConsentDescriptor, gcupkgConsentPromp
 import { mergeExamplesFromExtension } from './examples-loader.js';
 import { evaluateWorksScript } from './extension-loader.js';
 import { declarePackageServices } from './extension-services.js';
+import { registerPackageSurfaceTools } from './surface-tools.js';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const parentOf = (p) => {
@@ -693,6 +694,12 @@ export async function installGcupkgBytes(bytes, filename) {
   // a runtime-installed service would need a reload to become callable.
   try { await declarePackageServices(parsed.meta.name); }
   catch (e) { console.warn('[works] post-install service declaration failed:', e.message); }
+
+  // Same for the package's gcu.agentTools — register them live so a just-installed
+  // package's surface tools are reachable via the meta-tools without a reload
+  // (works-agent-tools-spec; mirrors the service declaration above).
+  try { await registerPackageSurfaceTools(parsed.meta.name); }
+  catch (e) { console.warn('[works] post-install agentTools registration failed:', e.message); }
 
   return { name: parsed.meta.name, version: parsed.meta.version, libPath: result.libPath, integrityOk: parsed.integrity.ok };
 }
