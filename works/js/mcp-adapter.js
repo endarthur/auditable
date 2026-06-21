@@ -15,7 +15,20 @@
 // agent to its own peer + grant set; the spine wires a single 'default' agent.
 
 import { connect } from '#abus';
+import { Dialog } from '#dialog';
 import { WKS } from './state.js';
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// The broker denies a gated call it can't authorize with code 'Error.AccessDenied'
+// (the message reads "not authorized to call …" — match the CODE, not the prose).
+const isAccessDenied = (e) =>
+  !!e && (e.code === 'Error.AccessDenied' || /access ?denied|not authorized/i.test(String((e && e.message) || e)));
+
+// Fire a works.Mcp signal so the (sandboxed) Settings panel updates live.
+function emitMcp(member, args) {
+  try { WKS.worksBus && WKS.worksBus.signal({ path: '/', interface: 'Mcp', member }, args); } catch { /* */ }
+}
 
 // Connect a gated A-Bus peer representing one agent identity. Its calls route
 // through the broker → authorized against this agent's grants. clientId carries
@@ -26,11 +39,12 @@ export async function connectAgentPeer(identity) {
   return connect(ch.port2, { client: 'agent:' + (identity || 'default') });
 }
 
-// The Works tool set (spine: read-only). Each tool's execute routes through the
-// agent's A-Bus peer (works.VFS) — never WKS.* — so the broker gates it. Tools
-// are pure of shell-realm access by construction. Write/mutate tools + scoped
-// consent are the next slice.
-export function worksTools(agentBus) {
+// The Works tool set. Each tool's execute routes through the agent's A-Bus peer
+// (works.VFS) — never WKS.* — so the broker gates it. Tools are pure of
+// shell-realm access by construction. Writes are gated for agent principals;
+// a denied write triggers reactive consent (see requestWriteConsent). `identity`
+// keys the grant 1:1 with numen's per-agent (multichannel) identity.
+export function worksTools(agentBus, identity = 'default') {
   const vfs = (member, args) =>
     agentBus.call({ to: 'works', path: '/', interface: 'VFS', member }, args);
   return [
@@ -58,15 +72,103 @@ export function worksTools(agentBus) {
       // principals). Without a consented grant it returns AccessDenied; with a
       // path-scoped grant it writes only within the granted prefix.
       name: 'worksWriteFile',
-      description: 'Write a text file to the Works workspace (requires a granted, scoped capability).',
+      description: 'Write a text file to the Works workspace (requires a granted, scoped capability — the user is prompted to approve a folder on the first write).',
       inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
       annotations: { destructiveHint: true, title: 'Write workspace file' },
       execute: async (input) => {
-        await vfs('Write', [input.path, String(input.content ?? '')]);
-        return { path: input.path, written: true };
+        const path = input.path;
+        const content = String(input.content ?? '');
+        try {
+          await vfs('Write', [path, content]);
+        } catch (e) {
+          // Denied for want of a grant → ask the user to consent to a scope,
+          // then retry once. Any other failure (or a declined prompt) propagates.
+          if (!isAccessDenied(e)) throw e;
+          const ok = await requestWriteConsent(identity, path);
+          if (!ok) throw e;
+          await vfs('Write', [path, content]);
+        }
+        return { path, written: true };
       },
     },
   ];
+}
+
+// Reactive consent: prompt the user to grant the agent a path-scoped write
+// capability when a write is denied. Resolves true (a grant was issued) or
+// false (declined). Automation overrides the dialog via window.__agentConsent__
+// — a function returning a pathPrefix string (allow), true (allow, default
+// scope = the file's folder), or a falsy value (deny). Default scope offered is
+// the containing folder; the user can widen it to /projects.
+async function requestWriteConsent(identity, path) {
+  const dir = path.replace(/[^/]*$/, '') || '/';
+  const applyGrant = (r) => {
+    if (!r) return false;
+    grantAgent(identity, { pathPrefix: typeof r === 'string' ? r : dir });
+    return true;
+  };
+
+  const hook = (typeof window !== 'undefined') && window.__agentConsent__;
+  if (typeof hook === 'function') return applyGrant(await hook({ identity, path, dir }));
+  if (typeof Dialog !== 'function') return false;   // no UI available → deny
+
+  let chosen = dir;
+  const scopes = dir === '/projects/' ? [{ v: dir, label: 'All projects — ' + dir }]
+    : [{ v: dir, label: 'This folder — ' + dir }, { v: '/projects/', label: 'All projects — /projects/' }];
+
+  const _btn = (label, primary) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'padding:5px 14px; border-radius:4px; cursor:pointer; font:inherit; '
+      + 'border:1px solid var(--au-border); '
+      + (primary ? 'background:var(--au-action); color:#fff; border-color:var(--au-action);'
+                 : 'background:var(--au-surface-bright); color:var(--au-fg);');
+    return b;
+  };
+
+  const dialog = new Dialog({
+    title: 'Agent write access',
+    backdrop: true,
+    render: (body, ctx) => {
+      body.innerHTML = '';
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'min-width:380px; max-width:480px; display:flex; flex-direction:column; gap:12px;';
+
+      const intro = document.createElement('div');
+      intro.style.cssText = 'color:var(--au-fg-soft); font-size:12px; line-height:1.5;';
+      intro.innerHTML = 'The connected agent (<code>' + esc(identity) + '</code>) wants to write:<br>'
+        + '<code>' + esc(path) + '</code><br>Grant it write access to a folder? Reads stay open; '
+        + 'the grant lasts until you revoke it or reload.';
+      wrap.appendChild(intro);
+
+      const list = document.createElement('div');
+      list.style.cssText = 'display:flex; flex-direction:column; gap:5px;';
+      scopes.forEach((s, i) => {
+        const row = document.createElement('label');
+        row.style.cssText = 'display:flex; gap:9px; align-items:center; padding:7px 10px; '
+          + 'border:1px solid var(--au-border); border-radius:6px; cursor:pointer; background:var(--au-surface-raised);';
+        const radio = document.createElement('input');
+        radio.type = 'radio'; radio.name = 'agent-scope'; radio.value = s.v; radio.checked = i === 0;
+        radio.addEventListener('change', () => { chosen = s.v; });
+        const t = document.createElement('div');
+        t.style.cssText = 'font-size:12px;'; t.textContent = s.label;
+        row.append(radio, t);
+        list.appendChild(row);
+      });
+      wrap.appendChild(list);
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex; gap:8px; justify-content:flex-end; margin-top:2px;';
+      const deny = _btn('Deny', false); deny.addEventListener('click', () => ctx.close(null));
+      const allow = _btn('Allow writes', true); allow.addEventListener('click', () => ctx.close(chosen));
+      row.append(deny, allow);
+      wrap.appendChild(row);
+
+      body.appendChild(wrap);
+      allow.focus();
+    },
+  });
+  return applyGrant(await dialog.show());
 }
 
 // ── consent backend — scoped grants per agent identity ──
@@ -77,12 +179,18 @@ export function worksTools(agentBus) {
 // VFS gate, confined to pathPrefix. The Settings panel + a consent dialog call
 // these; they don't need the shim (so works-smoke can exercise the gate directly).
 export function grantAgent(identity, opts = {}) {
-  return WKS.broker.grant('agent:' + (identity || 'default'), {
+  const id = WKS.broker.grant('agent:' + (identity || 'default'), {
     to: 'works', interface: 'VFS', member: '*',
     scope: opts.pathPrefix ? { pathPrefix: opts.pathPrefix } : null,
   });
+  emitMcp('GrantsChanged', [listAgentGrants()]);
+  return id;
 }
-export function revokeAgent(identity) { return WKS.broker.revokeAll('agent:' + (identity || 'default')); }
+export function revokeAgent(identity) {
+  const n = WKS.broker.revokeAll('agent:' + (identity || 'default'));
+  emitMcp('GrantsChanged', [listAgentGrants()]);
+  return n;
+}
 export function listAgentGrants() {
   return (WKS.broker.inspect().grants || []).filter((g) => String(g.grantee).startsWith('agent:'));
 }
@@ -115,7 +223,7 @@ export async function setupWorksMcp() {
   };
 
   const agentBus = await connectAgentPeer('default');
-  for (const tool of worksTools(agentBus)) mc.registerTool(tool);
+  for (const tool of worksTools(agentBus, 'default')) mc.registerTool(tool);
   if (typeof mc.notifyToolsChanged === 'function') mc.notifyToolsChanged();
   return { agentBus };
 }

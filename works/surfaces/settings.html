@@ -202,6 +202,12 @@
     <code>node ../numen/numen-bridge.js --app works --port 7803</code> — then paste its
     <code>port:token</code> here. The agent acts only through capability grants you approve.
   </div>
+  <div class="mounts-list" id="agentGrantsList" style="margin-top:8px"></div>
+  <div class="hint">
+    Folders an agent may <em>write</em> to. Reads are always allowed. You're
+    prompted to approve a folder the first time an agent writes; revoke any time.
+    Grants last until you revoke them or reload the workspace.
+  </div>
 
   <h2>About</h2>
   <div class="actions">
@@ -516,6 +522,44 @@ async function loadMcp() {
   renderMcp(st);
 }
 
+async function loadAgentGrants() {
+  const el = $('agentGrantsList');
+  if (!el) return;
+  let grants = [];
+  try { grants = await mcpCall('ListAgentGrants') || []; } catch { /* */ }
+  el.innerHTML = '';
+  if (!grants.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No agent has been granted write access.';
+    el.appendChild(empty);
+    return;
+  }
+  for (const g of grants) {
+    // grantee is 'agent:<identity>'; scope.pathPrefix is the writable folder.
+    const identity = String(g.grantee || '').replace(/^agent:/, '') || 'default';
+    const scope = (g.scope && g.scope.pathPrefix) || 'entire workspace';
+    const row = document.createElement('div');
+    row.className = 'mount-row';
+    const path = document.createElement('span');
+    path.className = 'path';
+    path.textContent = identity;
+    const type = document.createElement('span');
+    type.className = 'type';
+    type.textContent = 'write · ' + scope;
+    const btn = document.createElement('button');
+    btn.className = 'danger';
+    btn.textContent = 'Revoke';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try { await mcpCall('RevokeAgent', [identity]); await loadAgentGrants(); }
+      catch (e) { btn.disabled = false; alert('Revoke failed: ' + (e.message || e)); }
+    });
+    row.append(path, type, btn);
+    el.appendChild(row);
+  }
+}
+
 function wireMcp() {
   $('mcpConnect').addEventListener('click', async () => {
     const key = $('mcpKey').value.trim();
@@ -545,9 +589,12 @@ bootSurface({
     await loadLicenses();
     await loadUpdates();
     await loadMcp();
-    // Live status from the shell shim (works.Mcp.StateChanged).
+    await loadAgentGrants();
+    // Live status + grants from the shell (works.Mcp.StateChanged/GrantsChanged).
     bus.subscribe({ from: 'works', interface: 'Mcp', member: 'StateChanged' },
       (m) => renderMcp({ state: (m.args || [])[0] }));
+    bus.subscribe({ from: 'works', interface: 'Mcp', member: 'GrantsChanged' },
+      () => loadAgentGrants());
 
     // Auto-save on every change.
     $('theme').addEventListener('change', saveSettings);

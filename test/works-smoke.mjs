@@ -216,7 +216,7 @@ const agentMcp = await page.evaluate(async () => {
   try { await W.vfs.mkdir('/projects', { recursive: true }); } catch {}
   await W.vfs.writeFile('/projects/agent-probe.txt', 'hello agent');
   const agentBus = await W.connectAgentPeer('smoke');   // clientId 'agent:smoke' → a gated principal
-  const tools = W.worksTools(agentBus);
+  const tools = W.worksTools(agentBus, 'smoke');
   const tree = tools.find((t) => t.name === 'worksTree');
   const read = tools.find((t) => t.name === 'worksReadFile');
   const write = tools.find((t) => t.name === 'worksWriteFile');
@@ -224,25 +224,40 @@ const agentMcp = await page.evaluate(async () => {
   const got = await read.execute({ path: '/projects/agent-probe.txt' });
 
   const denied = (e) => (e && e.code === 'Error.AccessDenied') || /access ?denied|not authorized/i.test(String(e && e.message || e));
-  // write is gated for agents → denied without a grant
+  // Headless has no UI for the consent dialog — drive it via the hook. Default
+  // posture: auto-deny, so a denied write stays denied.
+  window.__agentConsent__ = () => null;
+  // write is gated for agents → denied without a grant (consent declined)
   let deniedNoGrant = false;
   try { await write.execute({ path: '/projects/agent-wrote.txt', content: 'x' }); } catch (e) { deniedNoGrant = denied(e); }
-  // consent: grant scoped to /projects → in-scope write lands, out-of-scope denied
+
+  // reactive consent: when the user approves a folder, the denied write retries + lands
+  window.__agentConsent__ = ({ dir }) => dir;   // approve the file's containing folder
+  let consentWrote = false;
+  try { await write.execute({ path: '/projects/consented.txt', content: 'via consent' }); consentWrote = true; } catch { /* */ }
+  const consentContent = await W.vfs.readFile('/projects/consented.txt', 'utf8').catch(() => null);
+  W.revokeAgent('smoke');                  // clear the consent grant
+  window.__agentConsent__ = () => null;    // back to deny for the rest
+
+  // explicit grant scoped to /projects → in-scope write lands, out-of-scope denied
   W.grantAgent('smoke', { pathPrefix: '/projects' });
   let wroteInScope = false;
   try { await write.execute({ path: '/projects/agent-wrote.txt', content: 'agent wrote this' }); wroteInScope = true; } catch { /* */ }
   let deniedOutScope = false;
   try { await write.execute({ path: '/sys/agent-escape.txt', content: 'x' }); } catch (e) { deniedOutScope = denied(e); }
   const wroteContent = await W.vfs.readFile('/projects/agent-wrote.txt', 'utf8').catch(() => null);
+  // grants are listed for the Settings panel; revoke clears them
+  const grantsListed = (W.listAgentGrants() || []).some((g) => String(g.grantee) === 'agent:smoke');
   // a non-agent principal (the shell's own bus) writes VFS freely — not gated
   let plainWrite = false;
   try { await W.worksBus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Write' }, ['/projects/plain.txt', 'plain']); plainWrite = true; } catch { /* */ }
+  delete window.__agentConsent__;
 
   return {
     toolNames: tools.map((t) => t.name),
     hasProbe: (listed.entries || []).some((e) => (e && e.name ? e.name : e) === 'agent-probe.txt'),
     content: got.content,
-    deniedNoGrant, wroteInScope, wroteContent, deniedOutScope, plainWrite,
+    deniedNoGrant, consentWrote, consentContent, wroteInScope, wroteContent, deniedOutScope, grantsListed, plainWrite,
   };
 });
 
@@ -1725,8 +1740,10 @@ const checks = {
   'numen: agent peer lists the workspace over A-Bus': agentMcp.hasProbe === true,
   'numen: agent peer reads a file over A-Bus': agentMcp.content === 'hello agent',
   'numen: agent write DENIED without a grant (gated)': agentMcp.deniedNoGrant === true,
+  'numen: reactive consent grants a folder → denied write retries + lands': agentMcp.consentWrote === true && agentMcp.consentContent === 'via consent',
   'numen: granted+scoped agent write lands in /projects': agentMcp.wroteInScope === true && agentMcp.wroteContent === 'agent wrote this',
   'numen: agent write outside the granted scope is denied': agentMcp.deniedOutScope === true,
+  'numen: agent grant is listed (Settings revoke UI backing)': agentMcp.grantsListed === true,
   'numen: a non-agent principal writes VFS freely (not gated)': agentMcp.plainWrite === true,
   // numen live transport: shim vendored + works.Mcp wired (bridge connect is manual)
   'numen: shim installed (navigator.modelContext)': mcpProbe.hasShim === true && mcpProbe.hasControl === true,

@@ -344,7 +344,7 @@ export async function setupWorksService() {
         RevokeAgent:    (identity) => WKS.revokeAgent(identity),
         ListAgentGrants: () => WKS.listAgentGrants(),
       },
-      signals: ['StateChanged'],
+      signals: ['StateChanged', 'GrantsChanged'],
     },
     // Build-time vendored license inventory — used by the workspace settings
     // surface (and future tools like `geas licenses`). Returns the standard
