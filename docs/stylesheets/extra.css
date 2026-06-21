@@ -24,12 +24,12 @@
   --sw-border-soft: #C6C4C1;
   --sw-rule:        #A5A3A0;
 
-  --sw-orange:      #B54E1A;  --sw-orange-soft: #E8D8CF;
-  --sw-teal:        #1B6B72;  --sw-teal-soft:   #CEE2E4;
-  --sw-green:       #3D7340;  --sw-green-soft:  #D2E4D4;
-  --sw-amber:       #8E6518;  --sw-amber-soft:  #E4DCCC;
-  --sw-red:         #A8312A;  --sw-red-soft:    #E8D6D4;
-  --sw-indigo:      #4E5580;  --sw-indigo-soft: #D8D9E2;
+  --sw-orange:      #8B3F00;  --sw-orange-soft: #FDE0CF;
+  --sw-blue:        #005C97;  --sw-blue-soft:   #CCE9FE;
+  --sw-green:       #00602B;  --sw-green-soft:  #D2ECD7;
+  --sw-yellow:      #6F5700;  --sw-yellow-soft: #F1E4CB;
+  --sw-red:         #99191E;  --sw-red-soft:    #FFDDD8;
+  --sw-violet:      #793A8D;  --sw-violet-soft: #F2DFF7;
 }
 
 /* Dark mode (basalt). */
@@ -45,12 +45,12 @@
   --sw-border-soft: #24272B;
   --sw-rule:        #3A3E44;
 
-  --sw-orange:      #D4672E;  --sw-orange-soft: #2E1F18;
-  --sw-teal:        #3A9BA3;  --sw-teal-soft:   #16272A;
-  --sw-green:       #5A9B5E;  --sw-green-soft:  #18261A;
-  --sw-amber:       #C49540;  --sw-amber-soft:  #2A2316;
-  --sw-red:         #D05048;  --sw-red-soft:    #2C1A18;
-  --sw-indigo:      #7E86B8;  --sw-indigo-soft: #1E2030;
+  --sw-orange:      #FB9044;  --sw-orange-soft: #2E2119;
+  --sw-blue:        #008CD1;  --sw-blue-soft:   #16262F;
+  --sw-green:       #5CCB80;  --sw-green-soft:  #1A261D;
+  --sw-yellow:      #FFD73A;  --sw-yellow-soft: #292317;
+  --sw-red:         #E75A51;  --sw-red-soft:    #30201D;
+  --sw-violet:      #EC9FFF;  --sw-violet-soft: #2A212C;
 }
 
 /* ── Layer 2: map Switchboard → Material tokens ─────────────────── */
@@ -84,7 +84,7 @@
   --md-accent-bg-color:            var(--sw-bg);
 
   /* Links — teal (info) */
-  --md-typeset-a-color:            var(--sw-teal);
+  --md-typeset-a-color:            var(--sw-blue);
 
   /* Code highlight */
   --md-code-hl-color:              var(--sw-orange-soft);
@@ -226,7 +226,7 @@
 
 /* Blockquotes — left rule in teal (info-coloured). */
 .md-typeset blockquote {
-  border-left: 3px solid var(--sw-teal);
+  border-left: 3px solid var(--sw-blue);
   color: var(--sw-text-mid);
   padding-left: 1rem;
 }
@@ -249,21 +249,21 @@
 .md-typeset details.note,
 .md-typeset .admonition.info,
 .md-typeset details.info {
-  border-color: var(--sw-teal);
+  border-color: var(--sw-blue);
   background: var(--sw-bg-raised);
 }
 .md-typeset .note > .admonition-title,
 .md-typeset .note > summary,
 .md-typeset .info > .admonition-title,
 .md-typeset .info > summary {
-  background: var(--sw-teal-soft);
-  color: var(--sw-teal);
+  background: var(--sw-blue-soft);
+  color: var(--sw-blue);
 }
 .md-typeset .note > .admonition-title::before,
 .md-typeset .note > summary::before,
 .md-typeset .info > .admonition-title::before,
 .md-typeset .info > summary::before {
-  background-color: var(--sw-teal);
+  background-color: var(--sw-blue);
 }
 
 /* tip / success / hint → green */
@@ -301,7 +301,7 @@
 .md-typeset details.caution,
 .md-typeset .admonition.attention,
 .md-typeset details.attention {
-  border-color: var(--sw-amber);
+  border-color: var(--sw-yellow);
   background: var(--sw-bg-raised);
 }
 .md-typeset .warning > .admonition-title,
@@ -310,8 +310,8 @@
 .md-typeset .caution > summary,
 .md-typeset .attention > .admonition-title,
 .md-typeset .attention > summary {
-  background: var(--sw-amber-soft);
-  color: var(--sw-amber);
+  background: var(--sw-yellow-soft);
+  color: var(--sw-yellow);
 }
 .md-typeset .warning > .admonition-title::before,
 .md-typeset .warning > summary::before,
@@ -319,7 +319,7 @@
 .md-typeset .caution > summary::before,
 .md-typeset .attention > .admonition-title::before,
 .md-typeset .attention > summary::before {
-  background-color: var(--sw-amber);
+  background-color: var(--sw-yellow);
 }
 
 /* danger / failure / error / bug → red */
@@ -363,7 +363,7 @@
 .md-typeset details.summary,
 .md-typeset .admonition.tldr,
 .md-typeset details.tldr {
-  border-color: var(--sw-indigo);
+  border-color: var(--sw-violet);
   background: var(--sw-bg-raised);
 }
 .md-typeset .abstract > .admonition-title,
@@ -372,8 +372,8 @@
 .md-typeset .summary > summary,
 .md-typeset .tldr > .admonition-title,
 .md-typeset .tldr > summary {
-  background: var(--sw-indigo-soft);
-  color: var(--sw-indigo);
+  background: var(--sw-violet-soft);
+  color: var(--sw-violet);
 }
 .md-typeset .abstract > .admonition-title::before,
 .md-typeset .abstract > summary::before,
@@ -381,7 +381,7 @@
 .md-typeset .summary > summary::before,
 .md-typeset .tldr > .admonition-title::before,
 .md-typeset .tldr > summary::before {
-  background-color: var(--sw-indigo);
+  background-color: var(--sw-violet);
 }
 
 /* example / quote → orange */

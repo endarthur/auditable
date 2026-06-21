@@ -39,7 +39,7 @@ Light is `:root` (Switchboard default = equipment gray); dark is `[data-theme="d
 
 ## Versioning and stability
 
-Switchboard is at **1.0**. The accent → semantic mapping (orange=action, teal=info, green=go, amber=caution, red=fault, indigo=selected) is the stability anchor — it does not change in 1.x. See SPEC §12 for the full semver policy.
+Switchboard is at **1.3**. The accent → **semantic** mapping (action / info / go / caution / fault / selected) is the stability anchor — it does not change in 1.x. The literal swatch colours and their hue-honest names (orange / blue / green / yellow / red / violet as of 1.3.0's CVD reset) may move for accessibility; components read the role tokens (`--au-*`), never the swatches. See SPEC §12 for the full semver policy.
 
 ## The installable package (v0.1)
 

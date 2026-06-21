@@ -608,7 +608,7 @@ The host runs both substitutions on the extension surface's HTML **at spawn time
 | Layer | Tokens | What |
 |---|---|---|
 | 1. Switchboard swatches | `--sw-orange`, `--sw-bg-raised`, `--sw-text`, … | Raw palette. Light defaults at `:root`, dark overrides at `[data-theme="dark"]`. |
-| 2. Auditable semantic | `--au-fg`, `--au-action`, `--au-surface`, `--au-border`, … | Role tokens (orange=action, teal=info, green=go, …). Map to layer 1. **Surfaces should use these.** |
+| 2. Auditable semantic | `--au-fg`, `--au-action`, `--au-surface`, `--au-border`, … | Role tokens (action=orange, info=blue, go=green, …). Map to layer 1. **Surfaces should use these.** |
 | 3. Component-internal | `--ui-bg-raised`, `--ui-fg-muted`, … | Read by `@gcu/menu` + `@gcu/dialog`. Map to layer 2. |
 
 Rules:

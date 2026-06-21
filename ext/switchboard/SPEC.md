@@ -4,7 +4,7 @@
 
 | Field      | Value                                          |
 |------------|------------------------------------------------|
-| Version    | 1.2.1                                          |
+| Version    | 1.3.0                                          |
 | Status     | Canon                                          |
 | License    | MIT                                            |
 | Org        | Geoscientific Chaos Union                      |
@@ -23,7 +23,7 @@ Switchboard is the shared visual language for everything that ships under the GC
 Three commitments drive every choice:
 
 1. **Eye-comfort first.** The brightest pixel on screen is never `#FFFFFF` and the text is never `#000000`. Max contrast is around 12:1 — above WCAG AAA, well below the retina-searing 21:1 of pure black-on-white. The interface must be readable for hours under variable lighting. This is the problem flight decks solved in 1981.
-2. **Accents are events, not ambience.** The stage is cool. Orange and amber register as *something happened* — a button pressed, a warning raised — not as the colour temperature of the entire interface. (See §10. The "piss filter" rule.)
+2. **Accents are events, not ambience.** The stage is cool. Orange and yellow register as *something happened* — a button pressed, a warning raised — not as the colour temperature of the entire interface. (See §10. The "piss filter" rule.)
 3. **Single-file deployable.** The whole system fits inside `<style>` and `<script>` blocks in one HTML file. No build step, no CSS-in-JS, no preprocessor. CSS custom properties carry all the tokens.
 
 ### 1.1 Two tiers
@@ -81,14 +81,16 @@ Six functional accents. Each has a desaturated **soft** variant used for tinted 
 
 | Accent | Semantic   | Light hex  | Light soft | Dark hex   | Dark soft  |
 |--------|------------|------------|------------|------------|------------|
-| Orange | **Action** — you initiated it; primary buttons; ET-foam | `#954015` | `#E8D8CF` | `#D4672E` | `#2E1F18` |
-| Teal   | **Info** — links, info badges, terminal prompt           | `#196369` | `#CEE2E4` | `#3A9BA3` | `#16272A` |
-| Green  | **Go** — success, connected, verified, GO                | `#356437` | `#D2E4D4` | `#5A9B5E` | `#18261A` |
-| Amber  | **Caution** — weak signal, low battery, pending          | `#755314` | `#E4DCCC` | `#C49540` | `#2A2316` |
-| Red    | **Fault** — error, dead device, failed auth              | `#A43029` | `#E8D6D4` | `#D05048` | `#2C1A18` |
-| Indigo | **Selected** — focus, standby, idle, highlighted         | `#4E5580` | `#D8D9E2` | `#7E86B8` | `#1E2030` |
+| Orange | **Action** — you initiated it; primary buttons; ET-foam | `#8B3F00` | `#FDE0CF` | `#FB9044` | `#2E2119` |
+| Blue   | **Info** — links, info badges, terminal prompt           | `#005C97` | `#CCE9FE` | `#008CD1` | `#16262F` |
+| Green  | **Go** — success, connected, verified, GO                | `#00602B` | `#D2ECD7` | `#5CCB80` | `#1A261D` |
+| Yellow | **Caution** — weak signal, low battery, pending          | `#6F5700` | `#F1E4CB` | `#FFD73A` | `#292317` |
+| Red    | **Fault** — error, dead device, failed auth              | `#99191E` | `#FFDDD8` | `#E75A51` | `#30201D` |
+| Violet | **Selected** — focus, standby, idle, highlighted         | `#793A8D` | `#F2DFF7` | `#EC9FFF` | `#2A212C` |
 
-CSS variable naming: `--sw-{name}` for the accent, `--sw-{name}-soft` for the tint. Example: `--sw-orange`, `--sw-orange-soft`.
+CSS variable naming: `--sw-{name}` for the accent, `--sw-{name}-soft` for the tint. Example: `--sw-orange`, `--sw-orange-soft`. The swatch names are honest hues — the **v1.3.0 CVD reset** shifted teal→**blue**, amber→**yellow**, indigo→**violet** so red-green colour-vision deficiency can't fold the cool/warm pairs together (§8). The semantic *roles* (action/info/go/caution/fault/selected) are unchanged; only the literal colours moved.
+
+**Two themes, two regimes.** Dark accents are bright and saturated, so the warm trio (orange/yellow/red) stays separated by the blue-yellow axis that CVD preserves — every accent pair clears **ΔE 10** across normal + protan/deutan/tritan (the styleguide matrix is the live check). Light accents are forced dark by AA on the light surface (luminance forces L\*≈37), which crushes chroma; under CVD the warm trio collapses there regardless. On the light surface, **glyph-pairing (§8) carries CVD distinguishability** — the dark theme is the one that separates by colour for CVD users.
 
 **Do not introduce additional accents.** If the design needs a seventh colour, it almost certainly needs a re-think of the semantic load instead.
 
@@ -194,7 +196,7 @@ toolkit) obeys four rules:
    structural sheet — auditable strips the `-default`'s `:root` block so it doesn't
    fight the host tokens.)
 3. **Obey the accent semantics (§3) and the anti-patterns (§10).** action=orange,
-   info=teal, go=green, caution=amber, fault=red, selected=indigo — non-negotiable;
+   info=blue, go=green, caution=yellow, fault=red, selected=violet — non-negotiable;
    no drop shadows (depth = surface register + 1px borders); no piss filter.
 4. **No runtime dependency leak.** A tier-2 component is a zero-dep leaf (it may use
    the bus/VFS via injection, like surfaces do, but it doesn't drag a framework).
@@ -227,9 +229,9 @@ Three variants. All mono, uppercase, 0.1em tracking, `--sw-radius`.
 |------------|-------------------|------------|---------------|--------------------------------|
 | `primary`  | `--sw-orange`     | `#FFFFFF`  | none          | `filter: brightness(1.08)`     |
 | `secondary`| transparent       | `--sw-text`| `--sw-border` | border + text → `--sw-orange`  |
-| `ghost`    | transparent       | `--sw-teal`| none          | brightness                     |
+| `ghost`    | transparent       | `--sw-blue`| none          | brightness                     |
 
-Orange is always primary. Teal is always the ghost / link-style variant. Do not introduce other coloured buttons.
+Orange is always primary. Blue is always the ghost / link-style variant. Do not introduce other coloured buttons.
 
 ### 6.3 Badge
 
@@ -287,10 +289,10 @@ State classes on `.gauge` (`go`, `caution`, `fault`) colour the **value** only �
 
 | Slot      | Token            | Use                                    |
 |-----------|------------------|----------------------------------------|
-| prompt    | `--sw-teal`      | Hostname/path prompt                   |
+| prompt    | `--sw-blue`      | Hostname/path prompt                   |
 | user      | `--sw-orange`    | `$` / user input glyph; cursor         |
 | ok        | `--sw-green`     | `✓` lines, success output              |
-| warn      | `--sw-amber`     | `⚠` lines, deprecation warnings        |
+| warn      | `--sw-yellow`     | `⚠` lines, deprecation warnings        |
 | err       | `--sw-red`       | `✗` lines, errors                      |
 | dim       | `--sw-text-soft` | Subprocess noise, hints                |
 
@@ -307,7 +309,7 @@ The states every interactive component shares (transitions use `--au-dur` /
 | active | `brightness(0.92)` (press) — never a transform/bounce |
 | focus-visible | buttons: 2px `--au-action` outline, 1px offset · inputs: 3px `--au-action-soft` ring (§6.4) |
 | disabled | `opacity: 0.5` + `cursor: not-allowed`; no hover/active response |
-| selected | `--au-selected` (indigo) border/tint — the one accent reserved for it (§3) |
+| selected | `--au-selected` (violet) border/tint — the one accent reserved for it (§3) |
 
 No positional motion on hover/active — depth and feedback come from brightness +
 border, the same restraint as "no drop shadows." See it live in `styleguide.html`.
@@ -347,14 +349,14 @@ Contrast reference, **dark mode on the primary surface `#15171A`** (the surface 
 | text        | `#DDDCDA` | 13.1:1  | AAA      |
 | text-mid    | `#9E9C98` | 6.6:1   | AA       |
 | text-soft   | `#83817E` | 4.6:1   | AA       |
-| orange      | `#D4672E` | 4.9:1   | AA       |
-| teal        | `#3A9BA3` | 5.5:1   | AA       |
-| green       | `#5A9B5E` | 5.4:1   | AA       |
-| amber       | `#C49540` | 6.6:1   | AA       |
-| red         | `#D05048` | 4.2:1   | AA large |
-| indigo      | `#7E86B8` | 5.1:1   | AA       |
+| orange      | `#FB9044` | 7.9:1   | AA       |
+| blue        | `#008CD1` | 4.9:1   | AA       |
+| green       | `#5CCB80` | 8.8:1   | AA       |
+| yellow      | `#FFD73A` | 12.9:1  | AAA      |
+| red         | `#E75A51` | 5.1:1   | AA       |
+| violet      | `#EC9FFF` | 9.4:1   | AAA      |
 
-(Earlier this table was measured on `#0E1012` (deep), which masked that `text-soft` failed AA on the *primary* surface — caught by the live readout, fixed in 1.1.1. The accents are AA / AA-large on surface; they carry meaning only glyph-paired, §8 above, so AA-large is compliant for them. Light mode runs a touch tighter — re-check via the styleguide.)
+(Earlier this table was measured on `#0E1012` (deep), which masked that `text-soft` failed AA on the *primary* surface — caught by the live readout, fixed in 1.1.1. The **v1.3.0 CVD reset** lifted every dark accent to a clean AA-or-better on surface — all ≥4.9:1, so no accent is AA-large any more — *and* every accent pair now clears ΔE 10 across CVD (§3). Light accents sit at AA on the light surface (≥4.5:1) but, forced dark, are CVD-distinguishable only by glyph there — re-check both via the styleguide's live readout + ΔE matrix.)
 
 ---
 
@@ -371,7 +373,7 @@ There is no plan for a Switchboard React/Vue component library. The whole point 
 
 ## 10. Anti-patterns
 
-**The piss filter.** The first draft of Switchboard was warm — putty surfaces, sepia accents. It looked like a faded crew manual. Don't warm the stage. Warmth across the entire interface makes orange and amber stop reading as events and start reading as the ambient colour temperature. Stage stays cool. Accents play.
+**The piss filter.** The first draft of Switchboard was warm — putty surfaces, sepia accents. It looked like a faded crew manual. Don't warm the stage. Warmth across the entire interface makes orange and yellow stop reading as events and start reading as the ambient colour temperature. Stage stays cool. Accents play.
 
 **Sans for data.** Body sans-serif inside a control panel reads as a SaaS dashboard. If it's a value, a label, a token, or equipment text — it's mono.
 
@@ -402,13 +404,15 @@ Switchboard follows semver:
 - **MINOR** — new component, new soft tint, new utility class. Tokens stable.
 - **PATCH** — hex value tweaks within ≤ 2 ΔE, contrast-table refresh, doc fixes.
 
+**1.3.0** — **the CVD accent reset.** All six accents re-tuned from scratch in LCh against the live ΔE2000 + Machado-CVD matrix (the 1.2.1 scoreboard). Three swatches shifted hue so red-green CVD can't fold them together, and the **names follow the hues**: `teal→blue`, `amber→yellow`, `indigo→violet` (orange/green/red keep their names; the semantic *roles* are unchanged — only the colours moved). Result: the **dark** theme is genuinely CVD-distinguishable — every accent pair clears **ΔE 10** across normal + protan/deutan/tritan (was 6 collapsing pairs at ΔE 2–6), all AA ≥4.9:1 on surface. The **light** theme is bound by physics — AA on the light surface forces accents dark, dark crushes chroma, the warm trio collapses under CVD regardless — so it's AA-clean + normal-vision-distinct + glyph-backed for CVD (the dark theme is the colour-distinguishing one for CVD users; this is stated in §3/§8). The old Works "brighter dark accents" delta is **retired** — the calibrated dark accents are bright enough for works + auditable to share one palette (parity test simplified, no deltas). MINOR not MAJOR: token *names* changed but the names track honest hues and the semantic role tokens (`--au-action`…`--au-selected`) are 100% stable; consumers reading `--au-*` (the contract) are unaffected. Raw-swatch consumers updated (patchbay cable map, menubar, docs). Why MINOR and not MAJOR despite `--sw-*` renames: the `--sw-*` swatches are the *implementation* layer, not the public contract (§6.0/§11 — components read `--au-*`); a swatch rename is a visible refresh, not a contract break. All four token copies updated; parity green; styleguide matrix + readout green.
+
 **1.2.1** — **distinguishability matrix + honest CVD doc.** Added a live ΔE2000 + Machado-CVD accent matrix to `styleguide.html` (per theme, flags pairs that collapse). It proved §8's old claim ("all six distinguishable via ΔE2000") **false** — under red-green CVD the warm trio (action/caution/fault) drops to ΔE 2–6. §8 rewritten to the truth: six semantic accents can't all be hue-distinct under CVD, so the *never-colour-alone* glyph-pairing is the actual guarantee; lightness separation is the secondary aid. No token change (the accent *re-tune* to maximize lightness separation is the next step, 1.3.0). Tooling + doc → PATCH.
 
 **1.2.0** — **light accents darkened to clear AA as text on the primary surface.** The readout showed the light six at 3.38–4.69:1 (all but indigo below AA-normal) — fine for glyph-paired status, but accent *text* (links use `info`, headers use `action`) was sub-AA. Darkened each just to ~4.55:1, hue preserved (scaled toward black), indigo left (already 4.69): orange `#B54E1A→#954015`, teal `#1B6B72→#196369`, green `#3D7340→#356437`, amber `#8E6518→#755314`, red `#A8312A→#A43029`. Light-only (dark accents already pass); `-soft` tints unchanged (badge/fill contrast only improves — darker accent on the same pale tint). MINOR not PATCH: a coordinated, *visible* palette shift, though names + semantics are stable (orange is still action). The muted equipment palette absorbs the darkening as "deeper," not "muddier" — but `amber`/`orange` shifted most; if either loses character, give *that one* a text-only `-ink` variant rather than the whole set going two-tier. All four token copies updated; parity green.
 
 **1.1.1** — accessibility fix the live readout surfaced: `--sw-text-soft` failed AA on the *primary* surface (3.43:1 dark / 2.88:1 light — the old §8 table hid it by measuring on the deep surface). Bumped to **`#83817E` (dark, 4.64:1)** / **`#5A5856` (light, 4.63:1)**; the warm-gray hue is preserved (scaled in place). A visible nudge (slightly beyond the ≤2 ΔE PATCH guideline) but it's a compliance fix, not a restyle — kept PATCH. §8 table rebased to the primary surface with measured values; all four token copies updated in lockstep (parity test green).
 
-Current: **1.1.1**. The accent mapping (orange=action, teal=info, green=go, amber=caution, red=fault, indigo=selected) is the stability anchor — it does not change in 1.x.
+Current: **1.3.0**. The accent **semantic mapping** (action / info / go / caution / fault / selected) is the stability anchor — it does not change in 1.x. The literal swatch *colours* and their hue-honest names (orange / blue / green / yellow / red / violet as of 1.3.0) may move for accessibility; components bind the role tokens (`--au-*`), never the swatches, so a colour reset doesn't touch them.
 
 **1.1.0** — additive (MINOR; existing tokens stable). New token groups in `:root`: z-index ladder (`--sw-z-*`), motion (`--sw-dur*` / `--sw-ease`), touch target (`--sw-tap`), each with an `--au-*` mirror. New: §4 touch/mobile guidance, §6 complete-by-reference component catalog, §8 `prefers-reduced-motion` requirement + 44px touch target. §11 now documents the two-layer naming and **canonicalizes `--au-*` as the shared GCU semantic vocabulary** (clarifies the cross-app contract; not a rename — a true neutral-prefix rename would be a future MAJOR). New **§6.7 interaction states** (hover/active/focus/disabled/selected — filling the slot the removed band vacated), and **§8 names the unicode glyph set**. A living styleguide (`styleguide.html`) renders the whole language in both themes — and adds **live per-theme WCAG contrast** (flagging any text tier below AA), the interaction-state matrix, and the glyph roster.
 

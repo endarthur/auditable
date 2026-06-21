@@ -393,7 +393,7 @@ async function openExamplePicker() {
             note.textContent = ' ⚠';
             note.title = 'Uses ' + entry.unresolvable.join(', ')
               + ' — not bundled in works-all; cell may error at load.';
-            note.style.color = 'var(--sw-amber,#c89b3c)';
+            note.style.color = 'var(--sw-yellow,#FFD73A)';
             title.appendChild(note);
           }
 

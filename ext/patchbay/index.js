@@ -2302,8 +2302,10 @@ const TOKEN_MAP = {
   bgDeep: '--sw-bg-deep', bg: '--sw-bg', bgRaised: '--sw-bg-raised', bgBright: '--sw-bg-bright',
   text: '--sw-text', textMid: '--sw-text-mid', textSoft: '--sw-text-soft',
   border: '--sw-border', rule: '--sw-rule',
-  orange: '--sw-orange', teal: '--sw-teal', green: '--sw-green',
-  amber: '--sw-amber', red: '--sw-red', indigo: '--sw-indigo',
+  // role names are patchbay-internal; sourced from the renamed Switchboard
+  // swatches (teal→blue, amber→yellow, indigo→violet as of switchboard 1.3.0).
+  orange: '--sw-orange', teal: '--sw-blue', green: '--sw-green',
+  amber: '--sw-yellow', red: '--sw-red', indigo: '--sw-violet',
 };
 function readThemeColors(el) {
   const cs = (typeof getComputedStyle !== 'undefined') ? getComputedStyle(el) : null;
@@ -2391,7 +2393,7 @@ function mountPatchbay(ctx) {
     .pb-insp input[type=range]{padding:0}
     .pb-readout{display:flex;justify-content:space-between;gap:10px;padding:3px 0;font:11px "Space Mono",monospace}
     .pb-readout .n{color:var(--sw-text-soft,#6E6C68)}
-    .pb-readout .rv{color:var(--sw-teal,#3A9BA3)}
+    .pb-readout .rv{color:var(--sw-blue,#008CD1)}
     .pb-del{margin-top:14px;width:100%;background:rgba(208,80,72,.15);border:1px solid var(--sw-red,#D05048);color:var(--sw-red,#D05048);
       border-radius:4px;padding:6px 10px;font:10px/1 "Space Mono",monospace;text-transform:uppercase;letter-spacing:.08em;cursor:pointer}
     .pb-hud{position:absolute;bottom:8px;right:8px;z-index:5;font:9.5px "Space Mono",monospace;color:var(--sw-text-soft,#6E6C68);

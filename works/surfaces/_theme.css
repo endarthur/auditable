@@ -19,12 +19,12 @@
   --sw-border:      #B3B1AD;
   --sw-border-soft: #C6C4C1;
   --sw-rule:        #A5A3A0;
-  --sw-orange:      #954015;  --sw-orange-soft: #E8D8CF;
-  --sw-teal:        #196369;  --sw-teal-soft:   #CEE2E4;
-  --sw-green:       #356437;  --sw-green-soft:  #D2E4D4;
-  --sw-amber:       #755314;  --sw-amber-soft:  #E4DCCC;
-  --sw-red:         #A43029;  --sw-red-soft:    #E8D6D4;
-  --sw-indigo:      #4E5580;  --sw-indigo-soft: #D8D9E2;
+  --sw-orange:      #8B3F00;  --sw-orange-soft: #FDE0CF;
+  --sw-blue:        #005C97;  --sw-blue-soft:   #CCE9FE;
+  --sw-green:       #00602B;  --sw-green-soft:  #D2ECD7;
+  --sw-yellow:      #6F5700;  --sw-yellow-soft: #F1E4CB;
+  --sw-red:         #99191E;  --sw-red-soft:    #FFDDD8;
+  --sw-violet:      #793A8D;  --sw-violet-soft: #F2DFF7;
   --au-surface-deep:   var(--sw-bg-deep);
   --au-surface:        var(--sw-bg);
   --au-surface-raised: var(--sw-bg-raised);
@@ -37,16 +37,16 @@
   --au-rule:           var(--sw-rule);
   --au-action:         var(--sw-orange);
   --au-action-soft:    var(--sw-orange-soft);
-  --au-info:           var(--sw-teal);
-  --au-info-soft:      var(--sw-teal-soft);
+  --au-info:           var(--sw-blue);
+  --au-info-soft:      var(--sw-blue-soft);
   --au-success:        var(--sw-green);
   --au-success-soft:   var(--sw-green-soft);
-  --au-warn:           var(--sw-amber);
-  --au-warn-soft:      var(--sw-amber-soft);
+  --au-warn:           var(--sw-yellow);
+  --au-warn-soft:      var(--sw-yellow-soft);
   --au-error:          var(--sw-red);
   --au-error-soft:     var(--sw-red-soft);
-  --au-selected:       var(--sw-indigo);
-  --au-selected-soft:  var(--sw-indigo-soft);
+  --au-selected:       var(--sw-violet);
+  --au-selected-soft:  var(--sw-violet-soft);
   /* Component-token aliases — @gcu/menu and @gcu/dialog read these.
      Mirrors works/style.css's top-level cascade so inlined component
      CSS in surfaces gets the same look as the shell's chrome. */
@@ -80,13 +80,14 @@
   --sw-border:      #2F3338;
   --sw-border-soft: #24272B;
   --sw-rule:        #3A3E44;
-  /* Works-specific brighter accents (see works/style.css for rationale). */
-  --sw-orange:      #D97A3C;  --sw-orange-soft: #2E1F18;
-  --sw-teal:        #7EC8E0;  --sw-teal-soft:   #16272A;
-  --sw-green:       #9ED47E;  --sw-green-soft:  #18261A;
-  --sw-amber:       #E0C060;  --sw-amber-soft:  #2A2316;
-  --sw-red:         #F88C8C;  --sw-red-soft:    #2C1A18;
-  --sw-indigo:      #C080C0;  --sw-indigo-soft: #1E2030;
+  /* Canonical Switchboard dark accents (CVD-tuned, SPEC §3) — the old
+     works brighter delta is retired; one palette now. */
+  --sw-orange:      #FB9044;  --sw-orange-soft: #2E2119;
+  --sw-blue:        #008CD1;  --sw-blue-soft:   #16262F;
+  --sw-green:       #5CCB80;  --sw-green-soft:  #1A261D;
+  --sw-yellow:      #FFD73A;  --sw-yellow-soft: #292317;
+  --sw-red:         #E75A51;  --sw-red-soft:    #30201D;
+  --sw-violet:      #EC9FFF;  --sw-violet-soft: #2A212C;
 }
 
 /* GCU thin scrollbar — mirrors the shell rule in works/style.css. Each

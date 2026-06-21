@@ -44,8 +44,8 @@ Behaving like a surface is half of it; *looking* like GCU is the other half. Tha
 **Switchboard** (`ext/switchboard/`), the GCU UI toolkit — two tiers:
 
 - **The language** (`ext/switchboard/SPEC.md`): tokens, the six-accent semantic
-  mapping (action=orange, info=teal, go=green, caution=amber, fault=red,
-  selected=indigo), typography, component patterns, theming, a11y. Runtime-free.
+  mapping (action=orange, info=blue, go=green, caution=yellow, fault=red,
+  selected=violet — CVD-tuned, 1.3.0), typography, component patterns, theming, a11y. Runtime-free.
 - **The components**: `@gcu/menu` (menus), `@gcu/dialog` (modals), `@gcu/rails`
   (docking layout), `@gcu/loom` (grid), `@gcu/term` (terminal) — drop-in DOM
   widgets that obey the toolkit's authoring contract (SPEC §6.0).

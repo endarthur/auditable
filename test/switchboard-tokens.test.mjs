@@ -2,9 +2,10 @@
 // single source of truth for the design tokens. Every in-repo copy
 // (src/style.css = auditable, works/style.css = the shell, works/surfaces/
 // _theme.css = surfaces) may define a SUBSET of the canonical tokens, but any
-// token it does define must match switchboard.css's value — except the ONE
-// documented delta: the Works files brighten the six dark accents (their own
-// comment: "Accents are works-specific: brighter than Switchboard's basalt").
+// token it does define must match switchboard.css's value — no deltas. (The
+// old Works "brighter dark accents" exception was retired in v1.3.0 when the
+// CVD-tuned accents became bright enough for works + auditable to share one
+// palette.)
 //
 // This is the safety net for the @gcu/switchboard extraction: the copies stay
 // physically in place (no risky theming rewire), but they cannot silently
@@ -42,7 +43,7 @@ function tokens(css) {
   return { light: declsOf(root), dark: declsOf(dark) };
 }
 
-const ACCENTS = new Set(['--sw-orange', '--sw-teal', '--sw-green', '--sw-amber', '--sw-red', '--sw-indigo']);
+const ACCENTS = new Set(['--sw-orange', '--sw-blue', '--sw-green', '--sw-yellow', '--sw-red', '--sw-violet']);
 
 const canonical = tokens(read('ext/switchboard/switchboard.css'));
 
@@ -59,8 +60,8 @@ test('switchboard.css defines a full canonical token set', () => {
   for (const a of ACCENTS) assert.ok(canonical.dark.has(a), `canonical dark missing ${a}`);
 });
 
-for (const { file, works } of CONSUMERS) {
-  test(`${file} tokens match switchboard.css (modulo the documented delta)`, () => {
+for (const { file } of CONSUMERS) {
+  test(`${file} tokens match switchboard.css exactly`, () => {
     const t = tokens(read(file));
     // Sanity: we actually found token blocks (a selector-shape change would
     // otherwise let this pass vacuously).
@@ -70,12 +71,12 @@ for (const { file, works } of CONSUMERS) {
     for (const scope of ['light', 'dark']) {
       for (const [token, val] of t[scope]) {
         if (!canonical[scope].has(token)) continue;          // app-specific addition — fine
-        if (val === canonical[scope].get(token)) continue;   // matches canon
-        // The only allowed divergence: Works brightens the six dark accents.
-        const allowed = works && scope === 'dark' && ACCENTS.has(token);
-        assert.ok(allowed,
+        // No deltas any more — every shared token must match canon exactly.
+        // (The old Works "brighter dark accents" exception retired in v1.3.0,
+        // when the CVD-tuned accents became bright enough to share.)
+        assert.equal(val, canonical[scope].get(token),
           `${file} [${scope}] ${token} = ${val} ≠ canonical ${canonical[scope].get(token)} `
-          + `(not an allowed delta) — reconcile with ext/switchboard/switchboard.css`);
+          + `— reconcile with ext/switchboard/switchboard.css`);
       }
     }
   });
