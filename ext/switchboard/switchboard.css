@@ -68,6 +68,32 @@
   --au-font-sans:      var(--sw-sans);
   --au-radius:         var(--sw-radius);
   --au-radius-lg:      var(--sw-radius-lg);
+
+  /* ── Layering — z-index scale (theme-independent; SPEC §4). One ladder so
+        overlays don't fight: dropdown < overlay < modal < shield. ── */
+  --sw-z-raised:    10;
+  --sw-z-dropdown:  100;
+  --sw-z-overlay:   1000;
+  --sw-z-modal:     2000;
+  --sw-z-shield:    2147483647;   /* cross-origin iframe pointer-shield — above all */
+  --au-z-raised:    var(--sw-z-raised);
+  --au-z-dropdown:  var(--sw-z-dropdown);
+  --au-z-overlay:   var(--sw-z-overlay);
+  --au-z-modal:     var(--sw-z-modal);
+  --au-z-shield:    var(--sw-z-shield);
+
+  /* ── Motion — restrained by default; components honor prefers-reduced-motion
+        (SPEC §8). Equipment, not theme-park: short, ease-out, no bounce. ── */
+  --sw-dur-fast:    0.12s;
+  --sw-dur:         0.2s;
+  --sw-ease:        cubic-bezier(0.2, 0, 0, 1);
+  --au-dur-fast:    var(--sw-dur-fast);
+  --au-dur:         var(--sw-dur);
+  --au-ease:        var(--sw-ease);
+
+  /* ── Touch — minimum interactive target on pointer:coarse (SPEC §4). ── */
+  --sw-tap:         44px;
+  --au-tap:         var(--sw-tap);
 }
 
 [data-theme="dark"] {

@@ -4,7 +4,7 @@
 
 | Field      | Value                                          |
 |------------|------------------------------------------------|
-| Version    | 1.0.1                                          |
+| Version    | 1.1.0                                          |
 | Status     | Canon                                          |
 | License    | MIT                                            |
 | Org        | Geoscientific Chaos Union                      |
@@ -102,10 +102,18 @@ CSS variable naming: `--sw-{name}` for the accent, `--sw-{name}-soft` for the ti
 | `--sw-radius-lg`   | `4px`     | Panels, readouts, terminal        |
 | `--sw-mono`        | `'Space Mono', 'JetBrains Mono', 'Consolas', monospace` | All mono surfaces |
 | `--sw-sans`        | `'Barlow', system-ui, sans-serif`                       | All sans surfaces |
+| `--sw-z-raised` … `-shield` | `10 / 100 / 1000 / 2000 / 2147483647` | Layering ladder: raised → dropdown → overlay → modal → shield. One scale so overlays don't fight; `-shield` is the cross-origin iframe pointer-shield (above everything). |
+| `--sw-dur-fast` / `--sw-dur` | `0.12s / 0.2s` | Motion durations — short by default |
+| `--sw-ease`        | `cubic-bezier(0.2, 0, 0, 1)` | The one easing curve (ease-out, no bounce) |
+| `--sw-tap`         | `44px`    | Minimum interactive target on touch (`pointer: coarse`) |
+
+Each has a `--au-*` mirror (the component-facing layer), same as `--sw-radius → --au-radius`. Z-index, motion, and tap are theme-independent (defined once in `:root`, not re-mapped in dark).
 
 No shadow tokens. Switchboard does not use drop shadows — depth comes from surface register and 1px borders. (Exception: a 3px outer ring of the accent's `-soft` variant on focused inputs.)
 
 No spacing scale tokens. Use plain `rem` values; the codebase has been consistent on `0.3rem / 0.45rem / 0.6rem / 0.85rem / 1rem / 1.25rem / 1.5rem` without needing to name them.
+
+**Touch / mobile.** Desktop is the default density and the "just use rem" rule above holds there. On `pointer: coarse` (handheld — FieldWorks et al.), interactive controls grow to `--sw-tap` (44px) minimum, and density loosens by feel — but a *named* density scale (comfortable/compact) is intentionally deferred until a real mobile surface (FieldWorks) forces the exact values, rather than guessed up front. Don't ship a sub-44px tap target on a touch build.
 
 ---
 
@@ -146,10 +154,27 @@ Labels, data values, terminal output, code, gauges, equipment text. Carries ever
 ## 6. Components
 
 The patterns below (§6.1–6.6) are the **tier-1 specification** — what each thing
-looks like, in tokens. The **tier-2 DOM packages** (`@gcu/menu`, `@gcu/dialog`,
-`@gcu/rails`, `@gcu/loom`, `@gcu/term`) implement them for the browser. §6.0 is the
-contract that keeps the two tiers — and any *new* component, here or in a sibling
-repo — consistent.
+looks like, in tokens. The **tier-2 DOM packages** implement them for the browser.
+§6.0 is the contract that keeps the two tiers — and any *new* component, here or in
+a sibling repo — consistent.
+
+The §6.1–6.6 patterns are the *primitives*; the higher-traffic composite
+components live as tier-2 packages and are specified **by their package**, not
+re-documented here. The catalog, complete-by-reference:
+
+| Component | Spec home |
+|---|---|
+| Panel · Button · Badge · Form field · Device readout · Terminal | §6.1–6.6 (here) |
+| Popup menu · menubar · context menu | `@gcu/menu` |
+| Modal · confirm · prompt | `@gcu/dialog` |
+| Docked tabs · stacks · floats | `@gcu/rails` |
+| Table / data grid | `@gcu/loom` |
+| Terminal emulator (runtime) | `@gcu/term` |
+| Tree / file explorer · toast / status · tooltip · slider & widgets | *not yet a documented pattern — see the consuming surface; promote to a tier-2 package or a §6.x pattern when a second consumer appears* |
+
+The last row is the honest edge: those exist in the app but aren't yet a *named*
+Switchboard pattern. They obey §6.0 by construction (they read `--au-*`); formalize
+each the moment a second surface needs it.
 
 ### 6.0 The component-authoring contract
 
@@ -296,7 +321,8 @@ Hard requirements:
 - **All six accents distinguishable under deuteranopia, protanopia, and tritanopia simulation.** Tested via CIE ΔE2000.
 - **Never carry meaning in colour alone.** Status colours are always paired with an icon, glyph, badge text, or position. A red value without an `✗` or "FAULT" label is non-compliant.
 - **Focus states are visible.** Inputs get the 3px `--sw-orange-soft` ring. Buttons get a 2px outline of `--sw-orange` on `:focus-visible`.
-- **Hit targets ≥ 32×32px** for any interactive element on touch surfaces (handheld platform UI especially).
+- **Hit targets:** ≥ `--sw-tap` (44×44px) on touch (`pointer: coarse` — the handheld/FieldWorks builds); ≥ 32×32px on fine pointers (desktop). Never below 44 on a touch surface.
+- **Honor `prefers-reduced-motion`.** Transitions/animations use `--au-dur*` + `--au-ease`; under `@media (prefers-reduced-motion: reduce)` components drop them to ~0. (The terminal cursor blink may stay — it carries state, not decoration.)
 
 Contrast reference, dark mode on basalt `#0E1012` (representative — re-measure when shipping):
 
@@ -345,7 +371,7 @@ There is no plan for a Switchboard React/Vue component library. The whole point 
 
 - Tool stylesheets that embed Switchboard live at the top of the file as a single `<style>` block, ordered: tokens → resets → typography → layout → components → utilities.
 - Class names use BEM-ish flat naming: `.panel`, `.panel-header`, `.panel-body`, `.field-row`, `.badge.action`. No SCSS, no nesting, no naming framework dependency.
-- All custom properties are prefixed `--sw-` so Switchboard tokens never collide with tool-specific variables.
+- Two custom-property layers, both **canonical GCU vocabulary** (not app-specific despite the `au` reading): `--sw-*` are the raw **swatches** (Layer 1 — the only things a theme re-skins), `--au-*` are the **semantic** tokens components read (Layer 2 — `--au-action`, `--au-surface`, `--au-z-modal`, …). The `--au-` prefix is *shared across every GCU app* — `@gcu/menu` and friends read `--au-action`, so ep/weir/koma/Arborist all define the same `--au-*` names (it's a Switchboard contract, not Auditable's private namespace; the `au` is historical, read it as "the canonical semantic layer"). A true rename to a neutral prefix is a possible future major, but the *names are the contract* regardless of the letters. Never read `--sw-*` from a component (§6.0); never hard-code hex.
 - Token order in `:root` follows §2 → §3 → §4 (surfaces → accents → other). Dark mode overrides go in a single `[data-theme="dark"] { … }` block at the end of the token section.
 
 ---
@@ -358,7 +384,9 @@ Switchboard follows semver:
 - **MINOR** — new component, new soft tint, new utility class. Tokens stable.
 - **PATCH** — hex value tweaks within ≤ 2 ΔE, contrast-table refresh, doc fixes.
 
-Current: **1.0.1**. The accent mapping (orange=action, teal=info, green=go, amber=caution, red=fault, indigo=selected) is the stability anchor — it does not change in 1.x.
+Current: **1.1.0**. The accent mapping (orange=action, teal=info, green=go, amber=caution, red=fault, indigo=selected) is the stability anchor — it does not change in 1.x.
+
+**1.1.0** — additive (MINOR; existing tokens stable). New token groups in `:root`: z-index ladder (`--sw-z-*`), motion (`--sw-dur*` / `--sw-ease`), touch target (`--sw-tap`), each with an `--au-*` mirror. New: §4 touch/mobile guidance, §6 complete-by-reference component catalog, §8 `prefers-reduced-motion` requirement + 44px touch target. §11 now documents the two-layer naming and **canonicalizes `--au-*` as the shared GCU semantic vocabulary** (clarifies the cross-app contract; not a rename — a true neutral-prefix rename would be a future MAJOR). A living styleguide (`styleguide.html`) renders the whole language in both themes.
 
 **1.0.1** — removed the *module identification band* (the six-accent stripe) from the device readout and as a standalone component. Treated as a PATCH/doc-fix, not the MAJOR a component removal would normally be (above): the band was only ever spec text — never implemented in `switchboard.css`, never used by a surface — so nothing consuming the language breaks. It was decorative inheritance from the original RelayKVM draft that didn't earn its place against the functional-over-decorative rule.
 
