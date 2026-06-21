@@ -203,7 +203,10 @@ export function updateMobileAddTray() {
 
 export function setMsg(msg, cls = '') {
   const el = $('#statusMsg');
-  el.textContent = msg;
+  // Never color-alone (WCAG 1.4.1): a severity glyph carries ok/warn/err even
+  // when the hue is indistinguishable (CVD, light theme, bad lighting).
+  const glyph = cls === 'ok' ? '✓ ' : cls === 'warn' ? '⚠ ' : cls === 'err' ? '✗ ' : '';
+  el.textContent = glyph + msg;
   el.className = 'status-msg' + (cls ? ' ' + cls : '');
   if (cls) setTimeout(() => { el.textContent = ''; el.className = 'status-msg'; }, 3000);
 }

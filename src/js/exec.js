@@ -112,7 +112,8 @@ export async function execCell(cell) {
     const line = cellErrorLine(e, cell.id);
     const lineInfo = line > 0 ? ` (line ${line})` : '';
     cell.error = e.message;
-    outputEl.textContent = e.message + lineInfo;
+    // '✗ ' marks error status without relying on the red color alone (WCAG 1.4.1).
+    outputEl.textContent = '✗ ' + e.message + lineInfo;
     outputEl.className = 'cell-output error';
     cell.el.classList.remove('stale', 'fresh');
     cell.el.classList.add('error');
@@ -369,7 +370,7 @@ export async function runDAG(dirtyIds, force = false) {
         cell.error = e.message;
         const outputEl = cell._ctx?.outputEl || cell.el.querySelector('.cell-output');
         if (outputEl) {
-          outputEl.textContent = e.message;
+          outputEl.textContent = '✗ ' + e.message;   // glyph, not color alone (WCAG 1.4.1)
           outputEl.className = 'cell-output error';
         }
         cell.el.classList.remove('stale', 'fresh');
