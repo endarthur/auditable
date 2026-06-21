@@ -71,13 +71,34 @@ function rotApply(R, x, y, z) {
   return [R[0] * x + R[1] * y + R[2] * z, R[3] * x + R[4] * y + R[5] * z, R[6] * x + R[7] * y + R[8] * z];
 }
 
+// Angular sector of an offset (dx,dy,dz) from the target, in the search's
+// PURE-rotation frame (anisotropy removed, so sectors are true angular wedges
+// aligned to the ellipsoid orientation, not stretched by anis). Horizontal
+// azimuth → one of `n` wedges; with hemispheres, the dz sign doubles it to 2n.
+function sectorOf(S, rotPure, dx, dy, dz) {
+  const x = rotPure[0] * dx + rotPure[1] * dy + rotPure[2] * dz;
+  const y = rotPure[3] * dx + rotPure[4] * dy + rotPure[5] * dz;
+  let az = Math.atan2(y, x);
+  if (az < 0) az += 2 * Math.PI;
+  let w = Math.floor(az / (2 * Math.PI / S.n));
+  if (w >= S.n) w = S.n - 1;
+  if (S.hemispheres) {
+    const z = rotPure[6] * dx + rotPure[7] * dy + rotPure[8] * dz;
+    if (z < 0) w += S.n;
+  }
+  return w;
+}
+
 // createNeighborhood(opts) — the moving-ellipsoid neighbourhood (M3a). Same
 // search vocabulary gsjs's kriging uses, so it composes with a recipe later:
-//   { radius, radiusMinor?, radiusVert?, angle?, angle2?, angle3?, ndmin?, ndmax?, faithful? }
+//   { radius, radiusMinor?, radiusVert?, angle?, angle2?, angle3?, ndmin?, ndmax?,
+//     faithful?, sectors? }
 // radiusMinor/radiusVert default to radius (isotropic). `faithful:true` uses
 // gslib's truncated π (oracle parity / wasm-kriging-fork consistency); default is
-// accurate Math.PI. The rotation matrix is built once here; samples are bound
-// (and the tree built once) via indexSamples.
+// accurate Math.PI. `sectors: { n, maxPer?, minPer?, minFilled?, hemispheres? }`
+// turns on angular-sector balancing (declustering): at most maxPer kept per
+// sector, status INSUFFICIENT unless minFilled sectors each hold ≥ minPer. The
+// rotation matrix is built once here; samples are bound via indexSamples.
 export function createNeighborhood(opts = {}) {
   if (!(opts.radius > 0)) throw new Error('gsjs.neigh: radius must be > 0');
   const radius = opts.radius;
@@ -87,12 +108,31 @@ export function createNeighborhood(opts = {}) {
   const ndmax = opts.ndmax != null ? opts.ndmax : Infinity;
   if (!(ndmax >= ndmin) || !(ndmin >= 1)) throw new Error('gsjs.neigh: need ndmax ≥ ndmin ≥ 1');
   const faithful = !!opts.faithful;
+  const pi = faithful ? GSLIB_PI : Math.PI;
+
+  let sectors = null, rotPure = null;
+  if (opts.sectors) {
+    const s = opts.sectors;
+    const n = s.n != null ? s.n : 8;
+    const maxPer = s.maxPer != null ? s.maxPer : Infinity;
+    const minPer = s.minPer != null ? s.minPer : 1;
+    const minFilled = s.minFilled != null ? s.minFilled : 1;
+    const hemispheres = !!s.hemispheres;
+    if (!(n >= 1)) throw new Error('gsjs.neigh: sectors.n must be ≥ 1');
+    if (!(maxPer >= 1)) throw new Error('gsjs.neigh: sectors.maxPer must be ≥ 1');
+    if (!(minPer >= 1) || minPer > maxPer) throw new Error('gsjs.neigh: need 1 ≤ sectors.minPer ≤ maxPer');
+    if (!(minFilled >= 0)) throw new Error('gsjs.neigh: sectors.minFilled must be ≥ 0');
+    sectors = { n, maxPer, minPer, minFilled, hemispheres, count: hemispheres ? 2 * n : n };
+    // pure rotation (anis=1) → sectors are true angular wedges in the ellipsoid frame
+    rotPure = setrot(opts.angle || 0, opts.angle2 || 0, opts.angle3 || 0, 1, 1, pi);
+  }
+
   return {
     type: opts.type || 'moving',
     faithful,
     radius, radiusMinor, radiusVert,
-    rotmat: setrot(opts.angle || 0, opts.angle2 || 0, opts.angle3 || 0, radiusMinor / radius, radiusVert / radius, faithful ? GSLIB_PI : Math.PI),
-    ndmin, ndmax,
+    rotmat: setrot(opts.angle || 0, opts.angle2 || 0, opts.angle3 || 0, radiusMinor / radius, radiusVert / radius, pi),
+    ndmin, ndmax, sectors, _rotPure: rotPure,
     _tree: null, _n: 0, _ox: null, _oy: null, _oz: null,
   };
 }
@@ -119,10 +159,13 @@ export function indexSamples(nbhd, samples, get) {
 
 // select(nbhd, target, opts?) — the neighbourhood for one target location.
 //   target: [x, y, z]
-//   returns { ranks: Int32Array, dists: Float64Array, status, n }
+//   returns { ranks: Int32Array, dists: Float64Array, status, n, filled? }
 // `ranks` are ORIGINAL sample indices (into the array passed to indexSamples),
-// distance-sorted then tie-broken by original index. Up to ndmax retained; status
-// is INSUFFICIENT_DATA when fewer than ndmin fall inside the ellipsoid.
+// distance-sorted then tie-broken by original index. Up to ndmax retained; with
+// sectors, at most maxPer per sector (greedy in distance order). status is
+// INSUFFICIENT_DATA when fewer than ndmin retained, or (sectors) fewer than
+// minFilled sectors hold ≥ minPer. `filled` (sector count) is returned when
+// sectors are active.
 export function select(nbhd, target, opts = {}) {
   if (!nbhd._tree) throw new Error('gsjs.neigh.select: call indexSamples(nbhd, samples) first');
   const R = nbhd.rotmat;
@@ -141,12 +184,32 @@ export function select(nbhd, target, opts = {}) {
     if (d2 <= r2) inside.push({ i, d2 });
   }
   inside.sort((a, b) => (a.d2 - b.d2) || (a.i - b.i));   // distance, then original index
-  const keep = inside.length > nbhd.ndmax ? inside.slice(0, nbhd.ndmax) : inside;
+
+  let keep, filled;
+  const S = nbhd.sectors;
+  if (S) {
+    // greedy in distance order: keep a candidate if its sector isn't full and the
+    // overall ndmax isn't reached — so sectors balance, distance still rules.
+    const perSector = new Int32Array(S.count);
+    keep = [];
+    for (let k = 0; k < inside.length && keep.length < nbhd.ndmax; k++) {
+      const c = inside[k];
+      const sec = sectorOf(S, nbhd._rotPure, nbhd._ox[c.i] - tx, nbhd._oy[c.i] - ty, nbhd._oz[c.i] - tz);
+      if (perSector[sec] >= S.maxPer) continue;
+      perSector[sec]++;
+      keep.push(c);
+    }
+    filled = 0;
+    for (let s = 0; s < S.count; s++) if (perSector[s] >= S.minPer) filled++;
+  } else {
+    keep = inside.length > nbhd.ndmax ? inside.slice(0, nbhd.ndmax) : inside;
+  }
+
   const ranks = new Int32Array(keep.length);
   const dists = new Float64Array(keep.length);
   for (let k = 0; k < keep.length; k++) { ranks[k] = keep[k].i; dists[k] = Math.sqrt(keep[k].d2); }
-  return {
-    ranks, dists, n: keep.length,
-    status: keep.length >= nbhd.ndmin ? STATUS.OK : STATUS.INSUFFICIENT_DATA,
-  };
+  const enough = keep.length >= nbhd.ndmin && (!S || filled >= S.minFilled);
+  const out = { ranks, dists, n: keep.length, status: enough ? STATUS.OK : STATUS.INSUFFICIENT_DATA };
+  if (S) out.filled = filled;
+  return out;
 }

@@ -24,7 +24,9 @@ atra/WASM), not a backend lock.
 | Notebook examples (live top-cut · domains · artifact + swath/GT) | ✅ |
 | Reactive cell wiring (estimate once → slider `onInput` re-realizes) | ✅ |
 | Neighbourhood M3a — moving ellipsoid, kd-tree, deterministic tie-break | ✅ |
-| Neighbourhood M3b/c — sectors/per-hole/bench/capping + kriging integration | ⏳ |
+| Neighbourhood M3b — sector search (nsect / maxPer / minPer / minFilled) | ✅ |
+| Neighbourhood M3b — per-hole cap · min-distance · distance-cap · unique · bench | ⏳ |
+| Neighbourhood M3c — feed select() into the kriging fork | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
 

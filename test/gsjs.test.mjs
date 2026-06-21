@@ -456,16 +456,29 @@ test('recipe — function `where` works in-memory but refuses to serialize', () 
 function rng32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 
 // brute-force reference: every sample inside the ellipsoid, distance-sorted, tie-
-// broken by original index, capped at ndmax. Uses the SAME sqdist as select() —
-// the point is identical metric, different algorithm (full scan vs kd-tree).
-function bruteSelect(samples, target, R, radius, ndmax) {
-  const r2 = radius * radius, cand = [];
+// broken by original index, then the SAME selection policy (ndmax cap, or the
+// greedy per-sector cap) implemented independently by a full scan. Uses select()'s
+// metric (sqdist/rotmat) but its own algorithm — bit-identity is the contract.
+function bruteSelect(samples, target, nbhd) {
+  const R = nbhd.rotmat, r2 = nbhd.radius * nbhd.radius, cand = [];
   for (let i = 0; i < samples.length; i++) {
     const d2 = sqdist(target[0], target[1], target[2], samples[i][0], samples[i][1], samples[i][2], R);
     if (d2 <= r2) cand.push({ i, d2 });
   }
   cand.sort((a, b) => (a.d2 - b.d2) || (a.i - b.i));
-  return cand.slice(0, ndmax).map((c) => c.i);
+  const S = nbhd.sectors;
+  if (!S) return cand.slice(0, nbhd.ndmax).map((c) => c.i);
+  const per = new Int32Array(S.count), keep = [], Rp = nbhd._rotPure;
+  for (let k = 0; k < cand.length && keep.length < nbhd.ndmax; k++) {
+    const c = cand[k], dx = samples[c.i][0] - target[0], dy = samples[c.i][1] - target[1], dz = samples[c.i][2] - target[2];
+    const x = Rp[0] * dx + Rp[1] * dy + Rp[2] * dz, y = Rp[3] * dx + Rp[4] * dy + Rp[5] * dz;
+    let az = Math.atan2(y, x); if (az < 0) az += 2 * Math.PI;
+    let w = Math.floor(az / (2 * Math.PI / S.n)); if (w >= S.n) w = S.n - 1;
+    if (S.hemispheres) { const z = Rp[6] * dx + Rp[7] * dy + Rp[8] * dz; if (z < 0) w += S.n; }
+    if (per[w] >= S.maxPer) continue;
+    per[w]++; keep.push(c.i);
+  }
+  return keep;
 }
 
 test('neigh — JS setrot/sqdist match gslib wasm (faithful port)', () => {
@@ -510,6 +523,8 @@ test('neigh — select() is bit-identical to a brute-force ellipsoid scan', () =
     { radius: 120 },                                                        // isotropic
     { radius: 160, radiusMinor: 70, radiusVert: 999, angle: 30 },           // anisotropic + rotated (2D)
     { radius: 200, radiusMinor: 90, radiusVert: 140, angle: 115, angle2: 20, angle3: 10 }, // full 3D
+    { radius: 160, sectors: { n: 4, maxPer: 3 } },                          // sectors
+    { radius: 200, radiusMinor: 90, angle: 30, sectors: { n: 6, maxPer: 2 } }, // sectors + anisotropy + rotation
   ];
   let checks = 0;
   for (const cfg of configs) {
@@ -519,20 +534,20 @@ test('neigh — select() is bit-identical to a brute-force ellipsoid scan', () =
       for (let t = 0; t < 60; t++) {
         const target = [rng() * 500, rng() * 500, 0];
         const got = [...select(nb, target).ranks];
-        const exp = bruteSelect(samples, target, nb.rotmat, cfg.radius, ndmax);
+        const exp = bruteSelect(samples, target, nb);
         assert.deepEqual(got, exp, `cfg ${JSON.stringify(cfg)} ndmax ${ndmax} target ${target}`);
         checks++;
       }
       // targets sitting EXACTLY on grid samples → maximal ties
       for (let gx = 100; gx <= 400; gx += 100) {
         const got = [...select(nb, [gx, gx, 0]).ranks];
-        const exp = bruteSelect(samples, [gx, gx, 0], nb.rotmat, cfg.radius, ndmax);
+        const exp = bruteSelect(samples, [gx, gx, 0], nb);
         assert.deepEqual(got, exp, `tie target ${gx}`);
         checks++;
       }
     }
   }
-  assert.ok(checks > 500, `only ${checks} comparisons`);
+  assert.ok(checks > 800, `only ${checks} comparisons`);
 });
 
 test('neigh — ndmin status + ndmax cap + tie-break order', () => {
@@ -567,4 +582,38 @@ test('neigh — faithful flag threads gslib π; default is accurate (modern)', (
   assert.deepEqual([...faithful.rotmat], [...setrot(...args, GSLIB_PI)]);   // oracle-parity π
   assert.deepEqual([...modern.rotmat], [...setrot(...args)]);                // accurate default (Math.PI)
   assert.notDeepEqual([...modern.rotmat], [...faithful.rotmat]);             // the flag does real work
+});
+
+test('neigh — sectors decluster (cap per sector) + minFilled gates status', () => {
+  // a dominant 5-point cluster in one direction + 3 isolated samples elsewhere.
+  // (Exact sector membership depends on gslib's azimuth-from-North frame, so this
+  // checks POLICY EFFECTS + cross-checks the validated brute-force, not hand-
+  // computed sector indices.)
+  const samples = [
+    [30, 2, 0], [32, -1, 0], [34, 3, 0], [36, -2, 0], [38, 1, 0],  // dense cluster (idx 0–4)
+    [2, 40, 0], [-40, 5, 0], [5, -38, 0],                          // isolated (idx 5–7)
+  ];
+  const base = createNeighborhood({ radius: 100, ndmin: 1, ndmax: 99 });
+  indexSamples(base, samples);
+  assert.equal(select(base, [0, 0, 0]).n, 8);            // all 8 within radius, no sectors
+
+  const sec = createNeighborhood({ radius: 100, ndmin: 1, ndmax: 99, sectors: { n: 4, maxPer: 2 } });
+  indexSamples(sec, samples);
+  const r = select(sec, [0, 0, 0]);
+  assert.deepEqual([...r.ranks], bruteSelect(samples, [0, 0, 0], sec));  // exact == validated reference
+  assert.ok(r.n < 8, `sectors should decluster (got ${r.n})`);
+  assert.equal(typeof r.filled, 'number');
+  // the 5-cluster spans at most 2 sectors → contributes ≤ 2 × maxPer
+  const fromCluster = [...r.ranks].filter((i) => i < 5).length;
+  assert.ok(fromCluster <= 4, `cluster contributed ${fromCluster}, expected ≤ 2 sectors × maxPer`);
+
+  // minFilled gate: demand more filled sectors than the geometry can provide → INSUFFICIENT
+  const strict = createNeighborhood({ radius: 100, ndmin: 1, ndmax: 99, sectors: { n: 8, maxPer: 2, minFilled: 8 } });
+  indexSamples(strict, samples);
+  assert.equal(select(strict, [0, 0, 0]).status, STATUS.INSUFFICIENT_DATA);
+  // minPer raises the bar for "filled": with minPer 2, single-sample sectors don't count
+  const mp = createNeighborhood({ radius: 100, ndmin: 1, ndmax: 99, sectors: { n: 8, maxPer: 3, minPer: 2, minFilled: 3 } });
+  indexSamples(mp, samples);
+  const rmp = select(mp, [0, 0, 0]);
+  assert.ok(rmp.filled < 3 && rmp.status === STATUS.INSUFFICIENT_DATA, `filled ${rmp.filled}`);
 });
