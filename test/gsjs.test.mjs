@@ -10,6 +10,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { realize, makeTransform, STATUS } from '../ext/gsjs/realize.js';
+import { kriging } from '../ext/gsjs/index.js';
+import { kt3d } from '../ext/gslib/index.js';
 
 const close = (a, b, eps = 1e-12) => Math.abs(a - b) <= eps;
 
@@ -98,14 +100,56 @@ test('realize — hgr without distances throws', () => {
     /needs distances/);
 });
 
-// ── M1 gate: reconstruction equation vs the gslib.kt3d oracle ──
-// Realization of gsjs.kriging's BlockEstimateTensor must equal gslib.kt3d.est
-// to f64 on identical input. Unskip when gsjs.atra (the kriging fork) lands.
-test.skip('reconstruction — realize(gsjs.kriging(...)) == gslib.kt3d.est (Walker Lake)', () => {
-  // 1. load reference dataset (Walker Lake or a gslib ref .dat)
-  // 2. run gslib.kt3d → est, estv
-  // 3. run gsjs.kriging → BlockEstimateTensor
-  // 4. realize(tensor, values) → realized
-  // 5. assert |realized[i] - est[i]| < 1e-9 for every status===OK block
-  // 6. assert kv[i] == estv[i] to f64
+// ── M1 gate: the reconstruction equation vs the gslib.kt3d oracle ──
+// realize(gsjs.kriging(...)) must equal gslib.kt3d.est (and kv == estv) to f64
+// on identical input. This is THE correctness contract: if it holds, the
+// BlockEstimateTensor captured everything kt3d computed.
+const SYNTH = {
+  data: [
+    [8, 8, 0, 2.1], [12, 30, 0, 3.4], [30, 10, 0, 1.2], [33, 33, 0, 4.0],
+    [20, 20, 0, 2.8], [5, 25, 0, 3.1], [25, 5, 0, 1.9], [18, 38, 0, 3.6],
+  ],
+  grid: { nx: 4, ny: 4, nz: 1, xmn: 5, ymn: 5, zmn: 0, xsiz: 10, ysiz: 10, zsiz: 10 },
+  variogram: { nugget: 0.1, structures: [{ type: 'spherical', contribution: 0.9, range: 30 }] },
+  search: { radius: 50, ndmin: 1, ndmax: 8 },
+};
+
+function reconstruct(ktype, extra = {}) {
+  const cfg = { ...SYNTH, ktype, ...extra };
+  const ref = kt3d(cfg);
+  const r = kriging(cfg);
+  const realized = realize(r, r.values);
+  let maxErr = 0, maxKv = 0, nOK = 0;
+  for (let i = 0; i < r.n_blocks; i++) {
+    if (r.status[i] !== STATUS.OK) continue;
+    assert.notEqual(ref.est[i], -999, `block ${i}: gsjs OK but kt3d unestimated`);
+    nOK++;
+    maxErr = Math.max(maxErr, Math.abs(realized[i] - ref.est[i]));
+    maxKv = Math.max(maxKv, Math.abs(r.kv[i] - ref.var[i]));
+  }
+  return { nOK, maxErr, maxKv };
+}
+
+test('reconstruction — OK == gslib.kt3d.est to f64', () => {
+  const { nOK, maxErr, maxKv } = reconstruct('OK');
+  assert.ok(nOK >= 12, `only ${nOK} OK blocks`);
+  assert.ok(maxErr < 1e-9, `max est error ${maxErr}`);
+  assert.ok(maxKv < 1e-9, `max kv error ${maxKv}`);
+});
+
+test('reconstruction — SK (scalar mean) == gslib.kt3d.est to f64', () => {
+  const { nOK, maxErr, maxKv } = reconstruct('SK', { skmean: 2.5 });
+  assert.ok(nOK >= 12, `only ${nOK} OK blocks`);
+  assert.ok(maxErr < 1e-9, `max est error ${maxErr}`);
+  assert.ok(maxKv < 1e-9, `max kv error ${maxKv}`);
+});
+
+test('OK weights sum to ~1 per estimated block (unbiasedness)', () => {
+  const r = kriging({ ...SYNTH, ktype: 'OK' });
+  for (let b = 0; b < r.n_blocks; b++) {
+    if (r.status[b] !== STATUS.OK) continue;
+    let sw = 0;
+    for (let k = 0; k < r.n_actual[b]; k++) sw += r.weights[b * r.K + k];
+    assert.ok(Math.abs(sw - 1) < 1e-9, `block ${b} Σw=${sw}`);
+  }
 });

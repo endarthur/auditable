@@ -1,0 +1,318 @@
+! ══════════════════════════════════════════════════════════════════════
+! @gcu/gsjs — the modern kriging fork.
+!
+! Co-compiled with gslib.atra (FROZEN — never edited). gsjs.kriging is a
+! forked copy of gslib.kt3d's per-block loop that REUSES gslib's primitives
+! unchanged (gslib.cova3 / gslib.ktsol / gslib.srchsupr / super-block) but,
+! instead of collapsing each block to a single est/estv, captures the kriging
+! WEIGHTS (s[]) + original sample INDICES (ind) + variance + status into the
+! BlockEstimateTensor. Realization (ext/gsjs/realize.js, the oracle) turns that
+! tensor into estimates — and a live cap/HGR slider re-realizes for free.
+!
+! Scope v1: SK (ktype 0) + OK (ktype 1). No trend/UK/ED (so gslib.kt3d's whole
+! drift section drops out) and no LVM yet. The reconstruction contract:
+!   realize(tensor, values) == gslib.kt3d.est to f64, on identical input.
+! For OK, Σw = 1 so est = Σw·z; for SK, est = Σw·z + (1−Σw)·skmean.
+!
+! Forked from gslib.kt3d (gslib.atra). The Fortran is still the spec; gslib
+! the oracle.
+! ══════════════════════════════════════════════════════════════════════
+
+subroutine gsjs.kriging(
+  nx, ny, nz: i32; xmn, ymn, zmn, xsiz, ysiz, zsiz: f64;
+  nxdis, nydis, nzdis: i32;
+  nd: i32; x, y, z, vr: array f64;
+  ndmin, ndmax: i32; radius: f64;
+  ktype: i32; skmean: f64;
+  nst: i32; c0: f64; it: array i32; cc, aa: array f64;
+  irot: i32; rotmat: array f64;
+  nsbtosr: i32; ixsbtosr, iysbtosr, izsbtosr, nisb: array i32;
+  supout: array f64;
+  wantdist: i32;
+  tind: array i32; twt, tkv: array f64; tnact, tstat: array i32; tdist: array f64;
+  xa, ya, za, vra: array f64;
+  r, rr, s, a: array f64;
+  xdb, ydb, zdb: array f64;
+  close: array f64;
+  covres: array f64;
+  inoct: array i32;
+  getindxres: array i32;
+  lt, ut: array i32)
+var
+  ix, iy, iz, index, gi: i32
+  xloc, yloc, zloc: f64
+  ndb, na, neq, mdt, nclose: i32
+  cbb, cov, cb, cb1, unbias: f64
+  covmax, resc, radsqd: f64
+  isrot, ind, i, j, k: i32
+  dx, dy, dz, dd: f64
+  xdis, ydis, zdis: f64
+  nxsup, nysup, nzsup: i32
+  xmnsup, ymnsup, zmnsup: f64
+  xsizsup, ysizsup, zsizsup: f64
+  nxy, base, kk: i32
+  sumw, wt, estv: f64
+  ising: f64
+  skmean_loc: f64
+  skip: i32
+begin
+  ! ── covmax + rescaling factor (unused without drift, kept for unbias) ──
+  radsqd := radius * radius
+  covmax := c0
+  for i := 0, nst
+    if (it[i] == 4) then
+      covmax := covmax + 999.0
+    else
+      covmax := covmax + cc[i]
+    end if
+  end for
+
+  ! search rotation index is irot + nst (last structure + 1)
+  isrot := irot + nst
+
+  ! drift terms: OK has the single unbiasedness constraint (mdt=1); SK has none.
+  mdt := 0
+  if (ktype == 1) then
+    mdt := 1
+  end if
+
+  ! ── discretization points within the block ──
+  ndb := nxdis * nydis * nzdis
+  xdis := xsiz / max(f64(nxdis), 1.0)
+  ydis := ysiz / max(f64(nydis), 1.0)
+  zdis := zsiz / max(f64(nzdis), 1.0)
+  i := 0
+  xloc := -0.5 * (xsiz + xdis)
+  for ix := 0, nxdis
+    xloc := xloc + xdis
+    yloc := -0.5 * (ysiz + ydis)
+    for iy := 0, nydis
+      yloc := yloc + ydis
+      zloc := -0.5 * (zsiz + zdis)
+      for iz := 0, nzdis
+        zloc := zloc + zdis
+        xdb[i] := xloc + 0.5 * xsiz
+        ydb[i] := yloc + 0.5 * ysiz
+        zdb[i] := zloc + 0.5 * zsiz
+        i := i + 1
+      end for
+    end for
+  end for
+
+  ! ── block covariance (unbias = point cov; cbb = mean block cov) ──
+  call gslib.cova3(xdb[0], ydb[0], zdb[0], xdb[0], ydb[0], zdb[0],
+    nst, c0, it, cc, aa, irot, rotmat, covres)
+  unbias := covres[0]
+  cbb := covres[0]
+
+  if (ndb > 1) then
+    cbb := 0.0
+    for i := 0, ndb
+      for j := 0, ndb
+        call gslib.cova3(xdb[i], ydb[i], zdb[i], xdb[j], ydb[j], zdb[j],
+          nst, c0, it, cc, aa, irot, rotmat, covres)
+        cov := covres[1]
+        if (i == j) then
+          cov := cov - c0
+        end if
+        cbb := cbb + cov
+      end for
+    end for
+    cbb := cbb / f64(ndb * ndb)
+  end if
+
+  ! ── super block parameters ──
+  nxsup := i32(supout[0])
+  nysup := i32(supout[1])
+  nzsup := i32(supout[2])
+  xmnsup := supout[3]
+  ymnsup := supout[4]
+  zmnsup := supout[5]
+  xsizsup := supout[6]
+  ysizsup := supout[7]
+  zsizsup := supout[8]
+
+  nxy := nx * ny
+
+  ! ══════════════════════════════════════════════════════════════════
+  ! MAIN LOOP OVER ALL GRID NODES
+  ! ══════════════════════════════════════════════════════════════════
+
+  for index := 0, nx * ny * nz
+    iz := index / nxy
+    iy := (index - iz * nxy) / nx
+    ix := index - iz * nxy - iy * nx
+    xloc := xmn + f64(ix) * xsiz
+    yloc := ymn + f64(iy) * ysiz
+    zloc := zmn + f64(iz) * zsiz
+    gi := index
+    base := gi * ndmax
+
+    ! default block state: NOT_ATTEMPTED until the search runs
+    tnact[gi] := 0
+    tkv[gi] := cbb
+    skip := 0
+
+    ! ── search for nearby data (xa is the distance tmp for srchsupr) ──
+    call gslib.srchsupr(xloc, yloc, zloc, radsqd,
+      isrot, rotmat,
+      nsbtosr, ixsbtosr, iysbtosr, izsbtosr,
+      0, nd,
+      x, y, z, xa, close,
+      nisb,
+      nxsup, xmnsup, xsizsup,
+      nysup, ymnsup, ysizsup,
+      nzsup, zmnsup, zsizsup,
+      covres,
+      getindxres, inoct, lt, ut)
+
+    nclose := i32(covres[0])
+
+    ! ── load nearby data; capture original index + (optional) real distance ──
+    na := 0
+    for i := 0, nclose
+      ind := i32(close[i] + 0.5)
+      if (na < ndmax) then
+        xa[na] := x[ind] - xloc + 0.5 * xsiz
+        ya[na] := y[ind] - yloc + 0.5 * ysiz
+        za[na] := z[ind] - zloc + 0.5 * zsiz
+        vra[na] := vr[ind]
+        tind[base + na] := ind
+        if (wantdist == 1) then
+          dx := x[ind] - xloc
+          dy := y[ind] - yloc
+          dz := z[ind] - zloc
+          tdist[base + na] := sqrt(dx * dx + dy * dy + dz * dz)
+        end if
+        na := na + 1
+      end if
+    end for
+
+    ! ── insufficient data ──
+    if (na < ndmin) then
+      tstat[gi] := 1
+      tnact[gi] := 0
+      skip := 1
+    end if
+
+    ! ── single sample ──
+    if (skip == 0 and na <= 1) then
+      call gslib.cova3(xa[0], ya[0], za[0], xa[0], ya[0], za[0],
+        nst, c0, it, cc, aa, irot, rotmat, covres)
+      cb1 := covres[0]
+
+      if (ndb <= 1) then
+        call gslib.cova3(xa[0], ya[0], za[0], xdb[0], ydb[0], zdb[0],
+          nst, c0, it, cc, aa, irot, rotmat, covres)
+        cb := covres[1]
+      else
+        cb := 0.0
+        for i := 0, ndb
+          call gslib.cova3(xa[0], ya[0], za[0], xdb[i], ydb[i], zdb[i],
+            nst, c0, it, cc, aa, irot, rotmat, covres)
+          cb := cb + covres[1]
+          dx := xa[0] - xdb[i]
+          dy := ya[0] - ydb[i]
+          dz := za[0] - zdb[i]
+          if (dx * dx + dy * dy + dz * dz < 1.0e-6) then
+            cb := cb - c0
+          end if
+        end for
+        cb := cb / f64(ndb)
+      end if
+
+      if (ktype == 0) then
+        ! SK: weight = cb/cb1; realize applies (1-w)*skmean
+        wt := cb / cb1
+        twt[base] := wt
+        tkv[gi] := cbb - wt * cb
+      else
+        ! OK: single sample takes weight 1
+        twt[base] := 1.0
+        tkv[gi] := cbb - 2.0 * cb + cb1
+      end if
+      tnact[gi] := 1
+      tstat[gi] := 0
+      skip := 1
+    end if
+
+    ! ── multiple samples: build + solve the kriging system ──
+    if (skip == 0) then
+      neq := mdt + na
+
+      for i := 0, neq * neq
+        a[i] := 0.0
+      end for
+
+      ! covariance LHS (column-major for ktsol)
+      for i := 0, na
+        for j := i, na
+          call gslib.cova3(xa[i], ya[i], za[i], xa[j], ya[j], za[j],
+            nst, c0, it, cc, aa, irot, rotmat, covres)
+          cov := covres[1]
+          a[j * neq + i] := cov
+          a[i * neq + j] := cov
+        end for
+      end for
+
+      ! OK unbiasedness constraint (drift row/col na)
+      if (neq > na) then
+        for i := 0, na
+          a[na * neq + i] := unbias
+          a[i * neq + na] := unbias
+        end for
+      end if
+
+      ! RHS: block-to-sample covariances
+      for i := 0, na
+        if (ndb <= 1) then
+          call gslib.cova3(xa[i], ya[i], za[i], xdb[0], ydb[0], zdb[0],
+            nst, c0, it, cc, aa, irot, rotmat, covres)
+          cb := covres[1]
+        else
+          cb := 0.0
+          for j := 0, ndb
+            call gslib.cova3(xa[i], ya[i], za[i], xdb[j], ydb[j], zdb[j],
+              nst, c0, it, cc, aa, irot, rotmat, covres)
+            cb := cb + covres[1]
+            dx := xa[i] - xdb[j]
+            dy := ya[i] - ydb[j]
+            dz := za[i] - zdb[j]
+            if (dx * dx + dy * dy + dz * dz < 1.0e-6) then
+              cb := cb - c0
+            end if
+          end for
+          cb := cb / f64(ndb)
+        end if
+        r[i] := cb
+        rr[i] := cb
+      end for
+
+      if (neq > na) then
+        r[na] := unbias
+        rr[na] := unbias
+      end if
+
+      ! ── solve ──
+      call gslib.ktsol(neq, a, r, s, covres)
+      ising := covres[0]
+
+      if (ising /= 0.0) then
+        tstat[gi] := 2
+        tnact[gi] := 0
+      else
+        ! capture weights + variance into the tensor
+        estv := cbb
+        for j := 0, neq
+          estv := estv - s[j] * rr[j]
+        end for
+        for k := 0, na
+          twt[base + k] := s[k]
+        end for
+        tnact[gi] := na
+        tkv[gi] := estv
+        tstat[gi] := 0
+      end if
+    end if
+  end for
+end
