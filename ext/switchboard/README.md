@@ -8,7 +8,7 @@ Used by everything that ships under the GCU org — Auditable, ep, Arborist, `@g
 
 Switchboard is a *toolkit*, not a runtime widget framework. That distinction is deliberate (SPEC §9): it composes with whatever idiom the host tool already uses — CodeMirror chrome, a native canvas, firmware-rendered keypad UI — without dragging in a component runtime. So the toolkit is two tiers, and Switchboard is the umbrella + the contract over both:
 
-**Tier 1 — the language (runtime-free).** Tokens, the six-accent semantic mapping, typography, the documented component *patterns* (Panel, Button, Badge, Form field, Device readout, Terminal, accent band), theming, accessibility. This is what lives here, in `SPEC.md`. It composes into anything.
+**Tier 1 — the language (runtime-free).** Tokens, the six-accent semantic mapping, typography, the documented component *patterns* (Panel, Button, Badge, Form field, Device readout, Terminal), theming, accessibility. This is what lives here, in `SPEC.md`. It composes into anything.
 
 **Tier 2 — the DOM components.** Separate zero-dep `@gcu/*` packages that *implement* the tier-1 patterns for the browser. Switchboard rosters and contracts them; it does **not** absorb them (that would forfeit runtime-agnosticism). Each ships its own structural CSS + a `-default` theme:
 

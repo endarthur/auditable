@@ -4,7 +4,7 @@
 
 | Field      | Value                                          |
 |------------|------------------------------------------------|
-| Version    | 1.0                                            |
+| Version    | 1.0.1                                          |
 | Status     | Canon                                          |
 | License    | MIT                                            |
 | Org        | Geoscientific Chaos Union                      |
@@ -145,7 +145,7 @@ Labels, data values, terminal output, code, gauges, equipment text. Carries ever
 
 ## 6. Components
 
-The patterns below (§6.1–6.7) are the **tier-1 specification** — what each thing
+The patterns below (§6.1–6.6) are the **tier-1 specification** — what each thing
 looks like, in tokens. The **tier-2 DOM packages** (`@gcu/menu`, `@gcu/dialog`,
 `@gcu/rails`, `@gcu/loom`, `@gcu/term`) implement them for the browser. §6.0 is the
 contract that keeps the two tiers — and any *new* component, here or in a sibling
@@ -234,8 +234,7 @@ The signature Switchboard component. Sits on `--sw-bg-deep` (terminal substrate)
 Structure:
 
 1. **Top bar** — mono uppercase, ID and status, `--sw-text-mid`.
-2. **Module identification band** — 4px horizontal gradient stripe through all six accents, in canonical order: orange → teal → green → amber → red → indigo. Borrowed from rack-mount test equipment where coloured bands identify which module you're looking at without reading labels. Doubles as a palette preview.
-3. **Body** — grid of `.gauge` cells.
+2. **Body** — grid of `.gauge` cells.
 
 Gauge cell: mono label (`--sw-text-soft`), large tabular-nums value (state-coloured), small unit.
 
@@ -245,7 +244,6 @@ Gauge cell: mono label (`--sw-text-soft`), large tabular-nums value (state-colou
     <span>DEVICE READOUT · NODE-03</span>
     <span>UPLINK ◉</span>
   </div>
-  <div class="readout-id-band"></div>
   <div class="readout-body">
     <div class="gauge go">
       <div class="label">Signal</div>
@@ -272,10 +270,6 @@ State classes on `.gauge` (`go`, `caution`, `fault`) colour the **value** only �
 | dim       | `--sw-text-soft` | Subprocess noise, hints                |
 
 Cursor: 0.55em × 1.05em solid block in `--sw-orange`, blinking at 1.05s with `steps(1)`. (Crucially `steps(1)`, not a smooth transition — the cursor should jump, not fade.)
-
-### 6.7 Module identification band
-
-A 6px (page-level) or 4px (component-level) horizontal stripe partitioning the width equally across all six accents in canonical order. Used at the top of pages and inside device readouts. Always full-width within its container. Always the same accent order. Never decorative-only — it is also a palette preview and an equipment-language signature.
 
 ---
 
@@ -364,7 +358,9 @@ Switchboard follows semver:
 - **MINOR** — new component, new soft tint, new utility class. Tokens stable.
 - **PATCH** — hex value tweaks within ≤ 2 ΔE, contrast-table refresh, doc fixes.
 
-Current: **1.0.0**. The accent mapping (orange=action, teal=info, green=go, amber=caution, red=fault, indigo=selected) is the stability anchor — it does not change in 1.x.
+Current: **1.0.1**. The accent mapping (orange=action, teal=info, green=go, amber=caution, red=fault, indigo=selected) is the stability anchor — it does not change in 1.x.
+
+**1.0.1** — removed the *module identification band* (the six-accent stripe) from the device readout and as a standalone component. Treated as a PATCH/doc-fix, not the MAJOR a component removal would normally be (above): the band was only ever spec text — never implemented in `switchboard.css`, never used by a surface — so nothing consuming the language breaks. It was decorative inheritance from the original RelayKVM draft that didn't earn its place against the functional-over-decorative rule.
 
 ---
 
@@ -373,6 +369,8 @@ Current: **1.0.0**. The accent mapping (orange=action, teal=info, green=go, ambe
 Switchboard descended from the RelayKVM theme prototyped in March 2026. The RelayKVM connection manager needed a UI that looked like rack-mount equipment without being kitsch, and the first draft landed on the shuttle flight deck idiom — Tektronix bezels, Rockwell Collins MFDs, crew procedure manuals. When the GCU stack started needing a shared visual language across Auditable, Arborist, and the handheld platform, the RelayKVM tokens were lifted, the warm cream surfaces were exorcised (the "piss filter" critique), and the six-accent system was formalised.
 
 The earlier GCU colour system v5 (dark background, copper/amber cursor, dual-temperature ANSI) was a precursor; Switchboard supersedes it for all new work.
+
+One element from that first draft was later dropped: the six-accent *module identification band* (the coloured stripe). It read as equipment-language flavour on paper but, in practice, was decoration that never got built or used — and a full-spectrum stripe sits awkwardly against the hard "each accent means one thing" rule. Removed in 1.0.1; the accents earn their place by carrying state, not by lining up as a swatch.
 
 ---
 
