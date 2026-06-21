@@ -11,6 +11,8 @@
 
 import { realize, makeTransform, STATUS } from './realize.js';
 export { realize, makeTransform, STATUS };
+export { stats, histogram, swath, gradeTonnage } from './aggregate.js';
+export { cpuBackend, getBackend, setBackend } from './backend.js';
 
 const _VARIO_TYPES = {
   spherical: 1, exponential: 2, gaussian: 3, power: 4, hole: 5,

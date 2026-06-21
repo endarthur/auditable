@@ -7,11 +7,15 @@
   "exports": {
     ".": "./index.js",
     "./realize": "./realize.js",
+    "./aggregate": "./aggregate.js",
+    "./backend": "./backend.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
     "realize.js",
+    "aggregate.js",
+    "backend.js",
     "gsjs.atra",
     "README.md"
   ],

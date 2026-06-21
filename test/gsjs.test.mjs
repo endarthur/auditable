@@ -12,6 +12,8 @@ import assert from 'node:assert/strict';
 import { realize, makeTransform, STATUS } from '../ext/gsjs/realize.js';
 import { kriging } from '../ext/gsjs/index.js';
 import { kt3d } from '../ext/gslib/index.js';
+import { stats, histogram, swath, gradeTonnage } from '../ext/gsjs/aggregate.js';
+import { cpuBackend, getBackend, setBackend } from '../ext/gsjs/backend.js';
 
 const close = (a, b, eps = 1e-12) => Math.abs(a - b) <= eps;
 
@@ -152,4 +154,62 @@ test('OK weights sum to ~1 per estimated block (unbiasedness)', () => {
     for (let k = 0; k < r.n_actual[b]; k++) sw += r.weights[b * r.K + k];
     assert.ok(Math.abs(sw - 1) < 1e-9, `block ${b} Σw=${sw}`);
   }
+});
+
+// ── CPU aggregations (the default backend; oracle for a future GPU one) ──
+// est [1,2,3,4] OK + a 5th block masked (INSUFFICIENT_DATA) — must not count.
+const AGG_EST = Float64Array.from([1, 2, 3, 4, 5]);
+const AGG_ST = Uint8Array.from([STATUS.OK, STATUS.OK, STATUS.OK, STATUS.OK, STATUS.INSUFFICIENT_DATA]);
+
+test('aggregate.stats masks by status', () => {
+  const s = stats(AGG_EST, AGG_ST);
+  assert.deepEqual([s.n, s.sum, s.mean, s.min, s.max], [4, 10, 2.5, 1, 4]);
+});
+
+test('aggregate.histogram — fixed bins, masked', () => {
+  const h = histogram(AGG_EST, AGG_ST, { min: 1, max: 4, nbins: 3 });
+  assert.equal(h.n, 4);
+  assert.deepEqual([...h.counts], [1, 1, 2]); // {1} {2} {3,4 (4 clamps into last bin)}
+  assert.equal(h.edges[0], 1); assert.equal(h.edges[3], 4);
+});
+
+test('aggregate.gradeTonnage — exact, tonnage/metal/grade above cutoff', () => {
+  const gt = gradeTonnage(AGG_EST, AGG_ST, { cutoffs: [0, 2, 4] });
+  assert.deepEqual([...gt.tonnage], [4, 3, 1]);
+  assert.deepEqual([...gt.metal], [10, 9, 4]);
+  assert.deepEqual([...gt.grade], [2.5, 3, 4]);
+});
+
+test('aggregate.swath — mean per axis slice', () => {
+  // 2×2×1 grid; blocks 0,2 → ix=0 ; blocks 1,3 → ix=1
+  const grid = { nx: 2, ny: 2, nz: 1, xmn: 5, ymn: 5, zmn: 0, xsiz: 10, ysiz: 10, zsiz: 10 };
+  const est = Float64Array.from([1, 2, 3, 4]);
+  const st = Uint8Array.from([STATUS.OK, STATUS.OK, STATUS.OK, STATUS.OK]);
+  const sw = swath(est, st, grid, { axis: 'x' });
+  assert.deepEqual([...sw.mean], [2, 3]);   // ix0: (1+3)/2 ; ix1: (2+4)/2
+  assert.deepEqual([...sw.count], [2, 2]);
+  assert.deepEqual([...sw.centers], [5, 15]);
+});
+
+test('backend seam — cpu default, realize + aggregations present, swappable', () => {
+  assert.equal(getBackend().name, 'cpu');
+  assert.equal(getBackend(), cpuBackend);
+  for (const k of ['realize', 'stats', 'histogram', 'swath', 'gradeTonnage']) {
+    assert.equal(typeof getBackend()[k], 'function', `cpu backend missing ${k}`);
+  }
+  const fake = { name: 'gpu-stub' };
+  setBackend(fake);
+  assert.equal(getBackend().name, 'gpu-stub');
+  setBackend(null); // reset
+  assert.equal(getBackend(), cpuBackend);
+});
+
+// End-to-end on the synthetic case: kriging → realize → aggregate, all CPU.
+test('pipeline — kriging → realize → stats/GT (CPU, GPU-free)', () => {
+  const r = kriging({ ...SYNTH, ktype: 'OK' });
+  const est = realize(r, r.values);
+  const s = stats(est, r.status);
+  assert.ok(s.n >= 12 && s.mean > 1 && s.mean < 4, `stats off: ${JSON.stringify(s)}`);
+  const gt = gradeTonnage(est, r.status, { cutoffs: [0, 2.5] });
+  assert.ok(gt.tonnage[0] >= gt.tonnage[1], 'tonnage must be monotone in cutoff');
 });
