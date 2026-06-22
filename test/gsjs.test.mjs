@@ -23,7 +23,7 @@ import {
   fromJSON, run, estimate, evaluate,
   createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
   leapfrogToRotmat, toRotmat, applyAnis, krige, qknaSummary, crossValidate,
-  declusterCell, declusterSweep, experimental, buildLagVolume, directionalVariogram, mergeLagVolumes, fitModel,
+  declusterCell, declusterSweep, experimental, buildLagVolume, directionalVariogram, mergeLagVolumes, fitModel, scoreModel,
 } from '../ext/gsjs/index.js';
 import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow,
   writeF64 as gWriteF64, writeI32 as gWriteI32 } from '../ext/gslib/index.js';
@@ -1370,4 +1370,37 @@ test('fitModel — the report makes the fit judgeable (warnings + constraints)',
   // fixed nugget honoured
   assert.equal(fitModel(exp, { sill: 1.0, nugget: 0.15 }).fit.nugget, 0.15);
   assert.throws(() => fitModel(exp, { sill: 1.0, type: 'bogus' }), /unknown structure type/);
+});
+
+// ── scoreModel — the closed loop (CV + QKNA judge the variogram model) ──
+test('scoreModel — cross-validation discriminates a good model from a degraded one', () => {
+  // ~440 composites from an anisotropic field (N–S long, E–W short) + nugget noise
+  const rng = (() => { let a = 9; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; })();
+  const bumps = []; for (let k = 0; k < 120; k++) bumps.push({ x: rng() * 300, y: rng() * 300, z: rng() * 60, a: (rng() - 0.5) * 3 });
+  const field = (x, y, z) => { let v = 0; for (const b of bumps) { const dx = (x - b.x) / 35, dy = (y - b.y) / 95, dz = (z - b.z) / 25; v += b.a * Math.exp(-(dx * dx + dy * dy + dz * dz)); } return v; };
+  const data = [], holeId = [];
+  let id = 0;
+  for (let hx = 20; hx < 300; hx += 48) for (let hy = 20; hy < 300; hy += 48) { id++; for (let z = 58; z > 5; z -= 6) { data.push([hx, hy, z, Math.max(0, field(hx, hy, z) + (rng() - 0.5) * 1.2)]); holeId.push('H' + id); } }
+  const sill = declusterCell({ data, cellSize: 48 }).variance;
+  const expDh = experimental(data, { holeId, lags: { size: 6, n: 10 }, directions: [{ name: 'downhole', mode: 'downhole' }] });
+  const expH = experimental(data, { lags: { size: 26, n: 9 }, directions: [{ name: 'major', azimuth: 0, atol: 30, dtol: 30, bandwidthH: 50, bandwidthV: 26 }, { name: 'semi', azimuth: 90, atol: 30, dtol: 30, bandwidthH: 50, bandwidthV: 26 }] });
+  const exp = { estimator: 'matheron', directions: [expDh.directions[0], ...expH.directions] };
+  const fit = fitModel(exp, { sill, roles: { major: 'major', semi: 'semi', minor: 'downhole' } });
+  const search = { radius: 130, radiusMinor: 130 * 0.6, radiusVert: 130 * 0.3, angle: 0, ndmin: 2, ndmax: 14 };
+
+  const good = scoreModel(data, fit.model, { search, holeId, sameHole: true });
+  // degraded: nearly pure nugget (no spatial structure) — must cross-validate worse
+  const bad = JSON.parse(JSON.stringify(fit.model)); bad.c0 = 0.9 * sill; bad.structures[0].cc = 0.1 * sill;
+  const badScore = scoreModel(data, bad, { search, holeId, sameHole: true });
+
+  assert.ok(Number.isFinite(good.cv.rmse) && good.cv.nOk > 300, `CV ran (${good.cv.nOk} ok)`);
+  assert.ok(Math.abs(good.cv.meanError) < 0.15, `good model ~unbiased (ME ${good.cv.meanError})`);
+  assert.ok(good.cv.rmse < badScore.cv.rmse, `good RMSE ${good.cv.rmse.toFixed(3)} < degraded ${badScore.cv.rmse.toFixed(3)}`);
+
+  // QKNA path (targets given) returns the neighbourhood scorecard
+  const pts = []; for (let x = 40; x < 280; x += 50) for (let y = 40; y < 280; y += 50) pts.push([x, y, 40]);
+  const q = scoreModel(data, fit.model, { search, targets: pts });
+  assert.ok(q.qkna && q.qkna.n > 0 && Number.isFinite(q.qkna.meanSlope) && Number.isFinite(q.qkna.meanKE), 'QKNA scorecard');
+
+  assert.throws(() => scoreModel(data, fit.model, {}), /search.*required/);
 });

@@ -14,6 +14,7 @@
 // boundary membership by ~1e-9 rad, so for real-valued coordinates the two agree.
 
 import { KDTree } from '../../scitra/src/spatial/kdtree.js';   // inlined by build.js (the neigh.js pattern)
+import { crossValidate, krige, qknaSummary } from './krige.js';   // the closed-loop scorer (scoreModel)
 
 export const GAMV_PI = 3.14159265;   // GSLIB gamv's literal (distinct from setrot's 3.141592654)
 
@@ -434,4 +435,50 @@ export function fitModel(experimental, opts = {}) {
     }
   }
   return { model, fit, report };
+}
+
+// ── scoreModel — close the loop (SPEC §4): how good is this variogram MODEL for estimation? ──
+//
+// The differentiator: a fitted variogram isn't judged in a vacuum, it's judged by the estimate
+// it produces. scoreModel runs leave-one-out cross-validation (the headline — bias / RMSE /
+// calibration / true-vs-estimate slope) and, given targets, a QKNA pass (slope-of-regression /
+// kriging-efficiency). Change the model → re-score → watch the numbers move. CV is N solves, so
+// this is an ON-DEMAND call (a "validate" action), never a per-slider-tick live readout.
+
+// compact recipe/fitModel model {c0, structures:[{type, cc, aa, anis, ang|orientation}]} →
+// the verbose form krige()/crossValidate() consume.
+function _compactToVerbose(model) {
+  return {
+    nugget: model.c0 != null ? model.c0 : (model.nugget || 0),
+    structures: (model.structures || []).map((s) => {
+      const aa = s.aa != null ? s.aa : s.range;
+      const anis = s.anis || [1, 1];
+      const base = { type: s.type, contribution: s.cc != null ? s.cc : s.contribution, range: aa, rangeMinor: aa * anis[0], rangeVert: aa * anis[1] };
+      if (s.convention && s.orientation) return { ...base, convention: s.convention, orientation: s.orientation };
+      const ang = s.ang || [s.angle || 0, s.angle2 || 0, s.angle3 || 0];
+      return { ...base, angle: ang[0], angle2: ang[1], angle3: ang[2] };
+    }),
+  };
+}
+
+// scoreModel(data, model, opts) → { cv, qkna? }
+//   opts = { search (required, the neighbourhood), ktype?='OK', skmean?, holeId?, sameHole?,
+//            grid? | targets?, discretization? }  — grid/targets enable the QKNA pass.
+export function scoreModel(data, model, opts = {}) {
+  if (!opts.search) throw new Error('gsjs.scoreModel: opts.search (the neighbourhood) is required');
+  const variogram = _compactToVerbose(model);
+  const ktype = opts.ktype || 'OK';
+  const base = { data, variogram, search: opts.search, ktype, faithful: true,
+    ...(opts.skmean != null ? { skmean: opts.skmean } : {}) };
+
+  const cv = crossValidate({ ...base, ...(opts.holeId ? { holeId: opts.holeId, sameHole: opts.sameHole } : {}) }).summary;
+
+  let qkna;
+  if (opts.grid || opts.targets) {
+    const t = krige({ ...base, diagnostics: true,
+      ...(opts.grid ? { grid: opts.grid } : { points: opts.targets }),
+      ...(opts.discretization ? { discretization: opts.discretization } : {}) });
+    qkna = qknaSummary(t);
+  }
+  return { cv, ...(qkna ? { qkna } : {}) };
 }

@@ -134,7 +134,26 @@ for (const name of ["major", "semi", "downhole"]) {
   ui.slider(name + " range (m)", Math.round(model.ranges[name]), { min: 5, max: 320, step: 1, onInput: (v) => { model.ranges[name] = +v; redraw(); } });
 }
 
-/// md
-**What you're doing.** The amber curve is the model; the blue dots are the experimental variogram; the grey strip is the pair count behind each lag. The sliders start at `fitModel`'s conservative seed — nugget from the downhole rise, ranges by pair-count-weighted least squares — and you drag to refine against what you see.
+/// code
+// ── validate: the closed loop — score the model by the ESTIMATE it makes ────
+// scoreModel runs leave-one-out cross-validation: how well does this variogram predict the
+// held-out samples? Lower RMSE = a better model FOR ESTIMATION. CV is N solves, so it's an
+// on-demand call (here on a 1-in-4 subsample for a snappy demo), never a per-slider-tick readout.
+const sub = [], subHole = [];
+for (let i = 0; i < data.length; i += 4) { sub.push(data[i]); subHole.push(holeId[i]); }
+const search = { radius: 140, radiusMinor: 140 * 0.6, radiusVert: 140 * 0.3, angle: 0, ndmin: 2, ndmax: 14 };
+const variants = [
+  ["fitted seed", seed.model],
+  ["over-stated nugget (80%)", { ...seed.model, c0: 0.8 * sill, structures: [{ ...seed.model.structures[0], cc: 0.2 * sill }] }],
+  ["isotropic (anisotropy ignored)", { ...seed.model, structures: [{ ...seed.model.structures[0], anis: [1, 1] }] }],
+];
+ui.table(variants.map(([name, m]) => {
+  const s = gsjs.scoreModel(sub, m, { search, holeId: subHole, sameHole: true }).cv;
+  return { model: name, "CV RMSE": s.rmse.toFixed(3), "var(std err)": s.varStdError.toFixed(2), "slope": s.slope.toFixed(2) };
+}));
+ui.display("The fitted seed has the lowest CV RMSE. Over-stating the nugget OR dropping the anisotropy both make the estimate worse — and cross-validation catches it. THIS is the closed loop: you fit against the estimate's quality, not the variogram curve alone.");
 
-The anisotropy is right there: **N–S reaches the sill slowly (long range), E–W rises fast (short range).** That ratio — plus the orientation, which a [stereonet sweep](ext/gsjs/README.md) will set properly — is the `{c0, structures:[{type, cc, aa, anis, ang}]}` the [estimate](example_gsjs_estimate.html) kriges with. Next in the design: tie this model to a live cross-validation / QKNA readout, so you fit *against the estimate's quality*, not in a vacuum.
+/// md
+**What you're doing.** The amber curve is the model; the blue dots are the experimental variogram; the grey strip is the pair count behind each lag. The sliders start at `fitModel`'s conservative seed — nugget from the downhole rise, ranges by pair-count-weighted least squares — and you drag to refine against what you see. The table below closes the loop: `scoreModel` cross-validates each model, so a fit isn't judged in a vacuum — it's judged by the estimate it produces.
+
+The anisotropy is right there: **N–S reaches the sill slowly (long range), E–W rises fast (short range).** That ratio — plus the orientation, which a [stereonet sweep](ext/gsjs/README.md) will set properly — is the `{c0, structures:[{type, cc, aa, anis, ang}]}` the [estimate](example_gsjs_estimate.html) kriges with. The reactive notebook is the proof of concept; the real variography *tool* (a Works surface) is where this becomes the most ergonomic variogram experience there is.
