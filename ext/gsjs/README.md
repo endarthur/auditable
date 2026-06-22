@@ -33,7 +33,7 @@ atra/WASM), not a backend lock.
 | M3c — grid/mask/points + categories (`krige()` is a kriging() drop-in) | ✅ |
 | Recipe on the JS engine (neighbourhood-driven, gslib-decoupled) | ✅ |
 | Perf — kNN search; JS ≥ WASM kt3d at ndmax 8–24 (test/gsjs-perf.mjs) | ✅ |
-| Follow-ups — per-hole in recipe · convention DSL · large-ndmax solve · GPU | ⏳ |
+| Follow-ups — per-hole in recipe · convention DSL · batched atra solve kernel (large ndmax) · GPU | ⏳ |
 | Distance-restricted capping · unique neighbourhood (deferred) | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |

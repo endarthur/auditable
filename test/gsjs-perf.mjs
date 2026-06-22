@@ -88,9 +88,17 @@ for (const disc of [{ nx: 1, ny: 1, nz: 1 }, { nx: 4, ny: 4, nz: 1 }]) {
 //   • Deopts are warmup/GC artifacts (tenuring, weak-object clearing, first-call type
 //     feedback) + the cova-closure `wrong call target` (a per-call-closure / bench
 //     artifact) — no steady-state hot-loop deopt. V8-winking holds once warm.
-//   • Remaining lever (large-ndmax solve): reuse per-block scratch (A/r/M/x are
-//     allocated per block in the GE path) to cut GC. GPU (M-last) targets the
-//     interactive 10M-block tier via realize/aggregate (§8 — never the search).
+//   • Large-ndmax SOLVE is arithmetic-bound (O(neq³) dense GE), not allocation-bound
+//     — an in-place solveGE measured NEUTRAL. So this is the kernel where atra/WASM
+//     genuinely wins (compute-dense), and §8's per-kernel-by-shape model says route
+//     it there. ROADMAP — but it must be BATCHED: a per-block atra call reincurs the
+//     FFI boundary (millions of tiny calls = pure overhead, the thing the JS driver
+//     avoids), so the win is either assembling many block systems in JS and solving
+//     them in ONE atra call, or the whole-grid-loop-in-atra (= what kt3d/the atra fork
+//     already are, and they DO win — once the fork's M>10⁴ scaling bug is fixed).
+//     Wire it behind the backend seam (backend.js), shape-selected (small ndmax → JS,
+//     large → batched atra). GPU (M-last) targets realize/aggregate for the 10M-block
+//     tier (§8 — never the search).
 //   • And krige() is CORRECT + robust at scale where the atra fork breaks, fully
 //     gslib-decoupled — now also FASTER than WASM in the common case.
 console.log('\nDeopt check: node --trace-deopt test/gsjs-perf.mjs 2>&1 | grep -i deopt | grep -iv "on stack replacement"');
