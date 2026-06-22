@@ -88,8 +88,10 @@ const unitH = (azRad) => [Math.sin(azRad), Math.cos(azRad), 0];
 // measured from strike (0 → along strike, 90 → down-dip). Built straight from
 // these meanings — pitch-from-strike falls out by construction, so there's no
 // Euler-order/sign trap. Strike uses the right-hand rule (dip to the right →
-// strike = dipAzimuth − 90°); see the UNVERIFIED note up top.
-export function leapfrogToRotmat({ dip = 0, dipAzimuth = 0, pitch = 0 } = {}) {
+// strike = dipAzimuth − 90°); see the UNVERIFIED note up top. This is the standard
+// structural-geology convention (Leapfrog and others use it); the public name is
+// 'structural' (leapfrogToRotmat is kept as a quiet alias).
+export function structuralToRotmat({ dip = 0, dipAzimuth = 0, pitch = 0 } = {}) {
   const r = Math.PI / 180;
   const az = dipAzimuth * r, dp = dip * r, pt = pitch * r;
   const cd = Math.cos(dp), sd = Math.sin(dp);
@@ -101,19 +103,22 @@ export function leapfrogToRotmat({ dip = 0, dipAzimuth = 0, pitch = 0 } = {}) {
   const minor = cross(major, semimajor);                        // plane normal — right-handed (det +1)
   return [...major, ...semimajor, ...minor];
 }
+export { structuralToRotmat as leapfrogToRotmat };              // quiet alias
 
 // ── convention dispatcher ──
 //
 // toRotmat(convention, params, pi?) → orthonormal R (rows = major/semi-major/minor).
-//   'gslib'    { azimuth, dip, rake }      — the validated baseline (pi-flag aware)
-//   'leapfrog' { dip, dipAzimuth, pitch }  — geometric construction
-// Anisotropy is applied separately (applyAnis) so this stays pure orientation.
+//   'structural' { dip, dipAzimuth, pitch } — the geologist default (dip/dip-az/pitch)
+//   'gslib'      { azimuth, dip, rake }      — the GSLIB baseline (pi-flag aware)
+// ('leapfrog' is accepted as an alias of 'structural'.) Anisotropy is applied
+// separately (applyAnis) so this stays pure orientation.
 export function toRotmat(convention, params = {}, pi = Math.PI) {
   switch (convention) {
     case 'gslib':
       return setrot(params.azimuth || 0, params.dip || 0, params.rake || 0, 1, 1, pi);
+    case 'structural':
     case 'leapfrog':
-      return leapfrogToRotmat(params);
+      return structuralToRotmat(params);
     default:
       throw new Error(`gsjs.orient: unknown convention '${convention}'`);
   }

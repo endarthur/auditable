@@ -729,8 +729,10 @@ const unitH = (azRad) => [Math.sin(azRad), Math.cos(azRad), 0];
 // measured from strike (0 → along strike, 90 → down-dip). Built straight from
 // these meanings — pitch-from-strike falls out by construction, so there's no
 // Euler-order/sign trap. Strike uses the right-hand rule (dip to the right →
-// strike = dipAzimuth − 90°); see the UNVERIFIED note up top.
-function leapfrogToRotmat({ dip = 0, dipAzimuth = 0, pitch = 0 } = {}) {
+// strike = dipAzimuth − 90°); see the UNVERIFIED note up top. This is the standard
+// structural-geology convention (Leapfrog and others use it); the public name is
+// 'structural' (leapfrogToRotmat is kept as a quiet alias).
+function structuralToRotmat({ dip = 0, dipAzimuth = 0, pitch = 0 } = {}) {
   const r = Math.PI / 180;
   const az = dipAzimuth * r, dp = dip * r, pt = pitch * r;
   const cd = Math.cos(dp), sd = Math.sin(dp);
@@ -742,19 +744,22 @@ function leapfrogToRotmat({ dip = 0, dipAzimuth = 0, pitch = 0 } = {}) {
   const minor = cross(major, semimajor);                        // plane normal — right-handed (det +1)
   return [...major, ...semimajor, ...minor];
 }
+// quiet alias
 
 // ── convention dispatcher ──
 //
 // toRotmat(convention, params, pi?) → orthonormal R (rows = major/semi-major/minor).
-//   'gslib'    { azimuth, dip, rake }      — the validated baseline (pi-flag aware)
-//   'leapfrog' { dip, dipAzimuth, pitch }  — geometric construction
-// Anisotropy is applied separately (applyAnis) so this stays pure orientation.
+//   'structural' { dip, dipAzimuth, pitch } — the geologist default (dip/dip-az/pitch)
+//   'gslib'      { azimuth, dip, rake }      — the GSLIB baseline (pi-flag aware)
+// ('leapfrog' is accepted as an alias of 'structural'.) Anisotropy is applied
+// separately (applyAnis) so this stays pure orientation.
 function toRotmat(convention, params = {}, pi = Math.PI) {
   switch (convention) {
     case 'gslib':
       return setrot(params.azimuth || 0, params.dip || 0, params.rake || 0, 1, 1, pi);
+    case 'structural':
     case 'leapfrog':
-      return leapfrogToRotmat(params);
+      return structuralToRotmat(params);
     default:
       throw new Error(`gsjs.orient: unknown convention '${convention}'`);
   }
@@ -1482,7 +1487,14 @@ function buildModel(variogram, pi) {
     const aa = s.range;
     const rMinor = s.rangeMinor != null ? s.rangeMinor : aa;
     const rVert = s.rangeVert != null ? s.rangeVert : aa;
-    return { it, cc: s.contribution, aa, rot: setrot(s.angle || 0, s.angle2 || 0, s.angle3 || 0, rMinor / aa, rVert / aa, pi) };
+    // orientation: a convention + params (default gslib azimuth/dip/rake from
+    // angle/angle2/angle3), → pure rotation, then anisotropy folded in.
+    const conv = s.convention || 'gslib';
+    const orientParams = conv === 'gslib'
+      ? { azimuth: s.angle || 0, dip: s.angle2 || 0, rake: s.angle3 || 0 }
+      : s.orientation || s;
+    const pureR = toRotmat(conv, orientParams, pi);
+    return { it, cc: s.contribution, aa, rot: applyAnis(pureR, rMinor / aa, rVert / aa) };
   });
   let cmax = c0;
   for (const s of structs) cmax += s.it === 4 ? 999 : s.cc;
@@ -2078,11 +2090,15 @@ function hgr(p = {}) {
   return { transform: 'hgr_' + mode, transform_params: tp };
 }
 
-// model builders → DomainEstimation. realization defaults to none().
+// model builders → DomainEstimation. realization defaults to none(). A model-level
+// `orientation` (+ `convention`, default 'structural' = dip/dipAzimuth/pitch) orients
+// the WHOLE domain — variogram and search share it (the common case); it overrides any
+// per-structure/search `ang`. Omit it to orient per-part with gslib `ang` (legacy).
 function _model(ktype, m) {
   return {
     ktype,
     ...(m.sk_mean != null ? { sk_mean: m.sk_mean } : {}),
+    ...(m.orientation ? { convention: m.convention || 'structural', orientation: { ...m.orientation } } : (m.convention ? { convention: m.convention } : {})),
     variogram: m.variogram,
     search: m.search,
     realization: m.realization || none(),
@@ -2202,7 +2218,15 @@ function fromJSON(spec) { return recipe(spec); }
 
 // ── translation: compact recipe vocab → kriging() verbose opts ──────────────
 
-function _krigingVario(v) {
+// the model-level orientation (if any) → the convention + params krige()/
+// createNeighborhood consume; else null → use the per-part gslib `ang`.
+function _orient(model) {
+  if (!model.orientation) return null;
+  return { convention: model.convention || 'structural', orientation: model.orientation };
+}
+
+function _krigingVario(model) {
+  const v = model.variogram, o = _orient(model);
   return {
     nugget: v.c0,
     structures: v.structures.map((s) => ({
@@ -2211,16 +2235,19 @@ function _krigingVario(v) {
       range: s.aa,
       rangeMinor: s.aa * s.anis[0],
       rangeVert: s.aa * s.anis[1],
-      angle: s.ang[0], angle2: s.ang[1], angle3: s.ang[2],
+      ...(o ? { convention: o.convention, orientation: o.orientation }
+        : { angle: s.ang[0], angle2: s.ang[1], angle3: s.ang[2] }),
     })),
   };
 }
-function _krigingSearch(s) {
+function _krigingSearch(model) {
+  const s = model.search, o = _orient(model);
   return {
     radius: s.radius,
     radiusMinor: s.radius * s.anis[0],
     radiusVert: s.radius * s.anis[1],
-    angle: s.ang[0], angle2: s.ang[1], angle3: s.ang[2],
+    ...(o ? { convention: o.convention, ...o.orientation }
+      : { angle: s.ang[0], angle2: s.ang[1], angle3: s.ang[2] }),
     ndmin: s.ndmin, ndmax: s.ndmax,
     ...(s.perHoleMax != null ? { perHoleMax: s.perHoleMax } : {}),
     ...(s.sectors ? { sectors: s.sectors } : {}),
@@ -2302,8 +2329,8 @@ function estimate(R, ctx = {}) {
     const { data, holeId } = _samples(rows, cols, w.predFn);
     const kopts = {
       data,
-      variogram: _krigingVario(w.model.variogram),
-      search: _krigingSearch(w.model.search),
+      variogram: _krigingVario(w.model),
+      search: _krigingSearch(w.model),
       ktype: w.model.ktype,
       ...(w.model.ktype === 'SK' ? { skmean: w.model.sk_mean } : {}),
       grid: g,
@@ -2405,7 +2432,8 @@ export {
   setrot,
   sqdist,
   applyAnis,
-  leapfrogToRotmat,
+  structuralToRotmat,
+  structuralToRotmat as leapfrogToRotmat,
   toRotmat,
   createNeighborhood,
   indexSamples,

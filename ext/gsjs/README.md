@@ -23,6 +23,7 @@ atra/WASM), not a backend lock.
 | Browser-loadable bundle (`@gcu/build` + gcu-make, sift inlined) | ✅ |
 | Notebook examples (live top-cut · domains · artifact + swath/GT) | ✅ |
 | End-to-end dogfood (drillholes → domains → block kriging → GT) | ✅ |
+| Recipe DSL — per-hole cap · structural orientation (dip/dip-az/pitch) | ✅ |
 | Reactive cell wiring (estimate once → slider `onInput` re-realizes) | ✅ |
 | Neighbourhood M3a — moving ellipsoid, kd-tree, deterministic tie-break | ✅ |
 | Neighbourhood M3b — sector search (nsect / maxPer / minPer / minFilled) | ✅ |
@@ -34,7 +35,7 @@ atra/WASM), not a backend lock.
 | M3c — grid/mask/points + categories (`krige()` is a kriging() drop-in) | ✅ |
 | Recipe on the JS engine (neighbourhood-driven, gslib-decoupled) | ✅ |
 | Perf — kNN search; JS ≥ WASM kt3d at ndmax 8–24 (test/gsjs-perf.mjs) | ✅ |
-| Follow-ups — per-hole in recipe · convention DSL · batched atra solve kernel (large ndmax) · GPU | ⏳ |
+| Follow-ups — variography · QKNA · cross-validation · batched atra solve · GPU | ⏳ |
 | Distance-restricted capping · unique neighbourhood (deferred) | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |

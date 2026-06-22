@@ -950,3 +950,33 @@ test('recipe — per-hole cap (dh_id) + bench flow through to the engine', () =>
   });
   assert.throws(() => run(rx, { rows: SROWS }), /holeId/);
 });
+
+test('recipe — model-level structural orientation (default) + gslib override + legacy ang', () => {
+  // structural is the DEFAULT convention (dip/dipAzimuth/pitch); orients the domain
+  const r = recipe({
+    data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU' } },
+    block_grid: { ...SYNTH.grid },
+    default_model: ok({ orientation: { dip: 60, dipAzimuth: 90, pitch: 0 }, variogram: RVARIO(), search: RSEARCH() }),
+    output: {},
+  });
+  const j = r.toJSON();
+  assert.equal(j.default_model.convention, 'structural');
+  assert.deepEqual(j.default_model.orientation, { dip: 60, dipAzimuth: 90, pitch: 0 });
+  assert.deepEqual(fromJSON(j).toJSON(), j);
+  assert.ok([...run(r, { rows: SROWS }).status].filter((s) => s === STATUS.OK).length >= 12);
+
+  // explicit gslib convention
+  const rg = recipe({
+    data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU' } },
+    block_grid: { ...SYNTH.grid },
+    default_model: ok({ convention: 'gslib', orientation: { azimuth: 90, dip: 0, rake: 0 }, variogram: RVARIO(), search: RSEARCH() }),
+    output: {},
+  });
+  assert.equal(rg.toJSON().default_model.convention, 'gslib');
+  assert.ok([...run(rg, { rows: SROWS }).status].filter((s) => s === STATUS.OK).length >= 12);
+
+  // legacy: no model orientation → per-part gslib path unchanged
+  const rl = baseRecipe();
+  assert.equal(rl.toJSON().default_model.orientation, undefined);
+  assert.ok([...run(rl, { rows: SROWS }).status].filter((s) => s === STATUS.OK).length >= 12);
+});

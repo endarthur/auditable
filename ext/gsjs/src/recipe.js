@@ -88,11 +88,15 @@ export function hgr(p = {}) {
   return { transform: 'hgr_' + mode, transform_params: tp };
 }
 
-// model builders → DomainEstimation. realization defaults to none().
+// model builders → DomainEstimation. realization defaults to none(). A model-level
+// `orientation` (+ `convention`, default 'structural' = dip/dipAzimuth/pitch) orients
+// the WHOLE domain — variogram and search share it (the common case); it overrides any
+// per-structure/search `ang`. Omit it to orient per-part with gslib `ang` (legacy).
 function _model(ktype, m) {
   return {
     ktype,
     ...(m.sk_mean != null ? { sk_mean: m.sk_mean } : {}),
+    ...(m.orientation ? { convention: m.convention || 'structural', orientation: { ...m.orientation } } : (m.convention ? { convention: m.convention } : {})),
     variogram: m.variogram,
     search: m.search,
     realization: m.realization || none(),
@@ -212,7 +216,15 @@ export function fromJSON(spec) { return recipe(spec); }
 
 // ── translation: compact recipe vocab → kriging() verbose opts ──────────────
 
-function _krigingVario(v) {
+// the model-level orientation (if any) → the convention + params krige()/
+// createNeighborhood consume; else null → use the per-part gslib `ang`.
+function _orient(model) {
+  if (!model.orientation) return null;
+  return { convention: model.convention || 'structural', orientation: model.orientation };
+}
+
+function _krigingVario(model) {
+  const v = model.variogram, o = _orient(model);
   return {
     nugget: v.c0,
     structures: v.structures.map((s) => ({
@@ -221,16 +233,19 @@ function _krigingVario(v) {
       range: s.aa,
       rangeMinor: s.aa * s.anis[0],
       rangeVert: s.aa * s.anis[1],
-      angle: s.ang[0], angle2: s.ang[1], angle3: s.ang[2],
+      ...(o ? { convention: o.convention, orientation: o.orientation }
+        : { angle: s.ang[0], angle2: s.ang[1], angle3: s.ang[2] }),
     })),
   };
 }
-function _krigingSearch(s) {
+function _krigingSearch(model) {
+  const s = model.search, o = _orient(model);
   return {
     radius: s.radius,
     radiusMinor: s.radius * s.anis[0],
     radiusVert: s.radius * s.anis[1],
-    angle: s.ang[0], angle2: s.ang[1], angle3: s.ang[2],
+    ...(o ? { convention: o.convention, ...o.orientation }
+      : { angle: s.ang[0], angle2: s.ang[1], angle3: s.ang[2] }),
     ndmin: s.ndmin, ndmax: s.ndmax,
     ...(s.perHoleMax != null ? { perHoleMax: s.perHoleMax } : {}),
     ...(s.sectors ? { sectors: s.sectors } : {}),
@@ -312,8 +327,8 @@ export function estimate(R, ctx = {}) {
     const { data, holeId } = _samples(rows, cols, w.predFn);
     const kopts = {
       data,
-      variogram: _krigingVario(w.model.variogram),
-      search: _krigingSearch(w.model.search),
+      variogram: _krigingVario(w.model),
+      search: _krigingSearch(w.model),
       ktype: w.model.ktype,
       ...(w.model.ktype === 'SK' ? { skmean: w.model.sk_mean } : {}),
       grid: g,

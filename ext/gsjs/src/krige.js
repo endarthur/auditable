@@ -17,7 +17,7 @@
 // OK + SK; point or block kriging (block = discretized RHS + block-block cbb).
 // Spec: spec_inbox/SPEC-neigh.md §5/§8.
 
-import { setrot, sqdist, GSLIB_PI } from './orient.js';
+import { sqdist, toRotmat, applyAnis, GSLIB_PI } from './orient.js';
 import { createNeighborhood, indexSamples, select } from './neigh.js';
 import { STATUS } from './realize.js';
 
@@ -37,7 +37,14 @@ function buildModel(variogram, pi) {
     const aa = s.range;
     const rMinor = s.rangeMinor != null ? s.rangeMinor : aa;
     const rVert = s.rangeVert != null ? s.rangeVert : aa;
-    return { it, cc: s.contribution, aa, rot: setrot(s.angle || 0, s.angle2 || 0, s.angle3 || 0, rMinor / aa, rVert / aa, pi) };
+    // orientation: a convention + params (default gslib azimuth/dip/rake from
+    // angle/angle2/angle3), → pure rotation, then anisotropy folded in.
+    const conv = s.convention || 'gslib';
+    const orientParams = conv === 'gslib'
+      ? { azimuth: s.angle || 0, dip: s.angle2 || 0, rake: s.angle3 || 0 }
+      : s.orientation || s;
+    const pureR = toRotmat(conv, orientParams, pi);
+    return { it, cc: s.contribution, aa, rot: applyAnis(pureR, rMinor / aa, rVert / aa) };
   });
   let cmax = c0;
   for (const s of structs) cmax += s.it === 4 ? 999 : s.cc;
