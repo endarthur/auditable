@@ -1441,8 +1441,8 @@ function select(nbhd, target, opts = {}) {
 //     estimates match gslib.kt3d to tolerance (§8: bit-identical SELECTION, tolerance-
 //     equal estimates). Swap a measured hot loop to atra/WASM later if needed.
 //
-// First cut: POINT kriging (block discretization is the same machinery with an
-// averaged RHS — a follow-up). OK + SK. Spec: spec_inbox/SPEC-neigh.md §5/§8.
+// OK + SK; point or block kriging (block = discretized RHS + block-block cbb).
+// Spec: spec_inbox/SPEC-neigh.md §5/§8.
 
 
 const _VTYPE = {
@@ -1465,7 +1465,7 @@ function buildModel(variogram, pi) {
   });
   let cmax = c0;
   for (const s of structs) cmax += s.it === 4 ? 999 : s.cc;
-  const cova = (x1, y1, z1, x2, y2, z2) => {
+  const cova = (x1, y1, z1, x2, y2, z2) => {  // eslint-disable-line no-shadow
     const hsq0 = sqdist(x1, y1, z1, x2, y2, z2, structs[0].rot);
     if (hsq0 < 1e-5) return cmax;                       // coincident → full sill
     let c = 0;
@@ -1480,7 +1480,31 @@ function buildModel(variogram, pi) {
     }
     return c;
   };
-  return { cmax, cova };
+  return { cmax, cova, c0 };
+}
+
+// Discretization-point offsets relative to the block CENTRE, for a block of
+// (bxsiz,bysiz,bzsiz) split nxdis×nydis×nzdis. (gsjs.discr/kt3d emit the same
+// points in a block-CORNER frame, i.e. +bxsiz/2, and translate the samples to
+// match; this driver works in absolute coords so it wants centre-relative offsets
+// — the `tl*` value, without gslib's +0.5·bsiz corner shift.)
+function discr(bxsiz, bysiz, bzsiz, nxdis, nydis, nzdis) {
+  const xdis = bxsiz / Math.max(nxdis, 1), ydis = bysiz / Math.max(nydis, 1), zdis = bzsiz / Math.max(nzdis, 1);
+  const pts = [];
+  let tlx = -0.5 * (bxsiz + xdis);
+  for (let ix = 0; ix < nxdis; ix++) {
+    tlx += xdis;
+    let tly = -0.5 * (bysiz + ydis);
+    for (let iy = 0; iy < nydis; iy++) {
+      tly += ydis;
+      let tlz = -0.5 * (bzsiz + zdis);
+      for (let iz = 0; iz < nzdis; iz++) {
+        tlz += zdis;
+        pts.push([tlx, tly, tlz]);   // centre-relative offset
+      }
+    }
+  }
+  return pts;
 }
 
 // Solve A·x = b for the n×n system (A flat row-major) by Gaussian elimination with
@@ -1524,9 +1548,11 @@ function _targets(opts) {
   throw new Error('gsjs.krige: provide points or grid');
 }
 
-// krige(opts) — point kriging over a neighbourhood, in pure JS.
+// krige(opts) — kriging over a neighbourhood, in pure JS.
 //   { data: [[x,y,z,value],...], variogram, search, ktype:'OK'|'SK', skmean?,
-//     points | grid, faithful?, holeId? }
+//     points | grid, discretization?:{nx,ny,nz}, blockSize?:[dx,dy,dz], faithful?, holeId? }
+// discretization (+ block size from `grid` or `blockSize`) switches to block
+// kriging; omitted → point kriging.
 // `search` is the neighbourhood spec (radius/anis/angles/ndmin/ndmax + any policy:
 // sectors / perHoleMax / minSampleDistance / convention / type:'bench'…). Returns a
 // BlockEstimateTensor (indices in ORIGINAL data order; values = original data values)
@@ -1538,7 +1564,27 @@ function krige(opts) {
   const mdt = ktype === 1 ? 1 : 0;
   const skmean = opts.skmean || 0;
   const pi = opts.faithful ? GSLIB_PI : Math.PI;
-  const { cmax, cova } = buildModel(opts.variogram, pi);
+  const { cmax, cova, c0 } = buildModel(opts.variogram, pi);
+
+  // block discretization (point kriging = a single disc point at the centre). The
+  // disc offsets + block-block covariance cbb are geometry-only → computed once.
+  const disc = opts.discretization || {};
+  const nxdis = disc.nx || 1, nydis = disc.ny || 1, nzdis = disc.nz || 1;
+  let bx = 0, by = 0, bz = 0;
+  if (opts.grid) { bx = opts.grid.xsiz || 0; by = opts.grid.ysiz || 0; bz = opts.grid.zsiz || 0; }
+  else if (opts.blockSize) { bx = opts.blockSize[0]; by = opts.blockSize[1]; bz = opts.blockSize[2]; }
+  const discOff = discr(bx, by, bz, nxdis, nydis, nzdis);
+  const ndb = discOff.length;
+  let cbb = cmax;                                       // point support → sill
+  if (ndb > 1) {
+    let acc = 0;
+    for (let i = 0; i < ndb; i++) for (let j = 0; j < ndb; j++) {
+      let cov = cova(discOff[i][0], discOff[i][1], discOff[i][2], discOff[j][0], discOff[j][1], discOff[j][2]);
+      if (i === j) cov -= c0;                           // drop the nugget on the diagonal (block support)
+      acc += cov;
+    }
+    cbb = acc / (ndb * ndb);
+  }
 
   const s = opts.search;
   const nbhd = createNeighborhood({
@@ -1573,13 +1619,25 @@ function krige(opts) {
         const cov = cova(xi, yi, zi, data[sj][0], data[sj][1], data[sj][2]);
         A[i * neq + j] = cov; A[j * neq + i] = cov;
       }
-      r[i] = cova(xi, yi, zi, tx, ty, tz);
+      // RHS: sample-to-block average covariance (point kriging → single centre point)
+      if (ndb <= 1) {
+        r[i] = cova(xi, yi, zi, tx, ty, tz);
+      } else {
+        let cb = 0;
+        for (let d = 0; d < ndb; d++) {
+          const dxp = tx + discOff[d][0], dyp = ty + discOff[d][1], dzp = tz + discOff[d][2];
+          cb += cova(xi, yi, zi, dxp, dyp, dzp);
+          const ex = xi - dxp, ey = yi - dyp, ez = zi - dzp;
+          if (ex * ex + ey * ey + ez * ez < 1e-6) cb -= c0;   // self-correction (nugget)
+        }
+        r[i] = cb / ndb;
+      }
     }
     if (mdt) { for (let i = 0; i < na; i++) { A[na * neq + i] = cmax; A[i * neq + na] = cmax; } r[na] = cmax; }
 
     const { x: sol, singular } = solveGE(A, r, neq);
     if (singular) { perTarget[t] = { status: STATUS.SINGULAR_SYSTEM, na: 0 }; continue; }
-    let estv = cmax;                                    // cbb = sill for point kriging
+    let estv = cbb;                                     // block-block covariance
     for (let j = 0; j < neq; j++) estv -= sol[j] * r[j];
     perTarget[t] = { status: STATUS.OK, na, ranks: sel.ranks, weights: sol, kv: estv };
     if (na > K) K = na;

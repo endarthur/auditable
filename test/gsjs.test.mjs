@@ -852,3 +852,27 @@ test('krige — insufficient data → status, no weights', () => {
   assert.equal(r.status[0], STATUS.INSUFFICIENT_DATA);
   assert.equal(r.n_actual[0], 0);
 });
+
+test('krige — block kriging (discretized) == gslib.kt3d est + var to f64', () => {
+  for (const dsc of [{ nx: 3, ny: 3, nz: 1 }, { nx: 4, ny: 4, nz: 2 }, { nx: 5, ny: 5, nz: 1 }]) {
+    for (const ktype of ['OK', 'SK']) {
+      const ref = kt3d({ ...SYNTH, ktype, skmean: 2.5, discretization: dsc });
+      const r = krige({ ...SYNTH, ktype, skmean: 2.5, faithful: true, discretization: dsc });
+      const est = realize(r, r.values);
+      let maxErr = 0, maxKv = 0, nOK = 0;
+      for (let i = 0; i < r.n_blocks; i++) {
+        if (r.status[i] !== STATUS.OK || ref.est[i] === -999) continue;
+        nOK++;
+        maxErr = Math.max(maxErr, Math.abs(est[i] - ref.est[i]));
+        maxKv = Math.max(maxKv, Math.abs(r.kv[i] - ref.var[i]));
+      }
+      assert.ok(nOK >= 12, `disc ${JSON.stringify(dsc)} ${ktype} only ${nOK}`);
+      assert.ok(maxErr < 1e-9, `disc ${JSON.stringify(dsc)} ${ktype} est ${maxErr}`);
+      assert.ok(maxKv < 1e-9, `disc ${JSON.stringify(dsc)} ${ktype} kv ${maxKv}`);
+    }
+  }
+  // block variance < point variance (block support reduces uncertainty)
+  const pt = krige({ ...SYNTH, ktype: 'OK', faithful: true });
+  const blk = krige({ ...SYNTH, ktype: 'OK', faithful: true, discretization: { nx: 4, ny: 4, nz: 1 } });
+  assert.ok(blk.kv[5] < pt.kv[5], `block kv ${blk.kv[5]} should be < point kv ${pt.kv[5]}`);
+});
