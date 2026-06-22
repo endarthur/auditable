@@ -194,7 +194,10 @@ export function select(nbhd, target, opts = {}) {
       if (d2 <= r2) cand.push({ i, d2 });
     }
     cand.sort((a, b) => (a.d2 - b.d2) || (a.i - b.i));
-    if (!(cand.length > nbhd.ndmax && cand[nbhd.ndmax].d2 === cand[nbhd.ndmax - 1].d2)) inside = cand;
+    // ambiguous only if the ndmax-th and (ndmax+1)-th are an exact tie — then the
+    // cap can't pick between them deterministically, so fall through to the gather.
+    const boundaryTie = cand.length > nbhd.ndmax && cand[nbhd.ndmax].d2 === cand[nbhd.ndmax - 1].d2;
+    if (!boundaryTie) inside = cand;
   }
   if (inside === null) {
     // full radius gather (+ bench band) — the policy/greedy path and the tie fallback.

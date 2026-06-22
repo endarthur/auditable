@@ -86,6 +86,9 @@ function discr(bxsiz, bysiz, bzsiz, nxdis, nydis, nzdis) {
 // Solve A·x = b for the n×n system (A flat row-major) by Gaussian elimination with
 // partial pivoting — the ktsol stand-in. Returns { x, singular }. The OK system is
 // symmetric indefinite (a saddle point), so a plain Cholesky won't do; GE handles it.
+// (Tried an in-place variant to cut the per-block copy — measured neutral: the
+// large-ndmax solve is arithmetic-bound, not allocation-bound. Kept the clean,
+// non-mutating form.)
 function solveGE(A, b, n) {
   const M = Float64Array.from(A), x = Float64Array.from(b);
   for (let col = 0; col < n; col++) {

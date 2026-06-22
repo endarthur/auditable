@@ -1380,7 +1380,10 @@ function select(nbhd, target, opts = {}) {
       if (d2 <= r2) cand.push({ i, d2 });
     }
     cand.sort((a, b) => (a.d2 - b.d2) || (a.i - b.i));
-    if (!(cand.length > nbhd.ndmax && cand[nbhd.ndmax].d2 === cand[nbhd.ndmax - 1].d2)) inside = cand;
+    // ambiguous only if the ndmax-th and (ndmax+1)-th are an exact tie — then the
+    // cap can't pick between them deterministically, so fall through to the gather.
+    const boundaryTie = cand.length > nbhd.ndmax && cand[nbhd.ndmax].d2 === cand[nbhd.ndmax - 1].d2;
+    if (!boundaryTie) inside = cand;
   }
   if (inside === null) {
     // full radius gather (+ bench band) — the policy/greedy path and the tie fallback.
@@ -1528,6 +1531,9 @@ function discr(bxsiz, bysiz, bzsiz, nxdis, nydis, nzdis) {
 // Solve A·x = b for the n×n system (A flat row-major) by Gaussian elimination with
 // partial pivoting — the ktsol stand-in. Returns { x, singular }. The OK system is
 // symmetric indefinite (a saddle point), so a plain Cholesky won't do; GE handles it.
+// (Tried an in-place variant to cut the per-block copy — measured neutral: the
+// large-ndmax solve is arithmetic-bound, not allocation-bound. Kept the clean,
+// non-mutating form.)
 function solveGE(A, b, n) {
   const M = Float64Array.from(A), x = Float64Array.from(b);
   for (let col = 0; col < n; col++) {
