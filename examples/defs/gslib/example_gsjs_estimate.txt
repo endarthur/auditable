@@ -1,6 +1,7 @@
 /// auditable
 /// title: gsjs — a resource estimate, end to end
 /// module: @gcu/gsjs ext/gsjs/index.js
+/// module: @gcu/drillhole ext/drillhole/index.js
 /// settings: {"theme":"dark","fontSize":13,"width":"940","editorView":"yes"}
 
 /// md
@@ -12,10 +13,12 @@ Every number agrees with the frozen `@gcu/gslib` (GSLIB `kt3d`) oracle to machin
 
 /// code collapsed
 // %collapsed
-// ── synthetic deposit + drillholes ──────────────────────────────────────────
+// ── synthetic deposit + RAW drillhole tables ────────────────────────────────
 // A tabular HG lens dipping 60° to the East (strikes N–S) through the model centre,
 // ~30 m thick; a LG halo to ±40 m; barren beyond. Vertical holes on a ~55 m grid,
-// composited every 3 m, sampled only where they intersect the deposit.
+// ASSAYED EVERY 1 m — then composited to 3 m by @gcu/drillhole (the real pipeline:
+// collars + surveys + intervals → desurvey → fixed-length composites, split at the
+// HG/LG contact so no composite straddles a domain boundary).
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 const rng = mulberry32(17);
 const EXT = 400, TOP = 200, cx = 200, cy = 200, cz = 100;
@@ -31,16 +34,35 @@ function trueGrade(x, y, z) {
   return Math.max(0, core * trend * (0.75 + 0.5 * rng()));     // skewed → a top-cut has work to do
 }
 
-const rows = [];
+const collars = [], surveys = [];
+const ivBhid = [], ivFrom = [], ivTo = [], au = [], dm = [];
 let bhid = 0;
 for (let hx = 30; hx < EXT; hx += 55) for (let hy = 30; hy < EXT; hy += 55) {
   bhid++;
-  for (let z = TOP - 2; z > 10; z -= 3) {
-    const dom = domainOf(hx, hy, z);
-    if (!dom) continue;
-    rows.push({ X: hx, Y: hy, Z: z, AU: +trueGrade(hx, hy, z).toFixed(3), DOMAIN: dom, BHID: bhid });
+  const id = "DH" + String(bhid).padStart(3, "0");
+  collars.push({ bhid: id, x: hx, y: hy, z: TOP, eoh: 190 });
+  surveys.push({ bhid: id, depth: 0, az: 0, dip: 90 });          // vertical holes
+  for (let d = 0; d < 190; d += 1) {                              // raw 1 m assay intervals
+    const z = TOP - (d + 0.5), D = domainOf(hx, hy, z);           // interval midpoint elevation
+    if (!D) continue;                                            // assayed only through the deposit
+    ivBhid.push(id); ivFrom.push(d); ivTo.push(d + 1);
+    au.push(+trueGrade(hx, hy, z).toFixed(3)); dm.push(D);
   }
 }
+
+// composite 1 m → 3 m with @gcu/drillhole, breaking at the HG/LG contact
+const DH = (await load("@gcu/drillhole")).Drillhole;   // the Drillhole facade
+const comp = DH.process({
+  collars, surveys,
+  intervals: { bhid: ivBhid, from: ivFrom, to: ivTo, cols: [
+    { name: "AU", type: "num", values: au },
+    { name: "DOMAIN", type: "cat", values: dm },
+  ] },
+}, { compositeLength: 3, splitCols: ["DOMAIN"], method: "minimumCurvature" });
+
+// composite rows → the {X,Y,Z,AU,DOMAIN,BHID} the recipe consumes (XYZ = desurveyed centroid)
+const ci = Object.fromEntries(comp.header.map((h, i) => [h, i]));
+const rows = comp.rows.map(r => ({ X: r[ci.X], Y: r[ci.Y], Z: r[ci.Z], AU: r[ci.AU], DOMAIN: r[ci.DOMAIN], BHID: r[ci.BHID] }));
 const nHG = rows.filter(r => r.DOMAIN === "HG").length;
 
 /// code
@@ -155,7 +177,7 @@ ui.display(`${rows.length} composites (${nHG} HG) in ${bhid} holes → ${nEst} b
 /// md
 **What just happened — the whole spine, decoupled and validated.**
 
-1. **Drillholes → composites → domains.** Vertical holes sample a dipping HG lens + LG halo; each composite carries a `DOMAIN` and a hole id. (`%collapsed` — open it to see the geology.)
+1. **Raw assays → composites → domains.** Vertical holes are assayed every 1 m through a dipping HG lens + LG halo; **`@gcu/drillhole`** desurveys them and composites the raw intervals to 3 m, splitting at the HG/LG contact (no composite straddles a domain). Each composite lands at its desurveyed centroid and carries a `DOMAIN` + hole id. (`%collapsed` — open it to see the geology + the compositing call.)
 2. **A domained recipe.** HG and LG each get their own variogram and a **sector-declustered** search (`sectors: { n: 4, maxPer: 5 }`), oriented to the lens. Samples are assigned to a domain by a serializable `@gcu/sift` predicate (`DOMAIN == 'HG'`); blocks by a per-block domain code. The recipe is a JSON artifact — `recipe.toJSON()` ships, diffs, and round-trips.
 3. **Block kriging, once.** `estimate()` solves the kriging system per block (3×3×3 discretization) in pure JS — no gslib WebAssembly in the path, yet **bit-identical to GSLIB `kt3d`**. The cross-section shows the kriged lens dipping through the model.
 4. **Live re-realize.** The HG **top-cut** slider re-runs only `evaluate()` (a re-weighting of weights already in hand) — the section and grade–tonnage update in a millisecond, never re-kriging.

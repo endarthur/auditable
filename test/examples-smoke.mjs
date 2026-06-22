@@ -89,6 +89,17 @@ async function checkExample(browser, ex) {
       return { id, msg, head };
     }));
 
+    // View-independent error check: in split/editor view (editorView:yes) a cell
+    // error renders on .split-output, NOT on .cell — so the .cell.error sweep above
+    // silently misses it. Read the cell MODEL directly so editor-view examples are
+    // actually verified (this is how a broken DH.process() example slipped a green).
+    const modelErrors = await page.evaluate(() => (window.S?.cells || [])
+      .map((c, i) => c && c.error
+        ? { id: c.id || ('#' + i), msg: String(c.error).slice(0, 200), head: (c.code || '').slice(0, 60).replace(/\s+/g, ' ') }
+        : null)
+      .filter(Boolean));
+    for (const e of modelErrors) if (!cellErrors.some(x => x.id === e.id)) cellErrors.push(e);
+
     // Silent load failure detector: a notebook that bails out of loadFromEmbed
     // without throwing falls back to addCell('md','') + addCell('code','') —
     // two empty cells, no errors. Compare runtime cell count with what the

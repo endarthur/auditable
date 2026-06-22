@@ -1,0 +1,150 @@
+/// auditable
+/// title: drillholes — desurvey, composite, QC
+/// module: @gcu/drillhole ext/drillhole/index.js
+/// settings: {"theme":"dark","fontSize":13,"width":"940","editorView":"yes"}
+
+/// md
+# From drillholes to samples
+
+Before you can estimate anything, raw drillhole data has to become *located, regularized* **samples**. `@gcu/drillhole` does the two jobs that stand between a database and a block model:
+
+- **Desurvey** — collar + down-hole survey (azimuth / dip) → the true 3D trace. Holes **deviate**; assuming a straight line mislocates metres of grade at depth.
+- **Composite** — ragged raw assay intervals → fixed-length, length-weighted samples that never straddle a geological contact.
+
+Pure JS, offline, and **nothing is dropped silently** — every excluded row lands in a consistency report. Below: a handful of deviated holes through a dipping lens, desurveyed three ways, composited, and QC'd.
+
+/// code collapsed
+// %collapsed
+// ── a dipping HG lens + DEVIATED drillholes, assayed every 1 m ───────────────
+// The lens dips 60° east (N–S strike) through the model centre. Holes are collared
+// at surface and drilled east, naturally flattening with depth (dip 80°→56°) — so
+// they CURVE, and a straight-line desurvey would put the deep assays in the wrong place.
+const DH = (await load("@gcu/drillhole")).Drillhole;   // the Drillhole facade
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const rng = mulberry32(7);
+const cx = 200, cz = 100;
+const nrm = [Math.sin(60 * Math.PI / 180), 0, Math.cos(60 * Math.PI / 180)];   // E-dipping lens pole
+const pdist = (x, z) => (x - cx) * nrm[0] + (z - cz) * nrm[2];
+const domainOf = (x, z) => { const d = Math.abs(pdist(x, z)); return d <= 15 ? "HG" : d <= 40 ? "LG" : null; };
+const trueGrade = (x, y, z) => { const d = Math.abs(pdist(x, z)); return Math.max(0, Math.exp(-d * d / 288) * (6 + 2 * Math.sin((y - 200) / 60)) * (0.75 + 0.5 * rng())); };
+
+const collars = [], surveys = [];
+let id = 0;
+for (let cxh = 70; cxh <= 250; cxh += 30) {
+  id++; const bid = "DH" + String(id).padStart(3, "0");
+  collars.push({ bhid: bid, x: cxh, y: 200, z: 200, eoh: 240 });
+  // survey every 30 m: due east (az 90), dip flattening 80°→56° down the hole
+  for (let depth = 0, dip = 80; depth <= 240; depth += 30, dip -= 3) surveys.push({ bhid: bid, depth, az: 90, dip });
+}
+
+// raw 1 m assays placed at the DESURVEYED midpoint of each interval (grade follows the
+// real curved trace), assayed only through the deposit. Keep the paths for the section.
+const ivBhid = [], ivFrom = [], ivTo = [], au = [], dm = [];
+const traces = {};
+for (const c of collars) {
+  const st = DH.normalizeSurveys(surveys.filter(s => s.bhid === c.bhid), "pos-down");
+  const path = DH.desurveyHole([c.x, c.y, c.z], st.stations, "minimumCurvature");
+  traces[c.bhid] = path;
+  for (let d = 0; d < c.eoh; d += 1) {
+    const p = DH.positionAt(path, d + 0.5), D = domainOf(p[0], p[2]);
+    if (!D) continue;
+    ivBhid.push(c.bhid); ivFrom.push(d); ivTo.push(d + 1);
+    au.push(+trueGrade(p[0], p[1], p[2]).toFixed(3)); dm.push(D);
+  }
+}
+const intervals = { bhid: ivBhid, from: ivFrom, to: ivTo, cols: [
+  { name: "AU", type: "num", values: au },
+  { name: "DOMAIN", type: "cat", values: dm },
+] };
+ui.display(`${collars.length} deviated holes · ${ivFrom.length} raw 1 m assays through the lens`);
+
+/// code
+// ── desurvey + composite to 3 m, breaking at the HG/LG contact ───────────────
+const comp = DH.process({ collars, surveys, intervals },
+  { compositeLength: 3, splitCols: ["DOMAIN"], method: "minimumCurvature" });
+const ci = Object.fromEntries(comp.header.map((h, i) => [h, i]));
+
+// dogleg-severity QC: the worst deviation rate down any hole
+let maxDls = 0;
+for (const path of Object.values(traces)) maxDls = Math.max(maxDls, ...path.dls);
+
+ui.display(`${comp.rows.length} composites from ${comp.report.nHoles} holes · 3 m length, split at the contact · worst dogleg severity ${maxDls.toFixed(1)}°/30 m`);
+ui.table(comp.rows.slice(0, 8).map(r => ({
+  BHID: r[ci.BHID], X: r[ci.X].toFixed(1), Y: r[ci.Y].toFixed(1), Z: r[ci.Z].toFixed(1),
+  FROM: r[ci.FROM], TO: r[ci.TO], SUPPORT: r[ci.SUPPORT].toFixed(1),
+  AU: r[ci.AU] == null ? "—" : r[ci.AU].toFixed(2), DOMAIN: r[ci.DOMAIN],
+})));
+
+/// code
+// ── cross-section (looking north): curved traces + composites by grade ───────
+const W = Math.min(880, window.innerWidth - 80), H = 400;
+const cv = ui.canvas(W, H), g = cv.getContext("2d");
+const X0 = 44, X1 = W - 16, Y0 = 18, Y1 = H - 34;
+const xmin = 40, xmax = 360, zmin = 0, zmax = 200;
+const sx = x => X0 + (x - xmin) / (xmax - xmin) * (X1 - X0);
+const sz = z => Y0 + (zmax - z) / (zmax - zmin) * (Y1 - Y0);
+g.fillStyle = "#161616"; g.fillRect(0, 0, W, H);
+// the lens (HG core amber, LG halo grey) — sample the domain over the section
+for (let px = X0; px <= X1; px += 2) for (let py = Y0; py <= Y1; py += 2) {
+  const x = xmin + (px - X0) / (X1 - X0) * (xmax - xmin), z = zmax - (py - Y0) / (Y1 - Y0) * (zmax - zmin);
+  const D = domainOf(x, z);
+  if (D) { g.fillStyle = D === "HG" ? "rgba(200,155,60,0.16)" : "rgba(150,150,150,0.10)"; g.fillRect(px, py, 2, 2); }
+}
+// desurveyed hole traces (blue) + collar ticks
+for (const p of Object.values(traces)) {
+  g.strokeStyle = "#3a6ea5"; g.lineWidth = 1.4; g.beginPath();
+  for (let k = 0; k < p.depths.length; k++) { const X = sx(p.px[k]), Z = sz(p.pz[k]); k ? g.lineTo(X, Z) : g.moveTo(X, Z); }
+  g.stroke();
+  g.fillStyle = "#cfcfcf"; g.fillRect(sx(p.px[0]) - 2, sz(p.pz[0]) - 2, 4, 4);
+}
+// composites coloured by grade (dark → amber)
+const gmax = Math.max(...comp.rows.map(r => r[ci.AU] || 0), 1);
+for (const r of comp.rows) {
+  const v = r[ci.AU]; if (v == null) continue;
+  const t = Math.min(1, v / gmax);
+  g.fillStyle = `rgb(${Math.round(50 + 200 * t)},${Math.round(45 + 110 * t)},${Math.round(60 - 45 * t)})`;
+  g.beginPath(); g.arc(sx(r[ci.X]), sz(r[ci.Z]), 2.5, 0, 7); g.fill();
+}
+g.fillStyle = "#888"; g.font = "11px monospace";
+g.fillText("cross-section, looking N — amber band: HG lens · blue: desurveyed traces · dots: 3 m composites by grade", 12, H - 12);
+
+/// code
+// ── why minimum curvature: one hole, three desurvey methods ──────────────────
+// Same survey, three models. On a curved hole they diverge with depth — the
+// straight-segment 'tangential' result drifts furthest from the arc-correct one.
+const hc = collars.find(c => c.bhid === "DH005");
+const st5 = DH.normalizeSurveys(surveys.filter(s => s.bhid === "DH005"), "pos-down");
+const methods = [["minimumCurvature", "#c89b3c"], ["balancedTangential", "#3a6ea5"], ["tangential", "#a05a5a"]];
+const paths = methods.map(([m]) => DH.desurveyHole([hc.x, hc.y, hc.z], st5.stations, m));
+
+const W2 = Math.min(880, window.innerWidth - 80), H2 = 300;
+const cv2 = ui.canvas(W2, H2), g2 = cv2.getContext("2d");
+// frame around the hole's own extent
+let xlo = 1e9, xhi = -1e9, zlo = 1e9, zhi = -1e9;
+for (const p of paths) for (let k = 0; k < p.depths.length; k++) { xlo = Math.min(xlo, p.px[k]); xhi = Math.max(xhi, p.px[k]); zlo = Math.min(zlo, p.pz[k]); zhi = Math.max(zhi, p.pz[k]); }
+const padx = (xhi - xlo) * 0.12 + 4, padz = (zhi - zlo) * 0.12 + 4;
+const ax = x => 50 + (x - xlo + padx) / (xhi - xlo + 2 * padx) * (W2 - 70);
+const az = z => 16 + (zhi - z + padz) / (zhi - zlo + 2 * padz) * (H2 - 50);
+g2.fillStyle = "#161616"; g2.fillRect(0, 0, W2, H2);
+methods.forEach(([m, col], i) => {
+  const p = paths[i];
+  g2.strokeStyle = col; g2.lineWidth = m === "tangential" ? 1.2 : 1.8; g2.beginPath();
+  for (let k = 0; k < p.depths.length; k++) { const X = ax(p.px[k]), Z = az(p.pz[k]); k ? g2.lineTo(X, Z) : g2.moveTo(X, Z); }
+  g2.stroke();
+  g2.fillStyle = col; g2.fillText(m, 60, 24 + i * 14);
+});
+// endpoint separation between tangential and minimum curvature
+const e0 = paths[0], e2 = paths[2], n = e0.depths.length - 1;
+const sep = Math.hypot(e0.px[n] - e2.px[n], e0.py[n] - e2.py[n], e0.pz[n] - e2.pz[n]);
+const maxDog = Math.max(...e0.dogleg);
+g2.fillStyle = "#bbb"; g2.font = "11px monospace";
+g2.fillText(`DH005 · ${e0.depths[n]} m · max dogleg ${maxDog.toFixed(1)}° · tangential vs min-curvature toe ${sep.toFixed(1)} m apart`, 50, H2 - 12);
+
+/// md
+**What the library did.**
+
+1. **Desurveyed** each curved hole from its survey — `minimumCurvature` (the arc-correct default), with `balancedTangential` and `tangential` available for legacy data and re-doing historical estimates. On `DH005` the three toes sit metres apart: ignoring curvature really does mislocate deep grade.
+2. **Composited** the raw 1 m assays to 3 m, length-weighted, **split at the HG/LG contact** so no sample mixes domains — each landing at its desurveyed centroid.
+3. **QC'd** with **dogleg severity** (°/30 m), the standard deviation-health number, carried on every desurveyed hole.
+
+Point-support data (handheld XRF, density, pre-composited assays) takes the parallel `Drillhole.desurveySamples(...)` path — located, not composited. The composites here are exactly the `{X, Y, Z, AU, DOMAIN, BHID}` rows the [end-to-end estimate](example_gsjs_estimate.html) feeds straight into domained block kriging.
