@@ -23,9 +23,10 @@ import {
   fromJSON, run, estimate, evaluate,
   createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
   leapfrogToRotmat, toRotmat, applyAnis, krige, qknaSummary, crossValidate,
-  declusterCell, declusterSweep,
+  declusterCell, declusterSweep, experimental,
 } from '../ext/gsjs/index.js';
-import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow } from '../ext/gslib/index.js';
+import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow,
+  writeF64 as gWriteF64, writeI32 as gWriteI32 } from '../ext/gslib/index.js';
 
 const close = (a, b, eps = 1e-12) => Math.abs(a - b) <= eps;
 
@@ -1145,4 +1146,114 @@ test('declusterSweep — traces the curve; best=min picks a low-mean cell size',
   // max-pick selects the other extremum
   const up = declusterSweep({ data, sizes: [2, 5, 10, 20, 30, 50, 80], pick: 'max' });
   assert.ok(up.best.mean >= Math.max(...up.means) - 1e-9, 'best=max is the maximum of the curve');
+});
+
+// ── experimental variography — bit-for-bit vs gslib.gamv ──
+// gamv with an arbitrary ivtype (the index.js wrapper hardcodes 1), so we can validate
+// the whole estimator menu against the frozen oracle without editing ext/gslib.
+function gamvIv(data, lags, dirs, ivtype) {
+  const nd = data.length, is3d = data[0] && data[0].length > 3;
+  const nlag = lags.n, xlag = lags.size, xltol = lags.tolerance != null ? lags.tolerance : xlag / 2;
+  const ndir = dirs.length, nvarg = 1, nlp2 = nlag + 2, nsiz = ndir * nvarg * nlp2;
+  const mem = new WebAssembly.Memory({ initial: 4 });
+  const lib = gslibInstantiate({ memory: mem });
+  const st = { off: 0 };
+  const pX = gAlloc(st, nd), pY = gAlloc(st, nd), pZ = gAlloc(st, nd), pVR = gAlloc(st, nd);
+  const pAZM = gAlloc(st, ndir), pATOL = gAlloc(st, ndir), pBWH = gAlloc(st, ndir);
+  const pDIP = gAlloc(st, ndir), pDTOL = gAlloc(st, ndir), pBWD = gAlloc(st, ndir);
+  const pIVTAIL = gAlloc(st, 0, nvarg), pIVHEAD = gAlloc(st, 0, nvarg), pIVTYPE = gAlloc(st, 0, nvarg);
+  const pNP = gAlloc(st, nsiz), pDIS = gAlloc(st, nsiz), pGAM = gAlloc(st, nsiz);
+  const pHM = gAlloc(st, nsiz), pTM = gAlloc(st, nsiz), pHV = gAlloc(st, nsiz), pTV = gAlloc(st, nsiz);
+  gGrow(mem, st.off);
+  gWriteF64(mem, pX, data.map(d => d[0])); gWriteF64(mem, pY, data.map(d => d[1]));
+  gWriteF64(mem, pZ, is3d ? data.map(d => d[2]) : new Array(nd).fill(0));
+  gWriteF64(mem, pVR, data.map(d => is3d ? d[3] : d[2]));
+  gWriteF64(mem, pAZM, dirs.map(d => d.azimuth || 0)); gWriteF64(mem, pATOL, dirs.map(d => d.tolerance != null ? d.tolerance : 90)); gWriteF64(mem, pBWH, dirs.map(() => 1e21));
+  gWriteF64(mem, pDIP, dirs.map(d => d.dip || 0)); gWriteF64(mem, pDTOL, dirs.map(d => d.dipTolerance != null ? d.dipTolerance : 90)); gWriteF64(mem, pBWD, dirs.map(() => 1e21));
+  gWriteI32(mem, pIVTAIL, [0]); gWriteI32(mem, pIVHEAD, [0]); gWriteI32(mem, pIVTYPE, [ivtype]);
+  lib.gslib.gamv(nd, pX, pY, pZ, pVR, nlag, xlag, xltol, ndir, pAZM, pATOL, pBWH, pDIP, pDTOL, pBWD,
+    nvarg, pIVTAIL, pIVHEAD, pIVTYPE, -1e21, 1e21, pNP, pDIS, pGAM, pHM, pTM, pHV, pTV);
+  return { value: gReadF64(mem, pGAM, nsiz), npairs: gReadF64(mem, pNP, nsiz) };
+}
+
+const VARIO_FIELD = (() => {
+  const rng = (() => { let a = 42; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; })();
+  const d = [];
+  for (let i = 0; i < 140; i++) { const x = rng() * 100, y = rng() * 100; d.push([x, y, 5 + Math.sin(x * 0.1) + Math.cos(y * 0.08) + 0.5 * rng()]); }
+  return d;
+})();
+
+test('experimental — bit-for-bit vs gslib.gamv across the estimator menu + directions', () => {
+  const lags = { size: 8, n: 8 }, nlp2 = lags.n + 2;
+  const dirCases = [{ azimuth: 0, tolerance: 90 }, { azimuth: 45, tolerance: 22.5 }, { azimuth: 90, tolerance: 30 }];
+  const estMap = [['matheron', 1], ['covariance', 3], ['correlogram', 4], ['generalRelative', 5], ['pairwiseRelative', 6], ['logVariogram', 7], ['madogram', 8]];
+  for (const [name, iv] of estMap) for (const dc of dirCases) {
+    const ref = gamvIv(VARIO_FIELD, lags, [dc], iv);
+    const r = experimental(VARIO_FIELD, { lags, directions: [{ azimuth: dc.azimuth, atol: dc.tolerance }], estimator: name, faithful: true });
+    for (let il = 0; il < nlp2; il++) {
+      const g = r.directions[0].lags[il];
+      assert.equal(g.npair, ref.npairs[il], `${name} az${dc.azimuth}/${dc.tolerance} lag ${il}: npair`);
+      if (ref.npairs[il] > 0) assert.ok(Math.abs(g.gamma - ref.value[il]) < 1e-9, `${name} az${dc.azimuth}/${dc.tolerance} lag ${il}: γ ${g.gamma} vs ${ref.value[il]}`);
+    }
+  }
+});
+
+test('experimental — 3D directional with dip vs gslib.gamv', () => {
+  const rng = (() => { let a = 7; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; })();
+  const data = [];
+  for (let i = 0; i < 120; i++) { const x = rng() * 80, y = rng() * 80, z = rng() * 40; data.push([x, y, z, 3 + Math.sin(x * 0.12) + 0.4 * rng()]); }
+  const lags = { size: 7, n: 7 }, nlp2 = lags.n + 2;
+  const dc = { azimuth: 30, tolerance: 25, dip: 45, dipTolerance: 20 };
+  const ref = gamvIv(data, lags, [dc], 1);
+  const r = experimental(data, { lags, directions: [{ azimuth: 30, atol: 25, dip: 45, dtol: 20 }], estimator: 'matheron', faithful: true });
+  for (let il = 0; il < nlp2; il++) {
+    const g = r.directions[0].lags[il];
+    assert.equal(g.npair, ref.npairs[il], `3D lag ${il} npair`);
+    if (ref.npairs[il] > 0) assert.ok(Math.abs(g.gamma - ref.value[il]) < 1e-9, `3D lag ${il} γ`);
+  }
+});
+
+test('experimental — downhole mode == pooled per-hole gamv (same-hole pairs only)', () => {
+  // 6 vertical holes, samples every 3 m; downhole variogram pools all same-hole pairs.
+  const data = [], holeId = [];
+  let id = 0;
+  for (let hx = 0; hx < 60; hx += 12) for (let hy = 0; hy < 30; hy += 15) {
+    id++;
+    for (let z = 0; z < 60; z += 3) { data.push([hx, hy, z, 4 + Math.sin(z * 0.2) + 0.3 * ((z * 7) % 5) / 5]); holeId.push('H' + id); }
+  }
+  const lags = { size: 3, n: 10 }, nlp2 = lags.n + 2;
+  const dh = experimental(data, { holeId, lags, directions: [{ mode: 'downhole' }], estimator: 'matheron', faithful: true });
+
+  // pool gamv run per hole (omni) — binning is per-pair, so per-hole-pooled == one pass over same-hole pairs
+  const holes = [...new Set(holeId)];
+  const sumG = new Float64Array(nlp2), sumN = new Float64Array(nlp2);
+  for (const h of holes) {
+    const hd = data.filter((_, k) => holeId[k] === h);
+    const g = gamvIv(hd, lags, [{ azimuth: 0, tolerance: 90 }], 1);
+    for (let il = 0; il < nlp2; il++) if (g.npairs[il] > 0) { sumG[il] += g.value[il] * g.npairs[il]; sumN[il] += g.npairs[il]; }
+  }
+  for (let il = 0; il < nlp2; il++) {
+    const g = dh.directions[0].lags[il];
+    assert.equal(g.npair, sumN[il], `downhole lag ${il} npair`);
+    if (sumN[il] > 0) assert.ok(Math.abs(g.gamma - sumG[il] / sumN[il]) < 1e-9, `downhole lag ${il} γ`);
+  }
+  // sanity: downhole excludes cross-hole pairs → fewer than the full omni
+  const omni = experimental(data, { lags, directions: [{ atol: 90 }], estimator: 'matheron', faithful: true });
+  const dhTotal = dh.directions[0].lags.reduce((s, l) => s + l.npair, 0);
+  const omniTotal = omni.directions[0].lags.reduce((s, l) => s + l.npair, 0);
+  assert.ok(dhTotal < omniTotal, 'downhole pairs ⊂ omni pairs');
+  assert.throws(() => experimental(data, { lags, directions: [{ mode: 'downhole' }] }), /downhole.*holeId/);
+});
+
+test('experimental — Cressie + rodogram on a hand fixture (no gamv oracle)', () => {
+  // one pair: (0,0)=2 and (10,0)=5, along azimuth 90 (narrow tol → single direction, np=1)
+  const data = [[0, 0, 2], [10, 0, 5]];
+  const lags = { size: 10, n: 3 };  // pair at d=10 → lag bin il=2 (centre 10), tol 5
+  const dir = [{ azimuth: 90, atol: 10 }];
+  const rodo = experimental(data, { lags, directions: dir, estimator: 'rodogram', faithful: true }).directions[0].lags[2];
+  const cres = experimental(data, { lags, directions: dir, estimator: 'cressie', faithful: true }).directions[0].lags[2];
+  assert.equal(rodo.npair, 1); assert.equal(cres.npair, 1);
+  // rodogram γ = ½·|Δ|^½ ; Cressie γ = ½·(|Δ|^½)⁴ / (0.457 + 0.494/n + 0.045/n²), n=1
+  assert.ok(Math.abs(rodo.gamma - 0.5 * Math.sqrt(3)) < 1e-12, `rodogram ${rodo.gamma}`);
+  assert.ok(Math.abs(cres.gamma - 0.5 * 9 / 0.996) < 1e-12, `cressie ${cres.gamma}`);
 });
