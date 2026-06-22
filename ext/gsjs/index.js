@@ -1254,14 +1254,32 @@ function createNeighborhood(opts = {}) {
   if (!(ndmax >= ndmin) || !(ndmin >= 1)) throw new Error('gsjs.neigh: need ndmax ≥ ndmin ≥ 1');
   const faithful = !!opts.faithful;
   const pi = faithful ? GSLIB_PI : Math.PI;
+  const type = opts.type || 'moving';
 
-  // orientation → pure (orthonormal) rotation; gslib accepts legacy angle/angle2/angle3.
-  const convention = opts.convention || 'gslib';
-  const orientParams = convention === 'gslib'
-    ? { azimuth: opts.azimuth != null ? opts.azimuth : (opts.angle || 0), dip: opts.dip != null ? opts.dip : (opts.angle2 || 0), rake: opts.rake != null ? opts.rake : (opts.angle3 || 0) }
-    : opts;
-  const rotPure = toRotmat(convention, orientParams, pi);
-  const rotmat = applyAnis(rotPure, radiusMinor / radius, radiusVert / radius);
+  // orientation → the distance matrix (rotmat) + the pure rotation (sector binning).
+  let rotmat, rotPure, convention, benchHalf = 0;
+  if (type === 'bench') {
+    // bench (2.5D): a HORIZONTAL 2D ellipse + a vertical-band prefilter. The rotmat
+    // is the horizontal ellipse with its vertical row ZEROED, so sqdist ignores z
+    // (true 2D search); the band |Δz| ≤ benchThickness/2 is applied in select's
+    // gather. Oriented by `azimuth` (dip/pitch/radiusVert are meaningless here).
+    if (!(opts.benchThickness > 0)) throw new Error('gsjs.neigh: bench needs benchThickness > 0');
+    benchHalf = opts.benchThickness / 2;
+    convention = 'bench';
+    const az = opts.azimuth != null ? opts.azimuth : (opts.angle || 0);
+    const h = setrot(az, 0, 0, radiusMinor / radius, 1, pi);  // dip=0 → rows 0,1 horizontal
+    rotmat = [h[0], h[1], 0, h[3], h[4], 0, 0, 0, 0];          // drop the z row → 2D ellipse
+    const hp = setrot(az, 0, 0, 1, 1, pi);
+    rotPure = [hp[0], hp[1], 0, hp[3], hp[4], 0, 0, 0, 0];     // horizontal pure rotation
+  } else {
+    // moving (default): full 3D ellipsoid. gslib accepts legacy angle/angle2/angle3.
+    convention = opts.convention || 'gslib';
+    const orientParams = convention === 'gslib'
+      ? { azimuth: opts.azimuth != null ? opts.azimuth : (opts.angle || 0), dip: opts.dip != null ? opts.dip : (opts.angle2 || 0), rake: opts.rake != null ? opts.rake : (opts.angle3 || 0) }
+      : opts;
+    rotPure = toRotmat(convention, orientParams, pi);
+    rotmat = applyAnis(rotPure, radiusMinor / radius, radiusVert / radius);
+  }
 
   let sectors = null;
   if (opts.sectors) {
@@ -1286,11 +1304,12 @@ function createNeighborhood(opts = {}) {
   if (!(minSampleDistance >= 0)) throw new Error('gsjs.neigh: minSampleDistance must be ≥ 0');
 
   return {
-    type: opts.type || 'moving',
-    convention, faithful,
+    type, convention, faithful,
     radius, radiusMinor, radiusVert,
     rotmat, ndmin, ndmax, sectors, perHoleMax, minSampleDistance,
+    ...(type === 'bench' ? { benchThickness: opts.benchThickness } : {}),
     _rotPure: rotPure,   // pure orientation (anis removed) — used by sector binning
+    _benchHalf: benchHalf,
     _tree: null, _n: 0, _ox: null, _oy: null, _oz: null, _holeId: null,
   };
 }
@@ -1342,10 +1361,13 @@ function select(nbhd, target, opts = {}) {
   const cand = nbhd._tree.query_ball_point([qx, qy, qz], nbhd.radius * (1 + 1e-9));
   const r2 = nbhd.radius * nbhd.radius;
   // Recompute the anisotropic distance authoritatively (same path as brute force)
-  // and keep only those genuinely inside the ellipsoid.
+  // and keep only those genuinely inside the ellipsoid. For a bench neighbourhood,
+  // also require the sample to sit within the vertical band (R already ignores z).
   const inside = [];
+  const benchHalf = nbhd._benchHalf;
   for (let k = 0; k < cand.length; k++) {
     const i = cand[k];
+    if (benchHalf > 0 && Math.abs(nbhd._oz[i] - tz) > benchHalf) continue;
     const d2 = sqdist(tx, ty, tz, nbhd._ox[i], nbhd._oy[i], nbhd._oz[i], R);
     if (d2 <= r2) inside.push({ i, d2 });
   }

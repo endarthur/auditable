@@ -462,8 +462,9 @@ function rng32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t =
 // Uses select()'s metric (sqdist/rotmat) but its own algorithm — bit-identity is
 // the contract.
 function bruteSelect(samples, target, nbhd) {
-  const R = nbhd.rotmat, r2 = nbhd.radius * nbhd.radius, cand = [];
+  const R = nbhd.rotmat, r2 = nbhd.radius * nbhd.radius, bh = nbhd._benchHalf, cand = [];
   for (let i = 0; i < samples.length; i++) {
+    if (bh > 0 && Math.abs(samples[i][2] - target[2]) > bh) continue;   // bench band
     const d2 = sqdist(target[0], target[1], target[2], samples[i][0], samples[i][1], samples[i][2], R);
     if (d2 <= r2) cand.push({ i, d2 });
   }
@@ -753,4 +754,53 @@ test('neigh — min-distance thins near-duplicate samples', () => {
   assert.equal(r.n, 3);                                    // cluster → 1 (nearest) + 2 separated
   assert.equal([...r.ranks].filter((i) => i < 4).length, 1);
   assert.ok([...r.ranks].includes(4) && [...r.ranks].includes(5));
+});
+
+// ── M3b: bench (2.5D) neighbourhood — vertical band + 2D horizontal ellipse ──
+
+test('neigh — bench restricts to the vertical band + searches in 2D', () => {
+  // 3 benches at z = 0/10/20; 5 samples each. Target on z=0, bench 6m thick.
+  const samples = [];
+  for (const z of [0, 10, 20]) for (const [x, y] of [[20, 0], [0, 20], [-20, 0], [0, -20], [15, 15]]) samples.push([x, y, z]);
+  const nb = createNeighborhood({ type: 'bench', benchThickness: 6, radius: 50, ndmin: 1, ndmax: 99 });
+  indexSamples(nb, samples);
+  const r = select(nb, [0, 0, 0]);
+  assert.equal(r.n, 5);                                   // only the z=0 bench
+  assert.ok([...r.ranks].every((i) => samples[i][2] === 0), `off-bench leaked: ${[...r.ranks].map((i) => samples[i][2])}`);
+  // z ignored in distance: a sample directly above (huge Δz) but horizontally
+  // identical would be excluded by the band, not counted as "near".
+  const mv = createNeighborhood({ radius: 50, ndmin: 1, ndmax: 99 });   // 3D contrast
+  indexSamples(mv, samples);
+  assert.ok(select(mv, [0, 0, 0]).n > r.n, 'moving 3D should reach other benches');
+});
+
+test('neigh — bench is bit-identical to brute-force (band + 2D + policies)', () => {
+  const rng = rng32(31);
+  const samples = [], holeId = [];
+  for (let h = 0; h < 14; h++) {
+    const hx = rng() * 400, hy = rng() * 400;
+    for (let k = 0; k < 8; k++) { samples.push([hx + (rng() - 0.5) * 30, hy + (rng() - 0.5) * 30, k * 5]); holeId.push(h); }
+  }
+  const configs = [
+    { type: 'bench', benchThickness: 8, radius: 120 },
+    { type: 'bench', benchThickness: 12, radius: 150, radiusMinor: 70, azimuth: 35 },          // 2D anisotropy + rotation
+    { type: 'bench', benchThickness: 10, radius: 140, perHoleMax: 2, sectors: { n: 4, maxPer: 2 } }, // + policies
+  ];
+  let checks = 0;
+  for (const cfg of configs) {
+    for (const ndmax of [5, 1e9]) {
+      const nb = createNeighborhood({ ...cfg, ndmin: 1, ndmax });
+      indexSamples(nb, samples, null, { holeId });
+      for (let t = 0; t < 60; t++) {
+        const target = [rng() * 400, rng() * 400, rng() * 35];
+        assert.deepEqual([...select(nb, target).ranks], bruteSelect(samples, target, nb), `cfg ${JSON.stringify(cfg)} ndmax ${ndmax}`);
+        checks++;
+      }
+    }
+  }
+  assert.ok(checks > 300, `only ${checks}`);
+});
+
+test('neigh — bench needs benchThickness > 0', () => {
+  assert.throws(() => createNeighborhood({ type: 'bench', radius: 50 }), /benchThickness/);
 });
