@@ -73,22 +73,24 @@ for (const disc of [{ nx: 1, ny: 1, nz: 1 }, { nx: 4, ny: 4, nz: 1 }]) {
   }
 }
 
-// ── §8 measured conclusion (2026-06-22) ─────────────────────────────────────
+// ── §8 measured conclusion (2026-06-22, after the kNN search optimization) ───
 // Against the CORRECT WASM baseline (gslib.kt3d; the gsjs atra fork kriging() is
 // NaN-buggy past ~M=10⁴ — only ever validated at N=8/M=16), all engines agree to
-// ~1e-15. Findings:
-//   • gslib WASM (kt3d) is ~1.5–2× faster than the UNOPTIMIZED JS krige() end-to-end.
-//   • §8's "V8 wins the per-block SOLVE" is too narrow for END-TO-END kriging: the
-//     JS/WASM ratio climbs with ndmax (~0.44 at ndmax 8 → ~0.7–0.8 at ndmax 60),
-//     i.e. JS is relatively weakest where the SEARCH dominates (small neighbourhoods)
-//     and strongest where the SOLVE dominates (large ones). gslib's tuned super-block
-//     search is the part to beat; the small solve is already near-competitive.
-//   • Next levers (future): a bounded top-ndmax selection (heap, not a full sort of
-//     every in-radius candidate) for the search; kill krige()'s residual deopts
-//     (Insufficient-type-feedback / wrong-call-target — partly the fresh-cova-closure-
-//     per-call bench artifact). GPU (M-last) targets the interactive 10M-block tier
-//     via realize/aggregate (§8 — never the search).
-//   • Strategic upside already banked: krige() is CORRECT + robust at scale where the
-//     atra fork breaks, and fully gslib-decoupled — speed is the only gap, and it's
-//     <2× before ANY tuning.
-console.log('\nDeopt check: node --trace-deopt test/gsjs-perf.mjs 2>&1 | grep -iE "deopt.*(cova|solveGE|sqdist)"');
+// ~1e-15. §8's "V8-winked JS wins" HOLDS for the common regime:
+//   • The original naive search (gather EVERY sample in radius — ~209 to pick 8 —
+//     then sort) made WASM ~1.5–2× faster. Replacing it with a bounded kNN in select()
+//     (tie-safe: falls back to the full gather only on an exact ndmax-boundary tie,
+//     so still bit-identical to brute force) flipped it:
+//       ndmax 8  (typical):  JS ~0.9–2.3× WASM (FASTER on dense data)
+//       ndmax 24:            JS ~0.6–0.9× WASM (≈parity)
+//       ndmax 60 (solve-bound): JS ~0.7× WASM (WASM still wins the big dense solve)
+//     Crossover ≈ ndmax 24; production resource estimation (ndmax 8–24) favours JS.
+//   • Deopts are warmup/GC artifacts (tenuring, weak-object clearing, first-call type
+//     feedback) + the cova-closure `wrong call target` (a per-call-closure / bench
+//     artifact) — no steady-state hot-loop deopt. V8-winking holds once warm.
+//   • Remaining lever (large-ndmax solve): reuse per-block scratch (A/r/M/x are
+//     allocated per block in the GE path) to cut GC. GPU (M-last) targets the
+//     interactive 10M-block tier via realize/aggregate (§8 — never the search).
+//   • And krige() is CORRECT + robust at scale where the atra fork breaks, fully
+//     gslib-decoupled — now also FASTER than WASM in the common case.
+console.log('\nDeopt check: node --trace-deopt test/gsjs-perf.mjs 2>&1 | grep -i deopt | grep -iv "on stack replacement"');

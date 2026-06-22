@@ -1356,28 +1356,46 @@ function select(nbhd, target, opts = {}) {
   const R = nbhd.rotmat;
   const tx = target[0], ty = target[1], tz = target[2];
   const [qx, qy, qz] = rotApply(R, tx, ty, tz);
-  // Tree as PREFILTER: query slightly wide so transformed-coord float order can
-  // never drop a boundary sample the authoritative sqdist would keep.
-  const cand = nbhd._tree.query_ball_point([qx, qy, qz], nbhd.radius * (1 + 1e-9));
   const r2 = nbhd.radius * nbhd.radius;
-  // Recompute the anisotropic distance authoritatively (same path as brute force)
-  // and keep only those genuinely inside the ellipsoid. For a bench neighbourhood,
-  // also require the sample to sit within the vertical band (R already ignores z).
-  const inside = [];
   const benchHalf = nbhd._benchHalf;
-  for (let k = 0; k < cand.length; k++) {
-    const i = cand[k];
-    if (benchHalf > 0 && Math.abs(nbhd._oz[i] - tz) > benchHalf) continue;
-    const d2 = sqdist(tx, ty, tz, nbhd._ox[i], nbhd._oy[i], nbhd._oz[i], R);
-    if (d2 <= r2) inside.push({ i, d2 });
-  }
-  inside.sort((a, b) => (a.d2 - b.d2) || (a.i - b.i));   // distance, then original index
-
-  let keep, filled;
   const S = nbhd.sectors;
   const perHoleMax = nbhd.perHoleMax;
   const minSep2 = nbhd.minSampleDistance > 0 ? nbhd.minSampleDistance * nbhd.minSampleDistance : 0;
   const needGreedy = S || perHoleMax != null || minSep2 > 0;
+
+  // Gather the in-ellipsoid candidates as { i, d2 }, distance-sorted (d2, index).
+  // FAST PATH — a plain moving ellipsoid with a finite ndmax (no sector/per-hole/
+  // min-dist/bench policies): a bounded kNN prunes the tree to ~ndmax candidates
+  // instead of every sample in radius (≈4× fewer at typical drillhole density). It's
+  // trusted only when there's no EXACT tie at the ndmax boundary; on a tie we fall
+  // back to the full radius gather, so the result stays bit-identical to brute force.
+  // (Authoritative sqdist is recomputed either way — the tree is only a prefilter.)
+  let inside = null;
+  if (!needGreedy && benchHalf === 0 && Number.isFinite(nbhd.ndmax)) {
+    const knn = nbhd._tree.query([qx, qy, qz], nbhd.ndmax + 1, { distance_upper_bound: nbhd.radius * (1 + 1e-9) });
+    const m = knn.idx.length, cand = [];
+    for (let a = 0; a < m; a++) {
+      const i = knn.idx[a];
+      const d2 = sqdist(tx, ty, tz, nbhd._ox[i], nbhd._oy[i], nbhd._oz[i], R);
+      if (d2 <= r2) cand.push({ i, d2 });
+    }
+    cand.sort((a, b) => (a.d2 - b.d2) || (a.i - b.i));
+    if (!(cand.length > nbhd.ndmax && cand[nbhd.ndmax].d2 === cand[nbhd.ndmax - 1].d2)) inside = cand;
+  }
+  if (inside === null) {
+    // full radius gather (+ bench band) — the policy/greedy path and the tie fallback.
+    const cand = nbhd._tree.query_ball_point([qx, qy, qz], nbhd.radius * (1 + 1e-9));
+    inside = [];
+    for (let k = 0; k < cand.length; k++) {
+      const i = cand[k];
+      if (benchHalf > 0 && Math.abs(nbhd._oz[i] - tz) > benchHalf) continue;
+      const d2 = sqdist(tx, ty, tz, nbhd._ox[i], nbhd._oy[i], nbhd._oz[i], R);
+      if (d2 <= r2) inside.push({ i, d2 });
+    }
+    inside.sort((a, b) => (a.d2 - b.d2) || (a.i - b.i));   // distance, then original index
+  }
+
+  let keep, filled;
 
   if (needGreedy) {
     if (perHoleMax != null && !nbhd._holeId) throw new Error('gsjs.neigh.select: perHoleMax set but no holeId bound — pass { holeId } to indexSamples');
