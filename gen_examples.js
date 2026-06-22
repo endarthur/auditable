@@ -86,17 +86,22 @@ const categories = {
     'example_alpack.txt',
     'example_alpack_atra.txt',
     'example_gslib_kb2d.txt',
-    'example_gsjs_cap.txt',
-    'example_gsjs_domains.txt',
-    'example_gsjs_tour.txt',
-    'example_drillhole.txt',
-    'example_variography.txt',
-    'example_gsjs_estimate.txt',
     'example_gslib_sgsim.txt',
     'example_gslib_dhsa.txt',
     'example_pairing.txt',
     'example_dee.txt',
     'example_dee_domains.txt',
+  ],
+
+  // gsjs — the @gcu/gsjs resource-estimation workflow: drillholes → variography →
+  // domained kriging → realization (cap/HGR) → aggregation, all pure-JS, validated vs gslib
+  gsjs: [
+    'example_drillhole.txt',
+    'example_variography.txt',
+    'example_gsjs_cap.txt',
+    'example_gsjs_domains.txt',
+    'example_gsjs_tour.txt',
+    'example_gsjs_estimate.txt',
   ],
 
   // gis — spatial analysis: maps, raster, hydrology
