@@ -28,8 +28,9 @@ atra/WASM), not a backend lock.
 | Orientation conventions (`orient.js`: gslib + leapfrog, matrix-canonical) | ✅ |
 | Neighbourhood M3b — per-hole cap · min-distance thinning | ✅ |
 | Neighbourhood M3b — bench (2.5D: vertical band + 2D ellipse) | ✅ |
-| Neighbourhood M3b — distance-restricted capping · unique (deferred) | ⏳ |
-| Neighbourhood M3c — feed select() into the kriging fork | ⏳ |
+| **M3c — pure-JS kriging driver, neighbourhood-fed (`krige()`)** | ✅ (== kt3d to f64) |
+| M3c follow-ups — block discretization · categories · recipe wiring | ⏳ |
+| Distance-restricted capping · unique neighbourhood (deferred) | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
 

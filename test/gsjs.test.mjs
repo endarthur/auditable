@@ -18,7 +18,7 @@ import {
   recipe, variogram, search, ok, sk, sk_lvm, none, topcut, hgr,
   fromJSON, run, estimate, evaluate,
   createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
-  leapfrogToRotmat, toRotmat, applyAnis,
+  leapfrogToRotmat, toRotmat, applyAnis, krige,
 } from '../ext/gsjs/index.js';
 import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow } from '../ext/gslib/index.js';
 
@@ -803,4 +803,52 @@ test('neigh — bench is bit-identical to brute-force (band + 2D + policies)', (
 
 test('neigh — bench needs benchThickness > 0', () => {
   assert.throws(() => createNeighborhood({ type: 'bench', radius: 50 }), /benchThickness/);
+});
+
+// ── M3c: the pure-JS kriging driver fed by the neighbourhood ──
+// The keystone: select() picks samples, krige() builds + solves the system in JS,
+// realize() turns it into estimates. Validated == gslib.kt3d (the frozen oracle).
+
+test('krige — JS driver == gslib.kt3d to f64 (OK + SK), neighbourhood-fed', () => {
+  for (const ktype of ['OK', 'SK']) {
+    const ref = kt3d({ ...SYNTH, ktype, skmean: 2.5 });
+    const r = krige({ ...SYNTH, ktype, skmean: 2.5, faithful: true });   // faithful → matches gslib's π
+    const est = realize(r, r.values);
+    let maxErr = 0, maxKv = 0, nOK = 0;
+    for (let i = 0; i < r.n_blocks; i++) {
+      if (r.status[i] !== STATUS.OK || ref.est[i] === -999) continue;
+      nOK++;
+      maxErr = Math.max(maxErr, Math.abs(est[i] - ref.est[i]));
+      maxKv = Math.max(maxKv, Math.abs(r.kv[i] - ref.var[i]));
+    }
+    assert.ok(nOK >= 12, `${ktype} only ${nOK} OK`);
+    assert.ok(maxErr < 1e-9, `${ktype} est err ${maxErr}`);
+    assert.ok(maxKv < 1e-9, `${ktype} kv err ${maxKv}`);
+  }
+});
+
+test('krige — the neighbourhood drives the estimate (ndmax + conventions)', () => {
+  // restricting ndmax feeds the solve fewer samples → a different (still valid) estimate
+  const full = krige({ ...SYNTH, ktype: 'OK', points: [[15, 15, 0]] });
+  const restricted = krige({ ...SYNTH, ktype: 'OK', search: { ...SYNTH.search, ndmax: 3 }, points: [[15, 15, 0]] });
+  const ef = realize(full, full.values)[0], er = realize(restricted, restricted.values)[0];
+  assert.ok(Number.isFinite(ef) && Number.isFinite(er));
+  assert.ok(full.n_actual[0] > 3 && restricted.n_actual[0] <= 3, `na ${full.n_actual[0]} vs ${restricted.n_actual[0]}`);
+  assert.notEqual(ef, er);
+  // a leapfrog-convention search runs end-to-end and yields a finite OK estimate
+  const lf = krige({ ...SYNTH, ktype: 'OK', points: [[15, 15, 0]], search: { radius: 50, ndmin: 1, ndmax: 8, convention: 'leapfrog', dip: 20, dipAzimuth: 60, pitch: 0 } });
+  assert.equal(lf.status[0], STATUS.OK);
+  assert.ok(Number.isFinite(realize(lf, lf.values)[0]));
+});
+
+test('krige — exact interpolator: estimate at a data location returns its value', () => {
+  const r = krige({ ...SYNTH, ktype: 'OK', points: [[20, 20, 0]] });  // == sample idx 4 (value 2.8)
+  assert.ok(Math.abs(realize(r, r.values)[0] - 2.8) < 1e-9);
+  assert.ok(Math.abs(r.kv[0]) < 1e-9);                                 // zero kriging variance at data
+});
+
+test('krige — insufficient data → status, no weights', () => {
+  const r = krige({ ...SYNTH, ktype: 'OK', search: { radius: 1, ndmin: 2, ndmax: 8 }, points: [[100, 100, 0]] });
+  assert.equal(r.status[0], STATUS.INSUFFICIENT_DATA);
+  assert.equal(r.n_actual[0], 0);
 });
