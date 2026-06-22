@@ -2057,6 +2057,7 @@ function search(opts = {}) {
     ndmax: opts.ndmax,
     ...(opts.octant ? { octant: { ...opts.octant } } : {}),
     // neighbourhood policies (the JS engine drives them); all serializable
+    ...(opts.perHoleMax != null ? { perHoleMax: opts.perHoleMax } : {}),   // needs data.columns.dh_id
     ...(opts.sectors ? { sectors: { ...opts.sectors } } : {}),
     ...(opts.minSampleDistance != null ? { minSampleDistance: opts.minSampleDistance } : {}),
     ...(opts.benchThickness != null ? { benchThickness: opts.benchThickness } : {}),
@@ -2221,22 +2222,25 @@ function _krigingSearch(s) {
     radiusVert: s.radius * s.anis[1],
     angle: s.ang[0], angle2: s.ang[1], angle3: s.ang[2],
     ndmin: s.ndmin, ndmax: s.ndmax,
+    ...(s.perHoleMax != null ? { perHoleMax: s.perHoleMax } : {}),
     ...(s.sectors ? { sectors: s.sectors } : {}),
     ...(s.minSampleDistance != null ? { minSampleDistance: s.minSampleDistance } : {}),
     ...(s.benchThickness != null ? { type: 'bench', benchThickness: s.benchThickness } : {}),
   };
 }
 
-// Extract [x,y,z,value] sample rows from host rows via the column mapping.
+// Extract [x,y,z,value] sample rows from host rows via the column mapping, plus a
+// parallel holeId side array when a dh_id column is mapped (for the per-hole cap).
 function _samples(rows, cols, predFn) {
-  const out = [];
+  const data = [], holeId = cols.dh_id != null ? [] : null;
   for (const row of rows) {
     if (predFn && !predFn(row)) continue;
     const v = row[cols.value];
     if (v == null || Number.isNaN(+v)) continue;        // skip missing assays
-    out.push([+row[cols.x], +row[cols.y], +row[cols.z], +v]);
+    data.push([+row[cols.x], +row[cols.y], +row[cols.z], +v]);
+    if (holeId) holeId.push(row[cols.dh_id]);
   }
-  return out;
+  return { data, holeId };
 }
 
 // ── estimate() — the EXPENSIVE stage (search + solve), per domain ───────────
@@ -2295,7 +2299,7 @@ function estimate(R, ctx = {}) {
   const outDomains = [];
   for (const w of work) {
     if (w.model.ktype === 'SK_LVM') throw new Error("gsjs.estimate: SK_LVM (locally varying mean) isn't supported by krige() yet — use OK or SK");
-    const data = _samples(rows, cols, w.predFn);
+    const { data, holeId } = _samples(rows, cols, w.predFn);
     const kopts = {
       data,
       variogram: _krigingVario(w.model.variogram),
@@ -2305,6 +2309,7 @@ function estimate(R, ctx = {}) {
       grid: g,
       ...(w.mask ? { mask: w.mask } : {}),
       ...(disc ? { discretization: disc } : {}),
+      ...(holeId ? { holeId } : {}),
       distances: wantDist,
     };
     // faithful:true → the recipe stays bit-identical to gslib.kt3d (no user-visible

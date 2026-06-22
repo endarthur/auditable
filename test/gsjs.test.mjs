@@ -918,3 +918,35 @@ test('recipe — neighbourhood policies (sectors) serialize + drive the JS engin
   const nOK = [...res.status].filter((s) => s === STATUS.OK).length;
   assert.ok(nOK >= 12, `sectors recipe nOK ${nOK}`);                                 // runs end-to-end
 });
+
+test('recipe — per-hole cap (dh_id) + bench flow through to the engine', () => {
+  const rows = SROWS.map((r, i) => ({ ...r, BHID: i % 3 }));     // group samples into 3 holes
+  const r = recipe({
+    data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU', dh_id: 'BHID' } },
+    block_grid: { ...SYNTH.grid },
+    default_model: ok({ variogram: RVARIO(), search: search({ radius: 50, ndmin: 1, ndmax: 8, perHoleMax: 2 }) }),
+    output: {},
+  });
+  assert.equal(r.toJSON().default_model.search.perHoleMax, 2);   // in the artifact
+  assert.deepEqual(fromJSON(r.toJSON()).toJSON(), r.toJSON());   // round-trips
+  assert.ok([...run(r, { rows }).status].filter((s) => s === STATUS.OK).length >= 12);
+
+  // bench in the recipe (degenerate 2D band here, but the path is exercised)
+  const rb = recipe({
+    data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU' } },
+    block_grid: { ...SYNTH.grid },
+    default_model: ok({ variogram: RVARIO(), search: search({ radius: 50, ndmin: 1, ndmax: 8, benchThickness: 15 }) }),
+    output: {},
+  });
+  assert.equal(rb.toJSON().default_model.search.benchThickness, 15);
+  assert.ok([...run(rb, { rows: SROWS }).status].filter((s) => s === STATUS.OK).length >= 1);
+
+  // perHoleMax without a dh_id column → the engine's holeId error
+  const rx = recipe({
+    data: { columns: { x: 'X', y: 'Y', z: 'Z', value: 'AU' } },
+    block_grid: { ...SYNTH.grid },
+    default_model: ok({ variogram: RVARIO(), search: search({ radius: 50, ndmin: 1, ndmax: 8, perHoleMax: 2 }) }),
+    output: {},
+  });
+  assert.throws(() => run(rx, { rows: SROWS }), /holeId/);
+});
