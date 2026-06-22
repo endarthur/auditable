@@ -319,3 +319,119 @@ export function mergeLagVolumes(a, b) {
   for (let i = 0; i < cells.length; i++) cells[i] = a.cells[i] + b.cells[i];
   return { ...a, cells };
 }
+
+// ── fitModel — the CONSERVATIVE auto-fit SEED (SPEC §2.5) ──
+//
+// A careful starting point that embodies good practice and is honest about being a seed:
+// nugget from the downhole variogram (not a global lstsq), a settable sill (never guessed),
+// one free parameter per direction (the range), linked across directions, and a REPORT with
+// warnings so the fit is judgeable — never a silent black box. It seeds the slider refinement;
+// the human is the ceiling.
+
+const _SHAPES = {
+  spherical: (t) => (t >= 1 ? 1 : 1.5 * t - 0.5 * t * t * t),
+  exponential: (t) => 1 - Math.exp(-3 * t),                  // practical range at a (1−e⁻³ ≈ 0.95)
+  gaussian: (t) => 1 - Math.exp(-3 * t * t),
+};
+
+// nugget = intercept at h=0 of a pair-count-weighted line through the first few downhole lags.
+function _nuggetFromDownhole(lags, k) {
+  const pts = lags.filter((l) => l.npair > 0 && l.h > 0).slice(0, k || 3);
+  if (pts.length === 0) return { nugget: 0, sparse: true };
+  if (pts.length === 1) return { nugget: Math.max(0, pts[0].gamma), sparse: true };
+  let sw = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (const p of pts) { const w = p.npair; sw += w; sx += w * p.h; sy += w * p.gamma; sxx += w * p.h * p.h; sxy += w * p.h * p.gamma; }
+  const den = sw * sxx - sx * sx;
+  if (Math.abs(den) < 1e-12) return { nugget: Math.max(0, sy / sw), sparse: true };
+  const b = (sw * sxy - sx * sy) / den, a = (sy - b * sx) / sw;
+  return { nugget: Math.max(0, a), sparse: pts.length < 3 };
+}
+
+// fit ONE structure's range (1 free param) to a direction by pair-count-weighted WLS — a
+// bounded grid scan (robust, no opaque optimiser), returning the range + RMS weighted residual.
+function _fitRange(lags, nugget, contribution, shape) {
+  const pts = lags.filter((l) => l.npair > 0 && l.h > 0);
+  if (pts.length === 0) return { range: NaN, residual: NaN, reached: false };
+  let maxH = 0, maxG = 0; for (const p of pts) { if (p.h > maxH) maxH = p.h; if (p.gamma > maxG) maxG = p.gamma; }
+  const rMin = maxH / 100, rMax = maxH * 3, N = 240;
+  let bestR = rMin, bestE = Infinity;
+  for (let i = 0; i <= N; i++) {
+    const r = rMin + (rMax - rMin) * i / N;
+    let e = 0, w = 0;
+    for (const p of pts) { const m = nugget + contribution * shape(p.h / r); const d = p.gamma - m; e += p.npair * d * d; w += p.npair; }
+    e /= w;
+    if (e < bestE) { bestE = e; bestR = r; }
+  }
+  return { range: bestR, residual: Math.sqrt(bestE), reached: maxG >= 0.8 * (nugget + contribution) };
+}
+
+// fitModel(experimental, opts) → { model?, fit, report }
+//   opts = { sill?, nugget?: 'downhole'|number, downhole?: dirName, maxNuggetFraction?=1,
+//            type?='spherical', roles?: { major, semi, minor }, orientation? }
+export function fitModel(experimental, opts = {}) {
+  const dirs = experimental.directions;
+  const warnings = [];
+  const type = opts.type || 'spherical';
+  const shape = _SHAPES[type];
+  if (!shape) throw new Error(`gsjs.fitModel: unknown structure type '${type}'`);
+
+  // sill — a settable INPUT; only estimated (flagged) as a last resort
+  let sill = opts.sill, sillEstimated = false;
+  if (sill == null) {
+    let s = 0, n = 0;
+    for (const d of dirs) { const ls = d.lags.filter((l) => l.npair > 0); for (const l of ls.slice(Math.max(0, ls.length - 3))) { s += l.gamma; n++; } }
+    sill = n ? s / n : 1; sillEstimated = true; warnings.push('sill-estimated');
+  }
+
+  // nugget — from the downhole variogram (or fixed), capped by maxNuggetFraction
+  let nugget;
+  if (typeof opts.nugget === 'number') nugget = opts.nugget;
+  else {
+    const dh = dirs.find((d) => d.name === (opts.downhole || 'downhole'));
+    if (!dh) { nugget = 0; warnings.push('no-downhole-nugget-zero'); }
+    else {
+      const r = _nuggetFromDownhole(dh.lags); nugget = r.nugget; if (r.sparse) warnings.push('sparse-downhole');
+      // unreliable anchor: the first downhole lag is already near the sill (lags too coarse to
+      // resolve the near-0 rise) → the extrapolated nugget overshoots. Warn, don't pretend.
+      const first = dh.lags.find((l) => l.npair > 0 && l.h > 0);
+      if (first && sill > 0 && first.gamma > 0.6 * sill) warnings.push('coarse-downhole');
+    }
+  }
+  const cap = (opts.maxNuggetFraction != null ? opts.maxNuggetFraction : 1) * sill;
+  if (nugget > cap) { nugget = cap; warnings.push('nugget-capped'); }
+  if (nugget < 0) nugget = 0;
+  const contribution = Math.max(sill - nugget, 0);
+  const nuggetFraction = sill > 0 ? nugget / sill : 0;
+  if (nuggetFraction > 0.5) warnings.push('high-nugget');
+  if (contribution < 0.01 * sill) warnings.push('pure-nugget');
+
+  // one range per direction (linked: shared nugget/sill/type/contribution)
+  const fitDirs = dirs.map((d) => {
+    const { range, residual, reached } = _fitRange(d.lags, nugget, contribution, shape);
+    if (!reached) warnings.push(`no-sill-reached:${d.name}`);
+    if (sill > 0 && residual > 0.3 * sill) warnings.push(`poor-fit:${d.name}`);
+    const npairs = d.lags.reduce((s, l) => s + l.npair, 0);
+    return { name: d.name, azm: d.azm, dip: d.dip, range, contribution, residual, npairs };
+  });
+
+  const fit = { nugget, sill, type, estimator: experimental.estimator, directions: fitDirs };
+  const report = { nuggetFraction, sillEstimated, warnings: [...new Set(warnings)] };
+
+  // optional model assembly (orientation is the structural step — given roles + orientation)
+  let model;
+  if (opts.roles) {
+    const byName = (n) => fitDirs.find((d) => d.name === n);
+    const maj = byName(opts.roles.major), sem = byName(opts.roles.semi), min = byName(opts.roles.minor);
+    if (maj && sem && min) {
+      model = {
+        c0: nugget,
+        structures: [{
+          type, cc: contribution, aa: maj.range,
+          anis: [sem.range / maj.range, min.range / maj.range],
+          ...(opts.orientation ? { convention: opts.orientation.convention || 'structural', orientation: opts.orientation } : { ang: [maj.azm, maj.dip, 0] }),
+        }],
+      };
+    }
+  }
+  return { model, fit, report };
+}

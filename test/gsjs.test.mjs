@@ -23,7 +23,7 @@ import {
   fromJSON, run, estimate, evaluate,
   createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
   leapfrogToRotmat, toRotmat, applyAnis, krige, qknaSummary, crossValidate,
-  declusterCell, declusterSweep, experimental, buildLagVolume, directionalVariogram, mergeLagVolumes,
+  declusterCell, declusterSweep, experimental, buildLagVolume, directionalVariogram, mergeLagVolumes, fitModel,
 } from '../ext/gsjs/index.js';
 import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow,
   writeF64 as gWriteF64, writeI32 as gWriteI32 } from '../ext/gslib/index.js';
@@ -1314,4 +1314,60 @@ test('lagVolume — downhole (sameHoleOnly) omni == experimental downhole', () =
   const ed = experimental(data, { holeId, lags, directions: [{ mode: 'downhole' }], estimator: 'matheron', faithful: true }).directions[0].lags;
   for (let lb = 0; lb < vol.nlb; lb++) { const e = ed[lb + 1]; if (e.npair > 0) assert.ok(Math.abs(vo.lags[lb].gamma - e.gamma) < 1e-9, `downhole lag ${lb} γ`); }
   assert.throws(() => buildLagVolume(data, { lags, estimator: 'matheron', sameHoleOnly: true }), /sameHoleOnly.*holeId/);
+});
+
+// ── fitModel — the conservative auto-fit seed ──
+// Build a synthetic experimental from a KNOWN model (nugget + spherical, known ranges) and
+// check the fit recovers it. Downhole gets FINE (composite-length) lags so the near-0 rise
+// anchors the nugget (the realistic case); the spatial directions get coarser lags.
+function fakeExperimental(nugget, sill, ranges, type = 'spherical') {
+  const shape = { spherical: (t) => (t >= 1 ? 1 : 1.5 * t - 0.5 * t ** 3), exponential: (t) => 1 - Math.exp(-3 * t), gaussian: (t) => 1 - Math.exp(-3 * t * t) }[type];
+  const cc = sill - nugget;
+  const mk = (name, azm, dip, range, lagSize, n) => {
+    const lags = [{ h: 0, gamma: 0, npair: 0 }];
+    for (let lb = 1; lb <= n; lb++) { const h = lb * lagSize; lags.push({ h, gamma: nugget + cc * shape(h / range), npair: 500 }); }
+    return { name, azm, dip, lags };
+  };
+  return { estimator: 'matheron', directions: [
+    mk('downhole', 0, 90, ranges.dh, 2, 12),       // fine lags
+    mk('major', 45, 0, ranges.major, 12, 12),
+    mk('semi', 135, 0, ranges.semi, 12, 12),
+    mk('minor', 0, 90, ranges.minor, 12, 12),
+  ] };
+}
+
+test('fitModel — recovers a known model (nugget from downhole + ranges by WLS)', () => {
+  const exp = fakeExperimental(0.2, 1.0, { dh: 25, major: 100, semi: 60, minor: 40 });
+  const r = fitModel(exp, { sill: 1.0, roles: { major: 'major', semi: 'semi', minor: 'minor' } });
+  assert.ok(Math.abs(r.fit.nugget - 0.2) < 0.03, `nugget ${r.fit.nugget} ≈ 0.2`);
+  const byName = (n) => r.fit.directions.find((d) => d.name === n);
+  assert.ok(Math.abs(byName('major').range - 100) < 6, `major range ${byName('major').range} ≈ 100`);
+  assert.ok(Math.abs(byName('minor').range - 40) < 6, `minor range ${byName('minor').range} ≈ 40`);
+  // assembled model: recipe shape, anis ≈ [0.6, 0.4], orientation from major
+  assert.equal(r.model.structures[0].type, 'spherical');
+  assert.ok(Math.abs(r.model.structures[0].anis[0] - 0.6) < 0.05 && Math.abs(r.model.structures[0].anis[1] - 0.4) < 0.05, `anis ${r.model.structures[0].anis}`);
+  assert.deepEqual(r.model.structures[0].ang, [45, 0, 0]);
+  assert.equal(r.report.warnings.length, 0, `clean fit, got ${r.report.warnings}`);
+  // exponential model also recovers — looser on the nugget: the linear extrapolation has a
+  // small upward bias for CURVED models (exp/gaussian rise steeply then curve near 0, so a
+  // line overshoots; spherical is linear near 0 and recovers tightly). Fine for a seed.
+  const re = fitModel(fakeExperimental(0.1, 1.0, { dh: 30, major: 120, semi: 80, minor: 50 }, 'exponential'), { sill: 1.0, type: 'exponential' });
+  assert.ok(Math.abs(re.fit.nugget - 0.1) < 0.07, `exp nugget ${re.fit.nugget}`);
+});
+
+test('fitModel — the report makes the fit judgeable (warnings + constraints)', () => {
+  const exp = fakeExperimental(0.2, 1.0, { dh: 25, major: 100, semi: 60, minor: 40 });
+  // maxNuggetFraction caps the nugget + flags it
+  const cap = fitModel(exp, { sill: 1.0, maxNuggetFraction: 0.1 });
+  assert.ok(Math.abs(cap.fit.nugget - 0.1) < 1e-9 && cap.report.warnings.includes('nugget-capped'), 'nugget capped + flagged');
+  // sill estimated (not given) is flagged
+  assert.ok(fitModel(exp, {}).report.warnings.includes('sill-estimated'), 'sill-estimated flagged');
+  // high nugget flagged
+  assert.ok(fitModel(fakeExperimental(0.7, 1.0, { dh: 25, major: 100, semi: 60, minor: 40 }), { sill: 1.0 }).report.warnings.includes('high-nugget'), 'high-nugget flagged');
+  // coarse downhole (first lag already near sill) → unreliable nugget anchor flagged
+  const coarse = { estimator: 'matheron', directions: [{ name: 'downhole', azm: 0, dip: 90, lags: [{ h: 0, gamma: 0, npair: 0 }, { h: 30, gamma: 0.9, npair: 500 }, { h: 60, gamma: 1.0, npair: 500 }] }] };
+  assert.ok(fitModel(coarse, { sill: 1.0 }).report.warnings.includes('coarse-downhole'), 'coarse-downhole flagged');
+  // fixed nugget honoured
+  assert.equal(fitModel(exp, { sill: 1.0, nugget: 0.15 }).fit.nugget, 0.15);
+  assert.throws(() => fitModel(exp, { sill: 1.0, type: 'bogus' }), /unknown structure type/);
 });
