@@ -22,6 +22,7 @@ atra/WASM), not a backend lock.
 | Recipe API (JSON spec + builder eDSL, `run`/`estimate`/`evaluate`) | ✅ |
 | Browser-loadable bundle (`@gcu/build` + gcu-make, sift inlined) | ✅ |
 | Notebook examples (live top-cut · domains · artifact + swath/GT) | ✅ |
+| End-to-end dogfood (drillholes → domains → block kriging → GT) | ✅ |
 | Reactive cell wiring (estimate once → slider `onInput` re-realizes) | ✅ |
 | Neighbourhood M3a — moving ellipsoid, kd-tree, deterministic tie-break | ✅ |
 | Neighbourhood M3b — sector search (nsect / maxPer / minPer / minFilled) | ✅ |
