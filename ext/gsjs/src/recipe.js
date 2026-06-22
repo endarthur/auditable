@@ -192,7 +192,7 @@ export function recipe(spec) {
     block_grid: { ...spec.block_grid },
     ...(domains.length ? { domains } : {}),
     ...(spec.default_model ? { default_model: spec.default_model } : {}),
-    output: { distances: !!(spec.output && spec.output.distances), aggregations },
+    output: { distances: !!(spec.output && spec.output.distances), diagnostics: !!(spec.output && spec.output.diagnostics), aggregations },
   };
 
   return {
@@ -288,6 +288,7 @@ export function estimate(R, ctx = {}) {
   const nxyz = g.nx * g.ny * g.nz;
   const disc = g.discretization ? { nx: g.discretization[0], ny: g.discretization[1], nz: g.discretization[2] } : undefined;
   const wantDist = !!r.output.distances;
+  const wantDiag = !!r.output.diagnostics;
   const status = new Uint8Array(nxyz).fill(STATUS.NOT_ATTEMPTED);
 
   // Resolve the work list: a domain is { id, predFn, model, blockMask | null }.
@@ -336,6 +337,7 @@ export function estimate(R, ctx = {}) {
       ...(disc ? { discretization: disc } : {}),
       ...(holeId ? { holeId } : {}),
       distances: wantDist,
+      diagnostics: wantDiag,
     };
     // faithful:true → the recipe stays bit-identical to gslib.kt3d (no user-visible
     // numerical change from the atra fork), now via the neighbourhood-driven JS engine.

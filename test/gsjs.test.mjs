@@ -18,7 +18,7 @@ import {
   recipe, variogram, search, ok, sk, sk_lvm, none, topcut, hgr,
   fromJSON, run, estimate, evaluate,
   createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
-  leapfrogToRotmat, toRotmat, applyAnis, krige,
+  leapfrogToRotmat, toRotmat, applyAnis, krige, qknaSummary,
 } from '../ext/gsjs/index.js';
 import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow } from '../ext/gslib/index.js';
 
@@ -979,4 +979,71 @@ test('recipe — model-level structural orientation (default) + gslib override +
   const rl = baseRecipe();
   assert.equal(rl.toJSON().default_model.orientation, undefined);
   assert.ok([...run(rl, { rows: SROWS }).status].filter((s) => s === STATUS.OK).length >= 12);
+});
+
+// ── QKNA diagnostics (slope of regression / kriging efficiency / negative weights) ──
+// Formulas pinned to Deutsch & Deutsch 2012 (CCG Paper 306): slope b = Σλ·C̄(uᵢ,V) /
+// ΣΣλᵢλⱼC(uᵢ,uⱼ) [Eq.9]; KE = (BV−KV)/BV with BV = C̄(V,V) = cbb [Eq.1-2]. SK is
+// conditionally unbiased → slope ≡ 1; OK slope < 1 under limited search and rises
+// monotonically toward 1 with more accessed data (the paper's headline observation).
+test('krige — QKNA: SK slope ≡ 1, OK slope rises toward 1 with more data', () => {
+  const data = [];
+  for (let i = 0; i < 60; i++) { const x = (i * 37) % 100, y = (i * 53) % 100, z = (i * 17) % 30; data.push([x, y, z, 1 + Math.sin(x * 0.1) + Math.cos(y * 0.13)]); }
+  const vario = { nugget: 0.3, structures: [{ type: 'spherical', contribution: 0.7, range: 25 }] };
+  const pt = [[55, 45, 12]];
+
+  // SK is conditionally unbiased → slope exactly 1 (Eq.9 numerator==denominator for SK)
+  const skr = krige({ data, variogram: vario, search: { radius: 35, ndmin: 1, ndmax: 8 }, ktype: 'SK', skmean: 1, points: pt, diagnostics: true });
+  assert.ok(Math.abs(skr.diagnostics.slope[0] - 1) < 1e-9, `SK slope ${skr.diagnostics.slope[0]} ≠ 1`);
+
+  // OK slope monotonically increases with ndmax (conditional bias shrinks), all < 1 here
+  const slopes = [2, 4, 8, 20].map((nd) => krige({ data, variogram: vario, search: { radius: 35, ndmin: 1, ndmax: nd }, ktype: 'OK', points: pt, diagnostics: true }).diagnostics.slope[0]);
+  for (let i = 1; i < slopes.length; i++) assert.ok(slopes[i] > slopes[i - 1], `slope not monotone: ${slopes}`);
+  assert.ok(slopes[0] < 0.9 && slopes[slopes.length - 1] < 1.0, `slopes out of band: ${slopes}`);
+});
+
+test('krige — QKNA: exact interpolator at data → slope 1, KE 1; OK weights sum to 1', () => {
+  const data = [];
+  for (let i = 0; i < 40; i++) { const x = (i * 37) % 100, y = (i * 53) % 100, z = (i * 17) % 30; data.push([x, y, z, 1 + Math.sin(x * 0.1)]); }
+  const vario = { nugget: 0.1, structures: [{ type: 'spherical', contribution: 0.9, range: 40 }] };
+  const search = { radius: 60, ndmin: 2, ndmax: 12 };
+
+  // at a data location: kv→0 so KE = 1 − 0/cbb = 1, and slope = 1 (coincident sample)
+  const at = krige({ data, variogram: vario, search, ktype: 'OK', points: [[data[5][0], data[5][1], data[5][2]]], diagnostics: true });
+  assert.ok(Math.abs(at.diagnostics.slope[0] - 1) < 1e-6, `at-data slope ${at.diagnostics.slope[0]}`);
+  assert.ok(Math.abs(at.diagnostics.ke[0] - 1) < 1e-6, `at-data KE ${at.diagnostics.ke[0]}`);
+
+  // OK: weight to the mean ≈ 0 (Σλ = 1); negWeights ≥ 0
+  const r = krige({ data, variogram: vario, search, ktype: 'OK', points: [[50, 50, 15], [12, 80, 5]], diagnostics: true });
+  for (let i = 0; i < 2; i++) {
+    assert.ok(Math.abs(r.diagnostics.weightMean[i]) < 1e-9, `OK weightMean ${r.diagnostics.weightMean[i]} ≠ 0`);
+    assert.ok(r.diagnostics.negWeights[i] >= 0, `negWeights < 0`);
+  }
+});
+
+test('krige — QKNA: diagnostics are opt-in (absent without the flag)', () => {
+  const r = kriging({ ...SYNTH, ktype: 'OK' });   // legacy path, no diagnostics
+  assert.equal(r.diagnostics, undefined);
+  const r2 = krige({ data: SYNTH.data, variogram: SYNTH.variogram, search: SYNTH.search, ktype: 'OK', grid: SYNTH.grid });
+  assert.equal(r2.diagnostics, null);
+});
+
+test('recipe — output.diagnostics flows through; qknaSummary pools over OK blocks', () => {
+  const r = baseRecipe({ output: { diagnostics: true, aggregations: [] } });
+  assert.equal(r.toJSON().output.diagnostics, true);
+  assert.deepEqual(fromJSON(r.toJSON()).toJSON(), r.toJSON());   // round-trips
+
+  const kr = estimate(r, { rows: SROWS });
+  const t = kr.domains[0].tensor;
+  assert.ok(t.diagnostics && t.diagnostics.slope.length === t.n_blocks);
+
+  const q = qknaSummary(kr);
+  assert.ok(q.n >= 12, `pooled ${q.n} OK blocks`);
+  assert.ok(Number.isFinite(q.meanSlope) && q.meanSlope > 0 && q.meanSlope <= 1.05, `meanSlope ${q.meanSlope}`);
+  assert.ok(Number.isFinite(q.meanKE), `meanKE ${q.meanKE}`);
+  assert.ok(q.meanNegWeights >= 0 && q.pctSlopeBelow95 >= 0 && q.pctSlopeBelow95 <= 100);
+
+  // qknaSummary also accepts a bare krige() tensor
+  const q2 = qknaSummary(t);
+  assert.equal(q2.n, q.n);
 });

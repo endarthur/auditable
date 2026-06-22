@@ -35,7 +35,8 @@ atra/WASM), not a backend lock.
 | M3c — grid/mask/points + categories (`krige()` is a kriging() drop-in) | ✅ |
 | Recipe on the JS engine (neighbourhood-driven, gslib-decoupled) | ✅ |
 | Perf — kNN search; JS ≥ WASM kt3d at ndmax 8–24 (test/gsjs-perf.mjs) | ✅ |
-| Follow-ups — variography · QKNA · cross-validation · batched atra solve · GPU | ⏳ |
+| QKNA diagnostics — slope of regression · kriging efficiency · neg-weights (`qknaSummary`) | ✅ (Deutsch & Deutsch 2012, Eq.1/9) |
+| Follow-ups — variography · cross-validation · compositing · batched atra solve · GPU | ⏳ |
 | Distance-restricted capping · unique neighbourhood (deferred) | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
@@ -129,6 +130,18 @@ const res = evaluate(kr, { HG: { transform_params: { cap: 28 } } });  // slider 
 const full = run(r, { rows, blockDomains });
 // res.estimates (Float64Array[nxyz]) · res.status · res.aggregations.{stats,gradeTonnage,swath_x} · res.domains[]
 ```
+
+**QKNA diagnostics.** Pass `diagnostics: true` (to `krige()`, or `output: { diagnostics: true }`
+in a recipe) to get per-target kriging-neighbourhood-analysis measures, computed from
+the solve at ~no extra cost: `tensor.diagnostics.{slope, ke, weightMean, negWeights}`
+(Float64Array per block, NaN where not `OK`). Formulas pinned to Deutsch & Deutsch
+2012 (CCG Paper 306): **slope of regression** `b = Σλᵢ·C̄(uᵢ,V) / ΣΣλᵢλⱼ·C(uᵢ,uⱼ)`
+(Eq. 9 — conditional bias; ≡ 1 for SK, < 1 for OK under limited search, → 1 with more
+data); **kriging efficiency** `KE = (BV − KV)/BV` with block variance `BV = C̄(V,V)`
+(Eq. 1-2; can go negative — a "kriging anomaly"); **weight to the mean** `1 − Σλ` (SK);
+**negative weights** `(100/n)·Σ|λ⁻|`. `qknaSummary(krigedOrTensor)` pools the OK blocks
+→ `{ n, meanSlope, meanKE, meanNegWeights, pctSlopeBelow95, minSlope, maxNegWeights }`
+(`< 0.95` is the conventional conditional-bias cutoff).
 
 **Canonical JSON** uses the compact GSLIB vocab (`{c0, structures:[{type, cc, aa,
 anis:[ay/ax,az/ax], ang:[strike,dip,plunge]}]}`); the executor translates it to

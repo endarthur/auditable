@@ -1641,6 +1641,7 @@ function krige(opts) {
   const mdt = ktype === 1 ? 1 : 0;
   const skmean = opts.skmean || 0;
   const wantDist = !!opts.distances;
+  const wantDiag = !!opts.diagnostics;
   const pi = opts.faithful ? GSLIB_PI : Math.PI;
   const { cmax, cova, c0 } = buildModel(opts.variogram, pi);
 
@@ -1724,7 +1725,20 @@ function krige(opts) {
     if (singular) { perTarget[t] = { status: STATUS.SINGULAR_SYSTEM, na: 0 }; continue; }
     let estv = cbb;                                     // block-block covariance
     for (let j = 0; j < neq; j++) estv -= sol[j] * r[j];
-    perTarget[t] = { status: STATUS.OK, na, ranks: sel.ranks, weights: sol, kv: estv, dists };
+
+    // QKNA diagnostics (cheap — from the weights + the system already built):
+    //   SR = Σλr / ΣΣλλC  (slope of regression; =1 for SK, ≤1 for OK = conditional bias)
+    //   KE = 1 − kv/cbb    (kriging efficiency; cbb = block variance)
+    //   WM = 1 − Σλ (weight to the mean) · NW = 100/na · Σ|λ⁻| (% negative-weight magnitude)
+    let diag;
+    if (wantDiag) {
+      let sumLR = 0, sumW = 0, negW = 0;
+      for (let i = 0; i < na; i++) { sumLR += sol[i] * r[i]; sumW += sol[i]; if (sol[i] < 0) negW -= sol[i]; }
+      let quad = 0;
+      for (let i = 0; i < na; i++) { const li = sol[i]; for (let j = 0; j < na; j++) quad += li * sol[j] * A[i * neq + j]; }
+      diag = { slope: quad !== 0 ? sumLR / quad : 1, ke: cbb !== 0 ? 1 - estv / cbb : 0, weightMean: 1 - sumW, negWeights: 100 * negW / na };
+    }
+    perTarget[t] = { status: STATUS.OK, na, ranks: sel.ranks, weights: sol, kv: estv, dists, diag };
     if (na > K) K = na;
   }
 
@@ -1735,6 +1749,10 @@ function krige(opts) {
   const kv = new Float64Array(ntarg);
   const status = new Uint8Array(ntarg).fill(STATUS.NOT_ATTEMPTED);
   const distances = wantDist ? new Float64Array(ntarg * K) : null;
+  // QKNA diagnostics — one scalar per target (NaN where not OK), opt-in via opts.diagnostics
+  const diagnostics = wantDiag
+    ? { slope: new Float64Array(ntarg).fill(NaN), ke: new Float64Array(ntarg).fill(NaN), weightMean: new Float64Array(ntarg).fill(NaN), negWeights: new Float64Array(ntarg).fill(NaN) }
+    : null;
   for (let t = 0; t < ntarg; t++) {
     const p = perTarget[t];
     status[t] = p.status;
@@ -1742,15 +1760,46 @@ function krige(opts) {
     n_actual[t] = p.na; kv[t] = p.kv;
     for (let k = 0; k < p.na; k++) { indices[t * K + k] = p.ranks[k]; weights[t * K + k] = p.weights[k]; }
     if (wantDist) for (let k = 0; k < p.na; k++) distances[t * K + k] = p.dists[k];
+    if (wantDiag && p.diag) { diagnostics.slope[t] = p.diag.slope; diagnostics.ke[t] = p.diag.ke; diagnostics.weightMean[t] = p.diag.weightMean; diagnostics.negWeights[t] = p.diag.negWeights; }
   }
 
   return {
     indices, weights, n_actual, kv, status,
-    distances,
+    distances, diagnostics,
     sk_mean: ktype === 0 ? skmean : null,
     values: Float64Array.from(data, (d) => d[3]),       // ORIGINAL order — indices reference this
     coords: pts, gridIndex, geom, K,
     n_targets: ntarg, n_blocks: ntarg, n_categories: ncat,
+  };
+}
+
+// Summarize QKNA diagnostics over the OK targets of a kriged result. Accepts a
+// krige() tensor (carrying `.diagnostics`, from `diagnostics: true`) or a recipe
+// estimate() result (`.domains[].tensor`). Returns domain-pooled means plus the
+// share of conditionally-biased blocks (slope < 0.95 = the conventional cutoff).
+function qknaSummary(result) {
+  const tensors = result && result.domains ? result.domains.map((d) => d.tensor).filter(Boolean) : [result];
+  let n = 0, sSlope = 0, sKE = 0, sNeg = 0, below = 0, minSlope = Infinity, maxNeg = 0;
+  for (const t of tensors) {
+    if (!t || !t.diagnostics) continue;
+    const { slope, ke, negWeights } = t.diagnostics;
+    for (let i = 0; i < t.n_blocks; i++) {
+      if (t.status[i] !== STATUS.OK) continue;
+      n++; sSlope += slope[i]; sKE += ke[i]; sNeg += negWeights[i];
+      if (slope[i] < 0.95) below++;
+      if (slope[i] < minSlope) minSlope = slope[i];
+      if (negWeights[i] > maxNeg) maxNeg = negWeights[i];
+    }
+  }
+  if (!n) return { n: 0, meanSlope: NaN, meanKE: NaN, meanNegWeights: NaN, pctSlopeBelow95: NaN, minSlope: NaN, maxNegWeights: NaN };
+  return {
+    n,
+    meanSlope: sSlope / n,
+    meanKE: sKE / n,
+    meanNegWeights: sNeg / n,
+    pctSlopeBelow95: 100 * below / n,
+    minSlope,
+    maxNegWeights: maxNeg,
   };
 }
 
@@ -2194,7 +2243,7 @@ function recipe(spec) {
     block_grid: { ...spec.block_grid },
     ...(domains.length ? { domains } : {}),
     ...(spec.default_model ? { default_model: spec.default_model } : {}),
-    output: { distances: !!(spec.output && spec.output.distances), aggregations },
+    output: { distances: !!(spec.output && spec.output.distances), diagnostics: !!(spec.output && spec.output.diagnostics), aggregations },
   };
 
   return {
@@ -2290,6 +2339,7 @@ function estimate(R, ctx = {}) {
   const nxyz = g.nx * g.ny * g.nz;
   const disc = g.discretization ? { nx: g.discretization[0], ny: g.discretization[1], nz: g.discretization[2] } : undefined;
   const wantDist = !!r.output.distances;
+  const wantDiag = !!r.output.diagnostics;
   const status = new Uint8Array(nxyz).fill(STATUS.NOT_ATTEMPTED);
 
   // Resolve the work list: a domain is { id, predFn, model, blockMask | null }.
@@ -2338,6 +2388,7 @@ function estimate(R, ctx = {}) {
       ...(disc ? { discretization: disc } : {}),
       ...(holeId ? { holeId } : {}),
       distances: wantDist,
+      diagnostics: wantDiag,
     };
     // faithful:true → the recipe stays bit-identical to gslib.kt3d (no user-visible
     // numerical change from the atra fork), now via the neighbourhood-driven JS engine.
@@ -2439,6 +2490,7 @@ export {
   indexSamples,
   select,
   krige,
+  qknaSummary,
   variogram,
   search,
   none,
