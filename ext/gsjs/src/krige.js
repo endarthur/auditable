@@ -180,6 +180,7 @@ export function krige(opts) {
   const ktype = opts.ktype === 'SK' ? 0 : 1;            // 0 = SK, 1 = OK
   const mdt = ktype === 1 ? 1 : 0;
   const skmean = opts.skmean || 0;
+  const wantDist = !!opts.distances;
   const pi = opts.faithful ? GSLIB_PI : Math.PI;
   const { cmax, cova, c0 } = buildModel(opts.variogram, pi);
 
@@ -234,8 +235,10 @@ export function krige(opts) {
     const neq = mdt + na;
     const A = new Float64Array(neq * neq);
     const r = new Float64Array(neq);
+    const dists = wantDist ? new Float64Array(na) : null;
     for (let i = 0; i < na; i++) {
       const si = sel.ranks[i], xi = data[si][0], yi = data[si][1], zi = data[si][2];
+      if (wantDist) { const dx = xi - tx, dy = yi - ty, dz = zi - tz; dists[i] = Math.sqrt(dx * dx + dy * dy + dz * dz); }
       for (let j = i; j < na; j++) {
         const sj = sel.ranks[j];
         const cov = cova(xi, yi, zi, data[sj][0], data[sj][1], data[sj][2]);
@@ -261,7 +264,7 @@ export function krige(opts) {
     if (singular) { perTarget[t] = { status: STATUS.SINGULAR_SYSTEM, na: 0 }; continue; }
     let estv = cbb;                                     // block-block covariance
     for (let j = 0; j < neq; j++) estv -= sol[j] * r[j];
-    perTarget[t] = { status: STATUS.OK, na, ranks: sel.ranks, weights: sol, kv: estv };
+    perTarget[t] = { status: STATUS.OK, na, ranks: sel.ranks, weights: sol, kv: estv, dists };
     if (na > K) K = na;
   }
 
@@ -271,17 +274,19 @@ export function krige(opts) {
   const n_actual = new Int32Array(ntarg);
   const kv = new Float64Array(ntarg);
   const status = new Uint8Array(ntarg).fill(STATUS.NOT_ATTEMPTED);
+  const distances = wantDist ? new Float64Array(ntarg * K) : null;
   for (let t = 0; t < ntarg; t++) {
     const p = perTarget[t];
     status[t] = p.status;
     if (p.status !== STATUS.OK) continue;
     n_actual[t] = p.na; kv[t] = p.kv;
     for (let k = 0; k < p.na; k++) { indices[t * K + k] = p.ranks[k]; weights[t * K + k] = p.weights[k]; }
+    if (wantDist) for (let k = 0; k < p.na; k++) distances[t * K + k] = p.dists[k];
   }
 
   return {
     indices, weights, n_actual, kv, status,
-    distances: null,
+    distances,
     sk_mean: ktype === 0 ? skmean : null,
     values: Float64Array.from(data, (d) => d[3]),       // ORIGINAL order — indices reference this
     coords: pts, gridIndex, geom, K,

@@ -30,7 +30,7 @@
 import { parsePredicate, evaluatePredicate, validatePredicate } from '../../sift/src/predicate.js';
 import { stats, histogram, swath, gradeTonnage } from './aggregate.js';
 import { realize, STATUS } from './realize.js';
-import { kriging } from './api.js';
+import { krige } from './krige.js';
 
 const _TRANSFORMS = new Set(['none', 'topcut', 'hgr_hard', 'hgr_soft']);
 const _KTYPES = new Set(['OK', 'SK', 'SK_LVM']);
@@ -66,6 +66,10 @@ export function search(opts = {}) {
     ndmin: opts.ndmin ?? 1,
     ndmax: opts.ndmax,
     ...(opts.octant ? { octant: { ...opts.octant } } : {}),
+    // neighbourhood policies (the JS engine drives them); all serializable
+    ...(opts.sectors ? { sectors: { ...opts.sectors } } : {}),
+    ...(opts.minSampleDistance != null ? { minSampleDistance: opts.minSampleDistance } : {}),
+    ...(opts.benchThickness != null ? { benchThickness: opts.benchThickness } : {}),
   };
 }
 
@@ -227,6 +231,9 @@ function _krigingSearch(s) {
     radiusVert: s.radius * s.anis[1],
     angle: s.ang[0], angle2: s.ang[1], angle3: s.ang[2],
     ndmin: s.ndmin, ndmax: s.ndmax,
+    ...(s.sectors ? { sectors: s.sectors } : {}),
+    ...(s.minSampleDistance != null ? { minSampleDistance: s.minSampleDistance } : {}),
+    ...(s.benchThickness != null ? { type: 'bench', benchThickness: s.benchThickness } : {}),
   };
 }
 
@@ -297,7 +304,7 @@ export function estimate(R, ctx = {}) {
 
   const outDomains = [];
   for (const w of work) {
-    if (w.model.ktype === 'SK_LVM') throw new Error("gsjs.estimate: SK_LVM (locally varying mean) isn't supported by kriging() yet — use OK or SK");
+    if (w.model.ktype === 'SK_LVM') throw new Error("gsjs.estimate: SK_LVM (locally varying mean) isn't supported by krige() yet — use OK or SK");
     const data = _samples(rows, cols, w.predFn);
     const kopts = {
       data,
@@ -310,7 +317,9 @@ export function estimate(R, ctx = {}) {
       ...(disc ? { discretization: disc } : {}),
       distances: wantDist,
     };
-    const tensor = kriging(kopts);
+    // faithful:true → the recipe stays bit-identical to gslib.kt3d (no user-visible
+    // numerical change from the atra fork), now via the neighbourhood-driven JS engine.
+    const tensor = krige({ ...kopts, faithful: true });
     // scatter this domain's per-target status into the full-grid status array
     for (let t = 0; t < tensor.n_targets; t++) {
       const gi = tensor.gridIndex ? tensor.gridIndex[t] : t;

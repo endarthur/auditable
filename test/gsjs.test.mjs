@@ -330,7 +330,9 @@ test('recipe — run() == hand-driven kriging()+realize() to f64 (no drift)', ()
     maxErr = Math.max(maxErr, Math.abs(res.estimates[i] - edir[i]));
   }
   assert.ok(nOK >= 12, `only ${nOK} OK`);
-  assert.equal(maxErr, 0, `recipe drift ${maxErr}`);
+  // recipe now runs on the JS krige() engine (faithful) vs the atra fork here —
+  // both == kt3d, agreeing to machine eps (GE vs ktsol solver rounding).
+  assert.ok(maxErr < 1e-9, `recipe drift ${maxErr}`);
 });
 
 test('recipe — evaluate() cap override re-realizes WITHOUT re-kriging (== direct topcut)', () => {
@@ -343,7 +345,7 @@ test('recipe — evaluate() cap override re-realizes WITHOUT re-kriging (== dire
     if (capped.status[i] !== STATUS.OK) continue;
     maxErr = Math.max(maxErr, Math.abs(capped.estimates[i] - edir[i]));
   }
-  assert.equal(maxErr, 0, `cap re-realize drift ${maxErr}`);
+  assert.ok(maxErr < 1e-9, `cap re-realize drift ${maxErr}`);   // JS engine vs atra fork → machine eps
 });
 
 test('recipe — output.aggregations wired in run()', () => {
@@ -904,4 +906,15 @@ test('krige — mask (sparse domain) == kt3d at active blocks; categories', () =
   const rmix = krige({ data: SYNTH.data, variogram: SYNTH.variogram, search: SYNTH.search, ktype: 'OK', discretization: { nx: 2, ny: 2, nz: 1 }, points: [[15, 15, 0, 10, 10, 10], [25, 25, 0, 20, 20, 10], [10, 30, 0, 5, 5, 5]] });
   assert.equal(rmix.n_categories, 3);
   assert.ok([...realize(rmix, rmix.values)].every(Number.isFinite));
+});
+
+test('recipe — neighbourhood policies (sectors) serialize + drive the JS engine', () => {
+  const r = baseRecipe({
+    default_model: ok({ variogram: RVARIO(), search: search({ radius: 50, ndmin: 1, ndmax: 8, sectors: { n: 4, maxPer: 3 } }) }),
+  });
+  assert.deepEqual(r.toJSON().default_model.search.sectors, { n: 4, maxPer: 3 });   // in the artifact
+  assert.deepEqual(fromJSON(r.toJSON()).toJSON(), r.toJSON());                       // round-trips
+  const res = run(r, { rows: SROWS });
+  const nOK = [...res.status].filter((s) => s === STATUS.OK).length;
+  assert.ok(nOK >= 12, `sectors recipe nOK ${nOK}`);                                 // runs end-to-end
 });

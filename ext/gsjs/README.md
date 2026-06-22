@@ -31,7 +31,8 @@ atra/WASM), not a backend lock.
 | **M3c — pure-JS kriging driver, neighbourhood-fed (`krige()`)** | ✅ (== kt3d to f64) |
 | M3c — block kriging (discretized RHS + cbb) | ✅ (== kt3d est+var to f64) |
 | M3c — grid/mask/points + categories (`krige()` is a kriging() drop-in) | ✅ |
-| M3c follow-ups — recipe wiring · perf wave | ⏳ |
+| Recipe on the JS engine (neighbourhood-driven, gslib-decoupled) | ✅ |
+| Follow-ups — per-hole in recipe · convention DSL · perf wave | ⏳ |
 | Distance-restricted capping · unique neighbourhood (deferred) | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
