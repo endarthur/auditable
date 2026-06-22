@@ -90,6 +90,7 @@ const categories = {
     'example_gsjs_domains.txt',
     'example_gsjs_tour.txt',
     'example_drillhole.txt',
+    'example_variography.txt',
     'example_gsjs_estimate.txt',
     'example_gslib_sgsim.txt',
     'example_gslib_dhsa.txt',

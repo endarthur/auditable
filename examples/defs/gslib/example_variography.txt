@@ -1,0 +1,140 @@
+/// auditable
+/// title: variography — experimental variogram + interactive fit
+/// module: @gcu/gsjs ext/gsjs/index.js
+/// settings: {"theme":"dark","fontSize":13,"width":"960","editorView":"yes"}
+
+/// md
+# Variography — calculate, then fit
+
+The variogram model is the one thing upstream of kriging you can't avoid *choosing*. This notebook does the two jobs: **calculate** the experimental variogram in the key directions, and **fit** a model to it — interactively, the way you actually would.
+
+- The **downhole** variogram (closest-spaced data) anchors the **nugget**.
+- The **major** (N–S here) and **semi-major** (E–W) directional variograms give the ranges — the **anisotropy**.
+- `fitModel` seeds a conservative starting point; you **drag the sliders to refine**. The auto-fit is the floor, you're the ceiling.
+
+Pair counts ride in a **companion strip** under each plot (so a lag built from few pairs is visible) — never as dot size, which would fight the curve you're reading.
+
+/// code collapsed
+// %collapsed
+// ── synthetic anisotropic deposit + drillholes ──────────────────────────────
+// A smooth grade field with geometric anisotropy — long continuity N–S (~105 m),
+// short E–W (~38 m), moderate vertical (~28 m) — built from ~280 overlapping
+// anisotropic bumps, plus a nugget from sampling noise. Vertical holes on a ~42 m
+// grid, composited @ 5 m, each carrying a BHID for the downhole variogram.
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const rng = mulberry32(23);
+const EXT = 400, HT = 120, Rx = 38, Ry = 105, Rz = 28;
+const bumps = [];
+for (let k = 0; k < 280; k++) bumps.push({ x: rng() * EXT, y: rng() * EXT, z: rng() * HT, a: (rng() - 0.5) * 3 });
+function field(x, y, z) {
+  let v = 0;
+  for (const b of bumps) { const dx = (x - b.x) / Rx, dy = (y - b.y) / Ry, dz = (z - b.z) / Rz; v += b.a * Math.exp(-(dx * dx + dy * dy + dz * dz)); }
+  return v;
+}
+const data = [], holeId = [];
+let id = 0;
+for (let hx = 20; hx < EXT; hx += 42) for (let hy = 20; hy < EXT; hy += 42) {
+  id++; const bid = "DH" + String(id).padStart(3, "0");
+  for (let z = HT - 2; z > 5; z -= 5) {
+    const g = 5 + field(hx, hy, z) + (rng() - 0.5) * 1.3;     // nugget = sampling noise
+    data.push([hx, hy, z, Math.max(0, +g.toFixed(3))]); holeId.push(bid);
+  }
+}
+ui.display(`${data.length} composites in ${id} drillholes · anisotropy N–S ${Ry} m / E–W ${Rx} m / vertical ${Rz} m`);
+
+/// code
+// ── calculate: declustered sill + experimental variograms ───────────────────
+const gsjs = await load("@gcu/gsjs");
+
+// sill = the DECLUSTERED variance (good practice for clustered drilling) — a choice you make
+const sill = gsjs.declusterCell({ data, cellSize: 42 }).variance;
+
+// downhole on FINE (composite-length) lags so the near-0 rise anchors the nugget;
+// the horizontal directions on coarser lags. Carpenter-pencil tolerance (wedge + bandwidths).
+const expDh = gsjs.experimental(data, { holeId, lags: { size: 5, n: 14 },
+  directions: [{ name: "downhole", mode: "downhole" }] });
+const expH = gsjs.experimental(data, { lags: { size: 28, n: 11 }, directions: [
+  { name: "major", azimuth: 0,  atol: 25, dtol: 25, bandwidthH: 55, bandwidthV: 28 },   // N–S
+  { name: "semi",  azimuth: 90, atol: 25, dtol: 25, bandwidthH: 55, bandwidthV: 28 },   // E–W
+] });
+const exp = { estimator: "matheron", directions: [expDh.directions[0], ...expH.directions] };
+ui.display(`sill ${sill.toFixed(2)} (declustered) · downhole + major (N–S) + semi (E–W) experimental variograms ready`);
+
+/// code
+// ── fit: conservative seed → drag to refine ─────────────────────────────────
+const seed = gsjs.fitModel(exp, { sill, roles: { major: "major", semi: "semi", minor: "downhole" } });
+const model = { nugget: seed.fit.nugget, ranges: {} };
+for (const d of seed.fit.directions) model.ranges[d.name] = d.range;
+const sph = (t) => t >= 1 ? 1 : 1.5 * t - 0.5 * t * t * t;
+const PANELS = [["downhole", "downhole (→ nugget + vertical)", 0, 0], ["major", "major · N–S", 1, 0], ["semi", "semi-major · E–W", 0, 1]];
+
+const W = Math.min(920, window.innerWidth - 60), H = 600;
+const cv = ui.canvas(W, H), g = cv.getContext("2d");
+
+function drawPanel(name, label, col, row) {
+  const dir = exp.directions.find((d) => d.name === name);
+  const lags = dir.lags.filter((l) => l.npair > 0 && l.h > 0);
+  if (!lags.length) return;
+  const PW = (W - 30) / 2, PH = (H - 30) / 2;
+  const px = 15 + col * PW, py = 15 + row * PH;
+  const ax0 = px + 44, ay0 = py + PH - 52, axw = PW - 62, axh = PH - 86;
+  const maxH = Math.max(...lags.map((l) => l.h)) * 1.05;
+  const maxG = Math.max(sill, ...lags.map((l) => l.gamma)) * 1.15;
+  const sx = (h) => ax0 + (h / maxH) * axw, sy = (v) => ay0 - (Math.min(v, maxG) / maxG) * axh;
+  // frame + sill line
+  g.strokeStyle = "#3a3a3a"; g.lineWidth = 1; g.strokeRect(ax0, py + 16, axw, axh);
+  g.strokeStyle = "#5a5a5a"; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(ax0, sy(sill)); g.lineTo(ax0 + axw, sy(sill)); g.stroke(); g.setLineDash([]);
+  g.fillStyle = "#777"; g.font = "10px monospace"; g.fillText("sill", ax0 + axw - 22, sy(sill) - 3);
+  // model curve (amber)
+  const r = model.ranges[name], cc = Math.max(sill - model.nugget, 0);
+  g.strokeStyle = "#c89b3c"; g.lineWidth = 2; g.beginPath();
+  for (let k = 0; k <= 80; k++) { const h = maxH * k / 80, gm = model.nugget + cc * sph(h / r); const X = sx(h), Y = sy(gm); k ? g.lineTo(X, Y) : g.moveTo(X, Y); }
+  g.stroke();
+  // experimental points — UNIFORM size (no pair-count scaling)
+  g.fillStyle = "#6aa0dc"; for (const l of lags) { g.beginPath(); g.arc(sx(l.h), sy(l.gamma), 3.1, 0, 7); g.fill(); }
+  // companion pair-count strip (below the axis)
+  const maxNp = Math.max(...lags.map((l) => l.npair)), stripY = ay0 + 8, stripH = 16, bw = axw / lags.length * 0.55;
+  g.fillStyle = "#444"; for (const l of lags) { const bh = stripH * l.npair / maxNp; g.fillRect(sx(l.h) - bw / 2, stripY + (stripH - bh), bw, bh); }
+  g.fillStyle = "#666"; g.fillText("pairs", ax0 - 38, stripY + stripH);
+  // labels
+  g.fillStyle = "#cfcfcf"; g.font = "12px monospace"; g.fillText(label, ax0, py + 12);
+  g.fillStyle = "#c89b3c"; g.fillText("range " + r.toFixed(0) + " m", ax0 + axw - 92, py + 12);
+}
+
+function drawSummary() {
+  const PW = (W - 30) / 2, PH = (H - 30) / 2, px = 15 + PW + 14, py = 15 + PH + 16;
+  const cc = Math.max(sill - model.nugget, 0), nf = sill > 0 ? model.nugget / sill : 0;
+  const anis = [model.ranges.semi / model.ranges.major, model.ranges.downhole / model.ranges.major];
+  g.fillStyle = "#cfcfcf"; g.font = "13px monospace";
+  const lines = [
+    "MODEL (spherical, oriented N–S)",
+    "",
+    `nugget   ${model.nugget.toFixed(3)}   (${(nf * 100).toFixed(0)}% of sill)`,
+    `sill     ${sill.toFixed(3)}   contribution ${cc.toFixed(3)}`,
+    `ranges   major ${model.ranges.major.toFixed(0)} · semi ${model.ranges.semi.toFixed(0)} · vert ${model.ranges.downhole.toFixed(0)} m`,
+    `anis     [${anis[0].toFixed(2)}, ${anis[1].toFixed(2)}]`,
+  ];
+  lines.forEach((t, i) => g.fillText(t, px, py + 6 + i * 20));
+  const warns = seed.report.warnings;
+  g.fillStyle = warns.length ? "#d98b4a" : "#5a9a5a"; g.font = "11px monospace";
+  g.fillText(warns.length ? "⚠ " + warns.join(" · ") : "✓ seed clean — drag sliders to refine", px, py + 6 + lines.length * 20 + 10);
+}
+
+function redraw() {
+  g.fillStyle = "#161616"; g.fillRect(0, 0, W, H);
+  for (const [name, label, col, row] of PANELS) drawPanel(name, label, col, row);
+  drawSummary();
+}
+redraw();
+
+// sliders — seeded by the fit (value is the 2nd positional arg); onInput re-renders the
+// overlay live (no re-compute). onInput hands back a string, so parse it.
+ui.slider("nugget", +model.nugget.toFixed(3), { min: 0, max: +sill.toFixed(2), step: 0.005, onInput: (v) => { model.nugget = +v; redraw(); } });
+for (const name of ["major", "semi", "downhole"]) {
+  ui.slider(name + " range (m)", Math.round(model.ranges[name]), { min: 5, max: 320, step: 1, onInput: (v) => { model.ranges[name] = +v; redraw(); } });
+}
+
+/// md
+**What you're doing.** The amber curve is the model; the blue dots are the experimental variogram; the grey strip is the pair count behind each lag. The sliders start at `fitModel`'s conservative seed — nugget from the downhole rise, ranges by pair-count-weighted least squares — and you drag to refine against what you see.
+
+The anisotropy is right there: **N–S reaches the sill slowly (long range), E–W rises fast (short range).** That ratio — plus the orientation, which a [stereonet sweep](ext/gsjs/README.md) will set properly — is the `{c0, structures:[{type, cc, aa, anis, ang}]}` the [estimate](example_gsjs_estimate.html) kriges with. Next in the design: tie this model to a live cross-validation / QKNA readout, so you fit *against the estimate's quality*, not in a vacuum.
