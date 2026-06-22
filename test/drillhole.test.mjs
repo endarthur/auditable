@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Drillhole as DH } from '../ext/drillhole/index.js';
+import * as DH from '../ext/drillhole/index.js';
 
 const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg} (|Δ|=${Math.abs(a - b).toExponential(2)} ≤ ${eps})`);
 const nearV = (p, q, eps, msg) => assert.ok(Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) <= eps, `${msg}`);

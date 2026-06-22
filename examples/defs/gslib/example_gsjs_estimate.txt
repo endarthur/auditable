@@ -51,7 +51,7 @@ for (let hx = 30; hx < EXT; hx += 55) for (let hy = 30; hy < EXT; hy += 55) {
 }
 
 // composite 1 m → 3 m with @gcu/drillhole, breaking at the HG/LG contact
-const DH = (await load("@gcu/drillhole")).Drillhole;   // the Drillhole facade
+const DH = await load("@gcu/drillhole");               // clean named exports
 const comp = DH.process({
   collars, surveys,
   intervals: { bhid: ivBhid, from: ivFrom, to: ivTo, cols: [

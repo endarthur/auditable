@@ -1,38 +1,25 @@
-// @gcu/drillhole — module manifest (the @gcu/build concat order) + the `Drillhole`
-// namespace BMA/dee call through. Reverse-vendored home of bma's vendor-drillhole.js.
+// @gcu/drillhole — public surface (the @gcu/build manifest). Clean named exports,
+// matching the other GCU packages: `const dh = await load("@gcu/drillhole"); dh.process(...)`.
+// The internal `dh*` names (a bma concat-IIFE artifact) and the private hole-join
+// helpers (dhJoinHoles / dhNormalizeHoleStations) stay module-scoped — they're still
+// bundled (validate/samples import them), just not part of the public API.
 //
 //   desurvey.js — tangent, detectDipConvention, normalizeSurveys, desurveyHole, positionAt
 //   validate.js — validate (join + consistency report)
 //   composite.js — defaultLength, composite (fixed-length, length/mass-weighted, split-aware)
-//   samples.js   — desurveySamples (point-support locator; reuses validate's hole join)
+//   samples.js   — desurveySamples (point-support locator)
 //   merge.js     — mergeIntervals (down-hole union re-segment join)
 //   process.js   — process (validate → desurvey → composite, one call)
 
-export * from './desurvey.js';
-export * from './validate.js';
-export * from './composite.js';
-export * from './samples.js';
-export * from './merge.js';
-export * from './process.js';
-
-import { dhTangent, dhDetectDipConvention, dhNormalizeSurveys, dhDesurveyHole, dhPositionAt } from './desurvey.js';
-import { dhValidate } from './validate.js';
-import { dhDefaultLength, dhComposite } from './composite.js';
-import { dhDesurveySamples } from './samples.js';
-import { dhMergeIntervals } from './merge.js';
-import { dhProcess } from './process.js';
-
-// The `Drillhole.*` facade (the surface app code + the BMA re-vendor call through).
-export const Drillhole = {
-  tangent: dhTangent,
-  detectDipConvention: dhDetectDipConvention,
-  normalizeSurveys: dhNormalizeSurveys,
-  desurveyHole: dhDesurveyHole,
-  positionAt: dhPositionAt,
-  validate: dhValidate,
-  defaultLength: dhDefaultLength,
-  composite: dhComposite,
-  desurveySamples: dhDesurveySamples,
-  process: dhProcess,
-  mergeIntervals: dhMergeIntervals,
-};
+export {
+  dhTangent as tangent,
+  dhDetectDipConvention as detectDipConvention,
+  dhNormalizeSurveys as normalizeSurveys,
+  dhDesurveyHole as desurveyHole,
+  dhPositionAt as positionAt,
+} from './desurvey.js';
+export { dhValidate as validate } from './validate.js';
+export { dhDefaultLength as defaultLength, dhComposite as composite } from './composite.js';
+export { dhDesurveySamples as desurveySamples } from './samples.js';
+export { dhMergeIntervals as mergeIntervals } from './merge.js';
+export { dhProcess as process } from './process.js';

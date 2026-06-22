@@ -56,9 +56,9 @@ modules from here now.
 ## Use
 
 ```js
-import { Drillhole } from '@gcu/drillhole';   // or the named dh* exports
+import * as dh from '@gcu/drillhole';   // or: const dh = await load('@gcu/drillhole')
 
-const { header, rows, report } = Drillhole.process({
+const { header, rows, report } = dh.process({
   collars:  [{ bhid: 'DH1', x: 1000, y: 2000, z: 350, eoh: 120 }, ...],
   surveys:  [{ bhid: 'DH1', depth: 0, az: 45, dip: 60 }, ...],   // dip raw (per file)
   intervals: { bhid: [...], from: [...], to: [...],
@@ -77,8 +77,9 @@ const { header, rows, report } = Drillhole.process({
 // report.checks = the non-silent consistency report
 ```
 
-Lower-level pieces are exposed too: `desurveyHole` / `positionAt` / `normalizeSurveys`
-/ `detectDipConvention` / `validate` / `composite` / `defaultLength` / `mergeIntervals`.
+The lower-level pieces are exported as clean names too: `desurveyHole` / `positionAt` /
+`normalizeSurveys` / `detectDipConvention` / `validate` / `composite` / `defaultLength` /
+`desurveySamples` / `mergeIntervals` / `tangent`.
 
 ## Build & test
 

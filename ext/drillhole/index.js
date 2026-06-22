@@ -722,46 +722,29 @@ function dhProcess(tables, opts) {
 
 // ── src/main.js ──
 
-// @gcu/drillhole — module manifest (the @gcu/build concat order) + the `Drillhole`
-// namespace BMA/dee call through. Reverse-vendored home of bma's vendor-drillhole.js.
+// @gcu/drillhole — public surface (the @gcu/build manifest). Clean named exports,
+// matching the other GCU packages: `const dh = await load("@gcu/drillhole"); dh.process(...)`.
+// The internal `dh*` names (a bma concat-IIFE artifact) and the private hole-join
+// helpers (dhJoinHoles / dhNormalizeHoleStations) stay module-scoped — they're still
+// bundled (validate/samples import them), just not part of the public API.
 //
 //   desurvey.js — tangent, detectDipConvention, normalizeSurveys, desurveyHole, positionAt
 //   validate.js — validate (join + consistency report)
 //   composite.js — defaultLength, composite (fixed-length, length/mass-weighted, split-aware)
-//   samples.js   — desurveySamples (point-support locator; reuses validate's hole join)
+//   samples.js   — desurveySamples (point-support locator)
 //   merge.js     — mergeIntervals (down-hole union re-segment join)
 //   process.js   — process (validate → desurvey → composite, one call)
 
-
-
-// The `Drillhole.*` facade (the surface app code + the BMA re-vendor call through).
-const Drillhole = {
-  tangent: dhTangent,
-  detectDipConvention: dhDetectDipConvention,
-  normalizeSurveys: dhNormalizeSurveys,
-  desurveyHole: dhDesurveyHole,
-  positionAt: dhPositionAt,
-  validate: dhValidate,
-  defaultLength: dhDefaultLength,
-  composite: dhComposite,
-  desurveySamples: dhDesurveySamples,
-  process: dhProcess,
-  mergeIntervals: dhMergeIntervals,
-};
-
 export {
-  Drillhole,
-  dhTangent,
-  dhDetectDipConvention,
-  dhNormalizeSurveys,
-  dhDesurveyHole,
-  dhPositionAt,
-  dhJoinHoles,
-  dhNormalizeHoleStations,
-  dhValidate,
-  dhDefaultLength,
-  dhComposite,
-  dhDesurveySamples,
-  dhMergeIntervals,
-  dhProcess,
+  dhTangent as tangent,
+  dhDetectDipConvention as detectDipConvention,
+  dhNormalizeSurveys as normalizeSurveys,
+  dhDesurveyHole as desurveyHole,
+  dhPositionAt as positionAt,
+  dhValidate as validate,
+  dhDefaultLength as defaultLength,
+  dhComposite as composite,
+  dhDesurveySamples as desurveySamples,
+  dhMergeIntervals as mergeIntervals,
+  dhProcess as process,
 };
