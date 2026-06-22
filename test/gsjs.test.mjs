@@ -23,7 +23,7 @@ import {
   fromJSON, run, estimate, evaluate,
   createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
   leapfrogToRotmat, toRotmat, applyAnis, krige, qknaSummary, crossValidate,
-  declusterCell, declusterSweep, experimental,
+  declusterCell, declusterSweep, experimental, buildLagVolume, directionalVariogram, mergeLagVolumes,
 } from '../ext/gsjs/index.js';
 import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow,
   writeF64 as gWriteF64, writeI32 as gWriteI32 } from '../ext/gslib/index.js';
@@ -1256,4 +1256,62 @@ test('experimental — Cressie + rodogram on a hand fixture (no gamv oracle)', (
   // rodogram γ = ½·|Δ|^½ ; Cressie γ = ½·(|Δ|^½)⁴ / (0.457 + 0.494/n + 0.045/n²), n=1
   assert.ok(Math.abs(rodo.gamma - 0.5 * Math.sqrt(3)) < 1e-12, `rodogram ${rodo.gamma}`);
   assert.ok(Math.abs(cres.gamma - 0.5 * 9 / 0.996) < 1e-12, `cressie ${cres.gamma}`);
+});
+
+// ── the lag-vector volume (the precompute-once / sweep-cheap substrate) ──
+const VOL3D = (() => {
+  const rng = (() => { let a = 11; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; })();
+  const d = [];
+  for (let i = 0; i < 200; i++) { const x = rng() * 100, y = rng() * 100, z = rng() * 40; d.push([x, y, z, 4 + Math.sin(x * 0.1) + 0.4 * rng()]); }
+  return d;
+})();
+
+test('lagVolume — omni extraction is EXACT vs experimental() (+ kd-tree gathers every pair)', () => {
+  const lags = { size: 8, n: 8 };
+  for (const estimator of ['matheron', 'madogram', 'correlogram']) {
+    const vol = buildLagVolume(VOL3D, { lags, estimator });
+    const vo = directionalVariogram(vol, { atol: 90, dtol: 90 });
+    const eo = experimental(VOL3D, { lags, directions: [{ atol: 90 }], estimator, faithful: true }).directions[0].lags;
+    for (let lb = 0; lb < vol.nlb; lb++) {
+      const e = eo[lb + 1];                                  // experimental il = volume lb + 1
+      if (e.npair > 0) {
+        assert.ok(Math.abs(vo.lags[lb].gamma - e.gamma) < 1e-9, `${estimator} omni lag ${lb}: γ ${vo.lags[lb].gamma} vs ${e.gamma}`);
+        assert.equal(e.npair, vo.lags[lb].npair, `${estimator} omni lag ${lb}: np (both symmetric)`);
+      }
+    }
+  }
+});
+
+test('lagVolume — directional approximates experimental() and CONVERGES with resolution', () => {
+  const lags = { size: 8, n: 8 };
+  const ed = experimental(VOL3D, { lags, directions: [{ azimuth: 45, dip: 0, atol: 25, dtol: 25 }], estimator: 'matheron', faithful: true }).directions[0].lags;
+  const meanErr = (az, dp) => {
+    const vol = buildLagVolume(VOL3D, { lags, estimator: 'matheron', azBins: az, dipBins: dp });
+    const vd = directionalVariogram(vol, { azimuth: 45, dip: 0, atol: 25, dtol: 25 });
+    let s = 0, n = 0;
+    for (let lb = 1; lb <= 6; lb++) { const e = ed[lb + 1]; if (e.npair > 20 && e.gamma > 0) { s += Math.abs(vd.lags[lb].gamma - e.gamma) / e.gamma; n++; } }
+    return s / n;
+  };
+  const coarse = meanErr(36, 18), fine = meanErr(90, 45);
+  assert.ok(coarse < 0.08, `default-resolution directional err ${coarse} should be small`);
+  assert.ok(fine < coarse + 1e-9, `finer cells converge: fine ${fine} ≤ coarse ${coarse}`);
+});
+
+test('lagVolume — mergeable (sums add; the parallel-fill contract)', () => {
+  const vol = buildLagVolume(VOL3D, { lags: { size: 8, n: 8 }, estimator: 'matheron' });
+  const m = mergeLagVolumes(vol, vol);
+  for (let i = 0; i < vol.cells.length; i++) assert.ok(Math.abs(m.cells[i] - 2 * vol.cells[i]) < 1e-9, `merge additivity at ${i}`);
+  assert.throws(() => mergeLagVolumes(vol, buildLagVolume(VOL3D, { lags: { size: 8, n: 6 }, estimator: 'matheron' })), /incompatible/);
+});
+
+test('lagVolume — downhole (sameHoleOnly) omni == experimental downhole', () => {
+  const data = [], holeId = [];
+  let id = 0;
+  for (let hx = 0; hx < 60; hx += 15) for (let hy = 0; hy < 30; hy += 15) { id++; for (let z = 0; z < 48; z += 3) { data.push([hx, hy, z, 4 + Math.sin(z * 0.2)]); holeId.push('H' + id); } }
+  const lags = { size: 3, n: 8 };
+  const vol = buildLagVolume(data, { lags, estimator: 'matheron', holeId, sameHoleOnly: true });
+  const vo = directionalVariogram(vol, { atol: 90, dtol: 90 });
+  const ed = experimental(data, { holeId, lags, directions: [{ mode: 'downhole' }], estimator: 'matheron', faithful: true }).directions[0].lags;
+  for (let lb = 0; lb < vol.nlb; lb++) { const e = ed[lb + 1]; if (e.npair > 0) assert.ok(Math.abs(vo.lags[lb].gamma - e.gamma) < 1e-9, `downhole lag ${lb} γ`); }
+  assert.throws(() => buildLagVolume(data, { lags, estimator: 'matheron', sameHoleOnly: true }), /sameHoleOnly.*holeId/);
 });
