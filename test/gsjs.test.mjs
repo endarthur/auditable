@@ -19,6 +19,7 @@ import {
   fromJSON, run, estimate, evaluate,
   createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
   leapfrogToRotmat, toRotmat, applyAnis, krige, qknaSummary, crossValidate,
+  declusterCell, declusterSweep,
 } from '../ext/gsjs/index.js';
 import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow } from '../ext/gslib/index.js';
 
@@ -1100,4 +1101,46 @@ test('crossValidate — SK adds the weight-on-mean; sameHole excludes the whole 
   for (let k = 0; k < data.length; k++) if (sh.status[k] === STATUS.OK && plain.status[k] === STATUS.OK && Math.abs(sh.estimate[k] - plain.estimate[k]) > 1e-9) differ++;
   assert.ok(differ > data.length / 2, `sameHole barely changed estimates (${differ})`);
   assert.throws(() => crossValidate({ data, variogram: vario, search, ktype: 'OK', sameHole: true }), /sameHole needs holeId/);
+});
+
+// ── cell declustering (GSLIB declus) ──
+test('declusterCell — down-weights a dense cluster; Σweights = n; recovers background', () => {
+  // 36 sparse background @ grade 1 on a 20-m grid + 64 clustered @ grade 10 (all in
+  // one 20-m cell). Naive mean is dragged up; declustering should recover ≈ 1.
+  const data = [];
+  for (let x = 0; x <= 100; x += 20) for (let y = 0; y <= 100; y += 20) data.push([x, y, 0, 1.0]);
+  for (let i = 0; i < 64; i++) data.push([48 + (i % 8) * 0.4, 48 + Math.floor(i / 8) * 0.4, 0, 10.0]);
+  const n = data.length;
+
+  const c = declusterCell({ data, cellSize: 20 });
+  let sw = 0; for (const w of c.weights) sw += w;
+  assert.ok(Math.abs(sw - n) < 1e-9, `Σweights ${sw} ≠ n=${n}`);
+  assert.ok(c.naiveMean > 6, `naive ${c.naiveMean} should be inflated`);
+  assert.ok(c.mean < 2, `declustered mean ${c.mean} should recover ≈1 background`);
+  assert.ok(c.mean < c.naiveMean, 'declustered < naive for high-grade clustering');
+  // the 64 clustered samples each get a small weight; a sparse sample gets ≈ a full one
+  assert.ok(c.weights[0] > c.weights[n - 1] * 5, 'sparse sample out-weighs a clustered one');
+});
+
+test('declusterCell — uniform data → ~equal weights, declustered ≈ naive', () => {
+  const data = [];
+  for (let x = 0; x < 60; x += 10) for (let y = 0; y < 60; y += 10) data.push([x, y, 0, 2 + 0.01 * x]);
+  const c = declusterCell({ data, cellSize: 10 });
+  for (const w of c.weights) assert.ok(Math.abs(w - 1) < 1e-9, `uniform weight ${w} ≠ 1`);
+  assert.ok(Math.abs(c.mean - c.naiveMean) < 1e-9, 'no clustering → declustered == naive');
+});
+
+test('declusterSweep — traces the curve; best=min picks a low-mean cell size', () => {
+  const data = [];
+  for (let x = 0; x <= 100; x += 20) for (let y = 0; y <= 100; y += 20) data.push([x, y, 0, 1.0]);
+  for (let i = 0; i < 64; i++) data.push([48 + (i % 8) * 0.4, 48 + Math.floor(i / 8) * 0.4, 0, 10.0]);
+
+  const sweep = declusterSweep({ data, sizes: [2, 5, 10, 20, 30, 50, 80] });
+  assert.equal(sweep.means.length, 7);
+  assert.ok(sweep.best.mean <= Math.min(...sweep.means) + 1e-9, 'best=min is the minimum of the curve');
+  assert.ok(sweep.best.mean < sweep.naiveMean, 'best declustered mean beats naive');
+  let sw = 0; for (const w of sweep.best.weights) sw += w; assert.ok(Math.abs(sw - data.length) < 1e-9);
+  // max-pick selects the other extremum
+  const up = declusterSweep({ data, sizes: [2, 5, 10, 20, 30, 50, 80], pick: 'max' });
+  assert.ok(up.best.mean >= Math.max(...up.means) - 1e-9, 'best=max is the maximum of the curve');
 });

@@ -37,7 +37,8 @@ atra/WASM), not a backend lock.
 | Perf — kNN search; JS ≥ WASM kt3d at ndmax 8–24 (test/gsjs-perf.mjs) | ✅ |
 | QKNA diagnostics — slope of regression · kriging efficiency · neg-weights (`qknaSummary`) | ✅ (Deutsch & Deutsch 2012, Eq.1/9) |
 | Cross-validation — leave-one-out (`crossValidate`, ± same-hole), ME/RMSE/calibration | ✅ (== krige-without-self to f64) |
-| Follow-ups — variography · compositing · declustering · batched atra solve · GPU | ⏳ |
+| Declustering — cell (`declusterCell` / `declusterSweep`), origin-offset averaged | ✅ (GSLIB declus; Σw = n) |
+| Follow-ups — variography · compositing/desurvey · batched atra solve · GPU | ⏳ |
 | Distance-restricted capping · unique neighbourhood (deferred) | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
@@ -160,6 +161,16 @@ well-calibrated; `slope`/`corr` are the empirical true-vs-estimate scatter (dist
 from QKNA's theoretical slope). A CV estimate equals a plain `krige()` over the data
 *minus that sample* to f64 — the exclusion happens in the neighbourhood, reusing the
 same solve.
+
+**Cell declustering (GSLIB `declus`).** Spatial sampling over-represents densely-drilled
+high-grade zones; declustering down-weights samples sharing a grid cell so global
+statistics aren't biased. `declusterCell({ data, cellSize, anisotropy?, nOffsets? })`
+returns per-sample `weights` (Σ = n) plus declustered-vs-naive `{ mean, variance, std }`;
+the weights average over `nOffsets`³ grid-origin shifts to kill the origin artifact.
+`declusterSweep({ data, sizes, pick? })` traces the declustered mean across cell sizes
+and returns the extremum (`pick: 'min'` for high-grade-clustered data — the usual case —
+or `'max'`) as `best.{ size, mean, weights }`, ready to feed a weighted histogram. The
+declustered mean = the average of the per-cell mean grades.
 
 **Canonical JSON** uses the compact GSLIB vocab (`{c0, structures:[{type, cc, aa,
 anis:[ay/ax,az/ax], ang:[strike,dip,plunge]}]}`); the executor translates it to
