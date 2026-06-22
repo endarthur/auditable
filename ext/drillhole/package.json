@@ -1,0 +1,12 @@
+{
+  "name": "@gcu/drillhole",
+  "version": "0.1.0",
+  "description": "Pure drillhole desurvey + fixed-length down-hole compositing (minimum curvature / balanced tangential / tangential), with a non-silent consistency report. Collars + surveys + intervals → composites ready for estimation.",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js" },
+  "files": ["index.js", "src", "README.md"],
+  "scripts": { "build": "node build.js" },
+  "license": "MIT",
+  "author": "Arthur Endlein Correia (Geoscientific Chaos Union)"
+}
