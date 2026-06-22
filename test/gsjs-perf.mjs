@@ -2,18 +2,17 @@
 //
 // SPEC-neigh §8 claims (from the BLAS-1 finding, NOT measured for kriging's
 // small-matrix-×-millions shape) that V8-winked JS likely WINS the per-block
-// kriging solve because the per-block WASM boundary is pure overhead. We now have
-// both engines — the pure-JS krige() and the atra/WASM fork kriging() — so this
-// benchmarks them head-to-head on representative shapes (ndmax × block count),
-// verifies they agree (correctness alongside speed), and is the re-runnable harness
-// §8 asks for. Run: node test/gsjs-perf.mjs   (deopt check: see the trailing note)
+// kriging solve because the per-block WASM boundary is pure overhead. This
+// benchmarks the pure-JS krige() against the GSLIB kt3d WASM oracle on
+// representative shapes (ndmax × block count), verifies they agree (correctness
+// alongside speed), and is the re-runnable harness §8 asks for.
+// Run: node test/gsjs-perf.mjs   (deopt check: see the trailing note)
 //
 // Not part of `npm test` — a manual measurement (like adder-perf.mjs / interp-perf.mjs).
 
 import { krige, realize, STATUS } from '../ext/gsjs/index.js';
 import { kt3d } from '../ext/gslib/index.js';   // gslib's own kriging = the correct WASM baseline
-// NB: gsjs's atra fork kriging() has a memory/super-block sizing bug at scale
-// (NaN past ~M=10⁴ — only ever validated at N=8/M=16); kt3d is the WASM oracle here.
+// (gsjs's old atra fork kriging() — NaN-broken past ~M=10⁴ — was removed; gsjs is pure JS now.)
 
 function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 

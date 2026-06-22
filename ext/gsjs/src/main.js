@@ -10,7 +10,6 @@
 export * from './realize.js';     // STATUS, makeTransform, realize
 export * from './aggregate.js';   // stats, histogram, swath, gradeTonnage
 export * from './backend.js';     // cpuBackend, getBackend, setBackend
-export * from './api.js';         // kriging
 export * from './orient.js';      // setrot, sqdist, applyAnis, toRotmat, leapfrogToRotmat, GSLIB_PI
 export * from './neigh.js';       // createNeighborhood, indexSamples, select
 export * from './krige.js';       // krige (pure-JS kriging driver, neighbourhood-fed) + qknaSummary, crossValidate

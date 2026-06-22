@@ -77,7 +77,7 @@ export function realize(tensor, values, opts = {}) {
   const T = makeTransform(opts.transform || 'none', opts.params || {});
   const needsDist = opts.transform === 'hgr_hard' || opts.transform === 'hgr_soft';
   if (needsDist && !distances) {
-    throw new Error(`gsjs: transform '${opts.transform}' needs distances; re-run kriging with distances:true`);
+    throw new Error(`gsjs: transform '${opts.transform}' needs distances; re-run krige() with distances:true`);
   }
   const meanOf = sk_mean == null
     ? () => 0

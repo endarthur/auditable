@@ -10,7 +10,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { realize, makeTransform, STATUS } from '../ext/gsjs/src/realize.js';
-import { kriging } from '../ext/gsjs/index.js';
+// The atra fork kriging() was removed (NaN-broken at scale, superseded by the pure-JS
+// krige()). These reconstruction/pipeline/recipe-drift tests still validate the SAME
+// thing — the kt3d oracle — now via krige(). `faithful: true` matches gslib's truncated
+// π so the result is bit-identical to the WASM oracle (krige defaults to accurate π).
+const kriging = (opts) => krige({ ...opts, faithful: true });
 import { kt3d } from '../ext/gslib/index.js';
 import { stats, histogram, swath, gradeTonnage } from '../ext/gsjs/src/aggregate.js';
 import { cpuBackend, getBackend, setBackend } from '../ext/gsjs/src/backend.js';
@@ -1023,10 +1027,8 @@ test('krige — QKNA: exact interpolator at data → slope 1, KE 1; OK weights s
 });
 
 test('krige — QKNA: diagnostics are opt-in (absent without the flag)', () => {
-  const r = kriging({ ...SYNTH, ktype: 'OK' });   // legacy path, no diagnostics
-  assert.equal(r.diagnostics, undefined);
-  const r2 = krige({ data: SYNTH.data, variogram: SYNTH.variogram, search: SYNTH.search, ktype: 'OK', grid: SYNTH.grid });
-  assert.equal(r2.diagnostics, null);
+  const r = krige({ data: SYNTH.data, variogram: SYNTH.variogram, search: SYNTH.search, ktype: 'OK', grid: SYNTH.grid });
+  assert.equal(r.diagnostics, null);
 });
 
 test('recipe — output.diagnostics flows through; qknaSummary pools over OK blocks', () => {

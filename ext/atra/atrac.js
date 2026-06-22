@@ -34,8 +34,9 @@ export function compileRecipe(inputs, opts = {}) {
  * gcu-make recipe: concatenate .atra inputs and emit a standalone JS module with
  * embedded Wasm (the `bundle()` form — runtime helpers + compiled bytes). Pure
  * (no fs) like compileRecipe, so gcu-make owns the I/O and the same recipe runs
- * over a @gcu/vfs adapter in-browser. Multiple inputs static-link in order — e.g.
- * gsjs passes [gslib.atra, gsjs.atra] so its fork reuses gslib's kernels.
+ * over a @gcu/vfs adapter in-browser. Multiple inputs static-link in order, so a
+ * package can co-compile a kernel against a frozen dependency's .atra. (Currently
+ * unused — gsjs was the lone consumer and is now pure JS; kept as a recipe primitive.)
  * @param {{path:string,text:string,bytes:Uint8Array}[]} inputs
  * @param {{ name?: string }} [opts] — forwarded to bundle()
  * @returns {string} — JS module source

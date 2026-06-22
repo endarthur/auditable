@@ -14,7 +14,7 @@ atra/WASM), not a backend lock.
 
 | piece | state |
 |---|---|
-| Kriging fork (OK + SK) | ✅ reconstructs `gslib.kt3d` to f64 |
+| Kriging engine `krige()` — pure-JS, neighbourhood-driven (OK + SK) | ✅ == `gslib.kt3d` to f64 (the atra fork removed — gsjs is pure JS) |
 | Realization oracle + predicates (none/topcut/hgr_hard/hgr_soft) | ✅ |
 | Targets + categories (grid / mask / points / sub-blocked) | ✅ |
 | CPU aggregations (stats / histogram / swath / grade-tonnage) | ✅ |
@@ -51,13 +51,14 @@ validated against the finished CPU path. (Specs: `spec_inbox/gsjs-SPEC.md` +
 ## API
 
 ```js
-import { kriging, realize, stats, histogram, swath, gradeTonnage } from '@gcu/gsjs';
+import { krige, realize, stats, histogram, swath, gradeTonnage } from '@gcu/gsjs';
 
-// 1. Krige → a BlockEstimateTensor (weights + sample indices + variance + status)
-const r = kriging({
+// 1. Krige → a BlockEstimateTensor (weights + sample indices + variance + status).
+//    Pure JS, neighbourhood-driven; validated bit-for-bit against GSLIB kt3d.
+const r = krige({
   data: [[x, y, z, value], ...],
   variogram: { nugget: 0.1, structures: [{ type: 'spherical', contribution: 0.9, range: 30 }] },
-  search: { radius: 50, ndmin: 1, ndmax: 8 },
+  search: { radius: 50, ndmin: 1, ndmax: 8 },   // a moving-ellipsoid neighbourhood spec
   ktype: 'OK',                 // or 'SK' (+ skmean)
   discretization: { nx: 3, ny: 3, nz: 1 },   // block kriging; omit → point kriging
   // — one target front door: —
@@ -66,6 +67,8 @@ const r = kriging({
   // points: [[x,y,z], ...] | [[x,y,z,dx,dy,dz], ...] (per-point dims, auto-categorized)
   //         | points:[[x,y,z],...] + dimCategories:[[dx,dy,dz],...] + cats:[...]
   distances: true,             // capture per-sample distance (needed by HGR realization)
+  diagnostics: true,           // per-block QKNA (slope / KE / neg-weights) — see below
+  // faithful: true            // use GSLIB's truncated π for bit-identical kt3d parity
 });
 
 // 2. Realize → per-target estimates. Cheap; re-run on cap/HGR slider changes
@@ -179,9 +182,9 @@ JSON spec) so the artifact stays self-contained — a raw JS-function `where` ru
 in memory but `toJSON()` refuses it. Domains assign **samples** via `where` (over
 data rows) and **blocks** via host-supplied `ctx.blockDomains` (per-block id);
 unmatched blocks fall to `default_model` or stay `NOT_ATTEMPTED`. `run()` adds no
-numerical drift — it equals a hand-driven `kriging()`+`realize()` to f64.
+numerical drift — it equals a hand-driven `krige()`+`realize()` to f64.
 Construction-time validation throws on bad models (range > 0, ndmax ≥ ndmin, …).
-SK_LVM builds (artifact-complete) but `run()` rejects it until kriging() gains
+SK_LVM builds (artifact-complete) but `run()` rejects it until `krige()` gains
 ktype 2.
 
 ## Build & test
@@ -197,21 +200,18 @@ wire `build.js` into `gcu-make`.
 
 ## Resume pointer
 
-Recipe API + browser-loadable bundle + three notebook examples shipped (live
-top-cut, domains, artifact+swath/GT — all browser-verified; the reactive split
-proven: estimate once, slider `onInput` re-realizes in ~0.5 ms vs ~35 ms krige).
-The build is on `@gcu/build` + gcu-make (sift + scitra's KDTree inlined; atra→wasm
-via atrac's `bundleRecipe`). **M3a shipped** — the search neighbourhood foundation
-(`neigh.js`: `createNeighborhood`/`indexSamples`/`select` for the moving ellipsoid,
-scitra kd-tree built in `setrot`-transformed coords so the ellipsoid is a sphere
-query, deterministic tie-break; bit-identical to a brute-force scan, ported
-setrot/sqdist faithful vs gslib wasm). Next: **M3b** — the selection-policy passes
-(nsect sectors, per-hole cap, min-distance, distance-restricted capping) + unique +
-bench; then **M3c** — feed `select()` into the kriging fork (the kt3d decoupling →
-octant/sector kriging, `ext/gslib` untouched). **π is a flag** (`createNeighborhood`
-`{ faithful }`): the default uses accurate `Math.PI` (gsjs is the modern library);
-`faithful: true` uses gslib's truncated-π literal `3.141592654`, making `setrot`/
-`sqdist` **bit-identical to gslib's wasm at f64 ULP** — for oracle-parity validation
-and for feeding gsjs's gslib-wasm kriging fork so selection stays bit-identical
-(atra's sin/cos are JS `Math` imports, so π is the only divergence — not trig). Then
-M-last WebGPU backend. State tracked in the `project_gsjs_started` memory.
+The estimation spine is complete and **pure JS**: composite ([`@gcu/drillhole`](../drillhole))
+→ declustered global stats → domained, convention-aware kriging (`krige()`, point/block,
+OK/SK, QKNA-diagnosed) → cross-validation → realize (live cap/HGR) → aggregate — all
+validated bit-for-bit against the frozen GSLIB `kt3d` oracle ([`@gcu/gslib`](../gslib), the
+only place atra/wasm still lives, used by the tests). `krige()` is driven by the
+neighbourhood (`neigh.js`: moving ellipsoid + sectors / per-hole / min-distance / bench, a
+scitra kd-tree built in `setrot`-transformed coords so the ellipsoid is a plain sphere query,
+deterministic tie-break, bit-identical to a brute-force scan). The original M1 atra fork
+(`gsjs.atra` + `kriging()`) was **removed** — it was NaN-broken past ~10⁴ blocks and fully
+superseded by `krige()`, so gsjs no longer carries any atra/wasm build stage. **π is a flag**
+(`{ faithful }`): default accurate `Math.PI`; `faithful: true` uses GSLIB's truncated π
+literal `3.141592654` for f64-ULP-identical kt3d parity (atra's sin/cos are JS `Math`, so π
+is the only divergence). Build: `@gcu/build` + gcu-make (sift + scitra's kdtree inlined).
+Roadmap: **variography** (experimental + model fit), then the **M-last WebGPU backend** behind
+the `getBackend`/`setBackend` seam. Full state in the `project_gsjs_started` memory.
