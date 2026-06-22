@@ -20,7 +20,14 @@ const TOKEN_RE = /[a-z0-9']+|[^\x00-\x7f]+/g;
 export function tokenize(text, opts = {}) {
   const stop = opts.keepStopwords ? new Set() : STOPWORDS;
   const minLen = opts.minLen != null ? opts.minLen : 2;
-  const lower = String(text || '').toLowerCase();
+  // Diacritic-fold accented Latin to ASCII (NFD → strip combining marks) BEFORE tokenizing.
+  // Otherwise TOKEN_RE splits at the accent (`geoestatística` → `geoestat` + `í` + `stica`) and the
+  // 1-char diacritic run is dropped by minLen, so the accented word never forms a token. Folding
+  // makes it one token (`geoestatistica`) AND lets an unaccented query match an accented doc and
+  // vice-versa. CJK is untouched — after folding, accented Latin is plain ASCII (first TOKEN_RE arm),
+  // genuinely non-Latin scripts still hit the second arm. NB: token shapes change → consumers reindex.
+  const folded = String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const lower = folded.toLowerCase();
   const out = [];
   let m;
   TOKEN_RE.lastIndex = 0;

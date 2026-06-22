@@ -24,7 +24,14 @@ const TOKEN_RE = /[a-z0-9']+|[^\x00-\x7f]+/g;
 function tokenize(text, opts = {}) {
   const stop = opts.keepStopwords ? new Set() : STOPWORDS;
   const minLen = opts.minLen != null ? opts.minLen : 2;
-  const lower = String(text || '').toLowerCase();
+  // Diacritic-fold accented Latin to ASCII (NFD → strip combining marks) BEFORE tokenizing.
+  // Otherwise TOKEN_RE splits at the accent (`geoestatística` → `geoestat` + `í` + `stica`) and the
+  // 1-char diacritic run is dropped by minLen, so the accented word never forms a token. Folding
+  // makes it one token (`geoestatistica`) AND lets an unaccented query match an accented doc and
+  // vice-versa. CJK is untouched — after folding, accented Latin is plain ASCII (first TOKEN_RE arm),
+  // genuinely non-Latin scripts still hit the second arm. NB: token shapes change → consumers reindex.
+  const folded = String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const lower = folded.toLowerCase();
   const out = [];
   let m;
   TOKEN_RE.lastIndex = 0;
@@ -354,8 +361,16 @@ function _expand(term, index, fuzzy, prefix) {
   const syns = index.synonyms[term];
   if (syns) for (const s of syns) if (has(s)) expanded.push({ term: s, weight: 1.0 });
   if (fuzzy > 0 && !has(term)) {
-    const near = nearTerms(term, index.vocab.keys(), fuzzy);
-    for (const { term: t, distance } of near) expanded.push({ term: t, weight: 1 - 0.3 * distance });
+    // Gate the fuzzy radius by query-term length — a 1-edit match on a short word flips its
+    // meaning (cat→bat, mina→mira), so don't fuzz short terms. And steepen the down-weight (0.5 @ d1,
+    // 0.2 @ d2) so a fuzzy hit can't outrank a literal/synonym match on a rare term's IDF alone
+    // (the sondagem→soldagem false-friend). Conservative fuzzy = typo fallback; the synonym ring
+    // above is the precise multilingual mechanism.
+    const fz = term.length < 5 ? 0 : term.length < 8 ? Math.min(fuzzy, 1) : fuzzy;
+    if (fz > 0) {
+      const near = nearTerms(term, index.vocab.keys(), fz);
+      for (const { term: t, distance } of near) expanded.push({ term: t, weight: Math.max(0, 0.5 - 0.3 * (distance - 1)) });
+    }
   }
   if (prefix && term.length >= 3 && !has(term)) {
     for (const t of index.vocab.keys()) if (t !== term && t.startsWith(term)) expanded.push({ term: t, weight: 0.8 });

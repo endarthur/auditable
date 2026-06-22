@@ -216,6 +216,23 @@ Benches in `bench/`: `lean-prototype.mjs` (the original v2 sizing study), `csr-b
 
 Pre-1.0 means the index format is not stabilized — bumps may change the serialization format. APIs are unlikely to change shape, but expansions to `Librarian.*` may add fields to result objects.
 
+### precision fixes — diacritic fold + fuzzy gating  *(2026-06-22)*
+
+Two precision bugs fixed (spec: `spec_inbox/SPEC-librarian-search-precision.md`, routed from `@gcu/weir`):
+
+- **Diacritic-insensitive tokenization** (`tokenize.js`) — `tokenize()` now NFD-folds accented
+  Latin to ASCII (strips combining marks) before splitting, so `geoestatística` → one token
+  `geoestatistica`, and an unaccented query matches an accented doc and vice-versa. Previously
+  `TOKEN_RE` split at the accent and the diacritic run was dropped by `minLen`, so accented pt-BR /
+  Latin terms never indexed. CJK unaffected. **⚠ On-disk token shapes CHANGE → any consumer that
+  PERSISTS an index (`pack`/`unpack`, e.g. weir) must REINDEX.** Runtime-built indexes (auditable's
+  docs Ctrl+K, the reader's per-book search) rebuild on first use, so they pick it up automatically.
+- **Fuzzy-match gating** (`csr.js` `_expand`) — query-time, **no reindex**. The fuzzy radius is now
+  length-gated (`<5` chars → no fuzz; `<8` → max 1 edit), and a fuzzy hit's weight is steepened to
+  `0.5 @ d1` (was `0.7`) so a rare false-friend (`sondagem`→`soldagem`) can't outrank literal/synonym
+  matches on IDF alone. Conservative fuzzy = typo fallback; the synonym ring stays the precise
+  multilingual mechanism. (Deeper IDF-guard option left as a follow-up if cases remain.)
+
 ## v2 — one engine, not two  *(SHIPPED 2026-06-01)*
 
 A v2 redesign (driven by `@gcu/weir`, which needs ranked full-text over 10k–100k

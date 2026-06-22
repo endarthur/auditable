@@ -217,3 +217,42 @@ describe('CSR engine — lean (folded) path', () => {
     assert.equal(r[0].doc.body, undefined);
   });
 });
+
+// ── precision fix 1: diacritic-insensitive tokenization (NFD fold) ───────────
+// Bug: TOKEN_RE split accented Latin at the accent → `geoestatística` never formed a token.
+describe('CSR engine — diacritic fold (accented Latin ↔ ASCII)', () => {
+  const docs = [
+    { id: 'pt', title: 'Geoestatística', body: 'inferência variográfica e seção de sondagem' },
+    { id: 'en', title: 'Geostatistics', body: 'plain english body' },
+  ];
+  const idx = buildCsrIndex({ docs });
+  const hit = (q) => search(idx, q, { fuzzy: 0 }).some((h) => h.id === 'pt');
+  it('accented doc found by an UNACCENTED query (geoestatistica → geoestatística)', () => assert.ok(hit('geoestatistica')));
+  it('accented doc found by the ACCENTED query too (geoestatística)', () => assert.ok(hit('geoestatística')));
+  it('mid-word accents fold (seção → secao, inferência → inferencia)', () => { assert.ok(hit('secao')); assert.ok(hit('inferencia')); });
+  it('CJK is unaffected by the fold', () => {
+    const i2 = buildCsrIndex({ docs: [{ id: 'c', body: '世界 foo bar' }] });
+    assert.ok(search(i2, '世界', { fuzzy: 0 }).some((h) => h.id === 'c'));
+  });
+});
+
+// ── precision fix 2: fuzzy gating + steeper down-weight ──────────────────────
+// Bug: fuzzy:1 matched every vocab term within 1 edit at weight 0.7, no length gate, so a rare
+// false-friend (soldagem/welding) outranked literal drillhole docs for `sondagem` (drilling).
+describe('CSR engine — fuzzy gating (false-friend down-weight + length gate)', () => {
+  it('short out-of-vocab term gets NO fuzzy match (cat ↛ bat — a 1-edit meaning flip)', () => {
+    const idx = buildCsrIndex({ docs: [{ id: 'b', body: 'bat ball game' }] });
+    assert.equal(search(idx, 'cat', { fuzzy: 1 }).length, 0);   // len 3 < 5 → gated; 'bat' is not a prefix of 'cat'
+  });
+  it('a 1-edit fuzzy hit now carries weight 0.5, not 0.7 (can\'t win on a rare term\'s IDF alone)', () => {
+    // pure-multiplier check, BM25-tuning-independent: fuzzy('sondagem'→'soldagem') / exact('soldagem')
+    const idx = buildCsrIndex({ docs: [{ id: 'weld', body: 'soldagem welding kit assembly notes' }] });
+    const exact = search(idx, 'soldagem', { fuzzy: 0 })[0].score;
+    const fz = search(idx, 'sondagem', { fuzzy: 1 })[0].score;   // 'sondagem' len 8 → fuzzy active, d=1
+    assert.ok(Math.abs(fz / exact - 0.5) < 0.02, `fuzzy weight should be ~0.5×, got ${(fz / exact).toFixed(3)}×`);
+  });
+  it('a genuine typo still fuzzy-matches (krigging → kriging)', () => {
+    const idx = buildCsrIndex({ docs: [{ id: 'k', body: 'kriging interpolation of grades' }] });
+    assert.equal(search(idx, 'krigging', { fuzzy: 1 })[0].id, 'k');   // len 8 → fuzzy active
+  });
+});

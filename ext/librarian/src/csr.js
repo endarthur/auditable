@@ -246,8 +246,16 @@ function _expand(term, index, fuzzy, prefix) {
   const syns = index.synonyms[term];
   if (syns) for (const s of syns) if (has(s)) expanded.push({ term: s, weight: 1.0 });
   if (fuzzy > 0 && !has(term)) {
-    const near = nearTerms(term, index.vocab.keys(), fuzzy);
-    for (const { term: t, distance } of near) expanded.push({ term: t, weight: 1 - 0.3 * distance });
+    // Gate the fuzzy radius by query-term length — a 1-edit match on a short word flips its
+    // meaning (cat→bat, mina→mira), so don't fuzz short terms. And steepen the down-weight (0.5 @ d1,
+    // 0.2 @ d2) so a fuzzy hit can't outrank a literal/synonym match on a rare term's IDF alone
+    // (the sondagem→soldagem false-friend). Conservative fuzzy = typo fallback; the synonym ring
+    // above is the precise multilingual mechanism.
+    const fz = term.length < 5 ? 0 : term.length < 8 ? Math.min(fuzzy, 1) : fuzzy;
+    if (fz > 0) {
+      const near = nearTerms(term, index.vocab.keys(), fz);
+      for (const { term: t, distance } of near) expanded.push({ term: t, weight: Math.max(0, 0.5 - 0.3 * (distance - 1)) });
+    }
   }
   if (prefix && term.length >= 3 && !has(term)) {
     for (const t of index.vocab.keys()) if (t !== term && t.startsWith(term)) expanded.push({ term: t, weight: 0.8 });
