@@ -457,9 +457,10 @@ test('recipe — function `where` works in-memory but refuses to serialize', () 
 function rng32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 
 // brute-force reference: every sample inside the ellipsoid, distance-sorted, tie-
-// broken by original index, then the SAME selection policy (ndmax cap, or the
-// greedy per-sector cap) implemented independently by a full scan. Uses select()'s
-// metric (sqdist/rotmat) but its own algorithm — bit-identity is the contract.
+// broken by original index, then the SAME selection policies (ndmax cap, sector
+// cap, per-hole cap, min separation) implemented independently by a full scan.
+// Uses select()'s metric (sqdist/rotmat) but its own algorithm — bit-identity is
+// the contract.
 function bruteSelect(samples, target, nbhd) {
   const R = nbhd.rotmat, r2 = nbhd.radius * nbhd.radius, cand = [];
   for (let i = 0; i < samples.length; i++) {
@@ -467,17 +468,30 @@ function bruteSelect(samples, target, nbhd) {
     if (d2 <= r2) cand.push({ i, d2 });
   }
   cand.sort((a, b) => (a.d2 - b.d2) || (a.i - b.i));
-  const S = nbhd.sectors;
-  if (!S) return cand.slice(0, nbhd.ndmax).map((c) => c.i);
-  const per = new Int32Array(S.count), keep = [], Rp = nbhd._rotPure;
+  const S = nbhd.sectors, phm = nbhd.perHoleMax, msd = nbhd.minSampleDistance, Rp = nbhd._rotPure;
+  if (!S && phm == null && !(msd > 0)) return cand.slice(0, nbhd.ndmax).map((c) => c.i);
+  const per = S ? new Int32Array(S.count) : null, perHole = phm != null ? new Map() : null;
+  const ms2 = msd > 0 ? msd * msd : 0, keep = [];
   for (let k = 0; k < cand.length && keep.length < nbhd.ndmax; k++) {
-    const c = cand[k], dx = samples[c.i][0] - target[0], dy = samples[c.i][1] - target[1], dz = samples[c.i][2] - target[2];
-    const x = Rp[0] * dx + Rp[1] * dy + Rp[2] * dz, y = Rp[3] * dx + Rp[4] * dy + Rp[5] * dz;
-    let az = Math.atan2(y, x); if (az < 0) az += 2 * Math.PI;
-    let w = Math.floor(az / (2 * Math.PI / S.n)); if (w >= S.n) w = S.n - 1;
-    if (S.hemispheres) { const z = Rp[6] * dx + Rp[7] * dy + Rp[8] * dz; if (z < 0) w += S.n; }
-    if (per[w] >= S.maxPer) continue;
-    per[w]++; keep.push(c.i);
+    const c = cand[k], i = c.i, dx = samples[i][0] - target[0], dy = samples[i][1] - target[1], dz = samples[i][2] - target[2];
+    let w = -1;
+    if (S) {
+      const x = Rp[0] * dx + Rp[1] * dy + Rp[2] * dz, y = Rp[3] * dx + Rp[4] * dy + Rp[5] * dz;
+      let az = Math.atan2(y, x); if (az < 0) az += 2 * Math.PI;
+      w = Math.floor(az / (2 * Math.PI / S.n)); if (w >= S.n) w = S.n - 1;
+      if (S.hemispheres) { const z = Rp[6] * dx + Rp[7] * dy + Rp[8] * dz; if (z < 0) w += S.n; }
+      if (per[w] >= S.maxPer) continue;
+    }
+    let hid;
+    if (perHole) { hid = nbhd._holeId[i]; if ((perHole.get(hid) || 0) >= phm) continue; }
+    if (ms2 > 0) {
+      let close = false;
+      for (const j of keep) { const ex = samples[i][0] - samples[j][0], ey = samples[i][1] - samples[j][1], ez = samples[i][2] - samples[j][2]; if (ex * ex + ey * ey + ez * ez < ms2) { close = true; break; } }
+      if (close) continue;
+    }
+    if (S) per[w]++;
+    if (perHole) perHole.set(hid, (perHole.get(hid) || 0) + 1);
+    keep.push(i);
   }
   return keep;
 }
@@ -676,4 +690,67 @@ test('neigh — leapfrog convention runs + applies anisotropy on the right axis'
   // major axis is E-W (strike), so the E sample (idx 1, along major, range 100) is in;
   // the N sample (idx 2, along the squeezed semi-major, range 50) is out at distance 80.
   assert.ok([...r.ranks].includes(1) && ![...r.ranks].includes(2), `expected E kept / N dropped; got ${[...r.ranks]}`);
+});
+
+// ── M3b: per-hole cap + min-distance thinning (post-gather selection policies) ──
+
+test('neigh — per-hole + min-distance are bit-identical to brute-force', () => {
+  const rng = rng32(7);
+  const samples = [], holeId = [];
+  for (let h = 0; h < 12; h++) {                    // 12 drillholes × 6 samples down-hole
+    const hx = rng() * 500, hy = rng() * 500;
+    for (let k = 0; k < 6; k++) { samples.push([hx + (rng() - 0.5) * 8, hy + (rng() - 0.5) * 8, k * 10]); holeId.push(h); }
+  }
+  const configs = [
+    { radius: 200, perHoleMax: 2 },
+    { radius: 200, minSampleDistance: 15 },
+    { radius: 200, perHoleMax: 3, minSampleDistance: 12 },
+    { radius: 220, radiusVert: 60, angle: 40, perHoleMax: 2, minSampleDistance: 10, sectors: { n: 4, maxPer: 3 } }, // all policies at once
+  ];
+  let checks = 0;
+  for (const cfg of configs) {
+    for (const ndmax of [6, 20, 1e9]) {
+      const nb = createNeighborhood({ ...cfg, ndmin: 1, ndmax });
+      indexSamples(nb, samples, null, { holeId });
+      for (let t = 0; t < 50; t++) {
+        const target = [rng() * 500, rng() * 500, rng() * 60];
+        assert.deepEqual([...select(nb, target).ranks], bruteSelect(samples, target, nb), `cfg ${JSON.stringify(cfg)} ndmax ${ndmax}`);
+        checks++;
+      }
+    }
+  }
+  assert.ok(checks > 500, `only ${checks}`);
+});
+
+test('neigh — per-hole cap limits samples per drillhole', () => {
+  const samples = [
+    [10, 0, 0], [11, 0, 5], [12, 0, 10], [13, 0, 15],      // hole A (idx 0–3)
+    [-10, 5, 0], [-11, 5, 5], [-12, 5, 10], [-13, 5, 15],  // hole B (idx 4–7)
+  ];
+  const holeId = [0, 0, 0, 0, 1, 1, 1, 1];
+  const nb = createNeighborhood({ radius: 100, ndmin: 1, ndmax: 99, perHoleMax: 2 });
+  indexSamples(nb, samples, null, { holeId });
+  const r = select(nb, [0, 0, 0]);
+  assert.equal(r.n, 4);                                    // 2 per hole × 2 holes
+  assert.equal([...r.ranks].filter((i) => i < 4).length, 2);
+  assert.equal([...r.ranks].filter((i) => i >= 4).length, 2);
+});
+
+test('neigh — perHoleMax without a bound holeId throws', () => {
+  const nb = createNeighborhood({ radius: 100, perHoleMax: 2 });
+  indexSamples(nb, [[0, 0, 0], [10, 0, 0]]);
+  assert.throws(() => select(nb, [0, 0, 0]), /holeId/);
+});
+
+test('neigh — min-distance thins near-duplicate samples', () => {
+  const samples = [
+    [20, 0, 0], [21, 0, 0], [22, 0, 0], [20, 1, 0],        // tight cluster (idx 0–3)
+    [-50, 0, 0], [0, 60, 0],                               // well separated (idx 4,5)
+  ];
+  const nb = createNeighborhood({ radius: 100, ndmin: 1, ndmax: 99, minSampleDistance: 5 });
+  indexSamples(nb, samples);
+  const r = select(nb, [0, 0, 0]);
+  assert.equal(r.n, 3);                                    // cluster → 1 (nearest) + 2 separated
+  assert.equal([...r.ranks].filter((i) => i < 4).length, 1);
+  assert.ok([...r.ranks].includes(4) && [...r.ranks].includes(5));
 });

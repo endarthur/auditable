@@ -92,20 +92,29 @@ export function createNeighborhood(opts = {}) {
     sectors = { n, maxPer, minPer, minFilled, hemispheres, count: hemispheres ? 2 * n : n };
   }
 
+  // per-drillhole cap (needs a holeId side array bound at indexSamples) + minimum
+  // separation between retained samples (real Euclidean — declusters near-duplicates).
+  const perHoleMax = opts.perHoleMax != null ? opts.perHoleMax : null;
+  if (perHoleMax != null && !(perHoleMax >= 1)) throw new Error('gsjs.neigh: perHoleMax must be ≥ 1');
+  const minSampleDistance = opts.minSampleDistance != null ? opts.minSampleDistance : 0;
+  if (!(minSampleDistance >= 0)) throw new Error('gsjs.neigh: minSampleDistance must be ≥ 0');
+
   return {
     type: opts.type || 'moving',
     convention, faithful,
     radius, radiusMinor, radiusVert,
-    rotmat, ndmin, ndmax, sectors,
+    rotmat, ndmin, ndmax, sectors, perHoleMax, minSampleDistance,
     _rotPure: rotPure,   // pure orientation (anis removed) — used by sector binning
-    _tree: null, _n: 0, _ox: null, _oy: null, _oz: null,
+    _tree: null, _n: 0, _ox: null, _oy: null, _oz: null, _holeId: null,
   };
 }
 
 // Bind the conditioning samples and build the kd-tree (once — samples are
 // resident per §7). `samples` is an array of [x,y,z] (extra columns ignored), or
-// the same row objects + a getter. Returns the neighbourhood (mutated) for chaining.
-export function indexSamples(nbhd, samples, get) {
+// the same row objects + a getter. `opts.holeId` is an optional side array
+// (parallel to samples, ORIGINAL order — SPEC-neigh §4.1) consumed by the per-hole
+// cap. Returns the neighbourhood (mutated) for chaining.
+export function indexSamples(nbhd, samples, get, opts = {}) {
   const n = samples.length;
   const xform = new Float64Array(n * 3);
   const ox = new Float64Array(n), oy = new Float64Array(n), oz = new Float64Array(n);
@@ -117,6 +126,10 @@ export function indexSamples(nbhd, samples, get) {
     xform[i * 3] = t[0]; xform[i * 3 + 1] = t[1]; xform[i * 3 + 2] = t[2];
     ox[i] = x; oy[i] = y; oz[i] = z;
   }
+  if (opts.holeId != null) {
+    if (opts.holeId.length !== n) throw new Error('gsjs.neigh.indexSamples: holeId length must match samples');
+    nbhd._holeId = opts.holeId;
+  }
   nbhd._tree = new KDTree({ data: xform, shape: [n, 3] });
   nbhd._n = n; nbhd._ox = ox; nbhd._oy = oy; nbhd._oz = oz;
   return nbhd;
@@ -126,8 +139,10 @@ export function indexSamples(nbhd, samples, get) {
 //   target: [x, y, z]
 //   returns { ranks: Int32Array, dists: Float64Array, status, n, filled? }
 // `ranks` are ORIGINAL sample indices (into the array passed to indexSamples),
-// distance-sorted then tie-broken by original index. Up to ndmax retained; with
-// sectors, at most maxPer per sector (greedy in distance order). status is
+// distance-sorted then tie-broken by original index. One greedy pass in distance
+// order applies every active policy: ndmax cap, sector cap (≤ maxPer per sector),
+// per-hole cap (≤ perHoleMax per drillhole), and minimum separation (drop a
+// candidate within minSampleDistance of one already kept). status is
 // INSUFFICIENT_DATA when fewer than ndmin retained, or (sectors) fewer than
 // minFilled sectors hold ≥ minPer. `filled` (sector count) is returned when
 // sectors are active.
@@ -152,20 +167,41 @@ export function select(nbhd, target, opts = {}) {
 
   let keep, filled;
   const S = nbhd.sectors;
-  if (S) {
-    // greedy in distance order: keep a candidate if its sector isn't full and the
-    // overall ndmax isn't reached — so sectors balance, distance still rules.
-    const perSector = new Int32Array(S.count);
+  const perHoleMax = nbhd.perHoleMax;
+  const minSep2 = nbhd.minSampleDistance > 0 ? nbhd.minSampleDistance * nbhd.minSampleDistance : 0;
+  const needGreedy = S || perHoleMax != null || minSep2 > 0;
+
+  if (needGreedy) {
+    if (perHoleMax != null && !nbhd._holeId) throw new Error('gsjs.neigh.select: perHoleMax set but no holeId bound — pass { holeId } to indexSamples');
+    // single greedy pass in distance order, applying every active policy: a
+    // candidate is kept only if it clears the sector cap, the per-hole cap, the
+    // minimum separation, AND the overall ndmax. Distance still rules the order.
+    const perSector = S ? new Int32Array(S.count) : null;
+    const perHole = perHoleMax != null ? new Map() : null;
     keep = [];
     for (let k = 0; k < inside.length && keep.length < nbhd.ndmax; k++) {
-      const c = inside[k];
-      const sec = sectorOf(S, nbhd._rotPure, nbhd._ox[c.i] - tx, nbhd._oy[c.i] - ty, nbhd._oz[c.i] - tz);
-      if (perSector[sec] >= S.maxPer) continue;
-      perSector[sec]++;
+      const c = inside[k], i = c.i;
+      let sec = -1;
+      if (S) {
+        sec = sectorOf(S, nbhd._rotPure, nbhd._ox[i] - tx, nbhd._oy[i] - ty, nbhd._oz[i] - tz);
+        if (perSector[sec] >= S.maxPer) continue;
+      }
+      let hid;
+      if (perHole) { hid = nbhd._holeId[i]; if ((perHole.get(hid) || 0) >= perHoleMax) continue; }
+      if (minSep2 > 0) {
+        let tooClose = false;
+        for (let m = 0; m < keep.length; m++) {
+          const j = keep[m].i;
+          const dx = nbhd._ox[i] - nbhd._ox[j], dy = nbhd._oy[i] - nbhd._oy[j], dz = nbhd._oz[i] - nbhd._oz[j];
+          if (dx * dx + dy * dy + dz * dz < minSep2) { tooClose = true; break; }
+        }
+        if (tooClose) continue;
+      }
+      if (S) perSector[sec]++;
+      if (perHole) perHole.set(hid, (perHole.get(hid) || 0) + 1);
       keep.push(c);
     }
-    filled = 0;
-    for (let s = 0; s < S.count; s++) if (perSector[s] >= S.minPer) filled++;
+    if (S) { filled = 0; for (let s = 0; s < S.count; s++) if (perSector[s] >= S.minPer) filled++; }
   } else {
     keep = inside.length > nbhd.ndmax ? inside.slice(0, nbhd.ndmax) : inside;
   }

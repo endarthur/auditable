@@ -26,7 +26,8 @@ atra/WASM), not a backend lock.
 | Neighbourhood M3a — moving ellipsoid, kd-tree, deterministic tie-break | ✅ |
 | Neighbourhood M3b — sector search (nsect / maxPer / minPer / minFilled) | ✅ |
 | Orientation conventions (`orient.js`: gslib + leapfrog, matrix-canonical) | ✅ |
-| Neighbourhood M3b — per-hole cap · min-distance · distance-cap · unique · bench | ⏳ |
+| Neighbourhood M3b — per-hole cap · min-distance thinning | ✅ |
+| Neighbourhood M3b — distance-restricted capping · unique · bench | ⏳ |
 | Neighbourhood M3c — feed select() into the kriging fork | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
