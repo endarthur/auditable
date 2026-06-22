@@ -38,7 +38,12 @@ atra/WASM), not a backend lock.
 | QKNA diagnostics — slope of regression · kriging efficiency · neg-weights (`qknaSummary`) | ✅ (Deutsch & Deutsch 2012, Eq.1/9) |
 | Cross-validation — leave-one-out (`crossValidate`, ± same-hole), ME/RMSE/calibration | ✅ (== krige-without-self to f64) |
 | Declustering — cell (`declusterCell` / `declusterSweep`), origin-offset averaged | ✅ (GSLIB declus; Σw = n) |
-| Follow-ups — variography · compositing/desurvey · batched atra solve · GPU | ⏳ |
+| Compositing / desurvey — [`@gcu/drillhole`](../drillhole) (min-curv / tangential, length-weighted) | ✅ (separate pkg; the workflow's front door) |
+| Variography — `experimental` · lag-vector volume · `fitModel` (conservative seed) | ✅ (`experimental` == `gslib.gamv`, full estimator menu) |
+| Closed loop — `scoreModel` (CV + QKNA judge the model by its estimate) | ✅ |
+| Variography notebook (interactive fit, companion pair-count strip, closed-loop demo) | ✅ |
+| Variography Works surface (traditional 5a → Our-Way stereonet/X-ray 5b) | ⏳ (the tool; UI/UX-first) |
+| Follow-ups — batched atra solve · GPU backend | ⏳ |
 | Distance-restricted capping · unique neighbourhood (deferred) | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
@@ -187,22 +192,55 @@ Construction-time validation throws on bad models (range > 0, ndmax ≥ ndmin, �
 SK_LVM builds (artifact-complete) but `run()` rejects it until `krige()` gains
 ktype 2.
 
+## Variography
+
+Deriving the variogram model `krige()` consumes, from the data. Pure JS; the experimental
+variogram is validated bit-for-bit against GSLIB `gamv`. Full design (incl. the stereonet
+discovery surface) in `spec_inbox/SPEC-variography.md`.
+
+```js
+import { experimental, buildLagVolume, directionalVariogram, fitModel, scoreModel } from '@gcu/gsjs';
+
+// 1. experimental variogram — directional + downhole, a pluggable estimator menu
+const exp = experimental(data, {
+  holeId, lags: { size: 30, n: 10 },
+  directions: [
+    { name: 'downhole', mode: 'downhole' },                                  // nugget (closest-spaced)
+    { name: 'major', azimuth: 0, atol: 25, dtol: 25, bandwidthH: 60, bandwidthV: 30 },  // carpenter pencil
+  ],
+  estimator: 'matheron',   // | madogram | covariance | correlogram | pairwiseRelative | cressie | …
+});
+
+// 2. fit a CONSERVATIVE seed (nugget from downhole, ranges by pair-count WLS, linked dirs).
+//    Returns a REPORT with warnings (high-nugget / sparse-downhole / …) — judgeable, not a black box.
+const { model, fit, report } = fitModel(exp, { sill, roles: { major: 'major', semi: 'semi', minor: 'downhole' } });
+
+// 3. close the loop — judge the model by the ESTIMATE it makes (leave-one-out CV + optional QKNA)
+const { cv } = scoreModel(data, model, { search });   // cv.{ rmse, meanError, varStdError, slope, corr }
+```
+
+`buildLagVolume` / `directionalVariogram` are the **precompute-once / sweep-cheap** substrate for
+the (planned) live stereonet sweep — bin pairs into a `lag-bin × direction-cell` grid of running
+sums (memory bounded by resolution, not N; kd-tree-filled; mergeable), then any directional
+variogram is a cheap cone-integration (omni exact vs `experimental()`, directional converging).
+
 ## Build & test
 
 ```
-node ext/gsjs/build.js        # co-compiles gslib.atra (frozen) + gsjs.atra → index.js
+node ext/gsjs/build.js        # @gcu/build bundle → index.js (pure JS, no atra/wasm)
 node --test test/gsjs.test.mjs
 ```
 
-`gsjs` owns its build (reads `gslib.atra` only as a static-link dependency — the
-fork reuses gslib's kernels in gsjs's own wasm; `ext/gslib` is never edited). TODO:
-wire `build.js` into `gcu-make`.
+`gsjs` is **pure JS** — its build is a single `@gcu/build` bundle (`@gcu/sift` + scitra's
+kd-tree inlined; gcu-make auto-discovers it). The GSLIB `kt3d` / `gamv` oracles it validates
+against live in `@gcu/gslib` (a separate, frozen package — never edited).
 
 ## Resume pointer
 
 The estimation spine is complete and **pure JS**: composite ([`@gcu/drillhole`](../drillhole))
-→ declustered global stats → domained, convention-aware kriging (`krige()`, point/block,
-OK/SK, QKNA-diagnosed) → cross-validation → realize (live cap/HGR) → aggregate — all
+→ declustered global stats → **variography** (`experimental` / `fitModel` / `scoreModel`) →
+domained, convention-aware kriging (`krige()`, point/block, OK/SK, QKNA-diagnosed) →
+cross-validation → realize (live cap/HGR) → aggregate — all
 validated bit-for-bit against the frozen GSLIB `kt3d` oracle ([`@gcu/gslib`](../gslib), the
 only place atra/wasm still lives, used by the tests). `krige()` is driven by the
 neighbourhood (`neigh.js`: moving ellipsoid + sectors / per-hole / min-distance / bench, a
@@ -213,5 +251,9 @@ superseded by `krige()`, so gsjs no longer carries any atra/wasm build stage. **
 (`{ faithful }`): default accurate `Math.PI`; `faithful: true` uses GSLIB's truncated π
 literal `3.141592654` for f64-ULP-identical kt3d parity (atra's sin/cos are JS `Math`, so π
 is the only divergence). Build: `@gcu/build` + gcu-make (sift + scitra's kdtree inlined).
-Roadmap: **variography** (experimental + model fit), then the **M-last WebGPU backend** behind
-the `getBackend`/`setBackend` seam. Full state in the `project_gsjs_started` memory.
+**Variography** is built (the engine: `experimental` == `gamv`, the lag-vector volume,
+`fitModel`, the closed-loop `scoreModel`) with an interactive notebook PoC. The variography
+**Works surface** — a traditional tool first, then the Our-Way stereonet + Cowan X-ray
+flagship (`spec_inbox/SPEC-variography.md`) — is the next big, UI/UX-first piece. Then the
+**M-last WebGPU backend** behind the `getBackend`/`setBackend` seam. Full state in the
+`project_gsjs_started` memory.
