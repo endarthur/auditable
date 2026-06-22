@@ -74,8 +74,12 @@ function dhNormalizeSurveys(rawSurveys, dipConvention) {
 // - 'tangential': straight segments along the LOWER station's attitude (sparse/legacy
 //   surveys; matches dee's simple-tangential seed)
 // collar = [x, y, z]; stations from dhNormalizeSurveys (pos-down). Returns { method,
-// depths, px, py, pz, tx, ty, tz } — tangents + method ride along so dhPositionAt
-// interpolates consistently.
+// depths, px, py, pz, tx, ty, tz, dogleg, dls } — tangents + method ride along so
+// dhPositionAt interpolates consistently. `dogleg[k]` is the angular change (degrees)
+// between stations k−1 and k; `dls[k]` is the dogleg SEVERITY in °/30 length-units (the
+// metric drilling-QC convention — multiply by ⅓ for °/10 m, or recompute from `dogleg`
+// for °/100 ft). Both are geometry of the survey attitudes — independent of `method` —
+// so they're the same whichever desurvey you pick. dogleg[0] = dls[0] = 0.
 function dhDesurveyHole(collar, stations, method) {
   method = method || 'minimumCurvature';
   let n = stations.length;
@@ -84,6 +88,7 @@ function dhDesurveyHole(collar, stations, method) {
     depths: new Float64Array(n),
     px: new Float64Array(n), py: new Float64Array(n), pz: new Float64Array(n),
     tx: new Float64Array(n), ty: new Float64Array(n), tz: new Float64Array(n),
+    dogleg: new Float64Array(n), dls: new Float64Array(n),
   };
   for (let i = 0; i < n; i++) {
     out.depths[i] = stations[i].depth;
@@ -94,18 +99,20 @@ function dhDesurveyHole(collar, stations, method) {
 
   for (let k = 1; k < n; k++) {
     let dl = out.depths[k] - out.depths[k - 1];
+    // dogleg angle between the two station tangents — drives both the min-curvature RF
+    // and the QC severity, and is the same for every method (it's the survey geometry).
+    let dot = out.tx[k - 1] * out.tx[k] + out.ty[k - 1] * out.ty[k] + out.tz[k - 1] * out.tz[k];
+    let doglegRad = Math.acos(Math.max(-1, Math.min(1, dot)));
+    out.dogleg[k] = doglegRad * 180 / Math.PI;
+    out.dls[k] = dl > 1e-12 ? out.dogleg[k] / dl * 30 : 0;
     if (method === 'tangential') {
       out.px[k] = out.px[k - 1] + dl * out.tx[k];
       out.py[k] = out.py[k - 1] + dl * out.ty[k];
       out.pz[k] = out.pz[k - 1] + dl * out.tz[k];
     } else {
       let rf = 1; // balanced tangential
-      if (method !== 'balancedTangential') {
-        // minimum curvature: RF = (2/θ)·tan(θ/2)
-        let dot = out.tx[k - 1] * out.tx[k] + out.ty[k - 1] * out.ty[k] + out.tz[k - 1] * out.tz[k];
-        let dogleg = Math.acos(Math.max(-1, Math.min(1, dot)));
-        rf = dogleg > 1e-6 ? (2 / dogleg) * Math.tan(dogleg / 2) : 1;
-      }
+      // minimum curvature: RF = (2/θ)·tan(θ/2)
+      if (method !== 'balancedTangential') rf = doglegRad > 1e-6 ? (2 / doglegRad) * Math.tan(doglegRad / 2) : 1;
       out.px[k] = out.px[k - 1] + 0.5 * dl * (out.tx[k - 1] + out.tx[k]) * rf;
       out.py[k] = out.py[k - 1] + 0.5 * dl * (out.ty[k - 1] + out.ty[k]) * rf;
       out.pz[k] = out.pz[k - 1] + 0.5 * dl * (out.tz[k - 1] + out.tz[k]) * rf;
@@ -182,7 +189,56 @@ function dhPositionAt(hole, depth) {
 
 // @gcu/drillhole — validate: join + check the three tables. Nothing is silently
 // dropped; every exclusion lands in the report with a count and a BHID list.
+//
+// The collar+survey join (dhJoinHoles) and per-hole station normalization
+// (dhNormalizeHoleStations) are factored out so the point-sample locator
+// (dhDesurveySamples) reuses the exact same hole-building — one join, two consumers.
 
+
+// Build the per-hole structure from collars + surveys (NOT normalized yet — callers
+// normalize only the holes that pass their own gate, so a skipped hole doesn't accrue
+// advisory counts). Returns { holes: bhid→{bhid,collar,eoh,rawSurveys}, order: [] }.
+function dhJoinHoles(tables, dipConvention, hit) {
+  let holes = {}, order = [];
+  for (let ci = 0; ci < (tables.collars || []).length; ci++) {
+    let c0 = tables.collars[ci];
+    let bid = String(c0.bhid).trim();
+    if (!bid) { hit('bad-collar', 'Collar rows with missing BHID or non-numeric coordinates', null); continue; }
+    if (!isFinite(c0.x) || !isFinite(c0.y) || !isFinite(c0.z)) {
+      hit('bad-collar', 'Collar rows with missing BHID or non-numeric coordinates', bid);
+      continue;
+    }
+    if (holes[bid]) { hit('dup-collar', 'Duplicate collar BHIDs (first kept)', bid); continue; }
+    holes[bid] = { bhid: bid, collar: [c0.x, c0.y, c0.z], eoh: isFinite(c0.eoh) ? c0.eoh : null, rawSurveys: [] };
+    order.push(bid);
+  }
+  for (let si = 0; si < (tables.surveys || []).length; si++) {
+    let s0 = tables.surveys[si];
+    let sb = String(s0.bhid).trim();
+    let h = holes[sb];
+    if (!h) { hit('orphan-survey', 'Survey rows whose BHID has no collar (excluded)', sb); continue; }
+    h.rawSurveys.push({ depth: s0.depth, az: s0.az, dip: s0.dip });
+  }
+  return { holes: holes, order: order };
+}
+
+// Normalize one hole's raw surveys → hole.stations (pos-down, sorted, deduped, depth-0
+// synthesized), with the no-usable-survey straight-down fallback and the survey-side
+// past-EOH advisory. Counts ride into `hit`. Mutates + returns the hole.
+function dhNormalizeHoleStations(hole, dipConvention, hit) {
+  let norm = dhNormalizeSurveys(hole.rawSurveys, dipConvention);
+  if (norm.badCount) for (let bi = 0; bi < norm.badCount; bi++) hit('bad-survey', 'Survey rows with non-numeric depth/azimuth or |dip| > 90 (excluded)', hole.bhid);
+  if (norm.dupCount) for (let di = 0; di < norm.dupCount; di++) hit('dup-survey-depth', 'Duplicate survey depths in a hole (last kept)', hole.bhid);
+  if (norm.stations.length === 0) {
+    hit('collar-no-survey', 'Holes with no usable survey (desurveyed straight down)', hole.bhid);
+    norm.stations = [{ depth: 0, az: 0, dip: 90 }];
+  }
+  hole.stations = norm.stations;
+  if (hole.eoh != null && norm.stations[norm.stations.length - 1].depth > hole.eoh + 1e-9) {
+    hit('past-eoh', 'Survey or interval depths past the collar EOH (kept — EOH is advisory)', hole.bhid);
+  }
+  return hole;
+}
 
 // tables = {
 //   collars:  [{ bhid, x, y, z, eoh }],            // eoh optional/null
@@ -204,34 +260,9 @@ function dhValidate(tables, opts) {
   let dipConvention = opts.dipConvention || 'auto';
   if (dipConvention === 'auto') dipConvention = dhDetectDipConvention(tables.surveys || []);
 
-  // collars
-  let holes = {}; // bhid → { collar, eoh, surveys: [], iv: [indices] }
-  let order = [];
-  for (let ci = 0; ci < (tables.collars || []).length; ci++) {
-    let c0 = tables.collars[ci];
-    let bid = String(c0.bhid).trim();
-    if (!bid) { hit('bad-collar', 'Collar rows with missing BHID or non-numeric coordinates', null); continue; }
-    if (!isFinite(c0.x) || !isFinite(c0.y) || !isFinite(c0.z)) {
-      hit('bad-collar', 'Collar rows with missing BHID or non-numeric coordinates', bid);
-      continue;
-    }
-    if (holes[bid]) { hit('dup-collar', 'Duplicate collar BHIDs (first kept)', bid); continue; }
-    holes[bid] = {
-      bhid: bid, collar: [c0.x, c0.y, c0.z],
-      eoh: isFinite(c0.eoh) ? c0.eoh : null,
-      rawSurveys: [], iv: []
-    };
-    order.push(bid);
-  }
-
-  // surveys
-  for (let si = 0; si < (tables.surveys || []).length; si++) {
-    let s0 = tables.surveys[si];
-    let sb = String(s0.bhid).trim();
-    let h = holes[sb];
-    if (!h) { hit('orphan-survey', 'Survey rows whose BHID has no collar (excluded)', sb); continue; }
-    h.rawSurveys.push({ depth: s0.depth, az: s0.az, dip: s0.dip });
-  }
+  let joined = dhJoinHoles(tables, dipConvention, hit);
+  let holes = joined.holes, order = joined.order;
+  for (let oi = 0; oi < order.length; oi++) holes[order[oi]].iv = [];
 
   // intervals
   let iv = tables.intervals || { bhid: [], from: [], to: [], cols: [] };
@@ -248,26 +279,16 @@ function dhValidate(tables, opts) {
     h2.iv.push(ii);
   }
 
-  // per-hole structure
+  // per-hole structure (normalize only the holes that have intervals)
   let ready = [];
   for (let oi = 0; oi < order.length; oi++) {
     let hh = holes[order[oi]];
     if (hh.iv.length === 0) { hit('collar-no-intervals', 'Collars with no interval rows (hole skipped)', hh.bhid); continue; }
 
-    let norm = dhNormalizeSurveys(hh.rawSurveys, dipConvention);
-    if (norm.badCount) for (let bi = 0; bi < norm.badCount; bi++) hit('bad-survey', 'Survey rows with non-numeric depth/azimuth or |dip| > 90 (excluded)', hh.bhid);
-    if (norm.dupCount) for (let di = 0; di < norm.dupCount; di++) hit('dup-survey-depth', 'Duplicate survey depths in a hole (last kept)', hh.bhid);
-    if (norm.stations.length === 0) {
-      // no usable survey → straight down (counted, never silent)
-      hit('collar-no-survey', 'Holes with no usable survey (desurveyed straight down)', hh.bhid);
-      norm.stations = [{ depth: 0, az: 0, dip: 90 }];
-    }
-    hh.stations = norm.stations;
+    dhNormalizeHoleStations(hh, dipConvention, hit);
 
-    // EOH advisories (kept, counted)
+    // interval-side past-EOH advisory (kept, counted)
     if (hh.eoh != null) {
-      let lastSurvey = norm.stations[norm.stations.length - 1].depth;
-      if (lastSurvey > hh.eoh + 1e-9) hit('past-eoh', 'Survey or interval depths past the collar EOH (kept — EOH is advisory)', hh.bhid);
       for (let ei = 0; ei < hh.iv.length; ei++) {
         if (iv.to[hh.iv[ei]] > hh.eoh + 1e-9) {
           hit('past-eoh', 'Survey or interval depths past the collar EOH (kept — EOH is advisory)', hh.bhid);
@@ -482,6 +503,87 @@ function dhComposite(validated, opts) {
   return { header: header, rows: rows };
 }
 
+// ── src/samples.js ──
+
+// @gcu/drillhole — point-sample locator. Some data is point-support, not intervals:
+// single-depth assays (handheld XRF, density readings) or already-composited samples
+// re-imported. Compositing (length-weighting into windows) doesn't apply — you just
+// want each sample placed in 3D on the desurveyed trace. This is that path; it reuses
+// the same collar+survey join + station normalization as dhValidate.
+
+
+// tables = { collars, surveys, samples: { bhid:[], depth:[], cols:[{name,type,values}] } }
+// opts   = { dipConvention, method }
+// Returns { header: ['BHID','X','Y','Z','DEPTH', ...cols], rows, report } — one located
+// row per valid sample (sorted down-hole within each hole), with the same non-silent
+// consistency report style as the interval pipeline.
+function dhDesurveySamples(tables, opts) {
+  opts = opts || {};
+  let checks = {};
+  function hit(id, label, bhid) {
+    let c = checks[id];
+    if (!c) { c = checks[id] = { id: id, label: label, count: 0, bhids: [] }; }
+    c.count++;
+    if (bhid != null && c.bhids.indexOf(bhid) < 0 && c.bhids.length < 200) c.bhids.push(bhid);
+  }
+
+  let dipConvention = opts.dipConvention || 'auto';
+  if (dipConvention === 'auto') dipConvention = dhDetectDipConvention(tables.surveys || []);
+
+  let joined = dhJoinHoles(tables, dipConvention, hit);
+  let holes = joined.holes, order = joined.order;
+  for (let oi = 0; oi < order.length; oi++) holes[order[oi]].smp = [];
+
+  // samples → per-hole index lists
+  let smp = tables.samples || { bhid: [], depth: [], cols: [] };
+  let cols = smp.cols || [];
+  let nS = smp.bhid.length;
+  for (let ii = 0; ii < nS; ii++) {
+    let bid = String(smp.bhid[ii]).trim();
+    let h = holes[bid];
+    if (!h) { hit('orphan-sample', 'Sample rows whose BHID has no collar (excluded)', bid); continue; }
+    let d = smp.depth[ii];
+    if (!isFinite(d) || d < 0) { hit('bad-sample', 'Sample rows with negative or non-numeric depth (excluded)', bid); continue; }
+    h.smp.push(ii);
+  }
+
+  let header = ['BHID', 'X', 'Y', 'Z', 'DEPTH'];
+  for (let hc = 0; hc < cols.length; hc++) header.push(cols[hc].name);
+  let rows = [];
+  let nHoles = 0;
+
+  for (let oi = 0; oi < order.length; oi++) {
+    let hh = holes[order[oi]];
+    if (hh.smp.length === 0) { hit('collar-no-samples', 'Collars with no sample rows (hole skipped)', hh.bhid); continue; }
+    dhNormalizeHoleStations(hh, dipConvention, hit);
+    let path = dhDesurveyHole(hh.collar, hh.stations, opts.method);
+    nHoles++;
+
+    // EOH advisory (kept, counted)
+    if (hh.eoh != null) {
+      for (let ei = 0; ei < hh.smp.length; ei++) {
+        if (smp.depth[hh.smp[ei]] > hh.eoh + 1e-9) {
+          hit('past-eoh', 'Sample depths past the collar EOH (kept — EOH is advisory)', hh.bhid);
+          break;
+        }
+      }
+    }
+
+    let idx = hh.smp.slice().sort(function(a, b) { return smp.depth[a] - smp.depth[b]; });
+    for (let k = 0; k < idx.length; k++) {
+      let ii = idx[k], d = smp.depth[ii];
+      let pos = dhPositionAt(path, d);
+      let row = [hh.bhid, pos[0], pos[1], pos[2], d];
+      for (let c = 0; c < cols.length; c++) row.push(cols[c].values[ii]);
+      rows.push(row);
+    }
+  }
+
+  let checkList = [];
+  for (let k in checks) checkList.push(checks[k]);
+  return { header: header, rows: rows, report: { checks: checkList, nHoles: nHoles, nSamples: rows.length, dipConvention: dipConvention } };
+}
+
 // ── src/merge.js ──
 
 // @gcu/drillhole — merge: the down-hole interval join (A11 P4).
@@ -626,6 +728,7 @@ function dhProcess(tables, opts) {
 //   desurvey.js — tangent, detectDipConvention, normalizeSurveys, desurveyHole, positionAt
 //   validate.js — validate (join + consistency report)
 //   composite.js — defaultLength, composite (fixed-length, length/mass-weighted, split-aware)
+//   samples.js   — desurveySamples (point-support locator; reuses validate's hole join)
 //   merge.js     — mergeIntervals (down-hole union re-segment join)
 //   process.js   — process (validate → desurvey → composite, one call)
 
@@ -641,6 +744,7 @@ const Drillhole = {
   validate: dhValidate,
   defaultLength: dhDefaultLength,
   composite: dhComposite,
+  desurveySamples: dhDesurveySamples,
   process: dhProcess,
   mergeIntervals: dhMergeIntervals,
 };
@@ -652,9 +756,12 @@ export {
   dhNormalizeSurveys,
   dhDesurveyHole,
   dhPositionAt,
+  dhJoinHoles,
+  dhNormalizeHoleStations,
   dhValidate,
   dhDefaultLength,
   dhComposite,
+  dhDesurveySamples,
   dhMergeIntervals,
   dhProcess,
 };

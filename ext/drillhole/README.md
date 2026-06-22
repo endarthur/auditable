@@ -24,7 +24,14 @@ modules from here now.
   points land on the analytic circle to 1e-14, where a chord would miss by ~0.125 m).
   Dip is the **mining convention** (positive down); `detectDipConvention` infers
   pos/neg-down from the median and `normalizeSurveys` flips, sorts, dedupes (last
-  wins), and synthesizes a depth-0 station.
+  wins), and synthesizes a depth-0 station. The desurveyed hole also carries
+  **`dogleg`** (angular change, °) and **`dls`** (dogleg severity, °/30 m) per
+  station — survey-geometry QC, the same for every method.
+
+- **Locate point samples** — `desurveySamples({ collars, surveys, samples })` places
+  point-support data (single-depth XRF/density readings, pre-composited assays) in 3D
+  on the desurveyed trace — one located row per sample, no compositing. Same
+  non-silent report style as the interval pipeline.
 
 - **Compositing** — fixed-length down-hole composites, length-weighted (optionally
   **mass**-weighted by a density column), with:

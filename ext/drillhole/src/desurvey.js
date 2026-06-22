@@ -69,8 +69,12 @@ export function dhNormalizeSurveys(rawSurveys, dipConvention) {
 // - 'tangential': straight segments along the LOWER station's attitude (sparse/legacy
 //   surveys; matches dee's simple-tangential seed)
 // collar = [x, y, z]; stations from dhNormalizeSurveys (pos-down). Returns { method,
-// depths, px, py, pz, tx, ty, tz } — tangents + method ride along so dhPositionAt
-// interpolates consistently.
+// depths, px, py, pz, tx, ty, tz, dogleg, dls } — tangents + method ride along so
+// dhPositionAt interpolates consistently. `dogleg[k]` is the angular change (degrees)
+// between stations k−1 and k; `dls[k]` is the dogleg SEVERITY in °/30 length-units (the
+// metric drilling-QC convention — multiply by ⅓ for °/10 m, or recompute from `dogleg`
+// for °/100 ft). Both are geometry of the survey attitudes — independent of `method` —
+// so they're the same whichever desurvey you pick. dogleg[0] = dls[0] = 0.
 export function dhDesurveyHole(collar, stations, method) {
   method = method || 'minimumCurvature';
   let n = stations.length;
@@ -79,6 +83,7 @@ export function dhDesurveyHole(collar, stations, method) {
     depths: new Float64Array(n),
     px: new Float64Array(n), py: new Float64Array(n), pz: new Float64Array(n),
     tx: new Float64Array(n), ty: new Float64Array(n), tz: new Float64Array(n),
+    dogleg: new Float64Array(n), dls: new Float64Array(n),
   };
   for (let i = 0; i < n; i++) {
     out.depths[i] = stations[i].depth;
@@ -89,18 +94,20 @@ export function dhDesurveyHole(collar, stations, method) {
 
   for (let k = 1; k < n; k++) {
     let dl = out.depths[k] - out.depths[k - 1];
+    // dogleg angle between the two station tangents — drives both the min-curvature RF
+    // and the QC severity, and is the same for every method (it's the survey geometry).
+    let dot = out.tx[k - 1] * out.tx[k] + out.ty[k - 1] * out.ty[k] + out.tz[k - 1] * out.tz[k];
+    let doglegRad = Math.acos(Math.max(-1, Math.min(1, dot)));
+    out.dogleg[k] = doglegRad * 180 / Math.PI;
+    out.dls[k] = dl > 1e-12 ? out.dogleg[k] / dl * 30 : 0;
     if (method === 'tangential') {
       out.px[k] = out.px[k - 1] + dl * out.tx[k];
       out.py[k] = out.py[k - 1] + dl * out.ty[k];
       out.pz[k] = out.pz[k - 1] + dl * out.tz[k];
     } else {
       let rf = 1; // balanced tangential
-      if (method !== 'balancedTangential') {
-        // minimum curvature: RF = (2/θ)·tan(θ/2)
-        let dot = out.tx[k - 1] * out.tx[k] + out.ty[k - 1] * out.ty[k] + out.tz[k - 1] * out.tz[k];
-        let dogleg = Math.acos(Math.max(-1, Math.min(1, dot)));
-        rf = dogleg > 1e-6 ? (2 / dogleg) * Math.tan(dogleg / 2) : 1;
-      }
+      // minimum curvature: RF = (2/θ)·tan(θ/2)
+      if (method !== 'balancedTangential') rf = doglegRad > 1e-6 ? (2 / doglegRad) * Math.tan(doglegRad / 2) : 1;
       out.px[k] = out.px[k - 1] + 0.5 * dl * (out.tx[k - 1] + out.tx[k]) * rf;
       out.py[k] = out.py[k - 1] + 0.5 * dl * (out.ty[k - 1] + out.ty[k]) * rf;
       out.pz[k] = out.pz[k - 1] + 0.5 * dl * (out.tz[k - 1] + out.tz[k]) * rf;

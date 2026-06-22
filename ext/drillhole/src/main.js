@@ -4,18 +4,21 @@
 //   desurvey.js — tangent, detectDipConvention, normalizeSurveys, desurveyHole, positionAt
 //   validate.js — validate (join + consistency report)
 //   composite.js — defaultLength, composite (fixed-length, length/mass-weighted, split-aware)
+//   samples.js   — desurveySamples (point-support locator; reuses validate's hole join)
 //   merge.js     — mergeIntervals (down-hole union re-segment join)
 //   process.js   — process (validate → desurvey → composite, one call)
 
 export * from './desurvey.js';
 export * from './validate.js';
 export * from './composite.js';
+export * from './samples.js';
 export * from './merge.js';
 export * from './process.js';
 
 import { dhTangent, dhDetectDipConvention, dhNormalizeSurveys, dhDesurveyHole, dhPositionAt } from './desurvey.js';
 import { dhValidate } from './validate.js';
 import { dhDefaultLength, dhComposite } from './composite.js';
+import { dhDesurveySamples } from './samples.js';
 import { dhMergeIntervals } from './merge.js';
 import { dhProcess } from './process.js';
 
@@ -29,6 +32,7 @@ export const Drillhole = {
   validate: dhValidate,
   defaultLength: dhDefaultLength,
   composite: dhComposite,
+  desurveySamples: dhDesurveySamples,
   process: dhProcess,
   mergeIntervals: dhMergeIntervals,
 };

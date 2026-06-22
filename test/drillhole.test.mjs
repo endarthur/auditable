@@ -235,3 +235,63 @@ test('merge — down-hole interval join (union re-segment)', () => {
   const proc = DH.process({ collars: [{ bhid: 'H1', x: 0, y: 0, z: 100, eoh: null }], surveys: [{ bhid: 'H1', depth: 0, az: 0, dip: 90 }], intervals: merged }, { compositeLength: 1, splitCols: ['LITO'] });
   assert.ok(proc.rows.length === 2 && proc.report.nHoles === 1, 'merged table composites cleanly');
 });
+
+test('desurvey — dogleg severity (DLS) is method-independent QC geometry', () => {
+  // a 90° kink (vertical → horizontal) over 30 m → dogleg 90°, DLS 90°/30 m
+  const st = DH.normalizeSurveys([{ depth: 0, az: 0, dip: 90 }, { depth: 30, az: 0, dip: 0 }], 'pos-down');
+  for (const method of ['minimumCurvature', 'balancedTangential', 'tangential']) {
+    const h = DH.desurveyHole([0, 0, 0], st.stations, method);
+    assert.equal(h.dogleg[0], 0, 'dogleg[0] = 0'); assert.equal(h.dls[0], 0, 'dls[0] = 0');
+    near(h.dogleg[1], 90, 1e-9, `${method}: dogleg 90°`);
+    near(h.dls[1], 90, 1e-9, `${method}: DLS 90°/30 m`);
+  }
+  // DLS scales with course length: same kink over 60 m → 45°/30 m
+  const st2 = DH.normalizeSurveys([{ depth: 0, az: 0, dip: 90 }, { depth: 60, az: 0, dip: 0 }], 'pos-down');
+  near(DH.desurveyHole([0, 0, 0], st2.stations, 'minimumCurvature').dls[1], 45, 1e-9, 'DLS halves over twice the length');
+  // a straight hole has zero dogleg everywhere
+  const hs = DH.desurveyHole([0, 0, 0], DH.normalizeSurveys([{ depth: 0, az: 30, dip: 60 }, { depth: 50, az: 30, dip: 60 }], 'pos-down').stations, 'minimumCurvature');
+  assert.ok(hs.dogleg[1] === 0 && hs.dls[1] === 0, 'straight hole: zero dogleg + DLS');
+});
+
+test('desurveySamples — point-support locator (single-depth assays)', () => {
+  // vertical hole from z=100 → samples at depth d land at z = 100 − d; sorted down-hole
+  const r = DH.desurveySamples({
+    collars: [{ bhid: 'H1', x: 5, y: 7, z: 100, eoh: 50 }],
+    surveys: [{ bhid: 'H1', depth: 0, az: 0, dip: 90 }],
+    samples: { bhid: ['H1', 'H1', 'H1'], depth: [40, 10, 25], cols: [{ name: 'AU', type: 'num', values: [3, 1, 2] }] },
+  });
+  assert.deepEqual(r.header, ['BHID', 'X', 'Y', 'Z', 'DEPTH', 'AU']);
+  assert.equal(r.rows.length, 3, 'three located samples');
+  assert.deepEqual(r.rows.map(row => row[4]), [10, 25, 40], 'sorted down-hole by depth');
+  assert.deepEqual(r.rows.map(row => row[5]), [1, 2, 3], 'values follow the sort');
+  for (const row of r.rows) { near(row[1], 5, 1e-9, 'x'); near(row[2], 7, 1e-9, 'y'); near(row[3], 100 - row[4], 1e-9, 'z = 100 − depth'); }
+  assert.equal(r.report.nHoles, 1); assert.equal(r.report.nSamples, 3);
+
+  // located on an inclined desurveyed trace consistently with positionAt
+  const inc = DH.desurveySamples({
+    collars: [{ bhid: 'H2', x: 0, y: 0, z: 0, eoh: null }],
+    surveys: [{ bhid: 'H2', depth: 0, az: 90, dip: 0 }],   // due east, horizontal
+    samples: { bhid: ['H2'], depth: [20], cols: [] },
+  });
+  near(inc.rows[0][1], 20, 1e-9, 'horizontal east: x = depth'); near(inc.rows[0][3], 0, 1e-9, 'z stays 0');
+
+  // non-silent report: orphan sample, bad depth, collar with no samples, past-EOH
+  const rep = DH.desurveySamples({
+    collars: [{ bhid: 'A', x: 0, y: 0, z: 0, eoh: 10 }, { bhid: 'B', x: 0, y: 0, z: 0, eoh: null }],
+    surveys: [{ bhid: 'A', depth: 0, az: 0, dip: 90 }],
+    samples: { bhid: ['A', 'A', 'X'], depth: [5, NaN, 5], cols: [] },
+  });
+  const byId = {}; rep.report.checks.forEach(c => { byId[c.id] = c; });
+  assert.ok(byId['orphan-sample'].bhids.includes('X'), 'orphan sample');
+  assert.ok(byId['bad-sample'].count === 1, 'bad depth excluded');
+  assert.ok(byId['collar-no-samples'].bhids.includes('B'), 'collar with no samples');
+  assert.equal(rep.rows.length, 1, 'one valid sample located');
+
+  // a sample past EOH is kept + advised
+  const eoh = DH.desurveySamples({
+    collars: [{ bhid: 'A', x: 0, y: 0, z: 0, eoh: 10 }],
+    surveys: [{ bhid: 'A', depth: 0, az: 0, dip: 90 }],
+    samples: { bhid: ['A'], depth: [20], cols: [] },
+  });
+  assert.ok(eoh.report.checks.some(c => c.id === 'past-eoh') && eoh.rows.length === 1, 'past-EOH sample kept + advised');
+});
