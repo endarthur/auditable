@@ -110,16 +110,57 @@ function solveGE(A, b, n) {
   return { x, singular: false };
 }
 
-// Resolve the target list: explicit points, or a grid's block centres.
+// Resolve the target list + block-dimension CATEGORIES (the front doors mirror
+// kriging(): grid | grid+mask | points). Returns:
+//   pts        — target centres [[x,y,z],…]
+//   tcat       — per-target category index
+//   catDims    — per-category block dimensions [[dx,dy,dz],…] ([0,0,0] = point)
+//   gridIndex  — original grid linear index per target (mask mode) or null
+//   geom       — { grid } | { coords } for swath
 function _targets(opts) {
-  if (opts.points) return { pts: opts.points, coords: opts.points, geom: { coords: opts.points }, gridIndex: null };
+  if (opts.points) {
+    const p0 = opts.points, n = p0.length;
+    const pts = p0.map((p) => [p[0], p[1], p[2]]);
+    let catDims, tcat;
+    if (opts.dimCategories && opts.cats) {              // explicit categories
+      catDims = opts.dimCategories.map((d) => [d[0], d[1], d[2]]);
+      tcat = opts.cats;
+    } else if (p0[0].length >= 6) {                     // per-point dims → auto-categorize
+      catDims = []; tcat = new Array(n);
+      const key2cat = new Map();
+      for (let i = 0; i < n; i++) {
+        const key = p0[i][3] + ',' + p0[i][4] + ',' + p0[i][5];
+        let c = key2cat.get(key);
+        if (c == null) { c = catDims.length; key2cat.set(key, c); catDims.push([p0[i][3], p0[i][4], p0[i][5]]); }
+        tcat[i] = c;
+      }
+    } else {                                            // shared block size (default point)
+      const bs = opts.blockSize || [0, 0, 0];
+      catDims = [[bs[0], bs[1], bs[2]]];
+      tcat = new Array(n).fill(0);
+    }
+    return { pts, tcat, catDims, gridIndex: null, geom: { coords: pts } };
+  }
   if (opts.grid) {
     const g = opts.grid;
     const nz = g.nz || 1, xsiz = g.xsiz || 1, ysiz = g.ysiz || 1, zsiz = g.zsiz || 1;
     const xmn = g.xmn != null ? g.xmn : xsiz / 2, ymn = g.ymn != null ? g.ymn : ysiz / 2, zmn = g.zmn != null ? g.zmn : zsiz / 2;
+    const gg = { ...g, nz, xsiz, ysiz, zsiz, xmn, ymn, zmn };
+    const catDims = [[xsiz, ysiz, zsiz]];
+    if (opts.mask) {
+      const m = opts.mask;
+      const active = typeof m === 'function' ? m : (ix, iy, iz, x, y, z, idx) => !!m[idx];
+      const pts = [], gridIndex = [];
+      let idx = 0;
+      for (let iz = 0; iz < nz; iz++) for (let iy = 0; iy < g.ny; iy++) for (let ix = 0; ix < g.nx; ix++, idx++) {
+        const x = xmn + ix * xsiz, y = ymn + iy * ysiz, z = zmn + iz * zsiz;
+        if (active(ix, iy, iz, x, y, z, idx)) { pts.push([x, y, z]); gridIndex.push(idx); }
+      }
+      return { pts, tcat: new Array(pts.length).fill(0), catDims, gridIndex: Int32Array.from(gridIndex), geom: { coords: pts } };
+    }
     const pts = [];
     for (let iz = 0; iz < nz; iz++) for (let iy = 0; iy < g.ny; iy++) for (let ix = 0; ix < g.nx; ix++) pts.push([xmn + ix * xsiz, ymn + iy * ysiz, zmn + iz * zsiz]);
-    return { pts, coords: pts, geom: { grid: { ...g, nz, xsiz, ysiz, zsiz, xmn, ymn, zmn } }, gridIndex: null };
+    return { pts, tcat: new Array(pts.length).fill(0), catDims, gridIndex: null, geom: { grid: gg } };
   }
   throw new Error('gsjs.krige: provide points or grid');
 }
@@ -142,25 +183,8 @@ export function krige(opts) {
   const pi = opts.faithful ? GSLIB_PI : Math.PI;
   const { cmax, cova, c0 } = buildModel(opts.variogram, pi);
 
-  // block discretization (point kriging = a single disc point at the centre). The
-  // disc offsets + block-block covariance cbb are geometry-only → computed once.
   const disc = opts.discretization || {};
   const nxdis = disc.nx || 1, nydis = disc.ny || 1, nzdis = disc.nz || 1;
-  let bx = 0, by = 0, bz = 0;
-  if (opts.grid) { bx = opts.grid.xsiz || 0; by = opts.grid.ysiz || 0; bz = opts.grid.zsiz || 0; }
-  else if (opts.blockSize) { bx = opts.blockSize[0]; by = opts.blockSize[1]; bz = opts.blockSize[2]; }
-  const discOff = discr(bx, by, bz, nxdis, nydis, nzdis);
-  const ndb = discOff.length;
-  let cbb = cmax;                                       // point support → sill
-  if (ndb > 1) {
-    let acc = 0;
-    for (let i = 0; i < ndb; i++) for (let j = 0; j < ndb; j++) {
-      let cov = cova(discOff[i][0], discOff[i][1], discOff[i][2], discOff[j][0], discOff[j][1], discOff[j][2]);
-      if (i === j) cov -= c0;                           // drop the nugget on the diagonal (block support)
-      acc += cov;
-    }
-    cbb = acc / (ndb * ndb);
-  }
 
   const s = opts.search;
   const nbhd = createNeighborhood({
@@ -173,8 +197,29 @@ export function krige(opts) {
   });
   indexSamples(nbhd, data, (row, k) => row[k], { holeId: opts.holeId });
 
-  const { pts, coords, geom, gridIndex } = _targets(opts);
+  const { pts, tcat, catDims, geom, gridIndex } = _targets(opts);
   const ntarg = pts.length;
+  const ncat = catDims.length;
+
+  // disc-point offsets + block-block cbb are GEOMETRY-only → memoized per category
+  // (shared = 1, sub-blocked = K, unique = N), so cost scales with distinct shapes.
+  const catDiscOff = new Array(ncat), catCbb = new Array(ncat);
+  for (let c = 0; c < ncat; c++) {
+    const [dx, dy, dz] = catDims[c];
+    const off = (dx > 0 || dy > 0 || dz > 0) ? discr(dx, dy, dz, nxdis, nydis, nzdis) : [[0, 0, 0]];
+    catDiscOff[c] = off;
+    let cbb = cmax;
+    if (off.length > 1) {
+      let acc = 0;
+      for (let i = 0; i < off.length; i++) for (let j = 0; j < off.length; j++) {
+        let cov = cova(off[i][0], off[i][1], off[i][2], off[j][0], off[j][1], off[j][2]);
+        if (i === j) cov -= c0;
+        acc += cov;
+      }
+      cbb = acc / (off.length * off.length);
+    }
+    catCbb[c] = cbb;
+  }
 
   // per-target solve, collected then packed to a fixed stride K = max retained.
   const perTarget = new Array(ntarg);
@@ -185,6 +230,7 @@ export function krige(opts) {
     const na = sel.n;
     if (sel.status !== STATUS.OK) { perTarget[t] = { status: sel.status, na: 0 }; continue; }
 
+    const discOff = catDiscOff[tcat[t]], ndb = discOff.length, cbb = catCbb[tcat[t]];
     const neq = mdt + na;
     const A = new Float64Array(neq * neq);
     const r = new Float64Array(neq);
@@ -238,7 +284,7 @@ export function krige(opts) {
     distances: null,
     sk_mean: ktype === 0 ? skmean : null,
     values: Float64Array.from(data, (d) => d[3]),       // ORIGINAL order — indices reference this
-    coords, gridIndex, geom, K,
-    n_targets: ntarg, n_blocks: ntarg, n_categories: 1,
+    coords: pts, gridIndex, geom, K,
+    n_targets: ntarg, n_blocks: ntarg, n_categories: ncat,
   };
 }

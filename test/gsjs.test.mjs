@@ -876,3 +876,32 @@ test('krige — block kriging (discretized) == gslib.kt3d est + var to f64', () 
   const blk = krige({ ...SYNTH, ktype: 'OK', faithful: true, discretization: { nx: 4, ny: 4, nz: 1 } });
   assert.ok(blk.kv[5] < pt.kv[5], `block kv ${blk.kv[5]} should be < point kv ${pt.kv[5]}`);
 });
+
+test('krige — mask (sparse domain) == kt3d at active blocks; categories', () => {
+  // sparse mask (left half) → only active blocks kriged, mapped back via gridIndex
+  const ref = kt3d({ ...SYNTH, ktype: 'OK', discretization: { nx: 3, ny: 3, nz: 1 } });
+  const { nx, ny, nz } = SYNTH.grid;
+  const mask = new Array(nx * ny * nz).fill(false);
+  for (let i = 0; i < mask.length; i++) if (i % nx < 2) mask[i] = true;
+  const rm = krige({ ...SYNTH, ktype: 'OK', faithful: true, discretization: { nx: 3, ny: 3, nz: 1 }, mask });
+  const em = realize(rm, rm.values);
+  assert.equal(rm.n_targets, mask.filter(Boolean).length);
+  let maxErr = 0, nOK = 0;
+  for (let t = 0; t < rm.n_targets; t++) { if (rm.status[t] !== STATUS.OK) continue; nOK++; maxErr = Math.max(maxErr, Math.abs(em[t] - ref.est[rm.gridIndex[t]])); }
+  assert.ok(nOK >= 6 && maxErr < 1e-9, `mask nOK ${nOK} maxErr ${maxErr}`);
+
+  // per-point dims → categories. uniform dims = 1 category, matches the block grid.
+  const centres = [];
+  for (let iy = 0; iy < ny; iy++) for (let ix = 0; ix < nx; ix++) centres.push([5 + ix * 10, 5 + iy * 10, 0, 10, 10, 10]);
+  const rc = krige({ data: SYNTH.data, variogram: SYNTH.variogram, search: SYNTH.search, ktype: 'OK', faithful: true, discretization: { nx: 3, ny: 3, nz: 1 }, points: centres });
+  assert.equal(rc.n_categories, 1);
+  const ec = realize(rc, rc.values);
+  let maxErr2 = 0;
+  for (let t = 0; t < rc.n_targets; t++) if (rc.status[t] === STATUS.OK) maxErr2 = Math.max(maxErr2, Math.abs(ec[t] - ref.est[t]));
+  assert.ok(maxErr2 < 1e-9, `uniform-cat maxErr ${maxErr2}`);
+
+  // mixed per-point dims → distinct categories, all estimates finite
+  const rmix = krige({ data: SYNTH.data, variogram: SYNTH.variogram, search: SYNTH.search, ktype: 'OK', discretization: { nx: 2, ny: 2, nz: 1 }, points: [[15, 15, 0, 10, 10, 10], [25, 25, 0, 20, 20, 10], [10, 30, 0, 5, 5, 5]] });
+  assert.equal(rmix.n_categories, 3);
+  assert.ok([...realize(rmix, rmix.values)].every(Number.isFinite));
+});
