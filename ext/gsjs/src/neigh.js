@@ -176,6 +176,12 @@ export function select(nbhd, target, opts = {}) {
   const perHoleMax = nbhd.perHoleMax;
   const minSep2 = nbhd.minSampleDistance > 0 ? nbhd.minSampleDistance * nbhd.minSampleDistance : 0;
   const needGreedy = S || perHoleMax != null || minSep2 > 0;
+  // exclude: drop sample indices from the gather BEFORE any cap (cross-validation
+  // leave-one-out — exclude the target's own sample, optionally its whole hole).
+  // A Set or a predicate (i)=>bool. Forces the full gather (the kNN fast path can't
+  // pre-size when an unknown count is removed); CV is n solves, not the hot path.
+  const exclude = opts.exclude || null;
+  const isExcl = exclude ? (exclude.has ? (i) => exclude.has(i) : exclude) : null;
 
   // Gather the in-ellipsoid candidates as { i, d2 }, distance-sorted (d2, index).
   // FAST PATH — a plain moving ellipsoid with a finite ndmax (no sector/per-hole/
@@ -185,7 +191,7 @@ export function select(nbhd, target, opts = {}) {
   // back to the full radius gather, so the result stays bit-identical to brute force.
   // (Authoritative sqdist is recomputed either way — the tree is only a prefilter.)
   let inside = null;
-  if (!needGreedy && benchHalf === 0 && Number.isFinite(nbhd.ndmax)) {
+  if (!needGreedy && !isExcl && benchHalf === 0 && Number.isFinite(nbhd.ndmax)) {
     const knn = nbhd._tree.query([qx, qy, qz], nbhd.ndmax + 1, { distance_upper_bound: nbhd.radius * (1 + 1e-9) });
     const m = knn.idx.length, cand = [];
     for (let a = 0; a < m; a++) {
@@ -205,6 +211,7 @@ export function select(nbhd, target, opts = {}) {
     inside = [];
     for (let k = 0; k < cand.length; k++) {
       const i = cand[k];
+      if (isExcl && isExcl(i)) continue;
       if (benchHalf > 0 && Math.abs(nbhd._oz[i] - tz) > benchHalf) continue;
       const d2 = sqdist(tx, ty, tz, nbhd._ox[i], nbhd._oy[i], nbhd._oz[i], R);
       if (d2 <= r2) inside.push({ i, d2 });

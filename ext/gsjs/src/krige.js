@@ -184,6 +184,62 @@ function _targets(opts) {
 // sectors / perHoleMax / minSampleDistance / convention / type:'bench'…). Returns a
 // BlockEstimateTensor (indices in ORIGINAL data order; values = original data values)
 // — feed straight to realize().
+// Assemble + solve ONE kriging system for a chosen sample set (the shared core of
+// krige() and crossValidate()). `ranks` are the selected sample indices into `data`;
+// `discOff` is the block discretization (centre-relative offsets, [[0,0,0]] for point
+// support) and `cbb` its block-block covariance. Returns the per-target record
+// (status / na / ranks / weights / kv / dists? / diag?). cova/c0/cmax/mdt come from
+// the caller's model so this stays allocation-only per target.
+function _solveTarget(data, ranks, na, tx, ty, tz, discOff, cbb, cova, c0, cmax, mdt, wantDist, wantDiag) {
+  const ndb = discOff.length;
+  const neq = mdt + na;
+  const A = new Float64Array(neq * neq);
+  const r = new Float64Array(neq);
+  const dists = wantDist ? new Float64Array(na) : null;
+  for (let i = 0; i < na; i++) {
+    const si = ranks[i], xi = data[si][0], yi = data[si][1], zi = data[si][2];
+    if (wantDist) { const dx = xi - tx, dy = yi - ty, dz = zi - tz; dists[i] = Math.sqrt(dx * dx + dy * dy + dz * dz); }
+    for (let j = i; j < na; j++) {
+      const sj = ranks[j];
+      const cov = cova(xi, yi, zi, data[sj][0], data[sj][1], data[sj][2]);
+      A[i * neq + j] = cov; A[j * neq + i] = cov;
+    }
+    // RHS: sample-to-block average covariance (point support → single centre point)
+    if (ndb <= 1) {
+      r[i] = cova(xi, yi, zi, tx, ty, tz);
+    } else {
+      let cb = 0;
+      for (let d = 0; d < ndb; d++) {
+        const dxp = tx + discOff[d][0], dyp = ty + discOff[d][1], dzp = tz + discOff[d][2];
+        cb += cova(xi, yi, zi, dxp, dyp, dzp);
+        const ex = xi - dxp, ey = yi - dyp, ez = zi - dzp;
+        if (ex * ex + ey * ey + ez * ez < 1e-6) cb -= c0;   // self-correction (nugget)
+      }
+      r[i] = cb / ndb;
+    }
+  }
+  if (mdt) { for (let i = 0; i < na; i++) { A[na * neq + i] = cmax; A[i * neq + na] = cmax; } r[na] = cmax; }
+
+  const { x: sol, singular } = solveGE(A, r, neq);
+  if (singular) return { status: STATUS.SINGULAR_SYSTEM, na: 0 };
+  let estv = cbb;                                     // block-block covariance
+  for (let j = 0; j < neq; j++) estv -= sol[j] * r[j];
+
+  // QKNA diagnostics (cheap — from the weights + the system already built):
+  //   SR = Σλr / ΣΣλλC  (slope of regression; =1 for SK, ≤1 for OK = conditional bias)
+  //   KE = 1 − kv/cbb    (kriging efficiency; cbb = block variance)
+  //   WM = 1 − Σλ (weight to the mean) · NW = 100/na · Σ|λ⁻| (% negative-weight magnitude)
+  let diag;
+  if (wantDiag) {
+    let sumLR = 0, sumW = 0, negW = 0;
+    for (let i = 0; i < na; i++) { sumLR += sol[i] * r[i]; sumW += sol[i]; if (sol[i] < 0) negW -= sol[i]; }
+    let quad = 0;
+    for (let i = 0; i < na; i++) { const li = sol[i]; for (let j = 0; j < na; j++) quad += li * sol[j] * A[i * neq + j]; }
+    diag = { slope: quad !== 0 ? sumLR / quad : 1, ke: cbb !== 0 ? 1 - estv / cbb : 0, weightMean: 1 - sumW, negWeights: 100 * negW / na };
+  }
+  return { status: STATUS.OK, na, ranks, weights: sol, kv: estv, dists, diag };
+}
+
 export function krige(opts) {
   const data = opts.data;
   const nd = data.length;
@@ -239,57 +295,11 @@ export function krige(opts) {
   for (let t = 0; t < ntarg; t++) {
     const tx = pts[t][0], ty = pts[t][1], tz = pts[t][2];
     const sel = select(nbhd, [tx, ty, tz]);
-    const na = sel.n;
     if (sel.status !== STATUS.OK) { perTarget[t] = { status: sel.status, na: 0 }; continue; }
-
-    const discOff = catDiscOff[tcat[t]], ndb = discOff.length, cbb = catCbb[tcat[t]];
-    const neq = mdt + na;
-    const A = new Float64Array(neq * neq);
-    const r = new Float64Array(neq);
-    const dists = wantDist ? new Float64Array(na) : null;
-    for (let i = 0; i < na; i++) {
-      const si = sel.ranks[i], xi = data[si][0], yi = data[si][1], zi = data[si][2];
-      if (wantDist) { const dx = xi - tx, dy = yi - ty, dz = zi - tz; dists[i] = Math.sqrt(dx * dx + dy * dy + dz * dz); }
-      for (let j = i; j < na; j++) {
-        const sj = sel.ranks[j];
-        const cov = cova(xi, yi, zi, data[sj][0], data[sj][1], data[sj][2]);
-        A[i * neq + j] = cov; A[j * neq + i] = cov;
-      }
-      // RHS: sample-to-block average covariance (point kriging → single centre point)
-      if (ndb <= 1) {
-        r[i] = cova(xi, yi, zi, tx, ty, tz);
-      } else {
-        let cb = 0;
-        for (let d = 0; d < ndb; d++) {
-          const dxp = tx + discOff[d][0], dyp = ty + discOff[d][1], dzp = tz + discOff[d][2];
-          cb += cova(xi, yi, zi, dxp, dyp, dzp);
-          const ex = xi - dxp, ey = yi - dyp, ez = zi - dzp;
-          if (ex * ex + ey * ey + ez * ez < 1e-6) cb -= c0;   // self-correction (nugget)
-        }
-        r[i] = cb / ndb;
-      }
-    }
-    if (mdt) { for (let i = 0; i < na; i++) { A[na * neq + i] = cmax; A[i * neq + na] = cmax; } r[na] = cmax; }
-
-    const { x: sol, singular } = solveGE(A, r, neq);
-    if (singular) { perTarget[t] = { status: STATUS.SINGULAR_SYSTEM, na: 0 }; continue; }
-    let estv = cbb;                                     // block-block covariance
-    for (let j = 0; j < neq; j++) estv -= sol[j] * r[j];
-
-    // QKNA diagnostics (cheap — from the weights + the system already built):
-    //   SR = Σλr / ΣΣλλC  (slope of regression; =1 for SK, ≤1 for OK = conditional bias)
-    //   KE = 1 − kv/cbb    (kriging efficiency; cbb = block variance)
-    //   WM = 1 − Σλ (weight to the mean) · NW = 100/na · Σ|λ⁻| (% negative-weight magnitude)
-    let diag;
-    if (wantDiag) {
-      let sumLR = 0, sumW = 0, negW = 0;
-      for (let i = 0; i < na; i++) { sumLR += sol[i] * r[i]; sumW += sol[i]; if (sol[i] < 0) negW -= sol[i]; }
-      let quad = 0;
-      for (let i = 0; i < na; i++) { const li = sol[i]; for (let j = 0; j < na; j++) quad += li * sol[j] * A[i * neq + j]; }
-      diag = { slope: quad !== 0 ? sumLR / quad : 1, ke: cbb !== 0 ? 1 - estv / cbb : 0, weightMean: 1 - sumW, negWeights: 100 * negW / na };
-    }
-    perTarget[t] = { status: STATUS.OK, na, ranks: sel.ranks, weights: sol, kv: estv, dists, diag };
-    if (na > K) K = na;
+    const discOff = catDiscOff[tcat[t]], cbb = catCbb[tcat[t]];
+    const p = _solveTarget(data, sel.ranks, sel.n, tx, ty, tz, discOff, cbb, cova, c0, cmax, mdt, wantDist, wantDiag);
+    perTarget[t] = p;
+    if (p.na > K) K = p.na;
   }
 
   // pack to the BlockEstimateTensor (padded to K).
@@ -350,5 +360,91 @@ export function qknaSummary(result) {
     pctSlopeBelow95: 100 * below / n,
     minSlope,
     maxNegWeights: maxNeg,
+  };
+}
+
+// crossValidate(opts) — leave-one-out cross-validation. Re-estimates each datum's
+// location from the OTHER data (the sample itself always excluded; its whole hole
+// too with `sameHole: true` + `holeId`), on POINT support, then scores estimate vs
+// measured value. Same model inputs as krige() (data / variogram / search / ktype /
+// skmean? / orientation / sectors / perHoleMax / …). Returns per-sample arrays plus
+// a `summary` of the standard CV diagnostics:
+//   meanError ≈ 0 (unbiased) · rmse (accuracy) · meanStdError ≈ 0 & varStdError ≈ 1
+//   (the variogram/KV is well-calibrated) · slope/corr of the true-vs-estimate scatter.
+export function crossValidate(opts) {
+  const data = opts.data;
+  const n = data.length;
+  const ktype = opts.ktype === 'SK' ? 0 : 1;
+  const mdt = ktype === 1 ? 1 : 0;
+  const skmean = opts.skmean || 0;
+  const pi = opts.faithful ? GSLIB_PI : Math.PI;
+  const { cmax, cova, c0 } = buildModel(opts.variogram, pi);
+  const discOff = [[0, 0, 0]], cbb = cmax;             // LOO is point-support
+
+  const s = opts.search;
+  const nbhd = createNeighborhood({
+    radius: s.radius, radiusMinor: s.radiusMinor, radiusVert: s.radiusVert,
+    angle: s.angle, angle2: s.angle2, angle3: s.angle3,
+    convention: s.convention, dip: s.dip, dipAzimuth: s.dipAzimuth, pitch: s.pitch, rake: s.rake, azimuth: s.azimuth,
+    ndmin: s.ndmin, ndmax: s.ndmax, sectors: s.sectors,
+    perHoleMax: s.perHoleMax, minSampleDistance: s.minSampleDistance,
+    type: s.type, benchThickness: s.benchThickness, faithful: opts.faithful,
+  });
+  const holeId = opts.holeId || null;
+  indexSamples(nbhd, data, (row, k) => row[k], { holeId });
+  const sameHole = !!opts.sameHole;
+  if (sameHole && !holeId) throw new Error('gsjs.crossValidate: sameHole needs holeId');
+
+  const estimate = new Float64Array(n).fill(NaN);
+  const actual = Float64Array.from(data, (d) => d[3]);
+  const error = new Float64Array(n).fill(NaN);
+  const stderr = new Float64Array(n).fill(NaN);
+  const kvOut = new Float64Array(n).fill(NaN);
+  const status = new Uint8Array(n).fill(STATUS.NOT_ATTEMPTED);
+
+  for (let i = 0; i < n; i++) {
+    const tx = data[i][0], ty = data[i][1], tz = data[i][2];
+    const exclude = sameHole ? (j) => j === i || holeId[j] === holeId[i] : (j) => j === i;
+    const sel = select(nbhd, [tx, ty, tz], { exclude });
+    if (sel.status !== STATUS.OK) { status[i] = sel.status; continue; }
+    const p = _solveTarget(data, sel.ranks, sel.n, tx, ty, tz, discOff, cbb, cova, c0, cmax, mdt, false, false);
+    status[i] = p.status;
+    if (p.status !== STATUS.OK) continue;
+    let est = 0, sw = 0;
+    for (let k = 0; k < p.na; k++) { est += p.weights[k] * data[p.ranks[k]][3]; sw += p.weights[k]; }
+    if (ktype === 0) est += (1 - sw) * skmean;          // SK: weight on the mean
+    estimate[i] = est; kvOut[i] = p.kv;
+    error[i] = est - actual[i];
+    stderr[i] = p.kv > 0 ? error[i] / Math.sqrt(p.kv) : NaN;
+  }
+
+  return { n, estimate, actual, error, stderr, kv: kvOut, status, summary: _cvSummary(estimate, actual, error, stderr, status) };
+}
+
+// Standard LOO-CV scorecard over the OK samples. `slope`/`corr` are the EMPIRICAL
+// regression of true-on-estimate (the CV scatterplot), distinct from QKNA's
+// theoretical slope. meanStdError≈0 & varStdError≈1 validate the variogram/KV.
+function _cvSummary(estimate, actual, error, stderr, status) {
+  let nOk = 0, se = 0, sae = 0, sse = 0, sStd = 0, sStd2 = 0;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0, syy = 0;
+  for (let i = 0; i < status.length; i++) {
+    if (status[i] !== STATUS.OK) continue;
+    nOk++;
+    const e = error[i];
+    se += e; sae += Math.abs(e); sse += e * e;
+    if (Number.isFinite(stderr[i])) { sStd += stderr[i]; sStd2 += stderr[i] * stderr[i]; }
+    const x = estimate[i], y = actual[i];
+    sx += x; sy += y; sxx += x * x; sxy += x * y; syy += y * y;
+  }
+  if (!nOk) return { nOk: 0, meanError: NaN, meanAbsError: NaN, mse: NaN, rmse: NaN, meanStdError: NaN, varStdError: NaN, slope: NaN, corr: NaN };
+  const meanError = se / nOk, mse = sse / nOk;
+  const meanStd = sStd / nOk, varStd = sStd2 / nOk - meanStd * meanStd;
+  const mx = sx / nOk, my = sy / nOk;
+  const covxy = sxy / nOk - mx * my, varx = sxx / nOk - mx * mx, vary = syy / nOk - my * my;
+  return {
+    nOk, meanError, meanAbsError: sae / nOk, mse, rmse: Math.sqrt(mse),
+    meanStdError: meanStd, varStdError: varStd,
+    slope: varx > 0 ? covxy / varx : NaN,
+    corr: (varx > 0 && vary > 0) ? covxy / Math.sqrt(varx * vary) : NaN,
   };
 }

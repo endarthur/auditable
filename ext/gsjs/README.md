@@ -36,7 +36,8 @@ atra/WASM), not a backend lock.
 | Recipe on the JS engine (neighbourhood-driven, gslib-decoupled) | ✅ |
 | Perf — kNN search; JS ≥ WASM kt3d at ndmax 8–24 (test/gsjs-perf.mjs) | ✅ |
 | QKNA diagnostics — slope of regression · kriging efficiency · neg-weights (`qknaSummary`) | ✅ (Deutsch & Deutsch 2012, Eq.1/9) |
-| Follow-ups — variography · cross-validation · compositing · batched atra solve · GPU | ⏳ |
+| Cross-validation — leave-one-out (`crossValidate`, ± same-hole), ME/RMSE/calibration | ✅ (== krige-without-self to f64) |
+| Follow-ups — variography · compositing · declustering · batched atra solve · GPU | ⏳ |
 | Distance-restricted capping · unique neighbourhood (deferred) | ⏳ |
 | WebGPU backend (realize + aggregate) | ⏳ last (drop-in, validated vs CPU oracle) |
 | LVM (ktype 2) · trend/UK/ED · cokriging | out of v1 |
@@ -142,6 +143,23 @@ data); **kriging efficiency** `KE = (BV − KV)/BV` with block variance `BV = C�
 **negative weights** `(100/n)·Σ|λ⁻|`. `qknaSummary(krigedOrTensor)` pools the OK blocks
 → `{ n, meanSlope, meanKE, meanNegWeights, pctSlopeBelow95, minSlope, maxNegWeights }`
 (`< 0.95` is the conventional conditional-bias cutoff).
+
+**Cross-validation (leave-one-out).** `crossValidate({ data, variogram, search, ktype,
+skmean?, holeId?, sameHole? })` re-estimates each datum's location from the *other*
+data (the sample always excluded; its whole drillhole too with `sameHole: true` +
+`holeId`), on point support, and scores estimate vs measured value:
+
+```js
+const cv = crossValidate({ data, variogram, search, ktype: 'OK' });
+// cv.{ estimate, actual, error, stderr, kv, status }  — Float64Array/Uint8Array[n]
+// cv.summary.{ nOk, meanError, meanAbsError, mse, rmse, meanStdError, varStdError, slope, corr }
+```
+
+`meanError ≈ 0` = unbiased; `meanStdError ≈ 0` & `varStdError ≈ 1` = the variogram/KV is
+well-calibrated; `slope`/`corr` are the empirical true-vs-estimate scatter (distinct
+from QKNA's theoretical slope). A CV estimate equals a plain `krige()` over the data
+*minus that sample* to f64 — the exclusion happens in the neighbourhood, reusing the
+same solve.
 
 **Canonical JSON** uses the compact GSLIB vocab (`{c0, structures:[{type, cc, aa,
 anis:[ay/ax,az/ax], ang:[strike,dip,plunge]}]}`); the executor translates it to

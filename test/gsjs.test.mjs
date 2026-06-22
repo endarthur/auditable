@@ -18,7 +18,7 @@ import {
   recipe, variogram, search, ok, sk, sk_lvm, none, topcut, hgr,
   fromJSON, run, estimate, evaluate,
   createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
-  leapfrogToRotmat, toRotmat, applyAnis, krige, qknaSummary,
+  leapfrogToRotmat, toRotmat, applyAnis, krige, qknaSummary, crossValidate,
 } from '../ext/gsjs/index.js';
 import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow } from '../ext/gslib/index.js';
 
@@ -1046,4 +1046,58 @@ test('recipe — output.diagnostics flows through; qknaSummary pools over OK blo
   // qknaSummary also accepts a bare krige() tensor
   const q2 = qknaSummary(t);
   assert.equal(q2.n, q.n);
+});
+
+// ── cross-validation (leave-one-out) ──
+// The strong oracle: a CV estimate at sample i must equal a plain krige() at that
+// location over data MINUS sample i (same neighbour set, same weights, same value).
+test('crossValidate — LOO estimate == krige() over data minus that sample', () => {
+  const data = [];
+  for (let i = 0; i < 70; i++) { const x = (i * 37) % 100, y = (i * 53) % 100, z = (i * 17) % 30; data.push([x, y, z, 5 + 0.03 * x + Math.sin(x * 0.07)]); }
+  const vario = { nugget: 0.05, structures: [{ type: 'spherical', contribution: 0.95, range: 40 }] };
+  const search = { radius: 60, ndmin: 2, ndmax: 16 };
+  const cv = crossValidate({ data, variogram: vario, search, ktype: 'OK' });
+
+  for (const i of [10, 25, 40]) {
+    const reduced = data.filter((_, k) => k !== i);
+    const kr = krige({ data: reduced, variogram: vario, search, ktype: 'OK', points: [[data[i][0], data[i][1], data[i][2]]] });
+    const est = realize(kr, kr.values)[0];           // Σ weights·values at the point
+    assert.ok(Math.abs(cv.estimate[i] - est) < 1e-9, `CV[${i}] ${cv.estimate[i]} ≠ krige-without-self ${est}`);
+    assert.ok(Math.abs(cv.kv[i] - kr.kv[0]) < 1e-9, `CV kv[${i}] mismatch`);
+  }
+  // mechanical invariants over all OK samples
+  for (let i = 0; i < cv.n; i++) {
+    if (cv.status[i] !== STATUS.OK) continue;
+    assert.ok(Math.abs((cv.estimate[i] - cv.actual[i]) - cv.error[i]) < 1e-12, 'error = estimate − actual');
+    assert.ok(Math.abs(cv.error[i] / Math.sqrt(cv.kv[i]) - cv.stderr[i]) < 1e-12, 'stderr = error/√kv');
+  }
+  assert.equal(cv.summary.nOk, 70);
+  assert.ok(Math.abs(cv.summary.meanError) < 0.1, `meanError ${cv.summary.meanError} not ≈ 0`);
+});
+
+test('crossValidate — SK adds the weight-on-mean; sameHole excludes the whole hole', () => {
+  const data = [];
+  for (let i = 0; i < 64; i++) { const x = (i * 37) % 100, y = (i * 53) % 100, z = (i * 17) % 30; data.push([x, y, z, 8 + Math.sin(x * 0.07)]); }
+  const vario = { nugget: 0.05, structures: [{ type: 'spherical', contribution: 0.95, range: 40 }] };
+  const search = { radius: 60, ndmin: 2, ndmax: 16 };
+
+  // SK estimate at i == Σλ·v + (1−Σλ)·skmean over data minus i
+  const cv = crossValidate({ data, variogram: vario, search, ktype: 'SK', skmean: 8 });
+  const i = 20;
+  const reduced = data.filter((_, k) => k !== i);
+  const kr = krige({ data: reduced, variogram: vario, search, ktype: 'SK', skmean: 8, points: [[data[i][0], data[i][1], data[i][2]]] });
+  let est = 0, sw = 0;
+  for (let k = 0; k < kr.n_actual[0]; k++) { est += kr.weights[k] * kr.values[kr.indices[k]]; sw += kr.weights[k]; }
+  est += (1 - sw) * 8;
+  assert.ok(Math.abs(cv.estimate[i] - est) < 1e-9, `SK CV[${i}] ${cv.estimate[i]} ≠ ${est}`);
+
+  // sameHole: excluding the datum's whole hole removes near neighbours → different
+  // estimates than plain LOO (and needs a holeId)
+  const hole = data.map((_, k) => Math.floor(k / 8));
+  const plain = crossValidate({ data, variogram: vario, search, ktype: 'OK', holeId: hole });
+  const sh = crossValidate({ data, variogram: vario, search, ktype: 'OK', holeId: hole, sameHole: true });
+  let differ = 0;
+  for (let k = 0; k < data.length; k++) if (sh.status[k] === STATUS.OK && plain.status[k] === STATUS.OK && Math.abs(sh.estimate[k] - plain.estimate[k]) > 1e-9) differ++;
+  assert.ok(differ > data.length / 2, `sameHole barely changed estimates (${differ})`);
+  assert.throws(() => crossValidate({ data, variogram: vario, search, ktype: 'OK', sameHole: true }), /sameHole needs holeId/);
 });
