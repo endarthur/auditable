@@ -2,7 +2,6 @@
   "name": "@gcu/wasm4",
   "version": "0.1.0",
   "description": "WASM-4 fantasy console for Auditable Works — the engine library plus a playable console surface that runs conformant .wasm carts (any source language).",
-  "type": "module",
   "license": "MIT",
   "keywords": ["auditable-extension", "works-surface", "wasm4", "fantasy-console", "game"],
   "auditable": {
