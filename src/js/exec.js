@@ -147,7 +147,7 @@ export const LANGUAGE_PACKS = {
 // `.languages`); this table seeds the known first-party packs that predate that
 // field. Keyed by package URL. See registerDeclaredLanguage in cell-types.js.
 export const LANGUAGE_PACK_META = {
-  '@gcu/adder': [{ cellType: 'adder', tag: 'adder', label: 'Python (adder)', aliases: ['mpy'], adderExports: ['adder'] }],
+  '@gcu/adder': [{ cellType: 'adder', tag: 'adder', label: 'Python (adder)', aliases: ['mpy'] }],
   '@gcu/soft':  [{ cellType: 'soft',  tag: 'soft',  label: 'Soft' }],
 };
 

@@ -58,5 +58,14 @@
   "homepage": "https://github.com/gentropic/auditable/tree/main/ext/adder",
   "bugs": {
     "url": "https://github.com/gentropic/auditable/issues"
+  },
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "language pack — declares its language as DATA (gcu.languages) so the notebook's cell-type picker can offer it cold; index.js registers the cell type + tag + AIR lowerer on first load (cold→hot)."
+  },
+  "gcu": {
+    "languages": [
+      { "cellType": "adder", "tag": "adder", "label": "Python (adder)", "aliases": ["mpy"] }
+    ]
   }
 }

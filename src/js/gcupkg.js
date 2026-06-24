@@ -341,6 +341,14 @@ export async function installGcupkg(parsed, opts = {}) {
       hasAdder:     !!files['adder.js'],
     },
   };
+  // Surface the package's declarative language contract (gcu.languages) onto the
+  // installed entry's meta, so the notebook's hydrateModulesFromVfs carries it
+  // and seedDeclaredLanguages can offer the language in the cell-type picker
+  // (cold) without loading the pack. The bundle still registers the real cell
+  // type on first load (cold→hot).
+  if (packageJson.gcu && Array.isArray(packageJson.gcu.languages) && packageJson.gcu.languages.length) {
+    pkgMeta.languages = packageJson.gcu.languages;
+  }
   await vfs.writeFile(libPath + '/meta.json', _ENCODER.encode(JSON.stringify(pkgMeta, null, 2)));
   await _updateLockfile(vfs, meta.name, pkgMeta);
 

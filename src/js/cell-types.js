@@ -543,11 +543,15 @@ export function listAvailableLanguages() {
     if (d.aliasOf) continue;   // list canonical only
     out.set(ct, { cellType: ct, label: d.label || ct, loaded: isLanguageLoaded(ct), pkg: d.pkg });
   }
-  // Loaded executable extension cell types — authoritative label, override decl.
+  // Loaded executable extension cell types. A declared language keeps its
+  // declaration label (the descriptive "Python (adder)") in discovery surfaces
+  // even once loaded — the registered cell-type label (short, e.g. "adder") is
+  // for the cell badge. Non-declared loaded types use their registered label.
   for (const [name, h] of Object.entries(window._cellTypes || {})) {
     if (!_ctIsExecutable(name)) continue;
+    const decl = _declaredLanguages.get(name);
     const prev = out.get(name);
-    out.set(name, { cellType: name, label: h.label || name, loaded: true, pkg: prev ? prev.pkg : undefined });
+    out.set(name, { cellType: name, label: (decl && decl.label) || h.label || name, loaded: true, pkg: prev ? prev.pkg : (decl ? decl.pkg : undefined) });
   }
   return [...out.values()];
 }

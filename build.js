@@ -989,6 +989,12 @@ if (target === 'packages') {
       { dir: 'ext/plate', files: ['package.json', 'index.js', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
         contributes: ['surface'], integrityCovers: ['index.js', 'works.js', 'surface.html'],
         title: 'Plate (figure)', tags: ['figure', 'compositor', 'plot'] },
+      // Language packs — notebook cell types delivered as data-declared (gcu.languages)
+      // .gcupkgs. index.js is the bundle (→ /source); it registers the cell type +
+      // tag + AIR lowerer on first load (cold→hot). The picker offers it cold.
+      { dir: 'ext/adder', files: ['package.json', 'index.js', 'LICENSE', 'README.md'],
+        contributes: ['language'], integrityCovers: ['index.js'],
+        title: 'Python (adder)', tags: ['language', 'python', 'adder'] },
     ];
 
     // Lib dependencies that the distributables' services `require` — packaged as
