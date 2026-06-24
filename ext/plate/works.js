@@ -21,7 +21,9 @@ if (typeof window !== 'undefined') {
           label:      'Plate (figure)',
           icon:       '◫',
           file:       'surface.html',
-          extensions: ['.strata', '.csv', '.tsv'],
+          // .strata only — a .csv/.tsv opens in the data viewer (preview) by
+          // default; reach Plate explicitly (menu / Open as…) for a figure.
+          extensions: ['.strata'],
           requires:   ['abus', 'surface', 'plate', 'strata', 'recon', 'archive'],
         },
       ],

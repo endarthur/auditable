@@ -99,9 +99,20 @@ export function kindForExtension(filename) {
   // "extension = .gitignore"; they fall through to the basename match below.
   const ext = i > 0 ? base.slice(i).toLowerCase() : '';
   if (ext) {
+    // An extension-contributed surface (a richer editor, e.g. the doc Markdown
+    // editor) wins over a built-in viewer (preview) for a SHARED extension.
+    // Built-in surfaces register at module-eval; package surfaces register later
+    // via works.js, so a plain first-match would let the core viewer win — which
+    // flipped .md from doc→preview once doc became a package. Two-pass: prefer an
+    // isExtension claimant, else the first built-in claimant.
+    let builtinMatch = null;
     for (const [kind, def] of KINDS) {
-      if (def.extensions && def.extensions.includes(ext)) return kind;
+      if (def.extensions && def.extensions.includes(ext)) {
+        if (def.isExtension) return kind;
+        if (!builtinMatch) builtinMatch = kind;
+      }
     }
+    if (builtinMatch) return builtinMatch;
   }
   // Extensionless conventional filenames (LICENSE, README, COPYING, …) — open
   // as plain text by default. Case-insensitive exact match on the basename.

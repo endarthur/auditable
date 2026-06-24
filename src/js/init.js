@@ -718,10 +718,13 @@ async function worksBoot(conn) {
               }
             }
             console.info(`[notebook] _installedModules refreshed from /lib (${Object.keys(fresh).length} entries)`);
-            // Re-declare installed language packs + refresh the pickers, so a
-            // just-installed language appears (cold, selectable) without a
-            // reload — and any pack for an existing fallback cell eager-loads.
-            try { await autoLoadFromCells(); } catch { /* best-effort */ }
+            // Re-declare installed language packs (cold) + refresh the pickers so
+            // a just-installed language appears, selectable, without a reload.
+            // Light + synchronous — NOT the full autoLoadFromCells (no eager pack
+            // loading here; boot already handled existing cells, and this runs on
+            // every /lib write so it must stay cheap).
+            try { window._seedDeclaredLanguages && window._seedDeclaredLanguages(); } catch { /* */ }
+            try { window.updateInsertBars && window.updateInsertBars(); } catch { /* */ }
           } catch (e) {
             console.warn('[notebook] /lib refresh failed:', e.message);
           }
