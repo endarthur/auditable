@@ -77,6 +77,19 @@ test('table: revert + effective column merges base⊕overlay', () => {
   assert.deepEqual(t.column(1), [0.5, 1.5, 8.8]);
 });
 
+test('table: setColumnType relabels (changes edit coercion, not existing values)', () => {
+  const t = sampleTable();                     // grade (col 1) is number
+  assert.equal(t.commitRaw(1, 1, 'abc'), undefined);
+  assert.equal(t.getCell(1, 1).value, null);   // 'abc' → null under number
+  t.setColumnType(1, 'string');
+  assert.equal(t.schema[1].type, 'string');
+  t.commitRaw(2, 1, 'abc');                     // now accepted as text
+  assert.equal(t.getCell(2, 1).value, 'abc');
+  assert.equal(t.baseValue(0, 1), 0.5);        // existing base values unchanged
+  t.setColumnType(1, 'bogus');                  // unknown type ignored
+  assert.equal(t.schema[1].type, 'string');
+});
+
 test('table: commitRaw coerces by column type', () => {
   const t = sampleTable();
   t.commitRaw(0, 1, '12.5');
@@ -175,6 +188,14 @@ test('provider: hide/show columns remap the display axis', () => {
   assert.equal(p.dims().cols, 3);
   assert.equal(p.header(1).label, 'grade');
   assert.equal(p.underCol(1), 1);
+});
+
+test('provider: header type follows setColumnType', () => {
+  const t = sampleTable();
+  const p = createTableProvider(t);
+  assert.equal(p.header(1).type, 'number');
+  t.setColumnType(1, 'category');
+  assert.equal(p.header(1).type, 'category');  // drives glyph + alignment
 });
 
 test('provider: header marks filtered columns (funnel)', () => {

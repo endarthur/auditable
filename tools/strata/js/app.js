@@ -446,8 +446,21 @@ export function createStrataApp(host) {
     items.push('---', { label: 'Autofit column', run: () => grid.autofitColumn(dc) }); // loom op = DISPLAY col
     const nEd = editedInColumn(uc);
     if (nEd > 0) items.push({ label: `Revert ${nEd} edit${nEd > 1 ? 's' : ''} in column`, run: () => revertColumn(uc) });
-    if (table.isDerived(uc)) items.push('---', { label: 'Show formula', run: () => flash('= ' + table.schema[uc].formula) });
+    if (table.isDerived(uc)) {
+      items.push('---', { label: 'Show formula', run: () => flash('= ' + table.schema[uc].formula) });
+    } else {
+      const ty = table.schema[uc].type;
+      items.push('---', { label: 'Type', disabled: true });
+      for (const [t, lbl] of [['number', 'Number'], ['string', 'Text'], ['category', 'Category']]) {
+        items.push({ label: (ty === t ? '✓ ' : '   ') + lbl, run: () => setColumnType(uc, t) });
+      }
+    }
     showContextMenu(items, clientX, clientY);
+  }
+  function setColumnType(uc, type) {
+    table.setColumnType(uc, type);
+    grid.refresh();
+    flash(`${table.schema[uc].name}: ${type}`);
   }
   async function openColFilter(col, name) {
     const v = await formModal(`Filter ${name}`, [{ name: 'expr', label: `Condition for ${name}  (e.g.  > 2  ·  ox  ·  >= 1)`, placeholder: '> 2' }]);

@@ -13,7 +13,7 @@
 //
 // Pure (new Function for formulas works in any JS env; no DOM). Node-testable.
 
-import { coerceValue, fmtCell } from './values.js';
+import { coerceValue, fmtCell, COL_TYPES } from './values.js';
 import { compileFormula, FORMULA_ERROR } from './formula.js';
 
 /**
@@ -117,6 +117,17 @@ export function createTable({ schema, columns, nrows }) {
 
     revert(r, c) { recordAround(r, c, () => overlay.delete(key(r, c))); invalidateDerived(); },
     dirtyCount() { return overlay.size; },
+
+    // Change a column's declared type (number/category/string). RELABEL ONLY —
+    // existing values are not re-coerced (the base stays immutable; sort/display
+    // are value-driven, so unaffected). The type drives alignment, the header
+    // glyph, and how FUTURE edits coerce. A schema op (like addDerivedColumn) —
+    // not on the undo stack. Unknown type ignored.
+    setColumnType(c, type) {
+      if (c < 0 || c >= schema.length || !COL_TYPES.includes(type)) return;
+      schema[c] = { ...schema[c], type };
+      const d = derived.get(c); if (d) d.type = type;
+    },
 
     // ── undo / redo (over overlay edits) ──
     // beginTxn/endTxn bracket a batch so it collapses to one undo step; nesting

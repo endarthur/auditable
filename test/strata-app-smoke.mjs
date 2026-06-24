@@ -286,6 +286,20 @@ try {
     ? ok(`header ▾ hide/show column (cols ${colsBefore}→${colsHidden}→${shown.cols})`)
     : fail(`hide/show failed: ${JSON.stringify({ colsBefore, colsHidden, shown })}`);
 
+  // Header ▾ Type → change a column's type (relabel).
+  await page.mouse.click(hbox.x + 186, hbox.y + 12, { button: 'right' });   // Au_gpt header
+  await page.waitForTimeout(60);
+  const typed = await page.evaluate(() => {
+    const m = document.querySelector('.strata-ctx');
+    const it = m && [...m.querySelectorAll('div')].find((d) => /Category$/.test(d.textContent));
+    const before = window._strataApp.table.schema.find((s) => s.name === 'Au_gpt').type;
+    if (it) it.click();
+    return { had: !!it, before, after: window._strataApp.table.schema.find((s) => s.name === 'Au_gpt').type };
+  });
+  (typed.had && typed.before === 'number' && typed.after === 'category')
+    ? ok(`header ▾ Type → Au_gpt ${typed.before}→${typed.after}`)
+    : fail(`convert type failed: ${JSON.stringify(typed)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);
