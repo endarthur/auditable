@@ -1421,7 +1421,7 @@ describe('CommentBackend', () => {
 // ============================================================
 
 function createHandleMock() {
-  const calls = { getDir: [], getFile: [] };   // resolve-call counter (cache tests read root._calls)
+  const calls = { getDir: [], getFile: [], removeEntry: [] };   // call counter (cache tests read root._calls)
   class MockFileHandle {
     constructor(name, storage) {
       this.kind = 'file';
@@ -1440,7 +1440,11 @@ function createHandleMock() {
           if (s.content instanceof Uint8Array) return s.content.buffer.slice(s.content.byteOffset, s.content.byteOffset + s.content.byteLength);
           return new TextEncoder().encode(s.content).buffer;
         },
-        stream() { return null; }, // Not used in tests
+        stream() {
+          const data = typeof s.content === 'string' ? new TextEncoder().encode(s.content)
+            : (s.content instanceof Uint8Array ? s.content : new Uint8Array());
+          return new ReadableStream({ start(c) { c.enqueue(data); c.close(); } });
+        },
       };
     }
     async createWritable() {
@@ -1485,9 +1489,10 @@ function createHandleMock() {
       }
       throw new DOMException('NotFoundError');
     }
-    async removeEntry(name) {
+    async removeEntry(name, opts) {
+      calls.removeEntry.push([name, !!(opts && opts.recursive)]);
       if (!this._children.has(name)) throw new DOMException('NotFoundError');
-      this._children.delete(name);
+      this._children.delete(name);   // the child's own subtree drops with the reference (recursive-equivalent)
     }
     async *entries() {
       for (const [name, entry] of this._children) {
@@ -1739,6 +1744,45 @@ describe('HandleBackend dir-handle cache', () => {
     const { be: b } = be();
     await b.mkdir('/d');
     await assert.rejects(b.readFile('/d/missing.txt'), { code: 'ENOENT' });
+  });
+
+  // ── follow-ups (vfs-handle-followups.md): native recursive delete + streamable reconcile ──
+
+  it('rmdir({recursive}) deletes a non-empty tree via ONE native removeEntry (not a walk)', async () => {
+    const { be: b, root } = be();
+    await b.mkdir('/d/sub', { recursive: true });
+    await b.writeFile('/d/sub/f.txt', 'x');
+    await b.writeFile('/d/g.txt', 'y');
+    root._calls.removeEntry.length = 0;
+    await b.rmdir('/d', { recursive: true });
+    assert.deepEqual(root._calls.removeEntry, [['d', true]], 'one recursive removeEntry, no per-child walk');
+    await assert.rejects(b.stat('/d'), { code: 'ENOENT' });
+    assert.ok(!b._dirCache.has('/d') && !b._dirCache.has('/d/sub'), 'subtree evicted from the cache');
+  });
+
+  it('directory rename deletes the source via native recursive removeEntry', async () => {
+    const { be: b, root } = be();
+    await b.mkdir('/src/inner', { recursive: true });
+    await b.writeFile('/src/inner/f.txt', 'x');
+    root._calls.removeEntry.length = 0;
+    await b.rename('/src', '/dst');
+    assert.deepEqual(root._calls.removeEntry, [['src', true]], 'the delete half is one recursive call');
+    assert.equal(await b.readFile('/dst/inner/f.txt'), 'x');
+  });
+
+  it('createReadStream yields the file bytes (streamable is now honest)', async () => {
+    const { be: b } = be();
+    await b.writeFile('/f.txt', 'streamed!');
+    assert.equal(b.streamable, true);
+    // async-iterator form
+    let out = ''; const dec = new TextDecoder();
+    for await (const chunk of b.createReadStream('/f.txt')) out += dec.decode(chunk, { stream: true });
+    out += dec.decode();
+    assert.equal(out, 'streamed!');
+    // getReader form
+    const reader = await b.createReadStream('/f.txt').getReader();
+    const { value } = await reader.read();
+    assert.equal(new TextDecoder().decode(value), 'streamed!');
   });
 });
 
