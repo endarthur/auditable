@@ -443,6 +443,7 @@ export function createStrataApp(host) {
     const hidn = provider.hiddenColumns();
     for (const hc of hidn) items.push({ label: `Show ${table.schema[hc].name}`, run: () => { provider.showColumn(hc); grid.refresh(); } });
     if (hidn.length > 1) items.push({ label: 'Show all columns', run: () => { provider.showAllColumns(); grid.refresh(); } });
+    items.push({ label: 'Columns…', run: () => openColumnsDialog() });
     items.push('---', { label: 'Autofit column', run: () => grid.autofitColumn(dc) }); // loom op = DISPLAY col
     const nEd = editedInColumn(uc);
     if (nEd > 0) items.push({ label: `Revert ${nEd} edit${nEd > 1 ? 's' : ''} in column`, run: () => revertColumn(uc) });
@@ -518,6 +519,88 @@ export function createStrataApp(host) {
     }, 0);
   }
 
+  // ── Columns… manager dialog (reorder + show/hide + reset) ──
+  // Live-apply (each change hits the provider + repaints); a snapshot taken on
+  // open lets Cancel/Escape restore the prior order + visibility. Drag a row
+  // (handle) or use ▲▼ to reorder; the checkbox toggles visibility.
+  function openColumnsDialog() {
+    if (!table) return;
+    const snapOrder = provider.columnOrder();
+    const snapHidden = new Set(provider.hiddenColumns());
+    const overlay = document.createElement('div');
+    overlay.className = 'strata-cols-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1200';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#1e1e1e;border:1px solid #444;border-radius:6px;width:min(360px,92vw);max-height:80vh;display:flex;flex-direction:column;gap:10px;padding:14px;font-family:var(--mono,monospace)';
+    box.innerHTML = '<div style="color:#c89b3c;font-size:13px">Columns</div>';
+    const listEl = document.createElement('div');
+    listEl.style.cssText = 'flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:3px';
+    box.appendChild(listEl);
+
+    const btn = (label, onclick, opts = {}) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.disabled = !!opts.disabled;
+      const primary = opts.primary;
+      b.style.cssText = `border-radius:4px;padding:4px 10px;font:11px var(--mono,monospace);cursor:${opts.disabled ? 'default' : 'pointer'};opacity:${opts.disabled ? 0.35 : 1};`
+        + (primary ? 'background:#3a2f1a;color:#e0b050;border:1px solid #6b5524' : 'background:#242424;color:#bbb;border:1px solid #333');
+      if (!opts.disabled) b.onclick = onclick;
+      return b;
+    };
+    function move(from, to) {
+      const ord = provider.columnOrder();
+      if (to < 0 || to >= ord.length || from === to) return;
+      const [x] = ord.splice(from, 1);
+      ord.splice(to, 0, x);
+      provider.setColumnOrder(ord);
+      grid.refresh();
+      render();
+    }
+    function render() {
+      listEl.innerHTML = '';
+      const ord = provider.columnOrder();
+      ord.forEach((uc, i) => {
+        const isHidden = provider.isColumnHidden(uc);
+        const s = table.schema[uc];
+        const row = document.createElement('div');
+        row.draggable = true;
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 6px;border:1px solid #2a2a2a;border-radius:4px;background:#161616';
+        row.ondragstart = (e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); };
+        row.ondragover = (e) => { e.preventDefault(); row.style.borderColor = '#c89b3c'; };
+        row.ondragleave = () => { row.style.borderColor = '#2a2a2a'; };
+        row.ondrop = (e) => { e.preventDefault(); const from = Number(e.dataTransfer.getData('text/plain')); if (!Number.isNaN(from)) move(from, i); };
+        const handle = document.createElement('span'); handle.textContent = '☰'; handle.style.cssText = 'color:#666;cursor:grab;font-size:12px';
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !isHidden;
+        cb.onchange = () => { if (cb.checked) provider.showColumn(uc); else provider.hideColumn(uc); grid.refresh(); render(); };
+        const nm = document.createElement('span');
+        nm.textContent = s.unit ? `${s.name} (${s.unit})` : s.name;
+        nm.style.cssText = `flex:1;font-size:12px;color:${isHidden ? '#666' : '#ccc'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
+        row.append(handle, cb, nm,
+          btn('▲', () => move(i, i - 1), { disabled: i === 0 }),
+          btn('▼', () => move(i, i + 1), { disabled: i === ord.length - 1 }));
+        listEl.appendChild(row);
+      });
+    }
+    const footer = document.createElement('div');
+    footer.style.cssText = 'display:flex;gap:8px;align-items:center';
+    const spacer = document.createElement('span'); spacer.style.flex = '1';
+    const restore = () => { provider.setColumnOrder(snapOrder); provider.showAllColumns(); for (const h of snapHidden) provider.hideColumn(h); grid.refresh(); };
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); };
+    footer.append(
+      btn('Reset order', () => { provider.resetColumnOrder(); grid.refresh(); render(); }),
+      btn('Show all', () => { provider.showAllColumns(); grid.refresh(); render(); }),
+      spacer,
+      btn('Cancel', () => { restore(); close(); }),
+      btn('OK', () => close(), { primary: true }));
+    box.appendChild(footer);
+    overlay.appendChild(box);
+    function onKey(e) { if (e.key === 'Escape') { restore(); close(); } }
+    document.addEventListener('keydown', onKey, true);
+    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) { restore(); close(); } });
+    document.body.appendChild(overlay);
+    render();
+  }
+
   // ── chrome ──
   function setTitle() {
     $('#fileName').firstChild.textContent = docName;  // app's own filename display
@@ -586,6 +669,7 @@ export function createStrataApp(host) {
       run: () => { if (provider && provider.undo) { provider.undo(); grid.refresh(); } } },
     { id: 'strata:redo', label: 'Redo', when: () => !!table && table.canRedo(),
       run: () => { if (provider && provider.redo) { provider.redo(); grid.refresh(); } } },
+    { id: 'strata:columns', label: 'Columns…', when: () => !!table, run: () => openColumnsDialog() },
     { id: 'strata:ungroup', btn: '#btnUngroup', label: '← Data', visible: () => !!detailTable, when: () => true,
       run: () => ungroup() },
   ];

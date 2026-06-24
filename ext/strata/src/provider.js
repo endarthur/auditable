@@ -42,16 +42,25 @@ export function createTableProvider(table, view) {
   const under = (r) => (view ? view.at(r) : r); // display row → underlying row
   const notify = () => { for (const cb of readyListeners) { try { cb(); } catch (e) { console.error('[strata] listener threw', e); } } };
 
-  // Column projection: hidden columns are omitted from the display order, so loom
-  // (and the app, via underCol) see only visible columns — the column-axis mirror
-  // of the row view. Hide-only for now (reorder is a later permutation of the same
-  // seam). No columns hidden → underCol(dc)===dc, identical to before.
+  // Column projection: the display axis is an explicit ORDER of underlying col
+  // indices (default identity), minus the HIDDEN set — the column-axis mirror of
+  // the row view. loom (and the app, via underCol) see only the visible columns,
+  // in order. No reorder + nothing hidden → underCol(dc)===dc, identical to before.
   const hidden = new Set();        // underlying column indices that are hidden
+  let order = null;                // display order of ALL underlying cols (incl hidden); null = identity
   let _vc = null, _vcCols = -1;
+  function ensureOrder() {         // (re)build/extend order to cover all current columns
+    if (!order) { order = []; for (let c = 0; c < table.cols; c++) order.push(c); return; }
+    if (order.length !== table.cols) {
+      const seen = new Set(order);
+      order = order.filter((c) => c < table.cols);                 // drop stale
+      for (let c = 0; c < table.cols; c++) if (!seen.has(c)) order.push(c); // append new (e.g. derived)
+    }
+  }
   function vc() {                  // visible underlying cols, in display order
     if (_vc === null || _vcCols !== table.cols) {
-      _vc = [];
-      for (let c = 0; c < table.cols; c++) if (!hidden.has(c)) _vc.push(c);
+      ensureOrder();
+      _vc = order.filter((c) => !hidden.has(c));
       _vcCols = table.cols;
     }
     return _vc;
@@ -141,6 +150,11 @@ export function createTableProvider(table, view) {
     showAllColumns() { hidden.clear(); invalidateCols(); },
     hiddenColumns() { return [...hidden]; },           // underlying indices
     isColumnHidden(c) { return hidden.has(c); },
+    // Display order of ALL underlying cols (incl hidden) — the Columns dialog
+    // reads it, reorders, and writes it back. resetColumnOrder → identity.
+    columnOrder() { ensureOrder(); return order.slice(); },
+    setColumnOrder(arr) { order = arr.slice(); invalidateCols(); },
+    resetColumnOrder() { order = null; invalidateCols(); },
 
     // Undo/redo + batch grouping — the optional loom provider contract. loom
     // calls beginBatch/endBatch around multi-cell writes (paste/fill/range-delete)

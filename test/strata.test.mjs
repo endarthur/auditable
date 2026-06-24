@@ -198,6 +198,33 @@ test('provider: header type follows setColumnType', () => {
   assert.equal(p.header(1).type, 'category');  // drives glyph + alignment
 });
 
+test('provider: setColumnOrder reorders the display axis; reset restores', () => {
+  const t = sampleTable();                  // id, grade, lito (0,1,2)
+  const p = createTableProvider(t);
+  assert.deepEqual(p.columnOrder(), [0, 1, 2]);
+  assert.equal(p.header(0).label, 'id');
+  p.setColumnOrder([2, 0, 1]);              // lito, id, grade
+  assert.equal(p.header(0).label, 'lito');
+  assert.equal(p.underCol(0), 2);
+  assert.equal(p.cellAt(0, 0).value, 'ox'); // display (0,0) == lito row 0
+  p.resetColumnOrder();
+  assert.deepEqual(p.columnOrder(), [0, 1, 2]);
+  assert.equal(p.header(0).label, 'id');
+});
+
+test('provider: reorder + hide compose; order keeps a hidden column positioned', () => {
+  const t = sampleTable();
+  const p = createTableProvider(t);
+  p.setColumnOrder([2, 1, 0]);              // lito, grade, id
+  p.hideColumn(1);                          // hide grade
+  assert.equal(p.dims().cols, 2);
+  assert.equal(p.header(0).label, 'lito');
+  assert.equal(p.header(1).label, 'id');    // grade hidden → display 1 is id
+  assert.deepEqual(p.columnOrder(), [2, 1, 0]); // order still carries grade
+  p.showColumn(1);
+  assert.equal(p.header(1).label, 'grade'); // returns to its ordered slot
+});
+
 test('provider: header marks filtered columns (funnel)', () => {
   const t = sampleTable();
   const v = createView(t);

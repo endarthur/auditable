@@ -300,6 +300,32 @@ try {
     ? ok(`header ▾ Type → Au_gpt ${typed.before}→${typed.after}`)
     : fail(`convert type failed: ${JSON.stringify(typed)}`);
 
+  // Columns… dialog: reorder (▼), hide via checkbox, Reset order, Show all, OK.
+  await page.evaluate(() => { window._strataApp.runCommand('strata:columns'); });
+  await page.waitForSelector('.strata-cols-modal', { timeout: 2000 });
+  const dlg = await page.evaluate(() => {
+    const m = document.querySelector('.strata-cols-modal');
+    const P = window._strataApp.grid.provider;
+    const rows = () => [...m.querySelectorAll('div[draggable]')];
+    const order0 = P.columnOrder().join(',');
+    rows()[0].querySelectorAll('button')[1].click();           // ▼ on first row
+    const orderMoved = P.columnOrder().join(',');
+    const cols0 = P.dims().cols;
+    rows()[0].querySelector('input[type=checkbox]').click();    // hide the new first column
+    const colsHidden = P.dims().cols;
+    const fbtns = [...m.querySelectorAll('button')];
+    fbtns.find((b) => b.textContent === 'Reset order').click();
+    const orderReset = P.columnOrder().join(',');
+    fbtns.find((b) => b.textContent === 'Show all').click();
+    const colsShown = P.dims().cols;
+    fbtns.find((b) => b.textContent === 'OK').click();
+    return { order0, orderMoved, cols0, colsHidden, orderReset, colsShown, open: !!document.querySelector('.strata-cols-modal') };
+  });
+  (dlg.orderMoved !== dlg.order0 && dlg.colsHidden === dlg.cols0 - 1
+    && dlg.orderReset === dlg.order0 && dlg.colsShown === dlg.cols0 && !dlg.open)
+    ? ok(`Columns dialog: reorder (${dlg.order0}→${dlg.orderMoved}) + hide (${dlg.cols0}→${dlg.colsHidden}) + reset/show-all restore`)
+    : fail(`columns dialog failed: ${JSON.stringify(dlg)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);
