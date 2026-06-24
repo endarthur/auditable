@@ -899,7 +899,7 @@ class Estimator {
 
 Auditable's runtime auto-loads two classes of installed modules so notebooks that use them don't need any JS preamble cell — the canonical shape of an adder notebook is just `/// adder` cells with idiomatic Python at the top.
 
-**Language packs** — when `runDAG` finds a fallback cell whose `cell.type` matches the host's known language-pack table (`adder` / `mpy` → `@gcu/adder`; `soft` → `@gcu/soft`), the matching pack is loaded from `_installedModules` before `buildDAG` runs. The cell upgrades out of fallback the moment `registerExtension` fires, so `parseNames` / `findUses` bind correctly in the same execution pass that triggered the load. The mapping is in `src/js/exec.js`'s `LANGUAGE_PACKS` constant.
+**Language packs** — when `runDAG` finds a fallback cell whose `cell.type` matches the host's known language-pack table (`adder` / `mpy` → `@gcu/adder`; `soft` → `@gcu/soft`), the matching pack is loaded from `_installedModules` before `buildDAG` runs. The cell upgrades out of fallback the moment `registerExtension` fires, so `parseNames` / `findUses` bind correctly in the same execution pass that triggered the load. The mapping is in `src/js/exec.js`'s `LANGUAGE_PACKS` constant. (This is the load path for cells that *already exist*; see **§4.6** for the declarative `gcu.languages` manifest that also makes a language **discoverable in the picker** before any cell of its type exists.)
 
 **Adapter bridges** — for every `/// adder` (or `/// mpy`) cell, `runDAG` regex-scans the source for `^from <name> import` statements. For each `<name>` that's not already in `window._auditableExtensions`, the runtime looks for an installed module whose key matches `*/<name>/adder` (preferring `@gcu/` over other scopes) and loads it. The adapter's `registerExtension({ exports: { <name>: _module } })` publishes the namespace before the cell parses, so `from natra import zeros` or `from learn.tree import DecisionTreeClassifier` just works.
 
@@ -935,6 +935,41 @@ No `await load("@gcu/adder")`, no `await load("@gcu/natra/adder")`, no `const na
 - The scan parses regex, not the adder AST. Multi-line imports (`from natra import (\n  zeros,\n  ones,\n)`) and `import X as Y` are recognized (the `from X` part still matches); deeply-nested or commented-out forms are best-effort.
 - Tagged-template usage (`` adder`from natra import …` ``) inside a JS code cell is **not** scanned — only declared `/// adder` cells are. Tagged-template adder users need an explicit `await load("@gcu/<pkg>/adder")` in the same cell. Could be lifted later by extending the scan to JS code-cell sources.
 - Soft cells use `use X.Y as N` syntax instead of `from X import`; adapter auto-discovery doesn't currently apply to soft. The language-pack auto-load (which loads `@gcu/soft` for soft cells) is unaffected.
+
+### 4.6 Declarative language packs — discovery + cold→hot
+
+§4.5 auto-loads a language pack when a cell of its type **already exists**. A pack can *also* declare its language(s) as **data** in its manifest, so the host knows the language *exists* — its cell type, label, the names adder imports it by — **without running the pack's code**. That's what makes an *installed-but-unloaded* language discoverable in the cell-type picker (and the "New ⟨language⟩ notebook" menu, and the default-language setting) and activatable on demand, rather than only lighting up for cells that already use it.
+
+**`gcu.languages`** (in `package.json`, an array — declared as DATA, no code runs to read it):
+
+```json
+"gcu": {
+  "languages": [
+    { "cellType": "adder", "tag": "adder", "label": "Python (adder)", "aliases": ["mpy"] }
+  ]
+}
+```
+
+| field | meaning |
+|---|---|
+| `cellType` | the cell type the pack registers (the `/// <cellType>` tag) |
+| `tag` | the tagged-language name for highlighting; usually `== cellType` |
+| `label` | the descriptive name shown in the pickers / New-notebook menu / default-language setting (e.g. `"Python (adder)"`). The pack's own `registerExtension` cell-type `label` stays the short *cell badge* (e.g. `"adder"`). |
+| `aliases` | other cell types that resolve to the same pack (`mpy` → adder) |
+
+**Discovery.** `listAvailableLanguages()` (cell-types.js) is the single source of truth — the union of *loaded* executable cell types and *declared-but-installed* packs. Every language picker reads it: the insert-bar / toolbar / mobile combos, the per-cell insert picker, the menubar Insert/Convert menus, the File → "New ⟨language⟩ notebook" submenu, and the Settings "default language" dropdown. Installing a language pack makes it appear *everywhere* a language is chosen, immediately (the `/lib` change watcher re-seeds without a reload).
+
+**Cold→hot activation.** A declared language shows in the picker *cold* — present in `listAvailableLanguages()` but not yet in `window._cellTypes`. Picking it (or opening/running a cell of its type, or setting it as the notebook default) calls `ensureLanguageLoaded(cellType)`: the pack loads from `_installedModules`, its `index.js` runs `registerExtension(...)`, and the cell type + tagged language + AIR lowerer register. The cell is born (or upgrades) in its real editor + runtime. Install-only — never the network.
+
+**Only cell-TYPE languages are picker entries.** A pack that contributes a `cellType` (adder, soft) is a notebook language and belongs in the pickers. **Tagged languages** (sql, glsl, calque — template tags used *inside* JS cells, `` sql`…` ``) and **libraries** (plot, sadpan — imported) are installable too, but are not cell types, so they do not appear in the language pickers; they register their tag / exports when loaded.
+
+**`gcu.adderExports`** — for **libraries**, declare the names adder code imports the package by, so `import plt` resolves *offline* in a provisioned notebook (the manifest form of the §4.4 adapter mechanism — replaces hand-editing `profiles/packages.json` for baked editions):
+
+```json
+"gcu": { "adderExports": ["plt"] }
+```
+
+**The /lib → notebook bridge.** On install, `src/js/gcupkg.js` surfaces both `packageJson.gcu.languages` and `packageJson.gcu.adderExports` onto the installed `/lib/<pkg>/meta.json`. The notebook's `hydrateModulesFromVfs` carries them onto the `_installedModules` entry (`.languages` / `.adderExports`), where `seedDeclaredLanguages()` registers the declared languages (cold) and `resolveAdderModule()` resolves the adder imports. The host's `LANGUAGE_PACK_META` (exec.js) is a fallback seed for first-party packs that predate the manifest field; **`gcu.languages` is the canonical source.**
 
 ---
 
