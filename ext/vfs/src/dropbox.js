@@ -105,10 +105,21 @@ class DropboxBackend extends Backend {
     return text ? JSON.parse(text) : null;
   }
 
-  // Content endpoints (content.dropboxapi.com/2/*) — arg rides the Dropbox-API-Arg header.
+  // Content endpoints (content.dropboxapi.com/2/*) — arg rides the Dropbox-API-Arg HEADER, which
+  // must be a valid HTTP header value (ASCII). Non-ASCII (accented/unicode paths) MUST be escaped
+  // as \uXXXX — exactly what the Dropbox SDK's httpHeaderSafeJson does. Without this, a unicode
+  // path yields a malformed header → the request fails, and since the error response omits the CORS
+  // header it surfaces as a bogus "No Access-Control-Allow-Origin" — breaking upload AND download
+  // for any such path. (RPC args ride the JSON body, which carries unicode fine, so this is content-only.)
+  _apiArg(arg) {
+    const s = JSON.stringify(arg); let o = '';
+    for (let i = 0; i < s.length; i++) { const cc = s.charCodeAt(i); o += cc > 127 ? String.fromCharCode(92) + 'u' + cc.toString(16).padStart(4, '0') : s[i]; }
+    return o;
+  }
+
   async _content(endpoint, arg, p, opts = {}) {
     return this._send(async () => {
-      const headers = { Authorization: await this._authHeader(), 'Dropbox-API-Arg': JSON.stringify(arg) };
+      const headers = { Authorization: await this._authHeader(), 'Dropbox-API-Arg': this._apiArg(arg) };
       if (opts.contentType) headers['Content-Type'] = opts.contentType;
       return fetch(CONTENT + endpoint, { method: 'POST', headers, body: opts.body });
     }, p);
