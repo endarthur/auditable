@@ -77,6 +77,22 @@ try {
     ? ok('edit committed to overlay (edits 0 → 1)')
     : fail(`edit not committed (edits ${editsBefore} → ${editsAfter})`);
 
+  // ── hover tooltip (provenance) ── cell (2,0) is edited from the test above
+  await page.mouse.move(box.x + 120, box.y + 200);   // move away first
+  await page.mouse.move(box.x + 120, box.y + 80);    // hover the edited cell
+  await page.waitForTimeout(450);
+  const tipText = await page.evaluate(() => { const t = document.querySelector('.loom-tooltip'); return t && t.style.display !== 'none' ? t.textContent : null; });
+  (tipText && /was .* → now/.test(tipText)) ? ok(`hover tooltip shows provenance (${tipText})`) : fail(`tooltip: ${tipText}`);
+
+  // ── right-click emits onContextMenu ──
+  await page.evaluate(() => { window.__ctx = null; window._loom.onContextMenu((d) => { window.__ctx = d; }); });
+  await page.mouse.click(box.x + 120, box.y + 80, { button: 'right' });
+  await page.waitForTimeout(40);
+  const ctx = await page.evaluate(() => window.__ctx);
+  (ctx && Number.isInteger(ctx.row) && Number.isInteger(ctx.col))
+    ? ok(`right-click emits onContextMenu (r${ctx.row}:c${ctx.col})`)
+    : fail(`onContextMenu: ${JSON.stringify(ctx)}`);
+
   // ── keyboard navigation ──
   await page.evaluate(() => { window._loom.setSelection({ r0: 3, c0: 1, r1: 3, c1: 1 }); window._loom.focus(); });
   await page.keyboard.press('ArrowDown');

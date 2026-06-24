@@ -73,6 +73,22 @@ export function createTableProvider(table, view) {
       return h;
     },
 
+    // Provenance on hover (loom shows it as a tooltip) — auditability made
+    // touchable: an edited cell tells you its base; a derived cell, its formula.
+    cellTitle(r, c) {
+      if (r < 0 || r >= nDisp() || c < 0 || c >= table.cols) return null;
+      if (table.isDerived(c)) { const f = table.schema[c].formula; return f ? '= ' + f : null; }
+      const cell = table.getCell(under(r), c);
+      return cell.edited ? `was ${fmtCell(cell.base)} → now ${fmtCell(cell.value)}` : null;
+    },
+
+    // Revert a cell to its base (display row → underlying). Derived cells aren't
+    // editable, so nothing to revert. Recorded on the table → undoable.
+    revert(r, c) {
+      if (table.isDerived(c)) return;
+      table.revert(under(r), c);
+    },
+
     // Show the UNDERLYING row number (provenance) — so a sorted/filtered view
     // still tells you which base row you're looking at.
     rowHeader(r) { return under(r) + 1; },

@@ -81,6 +81,13 @@ export function createMemoryProvider(spec) {
     header(c) { return { label: columns[c].name, type: columns[c].type }; },
     rowHeader(r) { return r + 1; },
 
+    // Provenance tooltip (optional loom contract): edited cells report base→now.
+    cellTitle(r, c) {
+      if (r < 0 || r >= rows.length || c < 0 || c >= columns.length) return null;
+      const k = key(r, c);
+      return overlay.has(k) ? `was ${fmtVal(rows[r][c])} → now ${fmtVal(overlay.get(k))}` : null;
+    },
+
     commit(r, c, raw) {
       const before = snap(r, c);
       overlay.set(key(r, c), coerce(raw, columns[c].type));

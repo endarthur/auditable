@@ -336,6 +336,13 @@ function createMemoryProvider(spec) {
     header(c) { return { label: columns[c].name, type: columns[c].type }; },
     rowHeader(r) { return r + 1; },
 
+    // Provenance tooltip (optional loom contract): edited cells report base→now.
+    cellTitle(r, c) {
+      if (r < 0 || r >= rows.length || c < 0 || c >= columns.length) return null;
+      const k = key(r, c);
+      return overlay.has(k) ? `was ${fmtVal(rows[r][c])} → now ${fmtVal(overlay.get(k))}` : null;
+    },
+
     commit(r, c, raw) {
       const before = snap(r, c);
       overlay.set(key(r, c), coerce(raw, columns[c].type));
@@ -662,6 +669,7 @@ function createGrid(element, provider, options = {}) {
     editing: null,
     selectListeners: [],
     headerListeners: [],
+    contextListeners: [],
     _cleanup: [],
   };
 
@@ -733,6 +741,19 @@ function createGrid(element, provider, options = {}) {
   clip.setAttribute('aria-hidden', 'true');
   element.appendChild(clip);
   g.clip = clip;
+
+  // Hover tooltip — shows provider.cellTitle(r,c) (provenance: was→now, derived
+  // formula, …) after a short dwell. position:fixed so it floats over the canvas.
+  const tip = document.createElement('div');
+  tip.className = 'loom-tooltip';
+  styleEl(tip, {
+    position: 'fixed', display: 'none', zIndex: 10, pointerEvents: 'none',
+    background: g.colors.hdrBg, color: g.colors.cellText, border: '1px solid ' + g.colors.hdrBorder,
+    borderRadius: '3px', padding: '2px 6px', font: g.hdrFontPx + 'px ' + g.mono,
+    whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+  });
+  element.appendChild(tip);
+  g.tip = tip;
 
   // ── sizing ──
   function sizeCanvases() {
@@ -846,6 +867,7 @@ function createGrid(element, provider, options = {}) {
     e.preventDefault();
     if (g.editing) cancelEdit();
     clip.focus();
+    if (g.tip) g.tip.style.display = 'none';
     const { row, col } = pointToCell(e.clientX, e.clientY);
     setSel({ r0: row, c0: col, r1: row, c1: col }, false);
     g.selDrag = true;
@@ -1120,11 +1142,58 @@ function createGrid(element, provider, options = {}) {
   g._cleanup.push(() => colHdr.removeEventListener('dblclick', onHeaderDblClick));
   g._cleanup.push(() => colHdr.removeEventListener('click', onHeaderClickEvt));
 
-  scroll.addEventListener('scroll', () => { if (g.editing) cancelEdit(); repaint(); }, { passive: true });
+  // ── hover tooltip ──
+  let hoverKey = null, hoverTimer = null;
+  function hideTip() { tip.style.display = 'none'; }
+  function onHoverMove(e) {
+    if (g.editing || g.selDrag || !provider.cellTitle) { hideTip(); return; }
+    const { row, col } = pointToCell(e.clientX, e.clientY);
+    const k = row + ':' + col;
+    if (k === hoverKey) return;            // same cell — leave the pending/shown tip
+    hoverKey = k;
+    hideTip();
+    clearTimeout(hoverTimer);
+    const cx = e.clientX, cy = e.clientY;
+    hoverTimer = setTimeout(() => {
+      const txt = provider.cellTitle(row, col);
+      if (!txt) return;
+      tip.textContent = txt;
+      tip.style.left = (cx + 12) + 'px';
+      tip.style.top = (cy + 16) + 'px';
+      tip.style.display = 'block';
+    }, 350);
+  }
+  function onHoverLeave() { hoverKey = null; clearTimeout(hoverTimer); hideTip(); }
+
+  // ── context menu (right-click) ──
+  // loom only DETECTS the gesture and emits (row,col,sel,clientX,clientY); the
+  // host builds the menu (so its items run through the host's own mutation/undo
+  // wiring). With no listener, the native menu shows (a bare grid stays default).
+  function onContextMenuEvt(e) {
+    if (!g.contextListeners.length) return;
+    e.preventDefault();
+    onHoverLeave();
+    clip.focus();
+    const { row, col } = pointToCell(e.clientX, e.clientY);
+    const ns = normSel(g.sel);
+    const inSel = ns && row >= ns.r0 && row <= ns.r1 && col >= ns.c0 && col <= ns.c1;
+    if (!inSel) { g.sel = { r0: row, c0: col, r1: row, c1: col }; repaint(); emitSelect(); }
+    const detail = { row, col, sel: normSel(g.sel), clientX: e.clientX, clientY: e.clientY };
+    for (const cb of g.contextListeners) { try { cb(detail); } catch (err) { console.error('[loom] onContextMenu listener threw', err); } }
+  }
+
+  scroll.addEventListener('scroll', () => { if (g.editing) cancelEdit(); hideTip(); hoverKey = null; repaint(); }, { passive: true });
   scroll.addEventListener('mousedown', onMouseDown);
   scroll.addEventListener('dblclick', onDblClick);
+  scroll.addEventListener('mousemove', onHoverMove);
+  scroll.addEventListener('mouseleave', onHoverLeave);
+  scroll.addEventListener('contextmenu', onContextMenuEvt);
   g._cleanup.push(() => scroll.removeEventListener('mousedown', onMouseDown));
   g._cleanup.push(() => scroll.removeEventListener('dblclick', onDblClick));
+  g._cleanup.push(() => scroll.removeEventListener('mousemove', onHoverMove));
+  g._cleanup.push(() => scroll.removeEventListener('mouseleave', onHoverLeave));
+  g._cleanup.push(() => scroll.removeEventListener('contextmenu', onContextMenuEvt));
+  g._cleanup.push(() => clearTimeout(hoverTimer));
 
   // Keyboard + clipboard live on the hidden focus holder (see scaffold above).
   clip.addEventListener('keydown', onKeyDown);
@@ -1165,6 +1234,7 @@ function createGrid(element, provider, options = {}) {
     setSelection(sel) { setSel(sel, true); },
     onSelect(cb) { g.selectListeners.push(cb); return () => { const i = g.selectListeners.indexOf(cb); if (i >= 0) g.selectListeners.splice(i, 1); }; },
     onHeaderClick(cb) { g.headerListeners.push(cb); return () => { const i = g.headerListeners.indexOf(cb); if (i >= 0) g.headerListeners.splice(i, 1); }; },
+    onContextMenu(cb) { g.contextListeners.push(cb); return () => { const i = g.contextListeners.indexOf(cb); if (i >= 0) g.contextListeners.splice(i, 1); }; },
     // Column widths (the sparse non-default map). get returns a copy; set
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.

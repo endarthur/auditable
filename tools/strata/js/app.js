@@ -10,7 +10,7 @@
 // Works-ready as-is.
 
 import { createGrid } from '@gcu/loom';
-import { tableFromCsv, createTableProvider, createView, groupBy, transformWithOver, previewOverTransform, readStrata, writeStrata, evaluatePredicate } from '@gcu/strata';
+import { tableFromCsv, createTableProvider, createView, groupBy, transformWithOver, previewOverTransform, readStrata, writeStrata, evaluatePredicate, fmtCell } from '@gcu/strata';
 import { sniff } from '@gcu/recon';
 import { createWriter, readZip } from '@gcu/archive';
 import { compile } from '@gcu/over';
@@ -93,6 +93,7 @@ export function createStrataApp(host) {
 
   // ── mounting ──
   function mountTable(t) {
+    closeContextMenu();
     table = t;
     view = createView(table);
     sortState = null;
@@ -102,11 +103,11 @@ export function createStrataApp(host) {
     // Track dirty + footer on every commit (loom repaints on its own).
     const commit = provider.commit.bind(provider);
     provider.commit = (r, c, v) => { commit(r, c, v); host.setDirty(true); updateFooter(); };
-    // Undo/redo are mutations too — wrap them to refresh dirty + footer (loom
-    // calls these directly on Ctrl+Z/Y, then repaints).
-    for (const m of ['undo', 'redo']) {
+    // Undo/redo/revert are mutations too — wrap them to refresh dirty + footer
+    // (loom calls undo/redo on Ctrl+Z/Y; revert is driven by the context menu).
+    for (const m of ['undo', 'redo', 'revert']) {
       const fn = provider[m] && provider[m].bind(provider);
-      if (fn) provider[m] = () => { const r = fn(); host.setDirty(true); updateFooter(); return r; };
+      if (fn) provider[m] = (...a) => { const r = fn(...a); host.setDirty(true); updateFooter(); return r; };
     }
 
     if (grid) grid.destroy();
@@ -114,6 +115,7 @@ export function createStrataApp(host) {
     grid = createGrid($('#grid'), provider, { theme: 'dark', defaultColW: 92 });
     grid.onSelect((s) => { updateSel(s); publishRowSelection(s); });
     grid.onHeaderClick(cycleSort);
+    grid.onContextMenu(onCellContextMenu);
     grid.focus();
 
     setTitle();
@@ -327,6 +329,78 @@ export function createStrataApp(host) {
       flash('filter error: ' + e.message);
       return false;
     }
+  }
+
+  // ── cell context menu (right-click → revert provenance) ──
+  // loom emits the gesture; the app builds the menu so revert flows through the
+  // wrapped provider.revert (dirty/footer) and the table's undo log. The noun-
+  // first "verbs come to the object" layer (see the GCU command-model direction).
+  function editedCellsInSel(sel) {
+    const out = [];
+    if (!sel || !table || !view) return out;
+    for (let r = sel.r0; r <= sel.r1; r++) {
+      const ur = view.at(r);
+      for (let c = sel.c0; c <= sel.c1; c++) if (!table.isDerived(c) && table.isEdited(ur, c)) out.push([r, c]);
+    }
+    return out;
+  }
+  function onCellContextMenu({ row, col, sel, clientX, clientY }) {
+    if (!table || !view) return;
+    const items = [];
+    const ur = view.at(row);
+    if (!table.isDerived(col) && table.isEdited(ur, col)) {
+      items.push({ label: `Revert to ${fmtCell(table.baseValue(ur, col))}`, run: () => { provider.revert(row, col); grid.refresh(); } });
+    }
+    const edited = editedCellsInSel(sel);
+    if (edited.length > 1) {
+      items.push({ label: `Revert ${edited.length} edits in selection`, run: () => {
+        if (provider.beginBatch) provider.beginBatch();
+        for (const [r, c] of edited) provider.revert(r, c);
+        if (provider.endBatch) provider.endBatch();
+        grid.refresh();
+      } });
+    }
+    if (!items.length) items.push({ label: 'No edits to revert', disabled: true });
+    showContextMenu(items, clientX, clientY);
+  }
+
+  let _ctxMenu = null;
+  function closeContextMenu() {
+    if (!_ctxMenu) return;
+    _ctxMenu.remove(); _ctxMenu = null;
+    document.removeEventListener('mousedown', _ctxOutside, true);
+    document.removeEventListener('keydown', _ctxKey, true);
+  }
+  function _ctxOutside(e) { if (_ctxMenu && !_ctxMenu.contains(e.target)) closeContextMenu(); }
+  function _ctxKey(e) { if (e.key === 'Escape') closeContextMenu(); }
+  function showContextMenu(items, x, y) {
+    closeContextMenu();
+    const menu = document.createElement('div');
+    menu.className = 'strata-ctx';
+    menu.style.cssText = 'position:fixed;z-index:1100;background:#1e1e1e;border:1px solid #444;border-radius:5px;padding:4px;min-width:150px;font-family:var(--mono,monospace);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.5)';
+    for (const it of items) {
+      const b = document.createElement('div');
+      b.textContent = it.label;
+      b.style.cssText = `padding:5px 10px;border-radius:3px;white-space:nowrap;cursor:${it.disabled ? 'default' : 'pointer'};color:${it.disabled ? '#666' : '#ccc'}`;
+      if (!it.disabled) {
+        b.onmouseenter = () => { b.style.background = '#2e2e2e'; };
+        b.onmouseleave = () => { b.style.background = ''; };
+        b.onclick = () => { closeContextMenu(); it.run(); };
+      }
+      menu.appendChild(b);
+    }
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    if (x + r.width > window.innerWidth) x = window.innerWidth - r.width - 4;
+    if (y + r.height > window.innerHeight) y = window.innerHeight - r.height - 4;
+    menu.style.left = Math.max(2, x) + 'px';
+    menu.style.top = Math.max(2, y) + 'px';
+    _ctxMenu = menu;
+    // Defer the dismiss listeners so the opening right-click doesn't close it.
+    setTimeout(() => {
+      document.addEventListener('mousedown', _ctxOutside, true);
+      document.addEventListener('keydown', _ctxKey, true);
+    }, 0);
   }
 
   // ── chrome ──

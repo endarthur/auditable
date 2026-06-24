@@ -195,6 +195,27 @@ try {
     ? ok('+Col form modal (replaces prompt) added a derived column + closed')
     : fail(`+Col modal failed: ${JSON.stringify(modalAdd)}`);
 
+  // Right-click an edited cell → context menu → "Revert to …" reverts it.
+  const cbox = await (await page.$('#grid')).boundingBox();
+  await page.mouse.click(cbox.x + 70, cbox.y + 90);   // select a base cell
+  await page.keyboard.type('ZZZ');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(60);
+  await page.mouse.click(cbox.x + 70, cbox.y + 90, { button: 'right' });
+  await page.waitForTimeout(60);
+  const ctxRevert = await page.evaluate(() => {
+    const m = document.querySelector('.strata-ctx');
+    if (!m) return { shown: false };
+    const item = [...m.querySelectorAll('div')].find((d) => /Revert to/.test(d.textContent));
+    if (!item) return { shown: true, hasRevert: false, text: m.textContent };
+    const before = window._strataApp.table.dirtyCount();
+    item.click();
+    return { shown: true, hasRevert: true, label: item.textContent, before, after: window._strataApp.table.dirtyCount() };
+  });
+  (ctxRevert.shown && ctxRevert.hasRevert && ctxRevert.after === ctxRevert.before - 1)
+    ? ok(`right-click "${ctxRevert.label}" reverts (dirty ${ctxRevert.before}→${ctxRevert.after})`)
+    : fail(`context revert failed: ${JSON.stringify(ctxRevert)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);

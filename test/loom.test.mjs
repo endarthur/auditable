@@ -242,6 +242,13 @@ test('memory provider: undo/redo + batched (beginBatch) one-step undo', () => {
   assert.equal(p.cellAt(2, 1).state, CellState.RAW);
 });
 
+test('memory provider: cellTitle reports edited provenance', () => {
+  const p = sampleProvider();
+  assert.equal(p.cellTitle(0, 1), null);             // raw → null
+  p.commit(0, 1, '9.5');
+  assert.equal(p.cellTitle(0, 1), 'was 2.50 → now 9.50');
+});
+
 test('memory provider: out-of-range + empty cells return null', () => {
   const p = sampleProvider();
   assert.equal(p.cellAt(-1, 0), null);

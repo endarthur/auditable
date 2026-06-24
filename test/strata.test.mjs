@@ -157,6 +157,31 @@ test('provider: header carries the active sort indicator', () => {
   assert.equal(p.header(1).sort, undefined);
 });
 
+test('provider: cellTitle reports provenance (edited was→now; derived formula)', () => {
+  const t = sampleTable();
+  t.addDerivedColumn({ name: 'g2', formula: 'grade * 2' });
+  const p = createTableProvider(t);
+  assert.equal(p.cellTitle(0, 1), null);                 // raw → no tooltip
+  t.setCell(0, 1, 9.9);
+  assert.equal(p.cellTitle(0, 1), 'was 0.5 → now 9.9');  // edited → base→now
+  const g2 = t.schema.findIndex((s) => s.name === 'g2');
+  assert.equal(p.cellTitle(0, g2), '= grade * 2');       // derived → formula
+});
+
+test('provider: revert maps through the view and is undoable', () => {
+  const t = sampleTable();
+  const v = createView(t);
+  v.setSort({ by: 'grade', dir: 'desc' });               // reorders display rows
+  const p = createTableProvider(t, v);
+  const ur = v.at(0);                                     // underlying row of display 0
+  p.commit(0, 1, '42');
+  assert.equal(t.isEdited(ur, 1), true);
+  p.revert(0, 1);                                         // display-row revert maps back
+  assert.equal(t.isEdited(ur, 1), false);
+  assert.equal(t.undo(), true);                           // the revert was recorded
+  assert.equal(t.isEdited(ur, 1), true);
+});
+
 // ── ingest: built-in sniffer ──
 
 const CSV = 'id,grade,lito\n1,0.5,ox\n2,1.5,sulf\n3,,ox\n';
