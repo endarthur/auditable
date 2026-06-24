@@ -38,7 +38,7 @@ await page.goto(origin + '/blank.html');
 
 // ── the scenarios run IN THE PAGE against real window.indexedDB; results come back as plain data ──
 const results = await page.evaluate(async (base) => {
-  const { IDBBackend } = await import(base + '/ext/vfs/index.js');
+  const { IDBBackend, VFS } = await import(base + '/ext/vfs/index.js');
   const out = [];
   const check = (name, cond, msg) => out.push({ name, ok: !!cond, msg: cond ? '' : (msg || 'failed') });
   const freshBe = async () => { const b = new IDBBackend({ name: 'idbt-' + Math.random().toString(36).slice(2) }); await b.init(); return b; };
@@ -102,6 +102,15 @@ const results = await page.evaluate(async (base) => {
   { const b = await freshBe(); const bytes = new Uint8Array([0, 1, 2, 250, 255]);
     await b.writeFile('/b.bin', bytes); const got = await b.readFile('/b.bin', 'bytes');
     check('binary round-trip', got instanceof Uint8Array && [...got].join(',') === '0,1,2,250,255'); }
+
+  // 9. CAPSTONE: the optimization reaches through the VFS router on the real engine
+  { const vfs = await VFS.create(); await vfs.mount('/m', { type: 'idb', name: 'plumb-' + Math.random().toString(36).slice(2) });
+    await vfs.mkdir('/m/d/sub', { recursive: true }); await vfs.writeFile('/m/d/sub/f.txt', 'x'); await vfs.writeFile('/m/d/g.txt', 'y');
+    check('vfs.rm({recursive}) through mount = 1 tx', (await countTx(() => vfs.rm('/m/d', { recursive: true }))) === 1);
+    check('vfs.rm({recursive}) through mount: gone', !(await vfs.exists('/m/d')));
+    const files = Array.from({ length: 1500 }, (_, i) => ({ path: `/m/bulk/f${i}.txt`, content: 'x' + i }));
+    check('vfs.writeFiles through mount = 2 tx', (await countTx(() => vfs.writeFiles(files))) === 2);
+    check('vfs.writeFiles through mount wrote 1500', (await vfs.readdir('/m/bulk')).length === 1500); }
 
   return out;
 }, origin);

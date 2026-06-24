@@ -240,7 +240,7 @@ class VFS extends EventEmitter {
     checkPermission('rmdir', p, principal);
     const { backend, subpath } = this.resolve(p);
     this._checkWrite(backend, p);
-    await backend.rmdir(subpath);
+    await backend.rmdir(subpath, opts);   // pass opts through (enables a backend's native recursive path)
     this.emit('delete', { path: path.normalize(p) });
   }
 
@@ -250,7 +250,13 @@ class VFS extends EventEmitter {
     const { backend, subpath } = this.resolve(p);
     this._checkWrite(backend, p);
     if (opts && opts.recursive) {
-      await this._rmRecursive(p, backend, subpath);
+      if (backend.recursiveRemove) {
+        // one native op (the backend handles file-or-subtree) instead of walking the tree node-by-node
+        await backend.rmdir(subpath, { recursive: true });
+        this.emit('delete', { path: path.normalize(p) });   // one coarse event on the fast path
+      } else {
+        await this._rmRecursive(p, backend, subpath);
+      }
     } else {
       const info = await backend.stat(subpath);
       if (info.type === 'directory') throw vfsError('EISDIR', p);
@@ -494,6 +500,89 @@ class VFS extends EventEmitter {
       }
     }
     this.emit('write', { path: path.normalize(p) });
+  }
+
+  // --- extended/optimized backend API: delegate to the backend's fast path when present, else a generic
+  //     fallback in core ops — so the method always works, fast where the backend (and composers) support it. ---
+
+  // Bulk write — files grouped by mount; each backend gets one writeFiles() call (or a per-file fallback).
+  async writeFiles(files, opts) {
+    if (!files || !files.length) return { committed: 0 };
+    const principal = opts?.principal;
+    const groups = new Map();   // backend → [{ subpath, content, absPath }]
+    for (const f of files) {
+      checkPermission('writeFile', f.path, principal);
+      const { backend, subpath } = this.resolve(f.path);
+      this._checkWrite(backend, f.path);
+      if (!groups.has(backend)) groups.set(backend, []);
+      groups.get(backend).push({ subpath, content: f.content, absPath: f.path });
+    }
+    let committed = 0;
+    for (const [backend, items] of groups) {
+      if (typeof backend.writeFiles === 'function') {
+        const r = await backend.writeFiles(items.map((i) => ({ path: i.subpath, content: i.content })));
+        committed += (r && r.committed != null) ? r.committed : items.length;
+      } else {
+        for (const i of items) await backend.writeFile(i.subpath, i.content);
+        committed += items.length;
+      }
+      for (const i of items) this.emit('write', { path: path.normalize(i.absPath) });
+    }
+    return { committed };
+  }
+
+  // Bulk delete — grouped by mount; each backend gets one deleteBatch() (or per-path unlink fallback).
+  async deleteBatch(paths, opts) {
+    if (!paths || !paths.length) return { deleted: 0 };
+    const principal = opts?.principal;
+    const groups = new Map();
+    for (const p of paths) {
+      checkPermission('rm', p, principal);
+      const { backend, subpath } = this.resolve(p);
+      this._checkWrite(backend, p);
+      if (!groups.has(backend)) groups.set(backend, []);
+      groups.get(backend).push({ subpath, absPath: p });
+    }
+    let deleted = 0;
+    for (const [backend, items] of groups) {
+      if (typeof backend.deleteBatch === 'function') {
+        const r = await backend.deleteBatch(items.map((i) => i.subpath));
+        deleted += (r && r.deleted != null) ? r.deleted : items.length;
+      } else {
+        for (const i of items) await backend.unlink(i.subpath);
+        deleted += items.length;
+      }
+      for (const i of items) this.emit('delete', { path: path.normalize(i.absPath) });
+    }
+    return { deleted };
+  }
+
+  // Recursive listing — one backend.listTree() (rich entries + cursor) when supported, else a readdir+stat
+  // walk (no cursor — that's a sync nicety, undefined elsewhere). Entry paths are absolute VFS paths.
+  async listTree(p, opts) {
+    const principal = opts?.principal;
+    checkPermission('readdir', p, principal);
+    const { backend, subpath, mount } = this.resolve(p);
+    const toAbs = (sub) => path.normalize((mount === '/' ? '' : mount) + (sub.startsWith('/') ? sub : '/' + sub));
+    if (typeof backend.listTree === 'function') {
+      const r = await backend.listTree(subpath);
+      return { entries: r.entries.map((e) => ({ ...e, path: toAbs(e.path) })), cursor: r.cursor };
+    }
+    const entries = [];
+    const walk = async (abs, sub) => {
+      let names;
+      try { names = await backend.readdir(sub); } catch { return; }
+      for (const name of names) {
+        const childSub = sub === '/' ? '/' + name : sub + '/' + name;
+        const childAbs = abs === '/' ? '/' + name : abs + '/' + name;
+        let info;
+        try { info = await backend.stat(childSub); } catch { continue; }
+        if (info.type === 'directory') { entries.push({ path: path.normalize(childAbs), type: 'directory' }); await walk(childAbs, childSub); }
+        else entries.push({ path: path.normalize(childAbs), type: 'file', size: info.size, modified: info.modified });
+      }
+    };
+    await walk(path.normalize(p), subpath);
+    return { entries, cursor: undefined };
   }
 }
 

@@ -380,6 +380,7 @@ class IDBBackend extends Backend {
 
   get persistent() { return true; }
   get estimatable() { return true; }
+  get recursiveRemove() { return true; }   // store.delete(IDBKeyRange) — see _rmdirRecursive
 }
 
 export { IDBBackend };

@@ -3,7 +3,7 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { VFS, VFSError, path, FSAABackend, IDBBackend } from '../ext/vfs/index.js';
-import { IDBFactory, IDBKeyRange as FakeIDBKeyRange } from 'fake-indexeddb';
+import { IDBFactory, IDBKeyRange as FakeIDBKeyRange, IDBDatabase } from 'fake-indexeddb';
 
 // ============================================================
 // 1. path utilities
@@ -1180,6 +1180,81 @@ describe('IDBBackend transaction batching', () => {
     await b.writeFile('/dd/f.txt', 'x');
     await assert.rejects(b.rmdir('/dd'), { code: 'ENOTEMPTY' });
     await assert.rejects(b.rmdir('/dd/f.txt'), { code: 'ENOTDIR' });
+  });
+});
+
+// ============================================================
+// 10c. VFS capability plumbing (vfs-capability-plumbing-spec.md)
+// proves the 0.3–0.6 backend optimizations now reach through the router + composers
+// ============================================================
+describe('VFS capability plumbing', () => {
+  // count IDB transactions during fn (across all dbs; the test op is isolated)
+  async function countIdbTx(fn) {
+    const proto = IDBDatabase.prototype, orig = proto.transaction; let n = 0;
+    proto.transaction = function (...a) { n++; return orig.apply(this, a); };
+    try { await fn(); } finally { proto.transaction = orig; }
+    return n;
+  }
+
+  it('vfs.rm({recursive}) uses the backend native recursive delete (IDB mount → ONE transaction)', async () => {
+    mock.indexedDB._reset();
+    const vfs = await VFS.create();
+    await vfs.mount('/m', { type: 'idb', name: 'plumb-rm' });
+    await vfs.mkdir('/m/d/sub', { recursive: true });
+    await vfs.writeFile('/m/d/sub/f.txt', 'x'); await vfs.writeFile('/m/d/g.txt', 'y');
+    assert.equal(await countIdbTx(() => vfs.rm('/m/d', { recursive: true })), 1, 'native recursive delete through the router');
+    assert.equal(await vfs.exists('/m/d'), false);
+  });
+
+  it('vfs.writeFiles batches on a backend that supports it (IDB mount)', async () => {
+    mock.indexedDB._reset();
+    const vfs = await VFS.create();
+    await vfs.mount('/m', { type: 'idb', name: 'plumb-wf' });
+    const files = Array.from({ length: 1500 }, (_, i) => ({ path: `/m/dir/f${i}.txt`, content: 'x' + i }));
+    assert.equal(await countIdbTx(() => vfs.writeFiles(files)), 2, '1500 files → two transactions through the router');
+    assert.equal((await vfs.readdir('/m/dir')).length, 1500);
+    assert.equal(await vfs.readFile('/m/dir/f42.txt'), 'x42');
+  });
+
+  it('vfs.writeFiles falls back to per-file writeFile when the backend lacks it (memory)', async () => {
+    const vfs = await VFS.create();   // memory at /
+    const r = await vfs.writeFiles([{ path: '/a.txt', content: 'a' }, { path: '/b.txt', content: 'b' }]);
+    assert.equal(r.committed, 2);
+    assert.equal(await vfs.readFile('/a.txt'), 'a');
+    assert.equal(await vfs.readFile('/b.txt'), 'b');
+  });
+
+  it('vfs.rm({recursive}) falls back to the walk when the backend lacks recursiveRemove (memory)', async () => {
+    const vfs = await VFS.create();
+    await vfs.mkdir('/d/sub', { recursive: true });
+    await vfs.writeFile('/d/sub/f.txt', 'x');
+    await vfs.rm('/d', { recursive: true });
+    assert.equal(await vfs.exists('/d'), false);
+  });
+
+  it('vfs.listTree fallback (readdir+stat walk) returns the whole subtree as absolute paths', async () => {
+    const vfs = await VFS.create();
+    await vfs.mkdir('/a/b', { recursive: true });
+    await vfs.writeFile('/a/b/c.txt', 'hi'); await vfs.writeFile('/a/top.txt', 't');
+    const paths = (await vfs.listTree('/a')).entries.map((e) => e.path).sort();
+    assert.deepEqual(paths, ['/a/b', '/a/b/c.txt', '/a/top.txt']);
+  });
+
+  it('CacheBackend exposes the remote optimized API + recursiveRemove (cache-over-idb)', async () => {
+    mock.indexedDB._reset();
+    const vfs = await VFS.create();
+    await vfs.mount('/c', { type: 'cache', backend: { type: 'idb', name: 'plumb-cache' } });
+    const { backend } = vfs.resolve('/c/x');
+    assert.equal(backend.recursiveRemove, true, 'cache delegates recursiveRemove to the idb remote');
+    assert.equal(typeof backend.writeFiles, 'function', 'cache exposes writeFiles (remote has it)');
+    // batched writeFiles reaches idb through the cache (not 1200 transactions)
+    const files = Array.from({ length: 1200 }, (_, i) => ({ path: `/c/d/f${i}.txt`, content: 'y' }));
+    const n = await countIdbTx(() => vfs.writeFiles(files));
+    assert.ok(n >= 2 && n < 10, 'batched through cache→idb (got ' + n + ')');
+    assert.equal((await vfs.readdir('/c/d')).length, 1200);
+    // recursive rm through cache → native delete + subtree cache invalidation
+    await vfs.rm('/c/d', { recursive: true });
+    assert.equal(await vfs.exists('/c/d'), false);
   });
 });
 

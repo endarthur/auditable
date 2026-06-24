@@ -320,6 +320,7 @@ class HandleBackend extends Backend {
   get persistent() { return true; }
   get streamable() { return true; }
   get estimatable() { return true; }
+  get recursiveRemove() { return true; }   // removeEntry({recursive}) — see _rmDir
 
   async estimate() {
     if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.estimate) {

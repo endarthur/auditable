@@ -124,6 +124,10 @@ class Backend {
   get exportable() { return true; }
   get portable() { return false; }
   get symlinks() { return false; }
+  // true ⇒ rmdir(p, { recursive: true }) deletes a non-empty subtree natively (one op). The router uses it for
+  // vfs.rm({recursive}) instead of walking. Optional bulk methods (writeFiles/deleteBatch/listTree) and the
+  // change feed (latestCursor/changes/longpoll) are detected by presence — implement them to opt in.
+  get recursiveRemove() { return false; }
 }
 
 export { Backend };

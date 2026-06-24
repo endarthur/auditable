@@ -23,6 +23,18 @@ class CacheBackend extends Backend {
     this._store = _createBackend(this._storeConfig || { type: 'memory' });
     if (this._remote.init) await this._remote.init();
     if (this._store.init) await this._store.init();
+    // Expose the remote's optimized API through the cache mount ONLY when the remote actually implements it —
+    // otherwise the method stays absent and the router's generic fallback applies. Bulk writes/deletes
+    // invalidate the touched cache entries; listTree + the change feed pass straight through.
+    if (typeof this._remote.writeFiles === 'function') {
+      this.writeFiles = async (files) => { const r = await this._remote.writeFiles(files); for (const f of files) await this.invalidate(path.normalize(f.path)); return r; };
+    }
+    if (typeof this._remote.deleteBatch === 'function') {
+      this.deleteBatch = async (paths) => { const r = await this._remote.deleteBatch(paths); for (const p of paths) await this.invalidate(path.normalize(p)); return r; };
+    }
+    for (const m of ['listTree', 'latestCursor', 'changes', 'longpoll']) {
+      if (typeof this._remote[m] === 'function') this[m] = (...a) => this._remote[m](...a);
+    }
   }
 
   async _isFresh(metaPath, ttl) {
@@ -122,10 +134,11 @@ class CacheBackend extends Backend {
     await this.invalidate(n);
   }
 
-  async rmdir(p) {
+  async rmdir(p, opts) {
     const n = path.normalize(p);
-    await this._remote.rmdir(n);
-    await this.invalidate(n);
+    await this._remote.rmdir(n, opts);                                  // pass opts → native recursive on the remote
+    if (opts && opts.recursive) await this._invalidateSubtree(n);       // drop cached descendants too
+    else await this.invalidate(n);
   }
 
   async rename(oldP, newP) {
@@ -184,6 +197,19 @@ class CacheBackend extends Backend {
     } catch {}
   }
 
+  // invalidate a whole cached subtree (content + meta + listing) — used after a recursive remote delete.
+  async _invalidateSubtree(n) {
+    await this.invalidate(n);
+    for (const base of ['', META_PREFIX, LISTING_PREFIX]) {
+      const root = base + n;
+      try {
+        const info = await this._store.stat(root);
+        if (info.type === 'directory') await this._rmStoreRecursive(root);
+        else await this._store.unlink(root);
+      } catch {}
+    }
+  }
+
   async exists(p) {
     try { await this.stat(p); return true; }
     catch { return false; }
@@ -199,6 +225,7 @@ class CacheBackend extends Backend {
   get readonly() { return this._remote ? !!this._remote.readonly : false; }
   get streamable() { return this._remote ? !!this._remote.streamable : false; }
   get estimatable() { return this._remote ? !!this._remote.estimatable : false; }
+  get recursiveRemove() { return this._remote ? !!this._remote.recursiveRemove : false; }
 }
 
 export { CacheBackend };
