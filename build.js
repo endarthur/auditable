@@ -998,6 +998,26 @@ if (target === 'packages') {
       { dir: 'ext/soft', files: ['package.json', 'index.js', 'LICENSE', 'README.md'],
         contributes: ['language'], integrityCovers: ['index.js'],
         title: 'Soft', tags: ['language', 'soft', 'english-keywords'] },
+      // Library packs — importable in adder/JS cells. gcu.adderExports lets
+      // `import plt` / `import sadpan` resolve offline (the install surfaces it
+      // onto meta.json → resolveAdderModule).
+      { dir: 'ext/plot', files: ['package.json', 'index.js', 'LICENSE', 'README.md'],
+        contributes: ['library'], integrityCovers: ['index.js'],
+        title: 'plot (matplotlib-style)', tags: ['library', 'plot', 'matplotlib'] },
+      { dir: 'ext/sadpan', files: ['package.json', 'index.js', 'LICENSE', 'README.md'],
+        contributes: ['library'], integrityCovers: ['index.js'],
+        title: 'sadpan (pandas-style)', tags: ['library', 'dataframe', 'pandas'] },
+      // Tagged-language packs — template tags used inside JS cells (e.g. sql`…`);
+      // register their tag on load. Not cell-type languages (not picker entries).
+      { dir: 'ext/sql', files: ['package.json', 'index.js', 'LICENSE', 'README.md'],
+        contributes: ['taggedLanguage'], integrityCovers: ['index.js'],
+        title: 'SQL (tag)', tags: ['language', 'sql', 'tag'] },
+      { dir: 'ext/shader', files: ['package.json', 'index.js', 'LICENSE', 'README.md'],
+        contributes: ['taggedLanguage'], integrityCovers: ['index.js'],
+        title: 'GLSL shader (tag)', tags: ['language', 'glsl', 'shader'] },
+      { dir: 'ext/calque', files: ['package.json', 'index.js', 'LICENSE', 'README.md'],
+        contributes: ['taggedLanguage'], integrityCovers: ['index.js'],
+        title: 'Calque (tag)', tags: ['language', 'calque', 'spreadsheet'] },
     ];
 
     // Lib dependencies that the distributables' services `require` — packaged as

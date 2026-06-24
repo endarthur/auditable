@@ -349,6 +349,13 @@ export async function installGcupkg(parsed, opts = {}) {
   if (packageJson.gcu && Array.isArray(packageJson.gcu.languages) && packageJson.gcu.languages.length) {
     pkgMeta.languages = packageJson.gcu.languages;
   }
+  // adderExports — the names adder code imports the package by (e.g. @gcu/plot →
+  // `plt`). Surfaced onto the entry's meta so resolveAdderModule (exec.js)
+  // resolves `import plt` / `from sadpan import …` OFFLINE in a provisioned
+  // notebook, the same way profiles/packages.json wires it for baked editions.
+  if (packageJson.gcu && Array.isArray(packageJson.gcu.adderExports) && packageJson.gcu.adderExports.length) {
+    pkgMeta.adderExports = packageJson.gcu.adderExports;
+  }
   await vfs.writeFile(libPath + '/meta.json', _ENCODER.encode(JSON.stringify(pkgMeta, null, 2)));
   await _updateLockfile(vfs, meta.name, pkgMeta);
 

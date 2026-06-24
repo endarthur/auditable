@@ -33,5 +33,12 @@
   "homepage": "https://github.com/gentropic/auditable/tree/main/ext/sadpan",
   "bugs": {
     "url": "https://github.com/gentropic/auditable/issues"
+  },
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "library pack — declares gcu.adderExports so adder code (`import sadpan`) resolves it offline once installed; registers its `sadpan` export on load."
+  },
+  "gcu": {
+    "adderExports": ["sadpan"]
   }
 }
