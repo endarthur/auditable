@@ -4,7 +4,8 @@
 // Self-contained: this package's index.js IS the @gcu/plate compositor lib
 // (→ /lib/@gcu/plate/source). The surface imports @gcu/plate (own source) plus
 // the @gcu/strata table lib, @gcu/recon, and @gcu/archive — pulled via
-// gcu.requires (strata brings the @gcu/strata package). Opens .strata/.csv/.tsv.
+// gcu.requires (strata brings the @gcu/strata package). No file association —
+// reached explicitly (launcher / Open as…); .strata is owned by the strata surface.
 
 const PLATE_VERSION = '0.1.0';
 
@@ -21,9 +22,12 @@ if (typeof window !== 'undefined') {
           label:      'Plate (figure)',
           icon:       '◫',
           file:       'surface.html',
-          // .strata only — a .csv/.tsv opens in the data viewer (preview) by
-          // default; reach Plate explicitly (menu / Open as…) for a figure.
-          extensions: ['.strata'],
+          // No file association: .strata is owned by the @gcu/strata surface (the
+          // table editor). Plate is a figure compositor reached explicitly — via
+          // the launcher / "New figure" / Open as… — then fed panels (incl. a
+          // .strata as a data source). Claiming .strata here double-bound the
+          // extension and shadowed the strata editor.
+          extensions: [],
           requires:   ['abus', 'surface', 'plate', 'strata', 'recon', 'archive'],
         },
       ],

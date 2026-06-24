@@ -99,3 +99,47 @@ export function selEquals(a, b) {
   const na = normSel(a), nb = normSel(b);
   return na.r0 === nb.r0 && na.c0 === nb.c0 && na.r1 === nb.r1 && na.c1 === nb.c1;
 }
+
+// ── clipboard TSV (pure, node-testable) ──────────────────────────────────────
+// The clipboard interchange is tab-separated values with Excel/Sheets quoting:
+// a field is wrapped in double quotes iff it contains a tab, newline, CR or
+// quote, and embedded quotes are doubled. This is exactly the dialect Excel and
+// Google Sheets put on the clipboard, so copy/paste round-trips with them.
+
+function tsvField(s) {
+  s = s == null ? '' : String(s);
+  return /[\t\n\r"]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+// Serialize a 2D matrix of cell strings to a TSV string.
+export function toTSV(matrix) {
+  return matrix.map((row) => row.map(tsvField).join('\t')).join('\n');
+}
+
+// Parse TSV (or CSV via `delim`) clipboard text into a 2D matrix of strings.
+// Honours Excel-style quoting: doubled quotes, and tabs/newlines inside quotes.
+// A single trailing newline does not yield a spurious empty row.
+export function parseTSV(text, delim = '\t') {
+  const rows = [];
+  let row = [], field = '', inQ = false;
+  const n = text.length;
+  for (let i = 0; i < n; i++) {
+    const ch = text[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQ = false;
+      } else field += ch;
+    } else if (ch === '"') {
+      inQ = true;
+    } else if (ch === delim) {
+      row.push(field); field = '';
+    } else if (ch === '\n') {
+      row.push(field); rows.push(row); row = []; field = '';
+    } else if (ch !== '\r') {
+      field += ch;
+    }
+  }
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}

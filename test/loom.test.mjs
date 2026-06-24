@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   PENDING, CellState, CellType,
   colLetter, colIndex, fmtVal, inferType, normSel, selEquals,
+  toTSV, parseTSV,
 } from '../ext/loom/src/model.js';
 import {
   colW, colXAt, colAtX, visibleColRange, totalWidth,
@@ -67,6 +68,48 @@ test('normSel orders corners; selEquals compares rects', () => {
   assert.ok(selEquals({ r0: 5, c0: 3, r1: 1, c1: 0 }, { r0: 1, c0: 0, r1: 5, c1: 3 }));
   assert.ok(!selEquals({ r0: 0, c0: 0, r1: 0, c1: 0 }, { r0: 0, c0: 0, r1: 1, c1: 0 }));
   assert.ok(!selEquals(null, { r0: 0, c0: 0, r1: 0, c1: 0 }));
+});
+
+// ── clipboard TSV (pure) ──
+
+test('toTSV joins a matrix with tabs and newlines', () => {
+  assert.equal(toTSV([['a', 'b'], ['c', 'd']]), 'a\tb\nc\td');
+  assert.equal(toTSV([['1']]), '1');
+  assert.equal(toTSV([['', '']]), '\t');
+});
+
+test('toTSV quotes fields containing tab / newline / quote (Excel dialect)', () => {
+  assert.equal(toTSV([['a\tb']]), '"a\tb"');
+  assert.equal(toTSV([['line1\nline2']]), '"line1\nline2"');
+  assert.equal(toTSV([['say "hi"']]), '"say ""hi"""');
+  assert.equal(toTSV([['plain']]), 'plain');
+});
+
+test('parseTSV splits into a matrix of strings', () => {
+  assert.deepEqual(parseTSV('a\tb\nc\td'), [['a', 'b'], ['c', 'd']]);
+  assert.deepEqual(parseTSV('5'), [['5']]);
+  assert.deepEqual(parseTSV('a\tb'), [['a', 'b']]);
+});
+
+test('parseTSV ignores a single trailing newline and CRs', () => {
+  assert.deepEqual(parseTSV('a\tb\n'), [['a', 'b']]);
+  assert.deepEqual(parseTSV('a\tb\r\nc\td\r\n'), [['a', 'b'], ['c', 'd']]);
+});
+
+test('parseTSV honours quoting (embedded tab/newline/quote)', () => {
+  assert.deepEqual(parseTSV('"a\tb"\tc'), [['a\tb', 'c']]);
+  assert.deepEqual(parseTSV('"line1\nline2"\tx'), [['line1\nline2', 'x']]);
+  assert.deepEqual(parseTSV('"say ""hi"""'), [['say "hi"']]);
+});
+
+test('toTSV / parseTSV round-trip', () => {
+  const m = [['plain', 'a\tb'], ['has "q"', 'multi\nline'], ['', '3.14']];
+  assert.deepEqual(parseTSV(toTSV(m)), m);
+});
+
+test('parseTSV preserves empty trailing fields within a row', () => {
+  assert.deepEqual(parseTSV('a\t\tc'), [['a', '', 'c']]);
+  assert.deepEqual(parseTSV('a\tb\t'), [['a', 'b', '']]);
 });
 
 // ── geometry: uniform (no custom widths) ──

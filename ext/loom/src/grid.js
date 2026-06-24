@@ -7,11 +7,16 @@
 // upgrade #4: host-agnostic mount, the seam that lets the same renderer drop
 // into a standalone page OR a Works iframe unchanged).
 //
-// This is the de-risk slice: scaffold + virtualized scroll + select + edit +
-// refresh + a first-class selection object. Deferred (second pass, additive):
-// column resize, zoom, frozen header rows, hover tooltips, copy/paste.
+// Scaffold + virtualized scroll + select + edit + refresh + a first-class
+// selection object, plus the daily-driver ergonomics: full keyboard navigation
+// (arrows/Home/End/PageUp-Down/Ctrl combos, shift-extend), range-aware
+// delete/fill, and TSV copy/cut/paste. Clipboard rides a hidden focus-holding
+// <textarea> so the native copy/cut/paste events carry e.clipboardData — no
+// permission prompt, and it works under file:// (where navigator.clipboard is
+// blocked). Still deferred (additive): column resize, zoom, frozen header rows,
+// hover tooltips, variable row-height.
 
-import { normSel, selEquals, PENDING, CellState } from './model.js';
+import { normSel, selEquals, PENDING, CellState, toTSV, parseTSV } from './model.js';
 import { cellAt, colAtX, totalWidth, totalHeight } from './geometry.js';
 import { paint, DARK_COLORS, LIGHT_COLORS } from './render.js';
 
@@ -97,7 +102,10 @@ export function createGrid(element, provider, options = {}) {
     // loom stays self-contained (no CSS file); every consumer inherits it.
     scrollbarWidth: 'thin', scrollbarColor: g.colors.scrollThumb + ' ' + g.colors.scrollTrack,
   });
-  scroll.tabIndex = 0; // focusable → keyboard scoped to this instance
+  // No tabindex: the scroll div wheel/drag-scrolls but must NOT be click-
+  // focusable, or it would steal focus from `clip` (where keyboard + clipboard
+  // live) on every mousedown. Adding a tabindex attribute makes a div click-
+  // focusable, so we deliberately leave it off.
   body.appendChild(scroll);
   g.scrollEl = scroll;
 
@@ -105,6 +113,26 @@ export function createGrid(element, provider, options = {}) {
   styleEl(spacer, { pointerEvents: 'none' });
   scroll.appendChild(spacer);
   g.spacer = spacer;
+
+  // Hidden focus holder: a 1px transparent textarea that holds focus when no
+  // cell is being edited. Keyboard navigation and clipboard both target it —
+  // the native copy/cut/paste events on a real <textarea> carry clipboardData
+  // directly, so copy/paste needs no permission and works under file:// (unlike
+  // navigator.clipboard, which is blocked there). Tucked under the corner.
+  const clip = document.createElement('textarea');
+  styleEl(clip, {
+    position: 'absolute', left: 0, top: 0, width: '1px', height: '1px',
+    opacity: 0, border: 0, padding: 0, margin: 0, resize: 'none', outline: 'none',
+    whiteSpace: 'pre', zIndex: 0,
+  });
+  clip.tabIndex = 0;
+  clip.setAttribute('autocomplete', 'off');
+  clip.setAttribute('autocorrect', 'off');
+  clip.setAttribute('autocapitalize', 'off');
+  clip.spellcheck = false;
+  clip.setAttribute('aria-hidden', 'true');
+  element.appendChild(clip);
+  g.clip = clip;
 
   // ── sizing ──
   function sizeCanvases() {
@@ -185,7 +213,7 @@ export function createGrid(element, provider, options = {}) {
   function onEditKey(e) {
     if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitEdit(1, 0); }
     else if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); commitEdit(0, e.shiftKey ? -1 : 1); }
-    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelEdit(); scroll.focus(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelEdit(); clip.focus(); }
   }
   function removeInput() {
     if (!g.editing) return;
@@ -204,15 +232,20 @@ export function createGrid(element, provider, options = {}) {
     catch (e) { console.error('[loom] commit failed', e); }
     const nr = Math.max(0, row + dRow), nc = Math.max(0, col + dCol);
     setSel({ r0: nr, c0: nc, r1: nr, c1: nc }, true);
-    scroll.focus();
+    clip.focus();
     refresh();
   }
 
   // ── events ──
   function onMouseDown(e) {
     if (e.button !== 0) return;
+    // Suppress the default mousedown action: on a non-focusable target it would
+    // move focus to <body>, blurring our hidden `clip` right after we focus it
+    // (then keyboard + clipboard would be dead). We manage focus + selection
+    // ourselves, so the default buys us nothing.
+    e.preventDefault();
     if (g.editing) cancelEdit();
-    scroll.focus();
+    clip.focus();
     const { row, col } = pointToCell(e.clientX, e.clientY);
     setSel({ r0: row, c0: col, r1: row, c1: col }, false);
     g.selDrag = true;
@@ -237,39 +270,162 @@ export function createGrid(element, provider, options = {}) {
     startEdit(row, col);
   }
 
-  function moveSel(dr, dc, extend) {
-    const s = normSel(g.sel) || { r0: 0, c0: 0, r1: 0, c1: 0 };
-    if (extend) {
-      const r = Math.max(0, g.sel.r1 + dr), c = Math.max(0, g.sel.c1 + dc);
-      g.sel = { r0: g.sel.r0, c0: g.sel.c0, r1: r, c1: c };
-      scrollToCell(r, c);
-    } else {
-      const r = Math.max(0, s.r0 + dr), c = Math.max(0, s.c0 + dc);
-      g.sel = { r0: r, c0: c, r1: r, c1: c };
-      scrollToCell(r, c);
-    }
+  const clampR = (r) => Math.max(0, Math.min(M.totalRows - 1, r));
+  const clampC = (c) => Math.max(0, Math.min(M.totalCols - 1, c));
+
+  // Move the active corner to (r,c). extend=true keeps the anchor (r0,c0) and
+  // grows the rect; otherwise collapses to a single cell. Clamped to the grid.
+  function gotoCell(r, c, extend) {
+    r = clampR(r); c = clampC(c);
+    if (extend && g.sel) g.sel = { r0: g.sel.r0, c0: g.sel.c0, r1: r, c1: c };
+    else g.sel = { r0: r, c0: c, r1: r, c1: c };
+    scrollToCell(r, c);
     repaint();
     emitSelect();
+  }
+
+  // ── range writes (delete / fill / paste) ──
+  // Plain display text of a cell — the copy source and the fill seed.
+  function cellPlainText(row, col) {
+    const cell = provider.cellAt(row, col);
+    if (cell == null || cell === PENDING) return '';
+    if (cell.style && typeof cell.style.text === 'string') return cell.style.text;
+    return cell.value == null ? '' : String(cell.value);
+  }
+  // Apply a batch of [row, col, raw] writes through the provider, then refresh
+  // once. The provider owns coercion + dirty tracking (the app wraps commit).
+  async function applyWrites(writes) {
+    for (const [r, c, v] of writes) {
+      try { await provider.commit(r, c, v); }
+      catch (e) { console.error('[loom] commit failed', e); }
+    }
+    refresh();
+  }
+  function clearRange() {
+    const s = normSel(g.sel); if (!s) return;
+    const w = [];
+    for (let r = s.r0; r <= s.r1; r++) for (let c = s.c0; c <= s.c1; c++) w.push([r, c, '']);
+    applyWrites(w);
+  }
+  function fillDown() {
+    const s = normSel(g.sel); if (!s || s.r1 === s.r0) return;
+    const w = [];
+    for (let c = s.c0; c <= s.c1; c++) {
+      const src = cellPlainText(s.r0, c);
+      for (let r = s.r0 + 1; r <= s.r1; r++) w.push([r, c, src]);
+    }
+    applyWrites(w);
+  }
+  function fillRight() {
+    const s = normSel(g.sel); if (!s || s.c1 === s.c0) return;
+    const w = [];
+    for (let r = s.r0; r <= s.r1; r++) {
+      const src = cellPlainText(r, s.c0);
+      for (let c = s.c0 + 1; c <= s.c1; c++) w.push([r, c, src]);
+    }
+    applyWrites(w);
+  }
+
+  // ── clipboard (native copy/cut/paste on the focus holder) ──
+  function selMatrix() {
+    const s = normSel(g.sel); if (!s) return null;
+    const m = [];
+    for (let r = s.r0; r <= s.r1; r++) {
+      const row = [];
+      for (let c = s.c0; c <= s.c1; c++) row.push(cellPlainText(r, c));
+      m.push(row);
+    }
+    return m;
+  }
+  function onCopy(e) {
+    if (g.editing) return; // the cell input copies its own text
+    const m = selMatrix(); if (!m) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', toTSV(m));
+  }
+  function onCut(e) {
+    if (g.editing) return;
+    const m = selMatrix(); if (!m) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', toTSV(m));
+    clearRange();
+  }
+  function onPaste(e) {
+    if (g.editing) return; // the cell input pastes into itself
+    if (!e.clipboardData) return;
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    if (!text) return;
+    const m = parseTSV(text);
+    if (!m.length) return;
+    const s = normSel(g.sel) || { r0: 0, c0: 0, r1: 0, c1: 0 };
+    const oneByOne = m.length === 1 && m[0].length === 1;
+    const w = [];
+    if (oneByOne && (s.r1 > s.r0 || s.c1 > s.c0)) {
+      // A single value pasted over a range fills the whole range (Excel-like).
+      const v = m[0][0];
+      for (let r = s.r0; r <= s.r1 && r < M.totalRows; r++)
+        for (let c = s.c0; c <= s.c1 && c < M.totalCols; c++) w.push([r, c, v]);
+    } else {
+      // Block paste anchored at the top-left, clipped to the grid (v1 base is
+      // fixed-height, so a paste that runs past the last row simply stops).
+      let maxCols = 0;
+      for (let i = 0; i < m.length; i++) {
+        const r = s.r0 + i; if (r >= M.totalRows) break;
+        maxCols = Math.max(maxCols, m[i].length);
+        for (let j = 0; j < m[i].length; j++) {
+          const c = s.c0 + j; if (c >= M.totalCols) break;
+          w.push([r, c, m[i][j]]);
+        }
+      }
+      const r1 = clampR(s.r0 + m.length - 1), c1 = clampC(s.c0 + maxCols - 1);
+      g.sel = { r0: s.r0, c0: s.c0, r1, c1 }; // select the pasted block
+    }
+    applyWrites(w).then(emitSelect);
   }
 
   function onKeyDown(e) {
     if (g.editing) return; // input handles its own keys
     if (!g.sel) return;
-    const s = normSel(g.sel);
-    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-      if (e.key === 'ArrowUp')    { e.preventDefault(); moveSel(-1, 0, e.shiftKey); return; }
-      if (e.key === 'ArrowDown')  { e.preventDefault(); moveSel(1, 0, e.shiftKey); return; }
-      if (e.key === 'ArrowLeft')  { e.preventDefault(); moveSel(0, -1, e.shiftKey); return; }
-      if (e.key === 'ArrowRight') { e.preventDefault(); moveSel(0, 1, e.shiftKey); return; }
-      if (e.key === 'Enter')      { e.preventDefault(); moveSel(1, 0, false); return; }
-      if (e.key === 'Tab')        { e.preventDefault(); moveSel(0, e.shiftKey ? -1 : 1, false); return; }
-      if (e.key === 'F2')         { e.preventDefault(); startEdit(s.r0, s.c0); return; }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        e.preventDefault();
-        Promise.resolve(provider.commit(s.r0, s.c0, '')).then(refresh).catch((err) => console.error('[loom] clear failed', err));
-        return;
+    const mod = e.ctrlKey || e.metaKey;
+    const ext = e.shiftKey;
+    const a = { r: g.sel.r1, c: g.sel.c1 };  // active (moving) corner
+    const lastR = M.totalRows - 1, lastC = M.totalCols - 1;
+    const page = Math.max(1, Math.floor(body.clientHeight / M.rowH) - 1);
+
+    if (mod && !e.altKey) {
+      switch (e.key) {
+        case 'a': case 'A': e.preventDefault(); g.sel = { r0: 0, c0: 0, r1: lastR, c1: lastC }; repaint(); emitSelect(); return;
+        // Copy/cut/paste are left to the native clipboard events on `clip`.
+        case 'c': case 'C': case 'x': case 'X': case 'v': case 'V': return;
+        case 'd': case 'D': e.preventDefault(); fillDown(); return;
+        case 'r': case 'R': e.preventDefault(); fillRight(); return;
+        case 'ArrowUp':    e.preventDefault(); gotoCell(0, a.c, ext); return;
+        case 'ArrowDown':  e.preventDefault(); gotoCell(lastR, a.c, ext); return;
+        case 'ArrowLeft':  e.preventDefault(); gotoCell(a.r, 0, ext); return;
+        case 'ArrowRight': e.preventDefault(); gotoCell(a.r, lastC, ext); return;
+        case 'Home':       e.preventDefault(); gotoCell(0, 0, ext); return;
+        case 'End':        e.preventDefault(); gotoCell(lastR, lastC, ext); return;
       }
-      if (e.key.length === 1) { e.preventDefault(); startEdit(s.r0, s.c0, e.key); return; }
+      return;
+    }
+    if (e.altKey) return;
+
+    switch (e.key) {
+      case 'ArrowUp':    e.preventDefault(); gotoCell(a.r - 1, a.c, ext); return;
+      case 'ArrowDown':  e.preventDefault(); gotoCell(a.r + 1, a.c, ext); return;
+      case 'ArrowLeft':  e.preventDefault(); gotoCell(a.r, a.c - 1, ext); return;
+      case 'ArrowRight': e.preventDefault(); gotoCell(a.r, a.c + 1, ext); return;
+      case 'Home':       e.preventDefault(); gotoCell(a.r, 0, ext); return;
+      case 'End':        e.preventDefault(); gotoCell(a.r, lastC, ext); return;
+      case 'PageUp':     e.preventDefault(); gotoCell(a.r - page, a.c, ext); return;
+      case 'PageDown':   e.preventDefault(); gotoCell(a.r + page, a.c, ext); return;
+      case 'Enter': { const s = normSel(g.sel); e.preventDefault(); gotoCell(s.r0 + 1, s.c0, false); return; }
+      case 'Tab':   { const s = normSel(g.sel); e.preventDefault(); gotoCell(s.r0, s.c0 + (e.shiftKey ? -1 : 1), false); return; }
+      case 'F2':    { const s = normSel(g.sel); e.preventDefault(); startEdit(s.r0, s.c0); return; }
+      case 'Delete': case 'Backspace': e.preventDefault(); clearRange(); return;
+      default:
+        if (e.key.length === 1) { const s = normSel(g.sel); e.preventDefault(); startEdit(s.r0, s.c0, e.key); return; }
     }
   }
 
@@ -286,10 +442,18 @@ export function createGrid(element, provider, options = {}) {
   scroll.addEventListener('scroll', () => { if (g.editing) cancelEdit(); repaint(); }, { passive: true });
   scroll.addEventListener('mousedown', onMouseDown);
   scroll.addEventListener('dblclick', onDblClick);
-  scroll.addEventListener('keydown', onKeyDown);
   g._cleanup.push(() => scroll.removeEventListener('mousedown', onMouseDown));
   g._cleanup.push(() => scroll.removeEventListener('dblclick', onDblClick));
-  g._cleanup.push(() => scroll.removeEventListener('keydown', onKeyDown));
+
+  // Keyboard + clipboard live on the hidden focus holder (see scaffold above).
+  clip.addEventListener('keydown', onKeyDown);
+  clip.addEventListener('copy', onCopy);
+  clip.addEventListener('cut', onCut);
+  clip.addEventListener('paste', onPaste);
+  g._cleanup.push(() => clip.removeEventListener('keydown', onKeyDown));
+  g._cleanup.push(() => clip.removeEventListener('copy', onCopy));
+  g._cleanup.push(() => clip.removeEventListener('cut', onCut));
+  g._cleanup.push(() => clip.removeEventListener('paste', onPaste));
 
   const ro = new ResizeObserver(() => { sizeCanvases(); repaint(); });
   ro.observe(element);
@@ -320,7 +484,7 @@ export function createGrid(element, provider, options = {}) {
     setSelection(sel) { setSel(sel, true); },
     onSelect(cb) { g.selectListeners.push(cb); return () => { const i = g.selectListeners.indexOf(cb); if (i >= 0) g.selectListeners.splice(i, 1); }; },
     onHeaderClick(cb) { g.headerListeners.push(cb); return () => { const i = g.headerListeners.indexOf(cb); if (i >= 0) g.headerListeners.splice(i, 1); }; },
-    focus() { g.scrollEl.focus(); },
+    focus() { g.clip.focus(); },
     setColors(colors) {
       g.colors = colors;
       scroll.style.scrollbarColor = colors.scrollThumb + ' ' + colors.scrollTrack;
