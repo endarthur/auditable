@@ -1108,18 +1108,36 @@ function createTableProvider(table, view) {
   const under = (r) => (view ? view.at(r) : r); // display row → underlying row
   const notify = () => { for (const cb of readyListeners) { try { cb(); } catch (e) { console.error('[strata] listener threw', e); } } };
 
+  // Column projection: hidden columns are omitted from the display order, so loom
+  // (and the app, via underCol) see only visible columns — the column-axis mirror
+  // of the row view. Hide-only for now (reorder is a later permutation of the same
+  // seam). No columns hidden → underCol(dc)===dc, identical to before.
+  const hidden = new Set();        // underlying column indices that are hidden
+  let _vc = null, _vcCols = -1;
+  function vc() {                  // visible underlying cols, in display order
+    if (_vc === null || _vcCols !== table.cols) {
+      _vc = [];
+      for (let c = 0; c < table.cols; c++) if (!hidden.has(c)) _vc.push(c);
+      _vcCols = table.cols;
+    }
+    return _vc;
+  }
+  const underC = (dc) => { const m = vc(); return dc >= 0 && dc < m.length ? m[dc] : -1; };
+  const invalidateCols = () => { _vc = null; };
+
   return {
     table,
     view,
 
-    dims() { return { rows: nDisp(), cols: table.cols }; },
+    dims() { return { rows: nDisp(), cols: vc().length }; },
 
     cellAt(r, c) {
-      if (r < 0 || r >= nDisp() || c < 0 || c >= table.cols) return null;
+      if (r < 0 || r >= nDisp() || c < 0 || c >= vc().length) return null;
+      const uc = underC(c);
       const ur = under(r);
-      const type = TYPE[table.schema[c].type] || 'string';
+      const type = TYPE[table.schema[uc].type] || 'string';
       const hl = highlight ? highlight.has(ur) : false;
-      const cell = table.getCell(ur, c);
+      const cell = table.getCell(ur, uc);
       let out;
       if (cell.derived) {
         if (cell.value === FORMULA_ERROR) out = { value: null, state: STATE_ERROR, type, style: { text: '#ERR' } };
@@ -1140,7 +1158,7 @@ function createTableProvider(table, view) {
     },
 
     header(c) {
-      const s = table.schema[c];
+      const s = table.schema[underC(c)];
       const h = { label: s.unit ? `${s.name} (${s.unit})` : s.name, type: TYPE[s.type] || 'string' };
       // Surface the active sort IN the header (loom draws an arrow) — sort state
       // was footer-only before, invisible in the grid itself.
@@ -1153,17 +1171,19 @@ function createTableProvider(table, view) {
     // Provenance on hover (loom shows it as a tooltip) — auditability made
     // touchable: an edited cell tells you its base; a derived cell, its formula.
     cellTitle(r, c) {
-      if (r < 0 || r >= nDisp() || c < 0 || c >= table.cols) return null;
-      if (table.isDerived(c)) { const f = table.schema[c].formula; return f ? '= ' + f : null; }
-      const cell = table.getCell(under(r), c);
+      if (r < 0 || r >= nDisp() || c < 0 || c >= vc().length) return null;
+      const uc = underC(c);
+      if (table.isDerived(uc)) { const f = table.schema[uc].formula; return f ? '= ' + f : null; }
+      const cell = table.getCell(under(r), uc);
       return cell.edited ? `was ${fmtCell(cell.base)} → now ${fmtCell(cell.value)}` : null;
     },
 
-    // Revert a cell to its base (display row → underlying). Derived cells aren't
-    // editable, so nothing to revert. Recorded on the table → undoable.
+    // Revert a cell to its base (display row+col → underlying). Derived cells
+    // aren't editable, so nothing to revert. Recorded on the table → undoable.
     revert(r, c) {
-      if (table.isDerived(c)) return;
-      table.revert(under(r), c);
+      const uc = underC(c);
+      if (uc < 0 || table.isDerived(uc)) return;
+      table.revert(under(r), uc);
     },
 
     // Show the UNDERLYING row number (provenance) — so a sorted/filtered view
@@ -1173,9 +1193,20 @@ function createTableProvider(table, view) {
     // Edits flow to the overlay at the underlying row. loom calls its own
     // refresh() after commit, so we don't repaint here.
     commit(r, c, raw) {
-      if (table.isDerived(c)) return; // computed columns aren't editable
-      table.setCell(under(r), c, coerceValue(raw, table.schema[c].type));
+      const uc = underC(c);
+      if (uc < 0 || table.isDerived(uc)) return; // computed columns aren't editable
+      table.setCell(under(r), uc, coerceValue(raw, table.schema[uc].type));
     },
+
+    // Column projection (hide/show). underCol maps a display col → underlying
+    // table col — the app uses it to translate loom's col indices into table
+    // indices. Mutators invalidate the cache; loom re-reads dims() on refresh().
+    underCol(dc) { return underC(dc); },
+    hideColumn(c) { hidden.add(c); invalidateCols(); },
+    showColumn(c) { hidden.delete(c); invalidateCols(); },
+    showAllColumns() { hidden.clear(); invalidateCols(); },
+    hiddenColumns() { return [...hidden]; },           // underlying indices
+    isColumnHidden(c) { return hidden.has(c); },
 
     // Undo/redo + batch grouping — the optional loom provider contract. loom
     // calls beginBatch/endBatch around multi-cell writes (paste/fill/range-delete)

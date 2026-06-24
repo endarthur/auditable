@@ -84,7 +84,7 @@ export function createStrataApp(host) {
     const rows = [];
     for (let r = sel.r0; r <= sel.r1; r++) rows.push(String(view.at(r)));  // base-ordinal identity (§4.1)
     const cols = [];
-    for (let c = sel.c0; c <= sel.c1; c++) cols.push(table.schema[c].name);
+    for (let c = sel.c0; c <= sel.c1; c++) { const uc = provider.underCol(c); if (uc >= 0) cols.push(table.schema[uc].name); }
     link.publish({ kind: 'rows', key: '#row', rows, cols });
   }
   function publishFilterSelection() {
@@ -118,7 +118,8 @@ export function createStrataApp(host) {
     $('#empty').style.display = 'none';
     grid = createGrid($('#grid'), provider, { theme: 'dark', defaultColW: 92 });
     grid.onSelect((s) => { updateSel(s); publishRowSelection(s); });
-    grid.onHeaderClick(cycleSort);
+    // loom hands DISPLAY col indices; map to underlying table cols at the boundary.
+    grid.onHeaderClick((dc) => cycleSort(provider.underCol(dc)));
     grid.onContextMenu(onCellContextMenu);
     grid.onHeaderContextMenu(onHeaderContextMenu);
     grid.focus();
@@ -374,12 +375,16 @@ export function createStrataApp(host) {
   // loom emits the gesture; the app builds the menu so revert flows through the
   // wrapped provider.revert (dirty/footer) and the table's undo log. The noun-
   // first "verbs come to the object" layer (see the GCU command-model direction).
+  // sel is in DISPLAY cols; returns DISPLAY [r,c] pairs (provider.revert maps).
   function editedCellsInSel(sel) {
     const out = [];
     if (!sel || !table || !view) return out;
     for (let r = sel.r0; r <= sel.r1; r++) {
       const ur = view.at(r);
-      for (let c = sel.c0; c <= sel.c1; c++) if (!table.isDerived(c) && table.isEdited(ur, c)) out.push([r, c]);
+      for (let c = sel.c0; c <= sel.c1; c++) {
+        const uc = provider.underCol(c);
+        if (uc >= 0 && !table.isDerived(uc) && table.isEdited(ur, uc)) out.push([r, c]);
+      }
     }
     return out;
   }
@@ -387,8 +392,9 @@ export function createStrataApp(host) {
     if (!table || !view) return;
     const items = [];
     const ur = view.at(row);
-    if (!table.isDerived(col) && table.isEdited(ur, col)) {
-      items.push({ label: `Revert to ${fmtCell(table.baseValue(ur, col))}`, run: () => { provider.revert(row, col); grid.refresh(); } });
+    const uc = provider.underCol(col);   // display col → underlying table col
+    if (uc >= 0 && !table.isDerived(uc) && table.isEdited(ur, uc)) {
+      items.push({ label: `Revert to ${fmtCell(table.baseValue(ur, uc))}`, run: () => { provider.revert(row, col); grid.refresh(); } });
     }
     const edited = editedCellsInSel(sel);
     if (edited.length > 1) {
@@ -420,21 +426,27 @@ export function createStrataApp(host) {
     table.endTxn();
     host.setDirty(true); updateFooter(); grid.refresh();
   }
-  function onHeaderContextMenu({ col, clientX, clientY }) {
+  function onHeaderContextMenu({ col: dc, clientX, clientY }) {
     if (!table || !view) return;
-    const name = table.schema[col].name;
+    const uc = provider.underCol(dc);            // underlying table col (for table ops)
+    if (uc < 0) return;
+    const name = table.schema[uc].name;
     const sorted = view.sortSpec && view.sortSpec.by === name ? view.sortSpec.dir : null;
     const items = [
-      { label: (sorted === 'asc' ? '✓ ' : '') + 'Sort ascending', run: () => applySort(col, 'asc') },
-      { label: (sorted === 'desc' ? '✓ ' : '') + 'Sort descending', run: () => applySort(col, 'desc') },
+      { label: (sorted === 'asc' ? '✓ ' : '') + 'Sort ascending', run: () => applySort(uc, 'asc') },
+      { label: (sorted === 'desc' ? '✓ ' : '') + 'Sort descending', run: () => applySort(uc, 'desc') },
     ];
-    if (sorted) items.push({ label: 'Clear sort', run: () => applySort(col, null) });
-    items.push('---', { label: colFilters.has(name) ? 'Edit filter…' : 'Filter…', run: () => openColFilter(col, name) });
+    if (sorted) items.push({ label: 'Clear sort', run: () => applySort(uc, null) });
+    items.push('---', { label: colFilters.has(name) ? 'Edit filter…' : 'Filter…', run: () => openColFilter(uc, name) });
     if (colFilters.has(name)) items.push({ label: 'Clear filter', run: () => { colFilters.delete(name); recomposeFilter(); } });
-    items.push('---', { label: 'Autofit column', run: () => grid.autofitColumn(col) });
-    const nEd = editedInColumn(col);
-    if (nEd > 0) items.push({ label: `Revert ${nEd} edit${nEd > 1 ? 's' : ''} in column`, run: () => revertColumn(col) });
-    if (table.isDerived(col)) items.push('---', { label: 'Show formula', run: () => flash('= ' + table.schema[col].formula) });
+    items.push('---', { label: 'Hide column', run: () => { provider.hideColumn(uc); grid.refresh(); } });
+    const hidn = provider.hiddenColumns();
+    for (const hc of hidn) items.push({ label: `Show ${table.schema[hc].name}`, run: () => { provider.showColumn(hc); grid.refresh(); } });
+    if (hidn.length > 1) items.push({ label: 'Show all columns', run: () => { provider.showAllColumns(); grid.refresh(); } });
+    items.push('---', { label: 'Autofit column', run: () => grid.autofitColumn(dc) }); // loom op = DISPLAY col
+    const nEd = editedInColumn(uc);
+    if (nEd > 0) items.push({ label: `Revert ${nEd} edit${nEd > 1 ? 's' : ''} in column`, run: () => revertColumn(uc) });
+    if (table.isDerived(uc)) items.push('---', { label: 'Show formula', run: () => flash('= ' + table.schema[uc].formula) });
     showContextMenu(items, clientX, clientY);
   }
   async function openColFilter(col, name) {

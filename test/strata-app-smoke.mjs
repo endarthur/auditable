@@ -267,6 +267,25 @@ try {
     ? ok(`per-column filter Au_gpt > 2 (${colFilt.len}/${colFilt.total}, header funnel shown)`)
     : fail(`per-column filter failed: ${JSON.stringify(colFilt)}`);
 
+  // Header ▾ "Hide column" → fewer columns; "Show <name>" from any header restores.
+  const colsBefore = await page.evaluate(() => window._strataApp.grid.provider.dims().cols);
+  await page.mouse.click(hbox.x + 94, hbox.y + 12, { button: 'right' });   // col 0 (LITO) header
+  await page.waitForTimeout(60);
+  await page.evaluate(() => { const m = document.querySelector('.strata-ctx'); const it = [...m.querySelectorAll('div')].find((d) => d.textContent === 'Hide column'); if (it) it.click(); });
+  await page.waitForTimeout(60);
+  const colsHidden = await page.evaluate(() => window._strataApp.grid.provider.dims().cols);
+  await page.mouse.click(hbox.x + 94, hbox.y + 12, { button: 'right' });   // any header now
+  await page.waitForTimeout(60);
+  const shown = await page.evaluate(() => {
+    const m = document.querySelector('.strata-ctx');
+    const it = m && [...m.querySelectorAll('div')].find((d) => d.textContent === 'Show LITO');
+    if (it) it.click();
+    return { had: !!it, cols: window._strataApp.grid.provider.dims().cols };
+  });
+  (colsHidden === colsBefore - 1 && shown.had && shown.cols === colsBefore)
+    ? ok(`header ▾ hide/show column (cols ${colsBefore}→${colsHidden}→${shown.cols})`)
+    : fail(`hide/show failed: ${JSON.stringify({ colsBefore, colsHidden, shown })}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);

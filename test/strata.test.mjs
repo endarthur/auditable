@@ -157,6 +157,26 @@ test('provider: header carries the active sort indicator', () => {
   assert.equal(p.header(1).sort, undefined);
 });
 
+test('provider: hide/show columns remap the display axis', () => {
+  const t = sampleTable();                 // cols: id, grade, lito
+  const p = createTableProvider(t);
+  assert.equal(p.dims().cols, 3);
+  assert.equal(p.underCol(1), 1);
+  assert.equal(p.header(1).label, 'grade');
+
+  p.hideColumn(1);                         // hide grade
+  assert.equal(p.dims().cols, 2);
+  assert.equal(p.underCol(1), 2);          // display col 1 is now lito (underlying 2)
+  assert.equal(p.header(1).label, 'lito');
+  assert.equal(p.cellAt(0, 1).value, 'ox'); // display (0,1) == lito row 0
+  assert.deepEqual(p.hiddenColumns(), [1]);
+
+  p.showColumn(1);
+  assert.equal(p.dims().cols, 3);
+  assert.equal(p.header(1).label, 'grade');
+  assert.equal(p.underCol(1), 1);
+});
+
 test('provider: header marks filtered columns (funnel)', () => {
   const t = sampleTable();
   const v = createView(t);
