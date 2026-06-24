@@ -15,7 +15,7 @@ import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, a
 import { toggleUpdate } from './update.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog } from './save.js';
 import { openIpynbDialog, exportAsIpynb } from './ipynb-bridge.js';
-import { insertAt, getPreferredCodeType, setPreferredCodeType, setPreferredAndInsert, toggleCodeTray, updateToolbarCodeBtn } from './ui.js';
+import { insertAt, getPreferredCodeType, setPreferredCodeType, setPreferredAndInsert, toggleCodeTray, updateToolbarCodeBtn, updateInsertBars, pickLang } from './ui.js';
 import { toggleFs, fsImport } from './fs.js';
 import { toggleMcpPanel, mcpConnect } from './mcp-adapter.js';
 import { openFind, closeFind } from './find.js';
@@ -107,6 +107,8 @@ window.clearAllOutputs = async () => {
 
 // ui
 window.insertAt = insertAt;
+window.updateInsertBars = updateInsertBars;
+window.pickLang = pickLang;
 window.getPreferredCodeType = getPreferredCodeType;
 window.setPreferredCodeType = setPreferredCodeType;
 window.setPreferredAndInsert = setPreferredAndInsert;

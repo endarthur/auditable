@@ -718,6 +718,10 @@ async function worksBoot(conn) {
               }
             }
             console.info(`[notebook] _installedModules refreshed from /lib (${Object.keys(fresh).length} entries)`);
+            // Re-declare installed language packs + refresh the pickers, so a
+            // just-installed language appears (cold, selectable) without a
+            // reload — and any pack for an existing fallback cell eager-loads.
+            try { await autoLoadFromCells(); } catch { /* best-effort */ }
           } catch (e) {
             console.warn('[notebook] /lib refresh failed:', e.message);
           }

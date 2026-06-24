@@ -1,6 +1,6 @@
 import { S, $ } from './state.js';
 import { addCell } from './cell-ops.js';
-import { _ctIsExecutable } from './cell-types.js';
+import { _ctIsExecutable, listAvailableLanguages, getDeclaredLanguage } from './cell-types.js';
 import { selectCell, editCell, addCellWithUndo } from './keyboard.js';
 import * as hooks from './hooks.js';
 
@@ -12,6 +12,9 @@ export function getPreferredCodeType() {
   if (_preferredCodeType === 'code') return 'code';
   const h = window._cellTypes?.[_preferredCodeType];
   if (h && _ctIsExecutable(_preferredCodeType)) return _preferredCodeType;
+  // An installed-but-not-yet-loaded language (declared, cold) is a valid
+  // preferred type — it activates on insert (ensureLanguageLoaded).
+  if (getDeclaredLanguage(_preferredCodeType)) return _preferredCodeType;
   return 'code';
 }
 
@@ -89,18 +92,23 @@ export function updateStatus() {
 }
 
 function buildCodeCombo(afterId) {
-  const execPlugins = Object.entries(window._cellTypes || {}).filter(([n, h]) => _ctIsExecutable(n));
+  // Languages = loaded executable cell types + declared-but-installed packs
+  // (the latter cold-load on insert). 'code' (js) is the always-present default,
+  // rendered separately below.
+  const langs = listAvailableLanguages().filter(l => l.cellType !== 'code');
   const pref = getPreferredCodeType();
-  const prefLabel = pref === 'code' ? 'js' : (window._cellTypes?.[pref]?.label || pref);
+  const prefLabel = pref === 'code' ? 'js'
+    : (window._cellTypes?.[pref]?.label || getDeclaredLanguage(pref)?.label || pref);
   const aid = afterId !== null ? afterId : 'null';
 
-  if (execPlugins.length === 0) {
+  if (langs.length === 0) {
     return `<button onclick="insertAt(${aid},'code')">+ js</button>`;
   }
 
   let trayItems = `<button onclick="setPreferredAndInsert(${aid},'code')">js</button>`;
-  for (const [name, h] of execPlugins) {
-    trayItems += `<button onclick="setPreferredAndInsert(${aid},'${name}')"${h.color ? ` style="color:${h.color}"` : ''}>${h.label || name}</button>`;
+  for (const l of langs) {
+    const color = window._cellTypes?.[l.cellType]?.color;
+    trayItems += `<button onclick="setPreferredAndInsert(${aid},'${l.cellType}')"${color ? ` style="color:${color}"` : ''}>${l.label}</button>`;
   }
 
   return `<span class="code-split"><button onclick="insertAt(${aid},'${pref}')">+ ${prefLabel}</button><button class="code-caret" onclick="toggleCodeTray(this)">\u25be</button><div class="code-tray">${trayItems}</div></span>`;
@@ -138,7 +146,14 @@ export function updateInsertBars() {
   updateMobileAddTray();
 }
 
-export function insertAt(afterId, type) {
+export async function insertAt(afterId, type) {
+  // Cold→hot: picking an installed-but-unloaded declared language activates its
+  // pack first, so the cell is born in its real editor/runtime (no fallback
+  // flash). Seamless — the load is from _installedModules, not the network.
+  if (type && type !== 'code' && !_ctIsExecutable(type)
+      && getDeclaredLanguage(type) && window._ensureLanguageLoaded) {
+    try { await window._ensureLanguageLoaded(type); } catch { /* falls back to a fallback cell */ }
+  }
   let cell;
   if (afterId === null && S.cells.length > 0) {
     // insert before first cell
@@ -150,27 +165,47 @@ export function insertAt(afterId, type) {
   editCell(cell.id);
 }
 
+// Add a cell at the selection, cold-loading a declared-but-unloaded language
+// first so the cell is born in its real editor/runtime (no fallback flash).
+export async function addLangCell(type) {
+  if (type && type !== 'code' && !_ctIsExecutable(type)
+      && getDeclaredLanguage(type) && window._ensureLanguageLoaded) {
+    try { await window._ensureLanguageLoaded(type); } catch { /* fallback cell */ }
+  }
+  addCellWithUndo(type, '', S.selectedId);
+}
+
+// Toolbar-tray pick: set preferred, refresh the button, add a cell, close tray.
+export async function pickLang(type, btn) {
+  setPreferredCodeType(type);
+  updateToolbarCodeBtn();
+  await addLangCell(type);
+  if (btn) toggleCodeTray(btn);
+}
+
 export function updateToolbarCodeBtn() {
   const wrap = document.getElementById('toolbarCodeCombo');
   if (!wrap) return;
-  const execPlugins = Object.entries(window._cellTypes || {}).filter(([n]) => _ctIsExecutable(n));
+  const langs = listAvailableLanguages().filter(l => l.cellType !== 'code');
   const pref = getPreferredCodeType();
-  const prefLabel = pref === 'code' ? 'js' : (window._cellTypes?.[pref]?.label || pref);
+  const prefLabel = pref === 'code' ? 'js'
+    : (window._cellTypes?.[pref]?.label || getDeclaredLanguage(pref)?.label || pref);
 
   const mainBtn = wrap.querySelector('.toolbar-add');
   if (mainBtn) {
     mainBtn.textContent = '+ ' + prefLabel;
-    mainBtn.onclick = () => addCellWithUndo(pref, '', S.selectedId);
+    mainBtn.onclick = () => addLangCell(pref);
   }
 
   const caret = wrap.querySelector('.code-caret');
-  if (caret) caret.style.display = execPlugins.length > 0 ? '' : 'none';
+  if (caret) caret.style.display = langs.length > 0 ? '' : 'none';
 
   const tray = wrap.querySelector('.code-tray');
   if (tray) {
-    let html = `<button onclick="setPreferredCodeType('code');updateToolbarCodeBtn();addCellWithUndo('code','',S.selectedId);toggleCodeTray(this)">js</button>`;
-    for (const [name, h] of execPlugins) {
-      html += `<button onclick="setPreferredCodeType('${name}');updateToolbarCodeBtn();addCellWithUndo('${name}','',S.selectedId);toggleCodeTray(this)"${h.color ? ` style="color:${h.color}"` : ''}>${h.label || name}</button>`;
+    let html = `<button onclick="pickLang('code',this)">js</button>`;
+    for (const l of langs) {
+      const color = window._cellTypes?.[l.cellType]?.color;
+      html += `<button onclick="pickLang('${l.cellType}',this)"${color ? ` style="color:${color}"` : ''}>${l.label}</button>`;
     }
     tray.innerHTML = html;
   }
@@ -180,19 +215,21 @@ export function updateMobileAddTray() {
   const tray = document.getElementById('mobileAddTray');
   if (!tray) return;
   const pref = getPreferredCodeType();
-  const execPlugins = Object.entries(window._cellTypes || {}).filter(([n]) => _ctIsExecutable(n));
+  const langs = listAvailableLanguages().filter(l => l.cellType !== 'code');
 
   let html = '';
-  // preferred code type first
-  const prefLabel = pref === 'code' ? 'js' : (window._cellTypes?.[pref]?.label || pref);
+  // preferred code type first (insertAt cold-loads a declared language)
+  const prefLabel = pref === 'code' ? 'js'
+    : (window._cellTypes?.[pref]?.label || getDeclaredLanguage(pref)?.label || pref);
   html += `<button onclick="insertAt(S.selectedId,'${pref}');toggleAddTray()">+ ${prefLabel}</button>`;
   // other code types
   if (pref !== 'code') {
     html += `<button onclick="setPreferredCodeType('code');insertAt(S.selectedId,'code');toggleAddTray()">+ js</button>`;
   }
-  for (const [name, h] of execPlugins) {
-    if (name === pref) continue;
-    html += `<button onclick="setPreferredCodeType('${name}');insertAt(S.selectedId,'${name}');toggleAddTray()"${h.color ? ` style="color:${h.color}"` : ''}>+ ${h.label || name}</button>`;
+  for (const l of langs) {
+    if (l.cellType === pref) continue;
+    const color = window._cellTypes?.[l.cellType]?.color;
+    html += `<button onclick="setPreferredCodeType('${l.cellType}');insertAt(S.selectedId,'${l.cellType}');toggleAddTray()"${color ? ` style="color:${color}"` : ''}>+ ${l.label}</button>`;
   }
   // non-code types
   html += `<button onclick="insertAt(S.selectedId,'md');toggleAddTray()">+ md</button>`;

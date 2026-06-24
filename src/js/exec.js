@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { buildDAG, topoSort, parseCellName } from './dag.js';
-import { _ctGetHandler, _ctRenderOutput, _ctIsExecutable } from './cell-types.js';
-import { setMsg } from './ui.js';
+import { _ctGetHandler, _ctRenderOutput, _ctIsExecutable, getDeclaredLanguage, isLanguageLoaded, registerDeclaredLanguage } from './cell-types.js';
+import { setMsg, updateInsertBars } from './ui.js';
 import { INJECTED_NAMES, cellErrorLine, compileCellCode, cellCacheKey, executeDAG } from './engine.js';
 import * as hooks from './hooks.js';
 import { renderMdCell, renderHtmlCell } from './cell-render.js';
@@ -139,6 +139,55 @@ export const LANGUAGE_PACKS = {
   stereonet: '@gcu/stereonet',
 };
 
+// Fallback language declarations for the first-party packs — label + tag +
+// aliases + adderExports, so a pack is DISCOVERABLE (in the cell-type picker /
+// "New <language> notebook" menu / default-language setting) the moment it's
+// INSTALLED, before its registration code runs. The canonical source is a pack's
+// own `gcu.languages` manifest (carried on its installed-module entry as
+// `.languages`); this table seeds the known first-party packs that predate that
+// field. Keyed by package URL. See registerDeclaredLanguage in cell-types.js.
+export const LANGUAGE_PACK_META = {
+  '@gcu/adder': [{ cellType: 'adder', tag: 'adder', label: 'Python (adder)', aliases: ['mpy'], adderExports: ['adder'] }],
+  '@gcu/soft':  [{ cellType: 'soft',  tag: 'soft',  label: 'Soft' }],
+};
+
+// Scan installed modules and register a declared language for each one that is a
+// known/declared language pack — so the picker can offer it WITHOUT loading it.
+// Prefers the entry's own `.languages` (from its gcu.languages manifest, surfaced
+// by hydrateModulesFromVfs / the edition bake); falls back to LANGUAGE_PACK_META.
+// Idempotent — safe to call after every hydrate / install.
+export function seedDeclaredLanguages() {
+  const mods = window._installedModules || {};
+  for (const [url, entry] of Object.entries(mods)) {
+    const decls = (entry && Array.isArray(entry.languages) && entry.languages.length)
+      ? entry.languages
+      : LANGUAGE_PACK_META[url];
+    if (!decls) continue;
+    for (const d of decls) registerDeclaredLanguage({ ...d, pkg: url });
+  }
+}
+if (typeof window !== 'undefined') window._seedDeclaredLanguages = seedDeclaredLanguages;
+
+// Cold→hot activation: load a declared language's pack so its cell type + tag +
+// runtime register (its register code runs). No-op if already loaded. Returns
+// true once the cell type is live. Called when the user picks a declared-but-
+// unloaded language, or when a default-language notebook opens. Only ever loads
+// from _installedModules — never the network.
+export async function ensureLanguageLoaded(cellType) {
+  if (isLanguageLoaded(cellType)) return true;
+  const decl = getDeclaredLanguage(cellType);
+  const pack = (decl && decl.pkg) || LANGUAGE_PACKS[cellType];
+  if (!pack || !window._installedModules?.[pack]) return false;
+  try { await loadInstalledModule(pack); }
+  catch (e) { _diagLog('warn', `[runtime] ensureLanguageLoaded("${cellType}") failed:`, e.message); return false; }
+  // register side-effects ran — refresh the highlighting + the pickers so the
+  // newly-live cell type is selectable / rendered.
+  refreshTaggedLanguages();
+  try { updateInsertBars(); } catch { /* no DOM (headless) */ }
+  return isLanguageLoaded(cellType);
+}
+if (typeof window !== 'undefined') window._ensureLanguageLoaded = ensureLanguageLoaded;
+
 // Adder ↔ auditable module bridge. adder calls this (via the window hook below) when
 // an `import <name>` misses its own resolvers, so `import plt` / `import sadpan` work
 // offline with no bootstrap `load()` cell: we find the INSTALLED auditable extension
@@ -188,8 +237,15 @@ function _diagLog(level, ...args) {
 // after hydrateNotebook lets the cells boot in their proper editor
 // from the first paint.
 export async function autoLoadFromCells() {
+  // Declare every installed language pack (cold) so the picker / New-notebook
+  // menu can offer it without loading it; then eager-load packs for cells that
+  // already exist + the adapter bridges they import.
+  seedDeclaredLanguages();
   await _autoLoadLanguagePacks();
   await _autoLoadAdapters();
+  // Reflect any newly-loaded cell types AND the freshly-declared (cold) ones in
+  // the insert pickers — the boot-time updateInsertBars ran before this.
+  try { updateInsertBars(); } catch { /* headless / no DOM */ }
 }
 
 async function _autoLoadLanguagePacks() {

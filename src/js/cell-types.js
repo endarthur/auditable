@@ -496,6 +496,67 @@ export function _ctRegisteredTypes() {
   return Object.keys(window._cellTypes || {});
 }
 
+// ── Declared languages (declarative language contract) ──
+//
+// A language pack declares its languages as DATA (`gcu.languages` in its
+// manifest), so the host knows a language EXISTS — its cell type, tag, label,
+// aliases, adderExports — WITHOUT running the pack's registration code. The
+// cell-type picker, the "New <language> notebook" menu, and the default-language
+// setting all read the UNION of loaded executable cell types + these
+// declared-but-unloaded packs. Activation is cold→hot: a declared language loads
+// (its register code runs) only when picked / its default-language notebook
+// opens. cellType → { cellType, tag, label, aliases, adderExports, pkg }.
+const _declaredLanguages = new Map();
+
+// Register a declared language (from a manifest's gcu.languages entry). Idempotent;
+// later declarations merge over earlier ones. `pkg` is the module URL to load on
+// activation (e.g. '@gcu/adder').
+export function registerDeclaredLanguage(decl) {
+  if (!decl || !decl.cellType || !decl.pkg) return;
+  const prev = _declaredLanguages.get(decl.cellType);
+  _declaredLanguages.set(decl.cellType, { aliases: [], ...(prev || {}), ...decl });
+  // aliases (e.g. mpy → adder) resolve to the same pack.
+  for (const a of (decl.aliases || [])) {
+    if (a && a !== decl.cellType && !_declaredLanguages.has(a)) {
+      _declaredLanguages.set(a, { cellType: a, tag: a, label: decl.label, pkg: decl.pkg, aliasOf: decl.cellType });
+    }
+  }
+}
+
+export function getDeclaredLanguage(cellType) {
+  return _declaredLanguages.get(cellType) || null;
+}
+
+export function isLanguageLoaded(cellType) {
+  return !!(window._cellTypes && window._cellTypes[cellType]);
+}
+
+// The single source of truth for "what languages can I use here": loaded
+// executable cell types (the built-in `code`/js plus any activated extension
+// cell types) MERGED with declared-but-unloaded language packs. Each entry:
+// { cellType, label, loaded, pkg? }. Aliases are folded out (only the canonical
+// cellType is listed). `code` (js) is included as the always-present default.
+export function listAvailableLanguages() {
+  const out = new Map();
+  out.set('code', { cellType: 'code', label: 'js', loaded: true });
+  for (const [ct, d] of _declaredLanguages) {
+    if (d.aliasOf) continue;   // list canonical only
+    out.set(ct, { cellType: ct, label: d.label || ct, loaded: isLanguageLoaded(ct), pkg: d.pkg });
+  }
+  // Loaded executable extension cell types — authoritative label, override decl.
+  for (const [name, h] of Object.entries(window._cellTypes || {})) {
+    if (!_ctIsExecutable(name)) continue;
+    const prev = out.get(name);
+    out.set(name, { cellType: name, label: h.label || name, loaded: true, pkg: prev ? prev.pkg : undefined });
+  }
+  return [...out.values()];
+}
+
+if (typeof window !== 'undefined') {
+  window._registerDeclaredLanguage = registerDeclaredLanguage;
+  window._listAvailableLanguages = listAvailableLanguages;
+}
+
 // ── Built-in cell type manifests ──
 // Auto-registered at module load so getCellType('code') etc. return uniform results.
 
