@@ -175,6 +175,16 @@ export async function registerExtensionSurfaces(manifest) {
         console.error(`[works] extension-surfaces: cannot read ${surfacePath} for kind "${s.kind}":`, e.message);
         continue;
       }
+      // Ensure the surface's declared lib `requires` are in the lib store
+      // before inlining. Baked libs (CORE_LIBS / SHARED_LIBS) are already
+      // there; a non-baked require — a provisioned package's lib, or this
+      // package's OWN engine shipped as index.js → /lib/<pkg>/source — must
+      // be pulled from /lib first, else its bare `@gcu/<name>` import survives
+      // uninlined and the surface fails to load. (Built-in surfaces never hit
+      // this: all their deps are baked.)
+      for (const req of (Array.isArray(s.requires) ? s.requires : [])) {
+        try { await ensureLibSource(req, WKS.vfs); } catch { /* a genuinely missing lib surfaces as the uninlined import below */ }
+      }
       // Same pipeline built-ins use — lib inlining + theme substitution.
       try {
         processed = processSurfaceHtml(html, s.kind);

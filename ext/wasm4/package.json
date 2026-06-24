@@ -1,0 +1,12 @@
+{
+  "name": "@gcu/wasm4",
+  "version": "0.1.0",
+  "description": "WASM-4 fantasy console for Auditable Works — the engine library plus a playable console surface that runs conformant .wasm carts (any source language).",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["auditable-extension", "works-surface", "wasm4", "fantasy-console", "game"],
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "works-contribution-registry — a self-contained surface package whose own engine ships as index.js (→ /lib/@gcu/wasm4/source); the surface imports @gcu/wasm4, resolved from the package's own source. No external lib deps."
+  }
+}

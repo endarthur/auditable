@@ -666,6 +666,9 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     { dir: 'ext/hex', files: ['package.json', 'works.js', 'surface.html'] },
     // @gcu/encode — surface-only path-less tool (base64/hex/url/json + hashes).
     { dir: 'ext/encode', files: ['package.json', 'works.js', 'surface.html'] },
+    // @gcu/wasm4 — self-contained: index.js IS the engine (→ /source); the
+    // surface imports @gcu/wasm4 from its own package source.
+    { dir: 'ext/wasm4', files: ['package.json', 'index.js', 'works.js', 'surface.html'] },
   ];
   function buildBuiltinPackagesPayload() {
     if (isWorksCore) return '';
@@ -826,11 +829,10 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'surface', 'sideact', 'patchbay', 'menu'] },
     { kind: 'strata',    file: 'works/surfaces/strata.html',    deps: ['abus', 'surface', 'strata-app'] },
     { kind: 'plate',     file: 'works/surfaces/plate.html',     deps: ['abus', 'surface', 'plate', 'strata', 'recon', 'archive'] },
-    // NB: the 'hex' + 'encode' surfaces are no longer built-in payloads — they
-    // ship inside the @gcu/hex / @gcu/encode builtin packages (pkg-builtins-
-    // payload above), installed into /lib at boot and registered as contributed
-    // surfaces.
-    { kind: 'wasm4',     file: 'works/surfaces/wasm4.html',     deps: ['abus', 'surface', 'wasm4'] },
+    // NB: the 'hex', 'encode', and 'wasm4' surfaces are no longer built-in
+    // payloads — they ship inside the @gcu/hex / @gcu/encode / @gcu/wasm4
+    // builtin packages (pkg-builtins-payload above), installed into /lib at boot
+    // and registered as contributed surfaces.
     // NB: the 'notebook' surface is no longer a built-in payload (auditable.html)
     // — it ships as the @gcu/notebook builtin package (pkg-builtins-payload),
     // assembled at spawn from its module tree. works no longer depends on a
@@ -951,6 +953,9 @@ if (target === 'packages') {
       { dir: 'ext/encode', files: ['package.json', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
         contributes: ['surface'], integrityCovers: ['works.js', 'surface.html'],
         title: 'Encode / Hash', tags: ['encode', 'hash', 'tool'] },
+      { dir: 'ext/wasm4', files: ['package.json', 'index.js', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
+        contributes: ['surface'], integrityCovers: ['index.js', 'works.js', 'surface.html'],
+        title: 'WASM-4 console', tags: ['wasm4', 'fantasy-console', 'game'] },
     ];
 
     // Lib dependencies that the distributables' services `require` — packaged as

@@ -580,7 +580,8 @@ registerKind('plate', { label: 'Plate (figure)', icon: '◫', extensions: ['.str
 // over the @gcu/wasm4 engine; spawns with a baked demo cart when path-less.
 // Claims `.w4` (the cart marker) — `.wasm` stays with the hex viewer (generic
 // binary), since a cart is one kind of .wasm among many.
-registerKind('wasm4', { label: 'WASM-4', icon: '◰', extensions: ['.w4'] });
+// NB: the WASM-4 surface ('wasm4') is NOT a built-in kind — it is contributed by
+// the self-contained @gcu/wasm4 package (engine + console). See ext/wasm4/.
 
 // The A-Bus inspector — a diagnostic surface, spawned from the Debug menu
 // (not tied to a VFS path).
