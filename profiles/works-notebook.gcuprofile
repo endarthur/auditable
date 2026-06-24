@@ -1,0 +1,30 @@
+{
+  "name": "works-notebook",
+  "title": "Notebook",
+  "base": "works-core",
+  "description": "The reactive computational notebook + a polyglot toolkit: Python (adder), Soft, SQL/GLSL/Calque tags, plot + sadpan, and the Document editor. The domain-neutral workstation.",
+  "packages": [
+    "@gcu/notebook",
+    "@gcu/adder",
+    "@gcu/soft",
+    "@gcu/plot",
+    "@gcu/sadpan",
+    "@gcu/sql",
+    "@gcu/shader",
+    "@gcu/calque",
+    "@gcu/doc"
+  ],
+  "settings": { "appearance": { "theme": "dark" } },
+  "welcome": [
+    { "kind": "notebook" },
+    { "kind": "doc", "content": "# Welcome to Auditable Works — Notebook\n\nA reactive computational notebook with a **polyglot** toolkit installed:\n\n- **Python (adder)** and **Soft** — pick them from a cell's language button, or **File → New ⟨language⟩ notebook**.\n- **plot** + **sadpan** — `import plt` / `import sadpan` inside Python cells (they resolve offline).\n- **SQL / GLSL / Calque** — template tags for use inside JS cells.\n- **Document editor** (Tools menu) — Markdown with live preview + EPUB export.\n\nThe **interactive tour notebook** shows a reactive cell and a Python cell. Other places to poke: **Tools → Terminal** (a real shell), **Tools → Library** (install more), **Tools → Set up / change profile…**. Delete this file whenever you're done." }
+  ],
+  "starter": [
+    { "type": "md", "code": "# Welcome to Auditable Works — Notebook\n\nA reactive computational notebook. Cells form a dependency graph; downstream cells re-run when an upstream value changes. This workstation is **polyglot** — JS, Python (adder), and Soft are all installed.\n\nRun the cells below (▶ on a cell, or **Run all** in the toolbar):" },
+    { "type": "code", "code": "// JS — define a value the next cell reacts to.\nconst n = ui.slider(\"points\", { min: 50, max: 2000, value: 500, step: 50 });" },
+    { "type": "code", "code": "const c = ui.canvas(640, 200);\nconst g = c.getContext(\"2d\");\ng.fillStyle = \"#14171c\"; g.fillRect(0, 0, 640, 200);\nfor (let i = 0; i < n; i++) {\n  const x = (i / n) * 640;\n  const y = 100 - 80 * Math.sin((i / n) * 6 * Math.PI) * Math.exp(-i / n);\n  g.fillStyle = `hsl(${180 + (i / n) * 120}, 60%, 60%)`;\n  g.fillRect(x, y, 2, 2);\n}" },
+    { "type": "md", "code": "Drag the slider — the canvas re-runs reactively.\n\nThe cell below is **Python** (the adder runtime). Run it — Python values are JS values, no FFI:" },
+    { "type": "adder", "code": "# Python (adder) — runs in the browser, no server.\ntotal = sum(i * i for i in range(1, 11))\nprint(\"sum of squares 1..10 =\", total)" },
+    { "type": "md", "code": "Add your own cells with the **+** buttons (pick a language from the code button's ▾ tray), or start fresh with **File → New ⟨language⟩ notebook**. Delete this notebook whenever you like." }
+  ]
+}

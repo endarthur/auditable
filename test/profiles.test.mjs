@@ -34,18 +34,36 @@ test('resolveToEdition maps packages → exts (with adderExports from the index)
 });
 
 // ── provisioned (runtime) profiles — the works-core first-run setup shape ──
-test('resolveToProvisioned returns the runtime shape (names, settings, no package index needed)', () => {
+test('resolveToProvisioned returns the runtime shape (names, settings, extends chain)', () => {
   const p = resolveToProvisioned('works-geoscience', { profilesDir: realProfiles });
   assert.equal(p.name, 'works-geoscience');
   assert.equal(p.base, 'works-core');
-  assert.deepEqual(p.packages, ['@gcu/notebook', '@gcu/workbench']);   // catalog entry names, as-is (notebook is a package now)
+  // extends works-notebook → inherits the notebook + polyglot toolkit, adds the geo tools
+  for (const pkg of ['@gcu/notebook', '@gcu/adder', '@gcu/workbench', '@gcu/strata', '@gcu/plate']) {
+    assert.ok(p.packages.includes(pkg), 'geoscience missing ' + pkg);
+  }
+  assert.equal(new Set(p.packages).size, p.packages.length);   // deduped (notebook not doubled across extends)
   assert.equal(p.settings.appearance.theme, 'dark');   // works settings nest theme under appearance
   assert.ok(typeof p.description === 'string' && p.description.length);
 });
 
-test('works-everything provisions the first-party packages', () => {
+test('works-everything extends geoscience → the full first-party set', () => {
   const p = resolveToProvisioned('works-everything', { profilesDir: realProfiles });
-  assert.deepEqual(p.packages, ['@gcu/notebook', '@gcu/workbench', '@example/service']);
+  // inherits geoscience (→ notebook) and adds the remaining surfaces
+  for (const pkg of ['@gcu/notebook', '@gcu/adder', '@gcu/workbench', '@gcu/strata',
+                     '@gcu/hex', '@gcu/patchbay', '@gcu/wasm4', '@example/service']) {
+    assert.ok(p.packages.includes(pkg), 'everything missing ' + pkg);
+  }
+  assert.equal(new Set(p.packages).size, p.packages.length);   // deduped across the extends chain
+});
+
+test('works-notebook is the domain-neutral computational profile', () => {
+  const p = resolveToProvisioned('works-notebook', { profilesDir: realProfiles });
+  for (const pkg of ['@gcu/notebook', '@gcu/adder', '@gcu/soft', '@gcu/plot', '@gcu/sadpan', '@gcu/doc']) {
+    assert.ok(p.packages.includes(pkg), 'notebook missing ' + pkg);
+  }
+  // no geo surfaces in the base computational profile
+  assert.ok(!p.packages.includes('@gcu/workbench'));
 });
 
 test('works-minimal provisions no packages (just the shell)', () => {

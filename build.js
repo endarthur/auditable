@@ -737,7 +737,7 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   function buildProfilesPayload() {
     if (!isWorksCore) return '';
     const { resolveToProvisioned } = require('./profiles/resolve.js');
-    const WORKS_PROFILES = ['works-minimal', 'works-geoscience', 'works-everything'];
+    const WORKS_PROFILES = ['works-minimal', 'works-notebook', 'works-geoscience', 'works-everything'];
     const profiles = [];
     for (const n of WORKS_PROFILES) {
       try { profiles.push(resolveToProvisioned(n, { profilesDir: path.join(__dirname, 'profiles') })); }
