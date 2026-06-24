@@ -64,6 +64,7 @@ export function createGrid(element, provider, options = {}) {
     editing: null,
     selectListeners: [],
     headerListeners: [],
+    headerContextListeners: [],
     contextListeners: [],
     _cleanup: [],
   };
@@ -528,14 +529,26 @@ export function createGrid(element, provider, options = {}) {
     if (c < 0 || c >= M.totalCols) return;
     for (const cb of g.headerListeners) { try { cb(c); } catch (err) { console.error('[loom] onHeaderClick listener threw', err); } }
   }
+  // Right-click a column header → emit (col, clientX, clientY); the host builds
+  // the header menu (sort/autofit/revert-column/…). No listener → native menu.
+  function onHeaderContextMenuEvt(e) {
+    if (!g.headerContextListeners.length) return;
+    e.preventDefault();
+    const rect = colHdr.getBoundingClientRect();
+    const c = colAtX(M, e.clientX - rect.left + scroll.scrollLeft);
+    if (c < 0 || c >= M.totalCols) return;
+    for (const cb of g.headerContextListeners) { try { cb({ col: c, clientX: e.clientX, clientY: e.clientY }); } catch (err) { console.error('[loom] onHeaderContextMenu listener threw', err); } }
+  }
   colHdr.addEventListener('mousedown', onHeaderMouseDown);
   colHdr.addEventListener('mousemove', onHeaderMove);
   colHdr.addEventListener('dblclick', onHeaderDblClick);
   colHdr.addEventListener('click', onHeaderClickEvt);
+  colHdr.addEventListener('contextmenu', onHeaderContextMenuEvt);
   g._cleanup.push(() => colHdr.removeEventListener('mousedown', onHeaderMouseDown));
   g._cleanup.push(() => colHdr.removeEventListener('mousemove', onHeaderMove));
   g._cleanup.push(() => colHdr.removeEventListener('dblclick', onHeaderDblClick));
   g._cleanup.push(() => colHdr.removeEventListener('click', onHeaderClickEvt));
+  g._cleanup.push(() => colHdr.removeEventListener('contextmenu', onHeaderContextMenuEvt));
 
   // ── hover tooltip ──
   let hoverKey = null, hoverTimer = null;
@@ -630,6 +643,7 @@ export function createGrid(element, provider, options = {}) {
     onSelect(cb) { g.selectListeners.push(cb); return () => { const i = g.selectListeners.indexOf(cb); if (i >= 0) g.selectListeners.splice(i, 1); }; },
     onHeaderClick(cb) { g.headerListeners.push(cb); return () => { const i = g.headerListeners.indexOf(cb); if (i >= 0) g.headerListeners.splice(i, 1); }; },
     onContextMenu(cb) { g.contextListeners.push(cb); return () => { const i = g.contextListeners.indexOf(cb); if (i >= 0) g.contextListeners.splice(i, 1); }; },
+    onHeaderContextMenu(cb) { g.headerContextListeners.push(cb); return () => { const i = g.headerContextListeners.indexOf(cb); if (i >= 0) g.headerContextListeners.splice(i, 1); }; },
     // Column widths (the sparse non-default map). get returns a copy; set
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.

@@ -116,6 +116,7 @@ export function createStrataApp(host) {
     grid.onSelect((s) => { updateSel(s); publishRowSelection(s); });
     grid.onHeaderClick(cycleSort);
     grid.onContextMenu(onCellContextMenu);
+    grid.onHeaderContextMenu(onHeaderContextMenu);
     grid.focus();
 
     setTitle();
@@ -303,15 +304,21 @@ export function createStrataApp(host) {
     return writeStrata(table, { createWriter, name: docName, source: 'strata-app' });
   }
 
-  // Click a column header → cycle its sort: none → asc → desc → none.
-  function cycleSort(col) {
+  // Apply an explicit sort to a column. dir: 'asc' | 'desc' | null (clear).
+  function applySort(col, dir) {
     if (!view) return;
-    if (!sortState || sortState.col !== col) sortState = { col, dir: 'asc' };
-    else if (sortState.dir === 'asc') sortState.dir = 'desc';
-    else sortState = null;
-    view.setSort(sortState ? { by: table.schema[col].name, dir: sortState.dir } : null);
+    sortState = dir ? { col, dir } : null;
+    view.setSort(dir ? { by: table.schema[col].name, dir } : null);
     grid.refresh();
     updateFooter();
+  }
+  // Left-click a column header → cycle its sort: none → asc → desc → none.
+  function cycleSort(col) {
+    let dir;
+    if (!sortState || sortState.col !== col) dir = 'asc';
+    else if (sortState.dir === 'asc') dir = 'desc';
+    else dir = null;
+    applySort(col, dir);
   }
 
   // Apply the filter box (a boolean formula over columns).
@@ -364,6 +371,39 @@ export function createStrataApp(host) {
     showContextMenu(items, clientX, clientY);
   }
 
+  // Column-header right-click → the ▾ menu (sort / autofit / revert-column /
+  // show-formula). The typed-table control center; reuses the same popup.
+  function editedInColumn(c) {
+    if (!table || table.isDerived(c)) return 0;
+    let n = 0;
+    for (let r = 0; r < table.nrows; r++) if (table.isEdited(r, c)) n++;
+    return n;
+  }
+  function revertColumn(c) {
+    const rows = [];
+    for (let r = 0; r < table.nrows; r++) if (table.isEdited(r, c)) rows.push(r);
+    if (!rows.length) return;
+    table.beginTxn();
+    for (const r of rows) table.revert(r, c);
+    table.endTxn();
+    host.setDirty(true); updateFooter(); grid.refresh();
+  }
+  function onHeaderContextMenu({ col, clientX, clientY }) {
+    if (!table || !view) return;
+    const name = table.schema[col].name;
+    const sorted = view.sortSpec && view.sortSpec.by === name ? view.sortSpec.dir : null;
+    const items = [
+      { label: (sorted === 'asc' ? '✓ ' : '') + 'Sort ascending', run: () => applySort(col, 'asc') },
+      { label: (sorted === 'desc' ? '✓ ' : '') + 'Sort descending', run: () => applySort(col, 'desc') },
+    ];
+    if (sorted) items.push({ label: 'Clear sort', run: () => applySort(col, null) });
+    items.push('---', { label: 'Autofit column', run: () => grid.autofitColumn(col) });
+    const nEd = editedInColumn(col);
+    if (nEd > 0) items.push({ label: `Revert ${nEd} edit${nEd > 1 ? 's' : ''} in column`, run: () => revertColumn(col) });
+    if (table.isDerived(col)) items.push('---', { label: 'Show formula', run: () => flash('= ' + table.schema[col].formula) });
+    showContextMenu(items, clientX, clientY);
+  }
+
   let _ctxMenu = null;
   function closeContextMenu() {
     if (!_ctxMenu) return;
@@ -379,6 +419,12 @@ export function createStrataApp(host) {
     menu.className = 'strata-ctx';
     menu.style.cssText = 'position:fixed;z-index:1100;background:#1e1e1e;border:1px solid #444;border-radius:5px;padding:4px;min-width:150px;font-family:var(--mono,monospace);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.5)';
     for (const it of items) {
+      if (it === '---') {
+        const sep = document.createElement('div');
+        sep.style.cssText = 'height:1px;background:#3a3a3a;margin:4px 2px';
+        menu.appendChild(sep);
+        continue;
+      }
       const b = document.createElement('div');
       b.textContent = it.label;
       b.style.cssText = `padding:5px 10px;border-radius:3px;white-space:nowrap;cursor:${it.disabled ? 'default' : 'pointer'};color:${it.disabled ? '#666' : '#ccc'}`;

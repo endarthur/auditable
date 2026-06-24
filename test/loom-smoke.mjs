@@ -93,6 +93,15 @@ try {
     ? ok(`right-click emits onContextMenu (r${ctx.row}:c${ctx.col})`)
     : fail(`onContextMenu: ${JSON.stringify(ctx)}`);
 
+  // ── right-click a column header → onHeaderContextMenu ──
+  await page.evaluate(() => { window.__hctx = null; window._loom.onHeaderContextMenu((d) => { window.__hctx = d; }); });
+  await page.mouse.click(box.x + 98, box.y + 12, { button: 'right' });   // header band, col 0
+  await page.waitForTimeout(40);
+  const hctx = await page.evaluate(() => window.__hctx);
+  (hctx && Number.isInteger(hctx.col))
+    ? ok(`right-click header emits onHeaderContextMenu (col ${hctx.col})`)
+    : fail(`onHeaderContextMenu: ${JSON.stringify(hctx)}`);
+
   // ── keyboard navigation ──
   await page.evaluate(() => { window._loom.setSelection({ r0: 3, c0: 1, r1: 3, c1: 1 }); window._loom.focus(); });
   await page.keyboard.press('ArrowDown');

@@ -384,13 +384,18 @@ function createMemoryProvider(spec) {
 
 const PAD = 6;
 
+// A muted one-glyph type indicator drawn before each header label — type is what
+// a structured table is *about*, so it's visible at a glance. Keyed by the
+// CellType string values the provider reports.
+const TYPE_GLYPH = { number: '#', string: 'a', category: '≡', date: '◷', bool: '✓' };
+
 // Default GCU-dark-ish palette. options.colors overrides any key. Kept inside
 // loom so the lib renders standalone without auditable's CSS tokens; a surface
 // can pass --au-* values through options.colors.
 const DARK_COLORS = {
   gridLine: '#1e1e1e', hdrBg: '#1a1a1a', hdrBorder: '#2a2a2a', hdrText: '#888',
   cellText: '#bbb', cellNum: '#8cb878', cellDerived: '#c89b3c', cellError: '#d46a6a',
-  cellPending: '#555', cellOutOfOrder: '#c8a13c',
+  cellPending: '#555', cellOutOfOrder: '#c8a13c', hdrGlyph: '#6f6f6f',
   editedBar: '#c89b3c', selFill: 'rgba(200,155,60,0.12)', selStroke: '#c89b3c',
   highlightFill: 'rgba(120,130,225,0.22)',   // cross-surface brushing tint (indigo)
   bg: '#121212', scrollThumb: '#3a3a3a', scrollTrack: '#161616',
@@ -399,7 +404,7 @@ const DARK_COLORS = {
 const LIGHT_COLORS = {
   gridLine: '#ddd', hdrBg: '#e8e8e8', hdrBorder: '#ccc', hdrText: '#888',
   cellText: '#333', cellNum: '#3a7a30', cellDerived: '#8a6c2a', cellError: '#b03030',
-  cellPending: '#bbb', cellOutOfOrder: '#9a7a1a',
+  cellPending: '#bbb', cellOutOfOrder: '#9a7a1a', hdrGlyph: '#aaa',
   editedBar: '#8a6c2a', selFill: 'rgba(138,108,42,0.12)', selStroke: '#8a6c2a',
   highlightFill: 'rgba(90,100,190,0.16)',   // cross-surface brushing tint (indigo)
   bg: '#fff', scrollThumb: '#c4c4c4', scrollTrack: '#ececec',
@@ -552,7 +557,16 @@ function paintColHeaders(g, c0, c1, sx, vw) {
     ctx.rect(x + 1, 0, cw - 2, metrics.hdrH);
     ctx.clip();
     ctx.textAlign = 'left';
-    ctx.fillText(String(label), x + PAD, metrics.hdrH / 2);
+    // Type glyph (muted), then the label.
+    const glyph = (h && typeof h === 'object' && h.type) ? TYPE_GLYPH[h.type] : '';
+    let lx = x + PAD;
+    if (glyph) {
+      ctx.fillStyle = g.colors.hdrGlyph || g.colors.cellPending;
+      ctx.fillText(glyph, lx, metrics.hdrH / 2);
+      lx += 12;
+      ctx.fillStyle = g.colors.hdrText;
+    }
+    ctx.fillText(String(label), lx, metrics.hdrH / 2);
     // Active-sort arrow at the right edge — sort state made visible in the grid.
     if (h && typeof h === 'object' && h.sort) {
       ctx.textAlign = 'right';
@@ -669,6 +683,7 @@ function createGrid(element, provider, options = {}) {
     editing: null,
     selectListeners: [],
     headerListeners: [],
+    headerContextListeners: [],
     contextListeners: [],
     _cleanup: [],
   };
@@ -1133,14 +1148,26 @@ function createGrid(element, provider, options = {}) {
     if (c < 0 || c >= M.totalCols) return;
     for (const cb of g.headerListeners) { try { cb(c); } catch (err) { console.error('[loom] onHeaderClick listener threw', err); } }
   }
+  // Right-click a column header → emit (col, clientX, clientY); the host builds
+  // the header menu (sort/autofit/revert-column/…). No listener → native menu.
+  function onHeaderContextMenuEvt(e) {
+    if (!g.headerContextListeners.length) return;
+    e.preventDefault();
+    const rect = colHdr.getBoundingClientRect();
+    const c = colAtX(M, e.clientX - rect.left + scroll.scrollLeft);
+    if (c < 0 || c >= M.totalCols) return;
+    for (const cb of g.headerContextListeners) { try { cb({ col: c, clientX: e.clientX, clientY: e.clientY }); } catch (err) { console.error('[loom] onHeaderContextMenu listener threw', err); } }
+  }
   colHdr.addEventListener('mousedown', onHeaderMouseDown);
   colHdr.addEventListener('mousemove', onHeaderMove);
   colHdr.addEventListener('dblclick', onHeaderDblClick);
   colHdr.addEventListener('click', onHeaderClickEvt);
+  colHdr.addEventListener('contextmenu', onHeaderContextMenuEvt);
   g._cleanup.push(() => colHdr.removeEventListener('mousedown', onHeaderMouseDown));
   g._cleanup.push(() => colHdr.removeEventListener('mousemove', onHeaderMove));
   g._cleanup.push(() => colHdr.removeEventListener('dblclick', onHeaderDblClick));
   g._cleanup.push(() => colHdr.removeEventListener('click', onHeaderClickEvt));
+  g._cleanup.push(() => colHdr.removeEventListener('contextmenu', onHeaderContextMenuEvt));
 
   // ── hover tooltip ──
   let hoverKey = null, hoverTimer = null;
@@ -1235,6 +1262,7 @@ function createGrid(element, provider, options = {}) {
     onSelect(cb) { g.selectListeners.push(cb); return () => { const i = g.selectListeners.indexOf(cb); if (i >= 0) g.selectListeners.splice(i, 1); }; },
     onHeaderClick(cb) { g.headerListeners.push(cb); return () => { const i = g.headerListeners.indexOf(cb); if (i >= 0) g.headerListeners.splice(i, 1); }; },
     onContextMenu(cb) { g.contextListeners.push(cb); return () => { const i = g.contextListeners.indexOf(cb); if (i >= 0) g.contextListeners.splice(i, 1); }; },
+    onHeaderContextMenu(cb) { g.headerContextListeners.push(cb); return () => { const i = g.headerContextListeners.indexOf(cb); if (i >= 0) g.headerContextListeners.splice(i, 1); }; },
     // Column widths (the sparse non-default map). get returns a copy; set
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.

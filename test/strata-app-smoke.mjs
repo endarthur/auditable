@@ -216,6 +216,36 @@ try {
     ? ok(`right-click "${ctxRevert.label}" reverts (dirty ${ctxRevert.before}→${ctxRevert.after})`)
     : fail(`context revert failed: ${JSON.stringify(ctxRevert)}`);
 
+  // Column-header ▾ menu (right-click): revert all edits in a column, then sort.
+  await page.evaluate(() => { const p = window._strataApp.grid.provider; p.commit(0, 1, '1'); p.commit(1, 1, '2'); window._strataApp.grid.refresh(); });
+  const hbox = await (await page.$('#grid')).boundingBox();
+  await page.mouse.click(hbox.x + 186, hbox.y + 12, { button: 'right' }); // col 1 (Au_gpt) header
+  await page.waitForTimeout(60);
+  const hdrRevert = await page.evaluate(() => {
+    const m = document.querySelector('.strata-ctx');
+    if (!m) return { shown: false };
+    const item = [...m.querySelectorAll('div')].find((d) => /Revert \d+ edits? in column/.test(d.textContent));
+    const before = window._strataApp.table.dirtyCount();
+    if (item) item.click();
+    return { shown: true, label: item && item.textContent, before, after: window._strataApp.table.dirtyCount() };
+  });
+  (hdrRevert.shown && /Revert 2 edits/.test(hdrRevert.label || '') && hdrRevert.after === hdrRevert.before - 2)
+    ? ok(`header ▾ "${hdrRevert.label}" (dirty ${hdrRevert.before}→${hdrRevert.after})`)
+    : fail(`header revert-column failed: ${JSON.stringify(hdrRevert)}`);
+
+  await page.mouse.click(hbox.x + 186, hbox.y + 12, { button: 'right' });
+  await page.waitForTimeout(60);
+  const hdrSort = await page.evaluate(() => {
+    const m = document.querySelector('.strata-ctx');
+    const item = m && [...m.querySelectorAll('div')].find((d) => /Sort ascending/.test(d.textContent));
+    if (item) item.click();
+    const v = window._strataApp.view;
+    return { clicked: !!item, sort: v && v.sortSpec };
+  });
+  (hdrSort.clicked && hdrSort.sort && hdrSort.sort.by === 'Au_gpt' && hdrSort.sort.dir === 'asc')
+    ? ok(`header ▾ "Sort ascending" (${hdrSort.sort.by} ${hdrSort.sort.dir})`)
+    : fail(`header sort failed: ${JSON.stringify(hdrSort)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);
