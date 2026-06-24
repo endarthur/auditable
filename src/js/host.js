@@ -202,12 +202,26 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
   // workspace project (reached via the / mount) — going through the surface
   // VFS, so they are transparent to whether / is a relay proxy or a direct
   // delegated mount. Write-back is write-all; orphan pruning is a follow-up.
+  // A local-copy mount seeds /projects/self from a SPECIFIC project dir. Refuse
+  // a missing / root / ancestor source: bootLoad would otherwise copy the whole
+  // workspace — INCLUDING the /projects/self destination mount itself — into the
+  // mount, re-reading what it just wrote and recursing until the stack blows.
+  // (A path-less "New notebook" arrives here with projectPath '/'.) A real
+  // notebook path ('/projects/<name>') never contains /projects/self, so it's
+  // always allowed.
+  function _canBootLoad(source, mount) {
+    if (!source || source === '/' || source === mount) return false;
+    const base = source.endsWith('/') ? source : source + '/';
+    return !mount.startsWith(base);   // mount nested under source → cycle
+  }
+
   async function bootLoad(vfs, remoteBase, localBase) {
     let names;
     try { names = await vfs.readdir(remoteBase); }
     catch { return; }   // not created yet — a fresh project
     for (const name of names) {
       const r = remoteBase + '/' + name;
+      if (r === localBase) continue;   // belt-and-suspenders: never copy the destination mount into itself
       const l = localBase + '/' + name;
       const st = await vfs.stat(r);
       if (st && st.type === 'directory') {
@@ -257,7 +271,7 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
       window._notebookVFS = vfs;
       window._vfsPath = path;
       for (const d of ds) {
-        if (d.kind === 'local-copy') await bootLoad(vfs, d.source, d.mount);
+        if (d.kind === 'local-copy' && _canBootLoad(d.source, d.mount)) await bootLoad(vfs, d.source, d.mount);
       }
 
       // Mirror shell-side mounts (today: /mnt/<name> disk folders). Subscribe
@@ -347,8 +361,16 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
           .catch(e => ['<readdir err: ' + e.message + '>']);
         console.log('[host] persist: /projects/self entries =', entries);
       }
-      await writeBack(window._notebookVFS, '/projects/self', projectPath);
-      if (dbg) console.log('[host] persist: writeBack done →', projectPath);
+      // Only write back to a REAL project path. A path-less scratch notebook
+      // (projectPath '/') has no home yet — writing /projects/self into the
+      // workspace root would scatter its files across /. The shell assigns a
+      // real path via relocate() (Save As) before persistence matters.
+      if (projectPath && projectPath !== '/') {
+        await writeBack(window._notebookVFS, '/projects/self', projectPath);
+        if (dbg) console.log('[host] persist: writeBack done →', projectPath);
+      } else if (dbg) {
+        console.log('[host] persist: scratch notebook (no project path) — write-back skipped');
+      }
       return 'saved';
     },
 
