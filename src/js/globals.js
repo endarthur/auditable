@@ -11,7 +11,7 @@ import { registerExtension, _ctUninstallPlugin, getExtension, getCellType, getTa
 import { registerProvider } from './stdlib.js';
 import { convertCell, moveCell } from './cell-ops.js';
 import { toggleAutorun } from './editor.js';
-import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView, applyEmbedFonts, applyLicensesStrict, applyConfirmDataPackInstall } from './settings.js';
+import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView, applyEmbedFonts, applyLicensesStrict, applyConfirmDataPackInstall, applyDefaultLang } from './settings.js';
 import { toggleUpdate } from './update.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog } from './save.js';
 import { openIpynbDialog, exportAsIpynb } from './ipynb-bridge.js';
@@ -69,6 +69,7 @@ window.applyLineNumbers = applyLineNumbers;
 window.applyHeader = applyHeader;
 window.applyExecMode = applyExecMode;
 window.applyRunOnLoad = applyRunOnLoad;
+window.applyDefaultLang = applyDefaultLang;
 window.applyShowToggle = applyShowToggle;
 window.applyGlobalExecMode = applyGlobalExecMode;
 window.applyGlobalRunOnLoad = applyGlobalRunOnLoad;

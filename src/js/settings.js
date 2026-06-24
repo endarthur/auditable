@@ -28,6 +28,7 @@ export function toggleSettings() {
     refreshPluginList();
     refreshModuleList();
     refreshLicensesList();
+    refreshDefaultLangOptions();
   }
 }
 
@@ -110,6 +111,34 @@ export function applyRunOnLoad(val) {
   const sel = $('#setRunOnLoad');
   if (sel) sel.value = val;
   hooks.emit("notebook:dirty");
+}
+
+// Default cell language (Settings → "default language"). It IS the persisted
+// preferred-code-type — the language new cells (and a new notebook's first cell)
+// default to. Choosing one loads it (cold→hot) so it's ready, and refreshes the
+// pickers. Persisted via getSettings()'s preferredCodeType.
+export function applyDefaultLang(val) {
+  setPreferredCodeType(val || 'code');
+  const sel = $('#setDefaultLang');
+  if (sel) sel.value = val || 'code';
+  if (val && val !== 'code' && window._ensureLanguageLoaded) {
+    Promise.resolve(window._ensureLanguageLoaded(val)).catch(() => {});
+  }
+  if (window.updateInsertBars) window.updateInsertBars();
+  if (window.updateToolbarCodeBtn) window.updateToolbarCodeBtn();
+  hooks.emit('notebook:dirty');
+}
+
+// Populate the default-language <select> from the available languages (loaded +
+// installed), selecting the current default. Called when the Settings panel opens.
+export function refreshDefaultLangOptions() {
+  const sel = $('#setDefaultLang');
+  if (!sel) return;
+  const langs = (window._listAvailableLanguages ? window._listAvailableLanguages() : []);
+  const opts = [{ v: 'code', label: 'js' },
+    ...langs.filter(l => l.cellType !== 'code').map(l => ({ v: l.cellType, label: l.label }))];
+  sel.innerHTML = opts.map(o => `<option value="${o.v}">${o.label}</option>`).join('');
+  sel.value = getRawPreferredCodeType() || 'code';
 }
 
 export function applyShowToggle(val) {
@@ -217,7 +246,16 @@ export function applySettings(s) {
   if (s.embedFonts !== undefined) applyEmbedFonts(s.embedFonts);
   if (s.licensesStrict !== undefined) applyLicensesStrict(s.licensesStrict);
   if (s.confirmDataPackInstall !== undefined) applyConfirmDataPackInstall(s.confirmDataPackInstall);
-  if (s.preferredCodeType) setPreferredCodeType(s.preferredCodeType);
+  if (s.preferredCodeType) {
+    setPreferredCodeType(s.preferredCodeType);
+    // The notebook's default language. A default-language notebook comes up with
+    // that language READY (eager at boot) — distinct from the cold-until-picked
+    // policy for other installed languages. Fire-and-forget; the cell type
+    // activates + the pickers refresh when it lands.
+    if (s.preferredCodeType !== 'code' && window._ensureLanguageLoaded) {
+      Promise.resolve(window._ensureLanguageLoaded(s.preferredCodeType)).catch(() => {});
+    }
+  }
   // optional: size-compare.js (typeof guards for --lean builds without it)
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
   if (s.sizeCompareRef !== undefined && typeof applySizeCompareRef === 'function') applySizeCompareRef(s.sizeCompareRef);

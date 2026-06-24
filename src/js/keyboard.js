@@ -5,7 +5,7 @@ import { _ctGetHandler, _ctIsExecutable, listAvailableLanguages } from './cell-t
 import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyLineNumbers, getSettings } from './settings.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray } from './save.js';
-import { setMsg, getPreferredCodeType } from './ui.js';
+import { setMsg, getPreferredCodeType, setPreferredCodeType } from './ui.js';
 import { toggleMdComment, autoResize, cssSummary } from './cell-dom.js';
 import { openFind, closeFind } from './find.js';
 import { getEditor, setCm6Callbacks } from './cm6.js';
@@ -281,7 +281,11 @@ export function expandAll() {
   setMsg('expanded all', 'ok');
 }
 
-export async function newNotebook() {
+// `lang` (optional) seeds the notebook AS that language — "New Python (adder)
+// notebook": it becomes the default cell language (preferred type), eager-loads
+// (cold→hot), and the seeded first cell is of that type. Omitted/`'code'` → a
+// plain JS notebook.
+export async function newNotebook(lang) {
   if (!await dialogConfirm('Clear all cells?', { okLabel: 'clear', danger: true })) return;
   while (S.cells.length) {
     const cell = S.cells[0];
@@ -296,8 +300,21 @@ export async function newNotebook() {
   S.clipboard = null;
   S.trash = [];
   $('#docTitle').value = 'untitled';
+
+  // Default language for the fresh notebook.
+  const useLang = (lang && lang !== 'code') ? lang : 'code';
+  setPreferredCodeType(useLang);
+  if (useLang !== 'code' && window._ensureLanguageLoaded) {
+    try { await window._ensureLanguageLoaded(useLang); } catch { /* a fallback cell still works */ }
+  }
+  const firstType = getPreferredCodeType();
+  const cell = addCell(firstType, '');
+  selectCell(cell.id);
+  editCell(cell.id);
   updateStatus();
-  setMsg('new notebook', 'ok');
+  const label = useLang === 'code' ? ''
+    : (listAvailableLanguages().find(l => l.cellType === useLang)?.label || useLang) + ' ';
+  setMsg(`new ${label}notebook`, 'ok');
 }
 
 export function runSelectedCell() { runSelectedAndAdvance(); }

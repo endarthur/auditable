@@ -44,6 +44,21 @@ function pluginInsertItems() {
   }));
 }
 
+// File → New. With installed languages, a submenu: a plain JS notebook plus
+// "New ⟨language⟩ notebook" (sets that language as the notebook's default +
+// seeds a first cell of it). Plain action when no languages are available.
+function newNotebookItem() {
+  const langs = _langEntries();
+  if (!langs.length) return { label: 'New', action: 'file:new' };
+  return {
+    label: 'New', children: [
+      { label: 'Notebook (JS)', action: 'file:new' },
+      '---',
+      ...langs.map(l => ({ label: `${l.label} notebook`, action: `file:new:${l.cellType}` })),
+    ],
+  };
+}
+
 function convertItems() {
   const items = BUILTIN_CONVERT.map(b => ({
     label: b.label, action: `edit:convert:${b.type}`,
@@ -93,7 +108,7 @@ function _stripWorksOwned(items) {
 function sections() {
   return [
     { label: 'File', items: () => _stripWorksOwned([
-      { label: 'New', action: 'file:new' },
+      newNotebookItem(),
       '---',
       { label: 'Save', action: 'file:save', shortcut: 'Ctrl+S' },
       { label: 'Save Packed', action: 'file:save-packed' },
@@ -171,6 +186,12 @@ function dispatch(action) {
     const type = action.slice('edit:convert:'.length);
     if (S.selectedId == null) return;
     window.convertCell(S.selectedId, type);
+    return;
+  }
+
+  // New notebook AS a language — file:new:<cellType>
+  if (action.startsWith('file:new:')) {
+    window.newNotebook(action.slice('file:new:'.length));
     return;
   }
 

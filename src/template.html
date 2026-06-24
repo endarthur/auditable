@@ -152,6 +152,12 @@
     </select>
   </div>
   <div class="settings-row">
+    <label>default language</label>
+    <select id="setDefaultLang" onchange="applyDefaultLang(this.value)" title="The cell language new cells (and a new notebook's first cell) default to. Installed languages appear here; choosing one loads it.">
+      <option value="code">js</option>
+    </select>
+  </div>
+  <div class="settings-row">
     <label>on .ipynb import</label>
     <select id="setIpynbReactive">
       <option value="manual" selected>switch to manual</option>
