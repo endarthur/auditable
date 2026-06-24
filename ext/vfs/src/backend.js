@@ -80,6 +80,12 @@ class Backend {
   async import(basePath, data) {
     // Collect and sort paths so directories come first
     const paths = Object.keys(data).sort();
+    // Fast path: if this backend has a bulk writer, let it do the whole import in few ops (it creates parent
+    // dirs itself — IDB mkdir-p in-tx, Dropbox auto-creates, CommentBackend uses implicit dirs).
+    if (typeof this.writeFiles === 'function') {
+      await this.writeFiles(paths.map((rel) => ({ path: basePath === '/' ? '/' + rel : basePath + '/' + rel, content: data[rel] })));
+      return;
+    }
     const createdDirs = new Set();
     for (const rel of paths) {
       const full = basePath === '/' ? '/' + rel : basePath + '/' + rel;

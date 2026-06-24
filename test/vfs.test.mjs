@@ -2,7 +2,7 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { VFS, VFSError, path, FSAABackend, IDBBackend } from '../ext/vfs/index.js';
+import { VFS, VFSError, path, FSAABackend, IDBBackend, CommentBackend } from '../ext/vfs/index.js';
 import { IDBFactory, IDBKeyRange as FakeIDBKeyRange, IDBDatabase } from 'fake-indexeddb';
 
 // ============================================================
@@ -1222,6 +1222,32 @@ describe('VFS capability plumbing', () => {
     assert.equal(r.committed, 2);
     assert.equal(await vfs.readFile('/a.txt'), 'a');
     assert.equal(await vfs.readFile('/b.txt'), 'b');
+  });
+
+  it('vfs.import uses the backend bulk writer when present (IDB → batched, not N transactions)', async () => {
+    mock.indexedDB._reset();
+    const vfs = await VFS.create();
+    await vfs.mount('/m', { type: 'idb', name: 'import-batch' });
+    const data = {}; for (let i = 0; i < 1500; i++) data[`d/f${i}.txt`] = 'x' + i;
+    const n = await countIdbTx(() => vfs.import('/m', data));
+    assert.ok(n <= 3, 'import batched through writeFiles (got ' + n + ', not 1500)');
+    assert.equal(await vfs.readFile('/m/d/f42.txt'), 'x42');
+    assert.equal((await vfs.readdir('/m/d')).length, 1500);
+  });
+
+  it('CommentBackend.writeFiles/deleteBatch re-serialize the comment ONCE (not per file)', async () => {
+    const b = new CommentBackend({ data: {} });
+    await b.init();
+    let syncs = 0; const orig = b._syncComment.bind(b); b._syncComment = () => { syncs++; orig(); };
+    await b.writeFiles([{ path: '/a.txt', content: 'a' }, { path: '/b.txt', content: 'b' }, { path: '/c.txt', content: 'c' }]);
+    assert.equal(syncs, 1, 'one sync for the whole batch (per-file would be 3)');
+    assert.equal(await b.readFile('/a.txt'), 'a');
+    assert.equal(await b.readFile('/c.txt'), 'c');
+    syncs = 0;
+    const r = await b.deleteBatch(['/a.txt', '/b.txt']);
+    assert.equal(syncs, 1);
+    assert.equal(r.deleted, 2);
+    assert.deepEqual(await b.readdir('/'), ['c.txt']);
   });
 
   it('vfs.rm({recursive}) falls back to the walk when the backend lacks recursiveRemove (memory)', async () => {
