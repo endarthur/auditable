@@ -1,7 +1,7 @@
 import { S, $ } from './state.js';
 import { createCellEl, autoResize, cssSummary } from './cell-dom.js';
 import { isManual } from './dag.js';
-import { _ctGetHandler, _ctIsBuiltin } from './cell-types.js';
+import { _ctGetHandler, _ctIsBuiltin, _ctIsExecutable, getDeclaredLanguage } from './cell-types.js';
 import { runAll, renderHtmlCell, renderMdCell } from './exec.js';
 import { updateStatus } from './ui.js';
 import { selectCell } from './keyboard.js';
@@ -219,9 +219,17 @@ export function deleteCell(id) {
   notifyDirty();
 }
 
-export function convertCell(id, newType) {
+export async function convertCell(id, newType) {
   const cell = S.cells.find(c => c.id === id);
   if (!cell || cell.type === newType) return;
+
+  // Cold→hot: converting a cell TO an installed-but-unloaded declared language
+  // activates its pack first, so the converted cell gets its real editor +
+  // runtime instead of a fallback.
+  if (newType && newType !== 'code' && !_ctIsExecutable(newType)
+      && getDeclaredLanguage(newType) && window._ensureLanguageLoaded) {
+    try { await window._ensureLanguageLoaded(newType); } catch { /* fallback cell */ }
+  }
 
   const code = cell.code;
 

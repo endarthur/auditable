@@ -23,26 +23,35 @@ const BUILTIN_CONVERT = [
   { label: 'HTML', type: 'html' },
 ];
 
+// Available languages (loaded executable cell types + declared-but-installed
+// packs) keyed canonical-cellType → label. The single discovery list, also read
+// by the in-notebook pickers. Declared-but-unloaded ones cold-load on action.
+function _langEntries() {
+  const langs = (window._listAvailableLanguages ? window._listAvailableLanguages() : [])
+    .filter(l => l.cellType !== 'code');
+  const seen = new Set(langs.map(l => l.cellType));
+  // non-executable loaded plugin cell types (e.g. pure tags) not in the lang list
+  const others = Object.entries(window._cellTypes || {})
+    .filter(([n, h]) => !h?.capabilities?.builtin && !seen.has(n))
+    .map(([n, h]) => ({ cellType: n, label: h.label || n }));
+  return [...langs.map(l => ({ cellType: l.cellType, label: l.label })), ...others];
+}
+
 function pluginInsertItems() {
-  const all = Object.entries(window._cellTypes || {});
-  return all
-    .filter(([, h]) => !h?.capabilities?.builtin)
-    .map(([name, h]) => ({
-      label: `Insert ${h.label || name} Cell`,
-      action: `edit:insert:${name}`,
-    }));
+  return _langEntries().map(l => ({
+    label: `Insert ${l.label} Cell`,
+    action: `edit:insert:${l.cellType}`,
+  }));
 }
 
 function convertItems() {
   const items = BUILTIN_CONVERT.map(b => ({
     label: b.label, action: `edit:convert:${b.type}`,
   }));
-  const plugins = Object.entries(window._cellTypes || {})
-    .filter(([, h]) => !h?.capabilities?.builtin)
-    .map(([name, h]) => ({
-      label: h.label || name,
-      action: `edit:convert:${name}`,
-    }));
+  const plugins = _langEntries().map(l => ({
+    label: l.label,
+    action: `edit:convert:${l.cellType}`,
+  }));
   if (plugins.length) items.push('---', ...plugins);
   return items;
 }
@@ -152,7 +161,8 @@ function dispatch(action) {
   // Insert cell types — variable suffix
   if (action.startsWith('edit:insert:')) {
     const type = action.slice('edit:insert:'.length);
-    window.addCellWithUndo(type, '', S.selectedId);
+    // addLangCell cold-loads a declared-but-unloaded language first.
+    (window.addLangCell ? window.addLangCell(type) : window.addCellWithUndo(type, '', S.selectedId));
     return;
   }
 

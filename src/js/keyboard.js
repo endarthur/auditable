@@ -1,7 +1,7 @@
 import { S, $, $$ } from './state.js';
 import { addCell, deleteCell, convertCell } from './cell-ops.js';
 import { runDAG, runAll, renderHtmlCell } from './exec.js';
-import { _ctGetHandler, _ctIsExecutable } from './cell-types.js';
+import { _ctGetHandler, _ctIsExecutable, listAvailableLanguages } from './cell-types.js';
 import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyLineNumbers, getSettings } from './settings.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray } from './save.js';
@@ -242,11 +242,21 @@ export function showInsertPicker(id, dir) {
     const idx = S.cells.findIndex(c => c.id === id);
     afterId = idx > 0 ? S.cells[idx - 1].id : null;
   }
-  const allTypes = ['code', 'md', 'css', 'html', ...Object.keys(window._cellTypes || {})];
-  picker.innerHTML = allTypes.map(t => {
-    const label = t === 'code' ? 'js' : (window._cellTypes?.[t]?.label || t);
-    return `<button onclick="insertAt(${afterId !== null ? afterId : 'null'},'${t}');this.closest('.cell-insert-picker').remove()">${label}</button>`;
-  }).join('');
+  // Languages (loaded + declared-but-installed) + the structural builtins +
+  // any non-executable plugin cell types. insertAt cold-loads a declared
+  // language before creating the cell.
+  const langs = listAvailableLanguages();
+  const langSet = new Set(langs.map(l => l.cellType));
+  const items = [
+    ...langs.map(l => ({ t: l.cellType, label: l.cellType === 'code' ? 'js' : l.label })),
+    { t: 'md', label: 'md' }, { t: 'css', label: 'css' }, { t: 'html', label: 'html' },
+    ...Object.entries(window._cellTypes || {})
+      .filter(([n]) => !langSet.has(n) && !_ctIsExecutable(n))
+      .map(([n, h]) => ({ t: n, label: h.label || n })),
+  ];
+  picker.innerHTML = items.map(it =>
+    `<button onclick="insertAt(${afterId !== null ? afterId : 'null'},'${it.t}');this.closest('.cell-insert-picker').remove()">${it.label}</button>`
+  ).join('');
   const header = cell.el.querySelector('.cell-header');
   header.style.position = 'relative';
   picker.style.top = '100%';
