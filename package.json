@@ -22,6 +22,7 @@
     "test": "node --no-warnings --test --test-force-exit \"test/!(adder-wasm).test.*\"",
     "test:wasm": "node --no-warnings --test-force-exit test/adder-wasm.test.mjs",
     "test:examples": "node test/examples-smoke.mjs",
+    "test:idb-browser": "node test/vfs-idb-browser.mjs",
     "test:all": "npm test && npm run test:wasm"
   },
   "devDependencies": {
@@ -31,6 +32,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
+    "fake-indexeddb": "^6.2.5",
     "js-yaml": "^4.1.1",
     "ol": "^10.8.0",
     "playwright": "^1.59.1",

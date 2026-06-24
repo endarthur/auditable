@@ -2,7 +2,8 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { VFS, VFSError, path, FSAABackend } from '../ext/vfs/index.js';
+import { VFS, VFSError, path, FSAABackend, IDBBackend } from '../ext/vfs/index.js';
+import { IDBFactory, IDBKeyRange as FakeIDBKeyRange } from 'fake-indexeddb';
 
 // ============================================================
 // 1. path utilities
@@ -850,95 +851,14 @@ describe('Custom backend', () => {
 });
 
 // ============================================================
-// IDB Mock — Map-based IndexedDB shim for testing
+// IDB — faithful IndexedDB via fake-indexeddb (real auto-commit semantics, so the
+// transaction-batching work is validated against true behavior — incl. the
+// mid-transaction-await hazard the old hand-rolled Map shim couldn't catch).
+// mock.indexedDB._reset() gives each test a clean DB world; call sites unchanged.
 // ============================================================
-
-function createIDBMock() {
-  const databases = new Map();
-
-  class MockIDBRequest {
-    constructor() { this.result = null; this.error = null; this.onsuccess = null; this.onerror = null; this.onupgradeneeded = null; }
-    _resolve(val) { this.result = val; queueMicrotask(() => this.onsuccess && this.onsuccess()); }
-    _reject(err) { this.error = err; queueMicrotask(() => this.onerror && this.onerror()); }
-  }
-
-  class MockStore {
-    constructor(data) { this._data = data; }
-    get(key) {
-      const req = new MockIDBRequest();
-      queueMicrotask(() => req._resolve(this._data.get(key) || null));
-      return req;
-    }
-    put(record) {
-      const req = new MockIDBRequest();
-      this._data.set(record.path, structuredClone(record));
-      queueMicrotask(() => req._resolve());
-      return req;
-    }
-    delete(key) {
-      const req = new MockIDBRequest();
-      this._data.delete(key);
-      queueMicrotask(() => req._resolve());
-      return req;
-    }
-    openCursor(range) {
-      const req = new MockIDBRequest();
-      const keys = [...this._data.keys()].sort().filter(k => {
-        if (!range) return true;
-        const aboveLower = range._lowerOpen ? k > range._lower : k >= range._lower;
-        const belowUpper = range._upperOpen ? k < range._upper : k <= range._upper;
-        return aboveLower && belowUpper;
-      });
-      let idx = 0;
-      const advance = () => {
-        if (idx < keys.length) {
-          const key = keys[idx++];
-          req.result = { value: structuredClone(this._data.get(key)), continue: () => queueMicrotask(advance) };
-        } else {
-          req.result = null;
-        }
-        if (req.onsuccess) req.onsuccess();
-      };
-      queueMicrotask(advance);
-      return req;
-    }
-  }
-
-  class MockDB {
-    constructor(name) { this._name = name; this._stores = new Map(); this.objectStoreNames = { contains: (n) => this._stores.has(n) }; }
-    createObjectStore(name) { const data = new Map(); this._stores.set(name, data); return new MockStore(data); }
-    transaction(storeName) { return { objectStore: () => new MockStore(this._stores.get(storeName)) }; }
-    close() {}
-  }
-
-  const idb = {
-    open(name, version) {
-      const req = new MockIDBRequest();
-      let db = databases.get(name);
-      const isNew = !db;
-      if (!db) { db = new MockDB(name); databases.set(name, db); }
-      req.result = db;
-      queueMicrotask(() => {
-        if (isNew && req.onupgradeneeded) req.onupgradeneeded();
-        req._resolve(db);
-      });
-      return req;
-    },
-    _reset() { databases.clear(); },
-  };
-
-  const IDBKeyRange = {
-    bound(lower, upper, lowerOpen, upperOpen) {
-      return { _lower: lower, _upper: upper, _lowerOpen: !!lowerOpen, _upperOpen: !!upperOpen };
-    },
-  };
-
-  return { indexedDB: idb, IDBKeyRange };
-}
-
-const mock = createIDBMock();
-globalThis.indexedDB = mock.indexedDB;
-globalThis.IDBKeyRange = mock.IDBKeyRange;
+globalThis.IDBKeyRange = FakeIDBKeyRange;
+globalThis.indexedDB = new IDBFactory();
+const mock = { indexedDB: { _reset() { globalThis.indexedDB = new IDBFactory(); } } };
 
 // ============================================================
 // 10. IDBBackend
@@ -1175,6 +1095,91 @@ describe('IDBBackend', () => {
     await vfs.unmount('/');
     // After unmount, the backend should be removed
     assert.equal(vfs.mounts().length, 0);
+  });
+});
+
+// ============================================================
+// 10b. IDBBackend transaction batching (vfs-idb-batching-spec.md)
+// ============================================================
+describe('IDBBackend transaction batching', () => {
+  async function be(name) {
+    mock.indexedDB._reset();
+    const b = new IDBBackend({ name: name || 'tx-test' });
+    await b.init();
+    return b;
+  }
+  // count IndexedDB transactions opened on this backend's db during fn()
+  async function countTx(b, fn) {
+    const orig = b._db.transaction.bind(b._db);
+    let n = 0;
+    b._db.transaction = (...a) => { n++; return orig(...a); };
+    try { await fn(); } finally { delete b._db.transaction; }
+    return n;
+  }
+
+  it('writeFile uses ONE transaction (was three)', async () => {
+    const b = await be();
+    await b.mkdir('/d');
+    assert.equal(await countTx(b, () => b.writeFile('/d/a.txt', 'hi')), 1);
+    assert.equal(await b.readFile('/d/a.txt'), 'hi');
+  });
+
+  it('writeFiles writes a corpus in one transaction per 1000-file chunk', async () => {
+    const b = await be();
+    const files = Array.from({ length: 1500 }, (_, i) => ({ path: `/dir/f${i}.txt`, content: 'x' + i }));
+    const n = await countTx(b, () => b.writeFiles(files));
+    assert.equal(n, 2, '1500 files → two chunks → two transactions');
+    assert.equal((await b.readdir('/dir')).length, 1500);
+    assert.equal(await b.readFile('/dir/f42.txt'), 'x42');
+  });
+
+  it('writeFiles creates missing parent directories in the same transaction', async () => {
+    const b = await be();
+    assert.equal(await countTx(b, () => b.writeFiles([{ path: '/a/b/c.txt', content: 'deep' }])), 1);
+    assert.equal((await b.stat('/a')).type, 'directory');
+    assert.equal((await b.stat('/a/b')).type, 'directory');
+    assert.equal(await b.readFile('/a/b/c.txt'), 'deep');
+  });
+
+  it('recursive rmdir deletes a non-empty tree in ONE transaction', async () => {
+    const b = await be();
+    await b.mkdir('/d/sub', { recursive: true });
+    await b.writeFile('/d/sub/f.txt', 'x');
+    await b.writeFile('/d/g.txt', 'y');
+    assert.equal(await countTx(b, () => b.rmdir('/d', { recursive: true })), 1);
+    await assert.rejects(b.stat('/d'), { code: 'ENOENT' });
+    await assert.rejects(b.stat('/d/sub/f.txt'), { code: 'ENOENT' });
+  });
+
+  it('directory rename re-keys the whole subtree in ONE transaction (atomic)', async () => {
+    const b = await be();
+    await b.mkdir('/src/inner', { recursive: true });
+    await b.writeFile('/src/inner/f.txt', 'moved');
+    await b.writeFile('/src/top.txt', 't');
+    assert.equal(await countTx(b, () => b.rename('/src', '/dst')), 1);
+    assert.equal(await b.readFile('/dst/inner/f.txt'), 'moved');
+    assert.equal(await b.readFile('/dst/top.txt'), 't');
+    await assert.rejects(b.stat('/src'), { code: 'ENOENT' });
+  });
+
+  it('deleteBatch removes many paths in one transaction', async () => {
+    const b = await be();
+    await b.mkdir('/d');
+    for (const f of ['a', 'b', 'c']) await b.writeFile(`/d/${f}.txt`, f);
+    assert.equal(await countTx(b, () => b.deleteBatch(['/d/a.txt', '/d/b.txt', '/d/c.txt'])), 1);
+    assert.deepEqual(await b.readdir('/d'), []);
+  });
+
+  it('error codes preserved through the single-transaction rewrite', async () => {
+    const b = await be();
+    await assert.rejects(b.writeFile('/nodir/x.txt', 'x'), { code: 'ENOENT' });
+    await b.mkdir('/dd');
+    await assert.rejects(b.mkdir('/dd'), { code: 'EEXIST' });
+    await assert.rejects(b.writeFile('/dd', 'x'), { code: 'EISDIR' });
+    await assert.rejects(b.unlink('/dd'), { code: 'EISDIR' });
+    await b.writeFile('/dd/f.txt', 'x');
+    await assert.rejects(b.rmdir('/dd'), { code: 'ENOTEMPTY' });
+    await assert.rejects(b.rmdir('/dd/f.txt'), { code: 'ENOTDIR' });
   });
 });
 
