@@ -112,7 +112,7 @@ export function createStrataApp(host) {
 
     setTitle();
     updateFooter();
-    for (const id of ['#btnSave', '#btnSaveAs', '#btnAddCol', '#btnGroup', '#btnTransform']) { const el = $(id); if (el) el.disabled = false; }
+    refreshCommands();  // enable/show the table-dependent commands (+ ungroup vis)
     applyHighlight();   // re-tint for the current incoming selection (new provider)
   }
 
@@ -129,7 +129,6 @@ export function createStrataApp(host) {
       docName = stripExt(name);
     }
     detailTable = null; detailName = null;
-    $('#btnUngroup').style.display = 'none';
     mountTable(t);
     host.setDirty(false);
   }
@@ -150,7 +149,6 @@ export function createStrataApp(host) {
     docName = `${docName} — by ${keyName}`;
     mountTable(summary);
     host.setDirty(true);
-    $('#btnUngroup').style.display = '';
     return true;
   }
 
@@ -160,7 +158,6 @@ export function createStrataApp(host) {
     docName = detailName;
     detailTable = null; detailName = null;
     mountTable(t);
-    $('#btnUngroup').style.display = 'none';
   }
 
   // Run an OVER transform over the current table → a NEW table (the whole-table
@@ -182,7 +179,6 @@ export function createStrataApp(host) {
     docName = `${docName} — transformed`;
     mountTable(res.table);
     host.setDirty(true);
-    $('#btnUngroup').style.display = '';
     const nWarn = res.warnings.length;
     const nFail = res.checks.reduce((n, c) => n + c.failed, 0);
     const tags = [`${res.table.cols} cols`];
@@ -243,6 +239,40 @@ export function createStrataApp(host) {
     overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.style.display = 'none'; });
     document.body.appendChild(overlay);
     return overlay;
+  }
+
+  // A tiny form modal — replaces native prompt() for the +Col / Group commands
+  // so those first-class actions feel like the app, not the browser. Mirrors the
+  // Transform modal's styling. Resolves a {name: value} map, or null on cancel.
+  // (Field labels/placeholders are app-authored constants — no untrusted HTML.)
+  function formModal(title, fields) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:#1e1e1e;border:1px solid #444;border-radius:6px;width:min(440px,92vw);display:flex;flex-direction:column;gap:10px;padding:14px;font-family:var(--mono,monospace)';
+      let html = `<div style="color:#c89b3c;font-size:13px">${title}</div>`;
+      for (const f of fields) {
+        html += `<label style="display:flex;flex-direction:column;gap:4px;font-size:11px;color:#999">${f.label}`
+          + `<input data-name="${f.name}" spellcheck="false" placeholder="${f.placeholder || ''}"`
+          + ` style="background:#141414;color:#ddd;border:1px solid #333;border-radius:4px;padding:6px 8px;font:12px var(--mono,monospace)"></label>`;
+      }
+      html += '<div style="display:flex;gap:8px;justify-content:flex-end">'
+        + '<button class="fm-cancel" style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:4px;padding:5px 12px;cursor:pointer">Cancel</button>'
+        + '<button class="fm-ok" style="background:#3a2f1a;color:#e0b050;border:1px solid #6b5524;border-radius:4px;padding:5px 12px;cursor:pointer">OK</button></div>';
+      box.innerHTML = html;
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      const inputs = [...box.querySelectorAll('input[data-name]')];
+      const close = (val) => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(val); };
+      const submit = () => { const out = {}; for (const i of inputs) out[i.dataset.name] = i.value; close(out); };
+      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(null); } else if (e.key === 'Enter') { e.preventDefault(); submit(); } };
+      document.addEventListener('keydown', onKey);
+      overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(null); });
+      box.querySelector('.fm-cancel').onclick = () => close(null);
+      box.querySelector('.fm-ok').onclick = submit;
+      if (inputs[0]) inputs[0].focus();
+    });
   }
 
   // Add a derived column (a JS formula over column names).
@@ -321,26 +351,68 @@ export function createStrataApp(host) {
     setTimeout(updateFooter, 1500);
   }
 
-  // ── toolbar / input wiring ──
-  if (canOpenFiles) {
-    $('#btnOpen').onclick = async () => {
-      const f = await host.open();
-      if (f) openBytes(f.name, f.bytes);
-    };
-  } else {
-    $('#btnOpen').style.display = 'none';
+  // ── commands (the registry) ──
+  // Commands-as-data: the single source of truth for the toolbar verbs, and the
+  // shape a future shared command palette / keybindings / MCP agent will consume.
+  // Converges on the two established GCU conventions — the namespaced string `id`
+  // is the menubar action convention (auditable/works `dispatch`), `run` is the
+  // weir-palette callback, `when` adds enablement. `btn` binds to the existing
+  // toolbar button (HTML owns layout; the list owns label + behaviour + state).
+  // `visible` (bool | () => bool) hides a command from the toolbar entirely.
+  const commands = [
+    { id: 'strata:open', btn: '#btnOpen', label: 'Open…', visible: canOpenFiles, when: () => true,
+      run: async () => { const f = await host.open(); if (f) openBytes(f.name, f.bytes); } },
+    { id: 'strata:save', btn: '#btnSave', label: 'Save', when: () => !!table,
+      run: async () => { if (!table) return; const msg = await host.save(docName + '.strata', await buildStrataBytes()); if (msg) { updateFooter(); flash(msg); } } },
+    { id: 'strata:save-as', btn: '#btnSaveAs', label: 'Save As…', when: () => !!table,
+      run: async () => { if (!table) return; const msg = await host.saveAs(docName + '.strata', await buildStrataBytes()); if (msg) { setTitle(); updateFooter(); flash(msg); } } },
+    { id: 'strata:add-column', btn: '#btnAddCol', label: '+ Col', when: () => !!table,
+      run: async () => {
+        if (!table) return;
+        const v = await formModal('Add column', [
+          { name: 'name', label: 'Column name', placeholder: 'e.g. metal' },
+          { name: 'formula', label: 'Formula — JS over column names', placeholder: 'grade * tonnes' },
+        ]);
+        if (v && v.name.trim() && v.formula.trim()) addColumn(v.name.trim(), v.formula.trim());
+      } },
+    { id: 'strata:group', btn: '#btnGroup', label: 'Group…', when: () => !!table,
+      run: async () => {
+        if (!table) return;
+        const v = await formModal('Group by', [
+          { name: 'key', label: 'Group by column (count + mean of each numeric column)', placeholder: 'e.g. LITO' },
+        ]);
+        if (v && v.key.trim()) groupByColumn(v.key.trim());
+      } },
+    { id: 'strata:transform', btn: '#btnTransform', label: 'Transform…', when: () => !!table,
+      run: () => openTransformDialog() },
+    { id: 'strata:ungroup', btn: '#btnUngroup', label: '← Data', visible: () => !!detailTable, when: () => true,
+      run: () => ungroup() },
+  ];
+  function commandById(id) { return commands.find((c) => c.id === id) || null; }
+  function runCommand(id) { const c = commandById(id); if (c && (!c.when || c.when())) return c.run(); }
+  // Bind each command to its toolbar button (label + click). Called once.
+  function renderToolbar() {
+    for (const c of commands) {
+      const el = $(c.btn); if (!el) continue;
+      el.textContent = c.label;
+      el.onclick = () => { if (!c.when || c.when()) c.run(); };
+    }
+    refreshCommands();
   }
-  $('#btnSave').onclick = async () => {
-    if (!table) return;
-    const msg = await host.save(docName + '.strata', await buildStrataBytes());
-    if (msg) { updateFooter(); flash(msg); }
-  };
-  $('#btnSaveAs').onclick = async () => {
-    if (!table) return;
-    const msg = await host.saveAs(docName + '.strata', await buildStrataBytes());
-    if (msg) { setTitle(); updateFooter(); flash(msg); }
-  };
+  // Sync enabled/visible state from the predicates. Called on every state change.
+  function refreshCommands() {
+    for (const c of commands) {
+      const el = $(c.btn); if (!el) continue;
+      const vis = typeof c.visible === 'function' ? c.visible() : (c.visible !== false);
+      el.style.display = vis ? '' : 'none';
+      el.disabled = c.when ? !c.when() : false;
+    }
+  }
+  renderToolbar();
+
   // Linking toggle (Works only; opt-in + visible §7). Hidden standalone (no link).
+  // Stateful toggle — kept out of the command list for now (it'll become a
+  // checked/toggle command when the shared palette lib lands).
   const btnLinked = $('#btnLinked');
   if (btnLinked) {
     if (!link) { btnLinked.style.display = 'none'; }
@@ -351,20 +423,6 @@ export function createStrataApp(host) {
     }
   }
   $('#filter').addEventListener('keydown', (e) => { if (e.key === 'Enter') applyFilter(e.target.value.trim()); });
-  $('#btnGroup').onclick = () => {
-    if (!table) return;
-    const key = prompt('Group by column (count + mean of each numeric column):');
-    if (key && key.trim()) groupByColumn(key.trim());
-  };
-  $('#btnUngroup').onclick = ungroup;
-  { const b = $('#btnTransform'); if (b) b.onclick = openTransformDialog; }
-  $('#btnAddCol').onclick = () => {
-    if (!table) return;
-    const name = prompt('New column name:');
-    if (!name || !name.trim()) return;
-    const formula = prompt(`Formula for "${name.trim()}" — JS over column names, e.g. grade * tonnes:`);
-    if (formula && formula.trim()) addColumn(name.trim(), formula.trim());
-  };
 
   // ── drag-drop (only where opening arbitrary files makes sense) ──
   if (canOpenFiles) {
@@ -391,6 +449,10 @@ export function createStrataApp(host) {
     openFile: (name, bytes) => openBytes(name, bytes),
     saveBytes: buildStrataBytes,
     addColumn, applyFilter, cycleSort, groupByColumn, ungroup, transformWith,
+    // The command registry — enumerable + invokable by id (the seam a shared
+    // palette / keybindings / MCP agent will drive; today the toolbar does).
+    get commands() { return commands.map((c) => ({ id: c.id, label: c.label, enabled: c.when ? !!c.when() : true })); },
+    runCommand,
     get table() { return table; },
     get grid() { return grid; },
     get view() { return view; },

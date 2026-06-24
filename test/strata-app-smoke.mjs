@@ -153,6 +153,33 @@ try {
     ? ok(`OVER transform → ${tx.cols.join(', ')} (${tx.nrows} rows); ORE[0]=${tx.ore0}`)
     : fail(`transform failed: ${JSON.stringify(tx)}`);
 
+  // The command registry is enumerable + well-shaped (the palette/agent seam).
+  const reg = await page.evaluate(() => window._strataApp.commands);
+  const ids = reg.map((c) => c.id);
+  const wanted = ['strata:open', 'strata:save', 'strata:save-as', 'strata:add-column', 'strata:group', 'strata:transform', 'strata:ungroup'];
+  (wanted.every((id) => ids.includes(id)) && reg.every((c) => typeof c.label === 'string' && 'enabled' in c))
+    ? ok(`command registry exposes ${reg.length} commands (${ids.join(', ')})`)
+    : fail(`registry shape off: ${JSON.stringify(reg)}`);
+
+  // +Col via the command + the new form modal (no native prompt()). Drive the
+  // dialog DOM exactly as a user would: open, fill, OK.
+  // NB: don't return the promise — runCommand resolves only after OK is clicked
+  // below, and page.evaluate auto-awaits a returned promise → deadlock.
+  await page.evaluate(() => { window._strataApp.runCommand('strata:add-column'); });
+  await page.waitForSelector('input[data-name="name"]', { timeout: 2000 });
+  await page.fill('input[data-name="name"]', 'metal2');
+  await page.fill('input[data-name="formula"]', 'Au_gpt * 2');
+  await page.click('button.fm-ok');
+  await page.waitForTimeout(80);
+  const modalAdd = await page.evaluate(() => {
+    const t = window._strataApp.table;
+    const c = t.schema.findIndex((s) => s.name === 'metal2');
+    return { added: c >= 0, isDerived: c >= 0 && t.isDerived(c), v0: c >= 0 ? t.getCell(0, c).value : null, au0: (t.columnByName('Au_gpt') || [])[0], open: !!document.querySelector('input[data-name="name"]') };
+  });
+  (modalAdd.added && modalAdd.isDerived && !modalAdd.open && Math.abs(modalAdd.v0 - modalAdd.au0 * 2) < 1e-9)
+    ? ok('+Col form modal (replaces prompt) added a derived column + closed')
+    : fail(`+Col modal failed: ${JSON.stringify(modalAdd)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);
