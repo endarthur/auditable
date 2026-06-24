@@ -150,6 +150,41 @@ try {
     ? ok('copy produced the expected TSV')
     : fail(`copy produced: ${JSON.stringify(copied)}`);
 
+  // ── column resize: drag the col-0 right border (default width 100) ──
+  const widthBefore = await page.evaluate(() => window._loom.getColWidths()[0] || 100);
+  const border0 = await page.evaluate(() => {
+    const r = document.querySelectorAll('#grid canvas')[0].getBoundingClientRect(); // colHdr
+    return { x: r.left + 100, y: r.top + r.height / 2 }; // col0 right edge @ content-x 100, scrollLeft 0
+  });
+  await page.mouse.move(border0.x, border0.y);
+  const cursor = await page.evaluate(() => document.querySelectorAll('#grid canvas')[0].style.cursor);
+  cursor === 'col-resize' ? ok('hovering a border shows the col-resize cursor') : fail(`cursor was '${cursor}'`);
+  await page.mouse.down();
+  await page.mouse.move(border0.x + 60, border0.y, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(30);
+  const widthAfter = await page.evaluate(() => window._loom.getColWidths()[0]);
+  (widthAfter === widthBefore + 60)
+    ? ok(`column resize: col 0 widened ${widthBefore} → ${widthAfter}px`)
+    : fail(`resize failed: ${widthBefore} → ${widthAfter} (expected ${widthBefore + 60})`);
+
+  // a resize drag must not also trigger click-to-sort (header click suppressed)
+  // — col 0 has no sort UI in the demo, so just assert no errors crept in here.
+
+  // ── autofit: double-click col 3's right border → fits the short category col ──
+  const border3 = await page.evaluate(() => {
+    const w = window._loom.getColWidths(); const cw = (c) => w[c] || 100;
+    let x = 0; for (let i = 0; i < 4; i++) x += cw(i);           // right edge of col 3
+    const r = document.querySelectorAll('#grid canvas')[0].getBoundingClientRect();
+    return { x: r.left + x, y: r.top + r.height / 2 };
+  });
+  await page.mouse.dblclick(border3.x, border3.y);
+  await page.waitForTimeout(40);
+  const fit = await page.evaluate(() => window._loom.getColWidths()[3]);
+  (typeof fit === 'number' && fit >= 30 && fit < 100)
+    ? ok(`autofit shrank the 'domain' category column to ${fit}px`)
+    : fail(`autofit produced ${fit} (expected a number in [30,100))`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

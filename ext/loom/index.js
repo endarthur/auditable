@@ -583,11 +583,12 @@ function paint(g) {
 // Scaffold + virtualized scroll + select + edit + refresh + a first-class
 // selection object, plus the daily-driver ergonomics: full keyboard navigation
 // (arrows/Home/End/PageUp-Down/Ctrl combos, shift-extend), range-aware
-// delete/fill, and TSV copy/cut/paste. Clipboard rides a hidden focus-holding
-// <textarea> so the native copy/cut/paste events carry e.clipboardData — no
-// permission prompt, and it works under file:// (where navigator.clipboard is
-// blocked). Still deferred (additive): column resize, zoom, frozen header rows,
-// hover tooltips, variable row-height.
+// delete/fill, TSV copy/cut/paste, and column resize (drag the header border;
+// double-click it to autofit). Clipboard rides a hidden focus-holding <textarea>
+// so the native copy/cut/paste events carry e.clipboardData — no permission
+// prompt, and it works under file:// (where navigator.clipboard is blocked).
+// Still deferred (additive): zoom, frozen header rows, hover tooltips, variable
+// row-height, persisting column widths into the document view-state.
 
 
 const SPACER_CAP = 16000000; // browser max element dimension, roughly
@@ -999,14 +1000,87 @@ function createGrid(element, provider, options = {}) {
     }
   }
 
+  // ── column resize ──
+  const RESIZE_HANDLE = 5;  // px proximity to a border that grabs the resize
+  const MIN_COL_W = 30;     // px floor so a column can't vanish
+  // The column whose right border is within RESIZE_HANDLE of clientX, or -1.
+  // A column is resized by dragging its OWN right edge (so the left edge of
+  // column c grabs column c-1, the standard spreadsheet feel).
+  function colBorderAt(clientX) {
+    const rect = colHdr.getBoundingClientRect();
+    const x = clientX - rect.left + scroll.scrollLeft;
+    if (x < 0) return -1;
+    const c = Math.max(0, colAtX(M, x));
+    let hit = -1;
+    if (Math.abs(x - colXOf(c + 1)) <= RESIZE_HANDLE) hit = c;               // c's right edge
+    else if (c > 0 && Math.abs(x - colXOf(c)) <= RESIZE_HANDLE) hit = c - 1; // c's left edge → prev col
+    return (hit >= 0 && hit < M.totalCols) ? hit : -1;
+  }
+  // Autofit a column to the widest of its header label + the currently visible
+  // cells (a bounded sample — virtualized grids can't measure every row).
+  function autofitCol(c) {
+    const ctx = g.colHdrCtx;
+    let w = 0;
+    ctx.font = '600 ' + g.hdrFontPx + 'px ' + g.mono;
+    const h = provider.header ? provider.header(c) : null;
+    const label = h == null ? '' : (typeof h === 'string' ? h : (h.label ?? ''));
+    w = Math.max(w, ctx.measureText(String(label)).width);
+    ctx.font = g.fontPx + 'px ' + g.mono;
+    const [r0, r1] = visibleRowRange(M, scroll.scrollTop, body.clientHeight);
+    for (let r = r0; r <= r1; r++) w = Math.max(w, ctx.measureText(cellPlainText(r, c)).width);
+    M.colWidths[c] = Math.max(MIN_COL_W, Math.ceil(w) + 16); // + padding both sides
+    sizeCanvases();
+    repaint();
+  }
+  function onHeaderMouseDown(e) {
+    if (e.button !== 0) return;
+    const c = colBorderAt(e.clientX);
+    if (c < 0) return;                 // not on a border → let click→sort happen
+    e.preventDefault();
+    g.suppressHeaderClick = true;      // the ensuing click must not also sort
+    const startX = e.clientX, startW = colWOf(c);
+    document.body.style.cursor = 'col-resize';
+    const onMove = (ev) => {
+      M.colWidths[c] = Math.max(MIN_COL_W, startW + (ev.clientX - startX));
+      sizeCanvases();                  // total width changed → resize the spacer
+      repaint();
+    };
+    const onUp = () => {
+      document.body.style.cursor = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+  function onHeaderMove(e) {
+    if (document.body.style.cursor === 'col-resize') return; // mid-drag
+    colHdr.style.cursor = colBorderAt(e.clientX) >= 0 ? 'col-resize' : '';
+  }
+  function onHeaderDblClick(e) {
+    const c = colBorderAt(e.clientX);
+    if (c < 0) return;
+    e.preventDefault();
+    g.suppressHeaderClick = true;
+    autofitCol(c);
+  }
+
   // Column-header click → emit the column index (for click-to-sort, etc.).
+  // Suppressed right after a border drag / autofit so a resize doesn't sort.
   function onHeaderClickEvt(e) {
+    if (g.suppressHeaderClick) { g.suppressHeaderClick = false; return; }
     const rect = colHdr.getBoundingClientRect();
     const c = colAtX(M, e.clientX - rect.left + scroll.scrollLeft);
     if (c < 0 || c >= M.totalCols) return;
     for (const cb of g.headerListeners) { try { cb(c); } catch (err) { console.error('[loom] onHeaderClick listener threw', err); } }
   }
+  colHdr.addEventListener('mousedown', onHeaderMouseDown);
+  colHdr.addEventListener('mousemove', onHeaderMove);
+  colHdr.addEventListener('dblclick', onHeaderDblClick);
   colHdr.addEventListener('click', onHeaderClickEvt);
+  g._cleanup.push(() => colHdr.removeEventListener('mousedown', onHeaderMouseDown));
+  g._cleanup.push(() => colHdr.removeEventListener('mousemove', onHeaderMove));
+  g._cleanup.push(() => colHdr.removeEventListener('dblclick', onHeaderDblClick));
   g._cleanup.push(() => colHdr.removeEventListener('click', onHeaderClickEvt));
 
   scroll.addEventListener('scroll', () => { if (g.editing) cancelEdit(); repaint(); }, { passive: true });
@@ -1054,6 +1128,12 @@ function createGrid(element, provider, options = {}) {
     setSelection(sel) { setSel(sel, true); },
     onSelect(cb) { g.selectListeners.push(cb); return () => { const i = g.selectListeners.indexOf(cb); if (i >= 0) g.selectListeners.splice(i, 1); }; },
     onHeaderClick(cb) { g.headerListeners.push(cb); return () => { const i = g.headerListeners.indexOf(cb); if (i >= 0) g.headerListeners.splice(i, 1); }; },
+    // Column widths (the sparse non-default map). get returns a copy; set
+    // restores a saved map — the seam for persisting widths into a document's
+    // view-state. autofitColumn measures the header + visible cells.
+    getColWidths() { return { ...M.colWidths }; },
+    setColWidths(widths) { M.colWidths = { ...(widths || {}) }; sizeCanvases(); repaint(); },
+    autofitColumn(c) { autofitCol(c); },
     focus() { g.clip.focus(); },
     setColors(colors) {
       g.colors = colors;
