@@ -8,15 +8,20 @@ const VFS_ERROR_MESSAGES = {
   EACCES: 'permission denied',
   EXDEV: 'cross-device link',
   ENOTSUP: 'operation not supported',
+  EBUSY: 'resource busy or rate-limited',
+  EIO: 'input/output error',
 };
 
 class VFSError extends Error {
-  constructor(code, path, message) {
+  // `extra` (optional) carries backend-specific fields onto the error — e.g. DropboxBackend
+  // attaches { retryAfterMs } on EBUSY and { failed } on a partial batch.
+  constructor(code, path, message, extra) {
     const msg = message || `${VFS_ERROR_MESSAGES[code] || code}: ${path}`;
     super(msg);
     this.code = code;
     this.path = path;
     this.name = 'VFSError';
+    if (extra) Object.assign(this, extra);
   }
 }
 

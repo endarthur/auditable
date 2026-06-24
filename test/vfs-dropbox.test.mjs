@@ -8,9 +8,10 @@ const origFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = origFetch; });
 
 function mkResp(r = {}) {
-  const { ok = true, status = 200, body = '', bytes = null } = r;
+  const { ok = true, status = 200, body = '', bytes = null, headers = null } = r;
   return {
     ok, status,
+    headers: { get: (k) => (headers ? (headers[k] ?? headers[k.toLowerCase()] ?? null) : null) },
     text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
     json: async () => (typeof body === 'string' ? (body ? JSON.parse(body) : null) : body),
     arrayBuffer: async () => (bytes || new Uint8Array()).buffer,
@@ -160,4 +161,148 @@ test('composes cleanly under the cache backend (VFS.create round-trip)', async (
   });
   await vfs.writeFile('/mnt/dropbox/x.txt', 'via-dropbox');
   assert.equal(await vfs.readFile('/mnt/dropbox/x.txt'), 'via-dropbox');
+});
+
+// ── efficiency follow-up (vfs-dropbox-efficiency-spec.md): listTree, writeFiles, 429 backpressure ──
+
+test('listTree → recursive list_folder, normalized rich entries + cursor', async () => {
+  const calls = harness((url) => (/list_folder\/continue/.test(url)
+    ? { body: { entries: [{ '.tag': 'file', path_display: '/d/c.txt', size: 9, content_hash: 'hc', server_modified: '2020-01-03T00:00:00Z' }], has_more: false, cursor: 'C2' } }
+    : { body: { entries: [
+        { '.tag': 'folder', path_display: '/d/sub' },
+        { '.tag': 'file', path_display: '/d/a.txt', size: 5, content_hash: 'ha', server_modified: '2020-01-01T00:00:00Z' },
+      ], has_more: true, cursor: 'C1' } }));
+  const r = await db().listTree('/d');
+  assert.equal(calls[0].arg.recursive, true);
+  assert.equal(r.cursor, 'C2');
+  assert.deepEqual(r.entries.map((e) => [e.path, e.type, e.size, e.contentHash]), [
+    ['/d/sub', 'directory', undefined, undefined],
+    ['/d/a.txt', 'file', 5, 'ha'],
+    ['/d/c.txt', 'file', 9, 'hc'],
+  ]);
+});
+
+test('listTree strips root from entry paths', async () => {
+  harness(() => ({ body: { entries: [{ '.tag': 'file', path_display: '/auditable/x.txt', size: 1, content_hash: 'h', server_modified: '2020-01-01T00:00:00Z' }], has_more: false, cursor: 'C' } }));
+  const r = await db({ root: '/auditable' }).listTree('/');
+  assert.equal(r.entries[0].path, '/x.txt');
+});
+
+test('listTree on a missing subtree → empty (no throw)', async () => {
+  harness(() => ({ ok: false, status: 409, body: { error: { '.tag': 'path', path: { '.tag': 'not_found' } } } }));
+  assert.deepEqual(await db().listTree('/nope'), { entries: [], cursor: '' });
+});
+
+test('writeFiles → upload_session/start per file + one finish_batch', async () => {
+  let sid = 0;
+  const calls = harness((url) => {
+    if (/upload_session\/start/.test(url)) return { body: { session_id: 's' + (sid++) } };
+    if (/finish_batch$/.test(url)) return { body: { '.tag': 'complete', entries: [{ '.tag': 'success' }, { '.tag': 'success' }] } };
+    return { body: {} };
+  });
+  const r = await db().writeFiles([{ path: '/a.txt', content: 'hello' }, { path: '/b.txt', content: 'hi' }]);
+  assert.equal(r.committed, 2);
+  const starts = calls.filter((c) => /upload_session\/start/.test(c.url));
+  assert.equal(starts.length, 2);
+  assert.deepEqual(starts[0].arg, { close: true });
+  const fin = calls.find((c) => /finish_batch$/.test(c.url));
+  assert.equal(fin.arg.entries.length, 2);
+  assert.deepEqual(fin.arg.entries[0].commit, { path: '/a.txt', mode: 'overwrite', mute: true });
+  assert.equal(fin.arg.entries[0].cursor.offset, 5);
+});
+
+test('writeFiles polls finish_batch/check when async', async () => {
+  let checks = 0;
+  harness((url) => {
+    if (/upload_session\/start/.test(url)) return { body: { session_id: 's' } };
+    if (/finish_batch\/check/.test(url)) return (++checks < 2) ? { body: { '.tag': 'in_progress' } } : { body: { '.tag': 'complete', entries: [{ '.tag': 'success' }] } };
+    if (/finish_batch$/.test(url)) return { body: { '.tag': 'async_job_id', async_job_id: 'job1' } };
+    return { body: {} };
+  });
+  const r = await db({ sleep: async () => {} }).writeFiles([{ path: '/a.txt', content: 'x' }]);
+  assert.equal(r.committed, 1);
+  assert.equal(checks, 2);
+});
+
+test('writeFiles chunks at 1000 entries', async () => {
+  const calls = harness((url) => (/upload_session\/start/.test(url)
+    ? { body: { session_id: 's' } }
+    : (/finish_batch$/.test(url) ? { body: { '.tag': 'complete', entries: [] } } : { body: {} })));
+  const files = Array.from({ length: 1500 }, (_, i) => ({ path: '/f' + i + '.txt', content: 'x' }));
+  const r = await db().writeFiles(files);
+  assert.equal(r.committed, 1500);
+  const fins = calls.filter((c) => /finish_batch$/.test(c.url));
+  assert.equal(fins.length, 2);
+  assert.equal(fins[0].arg.entries.length, 1000);
+  assert.equal(fins[1].arg.entries.length, 500);
+});
+
+test('writeFiles surfaces a per-entry failure as EIO with the failed paths', async () => {
+  let sid = 0;
+  harness((url) => {
+    if (/upload_session\/start/.test(url)) return { body: { session_id: 's' + (sid++) } };
+    if (/finish_batch$/.test(url)) return { body: { '.tag': 'complete', entries: [{ '.tag': 'success' }, { '.tag': 'failure', failure: {} }] } };
+    return { body: {} };
+  });
+  await assert.rejects(
+    db().writeFiles([{ path: '/a.txt', content: 'a' }, { path: '/b.txt', content: 'b' }]),
+    (e) => e.code === 'EIO' && Array.isArray(e.failed) && e.failed.includes('/b.txt'),
+  );
+});
+
+test('429 + Retry-After → waits the header seconds then retries', async () => {
+  let n = 0; const waited = [];
+  harness(() => (n++ === 0 ? { ok: false, status: 429, headers: { 'Retry-After': '2' } } : { body: 'ok' }));
+  const r = await db({ sleep: async (ms) => waited.push(ms) }).readFile('/a.txt');
+  assert.equal(r, 'ok');
+  assert.deepEqual(waited, [2000]);
+});
+
+test('persistent 429 → EBUSY after bounded attempts, carries retryAfterMs', async () => {
+  harness(() => ({ ok: false, status: 429, headers: { 'Retry-After': '1' } }));
+  await assert.rejects(
+    db({ sleep: async () => {}, maxRetries: 3 }).readFile('/a.txt'),
+    (e) => e.code === 'EBUSY' && e.retryAfterMs === 1000,
+  );
+});
+
+test('503 without Retry-After → exponential backoff fallback', async () => {
+  let n = 0; const waited = [];
+  harness(() => (n++ < 2 ? { ok: false, status: 503 } : { body: 'ok' }));
+  await db({ sleep: async (ms) => waited.push(ms) }).readFile('/a.txt');
+  assert.deepEqual(waited, [1000, 2000]);
+});
+
+test('401 → one transparent token refresh + retry, then succeeds', async () => {
+  let n = 0, toks = 0;
+  globalThis.fetch = async () => mkResp(n++ === 0 ? { ok: false, status: 401, body: 'unauth' } : { body: 'ok' });
+  const be = new DropboxBackend({ getToken: async () => { toks++; return 'T' + toks; } });
+  assert.equal(await be.readFile('/a.txt'), 'ok');
+  assert.equal(toks, 2);
+});
+
+test('persistent 401 → EACCES after the single refresh', async () => {
+  globalThis.fetch = async () => mkResp({ ok: false, status: 401, body: 'unauth' });
+  await assert.rejects(new DropboxBackend({ getToken: async () => 'T' }).readFile('/a.txt'), (e) => e.code === 'EACCES');
+});
+
+test('token cache: a burst of calls hits getToken once', async () => {
+  let toks = 0;
+  globalThis.fetch = async () => mkResp({ body: 'ok' });
+  const be = new DropboxBackend({ getToken: async () => { toks++; return 'T'; } });
+  await be.readFile('/a.txt'); await be.readFile('/b.txt'); await be.readFile('/c.txt');
+  assert.equal(toks, 1);
+});
+
+test('stat exposes contentHash', async () => {
+  harness(() => ({ body: { '.tag': 'file', size: 3, content_hash: 'abc', server_modified: '2020-01-01T00:00:00Z' } }));
+  assert.equal((await db().stat('/a.txt')).contentHash, 'abc');
+});
+
+test('deleteBatch → delete_batch with dpath entries', async () => {
+  const calls = harness((url) => (/delete_batch$/.test(url) ? { body: { '.tag': 'complete', entries: [{}, {}] } } : { body: {} }));
+  const r = await db({ root: '/auditable' }).deleteBatch(['/a.txt', '/b.txt']);
+  assert.equal(r.deleted, 2);
+  const c = calls.find((x) => /delete_batch$/.test(x.url));
+  assert.deepEqual(c.arg.entries, [{ path: '/auditable/a.txt' }, { path: '/auditable/b.txt' }]);
 });
