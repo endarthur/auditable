@@ -995,6 +995,9 @@ if (target === 'packages') {
       { dir: 'ext/adder', files: ['package.json', 'index.js', 'LICENSE', 'README.md'],
         contributes: ['language'], integrityCovers: ['index.js'],
         title: 'Python (adder)', tags: ['language', 'python', 'adder'] },
+      { dir: 'ext/soft', files: ['package.json', 'index.js', 'LICENSE', 'README.md'],
+        contributes: ['language'], integrityCovers: ['index.js'],
+        title: 'Soft', tags: ['language', 'soft', 'english-keywords'] },
     ];
 
     // Lib dependencies that the distributables' services `require` — packaged as

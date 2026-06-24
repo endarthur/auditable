@@ -55,5 +55,14 @@
   "homepage": "https://github.com/gentropic/auditable/tree/main/ext/soft",
   "bugs": {
     "url": "https://github.com/gentropic/auditable/issues"
+  },
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "language pack — declares its language as DATA (gcu.languages) so the picker offers it cold; index.js registers the cell type + tag + AIR lowerer on first load."
+  },
+  "gcu": {
+    "languages": [
+      { "cellType": "soft", "tag": "soft", "label": "Soft" }
+    ]
   }
 }
