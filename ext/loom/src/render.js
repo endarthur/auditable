@@ -201,10 +201,19 @@ export function paintColHeaders(g, c0, c1, sx, vw) {
       ctx.fillStyle = g.colors.hdrText;
     }
     ctx.fillText(String(label), lx, metrics.hdrH / 2);
-    // Active-sort arrow at the right edge — sort state made visible in the grid.
-    if (h && typeof h === 'object' && h.sort) {
-      ctx.textAlign = 'right';
-      ctx.fillText(h.sort === 'desc' ? '↓' : '↑', x + cw - 4, metrics.hdrH / 2);
+    // Right-edge state indicators: sort arrow (far right) + filter funnel (left
+    // of it). Both make active view-state visible in the grid, not just a panel.
+    const obj = h && typeof h === 'object';
+    let rx = x + cw - 4;
+    ctx.textAlign = 'right';
+    if (obj && h.sort) {
+      ctx.fillStyle = g.colors.hdrText;
+      ctx.fillText(h.sort === 'desc' ? '↓' : '↑', rx, metrics.hdrH / 2);
+      rx -= 11;
+    }
+    if (obj && h.filtered) {
+      ctx.fillStyle = g.colors.hdrText;
+      ctx.fillText('▽', rx, metrics.hdrH / 2);
     }
     ctx.restore();
   }

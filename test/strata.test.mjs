@@ -157,6 +157,18 @@ test('provider: header carries the active sort indicator', () => {
   assert.equal(p.header(1).sort, undefined);
 });
 
+test('provider: header marks filtered columns (funnel)', () => {
+  const t = sampleTable();
+  const v = createView(t);
+  const p = createTableProvider(t, v);
+  assert.equal(p.header(1).filtered, undefined);
+  v.setFilter('grade > 1');
+  assert.equal(p.header(1).filtered, true);        // grade is in the filter
+  assert.equal(p.header(0).filtered, undefined);   // id is not
+  v.setFilter(null);
+  assert.equal(p.header(1).filtered, undefined);
+});
+
 test('provider: cellTitle reports provenance (edited was→now; derived formula)', () => {
   const t = sampleTable();
   t.addDerivedColumn({ name: 'g2', formula: 'grade * 2' });

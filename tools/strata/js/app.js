@@ -42,6 +42,8 @@ export function createStrataApp(host) {
 
   let table = null, provider = null, grid = null, view = null, docName = 'untitled';
   let sortState = null;                       // { col, dir } — the click-to-sort cycle
+  let globalFilterStr = '';                   // the #filter box expression
+  const colFilters = new Map();               // colName → per-column expr string ("Au_gpt > 2")
   let detailTable = null, detailName = null;  // the pre-group table, for "← Data"
 
   // ── cross-surface brushing/linking (Works only; host.selection capability) ──
@@ -97,6 +99,8 @@ export function createStrataApp(host) {
     table = t;
     view = createView(table);
     sortState = null;
+    globalFilterStr = '';
+    colFilters.clear();
     $('#filter').value = '';
     $('#filter').classList.remove('err');
     provider = createTableProvider(table, view);
@@ -321,11 +325,19 @@ export function createStrataApp(host) {
     applySort(col, dir);
   }
 
-  // Apply the filter box (a boolean formula over columns).
-  function applyFilter(formula) {
+  // The view filter is the AND of the global box + every per-column condition.
+  // Each piece is an expression string; we compose then let view.setFilter parse
+  // the whole (one predicate, the §7.2 one-language model — also the bus spec).
+  function composeFilterString() {
+    const parts = [];
+    if (globalFilterStr.trim()) parts.push(`(${globalFilterStr.trim()})`);
+    for (const ex of colFilters.values()) parts.push(`(${ex})`);
+    return parts.join(' && ');
+  }
+  function recomposeFilter() {
     if (!view) return false;
     try {
-      view.setFilter(formula || null);
+      view.setFilter(composeFilterString() || null);
       $('#filter').classList.remove('err');
       grid.refresh();
       updateFooter();
@@ -336,6 +348,26 @@ export function createStrataApp(host) {
       flash('filter error: ' + e.message);
       return false;
     }
+  }
+  // The global filter box (kept as the public applyFilter the tests/host drive).
+  function applyFilter(formula) {
+    globalFilterStr = formula || '';
+    return recomposeFilter();
+  }
+  // Turn a per-column fragment into a full expression: an operator-prefixed
+  // fragment (">  2") → "col > 2"; a bare token ("ox") → "col == ox" (quoted if
+  // non-numeric). Parsed by the same sift engine as the global box.
+  function litTok(v) {
+    const u = v.replace(/^["']|["']$/g, '');
+    const n = Number(u);
+    return (u !== '' && !Number.isNaN(n)) ? u : JSON.stringify(u);
+  }
+  function colFilterToExpr(colName, input) {
+    const s = input.trim();
+    if (!s) return null;
+    const m = s.match(/^(>=|<=|==|!=|<>|=|>|<)\s*(.+)$/);
+    if (m) { const op = m[1] === '=' ? '==' : m[1] === '<>' ? '!=' : m[1]; return `${colName} ${op} ${litTok(m[2].trim())}`; }
+    return `${colName} == ${litTok(s)}`;
   }
 
   // ── cell context menu (right-click → revert provenance) ──
@@ -397,11 +429,23 @@ export function createStrataApp(host) {
       { label: (sorted === 'desc' ? '✓ ' : '') + 'Sort descending', run: () => applySort(col, 'desc') },
     ];
     if (sorted) items.push({ label: 'Clear sort', run: () => applySort(col, null) });
+    items.push('---', { label: colFilters.has(name) ? 'Edit filter…' : 'Filter…', run: () => openColFilter(col, name) });
+    if (colFilters.has(name)) items.push({ label: 'Clear filter', run: () => { colFilters.delete(name); recomposeFilter(); } });
     items.push('---', { label: 'Autofit column', run: () => grid.autofitColumn(col) });
     const nEd = editedInColumn(col);
     if (nEd > 0) items.push({ label: `Revert ${nEd} edit${nEd > 1 ? 's' : ''} in column`, run: () => revertColumn(col) });
     if (table.isDerived(col)) items.push('---', { label: 'Show formula', run: () => flash('= ' + table.schema[col].formula) });
     showContextMenu(items, clientX, clientY);
+  }
+  async function openColFilter(col, name) {
+    const v = await formModal(`Filter ${name}`, [{ name: 'expr', label: `Condition for ${name}  (e.g.  > 2  ·  ox  ·  >= 1)`, placeholder: '> 2' }]);
+    if (v == null) return;
+    const inp = (v.expr || '').trim();
+    if (!inp) { if (colFilters.delete(name)) recomposeFilter(); return; }
+    let ex;
+    try { ex = colFilterToExpr(name, inp); } catch (e) { flash('filter error: ' + e.message); return; }
+    colFilters.set(name, ex);
+    if (!recomposeFilter()) { colFilters.delete(name); recomposeFilter(); }  // bad expr → roll back to last good
   }
 
   let _ctxMenu = null;

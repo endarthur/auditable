@@ -246,6 +246,27 @@ try {
     ? ok(`header ▾ "Sort ascending" (${hdrSort.sort.by} ${hdrSort.sort.dir})`)
     : fail(`header sort failed: ${JSON.stringify(hdrSort)}`);
 
+  // Header ▾ "Filter…" → per-column quick-filter composes into the view.
+  await page.mouse.click(hbox.x + 186, hbox.y + 12, { button: 'right' });   // Au_gpt header
+  await page.waitForTimeout(60);
+  await page.evaluate(() => {
+    const m = document.querySelector('.strata-ctx');
+    const item = [...m.querySelectorAll('div')].find((d) => d.textContent === 'Filter…');
+    if (item) item.click();
+  });
+  await page.waitForSelector('input[data-name="expr"]', { timeout: 2000 });
+  await page.fill('input[data-name="expr"]', '> 2');
+  await page.click('button.fm-ok');
+  await page.waitForTimeout(80);
+  const colFilt = await page.evaluate(() => {
+    const v = window._strataApp.view, t = window._strataApp.table;
+    const ci = t.schema.findIndex((s) => s.name === 'Au_gpt');
+    return { len: v.length, total: t.nrows, filtered: window._strataApp.grid.provider.header(ci).filtered };
+  });
+  (colFilt.len > 0 && colFilt.len < colFilt.total && colFilt.filtered === true)
+    ? ok(`per-column filter Au_gpt > 2 (${colFilt.len}/${colFilt.total}, header funnel shown)`)
+    : fail(`per-column filter failed: ${JSON.stringify(colFilt)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);

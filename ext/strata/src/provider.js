@@ -11,6 +11,7 @@
 
 import { coerceValue, fmtCell } from './values.js';
 import { FORMULA_ERROR } from './formula.js';
+import { predicateColumns } from './predicate.js';
 
 // MUST match @gcu/loom CellState / CellType enum values.
 const STATE_RAW = 'raw';
@@ -29,6 +30,14 @@ const TYPE = { number: 'number', category: 'category', string: 'string' };
 export function createTableProvider(table, view) {
   const readyListeners = [];
   let highlight = null;   // Set<baseOrdinal> | null — rows brushed by an incoming selection
+  // Which columns the active filter touches (for the header funnel glyph),
+  // memoized by the filter-predicate identity (a fresh object per setFilter).
+  let _fpRef, _fpCols = null;
+  function filteredCols() {
+    const fp = view && view.filterPredicate;
+    if (fp !== _fpRef) { _fpRef = fp; _fpCols = fp ? new Set(predicateColumns(fp)) : null; }
+    return _fpCols;
+  }
   const nDisp = () => (view ? view.length : table.nrows);
   const under = (r) => (view ? view.at(r) : r); // display row → underlying row
   const notify = () => { for (const cb of readyListeners) { try { cb(); } catch (e) { console.error('[strata] listener threw', e); } } };
@@ -70,6 +79,8 @@ export function createTableProvider(table, view) {
       // Surface the active sort IN the header (loom draws an arrow) — sort state
       // was footer-only before, invisible in the grid itself.
       if (view && view.sortSpec && view.sortSpec.by === s.name) h.sort = view.sortSpec.dir;
+      const fc = filteredCols();
+      if (fc && fc.has(s.name)) h.filtered = true;
       return h;
     },
 
