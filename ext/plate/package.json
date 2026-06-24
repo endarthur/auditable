@@ -8,5 +8,12 @@
   "files": ["index.js", "src", "README.md", "SPEC.md"],
   "scripts": { "build": "node build.js" },
   "license": "MIT",
-  "author": "Arthur Endlein Correia (Geoscientific Chaos Union)"
+  "author": "Arthur Endlein Correia (Geoscientific Chaos Union)",
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "works-contribution-registry — a self-contained surface whose engine ships as index.js (→ /lib/@gcu/plate/source); pulls the @gcu/strata table lib + recon/archive via gcu.requires."
+  },
+  "gcu": {
+    "requires": ["strata", "recon", "archive"]
+  }
 }

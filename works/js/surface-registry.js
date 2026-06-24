@@ -349,7 +349,19 @@ function _inlineLibsIntoSurface(text, kind) {
 
   // For each lib imported by bare specifier in this surface, inline the
   // bundle (with its exports rewritten to locals).
+  //
+  // Fixpoint: a flat-inlined bundle that carries its OWN top-level
+  // `import {…} from '@gcu/x'` lines (e.g. strata-app → @gcu/strata/loom/over)
+  // introduces NEW bare imports mid-pass. _libSources iteration order does NOT
+  // guarantee a provider precedes its consumer — the built-in path leans on
+  // SHARED_LIBS_BASE order, but the package path resolves libs in
+  // ensureLibSource/cache order. So re-scan until no inlinable @gcu import
+  // remains. A replaced import vanishes from the text, so no lib inlines twice;
+  // the pass cap bounds chain depth.
   let inlinedGeas = false;
+  let _inlinePass = 0, _inlineChanged = true;
+  while (_inlineChanged && _inlinePass++ < 12) {
+  _inlineChanged = false;
   for (const [name, src] of _libSources) {
     // Anchor to start of line (with multiline flag) so the regex only
     // matches real top-level import statements. Bundles often have
@@ -361,6 +373,7 @@ function _inlineLibsIntoSurface(text, kind) {
     const re = new RegExp(
       `^\\s*import\\s*\\{([^}]*)\\}\\s*from\\s*['"]@gcu/${name}['"];?`, 'm');
     if (!re.test(text)) continue;
+    _inlineChanged = true;
     if (name === 'geas') inlinedGeas = true;
     // Inlined source lives inside the surface's <script type="module">
     // tag; any literal `</script>` in the source (even inside a JS //
@@ -405,6 +418,7 @@ function _inlineLibsIntoSurface(text, kind) {
           + (aliases.length ? aliases.join(' ') + '\n' : '');
       });
     }
+  }
   }
   // The terminal builds its worker source from the geas TEXT (not its
   // symbols). After inlining, the bundle text is no longer directly
@@ -555,7 +569,8 @@ registerKind('text', {
 // strata — an auditable column-oriented table. A loose-file surface: one
 // `.strata` zip document = one table. The same app core runs standalone
 // (tools/strata); only the host adapter differs (works/surfaces/strata.html).
-registerKind('strata', { label: 'Strata', icon: '▦', extensions: ['.strata'] });
+// NB: the Strata surface ('strata') ships as the self-contained @gcu/strata
+// package (table lib + surface). See ext/strata/.
 
 // plate — a figure compositor. A loose-file surface that opens a .strata/CSV as
 // a linked plot panel (brush ↔ a strata surface on the same file). The engine is
@@ -563,7 +578,8 @@ registerKind('strata', { label: 'Strata', icon: '▦', extensions: ['.strata'] }
 // strata/preview/text so it never wins a default extension (kindForExtension
 // returns the first match) — its extensions only make it appear in the tree's
 // "Open as…" menu for tabular files (an alternative, not the default opener).
-registerKind('plate', { label: 'Plate (figure)', icon: '◫', extensions: ['.strata', '.csv', '.tsv'] });
+// NB: the Plate surface ('plate') ships as the self-contained @gcu/plate package
+// (compositor lib + surface). See ext/plate/.
 
 // NB: the Hex viewer surface ('hex') is NOT a built-in kind — it is contributed
 // by the @gcu/hex package's works.js (registerExtension), baked into /lib for

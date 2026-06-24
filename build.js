@@ -680,6 +680,12 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     // @gcu/patchbay — self-contained: index.js IS the engine (→ /source); the
     // surface imports @gcu/patchbay from its own source, pulls @gcu/sideact.
     { dir: 'ext/patchbay', files: ['package.json', 'index.js', 'works.js', 'surface.html'] },
+    // @gcu/strata — self-contained: index.js IS the table lib (→ /source); the
+    // surface's strata-app core pulls strata-app/loom/over/archive/recon.
+    { dir: 'ext/strata', files: ['package.json', 'index.js', 'works.js', 'surface.html'] },
+    // @gcu/plate — self-contained: index.js IS the compositor lib (→ /source);
+    // pulls @gcu/strata + recon/archive.
+    { dir: 'ext/plate', files: ['package.json', 'index.js', 'works.js', 'surface.html'] },
   ];
   function buildBuiltinPackagesPayload() {
     if (isWorksCore) return '';
@@ -833,10 +839,8 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     { kind: 'library',   file: 'works/surfaces/library.html', deps: ['abus', 'surface', 'qr', 'capsule'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'surface', 'vfs', 'term', 'geas', 'proc', 'readline'], extras: 'terminal' },
-    // NB: 'patchbay' ships as the self-contained @gcu/patchbay builtin package
-    // (engine index.js + surface; pulls @gcu/sideact via gcu.requires).
-    { kind: 'strata',    file: 'works/surfaces/strata.html',    deps: ['abus', 'surface', 'strata-app'] },
-    { kind: 'plate',     file: 'works/surfaces/plate.html',     deps: ['abus', 'surface', 'plate', 'strata', 'recon', 'archive'] },
+    // NB: 'patchbay', 'strata', and 'plate' ship as self-contained @gcu/patchbay
+    // / @gcu/strata / @gcu/plate builtin packages (engine index.js + surface).
     // NB: the 'hex', 'encode', and 'wasm4' surfaces are no longer built-in
     // payloads — they ship inside the @gcu/hex / @gcu/encode / @gcu/wasm4
     // builtin packages (pkg-builtins-payload above), installed into /lib at boot
@@ -979,6 +983,12 @@ if (target === 'packages') {
       { dir: 'ext/patchbay', files: ['package.json', 'index.js', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
         contributes: ['surface'], integrityCovers: ['index.js', 'works.js', 'surface.html'],
         title: 'Patchbay', tags: ['patchbay', 'dataflow', 'reactive'] },
+      { dir: 'ext/strata', files: ['package.json', 'index.js', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
+        contributes: ['surface'], integrityCovers: ['index.js', 'works.js', 'surface.html'],
+        title: 'Strata', tags: ['table', 'columnar', 'geoscience'] },
+      { dir: 'ext/plate', files: ['package.json', 'index.js', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
+        contributes: ['surface'], integrityCovers: ['index.js', 'works.js', 'surface.html'],
+        title: 'Plate (figure)', tags: ['figure', 'compositor', 'plot'] },
     ];
 
     // Lib dependencies that the distributables' services `require` — packaged as
@@ -992,7 +1002,14 @@ if (target === 'packages') {
     const LIB_DEPS = ['flowsheet', 'sluice', 'recon', 'omf1', 'sideact', 'ipynb', 'template',
       // shared libs the provisionable surface packages require (doc/docs/book/dd60):
       // markdown/menu are CORE_LIBS (baked, skipped by the closure); these aren't.
-      'archive', 'epub', 'yaml', 'docview', 'librarian', 'katex', 'reader-core'];   // proc is a works-core CORE_LIB (already baked)
+      'archive', 'epub', 'yaml', 'docview', 'librarian', 'katex', 'reader-core',
+      // geo surfaces (strata/plate): strata-app is sourced from tools/strata (see
+      // LIB_SRC_OVERRIDE); loom/over are real ext libs. The strata + plate libs
+      // ship INSIDE their self-contained surface packages (kind name == lib name),
+      // not as standalone lib-packages — same as wasm4/patchbay.
+      'strata-app', 'loom', 'over'];   // proc is a works-core CORE_LIB (already baked)
+    // Libs whose source isn't ext/<lib>/index.js (mirrors the SHARED_LIBS override).
+    const LIB_SRC_OVERRIDE = { 'strata-app': 'tools/strata/js/app.js' };
     const LIB_LICENSE = 'MIT License\n\nCopyright (c) 2026 Arthur Endlein Correia / Geoscientific Chaos Union\n\n'
       + 'Permission is hereby granted, free of charge, to any person obtaining a copy of this software, to deal in it '
       + 'without restriction. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.\n';
@@ -1033,8 +1050,8 @@ if (target === 'packages') {
 
     // Lib-packages first (so the catalog lists deps before the packages that need them).
     for (const lib of LIB_DEPS) {
-      const idx = path.join(__dirname, 'ext', lib, 'index.js');
-      if (!fs.existsSync(idx)) { console.error(`packages: ext/${lib}/index.js missing — build the lib first`); process.exit(1); }
+      const idx = path.join(__dirname, LIB_SRC_OVERRIDE[lib] || path.join('ext', lib, 'index.js'));
+      if (!fs.existsSync(idx)) { console.error(`packages: ${path.relative(__dirname, idx)} missing — build the lib first`); process.exit(1); }
       let version = '0.1.0', description = `@gcu/${lib} — bundled library`;
       const lpj = path.join(__dirname, 'ext', lib, 'package.json');
       if (fs.existsSync(lpj)) { try { const o = JSON.parse(fs.readFileSync(lpj, 'utf8')); version = o.version || version; description = o.description || description; } catch { /* */ } }

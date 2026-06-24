@@ -27,5 +27,12 @@
   "homepage": "https://github.com/gentropic/auditable/tree/main/ext/strata",
   "bugs": {
     "url": "https://github.com/gentropic/auditable/issues"
+  },
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "works-contribution-registry — a self-contained surface whose engine ships as index.js (→ /lib/@gcu/strata/source); the surface's strata-app core (gcu.requires) inlines @gcu/strata + loom/over/archive/recon."
+  },
+  "gcu": {
+    "requires": ["strata-app", "loom", "over", "archive", "recon"]
   }
 }
