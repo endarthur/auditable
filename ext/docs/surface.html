@@ -316,15 +316,15 @@
   <aside class="toc empty-toc" id="toc"></aside>
 </div>
 <script type="module">
-import { connect } from '../../ext/abus/index.js';
-import { bootSurface } from '../../ext/surface/index.js';
+import { connect } from '@gcu/abus';
+import { bootSurface } from '@gcu/surface';
 
 /* @theme-init */
-import { render as mdRender, presets as mdPresets, slugify } from '../../ext/markdown/index.js';
+import { render as mdRender, presets as mdPresets, slugify } from '@gcu/markdown';
 // @gcu/markdown with the docs preset (notebook dialect + footnotes, html inert).
 const renderMd = (md) => mdRender(md, mdPresets.docs);
-import { Librarian } from '../../ext/librarian/index.js';
-import { highlightCode, scrollToAnchor, decorateHeadings, buildToc, rewireLinks, buildSearchIndex, makeStatePersister } from '../../ext/docview/index.js';
+import { Librarian } from '@gcu/librarian';
+import { highlightCode, scrollToAnchor, decorateHeadings, buildToc, rewireLinks, buildSearchIndex, makeStatePersister } from '@gcu/docview';
 
 const $ = (id) => document.getElementById(id);
 

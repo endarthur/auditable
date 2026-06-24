@@ -1,0 +1,12 @@
+{
+  "name": "@gcu/dd60",
+  "version": "0.1.0",
+  "description": "DADA Diskman — a retro reader skin (de-branded Sony Data Discman homage) over the same book.json content the Book reader uses.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["auditable-extension", "works-surface", "reader", "retro", "skin"],
+  "auditable": { "kind": "extension" },
+  "gcu": {
+    "requires": ["docview", "katex", "librarian", "reader-core"]
+  }
+}

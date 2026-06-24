@@ -28,5 +28,12 @@
   "homepage": "https://github.com/gentropic/auditable/tree/main/ext/patchbay",
   "bugs": {
     "url": "https://github.com/gentropic/auditable/issues"
+  },
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "works-contribution-registry — a self-contained surface whose engine ships as index.js (→ /lib/@gcu/patchbay/source); the surface imports @gcu/patchbay from its own source and pulls @gcu/sideact via gcu.requires."
+  },
+  "gcu": {
+    "requires": ["sideact"]
   }
 }

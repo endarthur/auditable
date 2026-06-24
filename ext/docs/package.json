@@ -1,0 +1,12 @@
+{
+  "name": "@gcu/docs",
+  "version": "0.1.0",
+  "description": "Documentation browser — a Works surface over the same content registry as Browse Library, with full-text search and Markdown rendering.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["auditable-extension", "works-surface", "documentation", "browser"],
+  "auditable": { "kind": "extension" },
+  "gcu": {
+    "requires": ["docview", "librarian"]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@gcu/doc",
+  "version": "0.1.0",
+  "description": "Document editor — a Works surface for Markdown with live preview, frontmatter, {{template}} interpolation, and EPUB export.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["auditable-extension", "works-surface", "markdown", "document", "editor"],
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "works-contribution-registry — a surface package whose lib deps (archive/epub/template/yaml) are declared in gcu.requires and pulled by the dep-closure (markdown/menu are baked CORE_LIBS)."
+  },
+  "gcu": {
+    "requires": ["archive", "epub", "template", "yaml", "cm6"]
+  }
+}

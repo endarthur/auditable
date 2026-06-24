@@ -502,12 +502,9 @@ registerKind('terminal', { label: 'Terminal', icon: '▶', extensions: [] });
 // template directives via @gcu/template. Wins for `.md` / `.markdown` so a
 // double-click on those drops the user into editor+preview rather than
 // preview-only. Preview still owns CSV/JSON/images/PDFs/archives below.
-registerKind('doc', {
-  label:      'Document',
-  icon:       '▥',
-  universal:  true,
-  extensions: ['.md', '.markdown'],
-});
+// NB: the Document surface ('doc') is NOT a built-in kind — it is contributed by
+// the @gcu/doc package's works.js (lib deps archive/epub/template/yaml via
+// gcu.requires). universal: true (any-file fallback). See ext/doc/.
 
 // The data-preview surface — read-only viewer for structured file types
 // (CSV table, JSON tree, image, PDF). Registered BEFORE text so it wins
@@ -552,7 +549,8 @@ registerKind('text', {
 // `.patchbay` JSON document = one rack. Opens from the tree by extension, or via
 // Tools → New rack. (The schema is container-agnostic so a future project-dir
 // form is a drop-in; see ext/patchbay/src/store.js.)
-registerKind('patchbay', { label: 'Patchbay', icon: '⊞', extensions: ['.patchbay'] });
+// NB: the Patchbay surface ('patchbay') is NOT a built-in kind — it ships as the
+// self-contained @gcu/patchbay package (engine + surface). See ext/patchbay/.
 
 // strata — an auditable column-oriented table. A loose-file surface: one
 // `.strata` zip document = one table. The same app core runs standalone
@@ -599,21 +597,21 @@ registerKind('settings', { label: 'Settings', icon: '⚙', extensions: [] });
 // Documentation reader — reads from /usr/share/doc/ (populated by
 // docs-loader at boot from the build-embedded payload). Single-instance.
 // Help → Documentation, or F1.
-registerKind('docs', { label: 'Documentation', icon: '?', extensions: [] });
+// NB: the Documentation browser ('docs') ships as the @gcu/docs package. See ext/docs/.
 
 // Book reader — reflowable long-form reading (book.json + md/html chapters).
 // Opens a directory containing book.json (see openPath). A raw .epub isn't a
 // book yet — it's ingested into a book.json dir via File → Import book (EPUB)…
 // or by dropping it on the window (book-import.js), then that dir opens here.
 // (No .epub extension mapping: a raw .epub opened directly has no book.json.)
-registerKind('book', { label: 'Book', icon: '▤', extensions: [] });
+// NB: the Book reader ('book') ships as the @gcu/book package. See ext/book/.
 
 // DD-60 "DADA Diskman" — a retro reader skin for the same book.json content
 // (Sony Data Discman homage, de-branded). Reads exactly what 'book' reads but
 // behind the device chrome. Registered so its payload decompresses + it's
 // spawnable; intentionally NOT wired into openPath dispatch — it's reached
 // only via the opt-in easter-egg affordance (see menubar). An easter egg.
-registerKind('dd60', { label: 'DADA Diskman', icon: '▥', extensions: [] });
+// NB: the DD-60 reader skin ('dd60') ships as the @gcu/dd60 package. See ext/dd60/.
 
 // The content-registry browser — a full-pane shelf over the same registry the
 // Browse Library dialog uses (drives install via the works Shell interface).

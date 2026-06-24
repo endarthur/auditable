@@ -317,19 +317,19 @@
   </div>
 </div>
 <script type="module">
-import { connect } from '../../ext/abus/index.js';
-import { bootSurface } from '../../ext/surface/index.js';
+import { connect } from '@gcu/abus';
+import { bootSurface } from '@gcu/surface';
 
 /* @theme-init */
-import { render as mdRender, presets as mdPresets, slugify } from '../../ext/markdown/index.js';
+import { render as mdRender, presets as mdPresets, slugify } from '@gcu/markdown';
 // @gcu/markdown with the docs preset (notebook dialect + footnotes, html inert).
 // reader-core stashes $math$ before renderMd and KaTeX-renders after, so the
 // engine's own math extension never engages here.
 const renderMd = (md) => mdRender(md, mdPresets.docs);
-import { highlightCode, scrollToAnchor, decorateHeadings, buildToc, rewireLinks, makeStatePersister, splitByHeadings } from '../../ext/docview/index.js';
-import { Librarian } from '../../ext/librarian/index.js';
-import { renderToString } from '../../ext/katex/index.js';
-import { createReader } from '../../ext/reader-core/index.js';
+import { highlightCode, scrollToAnchor, decorateHeadings, buildToc, rewireLinks, makeStatePersister, splitByHeadings } from '@gcu/docview';
+import { Librarian } from '@gcu/librarian';
+import { renderToString } from '@gcu/katex';
+import { createReader } from '@gcu/reader-core';
 
 // Thin chrome over @gcu/reader-core: this surface owns the element layout, the
 // contents/marks/search list rendering, the overlays, and the control wiring;

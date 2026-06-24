@@ -669,6 +669,17 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     // @gcu/wasm4 — self-contained: index.js IS the engine (→ /source); the
     // surface imports @gcu/wasm4 from its own package source.
     { dir: 'ext/wasm4', files: ['package.json', 'index.js', 'works.js', 'surface.html'] },
+    // @gcu/doc — Markdown editor; lib deps (archive/epub/template/yaml/cm6) via gcu.requires.
+    { dir: 'ext/doc', files: ['package.json', 'works.js', 'surface.html'] },
+    // @gcu/docs — documentation browser (docview/librarian).
+    { dir: 'ext/docs', files: ['package.json', 'works.js', 'surface.html'] },
+    // @gcu/book — reflowable reader (docview/katex/librarian/reader-core).
+    { dir: 'ext/book', files: ['package.json', 'works.js', 'surface.html'] },
+    // @gcu/dd60 — retro reader skin (same lib deps as book).
+    { dir: 'ext/dd60', files: ['package.json', 'works.js', 'surface.html'] },
+    // @gcu/patchbay — self-contained: index.js IS the engine (→ /source); the
+    // surface imports @gcu/patchbay from its own source, pulls @gcu/sideact.
+    { dir: 'ext/patchbay', files: ['package.json', 'index.js', 'works.js', 'surface.html'] },
   ];
   function buildBuiltinPackagesPayload() {
     if (isWorksCore) return '';
@@ -809,24 +820,21 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus', 'surface'] },
     { kind: 'launcher',  file: 'works/surfaces/launcher.html',  deps: ['abus', 'surface'] },
     { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus', 'surface', 'menu'] },
-    { kind: 'doc',       file: 'works/surfaces/doc.html',
-      deps: ['abus', 'surface', 'menu', 'markdown', 'template', 'yaml', 'epub', 'archive'] },
+    // NB: the 'doc' surface ships as the @gcu/doc builtin package (lib deps
+    // archive/epub/template/yaml via gcu.requires).
     { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus', 'surface', 'markdown'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus', 'surface'] },
     { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus', 'surface'] },
     // NB: the 'workbench' surface is no longer a built-in payload — it ships
     // inside the @gcu/workbench builtin package (pkg-builtins-payload below),
     // installed into /lib at boot and registered as a contributed surface.
-    { kind: 'docs',      file: 'works/surfaces/docs.html',
-      deps: ['abus', 'surface', 'markdown', 'librarian', 'docview'] },
-    { kind: 'book',      file: 'works/surfaces/reader.html',
-      deps: ['abus', 'surface', 'markdown', 'docview', 'librarian', 'katex', 'reader-core'] },
-    { kind: 'dd60',      file: 'works/surfaces/dd60.html',
-      deps: ['abus', 'surface', 'markdown', 'docview', 'librarian', 'katex', 'reader-core'] },
+    // NB: 'docs', 'book', 'dd60' ship as the @gcu/docs / @gcu/book / @gcu/dd60
+    // builtin packages (docview/librarian/katex/reader-core via gcu.requires).
     { kind: 'library',   file: 'works/surfaces/library.html', deps: ['abus', 'surface', 'qr', 'capsule'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'surface', 'vfs', 'term', 'geas', 'proc', 'readline'], extras: 'terminal' },
-    { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'surface', 'sideact', 'patchbay', 'menu'] },
+    // NB: 'patchbay' ships as the self-contained @gcu/patchbay builtin package
+    // (engine index.js + surface; pulls @gcu/sideact via gcu.requires).
     { kind: 'strata',    file: 'works/surfaces/strata.html',    deps: ['abus', 'surface', 'strata-app'] },
     { kind: 'plate',     file: 'works/surfaces/plate.html',     deps: ['abus', 'surface', 'plate', 'strata', 'recon', 'archive'] },
     // NB: the 'hex', 'encode', and 'wasm4' surfaces are no longer built-in
@@ -956,6 +964,21 @@ if (target === 'packages') {
       { dir: 'ext/wasm4', files: ['package.json', 'index.js', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
         contributes: ['surface'], integrityCovers: ['index.js', 'works.js', 'surface.html'],
         title: 'WASM-4 console', tags: ['wasm4', 'fantasy-console', 'game'] },
+      { dir: 'ext/doc', files: ['package.json', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
+        contributes: ['surface'], integrityCovers: ['works.js', 'surface.html'],
+        title: 'Document editor', tags: ['markdown', 'document', 'editor'] },
+      { dir: 'ext/docs', files: ['package.json', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
+        contributes: ['surface'], integrityCovers: ['works.js', 'surface.html'],
+        title: 'Documentation browser', tags: ['documentation', 'browser'] },
+      { dir: 'ext/book', files: ['package.json', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
+        contributes: ['surface'], integrityCovers: ['works.js', 'surface.html'],
+        title: 'Book reader', tags: ['reader', 'book', 'epub'] },
+      { dir: 'ext/dd60', files: ['package.json', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
+        contributes: ['surface'], integrityCovers: ['works.js', 'surface.html'],
+        title: 'DADA Diskman', tags: ['reader', 'retro', 'skin'] },
+      { dir: 'ext/patchbay', files: ['package.json', 'index.js', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
+        contributes: ['surface'], integrityCovers: ['index.js', 'works.js', 'surface.html'],
+        title: 'Patchbay', tags: ['patchbay', 'dataflow', 'reactive'] },
     ];
 
     // Lib dependencies that the distributables' services `require` — packaged as
@@ -966,7 +989,10 @@ if (target === 'packages') {
     // sideact/ipynb/template back @gcu/notebook's requires that AREN'T works-core
     // CORE_LIBS (vfs/abus/markdown/proc/menu/term are baked → the closure skips
     // them; cm6/acorn are packed as classic libs above).
-    const LIB_DEPS = ['flowsheet', 'sluice', 'recon', 'omf1', 'sideact', 'ipynb', 'template'];   // proc is a works-core CORE_LIB (already baked)
+    const LIB_DEPS = ['flowsheet', 'sluice', 'recon', 'omf1', 'sideact', 'ipynb', 'template',
+      // shared libs the provisionable surface packages require (doc/docs/book/dd60):
+      // markdown/menu are CORE_LIBS (baked, skipped by the closure); these aren't.
+      'archive', 'epub', 'yaml', 'docview', 'librarian', 'katex', 'reader-core'];   // proc is a works-core CORE_LIB (already baked)
     const LIB_LICENSE = 'MIT License\n\nCopyright (c) 2026 Arthur Endlein Correia / Geoscientific Chaos Union\n\n'
       + 'Permission is hereby granted, free of charge, to any person obtaining a copy of this software, to deal in it '
       + 'without restriction. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.\n';

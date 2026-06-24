@@ -1,0 +1,12 @@
+{
+  "name": "@gcu/book",
+  "version": "0.1.0",
+  "description": "Book reader — a Works surface for reflowable long-form reading (book.json + Markdown/HTML chapters), with highlights, search, and KaTeX math.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["auditable-extension", "works-surface", "reader", "book", "epub"],
+  "auditable": { "kind": "extension" },
+  "gcu": {
+    "requires": ["docview", "katex", "librarian", "reader-core"]
+  }
+}

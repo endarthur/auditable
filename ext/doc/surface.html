@@ -291,17 +291,17 @@
   <span class="status-read" id="status-read">0 min</span>
 </div>
 <script type="module">
-import { connect } from '../../ext/abus/index.js';
-import { bootSurface } from '../../ext/surface/index.js';
-import { MenuBar } from '../../ext/menu/index.js';
-import { render as mdRender, presets as mdPresets } from '../../ext/markdown/index.js';
-import { renderText, registerFilter } from '../../ext/template/index.js';
-import { parse as parseYaml, YamlParseError } from '../../ext/yaml/index.js';
-import { writeEpub, extractDataUrlImages, splitByHeading } from '../../ext/epub/index.js';
+import { connect } from '@gcu/abus';
+import { bootSurface } from '@gcu/surface';
+import { MenuBar } from '@gcu/menu';
+import { render as mdRender, presets as mdPresets } from '@gcu/markdown';
+import { renderText, registerFilter } from '@gcu/template';
+import { parse as parseYaml, YamlParseError } from '@gcu/yaml';
+import { writeEpub, extractDataUrlImages, splitByHeading } from '@gcu/epub';
 // Named import only — the surface inliner's regex matches `import {…}`
 // shape; `import * as ns` slips past it and lands as an unresolvable
 // bare specifier at runtime. writeEpub only needs `createWriter`.
-import { createWriter } from '../../ext/archive/index.js';
+import { createWriter } from '@gcu/archive';
 
 /* @theme-init */
 
