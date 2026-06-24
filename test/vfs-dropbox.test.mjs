@@ -57,6 +57,23 @@ test('writeFile → upload overwrite+mute, octet-stream, body passthrough', asyn
   assert.equal(calls[0].body, 'data');
 });
 
+// Regression: Dropbox-API-Arg is an HTTP HEADER → must be ASCII. Non-ASCII (accented/unicode
+// paths) MUST be escaped as \uXXXX, or the request is malformed and fails (in browsers it
+// surfaced as a bogus CORS error, breaking upload AND download of such paths). Build the unicode
+// path via fromCharCode so this test's own source stays ASCII.
+test('Dropbox-API-Arg escapes non-ASCII (unicode paths) on upload AND download', async () => {
+  const path = '/notes/caf' + String.fromCharCode(0xe9) + '-a' + String.fromCharCode(0xe7, 0xe3) + 'o.md';   // /notes/café-ação.md
+  const isAscii = (s) => /^[\x20-\x7E]*$/.test(s);
+  const up = harness(() => ({}));
+  await db().writeFile(path, 'data');
+  const uh = up[0].headers['Dropbox-API-Arg'];
+  assert.ok(isAscii(uh), 'upload Dropbox-API-Arg must be ASCII-only (no raw unicode): ' + uh);
+  assert.equal(JSON.parse(uh).path, path, 'escaped header still decodes to the original unicode path');
+  const dl = harness(() => ({ body: 'x' }));
+  await db().readFile(path);
+  assert.ok(isAscii(dl[0].headers['Dropbox-API-Arg']), 'download Dropbox-API-Arg must be ASCII-only too');
+});
+
 test('stat file maps server/client_modified + size', async () => {
   harness(() => ({ body: { '.tag': 'file', size: 42, server_modified: '2020-01-02T03:04:05Z', client_modified: '2020-01-01T00:00:00Z' } }));
   const s = await db().stat('/a.txt');
