@@ -2,7 +2,7 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { VFS, VFSError, path } from '../ext/vfs/index.js';
+import { VFS, VFSError, path, FSAABackend } from '../ext/vfs/index.js';
 
 // ============================================================
 // 1. path utilities
@@ -1421,6 +1421,7 @@ describe('CommentBackend', () => {
 // ============================================================
 
 function createHandleMock() {
+  const calls = { getDir: [], getFile: [] };   // resolve-call counter (cache tests read root._calls)
   class MockFileHandle {
     constructor(name, storage) {
       this.kind = 'file';
@@ -1462,6 +1463,7 @@ function createHandleMock() {
       this._children = new Map(); // name -> { type: 'file'|'dir', handle }
     }
     async getDirectoryHandle(name, opts) {
+      calls.getDir.push(name);
       const entry = this._children.get(name);
       if (entry && entry.type === 'dir') return entry.handle;
       if (opts && opts.create) {
@@ -1472,6 +1474,7 @@ function createHandleMock() {
       throw new DOMException('NotFoundError');
     }
     async getFileHandle(name, opts) {
+      calls.getFile.push(name);
       const entry = this._children.get(name);
       if (entry && entry.type === 'file') return entry.handle;
       if (opts && opts.create) {
@@ -1493,7 +1496,9 @@ function createHandleMock() {
     }
   }
 
-  return new MockDirHandle('root');
+  const root = new MockDirHandle('root');
+  root._calls = calls;
+  return root;
 }
 
 // ============================================================
@@ -1638,6 +1643,102 @@ describe('HandleBackend via mock', () => {
     await vfs.writeFile('/h/f.txt', 'old');
     await vfs.writeFile('/h/f.txt', 'new');
     assert.equal(await vfs.readFile('/h/f.txt'), 'new');
+  });
+});
+
+// ============================================================
+// 12b. HandleBackend directory-handle cache (vfs-handle-cache-spec.md)
+// ============================================================
+describe('HandleBackend dir-handle cache', () => {
+  // direct backend over the counting mock — precise getDirectoryHandle accounting
+  function be() {
+    const root = createHandleMock();
+    return { be: new FSAABackend({ handle: root }), root };
+  }
+  const dirCount = (root, name) => root._calls.getDir.filter((n) => n === name).length;
+
+  it('a resolved directory is reused across ops (no re-walk)', async () => {
+    const { be: b, root } = be();
+    await b.mkdir('/d');
+    const before = dirCount(root, 'd');
+    await b.writeFile('/d/a.txt', 'a');
+    await b.writeFile('/d/b.txt', 'b');
+    await b.readFile('/d/a.txt');
+    assert.equal(dirCount(root, 'd'), before, "'d' must not be re-resolved — cache hit");
+  });
+
+  it('a deep path resolves each ancestor once, then reuses them', async () => {
+    const { be: b, root } = be();
+    await b.mkdir('/a/b/c', { recursive: true });
+    root._calls.getDir.length = 0;   // mkdir seeded the cache; measure the writes
+    await b.writeFile('/a/b/c/f.txt', 'x');
+    await b.writeFile('/a/b/c/g.txt', 'y');
+    assert.equal(root._calls.getDir.filter((n) => ['a', 'b', 'c'].includes(n)).length, 0, 'ancestors stay cached');
+  });
+
+  it('walks only from the deepest cached ancestor', async () => {
+    const { be: b, root } = be();
+    await b.mkdir('/a/b/c/d', { recursive: true });
+    b._dirCache.clear(); root._calls.getDir.length = 0;   // cold cache, fresh counter
+    await b.readdir('/a/b/c/d');          // first resolve walks a,b,c,d once each
+    assert.equal(dirCount(root, 'a'), 1);
+    assert.equal(dirCount(root, 'd'), 1);
+    await b.readdir('/a/b/c');            // shallower path is fully cached → no new walks
+    assert.equal(dirCount(root, 'a'), 1);
+    assert.equal(dirCount(root, 'c'), 1);
+  });
+
+  it('writeFile resolves the parent once (not twice)', async () => {
+    const { be: b, root } = be();
+    await b.mkdir('/d');
+    b._dirCache.clear(); root._calls.getDir.length = 0;   // force a fresh resolve, fresh counter
+    await b.writeFile('/d/a.txt', 'a');
+    assert.equal(dirCount(root, 'd'), 1, "parent 'd' resolved exactly once");
+  });
+
+  it('rmdir evicts the directory + descendants from the cache', async () => {
+    const { be: b, root } = be();
+    await b.mkdir('/d/sub', { recursive: true });
+    await b.writeFile('/d/sub/f.txt', 'x');
+    assert.ok(b._dirCache.has('/d') && b._dirCache.has('/d/sub'));
+    await b.unlink('/d/sub/f.txt');
+    await b.rmdir('/d/sub');
+    assert.ok(!b._dirCache.has('/d/sub'), '/d/sub evicted');
+    // a later resolve under a fresh /d/sub re-walks it
+    await b.mkdir('/d/sub');
+    const before = dirCount(root, 'sub');
+    b._dirCache.clear();
+    await b.readdir('/d/sub');
+    assert.ok(dirCount(root, 'sub') > before, 're-resolved after eviction');
+  });
+
+  it('rename of a directory evicts the source subtree', async () => {
+    const { be: b } = be();
+    await b.mkdir('/src/inner', { recursive: true });
+    await b.writeFile('/src/inner/f.txt', 'x');
+    await b.rename('/src', '/dst');
+    assert.ok(!b._dirCache.has('/src') && !b._dirCache.has('/src/inner'), 'source subtree evicted');
+    assert.equal(await b.readFile('/dst/inner/f.txt'), 'x');
+  });
+
+  it('stale cached handle → evict + re-resolve from root, retry succeeds', async () => {
+    const { be: b, root } = be();
+    await b.mkdir('/d');
+    await b.writeFile('/d/f.txt', 'v1');
+    // simulate a stale cached handle: it throws on first use, then works (the re-resolve picks it up).
+    const stale = b._dirCache.get('/d');
+    const realGetFile = stale.getFileHandle.bind(stale);
+    let poisoned = true;
+    stale.getFileHandle = async (...a) => { if (poisoned) { poisoned = false; throw new DOMException('NotFoundError'); } return realGetFile(...a); };
+    const dBefore = dirCount(root, 'd');
+    assert.equal(await b.readFile('/d/f.txt'), 'v1');                    // recovers via re-resolve + retry
+    assert.ok(dirCount(root, 'd') > dBefore, 're-resolved from root after the stale failure');
+  });
+
+  it('stale-handle retry still surfaces a genuine ENOENT', async () => {
+    const { be: b } = be();
+    await b.mkdir('/d');
+    await assert.rejects(b.readFile('/d/missing.txt'), { code: 'ENOENT' });
   });
 });
 
