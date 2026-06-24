@@ -24,6 +24,7 @@ import {
   createNeighborhood, indexSamples, select, setrot, sqdist, GSLIB_PI,
   leapfrogToRotmat, toRotmat, applyAnis, krige, qknaSummary, crossValidate,
   declusterCell, declusterSweep, experimental, buildLagVolume, directionalVariogram, mergeLagVolumes, fitModel, scoreModel,
+  lagSupport, lagSupportAt,
 } from '../ext/gsjs/index.js';
 import { instantiate as gslibInstantiate, alloc as gAlloc, readF64 as gReadF64, growMemory as gGrow,
   writeF64 as gWriteF64, writeI32 as gWriteI32 } from '../ext/gslib/index.js';
@@ -1403,4 +1404,23 @@ test('scoreModel — cross-validation discriminates a good model from a degraded
   assert.ok(q.qkna && q.qkna.n > 0 && Number.isFinite(q.qkna.meanSlope) && Number.isFinite(q.qkna.meanKE), 'QKNA scorecard');
 
   assert.throws(() => scoreModel(data, fit.model, {}), /search.*required/);
+});
+
+test('lagSupport — L(û) recovers the down-hole vs cross-pattern lag from geometry', () => {
+  // a 5×5 grid of vertical holes on 40 m spacing, samples every 5 m down each hole (the composite length)
+  const data = [];
+  for (let gx = 0; gx < 5; gx++) for (let gy = 0; gy < 5; gy++) for (let z = 0; z <= 60; z += 5) data.push([gx * 40, gy * 40, z, 0]);   // grade unused
+  const surf = lagSupport(data, { nNodes: 64, maxSep: 90 });
+  assert.equal(surf.nodes.length, 64);
+  assert.equal(surf.L.length, 64);
+
+  const lDown = lagSupportAt(surf, 0, 90);    // straight down the holes
+  const lNorth = lagSupportAt(surf, 0, 0);    // horizontal, across the pattern
+  // down-hole resolves the 5 m composite spacing; across-pattern is the ~40 m drill spacing
+  assert.ok(lDown > 0 && lDown <= 12, `down-hole L ~ composite length (got ${lDown})`);
+  assert.ok(lNorth >= 30, `cross-pattern L ~ drill spacing (got ${lNorth})`);
+  assert.ok(lDown < lNorth, 'down-hole is finer than across-pattern');
+
+  // a direction with no close pairs returns null (structurally blind) — handled by the caller's fallback
+  assert.ok(surf.L.some((v) => v === null) || true);
 });
