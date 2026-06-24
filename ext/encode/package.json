@@ -1,0 +1,12 @@
+{
+  "name": "@gcu/encode",
+  "version": "0.1.0",
+  "description": "Encode / Hash — a path-less Works tool surface: base64/hex/url/json transforms + SHA-1/256/512 via Web Crypto.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["auditable-extension", "works-surface", "encode", "hash", "tool"],
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "works-contribution-registry — a surface-only tool package (no service, no lib deps beyond the universal base)."
+  }
+}

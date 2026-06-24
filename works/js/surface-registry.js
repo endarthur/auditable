@@ -572,9 +572,9 @@ registerKind('plate', { label: 'Plate (figure)', icon: '◫', extensions: ['.str
 // works/works-all and provisioned from the catalog for works-core. It is the
 // universal any-bytes floor (universal: true). See ext/hex/.
 
-// Encode / Hash — a path-less tool surface (Tools menu). base64/hex/url/json
-// transforms + SHA-1/256/512 via Web Crypto. No extensions (not a file opener).
-registerKind('encode', { label: 'Encode / Hash', icon: '⇄', extensions: [] });
+// NB: the Encode / Hash surface ('encode') is NOT a built-in kind — it is
+// contributed by the @gcu/encode package's works.js, baked into /lib for
+// works/works-all and provisioned from the catalog for works-core. See ext/encode/.
 
 // WASM-4 fantasy console — runs a conformant .wasm cart (any source language)
 // over the @gcu/wasm4 engine; spawns with a baked demo cart when path-less.
