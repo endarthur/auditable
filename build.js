@@ -660,6 +660,10 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   // A-Bus service (declared in its package.json gcu.services, activated cold).
   const BUILTIN_PACKAGES = [
     { dir: 'ext/workbench', files: ['package.json', 'service.js', 'works.js', 'surface.html'] },
+    // @gcu/hex — a surface-only package (no service). Baked into /lib so
+    // works/works-all carry the Hex viewer; works-core omits the payload and
+    // provisions it from the catalog. The any-bytes universal fallback.
+    { dir: 'ext/hex', files: ['package.json', 'works.js', 'surface.html'] },
   ];
   function buildBuiltinPackagesPayload() {
     if (isWorksCore) return '';
@@ -820,7 +824,9 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
     { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'surface', 'sideact', 'patchbay', 'menu'] },
     { kind: 'strata',    file: 'works/surfaces/strata.html',    deps: ['abus', 'surface', 'strata-app'] },
     { kind: 'plate',     file: 'works/surfaces/plate.html',     deps: ['abus', 'surface', 'plate', 'strata', 'recon', 'archive'] },
-    { kind: 'hex',       file: 'works/surfaces/hex.html',       deps: ['abus', 'surface'] },
+    // NB: the 'hex' surface is no longer a built-in payload — it ships inside
+    // the @gcu/hex builtin package (pkg-builtins-payload above), installed into
+    // /lib at boot and registered as a contributed surface.
     { kind: 'encode',    file: 'works/surfaces/encode.html',    deps: ['abus', 'surface'] },
     { kind: 'wasm4',     file: 'works/surfaces/wasm4.html',     deps: ['abus', 'surface', 'wasm4'] },
     // NB: the 'notebook' surface is no longer a built-in payload (auditable.html)
@@ -937,6 +943,9 @@ if (target === 'packages') {
       { dir: 'ext/workbench', files: ['package.json', 'service.js', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
         contributes: ['surface', 'service'], integrityCovers: ['service.js', 'works.js', 'surface.html'],
         title: 'Data Workbench', tags: ['geoscience', 'tabular', 'blockmodel'] },
+      { dir: 'ext/hex', files: ['package.json', 'works.js', 'surface.html', 'LICENSE', 'README.md'],
+        contributes: ['surface'], integrityCovers: ['works.js', 'surface.html'],
+        title: 'Hex viewer', tags: ['binary', 'viewer', 'universal'] },
     ];
 
     // Lib dependencies that the distributables' services `require` — packaged as

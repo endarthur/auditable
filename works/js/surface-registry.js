@@ -567,10 +567,10 @@ registerKind('strata', { label: 'Strata', icon: '▦', extensions: ['.strata'] }
 // "Open as…" menu for tabular files (an alternative, not the default opener).
 registerKind('plate', { label: 'Plate (figure)', icon: '◫', extensions: ['.strata', '.csv', '.tsv'] });
 
-// Hex viewer — a loose-file surface for raw binary. Virtualized hex/ASCII view
-// + data inspector; the universal floor (any bytes open to something useful).
-registerKind('hex', { label: 'Hex viewer', icon: '⬡', universal: true,
-  extensions: ['.bin', '.dat', '.hex', '.wasm', '.img', '.rom'] });
+// NB: the Hex viewer surface ('hex') is NOT a built-in kind — it is contributed
+// by the @gcu/hex package's works.js (registerExtension), baked into /lib for
+// works/works-all and provisioned from the catalog for works-core. It is the
+// universal any-bytes floor (universal: true). See ext/hex/.
 
 // Encode / Hash — a path-less tool surface (Tools menu). base64/hex/url/json
 // transforms + SHA-1/256/512 via Web Crypto. No extensions (not a file opener).

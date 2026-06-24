@@ -1,0 +1,12 @@
+{
+  "name": "@gcu/hex",
+  "version": "0.1.0",
+  "description": "Hex viewer — a universal loose-file Works surface for raw binary: virtualized hex/ASCII view + a data inspector. The any-bytes floor.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["auditable-extension", "works-surface", "hex", "binary", "viewer"],
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "works-contribution-registry — a surface-only package (works.js contributes a surface; no service, no src/ build, a static surface.html)."
+  }
+}

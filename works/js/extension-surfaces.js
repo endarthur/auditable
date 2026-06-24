@@ -196,6 +196,7 @@ export async function registerExtensionSurfaces(manifest) {
       icon:        s.icon  || '■',
       extensions:  s.extensions || [],
       detect:      typeof s.detect === 'function' ? s.detect : null,
+      universal:   !!s.universal,
       isExtension: true,
       extension: {
         manifest:   manifest.name,
