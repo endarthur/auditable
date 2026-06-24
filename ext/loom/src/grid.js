@@ -10,8 +10,9 @@
 // Scaffold + virtualized scroll + select + edit + refresh + a first-class
 // selection object, plus the daily-driver ergonomics: full keyboard navigation
 // (arrows/Home/End/PageUp-Down/Ctrl combos, shift-extend), range-aware
-// delete/fill, TSV copy/cut/paste, and column resize (drag the header border;
-// double-click it to autofit). Clipboard rides a hidden focus-holding <textarea>
+// delete/fill, TSV copy/cut/paste, undo/redo (Ctrl+Z / Ctrl+Y, via the optional
+// provider.undo/redo + beginBatch/endBatch contract), and column resize (drag the
+// header border; double-click it to autofit). Clipboard rides a focus-holding <textarea>
 // so the native copy/cut/paste events carry e.clipboardData — no permission
 // prompt, and it works under file:// (where navigator.clipboard is blocked).
 // Still deferred (additive): zoom, frozen header rows, hover tooltips, variable
@@ -295,11 +296,16 @@ export function createGrid(element, provider, options = {}) {
   }
   // Apply a batch of [row, col, raw] writes through the provider, then refresh
   // once. The provider owns coercion + dirty tracking (the app wraps commit).
+  // beginBatch/endBatch (optional contract) group the writes into ONE undo step.
   async function applyWrites(writes) {
-    for (const [r, c, v] of writes) {
-      try { await provider.commit(r, c, v); }
-      catch (e) { console.error('[loom] commit failed', e); }
-    }
+    if (!writes.length) return;
+    if (provider.beginBatch) provider.beginBatch();
+    try {
+      for (const [r, c, v] of writes) {
+        try { await provider.commit(r, c, v); }
+        catch (e) { console.error('[loom] commit failed', e); }
+      }
+    } finally { if (provider.endBatch) provider.endBatch(); }
     refresh();
   }
   function clearRange() {
@@ -399,6 +405,9 @@ export function createGrid(element, provider, options = {}) {
         case 'a': case 'A': e.preventDefault(); g.sel = { r0: 0, c0: 0, r1: lastR, c1: lastC }; repaint(); emitSelect(); return;
         // Copy/cut/paste are left to the native clipboard events on `clip`.
         case 'c': case 'C': case 'x': case 'X': case 'v': case 'V': return;
+        // Undo/redo (optional provider contract). Ctrl+Z / Ctrl+Shift+Z + Ctrl+Y.
+        case 'z': case 'Z': e.preventDefault(); if (e.shiftKey) { if (provider.redo) { provider.redo(); refresh(); } } else if (provider.undo) { provider.undo(); refresh(); } return;
+        case 'y': case 'Y': e.preventDefault(); if (provider.redo) { provider.redo(); refresh(); } return;
         case 'd': case 'D': e.preventDefault(); fillDown(); return;
         case 'r': case 'R': e.preventDefault(); fillRight(); return;
         case 'ArrowUp':    e.preventDefault(); gotoCell(0, a.c, ext); return;

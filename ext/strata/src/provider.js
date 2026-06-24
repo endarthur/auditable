@@ -66,7 +66,11 @@ export function createTableProvider(table, view) {
 
     header(c) {
       const s = table.schema[c];
-      return { label: s.unit ? `${s.name} (${s.unit})` : s.name, type: TYPE[s.type] || 'string' };
+      const h = { label: s.unit ? `${s.name} (${s.unit})` : s.name, type: TYPE[s.type] || 'string' };
+      // Surface the active sort IN the header (loom draws an arrow) — sort state
+      // was footer-only before, invisible in the grid itself.
+      if (view && view.sortSpec && view.sortSpec.by === s.name) h.sort = view.sortSpec.dir;
+      return h;
     },
 
     // Show the UNDERLYING row number (provenance) — so a sorted/filtered view
@@ -79,6 +83,17 @@ export function createTableProvider(table, view) {
       if (table.isDerived(c)) return; // computed columns aren't editable
       table.setCell(under(r), c, coerceValue(raw, table.schema[c].type));
     },
+
+    // Undo/redo + batch grouping — the optional loom provider contract. loom
+    // calls beginBatch/endBatch around multi-cell writes (paste/fill/range-delete)
+    // so each is one undo step, and Ctrl+Z/Ctrl+Y call undo/redo. Delegated to
+    // the table (which owns the overlay op-log).
+    beginBatch() { table.beginTxn(); },
+    endBatch() { table.endTxn(); },
+    undo() { return table.undo(); },
+    redo() { return table.redo(); },
+    canUndo() { return table.canUndo(); },
+    canRedo() { return table.canRedo(); },
 
     // Reserved for async windowing (strata-spec §11 upgrade #1): a streaming
     // base will call these when a window lands so loom repaints. v1 is fully

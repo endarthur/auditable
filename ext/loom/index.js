@@ -305,6 +305,17 @@ function createMemoryProvider(spec) {
   const overlay = new Map();
   const key = (r, c) => r + ':' + c;
 
+  // Undo/redo + batch grouping (the optional loom provider contract), mirroring
+  // the real strata table so loom's generic Ctrl+Z / batch path is exercised by
+  // the reference provider too. ABSENT marks an overlay cell that wasn't set.
+  const undoStack = [], redoStack = [];
+  let txn = null, txnDepth = 0;
+  const ABSENT = Symbol('absent');
+  const snap = (r, c) => (overlay.has(key(r, c)) ? overlay.get(key(r, c)) : ABSENT);
+  const restore = (r, c, v) => { const k = key(r, c); if (v === ABSENT) overlay.delete(k); else overlay.set(k, v); };
+  const record = (op) => { if (txn) txn.push(op); else { undoStack.push([op]); redoStack.length = 0; } };
+  const applyGroup = (g, useBefore) => { for (let i = g.length - 1; i >= 0; i--) restore(g[i].r, g[i].c, useBefore ? g[i].before : g[i].after); };
+
   return {
     dims() { return { rows: rows.length, cols: columns.length }; },
 
@@ -326,8 +337,18 @@ function createMemoryProvider(spec) {
     rowHeader(r) { return r + 1; },
 
     commit(r, c, raw) {
+      const before = snap(r, c);
       overlay.set(key(r, c), coerce(raw, columns[c].type));
+      record({ r, c, before, after: snap(r, c) });
     },
+
+    // Undo/redo + batch (optional loom contract; see header).
+    beginBatch() { txnDepth++; if (!txn) txn = []; },
+    endBatch() { txnDepth--; if (txnDepth <= 0) { if (txn && txn.length) { undoStack.push(txn); redoStack.length = 0; } txn = null; txnDepth = 0; } },
+    undo() { if (!undoStack.length) return false; const g = undoStack.pop(); applyGroup(g, true); redoStack.push(g); return true; },
+    redo() { if (!redoStack.length) return false; const g = redoStack.pop(); applyGroup(g, false); undoStack.push(g); return true; },
+    canUndo() { return undoStack.length > 0; },
+    canRedo() { return redoStack.length > 0; },
 
     // Inspection helpers (not part of the contract; for tests/demos).
     _overlay: overlay,
@@ -517,12 +538,19 @@ function paintColHeaders(g, c0, c1, sx, vw) {
   for (let c = c0; c <= c1; c++) {
     const h = provider.header ? provider.header(c) : null;
     const label = h == null ? colLetter(c) : (typeof h === 'string' ? h : (h.label ?? colLetter(c)));
+    const cw = colW(metrics, c);
     const x = colXAt(metrics, c) - sx;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x + 1, 0, colW(metrics, c) - 2, metrics.hdrH);
+    ctx.rect(x + 1, 0, cw - 2, metrics.hdrH);
     ctx.clip();
+    ctx.textAlign = 'left';
     ctx.fillText(String(label), x + PAD, metrics.hdrH / 2);
+    // Active-sort arrow at the right edge — sort state made visible in the grid.
+    if (h && typeof h === 'object' && h.sort) {
+      ctx.textAlign = 'right';
+      ctx.fillText(h.sort === 'desc' ? '↓' : '↑', x + cw - 4, metrics.hdrH / 2);
+    }
     ctx.restore();
   }
 }
@@ -583,8 +611,9 @@ function paint(g) {
 // Scaffold + virtualized scroll + select + edit + refresh + a first-class
 // selection object, plus the daily-driver ergonomics: full keyboard navigation
 // (arrows/Home/End/PageUp-Down/Ctrl combos, shift-extend), range-aware
-// delete/fill, TSV copy/cut/paste, and column resize (drag the header border;
-// double-click it to autofit). Clipboard rides a hidden focus-holding <textarea>
+// delete/fill, TSV copy/cut/paste, undo/redo (Ctrl+Z / Ctrl+Y, via the optional
+// provider.undo/redo + beginBatch/endBatch contract), and column resize (drag the
+// header border; double-click it to autofit). Clipboard rides a focus-holding <textarea>
 // so the native copy/cut/paste events carry e.clipboardData — no permission
 // prompt, and it works under file:// (where navigator.clipboard is blocked).
 // Still deferred (additive): zoom, frozen header rows, hover tooltips, variable
@@ -865,11 +894,16 @@ function createGrid(element, provider, options = {}) {
   }
   // Apply a batch of [row, col, raw] writes through the provider, then refresh
   // once. The provider owns coercion + dirty tracking (the app wraps commit).
+  // beginBatch/endBatch (optional contract) group the writes into ONE undo step.
   async function applyWrites(writes) {
-    for (const [r, c, v] of writes) {
-      try { await provider.commit(r, c, v); }
-      catch (e) { console.error('[loom] commit failed', e); }
-    }
+    if (!writes.length) return;
+    if (provider.beginBatch) provider.beginBatch();
+    try {
+      for (const [r, c, v] of writes) {
+        try { await provider.commit(r, c, v); }
+        catch (e) { console.error('[loom] commit failed', e); }
+      }
+    } finally { if (provider.endBatch) provider.endBatch(); }
     refresh();
   }
   function clearRange() {
@@ -969,6 +1003,9 @@ function createGrid(element, provider, options = {}) {
         case 'a': case 'A': e.preventDefault(); g.sel = { r0: 0, c0: 0, r1: lastR, c1: lastC }; repaint(); emitSelect(); return;
         // Copy/cut/paste are left to the native clipboard events on `clip`.
         case 'c': case 'C': case 'x': case 'X': case 'v': case 'V': return;
+        // Undo/redo (optional provider contract). Ctrl+Z / Ctrl+Shift+Z + Ctrl+Y.
+        case 'z': case 'Z': e.preventDefault(); if (e.shiftKey) { if (provider.redo) { provider.redo(); refresh(); } } else if (provider.undo) { provider.undo(); refresh(); } return;
+        case 'y': case 'Y': e.preventDefault(); if (provider.redo) { provider.redo(); refresh(); } return;
         case 'd': case 'D': e.preventDefault(); fillDown(); return;
         case 'r': case 'R': e.preventDefault(); fillRight(); return;
         case 'ArrowUp':    e.preventDefault(); gotoCell(0, a.c, ext); return;

@@ -150,6 +150,41 @@ try {
     ? ok('copy produced the expected TSV')
     : fail(`copy produced: ${JSON.stringify(copied)}`);
 
+  // ── undo / redo (Ctrl+Z / Ctrl+Y) ──
+  await page.evaluate(() => { window._loom.setSelection({ r0: 40, c0: 1, r1: 40, c1: 1 }); window._loom.focus(); });
+  const ovBefore = await page.evaluate(() => window._loom.provider._overlay.size);
+  await page.keyboard.type('123');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(40);
+  const ovEdit = await page.evaluate(() => window._loom.provider._overlay.size);
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(40);
+  const ovUndo = await page.evaluate(() => window._loom.provider._overlay.size);
+  (ovEdit === ovBefore + 1 && ovUndo === ovBefore)
+    ? ok(`undo reverts a single edit (overlay ${ovBefore}→${ovEdit}→${ovUndo})`)
+    : fail(`undo failed: ${ovBefore} → ${ovEdit} → ${ovUndo}`);
+  await page.keyboard.press('Control+y');
+  await page.waitForTimeout(40);
+  const ovRedo = await page.evaluate(() => window._loom.provider._overlay.size);
+  ovRedo === ovBefore + 1 ? ok('redo (Ctrl+Y) restores the edit') : fail(`redo failed: ${ovRedo}`);
+
+  // A batched paste undoes in ONE step.
+  const batch = await page.evaluate(async () => {
+    window._loom.setSelection({ r0: 45, c0: 1, r1: 45, c1: 1 });
+    window._loom.focus();
+    const before = window._loom.provider._overlay.size;
+    const dt = new DataTransfer(); dt.setData('text/plain', '1\t2\n3\t4');
+    document.querySelector('#grid textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 60));
+    return { before, afterPaste: window._loom.provider._overlay.size };
+  });
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(40);
+  const ovBatchUndo = await page.evaluate(() => window._loom.provider._overlay.size);
+  (batch.afterPaste === batch.before + 4 && ovBatchUndo === batch.before)
+    ? ok(`one undo reverts a whole 2×2 paste (overlay ${batch.before}→${batch.afterPaste}→${ovBatchUndo})`)
+    : fail(`batch undo failed: ${JSON.stringify({ ...batch, ovBatchUndo })}`);
+
   // ── column resize: drag the col-0 right border (default width 100) ──
   const widthBefore = await page.evaluate(() => window._loom.getColWidths()[0] || 100);
   const border0 = await page.evaluate(() => {

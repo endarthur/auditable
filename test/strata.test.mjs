@@ -85,6 +85,78 @@ test('table: commitRaw coerces by column type', () => {
   assert.equal(t.getCell(0, 1).value, null);
 });
 
+test('table: undo/redo over overlay edits', () => {
+  const t = sampleTable();
+  assert.equal(t.canUndo(), false);
+  t.setCell(1, 1, 9.9);
+  assert.equal(t.getCell(1, 1).value, 9.9);
+  assert.equal(t.canUndo(), true);
+
+  assert.equal(t.undo(), true);                 // back to base
+  assert.equal(t.getCell(1, 1).value, 1.5);
+  assert.equal(t.isEdited(1, 1), false);
+  assert.equal(t.dirtyCount(), 0);
+  assert.equal(t.canUndo(), false);
+  assert.equal(t.canRedo(), true);
+
+  assert.equal(t.redo(), true);                 // re-apply the edit
+  assert.equal(t.getCell(1, 1).value, 9.9);
+  assert.equal(t.dirtyCount(), 1);
+  assert.equal(t.canRedo(), false);             // nothing left to redo
+  assert.equal(t.redo(), false);                // redo on empty stack is a no-op
+});
+
+test('table: undo stack is per-edit; redo cleared by a new edit', () => {
+  const t = sampleTable();
+  t.setCell(0, 0, 10);
+  t.setCell(0, 1, 20);
+  t.undo();                                     // undo the grade edit
+  assert.equal(t.getCell(0, 1).value, 0.5);     // row-0 grade base
+  assert.equal(t.getCell(0, 0).value, 10);      // first edit still there
+  t.setCell(2, 1, 30);                          // a new edit clears redo
+  assert.equal(t.canRedo(), false);
+  t.undo(); t.undo();                           // undo the new edit, then the id edit
+  assert.equal(t.getCell(2, 1).value, 2.5);
+  assert.equal(t.getCell(0, 0).value, 1);
+  assert.equal(t.dirtyCount(), 0);
+});
+
+test('table: a transaction collapses a batch into ONE undo step', () => {
+  const t = sampleTable();
+  t.beginTxn();
+  t.setCell(0, 1, 7);
+  t.setCell(1, 1, 8);
+  t.setCell(2, 1, 9);
+  t.endTxn();
+  assert.deepEqual(t.column(1), [7, 8, 9]);
+  assert.equal(t.undo(), true);                 // one undo reverts all three
+  assert.deepEqual(t.column(1), [0.5, 1.5, 2.5]);
+  assert.equal(t.dirtyCount(), 0);
+  assert.equal(t.redo(), true);                 // one redo restores all three
+  assert.deepEqual(t.column(1), [7, 8, 9]);
+});
+
+test('table: revert is undoable', () => {
+  const t = sampleTable();
+  t.setCell(0, 1, 5.5);
+  t.revert(0, 1);
+  assert.equal(t.getCell(0, 1).value, 0.5);     // reverted to base
+  t.undo();                                     // undo the revert → edit is back
+  assert.equal(t.getCell(0, 1).value, 5.5);
+});
+
+test('provider: header carries the active sort indicator', () => {
+  const t = sampleTable();
+  const v = createView(t);
+  const p = createTableProvider(t, v);
+  assert.equal(p.header(1).sort, undefined);
+  v.setSort({ by: 'grade', dir: 'desc' });
+  assert.equal(p.header(1).sort, 'desc');       // grade column
+  assert.equal(p.header(0).sort, undefined);    // id column unaffected
+  v.setSort(null);
+  assert.equal(p.header(1).sort, undefined);
+});
+
 // ── ingest: built-in sniffer ──
 
 const CSV = 'id,grade,lito\n1,0.5,ox\n2,1.5,sulf\n3,,ox\n';

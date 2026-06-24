@@ -179,12 +179,19 @@ export function paintColHeaders(g, c0, c1, sx, vw) {
   for (let c = c0; c <= c1; c++) {
     const h = provider.header ? provider.header(c) : null;
     const label = h == null ? colLetter(c) : (typeof h === 'string' ? h : (h.label ?? colLetter(c)));
+    const cw = colW(metrics, c);
     const x = colXAt(metrics, c) - sx;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x + 1, 0, colW(metrics, c) - 2, metrics.hdrH);
+    ctx.rect(x + 1, 0, cw - 2, metrics.hdrH);
     ctx.clip();
+    ctx.textAlign = 'left';
     ctx.fillText(String(label), x + PAD, metrics.hdrH / 2);
+    // Active-sort arrow at the right edge — sort state made visible in the grid.
+    if (h && typeof h === 'object' && h.sort) {
+      ctx.textAlign = 'right';
+      ctx.fillText(h.sort === 'desc' ? '↓' : '↑', x + cw - 4, metrics.hdrH / 2);
+    }
     ctx.restore();
   }
 }

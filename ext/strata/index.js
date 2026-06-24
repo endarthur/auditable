@@ -123,6 +123,29 @@ function createTable({ schema, columns, nrows }) {
   const derived = new Map();             // colIdx → { name, type, formula, deps, fn, cache }
   const key = (r, c) => r + ':' + c;
 
+  // Undo/redo over overlay edits — "every action reversible" made real, nearly
+  // free off the overlay (which is already an op-log in spirit). Each entry is a
+  // GROUP of cell ops [{r,c,before,after}] where before/after are the overlay
+  // state ({value,base} | null). beginTxn/endTxn collapse a batch (paste, fill,
+  // range-delete) into ONE group so a single undo reverts the whole batch.
+  const undoStack = [], redoStack = [];
+  let txn = null, txnDepth = 0;
+  const ovSnap = (r, c) => { const o = overlay.get(key(r, c)); return o ? { value: o.value, base: o.base } : null; };
+  const ovRestore = (r, c, s) => { const k = key(r, c); if (s) overlay.set(k, { value: s.value, base: s.base }); else overlay.delete(k); };
+  function recordAround(r, c, mutate) {
+    const before = ovSnap(r, c);
+    mutate();
+    const after = ovSnap(r, c);
+    if ((before === null && after === null) || (before && after && before.value === after.value)) return; // no-op
+    const op = { r, c, before, after };
+    if (txn) txn.push(op);
+    else { undoStack.push([op]); redoStack.length = 0; }
+  }
+  function applyGroup(ops, useBefore) {
+    for (let i = ops.length - 1; i >= 0; i--) ovRestore(ops[i].r, ops[i].c, useBefore ? ops[i].before : ops[i].after);
+    invalidateDerived();
+  }
+
   // Read a cell's effective value by column index (base⊕overlay, or derived).
   function readValue(c, r, stack) {
     if (derived.has(c)) return derivedColumn(c, stack)[r];
@@ -178,15 +201,28 @@ function createTable({ schema, columns, nrows }) {
     // Write a value patch (base columns only — derived cells are computed).
     setCell(r, c, value) {
       if (derived.has(c)) return;
-      const k = key(r, c);
-      const base = columns[c][r];
-      if (value === base || (value == null && base == null)) overlay.delete(k);
-      else overlay.set(k, { value, base });
+      recordAround(r, c, () => {
+        const k = key(r, c);
+        const base = columns[c][r];
+        if (value === base || (value == null && base == null)) overlay.delete(k);
+        else overlay.set(k, { value, base });
+      });
       invalidateDerived();
     },
 
-    revert(r, c) { overlay.delete(key(r, c)); invalidateDerived(); },
+    revert(r, c) { recordAround(r, c, () => overlay.delete(key(r, c))); invalidateDerived(); },
     dirtyCount() { return overlay.size; },
+
+    // ── undo / redo (over overlay edits) ──
+    // beginTxn/endTxn bracket a batch so it collapses to one undo step; nesting
+    // is depth-counted (loom's batched writes never nest, but it's safe). A bare
+    // setCell outside a txn is its own one-op group.
+    beginTxn() { txnDepth++; if (!txn) txn = []; },
+    endTxn() { txnDepth--; if (txnDepth <= 0) { if (txn && txn.length) { undoStack.push(txn); redoStack.length = 0; } txn = null; txnDepth = 0; } },
+    undo() { if (!undoStack.length) return false; const g = undoStack.pop(); applyGroup(g, true); redoStack.push(g); return true; },
+    redo() { if (!redoStack.length) return false; const g = redoStack.pop(); applyGroup(g, false); undoStack.push(g); return true; },
+    canUndo() { return undoStack.length > 0; },
+    canRedo() { return redoStack.length > 0; },
 
     // The effective values of column c as a fresh array (base⊕overlay, or the
     // derived computation). The bridge to the rest of the workspace.
@@ -1097,7 +1133,11 @@ function createTableProvider(table, view) {
 
     header(c) {
       const s = table.schema[c];
-      return { label: s.unit ? `${s.name} (${s.unit})` : s.name, type: TYPE[s.type] || 'string' };
+      const h = { label: s.unit ? `${s.name} (${s.unit})` : s.name, type: TYPE[s.type] || 'string' };
+      // Surface the active sort IN the header (loom draws an arrow) — sort state
+      // was footer-only before, invisible in the grid itself.
+      if (view && view.sortSpec && view.sortSpec.by === s.name) h.sort = view.sortSpec.dir;
+      return h;
     },
 
     // Show the UNDERLYING row number (provenance) — so a sorted/filtered view
@@ -1110,6 +1150,17 @@ function createTableProvider(table, view) {
       if (table.isDerived(c)) return; // computed columns aren't editable
       table.setCell(under(r), c, coerceValue(raw, table.schema[c].type));
     },
+
+    // Undo/redo + batch grouping — the optional loom provider contract. loom
+    // calls beginBatch/endBatch around multi-cell writes (paste/fill/range-delete)
+    // so each is one undo step, and Ctrl+Z/Ctrl+Y call undo/redo. Delegated to
+    // the table (which owns the overlay op-log).
+    beginBatch() { table.beginTxn(); },
+    endBatch() { table.endTxn(); },
+    undo() { return table.undo(); },
+    redo() { return table.redo(); },
+    canUndo() { return table.canUndo(); },
+    canRedo() { return table.canRedo(); },
 
     // Reserved for async windowing (strata-spec §11 upgrade #1): a streaming
     // base will call these when a window lands so loom repaints. v1 is fully

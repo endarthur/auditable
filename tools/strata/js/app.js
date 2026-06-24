@@ -102,6 +102,12 @@ export function createStrataApp(host) {
     // Track dirty + footer on every commit (loom repaints on its own).
     const commit = provider.commit.bind(provider);
     provider.commit = (r, c, v) => { commit(r, c, v); host.setDirty(true); updateFooter(); };
+    // Undo/redo are mutations too — wrap them to refresh dirty + footer (loom
+    // calls these directly on Ctrl+Z/Y, then repaints).
+    for (const m of ['undo', 'redo']) {
+      const fn = provider[m] && provider[m].bind(provider);
+      if (fn) provider[m] = () => { const r = fn(); host.setDirty(true); updateFooter(); return r; };
+    }
 
     if (grid) grid.destroy();
     $('#empty').style.display = 'none';
@@ -385,6 +391,12 @@ export function createStrataApp(host) {
       } },
     { id: 'strata:transform', btn: '#btnTransform', label: 'Transform…', when: () => !!table,
       run: () => openTransformDialog() },
+    // No toolbar button (Ctrl+Z/Y + the future palette); registered so they're in
+    // the command surface a palette / agent will drive.
+    { id: 'strata:undo', label: 'Undo', when: () => !!table && table.canUndo(),
+      run: () => { if (provider && provider.undo) { provider.undo(); grid.refresh(); } } },
+    { id: 'strata:redo', label: 'Redo', when: () => !!table && table.canRedo(),
+      run: () => { if (provider && provider.redo) { provider.redo(); grid.refresh(); } } },
     { id: 'strata:ungroup', btn: '#btnUngroup', label: '← Data', visible: () => !!detailTable, when: () => true,
       run: () => ungroup() },
   ];

@@ -62,6 +62,20 @@ try {
     ? ok(`grid edit → overlay (cell ${afterEdit.entries[0].k}, base ${afterEdit.entries[0].base} → 777.77)`)
     : fail(`edit failed: ${JSON.stringify(afterEdit)}`);
 
+  // Undo then redo the edit via the commands (then redo so the rest of the flow
+  // still sees exactly one edit). Exercises the wrapped provider.undo/redo path.
+  const ur = await page.evaluate(() => {
+    const app = window._strataApp, t = app.table;
+    app.runCommand('strata:undo');
+    const afterUndo = { dirty: t.dirtyCount(), v: t.getCell(2, 0).value };
+    app.runCommand('strata:redo');
+    const afterRedo = { dirty: t.dirtyCount(), v: t.getCell(2, 0).value };
+    return { afterUndo, afterRedo };
+  });
+  (ur.afterUndo.dirty === 0 && ur.afterRedo.dirty === 1 && ur.afterRedo.v === 777.77)
+    ? ok(`undo/redo via command (dirty 1→0→1, cell 2:0 restored to ${ur.afterRedo.v})`)
+    : fail(`undo/redo failed: ${JSON.stringify(ur)}`);
+
   // Add a derived column through the app and check it computes.
   const dv = await page.evaluate(() => {
     const okAdd = window._strataApp.addColumn('metal', 'Au_gpt * density');
@@ -105,11 +119,12 @@ try {
     window._strataApp.cycleSort(auIdx);              // → desc
     const top = g.provider.cellAt(0, auIdx).value;
     const next = g.provider.cellAt(1, auIdx).value;
+    const hdrSort = g.provider.header(auIdx).sort;   // the in-header arrow indicator
     window._strataApp.applyFilter('');               // clear filter
-    return { total, filtered, top, next, restored: v.length };
+    return { total, filtered, top, next, restored: v.length, hdrSort };
   });
-  (sf.filtered > 0 && sf.filtered < sf.total && sf.top >= sf.next && sf.restored === sf.total)
-    ? ok(`filter Au_gpt>1 (${sf.filtered}/${sf.total}) + sort desc (${sf.top} ≥ ${sf.next}); clear restores ${sf.restored}`)
+  (sf.filtered > 0 && sf.filtered < sf.total && sf.top >= sf.next && sf.restored === sf.total && sf.hdrSort === 'desc')
+    ? ok(`filter Au_gpt>1 (${sf.filtered}/${sf.total}) + sort desc (${sf.top} ≥ ${sf.next}, header arrow=${sf.hdrSort}); clear restores ${sf.restored}`)
     : fail(`sort/filter failed: ${JSON.stringify(sf)}`);
 
   // Group-by through the app: group the (now unfiltered) data by LITO.

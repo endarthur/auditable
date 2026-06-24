@@ -219,6 +219,29 @@ test('memory provider: raw cells, then commit marks EDITED over an untouched bas
   assert.equal(p.cellAt(0, 1).state, CellState.RAW);
 });
 
+test('memory provider: undo/redo + batched (beginBatch) one-step undo', () => {
+  const p = sampleProvider();
+  assert.equal(p.canUndo(), false);
+  p.commit(0, 1, '5');
+  assert.equal(p.cellAt(0, 1).value, 5);
+  p.undo();
+  assert.equal(p.cellAt(0, 1).state, CellState.RAW);   // back to base
+  assert.equal(p.canRedo(), true);
+  p.redo();
+  assert.equal(p.cellAt(0, 1).value, 5);
+
+  // A batch (beginBatch/endBatch) collapses into ONE undo step.
+  p.beginBatch();
+  p.commit(1, 1, '7');
+  p.commit(2, 1, '8');
+  p.endBatch();
+  assert.equal(p.cellAt(1, 1).value, 7);
+  assert.equal(p.cellAt(2, 1).value, 8);
+  p.undo();                                            // one undo reverts both
+  assert.equal(p.cellAt(1, 1).state, CellState.RAW);
+  assert.equal(p.cellAt(2, 1).state, CellState.RAW);
+});
+
 test('memory provider: out-of-range + empty cells return null', () => {
   const p = sampleProvider();
   assert.equal(p.cellAt(-1, 0), null);
