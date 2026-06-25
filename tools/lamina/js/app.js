@@ -99,6 +99,7 @@ function mount(name, d, src, totalBytes) {
   $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear();   // fresh file → clear filter + sort
   initCalcState();
   recompute();
+  refreshGutter();
 }
 
 // Derive the active view from base + filter + sort and render it. Filter and sort
@@ -160,11 +161,12 @@ function mountView(vs, info = {}) {
       return cell;
     },
     header(dc) { const uc = vis[dc]; const h = base.header(uc); if (c.sort && c.sort.col === uc) h.sort = c.sort.dir; return h; },
+    headerGutter(dc) { const uc = vis[dc]; return (showGutter && c.gutter) ? (c.gutter[uc] || null) : null; },
     rowHeader(r) { return base.rowHeader(r); },
     onReady(cb) { return base.onReady(cb); },
   };
 
-  grid = createGrid($('#grid'), provider, { readOnly: true, theme: 'dark', defaultColW: c.d.kind === 'text' ? 900 : 130 });
+  grid = createGrid($('#grid'), provider, { readOnly: true, theme: 'dark', defaultColW: c.d.kind === 'text' ? 900 : 130, headerGutterH: (showGutter && c.gutter) ? GUTTER_H : 0 });
   // reapply persisted column widths (stored by UNDERLYING col → display indices)
   const dw = {};
   for (let dc = 0; dc < vis.length; dc++) { const w = c.colWidths[vis[dc]]; if (w != null) dw[dc] = w; }
@@ -174,6 +176,7 @@ function mountView(vs, info = {}) {
     grid.onHeaderContextMenu(({ col, clientX, clientY }) => showColumnMenu(vis[col], clientX, clientY));
   }
   grid.onContextMenu(({ row, col, sel, clientX, clientY }) => showCellMenu(row, col, sel, clientX, clientY));
+  if (c.d.kind === 'delimited') grid.onGutterClick((dc) => showColumnStats(vis[dc]));   // click a distribution glyph → full stats
 
   const shownRows = vs.rowCount();
   const baseRows = c.baseVs.rowCount();
@@ -507,8 +510,8 @@ function createDmCursor(reader, h, { chunk = 4096 } = {}) {
   const n = h.recordCount;
   return {
     kind: 'dm', rowCount: n, schema: h.schema, delimiter: '\t', quote: '"',
-    async eachRecord({ dataStart = 0, rows = null, onProgress } = {}, visit) {
-      let sp = 0;
+    async eachRecord({ dataStart = 0, rows = null, onProgress, limit = Infinity } = {}, visit) {
+      let sp = 0, seen = 0;
       for (let i0 = 0; i0 < n; i0 += chunk) {
         const i1 = Math.min(n, i0 + chunk);
         const start = recordRange(h, i0).offset;
@@ -524,6 +527,7 @@ function createDmCursor(reader, h, { chunk = 4096 } = {}) {
           }
           const r = recordRange(h, i);
           visit(disp, decodeRecord(bytes.subarray(r.offset - start, r.offset - start + r.length), h), i, 0);   // loc0 = record index
+          if (++seen >= limit) return;                      // sample cap (gutter stats)
         }
         if (onProgress) onProgress(i1, n);
         if (rows && sp >= rows.length) break;
@@ -549,6 +553,7 @@ function mountDm(name, reader, h, totalBytes) {
   lastScan = 'dm';
   initCalcState();
   recompute();
+  refreshGutter();
 }
 
 // ── calculated columns (read-time derived columns; @gcu/expr) ──────────────────
@@ -585,7 +590,9 @@ function applyCalcs() {
   if (c.sort && c.sort.col >= c.schema.length) c.sort = null;     // a removed calc → drop a now-dangling sort
   const box = $('#filter').value;                                 // a filter that referenced a removed calc → clear it (don't strand a red box)
   if (box.trim() && !validate(box, c.schema).ok) { $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear(); }
-  return applyFilter($('#filter').value);                         // re-validate + re-run the filter, then recompute (sort)
+  const r = applyFilter($('#filter').value);                      // re-validate + re-run the filter, then recompute (sort)
+  refreshGutter();                                                // recompute the gutter so calc columns get a glyph too
+  return r;
 }
 
 // Programmatic add (the automation hook + the editor's commit share applyCalcs).
@@ -1027,6 +1034,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
   { label: 'Clear sort', action: () => { if (current) { current.sort = null; recompute(); } } },
 ]);
 $('#mView').onclick = () => menuAt($('#mView'), [
+  { label: (showGutter ? '✓ ' : '') + 'Column distributions', action: () => { showGutter = !showGutter; refreshGutter(); } },
   { label: 'Go to row…', action: () => $('#goto').focus() },
   { sep: true },
   { label: 'Autofit all columns', action: () => autofitAll() },
@@ -1046,7 +1054,8 @@ const HELP = {
   start: ['Getting started',
     `<b>lamina</b> opens any file — even a multi-gigabyte one — and lets you scroll, filter, and sort it. It never loads the whole file, so size isn't the problem.<br><br>`
     + `<b>Open</b> — File → Open (<code>Ctrl+O</code>) or drag a file in. CSV/TSV → table · Datamine <code>.dm</code> → table · text → lines · binary → hex · <code>.zip</code>/<code>.tar</code>/<code>.gz</code>/<code>.zst</code>/<code>.xz</code>/<code>.bz2</code> → peek inside.<br><br>`
-    + `<b>If a file reads wrong</b> — click the <b>kind badge</b> (top-right) or <b>View → Interpretation</b> to force the delimiter, header on/off, skip comment lines, or switch the decimal point/comma.<br><br>`
+    + `<b>If a file reads wrong</b> — click the <b>kind badge</b> (top-right) or <b>Data → Interpretation</b> to force the delimiter, header on/off, skip comment lines, or switch the decimal point/comma.<br><br>`
+    + `<b>Column distributions</b> — each header shows a mini distribution + null-rate bar (a histogram for numbers, a top-values bar for categories; <code>≈</code> = sampled). Click a glyph for full statistics. Toggle under <b>View → Column distributions</b>.<br><br>`
     + `<b>Most actions live in right-click menus:</b><br>`
     + `• <b>Right-click a column header</b> — Statistics · sort · filter by · number format · treat as text/number · hide/show · autofit · <b>add a calculated column</b>.<br>`
     + `• <b>Right-click a cell or selection</b> — copy (with header / row #) · filter by this value · column statistics.<br><br>`
@@ -1099,6 +1108,64 @@ function applyStatFilter() {
   if (_statsSelected.size === 0) { $('#filter').value = ''; syncFilterClear(); return applyFilter(''); }
   const expr = `${colRef(name)} in ${[...(_statsSelected)].map((v) => JSON.stringify(v)).join(', ')}`;
   $('#filter').value = expr; syncFilterClear(); applyFilter(expr);
+}
+
+// ── column distribution gutter (the header glyphs) ──────────────────────────
+// A per-column distribution mark drawn in loom's header gutter: a mini-histogram
+// (numeric) or a top-N segmented bar (categorical) + a null-rate bar. v1 is an
+// APPROXIMATE glyph from the first GUTTER_SAMPLE records (one quick scan, all
+// columns, marked ≈); click a gutter → the full exact stats popover.
+const GUTTER_H = 26, GUTTER_SAMPLE = 8192, GUTTER_BINS = 22;
+let showGutter = true;
+
+async function refreshGutter() {
+  const c = current; if (!c) return;
+  if (!showGutter) { c.gutter = null; return rerender(); }
+  try {
+    const g = await computeGutterStats(c.source, c.schema, c.dataStart, c.d.decimal);
+    if (current !== c) return;                       // a newer file opened mid-scan
+    c.gutter = g;
+  } catch (e) { console.warn('[lamina] gutter stats failed', e); c.gutter = null; }
+  rerender();
+}
+
+// One bounded scan → per-column { kind:'hist', bins:[0..1], nullRate, approx } |
+// { kind:'cat', segments:[fractions], nullRate, approx } | null.
+async function computeGutterStats(source, schema, dataStart, decimal) {
+  const cols = schema.length;
+  const acc = schema.map((s) => (s.type === 'number'
+    ? { num: true, vals: [], n: 0, nulls: 0, min: Infinity, max: -Infinity }
+    : { num: false, n: 0, nulls: 0, freq: new Map() }));
+  await source.eachRecord({ dataStart, limit: GUTTER_SAMPLE }, (disp, fields) => {
+    for (let i = 0; i < cols; i++) {
+      const a = acc[i]; if (!a) continue; a.n++;
+      const raw = fields[i];
+      if (a.num) {
+        if (raw == null || raw === '') { a.nulls++; continue; }
+        const x = parseNum(raw, decimal);
+        if (Number.isNaN(x)) { a.nulls++; continue; }
+        a.vals.push(x); if (x < a.min) a.min = x; if (x > a.max) a.max = x;
+      } else {
+        if (raw == null || raw === '') { a.nulls++; continue; }
+        if (a.freq.has(raw)) a.freq.set(raw, a.freq.get(raw) + 1);
+        else if (a.freq.size < 200) a.freq.set(raw, 1);                 // cap distinct (bounded memory)
+      }
+    }
+  });
+  return acc.map((a) => {
+    if (!a || !a.n) return null;
+    const nullRate = a.nulls / a.n;
+    if (a.num) {
+      if (!a.vals.length || !(a.max > a.min)) return { kind: 'hist', bins: [], nullRate, approx: true };
+      const lo = a.min, span = a.max - a.min, bins = new Array(GUTTER_BINS).fill(0);
+      for (const v of a.vals) { let k = Math.floor((v - lo) / span * GUTTER_BINS); if (k >= GUTTER_BINS) k = GUTTER_BINS - 1; if (k < 0) k = 0; bins[k]++; }
+      const mx = Math.max(...bins) || 1;
+      return { kind: 'hist', bins: bins.map((x) => x / mx), nullRate, approx: true };
+    }
+    const tot = [...a.freq.values()].reduce((s, v) => s + v, 0) || 1;
+    const top = [...a.freq.entries()].sort((x, y) => y[1] - x[1]).slice(0, 8);
+    return { kind: 'cat', segments: top.map(([, nn]) => nn / tot), nullRate, approx: true };
+  });
 }
 
 // ── column statistics (respects the current filter) ──
@@ -1183,7 +1250,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

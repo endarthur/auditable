@@ -53,7 +53,12 @@ export function createGrid(element, provider, options = {}) {
     metrics: {
       defaultColW: options.defaultColW || 100,
       rowH: options.rowH || 24,
-      hdrH: options.hdrH || 24,
+      // The header splits into a label strip (hdrLabelH) + an optional gutter strip
+      // (hdrGutterH, for per-column distribution glyphs via provider.headerGutter).
+      // hdrH is the total — every layout offset below uses it.
+      hdrLabelH: options.hdrH || 24,
+      hdrGutterH: options.headerGutterH || 0,
+      hdrH: (options.hdrH || 24) + (options.headerGutterH || 0),
       rowHdrW: options.rowHdrW || 48,
       colWidths: options.colWidths || {},
       totalRows: dims.rows,
@@ -66,6 +71,7 @@ export function createGrid(element, provider, options = {}) {
     selectListeners: [],
     headerListeners: [],
     headerContextListeners: [],
+    gutterListeners: [],
     contextListeners: [],
     _cleanup: [],
   };
@@ -543,6 +549,10 @@ export function createGrid(element, provider, options = {}) {
     const rect = colHdr.getBoundingClientRect();
     const c = colAtX(M, e.clientX - rect.left + scroll.scrollLeft);
     if (c < 0 || c >= M.totalCols) return;
+    if (M.hdrGutterH > 0 && (e.clientY - rect.top) > M.hdrLabelH) {     // clicked the gutter strip, not the label → distribution, not sort
+      for (const cb of g.gutterListeners) { try { cb(c); } catch (err) { console.error('[loom] onGutterClick listener threw', err); } }
+      return;
+    }
     for (const cb of g.headerListeners) { try { cb(c); } catch (err) { console.error('[loom] onHeaderClick listener threw', err); } }
   }
   // Right-click a column header → emit (col, clientX, clientY); the host builds
@@ -660,6 +670,7 @@ export function createGrid(element, provider, options = {}) {
     onHeaderClick(cb) { g.headerListeners.push(cb); return () => { const i = g.headerListeners.indexOf(cb); if (i >= 0) g.headerListeners.splice(i, 1); }; },
     onContextMenu(cb) { g.contextListeners.push(cb); return () => { const i = g.contextListeners.indexOf(cb); if (i >= 0) g.contextListeners.splice(i, 1); }; },
     onHeaderContextMenu(cb) { g.headerContextListeners.push(cb); return () => { const i = g.headerContextListeners.indexOf(cb); if (i >= 0) g.headerContextListeners.splice(i, 1); }; },
+    onGutterClick(cb) { g.gutterListeners.push(cb); return () => { const i = g.gutterListeners.indexOf(cb); if (i >= 0) g.gutterListeners.splice(i, 1); }; },
     // Column widths (the sparse non-default map). get returns a copy; set
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.

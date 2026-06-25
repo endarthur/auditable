@@ -206,11 +206,11 @@ export function paintColHeaders(g, c0, c1, sx, vw) {
     let lx = x + PAD;
     if (glyph) {
       ctx.fillStyle = calc ? (g.colors.cellDerived || g.colors.hdrText) : (g.colors.hdrGlyph || g.colors.cellPending);
-      ctx.fillText(glyph, lx, metrics.hdrH / 2);
+      ctx.fillText(glyph, lx, metrics.hdrLabelH / 2);
       lx += 12;
       ctx.fillStyle = g.colors.hdrText;
     }
-    ctx.fillText(String(label), lx, metrics.hdrH / 2);
+    ctx.fillText(String(label), lx, metrics.hdrLabelH / 2);
     // Right-edge state indicators: sort arrow (far right) + filter funnel (left
     // of it). Both make active view-state visible in the grid, not just a panel.
     const obj = h && typeof h === 'object';
@@ -218,19 +218,63 @@ export function paintColHeaders(g, c0, c1, sx, vw) {
     ctx.textAlign = 'right';
     if (obj && h.sort) {
       ctx.fillStyle = g.colors.hdrText;
-      ctx.fillText(h.sort === 'desc' ? '↓' : '↑', rx, metrics.hdrH / 2);
+      ctx.fillText(h.sort === 'desc' ? '↓' : '↑', rx, metrics.hdrLabelH / 2);
       rx -= 11;
     }
     if (obj && h.filtered) {
       ctx.fillStyle = g.colors.hdrText;
-      ctx.fillText('▽', rx, metrics.hdrH / 2);
+      ctx.fillText('▽', rx, metrics.hdrLabelH / 2);
       rx -= 11;
     }
     if (obj && h.invalid) {
       ctx.fillStyle = g.colors.cellError;
-      ctx.fillText('⚠', rx, metrics.hdrH / 2);
+      ctx.fillText('⚠', rx, metrics.hdrLabelH / 2);
     }
+    // Per-column distribution gutter (opt-in via headerGutterH + provider.headerGutter).
+    if (metrics.hdrGutterH > 0 && provider.headerGutter) drawGutter(ctx, g, provider.headerGutter(c), x, metrics.hdrLabelH, cw, metrics.hdrGutterH);
     ctx.restore();
+  }
+}
+
+// Draw a column's distribution glyph in the header gutter strip. `gd` (from
+// provider.headerGutter) is { kind:'hist', bins:[0..1], nullRate, approx } |
+// { kind:'cat', segments:[fractions], nullRate, approx } | null. Runs inside the
+// per-column save/restore, so ctx state changes don't leak.
+function drawGutter(ctx, g, gd, x, top, cw, gh) {
+  const x0 = x + 1, w = cw - 2;
+  ctx.fillStyle = g.colors.hdrBorder;            // hairline under the label
+  ctx.fillRect(x0 - 1, top, cw, 1);
+  if (!gd || w <= 1) return;
+  const nullH = 2, padTop = 3;
+  const plotTop = top + padTop, plotH = Math.max(0, gh - padTop - nullH - 1);
+  if (gd.kind === 'hist' && gd.bins && gd.bins.length) {
+    const n = gd.bins.length, bw = w / n;
+    ctx.fillStyle = g.colors.cellNum;
+    for (let i = 0; i < n; i++) {
+      const v = gd.bins[i] || 0; if (v <= 0) continue;
+      const bh = Math.max(v * plotH, 1);
+      ctx.fillRect(x0 + i * bw, plotTop + (plotH - bh), Math.max(bw - 0.5, 0.5), bh);
+    }
+  } else if (gd.kind === 'cat' && gd.segments && gd.segments.length) {
+    const total = gd.segments.reduce((s, v) => s + v, 0) || 1;
+    let cx = x0;
+    for (let i = 0; i < gd.segments.length; i++) {
+      const sw = (gd.segments[i] / total) * w;
+      ctx.globalAlpha = Math.max(0.3, 1 - i * 0.13);
+      ctx.fillStyle = g.colors.cellDerived;
+      ctx.fillRect(cx, plotTop, Math.max(sw - 0.5, 0.5), plotH);
+      cx += sw;
+    }
+    ctx.globalAlpha = 1;
+  }
+  if (gd.nullRate != null) {                      // null-rate bar along the bottom
+    const by = top + gh - nullH;
+    ctx.fillStyle = g.colors.gridLine; ctx.fillRect(x0, by, w, nullH);
+    if (gd.nullRate > 0) { ctx.globalAlpha = 0.65; ctx.fillStyle = g.colors.cellError; ctx.fillRect(x0, by, w * gd.nullRate, nullH); ctx.globalAlpha = 1; }
+  }
+  if (gd.approx) {                                // a muted ≈ marks a sampled (not exact) glyph
+    ctx.fillStyle = g.colors.hdrGlyph; ctx.font = '9px ' + g.mono; ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+    ctx.fillText('≈', x0 + w, top + 1);
   }
 }
 

@@ -609,6 +609,26 @@ try {
     ? ok(`calc columns: ƒ+ col opens editor; header marked ƒ; manager lists [${calc.listed}] → remove → [${calc.listedAfter}]; filter ab>50 → ${calc.filtered}; remove all → ${calc.afterCols} cols`)
     : fail(`calc columns failed: ${JSON.stringify(calc)}`);
 
+  // ── column distribution gutter: numeric → histogram, categorical → top-N bar,
+  //    sampled (≈), fed to loom's header gutter ──
+  await page.evaluate(() => {
+    let csv = 'grade,lito\n';
+    for (let i = 0; i < 500; i++) csv += `${((i % 50) * 0.1).toFixed(1)},${['ox', 'sulf', 'trans'][i % 3]}\n`;
+    window._lamina.open('g.csv', new TextEncoder().encode(csv));
+  });
+  await page.waitForTimeout(150);   // refreshGutter is an async sample scan
+  const gut = await page.evaluate(() => {
+    const g = window._lamina.gutter, prov = window._lamina.grid.provider;
+    return {
+      n: g && g.length, gradeKind: g && g[0] && g[0].kind, litoKind: g && g[1] && g[1].kind,
+      gradeBins: g && g[0] && g[0].bins && g[0].bins.length, litoSegs: g && g[1] && g[1].segments && g[1].segments.length,
+      approx: !!(g && g[0] && g[0].approx), provKind: prov.headerGutter(0) && prov.headerGutter(0).kind,
+    };
+  });
+  (gut.n === 2 && gut.gradeKind === 'hist' && gut.litoKind === 'cat' && gut.gradeBins > 0 && gut.litoSegs === 3 && gut.approx && gut.provKind === 'hist')
+    ? ok(`gutter: grade→histogram (${gut.gradeBins} bins, ≈) · lito→top-${gut.litoSegs} bar · provider feeds loom`)
+    : fail(`gutter failed: ${JSON.stringify(gut)}`);
+
   // ── responsive: a phone-width viewport → the toolbar wraps to two rows, the
   //    grid drops below it, nothing overflows horizontally ──
   await page.setViewportSize({ width: 360, height: 720 });
