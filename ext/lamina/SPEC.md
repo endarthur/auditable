@@ -113,6 +113,10 @@ matches) and are selectivity-bounded (capped, "filter first" rather than OOM).
 - **Popup distribution plots** in the stats panel (histogram / t-digest on
   `@gcu/sluice`).
 - A **copy-friendly stats render** (clean TSV / Excel paste of a column summary).
+- **Toolbar / filter layout polish:** reserve space so the kind-badge popover
+  doesn't sit under the toolbar edge; keep the filter box from growing under it;
+  fold the apply button into the box; let the filter box grow to multiple lines
+  for long expressions.
 
 ### Far-ahead (deliberate slices, not soon)
 
