@@ -121,6 +121,12 @@ streaming is **native-only** — only backends with real streaming support (OPFS
 
 A consumer doing its *own* multi-GB streaming (own line-splitter / parser, off-main-thread in a worker) doesn't want decoded chunks — it wants the **native source**. `toFile(path)` resolves a path to a `File` it can `File.stream()`/parse and `postMessage`-transfer into a worker; `readRange(path, offset, length)` does a random-access seek (parquet row groups, a sidecar index, a windowed grid scroll). This is *"vfs is the phonebook, the consumer owns the pipe."* On FSAA/OPFS these are **lazy** (off the file handle — no read), flagged `nativeFile` / `rangeReadable`; on memory/idb `toFile` falls back to a wrap-of-bytes (works, not lazy → `nativeFile` false) and `readRange` returns `null` where the backend can't seek (the consumer checks the flag and **never** silently reads a 2 GB file). See `spec_inbox/vfs-streaming-spec.md`.
 
+**Fail loud, never silently buffer.** `vfs.requireStreamable(path)` throws `ENOTSUP` (with the mount + type) unless the backend is `streamable || nativeFile`, returning the capabilities on success. A consumer commits a huge file to a mount / enters its hot path *behind* this guard, so a 2 GB file on a non-streaming mount fails fast instead of OOM-ing the tab.
+
+**Streaming writes carry backpressure.** `createWriter` returns the native sink (FSAA/OPFS `FileSystemWritableFileStream`) whose `write(chunk)` resolves on sink readiness — so a multi-GB export blocks the producer correctly when you `await writer.write(chunk)`. The `writeFrom(path, iterable)` helper awaits each write for the same reason (a fire-and-forget loop would re-OOM on the write side).
+
+**The Web-Worker boundary.** Heavy consumers run off-main-thread, and what `toFile`/`resolveHandle` hand back crosses cleanly: a `File`/`Blob` is structured-cloneable / transferable; an FSAA `FileSystemFileHandle` is `postMessage`-cloneable. The one exception: **OPFS sync access handles must be *opened in the worker*** (the main thread can't create one and ship it) — so for OPFS random access, pass the worker a *path* (or use `resolveHandle` in the worker), not a pre-opened sync handle. Preferring `toFile` (a transferable `File`) makes the worker boundary a non-issue. Pairs with `@gcu/proc` (whose `scanParallel` already takes a `Blob` by reference).
+
 ```js
 // read as an async iterable of chunks (returns null if backend doesn't support it)
 const stream = vfs.createReadStream("/data/big.csv");

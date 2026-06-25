@@ -495,6 +495,19 @@ class VFS extends EventEmitter {
     return backend.readRange ? backend.readRange(subpath, offset, length) : null;
   }
 
+  // Assert this path can be read WITHOUT buffering the whole file — a forward
+  // stream OR a lazy native File. The "this huge file must never be fully read —
+  // fail loud, don't silently OOM" guard (spec §3): a consumer calls it before
+  // committing a multi-GB file to a mount / entering its hot path. Throws ENOTSUP
+  // (with the mount + type) otherwise; returns the capabilities on success.
+  requireStreamable(p) {
+    const { backend, mount } = this.resolve(p);
+    if (!(backend.streamable || backend.nativeFile)) {
+      throw vfsError('ENOTSUP', p, `mount '${mount}' (${backend.constructor?.type || 'custom'}) can't stream — reading would buffer the whole file`);
+    }
+    return this.capabilities(p);
+  }
+
   async createWriter(p, opts) {
     const { backend, subpath } = this.resolve(p);
     this._checkWrite(backend, p);
@@ -506,7 +519,10 @@ class VFS extends EventEmitter {
     this._checkWrite(backend, p);
     const writer = backend.createWriter?.(subpath);
     if (writer) {
-      for await (const chunk of iterable) writer.write(chunk);
+      // AWAIT each write — the sink's promise reflects readiness (FSAA's
+      // FileSystemWritableFileStream is backpressured). Fire-and-forget here
+      // would re-introduce OOM on the write side for a multi-GB export (spec §4).
+      for await (const chunk of iterable) await writer.write(chunk);
       await writer.close();
     } else {
       // Fallback: collect and writeFile

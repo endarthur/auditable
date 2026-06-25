@@ -489,6 +489,33 @@ describe('VFS mount table', () => {
     assert.ok(r instanceof Uint8Array);
     assert.deepEqual([...r], [11, 12, 13]);
   });
+
+  it('requireStreamable throws on a non-streaming mount (fail loud, not OOM)', async () => {
+    const vfs = await VFS.create();           // memory: not streamable, not nativeFile
+    await vfs.writeFile('/x.csv', 'a');
+    assert.throws(() => vfs.requireStreamable('/x.csv'), (e) => e.code === 'ENOTSUP');
+  });
+
+  it('writeFrom awaits each write — backpressure (spec §4)', async () => {
+    let inflight = 0, maxInflight = 0;
+    const written = [];
+    const vfs = await VFS.create();
+    await vfs.mount('/bp', {
+      type: 'custom',
+      async writeFile() {},
+      async stat() { return { type: 'file', size: 0, created: new Date(), modified: new Date() }; },
+      createWriter() {
+        return {
+          async write(chunk) { inflight++; maxInflight = Math.max(maxInflight, inflight); await Promise.resolve(); written.push(chunk); inflight--; },
+          async close() {},
+        };
+      },
+    });
+    async function* gen() { yield 'a'; yield 'b'; yield 'c'; }
+    await vfs.writeFrom('/bp/out', gen());
+    assert.deepEqual(written, ['a', 'b', 'c']);   // all chunks, in order
+    assert.equal(maxInflight, 1);                  // each write awaited before the next (no fire-and-forget)
+  });
 });
 
 // ============================================================
