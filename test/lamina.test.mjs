@@ -431,3 +431,36 @@ test('scanSortKeys: max cap throws', async () => {
   const src = buildMemorySource(B(csv), { kind: 'text', blockSize: 32 });
   await assert.rejects(scanSortKeys(src, { col: 0, dataStart: 1, numeric: true, max: 10 }), /too many rows/);
 });
+
+// ── detect: force overrides + BOM ──
+
+test('detect: force delimiter/kind/header overrides', () => {
+  const semi = B('a;b;c\n1;2;3\n4;5;6\n');
+  // a semicolon file where the comma-sniffer might pick text/wrong — force ';'
+  const forced = detectKind(semi, { force: { delimiter: ';' } });
+  assert.equal(forced.kind, 'delimited');
+  assert.equal(forced.delimiter, ';');
+  assert.deepEqual(forced.schema.map((s) => s.name), ['a', 'b', 'c']);
+
+  // force header off on a file detect would call header-having
+  const noHdr = detectKind(B('id,name\n1,x\n2,y\n'), { force: { hasHeader: false } });
+  assert.equal(noHdr.hasHeader, false);
+  assert.deepEqual(noHdr.schema.map((s) => s.name), ['col 1', 'col 2']);
+
+  // force header ON for an all-numeric file detect would call headerless
+  const hdrOn = detectKind(B('1,2,3\n4,5,6\n7,8,9\n'), { force: { hasHeader: true } });
+  assert.equal(hdrOn.hasHeader, true);
+  assert.deepEqual(hdrOn.schema.map((s) => s.name), ['1', '2', '3']);
+
+  // force a delimited file to be viewed as plain text
+  assert.equal(detectKind(B('a,b\n1,2\n'), { force: { kind: 'text' } }).kind, 'text');
+});
+
+test('detect + parseFields: a UTF-8 BOM is stripped from the first column', () => {
+  const bom = new Uint8Array([0xEF, 0xBB, 0xBF, ...B('id,grade\n1,2.5\n')]);
+  const d = detectKind(bom);
+  assert.equal(d.kind, 'delimited');
+  assert.equal(d.schema[0].name, 'id');                       // not "﻿id"
+  // and a record whose bytes start with the BOM decodes clean
+  assert.deepEqual(parseFields(new Uint8Array([0xEF, 0xBB, 0xBF, ...B('a,b,c')])), ['a', 'b', 'c']);
+});

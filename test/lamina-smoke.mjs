@@ -228,6 +228,35 @@ try {
     ? ok(`sort: asc (${srt.a0}≤${srt.a1}), desc top=${srt.dTop}; filter+sort → ${srt.fRows} rows, top=${srt.fTop}`)
     : fail(`sort failed: ${JSON.stringify(srt)}`);
 
+  // ── interpretation override: a semicolon file forced to ';' + header off ──
+  const ovr = await page.evaluate(async () => {
+    const bytes = new TextEncoder().encode('a;b;c\n1;2;3\n4;5;6\n');
+    window._lamina.open('semi.csv', bytes);              // auto: likely 1 "text" column
+    const autoCols = window._laminaVS.cols;
+    window._lamina.reopen({ delimiter: ';' });           // force semicolon
+    await new Promise((r) => setTimeout(r, 30));
+    const forcedCols = window._laminaVS.cols;
+    window._lamina.reopen({ delimiter: ';', hasHeader: false });
+    await new Promise((r) => setTimeout(r, 30));
+    const rows = window._laminaVS.rowCount();            // header off → 3 data rows
+    return { autoCols, forcedCols, rows };
+  });
+  (ovr.forcedCols === 3 && ovr.rows === 3)
+    ? ok(`override: forced ';' → ${ovr.forcedCols} cols (auto saw ${ovr.autoCols}); header off → ${ovr.rows} rows`)
+    : fail(`override failed: ${JSON.stringify(ovr)}`);
+
+  // ── go-to-row scrolls a deep row into selection ──
+  const go = await page.evaluate(async () => {
+    let csv = 'id\n'; for (let i = 0; i < 5000; i++) csv += `${i}\n`;
+    window._lamina.open('rows.csv', new TextEncoder().encode(csv));
+    window._lamina.gotoRow(4000);
+    const sel = window._lamina.grid.getSelection();
+    return { r0: sel && sel.r0 };
+  });
+  (go.r0 === 3999)
+    ? ok(`go-to-row: row 4000 selected (r0=${go.r0})`)
+    : fail(`go-to-row failed: ${JSON.stringify(go)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

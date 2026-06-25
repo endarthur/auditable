@@ -28,8 +28,24 @@
   #toolbar #filter:focus { outline: none; border-color: #4a78b0; }   /* info */
   #toolbar #filter.err { border-color: #c0584a; }                    /* fault */
   #toolbar #filter::placeholder { color: #555; }
+  #toolbar #goto {
+    width: 64px; font-family: var(--mono); font-size: 12px; color: #ddd; background: #141414;
+    border: 1px solid #333; border-radius: 3px; padding: 4px 6px;
+  }
+  #toolbar #goto:focus { outline: none; border-color: #4a78b0; }
+  #toolbar #goto::placeholder { color: #555; }
   #toolbar .name { font-family: var(--mono); font-size: 12px; color: #888; }
-  #toolbar .kind { font-family: var(--mono); font-size: 11px; color: #8cb878; border: 1px solid #2f4a28; border-radius: 3px; padding: 1px 6px; }
+  #toolbar .kind { font-family: var(--mono); font-size: 11px; color: #8cb878; border: 1px solid #2f4a28; border-radius: 3px; padding: 1px 6px; cursor: pointer; }
+  #toolbar .kind:hover { border-color: #8cb878; }
+
+  #opts {
+    position: absolute; top: 40px; right: 10px; z-index: 30; display: none; flex-direction: column; gap: 8px;
+    background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 12px 14px;
+    font-family: var(--mono); font-size: 12px; color: #bbb; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  #opts.show { display: flex; }
+  #opts label { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
+  #opts select { font-family: var(--mono); font-size: 12px; color: #ddd; background: #141414; border: 1px solid #333; border-radius: 3px; padding: 3px 6px; }
 
   #grid { position: absolute; left: 0; right: 0; top: 38px; bottom: 24px; }
   #empty, #binary {
@@ -81,8 +97,15 @@
     <span class="title">lamina</span>
     <button id="btnOpen">Open…</button>
     <input id="filter" type="text" spellcheck="false" placeholder="filter…  e.g.  grade > 1  &&  lito == OXIDE">
+    <input id="goto" type="number" min="1" placeholder="row #" title="go to row">
     <span class="name" id="fileName">no file</span>
-    <span class="kind" id="kindBadge" style="display:none"></span>
+    <span class="kind" id="kindBadge" style="display:none" title="click to change how this file is read"></span>
+  </div>
+
+  <div id="opts">
+    <label>View as <select id="optKind"><option value="">auto</option><option value="delimited">table</option><option value="text">text</option></select></label>
+    <label>Delimiter <select id="optDelim"><option value="">auto</option><option value=",">comma</option><option value=";">semicolon</option><option value="&#9;">tab</option><option value="|">pipe</option></select></label>
+    <label>Header <select id="optHeader"><option value="">auto</option><option value="yes">yes</option><option value="no">no</option></select></label>
   </div>
 
   <div id="grid"></div>

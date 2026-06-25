@@ -80,7 +80,7 @@ function mount(name, d, src, totalBytes) {
   const schema = kind === 'delimited' ? d.schema : [{ name: 'line', type: 'string' }];
   const dataStart = kind === 'delimited' && d.hasHeader ? 1 : 0;
   const baseVs = createRecordViewSource(src, { schema, dataStart });
-  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterMatches: null, sort: null };
+  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterMatches: null, sort: null, file: null, bytes: null, force: {} };
   $('#filter').value = ''; $('#filter').classList.remove('err');     // fresh file → clear filter + sort
   recompute();
 }
@@ -169,11 +169,13 @@ async function applyFilter(str) {
 }
 function filterErr(e) { $('#filter').classList.add('err'); $('#meta').textContent = `filter: ${e.message}`; }
 
-// Open raw bytes — memory source (the test hook + small files).
-function open(name, bytes) {
-  const d = detectKind(bytes.subarray(0, 65536));
+// Open raw bytes — memory source (the test hook + small files). `force` overrides
+// auto-detection (the interpretation popover re-opens with it).
+function open(name, bytes, force) {
+  const d = detectKind(bytes.subarray(0, 65536), { force });
   if (d.kind === 'binary') return showBinary(name, bytes.length);
   mount(name, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
+  current.bytes = bytes; current.force = force || {};                 // remember for re-open with new force
 }
 
 // Render in-memory bytes (a small file, or a decompressed archive entry) through
@@ -320,7 +322,9 @@ $('#picker').onclick = (e) => { if (e.target.id === 'picker') $('#picker').class
 
 // Open a File — STREAMING source (never resident; the huge-file path). Detect off
 // the head slice, then stream the whole to build the block index.
-async function openFile(file) {
+async function openFile(file, force) {
+  const forced = force && Object.keys(force).length > 0;              // user overrode detection → fresh, no cache
+
   // 0. Archive? Peek inside (resident tier). Sniff the head's magic bytes.
   const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
   const fmt = detectFormat(head);
@@ -328,18 +332,20 @@ async function openFile(file) {
 
   // 1. Cache hit → rebuild the source from the stored index, no scan (instant).
   const key = fileKey(file);
-  const cached = await idbCache.get(key);
+  const cached = forced ? null : await idbCache.get(key);
   if (cached) {
     lastScan = 'cache';
     if (cached.detect.kind === 'binary') return showBinary(file.name, file.size);
     $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
-    return mount(file.name, cached.detect, buildSourceFromIndex(file, cached.index), file.size);
+    mount(file.name, cached.detect, buildSourceFromIndex(file, cached.index), file.size);
+    current.file = file; current.force = {};
+    return;
   }
 
-  // 2. Miss → detect off the head, scan (off-thread when we can), then cache.
+  // 2. Miss (or forced) → detect off the head, scan (off-thread when we can), then cache.
   const sample = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
-  const d = detectKind(sample);
-  if (d.kind === 'binary') { idbCache.set(key, { detect: d, index: null }); return showBinary(file.name, file.size); }
+  const d = detectKind(sample, { force });
+  if (d.kind === 'binary') { if (!forced) idbCache.set(key, { detect: d, index: null }); return showBinary(file.name, file.size); }
   $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
   const opts = { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' };
   const onProgress = (r, t) => { $('#meta').textContent = `indexing… ${t ? Math.round((100 * r) / t) : 0}%`; };
@@ -351,9 +357,43 @@ async function openFile(file) {
   } else {
     src = await buildFileSource(file, { ...opts, onProgress }); lastScan = 'inline';            // file:// — inline only
   }
-  idbCache.set(key, { detect: d, index: indexOf(src) });           // sidecar for next open (best-effort)
+  if (!forced) idbCache.set(key, { detect: d, index: indexOf(src) });   // cache only the auto interpretation
   mount(file.name, d, src, file.size);
+  current.file = file; current.force = force || {};                 // remember for re-open with new force
 }
+
+// ── interpretation override (delimiter / header / kind) + go-to-row ──
+
+// Re-open the current file applying a force patch (the popover changed something).
+function reopen(patch) {
+  const c = current; if (!c) return;
+  const force = { ...(c.force || {}), ...patch };
+  Object.keys(force).forEach((k) => { if (force[k] === '' || force[k] == null) delete force[k]; });   // '' = auto
+  if (c.file) openFile(c.file, force);
+  else if (c.bytes) open(c.label, c.bytes, force);
+}
+
+function openOpts() {
+  const f = current && current.force || {};
+  $('#optKind').value = f.kind || '';
+  $('#optDelim').value = f.delimiter || '';
+  $('#optHeader').value = f.hasHeader === true ? 'yes' : f.hasHeader === false ? 'no' : '';
+  $('#opts').classList.toggle('show');
+}
+$('#kindBadge').onclick = () => { if (current) openOpts(); };
+$('#optKind').onchange = (e) => reopen({ kind: e.target.value });
+$('#optDelim').onchange = (e) => reopen({ delimiter: e.target.value });
+$('#optHeader').onchange = (e) => reopen({ hasHeader: e.target.value === 'yes' ? true : e.target.value === 'no' ? false : '' });
+document.addEventListener('click', (e) => { if (!$('#opts').contains(e.target) && e.target.id !== 'kindBadge') $('#opts').classList.remove('show'); });
+
+// Go to a 1-based row: select it (loom scrolls the selection into view).
+function gotoRow(n) {
+  if (!grid || !window._laminaVS) return;
+  const row = Math.max(0, Math.min(window._laminaVS.rowCount() - 1, (n | 0) - 1));
+  grid.setSelection({ r0: row, c0: 0, r1: row, c1: 0 });
+  grid.focus();
+}
+$('#goto').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value) { gotoRow(Number(e.target.value)); } });
 
 // ── file pick ──
 $('#btnOpen').onclick = async () => {
@@ -386,4 +426,4 @@ $('#filter').addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { e.target.value = ''; applyFilter(''); e.target.blur(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };

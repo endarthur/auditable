@@ -664,16 +664,44 @@ function sniffDelimiter(lines) {
   return best && best.consistent >= 0.6 ? best : null;
 }
 
+// Build a delimited result (schema + header guess) for a known delimiter. Header:
+// forced (true/false) or guessed (row 0 all-text + a later numeric). Column count
+// = the median row length (robust to a stray ragged row). Shared by auto + forced.
+function buildDelimited(lines, delimiter, forceHeader) {
+  const rows = lines.filter((l) => l !== '').map((l) => l.split(delimiter));
+  const lens = rows.map((r) => r.length).sort((a, b) => a - b);
+  const columns = Math.max(1, lens[Math.floor(lens.length / 2)] || 1);
+  const head = rows[0] || [];
+  let hasHeader;
+  if (forceHeader === true || forceHeader === false) hasHeader = forceHeader;
+  else hasHeader = head.length > 0 && head.every((c) => !isNumeric(c)) && rows.slice(1, 20).some((r) => r.some(isNumeric));
+  const dataRows = rows.slice(hasHeader ? 1 : 0, hasHeader ? 21 : 20);
+  const schema = [];
+  for (let c = 0; c < columns; c++) {
+    const name = hasHeader && head[c] != null && head[c] !== '' ? head[c] : `col ${c + 1}`;
+    const vals = dataRows.map((r) => r[c]).filter((v) => v != null && v !== '');
+    schema.push({ name, type: vals.length && vals.every(isNumeric) ? 'number' : 'string' });
+  }
+  return { kind: 'delimited', delimiter, quote: '"', hasHeader, schema };
+}
+
 /**
  * @param {Uint8Array} sample  the file's head (e.g. first 64 KB)
- * @param {object} opts  { sniff?: @gcu/recon sniff }
- * @returns {{ kind:'delimited'|'text'|'binary', delimiter?, quote?, schema?, hasHeader? }}
+ * @param {object} opts  { sniff?, force? }
+ *   force overrides auto-detection (when the user corrects a wrong guess):
+ *   { kind?: 'delimited'|'text'|'binary', delimiter?: char, hasHeader?: boolean }
+ * @returns {{ kind, delimiter?, quote?, schema?, hasHeader? }}
  */
-function detectKind(sample, { sniff } = {}) {
-  if (looksBinary(sample)) return { kind: 'binary' };
+function detectKind(sample, { sniff, force } = {}) {
+  const f = force || {};
+  if (f.kind === 'binary') return { kind: 'binary' };
+  if (!f.kind && !f.delimiter && looksBinary(sample)) return { kind: 'binary' };
 
-  const text = new TextDecoder().decode(sample);
+  const text = new TextDecoder().decode(sample);   // default decoder strips a leading BOM
   const lines = text.split('\n').slice(0, 50).map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
+
+  if (f.kind === 'text') return { kind: 'text' };
+  if (f.delimiter) return buildDelimited(lines, f.delimiter, f.hasHeader);   // user forced a delimiter
 
   // recon enrichment (best-effort): if it finds a delimiter + fields, prefer it.
   if (typeof sniff === 'function') {
@@ -682,8 +710,8 @@ function detectKind(sample, { sniff } = {}) {
       if (m && m.delimiter && Array.isArray(m.fields) && m.fields.length > 1) {
         return {
           kind: 'delimited', delimiter: m.delimiter, quote: '"',
-          hasHeader: m.hasHeader !== false,
-          schema: m.fields.map((f) => ({ name: f.name, type: f.type || 'string', unit: f.unit, role: f.role })),
+          hasHeader: f.hasHeader != null ? f.hasHeader : m.hasHeader !== false,
+          schema: m.fields.map((fl) => ({ name: fl.name, type: fl.type || 'string', unit: fl.unit, role: fl.role })),
         };
       }
     } catch { /* fall through to builtin */ }
@@ -691,23 +719,7 @@ function detectKind(sample, { sniff } = {}) {
 
   const d = sniffDelimiter(lines.filter((l) => l !== ''));
   if (!d) return { kind: 'text' };
-
-  // Header guess: row 0 all non-numeric, and some later row has a numeric.
-  const rows = lines.filter((l) => l !== '').map((l) => l.split(d.delimiter));
-  const head = rows[0] || [];
-  const headAllText = head.length > 0 && head.every((c) => !isNumeric(c));
-  const laterHasNum = rows.slice(1, 20).some((r) => r.some(isNumeric));
-  const hasHeader = headAllText && laterHasNum;
-
-  const dataRows = rows.slice(hasHeader ? 1 : 0, hasHeader ? 21 : 20);
-  const schema = [];
-  for (let c = 0; c < d.columns; c++) {
-    const name = hasHeader && head[c] != null ? head[c] : `col ${c + 1}`;
-    const vals = dataRows.map((r) => r[c]).filter((v) => v != null && v !== '');
-    const type = vals.length && vals.every(isNumeric) ? 'number' : 'string';
-    schema.push({ name, type });
-  }
-  return { kind: 'delimited', delimiter: d.delimiter, quote: '"', hasHeader, schema };
+  return buildDelimited(lines, d.delimiter, f.hasHeader);
 }
 
 // ── src/provider.js ──
