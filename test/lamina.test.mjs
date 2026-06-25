@@ -585,3 +585,15 @@ test('scanColumnStats: categorical top-N + distinct; respects the rows subset', 
   const st2 = await scanColumnStats(src, { col: 0, dataStart: 1, numeric: false, rows: subset });
   assert.equal(st2.count, 60);
 });
+
+test('scanColumnStats: numeric column counts nulls vs non-numeric (bad) separately', async () => {
+  // grade column: numbers, one empty, two non-numeric tokens
+  const csv = 'id,grade\n0,1\n1,\n2,2\n3,oops\n4,3\n5,NA\n';
+  const src = buildMemorySource(B(csv), { kind: 'delimited', blockSize: 2 });
+  const st = await scanColumnStats(src, { col: 1, dataStart: 1, numeric: true });
+  assert.equal(st.count, 6);
+  assert.equal(st.n, 3);            // 1, 2, 3 parsed
+  assert.equal(st.nulls, 1);        // the empty cell
+  assert.equal(st.bad, 2);          // "oops" + "NA"
+  assert.equal(st.max, 3);
+});

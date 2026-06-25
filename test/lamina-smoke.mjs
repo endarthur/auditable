@@ -394,6 +394,24 @@ try {
     ? ok(`column stats: numeric (mean+median) + categorical (distinct + top values)`)
     : fail(`stats failed: ${JSON.stringify(stats)}`);
 
+  // ── force column type (number ↔ text) changes sort + stats ──
+  const ftype = await page.evaluate(async () => {
+    // a column that looks numeric but should be text (codes); x keeps it a real table
+    window._lamina.open('ft.csv', new TextEncoder().encode('code,x\n10,a\n2,b\n30,c\n'));
+    const before = window._lamina.current.schema[0].type;     // detected 'number'
+    window._lamina.setColType(0, 'string');                   // force text
+    const after = window._lamina.current.schema[0].type;
+    // stats now treat it as categorical (distinct), not numeric
+    await window._lamina.showColumnStats(0);
+    await new Promise((r) => setTimeout(r, 40));
+    const body = document.getElementById('helpBody').textContent;
+    document.getElementById('helpClose').click();
+    return { before, after, statsCategorical: /distinct/.test(body) };
+  });
+  (ftype.before === 'number' && ftype.after === 'string' && ftype.statsCategorical)
+    ? ok(`force column type: number→text (stats become categorical)`)
+    : fail(`force type failed: ${JSON.stringify(ftype)}`);
+
   // ── column widths persist across a re-render (autofit then sort) ──
   const persist = await page.evaluate(async () => {
     window._lamina.open('p2.csv', new TextEncoder().encode('a,b\n1,2\n3,4\n5,6\n'));

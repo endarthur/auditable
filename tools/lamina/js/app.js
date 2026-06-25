@@ -161,6 +161,14 @@ function mountView(vs, info = {}) {
 // Cheap re-render of the current view (after a column hide/show — the data view
 // is unchanged, only which columns show).
 function rerender() { if (current && current.view) mountView(current.view, current.info); }
+// Override a column's detected type (number ↔ text). The schema array is shared
+// live with the views, so this changes alignment + how stats/sort treat it;
+// recompute re-applies a sort on that column under the new type.
+function setColType(uc, type) {
+  if (!current || !current.schema[uc]) return;
+  current.schema[uc].type = type;
+  recompute();
+}
 function hideColumn(uc) { if (current) { current.hidden.add(uc); rerender(); } }
 function showColumn(uc) { if (current) { current.hidden.delete(uc); rerender(); } }
 function showAllColumns() { if (current) { current.hidden.clear(); rerender(); } }
@@ -187,6 +195,9 @@ function showColumnMenu(uc, x, y) {
   if (c.sort && c.sort.col === uc) items.push({ label: 'Clear sort', action: () => { c.sort = null; recompute(); } });
   items.push({ sep: true }, { label: `Statistics — ${name}…`, action: () => showColumnStats(uc) });
   items.push({ label: `Filter by ${name}…`, action: () => setFilterText(`${name} `) });
+  const isNum = c.schema[uc] && c.schema[uc].type === 'number';       // force-type override (fixes a mis-detected column)
+  items.push(isNum ? { label: 'Treat as text', action: () => setColType(uc, 'string') }
+                   : { label: 'Treat as number', action: () => setColType(uc, 'number') });
   items.push({ sep: true }, { label: `Hide ${name}`, action: () => hideColumn(uc) });
   for (let i = 0; i < c.baseVs.cols; i++) {
     if (c.hidden.has(i)) items.push({ label: `Show ${c.baseVs.header(i).label}`, action: () => showColumn(i) });
@@ -599,6 +610,7 @@ function renderStats(st) {
   if (st.kind === 'number') {
     let h = '<table style="border-collapse:collapse">';
     h += row('count', st.count.toLocaleString()) + row('non-null', st.n.toLocaleString()) + row('nulls', st.nulls.toLocaleString());
+    if (st.bad) h += row('<span style="color:#c89b3c">non-numeric</span>', `<span style="color:#c89b3c">${st.bad.toLocaleString()}</span>`);   // failed to parse
     h += row('min', fmtN(st.min)) + row('max', fmtN(st.max)) + row('mean', fmtN(st.mean)) + row('std', fmtN(st.std)) + row('sum', fmtN(st.sum));
     if (st.quantiles) {
       const q = st.quantiles;
@@ -663,4 +675,4 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') $('#help').classList.remove('show');
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, autofitAll, resetColWidths, showColumnStats, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, autofitAll, resetColWidths, showColumnStats, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };

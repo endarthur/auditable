@@ -22,7 +22,7 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
   const subset = rows;
   let sp = 0;
 
-  let count = 0, nulls = 0;
+  let count = 0, nulls = 0, bad = 0;   // nulls = empty/missing; bad = present but not a number
   // numeric (Welford) + a capped value buffer for quantiles
   let min = Infinity, max_ = -Infinity, sum = 0, mean = 0, m2 = 0, nNum = 0;
   let vals = numeric ? new Float64Array(1024) : null, nv = 0, collecting = numeric;
@@ -52,7 +52,7 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
       if (numeric) {
         if (raw == null || raw === '') { nulls++; continue; }
         const x = Number(raw);
-        if (Number.isNaN(x)) { nulls++; continue; }     // non-numeric in a numeric column → counted as null
+        if (Number.isNaN(x)) { bad++; continue; }       // present but not a number → "non-numeric"
         nNum++;
         if (x < min) min = x;
         if (x > max_) max_ = x;
@@ -85,7 +85,7 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
       const q = (p) => sl[Math.min(nv - 1, Math.round(p * (nv - 1)))];
       quantiles = { p5: q(0.05), p25: q(0.25), p50: q(0.5), p75: q(0.75), p95: q(0.95) };
     }
-    return { kind: 'number', count, nulls, n: nNum, min: nNum ? min : null, max: nNum ? max_ : null, mean: nNum ? mean : null, std, sum, quantiles, quantilesCapped: !collecting };
+    return { kind: 'number', count, nulls, bad, n: nNum, min: nNum ? min : null, max: nNum ? max_ : null, mean: nNum ? mean : null, std, sum, quantiles, quantilesCapped: !collecting };
   }
   const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN).map(([value, n]) => ({ value, n }));
   return { kind: 'string', count, nulls, distinct: freq.size, cappedDistinct, top };
