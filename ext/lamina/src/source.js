@@ -6,7 +6,7 @@
 // chunk-by-chunk to build the index, then `vfs.readRange` serves windows) is a
 // separate builder with the SAME shape — the ViewSource doesn't care which.
 
-import { scanRecords, createRecordScanner } from './scan.js';
+import { scanRecords, scanFileToIndex } from './scan.js';
 
 /**
  * @param {Uint8Array} bytes  the whole file (small/medium)
@@ -29,26 +29,23 @@ export function buildMemorySource(bytes, { kind = 'delimited', delimiter = ',', 
  * scanned then discarded; only the ~1 MB index is kept). Windows are served by
  * File.slice (lazy — reads only the slice). This is the "actually huge" source:
  * the File comes from a drop / FSAA picker / `vfs.toFile(path)`.
- * @param {File|Blob} file
- * @param {object} opts  { kind, delimiter, quote, blockSize?, onProgress?(read,total) }
- * @returns {Promise<source>}  same shape as buildMemorySource
  *
- * NOTE: the scan runs on the calling thread today; moving it to a @gcu/proc
- * worker (responsiveness on tens-of-GB) is the next increment — the source shape
- * is unchanged, so nothing downstream moves.
+ * The index scan is dependency-injected via `scan(file, scanOpts) → index` so the
+ * heavy pass can run OFF the main thread (a @gcu/proc worker imports this bundle
+ * and calls scanFileToIndex — see the harness wiring) while @gcu/lamina stays
+ * zero-dependency on @gcu/proc. Default is the inline scan (with progress) — used
+ * by tests, small files, and the file:// fallback where cross-blob workers are
+ * blocked. `readRange` ALWAYS stays main-thread (File.slice — can't return a
+ * subarray closure across a worker boundary).
+ * @param {File|Blob} file
+ * @param {object} opts  { kind, delimiter, quote, blockSize?, onProgress?(read,total), scan? }
+ * @returns {Promise<source>}  same shape as buildMemorySource
  */
-export async function buildFileSource(file, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, onProgress } = {}) {
-  const scanner = createRecordScanner({ kind, quote: quote.charCodeAt(0), blockSize });
-  const reader = file.stream().getReader();
-  let read = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    scanner.push(value);                       // a Uint8Array chunk — scanned, then dropped
-    read += value.length;
-    if (onProgress) onProgress(read, file.size);
-  }
-  const idx = scanner.end();
+export async function buildFileSource(file, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, onProgress, scan } = {}) {
+  const scanOpts = { kind, quote: quote.charCodeAt(0), blockSize };
+  const idx = scan
+    ? await scan(file, scanOpts)                          // off-thread (worker): no onProgress (functions don't clone)
+    : await scanFileToIndex(file, { ...scanOpts, onProgress });
   return {
     kind, delimiter, quote, blockSize,
     blockOffsets: idx.blockOffsets,

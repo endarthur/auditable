@@ -68,6 +68,32 @@ export function scanRecords(bytes, opts) {
 }
 
 /**
+ * Stream a File/Blob through the scanner and return the block index — NEVER
+ * resident (chunks scanned then dropped). Worker-callable (a @gcu/proc
+ * module-call imports this bundle and invokes it; File crosses by structured
+ * clone, the ~1 MB index comes back) AND the main-thread fallback. Self-contained
+ * — references only this module, so it's safe across the realm boundary.
+ * `onProgress` is undefined in a worker (functions don't clone); only the inline
+ * caller passes it.
+ * @param {File|Blob} file
+ * @param {object} opts  { kind, quote (BYTE), blockSize, onProgress?(read,total) }
+ * @returns {Promise<{blockOffsets,rowCount,totalBytes,kind,quote,blockSize}>}
+ */
+export async function scanFileToIndex(file, { kind = 'delimited', quote = DQUOTE, blockSize = 4096, onProgress } = {}) {
+  const scanner = createRecordScanner({ kind, quote, blockSize });
+  const reader = file.stream().getReader();
+  let read = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    scanner.push(value);                 // a Uint8Array chunk — scanned, then dropped
+    read += value.length;
+    if (onProgress) onProgress(read, file.size);
+  }
+  return scanner.end();
+}
+
+/**
  * Split a byte range (one or more blocks' worth) into record byte-slices, using
  * the same boundary rule as the scanner. Trailing \r is trimmed (CRLF). The \n
  * is excluded. This is what the windowed read calls after readRange.

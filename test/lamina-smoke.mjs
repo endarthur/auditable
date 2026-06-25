@@ -93,11 +93,15 @@ try {
     const R = 5000;                                      // a deep, unloaded block
     const before = vs.rowAt(R);                          // LOADING
     const row = await vs.ensureRow(R);                   // windowed via File.slice (lazy)
-    return { rows: vs.rowCount(), wasPending: typeof before === 'symbol', n: row[0], v: row[1] };
+    return { rows: vs.rowCount(), wasPending: typeof before === 'symbol', n: row[0], v: row[1], scan: window._lamina.lastScan };
   });
   (stream.rows === 6000 && stream.wasPending && stream.n === '5000' && stream.v === 'x5000')
     ? ok(`streamed File → ${stream.rows} rows; deep row 5000 windowed via File.slice (n=${stream.n})`)
     : fail(`streaming open failed: ${JSON.stringify(stream)}`);
+  // over http the index scan must run in a @gcu/proc worker (off the main thread), not the inline fallback
+  stream.scan === 'worker'
+    ? ok('index scan ran off-thread (@gcu/proc worker)')
+    : fail(`expected worker scan, got "${stream.scan}" (worker path fell back to inline)`);
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');

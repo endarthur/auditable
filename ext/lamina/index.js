@@ -73,6 +73,32 @@ function scanRecords(bytes, opts) {
 }
 
 /**
+ * Stream a File/Blob through the scanner and return the block index — NEVER
+ * resident (chunks scanned then dropped). Worker-callable (a @gcu/proc
+ * module-call imports this bundle and invokes it; File crosses by structured
+ * clone, the ~1 MB index comes back) AND the main-thread fallback. Self-contained
+ * — references only this module, so it's safe across the realm boundary.
+ * `onProgress` is undefined in a worker (functions don't clone); only the inline
+ * caller passes it.
+ * @param {File|Blob} file
+ * @param {object} opts  { kind, quote (BYTE), blockSize, onProgress?(read,total) }
+ * @returns {Promise<{blockOffsets,rowCount,totalBytes,kind,quote,blockSize}>}
+ */
+async function scanFileToIndex(file, { kind = 'delimited', quote = DQUOTE, blockSize = 4096, onProgress } = {}) {
+  const scanner = createRecordScanner({ kind, quote, blockSize });
+  const reader = file.stream().getReader();
+  let read = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    scanner.push(value);                 // a Uint8Array chunk — scanned, then dropped
+    read += value.length;
+    if (onProgress) onProgress(read, file.size);
+  }
+  return scanner.end();
+}
+
+/**
  * Split a byte range (one or more blocks' worth) into record byte-slices, using
  * the same boundary rule as the scanner. Trailing \r is trimmed (CRLF). The \n
  * is excluded. This is what the windowed read calls after readRange.
@@ -158,26 +184,23 @@ function buildMemorySource(bytes, { kind = 'delimited', delimiter = ',', quote =
  * scanned then discarded; only the ~1 MB index is kept). Windows are served by
  * File.slice (lazy — reads only the slice). This is the "actually huge" source:
  * the File comes from a drop / FSAA picker / `vfs.toFile(path)`.
- * @param {File|Blob} file
- * @param {object} opts  { kind, delimiter, quote, blockSize?, onProgress?(read,total) }
- * @returns {Promise<source>}  same shape as buildMemorySource
  *
- * NOTE: the scan runs on the calling thread today; moving it to a @gcu/proc
- * worker (responsiveness on tens-of-GB) is the next increment — the source shape
- * is unchanged, so nothing downstream moves.
+ * The index scan is dependency-injected via `scan(file, scanOpts) → index` so the
+ * heavy pass can run OFF the main thread (a @gcu/proc worker imports this bundle
+ * and calls scanFileToIndex — see the harness wiring) while @gcu/lamina stays
+ * zero-dependency on @gcu/proc. Default is the inline scan (with progress) — used
+ * by tests, small files, and the file:// fallback where cross-blob workers are
+ * blocked. `readRange` ALWAYS stays main-thread (File.slice — can't return a
+ * subarray closure across a worker boundary).
+ * @param {File|Blob} file
+ * @param {object} opts  { kind, delimiter, quote, blockSize?, onProgress?(read,total), scan? }
+ * @returns {Promise<source>}  same shape as buildMemorySource
  */
-async function buildFileSource(file, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, onProgress } = {}) {
-  const scanner = createRecordScanner({ kind, quote: quote.charCodeAt(0), blockSize });
-  const reader = file.stream().getReader();
-  let read = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    scanner.push(value);                       // a Uint8Array chunk — scanned, then dropped
-    read += value.length;
-    if (onProgress) onProgress(read, file.size);
-  }
-  const idx = scanner.end();
+async function buildFileSource(file, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, onProgress, scan } = {}) {
+  const scanOpts = { kind, quote: quote.charCodeAt(0), blockSize };
+  const idx = scan
+    ? await scan(file, scanOpts)                          // off-thread (worker): no onProgress (functions don't clone)
+    : await scanFileToIndex(file, { ...scanOpts, onProgress });
   return {
     kind, delimiter, quote, blockSize,
     blockOffsets: idx.blockOffsets,
@@ -392,6 +415,7 @@ function createLaminaProvider(vs, { PENDING } = {}) {
 export {
   createRecordScanner,
   scanRecords,
+  scanFileToIndex,
   splitRecords,
   parseFields,
   buildMemorySource,

@@ -4,7 +4,7 @@
 // reconstruct any window. Pure, in `npm test`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRecordScanner, scanRecords, splitRecords, parseFields } from '../ext/lamina/src/scan.js';
+import { createRecordScanner, scanRecords, scanFileToIndex, splitRecords, parseFields } from '../ext/lamina/src/scan.js';
 import { detectKind } from '../ext/lamina/src/detect.js';
 import { buildMemorySource, buildFileSource } from '../ext/lamina/src/source.js';
 import { createRecordViewSource, LOADING } from '../ext/lamina/src/viewsource.js';
@@ -230,4 +230,29 @@ test('buildFileSource: a viewsource over a streamed File windows a deep row', as
   assert.equal(vs.rowCount(), 5000);
   assert.equal(vs.rowAt(4321), LOADING);                        // deep, not loaded
   assert.deepEqual(await vs.ensureRow(4321), ['4321']);         // windowed via File.slice
+});
+
+test('scanFileToIndex == scanRecords (the worker-callable entry); quote BYTE in opts', async () => {
+  const bytes = B('a,"x\ny",b\n1,2\n3,4\n');                     // an embedded-newline quoted field
+  const file = new File([bytes], 'q.csv');
+  const oneShot = scanRecords(bytes, { kind: 'delimited', blockSize: 1 });
+  const streamed = await scanFileToIndex(file, { kind: 'delimited', quote: 34, blockSize: 1 });
+  assert.equal(streamed.rowCount, oneShot.rowCount);
+  assert.deepEqual([...streamed.blockOffsets], [...oneShot.blockOffsets]);
+});
+
+test('buildFileSource: injected `scan` dispatcher (the off-thread seam) is used; readRange stays local', async () => {
+  let csv = 'k,v\n';
+  for (let i = 0; i < 1200; i++) csv += `${i},${i * 2}\n`;
+  const bytes = B(csv);
+  const file = new File([bytes], 'inj.csv');
+  let called = 0;
+  // Stand-in for the @gcu/proc worker: a function that returns the index off-band.
+  const scan = async (f, opts) => { called++; return scanFileToIndex(f, opts); };
+  const src = await buildFileSource(file, { kind: 'delimited', blockSize: 128, scan });
+  assert.equal(called, 1);                                       // the seam ran, not the inline path
+  const mem = buildMemorySource(bytes, { kind: 'delimited', blockSize: 128 });
+  assert.deepEqual([...src.blockOffsets], [...mem.blockOffsets]);
+  const off = src.blockOffsets[2];
+  assert.deepEqual([...(await src.readRange(off, 12))], [...bytes.subarray(off, off + 12)]);  // readRange = File.slice, local
 });

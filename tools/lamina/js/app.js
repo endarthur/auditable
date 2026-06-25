@@ -9,9 +9,28 @@
 
 import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, createRecordViewSource, createLaminaProvider } from '@gcu/lamina';
+import { ProcessManager } from '@gcu/proc';
 
 const $ = (s) => document.querySelector(s);
 let grid = null;
+let lastScan = null;            // 'worker' | 'inline' — which index-scan path the last openFile took (automation hook)
+
+// ── off-thread index scan (a @gcu/proc module-call imports the lamina bundle and
+// runs scanFileToIndex over File.stream(); the File crosses by reference, the
+// ~1 MB index comes back). Keeps the tab responsive on tens-of-GB. On file://
+// cross-blob workers are blocked, so we skip it; any worker failure falls back to
+// the inline scan in openFile. ──
+const LAMINA_URL = new URL('../../ext/lamina/index.js', document.baseURI).href;  // matches the import map (relative to the document, not js/app.js)
+const canWorker = location.protocol !== 'file:' && typeof Worker !== 'undefined';
+let _pm = null;
+const pm = () => (_pm ||= new ProcessManager());
+
+async function workerScan(file, scanOpts) {
+  const proc = await pm().spawn({ module: LAMINA_URL, fn: 'scanFileToIndex', args: [file, scanOpts] });
+  const code = await proc.wait();
+  if (code !== 0) { if (proc.error) throw proc.error; throw new Error('scan worker exit ' + code); }
+  return proc.result;
+}
 
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
@@ -63,10 +82,16 @@ async function openFile(file) {
   const d = detectKind(sample);
   if (d.kind === 'binary') return showBinary(file.name, file.size);
   $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
-  const src = await buildFileSource(file, {
-    kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"',
-    onProgress: (r, t) => { $('#meta').textContent = `indexing… ${t ? Math.round((100 * r) / t) : 0}%`; },
-  });
+  const opts = { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' };
+  const onProgress = (r, t) => { $('#meta').textContent = `indexing… ${t ? Math.round((100 * r) / t) : 0}%`; };
+  let src;
+  if (canWorker) {
+    $('#meta').textContent = 'indexing…';                          // worker scan has no progress callback
+    try { src = await buildFileSource(file, { ...opts, scan: workerScan }); lastScan = 'worker'; }
+    catch { src = await buildFileSource(file, { ...opts, onProgress }); lastScan = 'inline'; }  // worker blocked/failed → inline
+  } else {
+    src = await buildFileSource(file, { ...opts, onProgress }); lastScan = 'inline';            // file:// — inline only
+  }
   mount(file.name, d, src, file.size);
 }
 
@@ -95,4 +120,4 @@ window.addEventListener('drop', async (e) => {
   if (f) openFile(f);
 });
 
-window._lamina = { open, openFile, get grid() { return grid; } };
+window._lamina = { open, openFile, get grid() { return grid; }, get lastScan() { return lastScan; }, canWorker };
