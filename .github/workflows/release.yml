@@ -30,6 +30,7 @@ jobs:
           node build.js --target=auditable-py
           node build.js --target=auditable-geo
           node build.js --target=scan
+          node build.js --target=lamina
           node gen_examples.js
           node gen_gallery.js
           node make_encrypted_example.mjs
@@ -62,6 +63,7 @@ jobs:
             works-all.html \
             works-core.html \
             packages.zip \
+            lamina.html \
             editions/auditable-py.html \
             editions/auditable-geo.html \
             --clobber
@@ -110,3 +112,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WORKS_DISPATCH_TOKEN }}
         run: gh workflow run publish.yml --repo gentropic/works --ref main
+
+      # Tell the lamina repo to rebuild its PWA from this fresh release. Guarded:
+      # if LAMINA_DISPATCH_TOKEN isn't set yet, skip rather than fail the release
+      # (lamina's publish.yml also runs on its own push + falls back to its seed).
+      - name: Trigger lamina PWA rebuild
+        env:
+          GH_TOKEN: ${{ secrets.LAMINA_DISPATCH_TOKEN }}
+        run: |
+          if [ -n "$GH_TOKEN" ]; then
+            gh workflow run publish.yml --repo gentropic/lamina --ref main
+          else
+            echo "LAMINA_DISPATCH_TOKEN unset — skipping lamina trigger (push-deploy still works)."
+          fi
