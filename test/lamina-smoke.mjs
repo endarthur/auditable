@@ -334,20 +334,25 @@ try {
     ? ok(`columns: hide 'b' → ${col.afterHide.cols} cols (display col 1 now '${col.afterHide.c1}'); show all → ${col.restored}`)
     : fail(`column hide/show failed: ${JSON.stringify(col)}`);
 
-  // ── menubar + help overlay ──
+  // ── menubar + help overlay + View→Interpretation opens the popover ──
   const menu = await page.evaluate(async () => {
+    window._lamina.open('mm.csv', new TextEncoder().encode('a,b\n1,2\n3,4\n'));   // a file must be open
     document.getElementById('mFile').click();            // open the File menu
     const fileItems = [...document.querySelectorAll('#ctxmenu .item')].map((e) => e.textContent);
     document.getElementById('mView').click();            // (re)open View
     const viewItems = [...document.querySelectorAll('#ctxmenu .item')].map((e) => e.textContent);
+    // click "Interpretation…" and confirm the popover OPENS and STAYS open (the bug)
+    [...document.querySelectorAll('#ctxmenu .item')].find((e) => e.textContent.startsWith('Interpretation')).click();
+    await new Promise((r) => setTimeout(r, 20));
+    const optsOpen = document.getElementById('opts').classList.contains('show');
     window._lamina.showHelp('filter');                   // Help → Filter syntax
     const helpShown = document.getElementById('help').classList.contains('show');
     const helpHasOps = document.getElementById('helpBody').textContent.includes('contains');
     document.getElementById('helpClose').click();
-    return { fileItems, viewItems, helpShown, helpHasOps, helpClosed: !document.getElementById('help').classList.contains('show') };
+    return { fileItems, viewItems, optsOpen, helpShown, helpHasOps, helpClosed: !document.getElementById('help').classList.contains('show') };
   });
-  (menu.fileItems.some((t) => t.startsWith('Open')) && menu.viewItems.includes('Clear sort') && menu.helpShown && menu.helpHasOps && menu.helpClosed)
-    ? ok(`menubar: File(${menu.fileItems.length}) / View(${menu.viewItems.length}) / Help → filter-syntax overlay opens + closes`)
+  (menu.fileItems.some((t) => t.startsWith('Open')) && menu.viewItems.includes('Clear sort') && menu.optsOpen && menu.helpShown && menu.helpHasOps && menu.helpClosed)
+    ? ok(`menubar: File/View populate · View→Interpretation opens the popover · Help→filter overlay opens+closes`)
     : fail(`menubar failed: ${JSON.stringify(menu)}`);
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));

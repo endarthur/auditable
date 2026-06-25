@@ -470,22 +470,31 @@ function reopen(patch) {
   else if (c.bytes) open(c.label, c.bytes, force);
 }
 
+// Open the interpretation popover (delimiter / header / kind / skip / comment).
+// Dismiss-on-outside is attached AFTER this click (setTimeout 0) so the very
+// click that opens it — from the kind badge OR View → Interpretation — doesn't
+// immediately close it.
 function openOpts() {
-  const f = current && current.force || {};
+  if (!current) return;
+  const opts = $('#opts');
+  if (opts.classList.contains('show')) return closeOpts();
+  const f = current.force || {};
   $('#optKind').value = f.kind || '';
   $('#optDelim').value = f.delimiter || '';
   $('#optHeader').value = f.hasHeader === true ? 'yes' : f.hasHeader === false ? 'no' : '';
   $('#optSkip').value = f.skip != null ? f.skip : '';
   $('#optComment').value = f.comment != null ? f.comment : '';
-  $('#opts').classList.toggle('show');
+  opts.classList.add('show');
+  setTimeout(() => document.addEventListener('mousedown', onOptsDown), 0);
 }
-$('#kindBadge').onclick = () => { if (current) openOpts(); };
+function closeOpts() { $('#opts').classList.remove('show'); document.removeEventListener('mousedown', onOptsDown); }
+function onOptsDown(e) { if (!$('#opts').contains(e.target) && e.target.id !== 'kindBadge') closeOpts(); }
+$('#kindBadge').onclick = () => openOpts();
 $('#optKind').onchange = (e) => reopen({ kind: e.target.value });
 $('#optDelim').onchange = (e) => reopen({ delimiter: e.target.value });
 $('#optHeader').onchange = (e) => reopen({ hasHeader: e.target.value === 'yes' ? true : e.target.value === 'no' ? false : '' });
 $('#optSkip').onchange = (e) => reopen({ skip: e.target.value === '' ? '' : Math.max(0, e.target.value | 0) });   // '' = auto
 $('#optComment').onchange = (e) => reopen({ comment: e.target.value });                                           // '' = none/auto
-document.addEventListener('click', (e) => { if (!$('#opts').contains(e.target) && e.target.id !== 'kindBadge') $('#opts').classList.remove('show'); });
 
 // Go to a 1-based row: select it (loom scrolls the selection into view).
 function gotoRow(n) {
