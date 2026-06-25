@@ -207,6 +207,27 @@ try {
     ? ok('filter: unknown column → box marked red, no crash')
     : fail(`filter error-handling failed: ${JSON.stringify(bad)}`);
 
+  // ── sort: header-click cycles asc/desc; composes with filter ──
+  const srt = await page.evaluate(async () => {
+    let csv = 'id,grade\n';
+    const grades = [];
+    for (let i = 0; i < 2000; i++) { const g = (i * 7) % 100; grades.push(g); csv += `${i},${g}\n`; }
+    window._lamina.open('g.csv', new TextEncoder().encode(csv));
+    await window._lamina.toggleSort(1);                  // grade asc
+    const a0 = Number((await window._laminaVS.ensureRow(0))[1]);
+    const a1 = Number((await window._laminaVS.ensureRow(1))[1]);
+    await window._lamina.toggleSort(1);                  // grade desc
+    const dTop = Number((await window._laminaVS.ensureRow(0))[1]);
+    // filter then sort: keep grade<50, sorted desc → top should be the max under 50
+    await window._lamina.applyFilter('grade < 50');
+    const fRows = window._laminaVS.rowCount();
+    const fTop = Number((await window._laminaVS.ensureRow(0))[1]);   // sort (desc) still active over the filtered set
+    return { a0, a1, dTop, fRows, fTop, expectMax: Math.max(...grades), expectFiltered: grades.filter((g) => g < 50).length, expectFTop: Math.max(...grades.filter((g) => g < 50)) };
+  });
+  (srt.a0 <= srt.a1 && srt.dTop === srt.expectMax && srt.fRows === srt.expectFiltered && srt.fTop === srt.expectFTop)
+    ? ok(`sort: asc (${srt.a0}≤${srt.a1}), desc top=${srt.dTop}; filter+sort → ${srt.fRows} rows, top=${srt.fTop}`)
+    : fail(`sort failed: ${JSON.stringify(srt)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

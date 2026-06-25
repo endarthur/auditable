@@ -4,5 +4,6 @@ export { createRecordScanner, scanRecords, scanFileToIndex, splitRecords, parseF
 export { buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey } from './source.js';
 export { createRecordViewSource, LOADING } from './viewsource.js';
 export { parseFilter, scanFilter, createFilteredViewSource } from './filter.js';
+export { scanSortKeys } from './sort.js';
 export { detectKind } from './detect.js';
 export { createLaminaProvider } from './provider.js';

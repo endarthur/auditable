@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createFilteredViewSource, createLaminaProvider } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createFilteredViewSource, scanSortKeys, createLaminaProvider } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes } from '@gcu/archive';
 import { Unzip, UnzipInflate } from 'fflate';
@@ -74,19 +74,46 @@ function showBinary(name, totalBytes) {
 }
 
 // Mount a built source (memory / streaming / tape) read-only. Builds the base
-// view, stores `current` (so the filter box can act on it), then renders.
+// view, stores `current` (the open file — filter + sort act on it), then renders.
 function mount(name, d, src, totalBytes) {
   const kind = d.kind;                                  // 'delimited' | 'text'
   const schema = kind === 'delimited' ? d.schema : [{ name: 'line', type: 'string' }];
   const dataStart = kind === 'delimited' && d.hasHeader ? 1 : 0;
   const baseVs = createRecordViewSource(src, { schema, dataStart });
-  current = { source: src, d, dataStart, baseVs, label: name, totalBytes };
-  $('#filter').value = ''; $('#filter').classList.remove('err');     // fresh file → clear filter
-  mountView(baseVs);
+  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterMatches: null, sort: null };
+  $('#filter').value = ''; $('#filter').classList.remove('err');     // fresh file → clear filter + sort
+  recompute();
 }
 
-// (Re)create the grid for a view (base or filtered) + update the footer.
-function mountView(vs, info) {
+// Derive the active view from base + filter + sort and render it. Filter and sort
+// compose: sort runs over the current filter's matches (so "filter then sort" is
+// the path for files too big to sort whole).
+async function recompute() {
+  const c = current;
+  if (!c) return;
+  let view = c.baseVs;
+  let info = {};
+  const subset = c.filterMatches;                       // ascending display rows, or null = all
+  if (c.sort) {
+    $('#meta').textContent = 'sorting…';
+    try {
+      const numeric = (c.schema[c.sort.col] && c.schema[c.sort.col].type) === 'number';
+      const order = await scanSortKeys(c.source, {
+        col: c.sort.col, dir: c.sort.dir, dataStart: c.dataStart, numeric, rows: subset,
+        onProgress: (b, n) => { $('#meta').textContent = `sorting… ${n ? Math.round((100 * b) / n) : 0}%`; },
+      });
+      view = createFilteredViewSource(c.baseVs, order);
+      info = { filtered: !!subset, sorted: true };
+    } catch (e) { $('#meta').textContent = `sort: ${e.message}`; c.sort = null; view = subset ? createFilteredViewSource(c.baseVs, subset) : c.baseVs; info = { filtered: !!subset }; }
+  } else if (subset) {
+    view = createFilteredViewSource(c.baseVs, subset);
+    info = { filtered: true };
+  }
+  mountView(view, info);
+}
+
+// (Re)create the grid for a view + wire header-click sorting + update the footer.
+function mountView(vs, info = {}) {
   if (grid) { grid.destroy(); grid = null; }
   const c = current;
   $('#fileName').textContent = c.label;
@@ -94,33 +121,50 @@ function mountView(vs, info) {
   $('#empty').style.display = 'none';
   const badge = $('#kindBadge'); badge.style.display = '';
   badge.textContent = c.d.kind === 'delimited' ? `CSV · ${c.d.delimiter === '\t' ? 'TSV' : 'delimited'}` : c.d.kind;
-  grid = createGrid($('#grid'), createLaminaProvider(vs, { PENDING }), { readOnly: true, theme: 'dark', defaultColW: c.d.kind === 'text' ? 900 : 130 });
+
+  // Provider with a sort indicator stamped onto the active column's header.
+  const provider = createLaminaProvider(vs, { PENDING });
+  const baseHeader = provider.header.bind(provider);
+  provider.header = (col) => { const h = baseHeader(col); if (c.sort && c.sort.col === col) h.sort = c.sort.dir; return h; };
+
+  grid = createGrid($('#grid'), provider, { readOnly: true, theme: 'dark', defaultColW: c.d.kind === 'text' ? 900 : 130 });
+  if (c.d.kind === 'delimited') grid.onHeaderClick((col) => toggleSort(col));   // click a header to sort
+
   const shown = vs.rowCount();
-  const rows = (info && info.filtered)
-    ? `${shown.toLocaleString()} of ${c.baseVs.rowCount().toLocaleString()} rows (filtered)`
-    : `${shown.toLocaleString()} rows`;
+  const base = c.baseVs.rowCount();
+  let rows = info.filtered ? `${shown.toLocaleString()} of ${base.toLocaleString()} rows (filtered)` : `${shown.toLocaleString()} rows`;
+  if (info.sorted) rows += ` · sorted ${c.sort.dir} by ${c.schema[c.sort.col].name}`;
   $('#meta').textContent = `${rows} × ${vs.cols} cols · ${fmtBytes(c.totalBytes)} · ${c.d.kind}`;
   window._laminaVS = vs;                                // automation hook
 }
 
-// Apply a filter expression over the current file (forward scan → matching rows →
-// remap view). Empty clears. Bad column/expr marks the box red.
+// Cycle a column's sort: none → asc → desc → none. Switching columns starts asc.
+function toggleSort(col) {
+  const c = current; if (!c) return;
+  if (!c.sort || c.sort.col !== col) c.sort = { col, dir: 'asc' };
+  else if (c.sort.dir === 'asc') c.sort = { col, dir: 'desc' };
+  else c.sort = null;
+  return recompute();
+}
+
+// Apply a filter expression (forward scan → matching rows), then recompute (sort
+// re-applies over the new matches). Empty clears. Bad column/expr marks red.
 async function applyFilter(str) {
   const c = current;
   if (!c) return;
-  if (!str.trim()) { $('#filter').classList.remove('err'); return mountView(c.baseVs); }
+  if (!str.trim()) { $('#filter').classList.remove('err'); c.filterMatches = null; return recompute(); }
   const cols = c.d.kind === 'delimited' ? c.d.schema : [{ name: 'line' }];
   let predicate;
   try { predicate = parseFilter(str, cols); } catch (e) { return filterErr(e); }
-  if (!predicate) return mountView(c.baseVs);
+  if (!predicate) { c.filterMatches = null; return recompute(); }
   $('#filter').classList.remove('err');
   $('#meta').textContent = 'filtering…';
   try {
-    const matches = await scanFilter(c.source, {
+    c.filterMatches = await scanFilter(c.source, {
       predicate, dataStart: c.dataStart,
       onProgress: (b, n) => { $('#meta').textContent = `filtering… ${n ? Math.round((100 * b) / n) : 0}%`; },
     });
-    mountView(createFilteredViewSource(c.baseVs, matches), { filtered: true });
+    return recompute();
   } catch (e) { filterErr(e); }
 }
 function filterErr(e) { $('#filter').classList.add('err'); $('#meta').textContent = `filter: ${e.message}`; }
@@ -342,4 +386,4 @@ $('#filter').addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { e.target.value = ''; applyFilter(''); e.target.blur(); }
 });
 
-window._lamina = { open, openFile, applyFilter, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, canWorker };

@@ -9,6 +9,7 @@ import { detectKind } from '../ext/lamina/src/detect.js';
 import { buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey } from '../ext/lamina/src/source.js';
 import { createRecordViewSource, LOADING } from '../ext/lamina/src/viewsource.js';
 import { parseFilter, scanFilter, createFilteredViewSource } from '../ext/lamina/src/filter.js';
+import { scanSortKeys } from '../ext/lamina/src/sort.js';
 import { createLaminaProvider } from '../ext/lamina/src/provider.js';
 
 const B = (s) => new TextEncoder().encode(s);
@@ -390,4 +391,43 @@ test('scanFilter: max cap throws on a runaway match set', async () => {
   await assert.rejects(
     scanFilter(src, { predicate: () => true, dataStart: 1, max: 10 }),
     /too many matches/);
+});
+
+// ── sort (key scan → ordered remap) ──
+
+test('scanSortKeys: numeric asc/desc, nulls last; ordered view via createFilteredViewSource', async () => {
+  const csv = 'id,grade\n0,3\n1,1\n2,\n3,2\n4,9\n';     // row 2 has empty grade → NaN → last
+  const src = buildMemorySource(B(csv), { kind: 'delimited', delimiter: ',', blockSize: 2 });
+  const schema = [{ name: 'id' }, { name: 'grade', type: 'number' }];
+  const base = createRecordViewSource(src, { schema, dataStart: 1 });
+
+  const asc = await scanSortKeys(src, { col: 1, dir: 'asc', dataStart: 1, numeric: true });
+  // grades: row0=3,row1=1,row2=NaN,row3=2,row4=9 → asc by grade: 1(r1),2(r3),3(r0),9(r4),NaN(r2)
+  assert.deepEqual([...asc], [1, 3, 0, 4, 2]);
+  const v = createFilteredViewSource(base, asc);
+  assert.equal(v.rowCount(), 5);
+  assert.deepEqual(await v.ensureRow(0), ['1', '1']);    // smallest grade first
+  assert.equal(v.rowHeaderAt(0), 2);                     // original row # (1-based: data row 1 → 2)
+
+  const desc = await scanSortKeys(src, { col: 1, dir: 'desc', dataStart: 1, numeric: true });
+  assert.deepEqual([...desc], [4, 0, 3, 1, 2]);          // 9,3,2,1 then NaN last (both dirs)
+});
+
+test('scanSortKeys: string sort + subset (filter→sort composition)', async () => {
+  let csv = 'k,v\n';
+  for (let i = 0; i < 10; i++) csv += `${i},${['c', 'a', 'b'][i % 3]}\n`;
+  const src = buildMemorySource(B(csv), { kind: 'delimited', blockSize: 4 });
+  // sort only the even rows (a subset, ascending) by column v (string)
+  const subset = Float64Array.from([0, 2, 4, 6, 8]);
+  const order = await scanSortKeys(src, { col: 1, dir: 'asc', dataStart: 1, numeric: false, rows: subset });
+  assert.equal(order.length, 5);                          // only the subset
+  for (const r of order) assert.equal(subset.includes(r), true);
+  // v of even rows (['c','a','b'][i%3]): r0=c,r2=b,r4=a,r6=c,r8=b → asc: a(4),b(2),b(8),c(0),c(6)
+  assert.deepEqual([...order], [4, 2, 8, 0, 6]);
+});
+
+test('scanSortKeys: max cap throws', async () => {
+  let csv = 'n\n'; for (let i = 0; i < 200; i++) csv += `${i}\n`;
+  const src = buildMemorySource(B(csv), { kind: 'text', blockSize: 32 });
+  await assert.rejects(scanSortKeys(src, { col: 0, dataStart: 1, numeric: true, max: 10 }), /too many rows/);
 });
