@@ -103,6 +103,22 @@ try {
     ? ok('index scan ran off-thread (@gcu/proc worker)')
     : fail(`expected worker scan, got "${stream.scan}" (worker path fell back to inline)`);
 
+  // ── index cache: reopen the SAME file → hit (no re-scan), identical view ──
+  const cache = await page.evaluate(async () => {
+    await window._lamina.cache.clear();
+    let csv = 'a,b\n';
+    for (let i = 0; i < 4000; i++) csv += `${i},y${i}\n`;
+    const file = new File([new TextEncoder().encode(csv)], 'cached.csv');   // one object → stable fileKey
+    await window._lamina.openFile(file);
+    const first = { scan: window._lamina.lastScan, rows: window._laminaVS.rowCount() };
+    await window._lamina.openFile(file);                                    // reopen → should hit the sidecar
+    const row = await window._laminaVS.ensureRow(3700);
+    return { first, secondScan: window._lamina.lastScan, secondRows: window._laminaVS.rowCount(), b: row[1] };
+  });
+  (cache.first.scan === 'worker' && cache.secondScan === 'cache' && cache.secondRows === cache.first.rows && cache.b === 'y3700')
+    ? ok(`index cache: first open scanned (${cache.first.scan}), reopen hit the cache (${cache.first.rows} rows, deep row intact)`)
+    : fail(`index cache failed: ${JSON.stringify(cache)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

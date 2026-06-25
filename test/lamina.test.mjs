@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRecordScanner, scanRecords, scanFileToIndex, splitRecords, parseFields } from '../ext/lamina/src/scan.js';
 import { detectKind } from '../ext/lamina/src/detect.js';
-import { buildMemorySource, buildFileSource } from '../ext/lamina/src/source.js';
+import { buildMemorySource, buildFileSource, buildSourceFromIndex, indexOf, fileKey } from '../ext/lamina/src/source.js';
 import { createRecordViewSource, LOADING } from '../ext/lamina/src/viewsource.js';
 import { createLaminaProvider } from '../ext/lamina/src/provider.js';
 
@@ -239,6 +239,33 @@ test('scanFileToIndex == scanRecords (the worker-callable entry); quote BYTE in 
   const streamed = await scanFileToIndex(file, { kind: 'delimited', quote: 34, blockSize: 1 });
   assert.equal(streamed.rowCount, oneShot.rowCount);
   assert.deepEqual([...streamed.blockOffsets], [...oneShot.blockOffsets]);
+});
+
+test('indexOf → buildSourceFromIndex round-trips (the cache path): no re-scan, same windows', async () => {
+  let csv = 'id,x\n';
+  for (let i = 0; i < 2000; i++) csv += `${i},v${i}\n`;
+  const bytes = B(csv);
+  const file = new File([bytes], 'c.csv');
+  const fresh = await buildFileSource(file, { kind: 'delimited', blockSize: 64 });
+  const idx = indexOf(fresh);                                    // what a host persists (no readRange closure)
+  assert.equal(idx.readRange, undefined);
+  assert.deepEqual(Object.keys(idx).sort(), ['blockOffsets', 'blockSize', 'delimiter', 'kind', 'quote', 'rowCount', 'totalBytes']);
+  const rebuilt = buildSourceFromIndex(file, idx);              // reopen from cache — NO scan
+  assert.equal(rebuilt.rowCount, fresh.rowCount);
+  assert.deepEqual([...rebuilt.blockOffsets], [...fresh.blockOffsets]);
+  const off = idx.blockOffsets[5];
+  assert.deepEqual([...(await rebuilt.readRange(off, 10))], [...bytes.subarray(off, off + 10)]);  // readRange rebuilt over the File
+  // and a viewsource over the rebuilt source resolves a deep row
+  const vs = createRecordViewSource(rebuilt, { schema: [{ name: 'id' }, { name: 'x' }], dataStart: 1 });
+  assert.deepEqual(await vs.ensureRow(1500), ['1500', 'v1500']);
+});
+
+test('fileKey is stable + changes with size/mtime', () => {
+  const k = fileKey({ name: 'a.csv', size: 100, lastModified: 5 });
+  assert.equal(k, fileKey({ name: 'a.csv', size: 100, lastModified: 5 }));   // same triple → same key
+  assert.notEqual(k, fileKey({ name: 'a.csv', size: 101, lastModified: 5 })); // size differs
+  assert.notEqual(k, fileKey({ name: 'a.csv', size: 100, lastModified: 6 })); // mtime differs
+  assert.equal(fileKey({ name: 'a.csv', size: 100 }), 'a.csv:100:0');         // missing mtime → 0
 });
 
 test('buildFileSource: injected `scan` dispatcher (the off-thread seam) is used; readRange stays local', async () => {

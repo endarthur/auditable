@@ -8,8 +8,9 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, createRecordViewSource, createLaminaProvider } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, createLaminaProvider } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
+import { idbCache } from './idb-cache.js';
 
 const $ = (s) => document.querySelector(s);
 let grid = null;
@@ -78,9 +79,20 @@ function open(name, bytes) {
 // Open a File — STREAMING source (never resident; the huge-file path). Detect off
 // the head slice, then stream the whole to build the block index.
 async function openFile(file) {
+  // 1. Cache hit → rebuild the source from the stored index, no scan (instant).
+  const key = fileKey(file);
+  const cached = await idbCache.get(key);
+  if (cached) {
+    lastScan = 'cache';
+    if (cached.detect.kind === 'binary') return showBinary(file.name, file.size);
+    $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
+    return mount(file.name, cached.detect, buildSourceFromIndex(file, cached.index), file.size);
+  }
+
+  // 2. Miss → detect off the head, scan (off-thread when we can), then cache.
   const sample = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
   const d = detectKind(sample);
-  if (d.kind === 'binary') return showBinary(file.name, file.size);
+  if (d.kind === 'binary') { idbCache.set(key, { detect: d, index: null }); return showBinary(file.name, file.size); }
   $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
   const opts = { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' };
   const onProgress = (r, t) => { $('#meta').textContent = `indexing… ${t ? Math.round((100 * r) / t) : 0}%`; };
@@ -92,6 +104,7 @@ async function openFile(file) {
   } else {
     src = await buildFileSource(file, { ...opts, onProgress }); lastScan = 'inline';            // file:// — inline only
   }
+  idbCache.set(key, { detect: d, index: indexOf(src) });           // sidecar for next open (best-effort)
   mount(file.name, d, src, file.size);
 }
 
@@ -120,4 +133,4 @@ window.addEventListener('drop', async (e) => {
   if (f) openFile(f);
 });
 
-window._lamina = { open, openFile, get grid() { return grid; }, get lastScan() { return lastScan; }, canWorker };
+window._lamina = { open, openFile, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, canWorker };

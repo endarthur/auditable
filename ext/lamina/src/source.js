@@ -46,6 +46,13 @@ export async function buildFileSource(file, { kind = 'delimited', delimiter = ',
   const idx = scan
     ? await scan(file, scanOpts)                          // off-thread (worker): no onProgress (functions don't clone)
     : await scanFileToIndex(file, { ...scanOpts, onProgress });
+  return fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize });
+}
+
+// Build the source object (block index + a lazy File.slice readRange) — shared by
+// buildFileSource (fresh scan) and buildSourceFromIndex (cached). readRange always
+// stays main-thread: it captures the live File, which can't cross a realm.
+function fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize }) {
   return {
     kind, delimiter, quote, blockSize,
     blockOffsets: idx.blockOffsets,
@@ -53,4 +60,34 @@ export async function buildFileSource(file, { kind = 'delimited', delimiter = ',
     totalBytes: idx.totalBytes,
     async readRange(offset, length) { return new Uint8Array(await file.slice(offset, offset + length).arrayBuffer()); },
   };
+}
+
+/**
+ * The serializable part of a source — everything but the readRange closure. This
+ * is what a host persists (an IDB/OPFS/VFS sidecar) to skip the scan on reopen.
+ * blockOffsets is a Float64Array (structured-clone-friendly).
+ */
+export function indexOf(source) {
+  const { kind, delimiter, quote, blockSize, blockOffsets, rowCount, totalBytes } = source;
+  return { kind, delimiter, quote, blockSize, blockOffsets, rowCount, totalBytes };
+}
+
+/**
+ * Rebuild a source from a previously-computed (cached) index — NO scan. The File
+ * supplies the bytes via the same lazy readRange; the index supplies the offsets.
+ * @param {File|Blob} file
+ * @param {object} index  an `indexOf(source)` value
+ */
+export function buildSourceFromIndex(file, index) {
+  return fileSourceFrom(file, index, index);
+}
+
+/**
+ * A stable cache key for a File: name + size + mtime. Different content with the
+ * same triple is essentially never a real collision for a viewer; if the file
+ * changes, lastModified changes → the key misses → a fresh scan. So all hosts key
+ * the index cache identically.
+ */
+export function fileKey(file) {
+  return [file.name, file.size, file.lastModified || 0].join(':');
 }
