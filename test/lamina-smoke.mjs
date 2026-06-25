@@ -540,7 +540,9 @@ try {
     ? ok(`autofit: all ${fit.fitCount} columns sized (long header → ${fit.w1}px), reset clears widths`)
     : fail(`autofit failed: ${JSON.stringify(fit)}`);
 
-  // ── Datamine .dm → decoded table (full pipeline: filter works on it) ──
+  // ── Datamine .dm → the DIRECT record path (no decode-to-text): browse windows
+  // via File.slice, and filter / sort / stats run over the record cursor exactly
+  // like CSV. One path at any size — lastScan === 'dm'. ──
   const dmBuf = makeDM(
     [{ name: 'BHID', type: 'A', width: 8 }, { name: 'FROM', type: 'N' }, { name: 'TO', type: 'N' }, { name: 'AU', type: 'N' }],
     Array.from({ length: 250 }, (_, i) => ({ BHID: 'DDH' + String(i % 5).padStart(5, '0'), FROM: i, TO: i + 1, AU: (i % 10) * 0.1 })),
@@ -549,34 +551,26 @@ try {
   const dm = await page.evaluate(async (arr) => {
     await window._lamina.openFile(new File([new Uint8Array(arr)], 'model.dm'));
     const vs = window._laminaVS;
+    const scan = window._lamina.lastScan;
     const first = await vs.ensureRow(0);
+    const deep = await vs.ensureRow(240);                   // far record → windowed via File.slice
     const cols = vs.cols, rows = vs.rowCount(), h0 = window._lamina.grid.provider.header(0).label;
-    await window._lamina.applyFilter('AU > 0.5');          // .dm is now a normal table → filter works
-    return { cols, rows, h0, first, filtered: window._laminaVS.rowCount() };
-  }, dmArr);
-  (dm.cols === 4 && dm.rows === 250 && dm.h0 === 'BHID' && dm.first[0] === 'DDH00000' && Number(dm.first[1]) === 0 && dm.filtered > 0 && dm.filtered < 250)
-    ? ok(`.dm → decoded table (${dm.rows} rows × ${dm.cols} cols, BHID='${dm.first[0]}'); filter AU>0.5 → ${dm.filtered}`)
-    : fail(`.dm open failed: ${JSON.stringify(dm)}`);
-
-  // ── huge .dm → WINDOWED browse (force the path with a tiny cap): scroll all
-  // records read-only via File.slice, no resident decode; deep rows resolve. ──
-  const dmw = await page.evaluate(async (arr) => {
-    window.__LAMINA_DM_CAP__ = 100;                          // force windowed for the 250-record fixture
-    await window._lamina.openFile(new File([new Uint8Array(arr)], 'big.dm'));
-    const vs = window._laminaVS;
-    const rows = vs.rowCount(), cols = vs.cols, scan = window._lamina.lastScan;
-    const first = await vs.ensureRow(0);                     // block 0
-    const deep = await vs.ensureRow(240);                    // a far block → File.slice window
     const badge = document.querySelector('#kindBadge').textContent;
-    await window._lamina.applyFilter('AU > 0.5');            // browse-only → must NOT reduce the row set
-    const afterFilter = window._laminaVS.rowCount();
-    window.__LAMINA_DM_CAP__ = undefined;
-    return { rows, cols, scan, first, deep, badge, afterFilter };
+    await window._lamina.showColumnStats(1);               // stats over the cursor (no text round-trip)
+    const statsText = document.querySelector('#helpBody').innerText;
+    document.querySelector('#help').classList.remove('show');
+    await window._lamina.applyFilter('AU > 0.5');          // filter via the record cursor
+    const filtered = window._laminaVS.rowCount();
+    await window._lamina.toggleSort(1);                    // sort FROM asc over the filtered matches
+    const sortedTop = await window._laminaVS.ensureRow(0);
+    return { scan, cols, rows, h0, first, deep, badge, filtered, statsText, sortedTop };
   }, dmArr);
-  (dmw.scan === 'dm-windowed' && dmw.rows === 250 && dmw.cols === 4 && dmw.first[0] === 'DDH00000'
-    && dmw.deep[0] === 'DDH00000' && Number(dmw.deep[1]) === 240 && dmw.badge === 'dm' && dmw.afterFilter === 250)
-    ? ok(`.dm windowed → ${dmw.rows} rows browsed via File.slice (deep row 240 FROM=${dmw.deep[1]}); filter is browse-only (rows stay ${dmw.afterFilter})`)
-    : fail(`.dm windowed failed: ${JSON.stringify(dmw)}`);
+  (dm.scan === 'dm' && dm.cols === 4 && dm.rows === 250 && dm.h0 === 'BHID' && dm.badge === 'dm'
+    && dm.first[0] === 'DDH00000' && Number(dm.first[1]) === 0
+    && dm.deep[0] === 'DDH00000' && Number(dm.deep[1]) === 240
+    && /mean/i.test(dm.statsText) && dm.filtered > 0 && dm.filtered < 250 && Number(dm.sortedTop[1]) === 6)
+    ? ok(`.dm direct (${dm.rows}×${dm.cols}, deep row 240 FROM=${dm.deep[1]} via File.slice); stats✓ filter AU>0.5 → ${dm.filtered}; sort+filter top FROM=${dm.sortedTop[1]}`)
+    : fail(`.dm direct failed: ${JSON.stringify(dm)}`);
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');

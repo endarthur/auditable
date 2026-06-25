@@ -46,6 +46,17 @@ those two invariants hold from a memory-sized CSV up to a tens-of-GB block model
     scan is dependency-injected (`scan`) so it can run off-thread.
   - `buildStreamSource` — the **tape** over a compressed stream (below).
   - `indexOf` / `buildSourceFromIndex` / `fileKey` — the cache primitives.
+- **cursor** (`cursor.js`) — the backing-AGNOSTIC iteration the scans + result
+  views run on, so they aren't welded to the CSV byte-block model. Two methods:
+  `eachRecord({dataStart, rows, onProgress}, visit)` — forward-iterate, calling
+  `visit(disp, fields, loc0, loc1)` per record (a `rows` subset stops early); and
+  `readByLoc(loc0, loc1) → fields[]` — re-read one record for a scattered result
+  view. The **locator** `(loc0, loc1)` is opaque to the scans (they only store +
+  replay it). `installRecordCursor(source)` adds both to a block source (locator =
+  byte offset + length). Any other backing — e.g. a binary table like Datamine
+  `.dm` — implements the SAME two methods directly (locator = record index, via
+  O(1) record access) and then filter / sort / stats / result-views work on it
+  unchanged, with **no decode-to-text intermediate**.
 - **viewsource** (`viewsource.js`) — `createRecordViewSource(source, {schema,
   dataStart, cacheBlocks})`: `rowAt(r)` is sync → fields \| `LOADING` (block fetch
   kicked) \| null; blocks fetched on demand into an LRU; `onReady` repaints.
@@ -54,15 +65,19 @@ those two invariants hold from a memory-sized CSV up to a tens-of-GB block model
   injectable for richer schema; `force` overrides a wrong guess.
 - **filter** (`filter.js`) — `parseFilter(str, columns)` compiles `col OP value`
   terms (`== != > >= < <= ~ !~`, `&&`) to a field-array predicate; `scanFilter`
-  forward-scans → a **result** `{ offsets, lengths, nums }` (byte offset + length
-  + original row # per match); `createResultView(source, result, schema)` reads
-  each result row **directly by byte offset** with its own row LRU. (NOT a remap
-  onto the base view: a selective result is scattered, so going through the base's
-  4096-row blocks would touch one block per visible row → LRU thrash. Per-row
-  reads touch only the visible rows.)
-- **sort** (`sort.js`) — `scanSortKeys` extracts a key column + each row's byte
-  position, sorts (nulls last, stable), returns the same `{ offsets, lengths,
-  nums }` result shape — consumed by the same `createResultView`.
+  iterates via `source.eachRecord` → a **result** `{ offsets, lengths, nums }`
+  (the per-match locator loc0/loc1 + original row #); `createResultView(source,
+  result, schema)` reads each result row **directly via `source.readByLoc`** with
+  its own row LRU. (NOT a remap onto the base view: a selective result is
+  scattered, so going through the base's 4096-row blocks would touch one block per
+  visible row → LRU thrash. Per-row reads touch only the visible rows.)
+- **sort** (`sort.js`) — `scanSortKeys` iterates via `source.eachRecord`,
+  extracting a key column + each row's locator, sorts (nulls last, stable),
+  returns the same `{ offsets, lengths, nums }` result shape — consumed by the
+  same `createResultView`.
+- **stats** (`stats.js`) — `scanColumnStats` iterates via `source.eachRecord` for
+  a numeric (Welford + capped quantiles) or categorical (top-N + distinct)
+  summary, optionally restricted to a filter's `rows`.
 - **provider** (`provider.js`) — adapts a view to `@gcu/loom`'s cell-provider;
   `LOADING` → loom's injected `PENDING`.
 

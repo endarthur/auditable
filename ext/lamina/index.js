@@ -176,6 +176,73 @@ function parseFields(recordBytes, { delimiter = ',', quote = '"' } = {}) {
   return fields;
 }
 
+// ── src/cursor.js ──
+
+// @gcu/lamina — record cursor: the backing-AGNOSTIC iteration that the scans
+// (filter / sort / stats) and result views run on. A CSV/text block source gets a
+// cursor via installRecordCursor (byte locator); any other backing — e.g. a binary
+// table like Datamine .dm — implements the SAME two methods directly, and then the
+// whole pipeline (filter / sort / stats / result-view) works on it unchanged.
+//
+//   eachRecord({ dataStart, rows, onProgress }, visit) -> Promise
+//       Forward-iterate, calling visit(disp, fields, loc0, loc1) for every record
+//       with display row `disp` >= 0, in order. `rows` (ascending display rows)
+//       restricts to a subset (the filter→sort / filter→stats composition); pass
+//       null for all. `fields` is the parsed/decoded value array. (loc0, loc1) is
+//       the record's LOCATOR — opaque to the scans; they only store and replay it.
+//
+//   readByLoc(loc0, loc1) -> Promise<fields[]>
+//       Re-read one record by its locator, for a result view's scattered per-row
+//       reads (no base-block thrash).
+//
+// The locator lets a result set stay compact (two Float64Arrays) and read each
+// matching row directly. For CSV it's (byte offset, byte length); for .dm it's the
+// record index. The scans never interpret it — that's the whole point.
+
+
+const DEC = new TextDecoder();
+
+/**
+ * Attach `eachRecord` + `readByLoc` to a CSV/text block source (source.js shape:
+ * blockOffsets + readRange + kind/delimiter/quote/blockSize/rowCount/totalBytes).
+ * Locator = (byte offset, byte length) — exactly what the byte-offset result view
+ * reads a scattered row from. Returns the same source (mutated), for chaining.
+ */
+function installRecordCursor(source) {
+  const K = source.blockSize;
+  const qByte = (source.quote || '"').charCodeAt(0);
+  const delimited = source.kind === 'delimited';
+  const fieldsOf = (bytes) => (delimited ? parseFields(bytes, { delimiter: source.delimiter, quote: source.quote }) : [DEC.decode(bytes)]);
+
+  source.eachRecord = async ({ dataStart = 0, rows = null, onProgress } = {}, visit) => {
+    const nBlocks = source.blockOffsets.length;
+    let sp = 0;                                            // cursor into the `rows` subset
+    for (let b = 0; b < nBlocks; b++) {
+      const s = source.blockOffsets[b];
+      const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
+      const bytes = await source.readRange(s, e - s);
+      const pos = splitRecordsPos(bytes, { kind: source.kind, quote: qByte });
+      for (let i = 0; i < pos.length; i++) {
+        const srcRow = b * K + i;
+        if (srcRow >= source.rowCount) break;
+        const disp = srcRow - dataStart;
+        if (disp < 0) continue;                            // header / preamble
+        if (rows) {                                        // restrict to the subset (ascending)
+          while (sp < rows.length && rows[sp] < disp) sp++;
+          if (sp >= rows.length || rows[sp] !== disp) continue;
+          sp++;
+        }
+        visit(disp, fieldsOf(bytes.subarray(pos[i].start, pos[i].end)), s + pos[i].start, pos[i].end - pos[i].start);
+      }
+      if (onProgress) onProgress(b + 1, nBlocks);
+      if (rows && sp >= rows.length) break;                // subset exhausted → stop early
+    }
+  };
+
+  source.readByLoc = async (off, len) => fieldsOf(await source.readRange(off, len));
+  return source;
+}
+
 // ── src/source.js ──
 
 // @gcu/lamina — source: a "where the bytes are" object the ViewSource reads
@@ -194,13 +261,13 @@ function parseFields(recordBytes, { delimiter = ',', quote = '"' } = {}) {
  */
 function buildMemorySource(bytes, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096 } = {}) {
   const idx = scanRecords(bytes, { kind, quote: quote.charCodeAt(0), blockSize });
-  return {
+  return installRecordCursor({
     kind, delimiter, quote, blockSize,
     blockOffsets: idx.blockOffsets,
     rowCount: idx.rowCount,
     totalBytes: idx.totalBytes,
     async readRange(offset, length) { return bytes.subarray(offset, offset + length); },
-  };
+  });
 }
 
 /**
@@ -232,13 +299,13 @@ async function buildFileSource(file, { kind = 'delimited', delimiter = ',', quot
 // buildFileSource (fresh scan) and buildSourceFromIndex (cached). readRange always
 // stays main-thread: it captures the live File, which can't cross a realm.
 function fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize }) {
-  return {
+  return installRecordCursor({
     kind, delimiter, quote, blockSize,
     blockOffsets: idx.blockOffsets,
     rowCount: idx.rowCount,
     totalBytes: idx.totalBytes,
     async readRange(offset, length) { return new Uint8Array(await file.slice(offset, offset + length).arrayBuffer()); },
-  };
+  });
 }
 
 /**
@@ -353,13 +420,13 @@ async function buildStreamSource({ openStream, index, kind = 'delimited', delimi
   // The index scan reuses scanFileToIndex over a File-like whose .stream() decompresses.
   const idx = index || await scanFileToIndex({ stream: openStream, size: 0 }, { kind, quote: quote.charCodeAt(0), blockSize, onProgress });
   const tape = makeTape(openStream, maxBuffer ? { maxBuffer } : {});
-  return {
+  return installRecordCursor({
     kind, delimiter, quote, blockSize,
     blockOffsets: idx.blockOffsets,
     rowCount: idx.rowCount,
     totalBytes: idx.totalBytes,                          // DECOMPRESSED size (from the scan)
     readRange(offset, length) { return tape.read(offset, length); },
-  };
+  });
 }
 
 // ── src/viewsource.js ──
@@ -460,7 +527,6 @@ function createRecordViewSource(source, { schema = null, cacheBlocks = 16, dataS
 // the filter") rather than OOM.
 
 
-const DEC$filter = new TextDecoder();
 const CMP = {
   '==': (a, b) => a === b, '!=': (a, b) => a !== b,
   '>': (a, b) => a > b, '>=': (a, b) => a >= b, '<': (a, b) => a < b, '<=': (a, b) => a <= b,
@@ -529,35 +595,19 @@ function grower() {
 
 /**
  * Forward-scan a source applying a predicate; return the matching rows as
- * `{ offsets, lengths, nums }` (Float64Arrays — byte offset, byte length, and
- * original DISPLAY row #). Reads every block once via source.readRange.
+ * `{ offsets, lengths, nums }` (Float64Arrays — the record LOCATOR loc0/loc1 and
+ * the original DISPLAY row #). Iteration is delegated to source.eachRecord, so this
+ * works on any backing (CSV byte-blocks, a windowed .dm, …) unchanged.
  * @param {object} opts  { predicate, dataStart?, onProgress?, max? }
  */
 async function scanFilter(source, { predicate, dataStart = 0, onProgress, max = 16 * 1024 * 1024 } = {}) {
-  const K = source.blockSize;
-  const nBlocks = source.blockOffsets.length;
-  const qByte = (source.quote || '"').charCodeAt(0);
-  const delimited = source.kind === 'delimited';
   const offsets = grower(), lengths = grower(), nums = grower();
-  for (let b = 0; b < nBlocks; b++) {
-    const s = source.blockOffsets[b];
-    const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
-    const bytes = await source.readRange(s, e - s);
-    const pos = splitRecordsPos(bytes, { kind: source.kind, quote: qByte });
-    for (let i = 0; i < pos.length; i++) {
-      const srcRow = b * K + i;
-      if (srcRow >= source.rowCount) break;
-      const disp = srcRow - dataStart;
-      if (disp < 0) continue;                               // header / preamble
-      const rec = bytes.subarray(pos[i].start, pos[i].end);
-      const fields = delimited ? parseFields(rec, { delimiter: source.delimiter, quote: source.quote }) : [DEC$filter.decode(rec)];
-      if (predicate(fields)) {
-        offsets.push(s + pos[i].start); lengths.push(pos[i].end - pos[i].start); nums.push(disp);
-        if (offsets.n > max) throw new Error('too many matches — refine the filter');
-      }
+  await source.eachRecord({ dataStart, onProgress }, (disp, fields, loc0, loc1) => {
+    if (predicate(fields)) {
+      offsets.push(loc0); lengths.push(loc1); nums.push(disp);
+      if (offsets.n > max) throw new Error('too many matches — refine the filter');
     }
-    if (onProgress) onProgress(b + 1, nBlocks);
-  }
+  });
   return { offsets: offsets.done(), lengths: lengths.done(), nums: nums.done() };
 }
 
@@ -577,14 +627,13 @@ function createResultView(source, result, schema, { cacheRows = 1024 } = {}) {
   const inflight = new Map();
   const readyCbs = [];
   const cols = schema ? schema.length : 1;
-  const delimited = source.kind === 'delimited';
   const notify = () => { for (const cb of readyCbs) { try { cb(); } catch (e) { console.error('[lamina] onReady threw', e); } } };
 
   function loadRow(r) {
     if (cache.has(r)) return Promise.resolve();
     if (inflight.has(r)) return inflight.get(r);
-    const p = Promise.resolve(source.readRange(offsets[r], lengths[r])).then((bytes) => {
-      cache.set(r, delimited ? parseFields(bytes, { delimiter: source.delimiter, quote: source.quote }) : [DEC$filter.decode(bytes)]);
+    const p = Promise.resolve(source.readByLoc(offsets[r], lengths[r])).then((fields) => {
+      cache.set(r, fields);
       while (cache.size > cacheRows) cache.delete(cache.keys().next().value);
       inflight.delete(r); notify();
     }, (err) => { inflight.delete(r); console.error('[lamina] loadRow failed', err); });
@@ -623,48 +672,25 @@ function createResultView(source, result, schema, { cacheRows = 1024 } = {}) {
 // only the current filter's matches).
 
 
-const DEC$sort = new TextDecoder();
-
 /**
- * @param {object} source  block index + readRange (source.js)
+ * Forward-scan a source extracting a key column + each row's LOCATOR, then order
+ * the rows by key. Iteration is delegated to source.eachRecord, so it works on any
+ * backing. Returns the same `{ offsets, lengths, nums }` result shape as filter,
+ * consumed by createResultView.
+ * @param {object} source  a record cursor (cursor.js / a backing adapter)
  * @param {object} opts  { col, dir?, dataStart?, numeric?, rows?, onProgress?, max? }
  *   rows = ascending DISPLAY rows to restrict to (a filter's matches), or null = all
  * @returns {Promise<{offsets:Float64Array, lengths:Float64Array, nums:Float64Array}>}
  *          ordered by key (nulls/NaN/empty last, stable)
  */
 async function scanSortKeys(source, { col, dir = 'asc', dataStart = 0, numeric = true, decimal = '.', rows = null, onProgress, max = 5 * 1024 * 1024 } = {}) {
-  const K = source.blockSize;
-  const nBlocks = source.blockOffsets.length;
-  const qByte = (source.quote || '"').charCodeAt(0);
-  const delimited = source.kind === 'delimited';
-  const subset = rows;
-  let sp = 0;
   const recs = [];   // { off, len, num, key }
-  for (let b = 0; b < nBlocks; b++) {
-    const s = source.blockOffsets[b];
-    const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
-    const bytes = await source.readRange(s, e - s);
-    const pos = splitRecordsPos(bytes, { kind: source.kind, quote: qByte });
-    for (let i = 0; i < pos.length; i++) {
-      const srcRow = b * K + i;
-      if (srcRow >= source.rowCount) break;
-      const disp = srcRow - dataStart;
-      if (disp < 0) continue;
-      if (subset) {
-        while (sp < subset.length && subset[sp] < disp) sp++;
-        if (sp >= subset.length || subset[sp] !== disp) continue;
-        sp++;
-      }
-      const rec = bytes.subarray(pos[i].start, pos[i].end);
-      const fields = delimited ? parseFields(rec, { delimiter: source.delimiter, quote: source.quote }) : [DEC$sort.decode(rec)];
-      const raw = fields[col];
-      const key = numeric ? (raw == null || raw === '' ? NaN : parseNum(raw, decimal)) : (raw == null ? '' : String(raw));
-      recs.push({ off: s + pos[i].start, len: pos[i].end - pos[i].start, num: disp, key });
-      if (recs.length > max) throw new Error('too many rows to sort — filter first');
-    }
-    if (onProgress) onProgress(b + 1, nBlocks);
-    if (subset && sp >= subset.length) break;
-  }
+  await source.eachRecord({ dataStart, rows, onProgress }, (disp, fields, loc0, loc1) => {
+    const raw = fields[col];
+    const key = numeric ? (raw == null || raw === '' ? NaN : parseNum(raw, decimal)) : (raw == null ? '' : String(raw));
+    recs.push({ off: loc0, len: loc1, num: disp, key });
+    if (recs.length > max) throw new Error('too many rows to sort — filter first');
+  });
 
   const n = recs.length;
   const idx = new Array(n);
@@ -703,22 +729,17 @@ async function scanSortKeys(source, { col, dir = 'asc', dataStart = 0, numeric =
 // Same scan shape as filter/sort — no new dependency.
 
 
-const DEC$stats = new TextDecoder();
-
 /**
- * @param {object} source  block index + readRange (source.js)
+ * One forward scan over a column (optionally restricted to a filter's `rows`),
+ * accumulating a summary. Iteration is delegated to source.eachRecord, so it works
+ * on any backing. Numeric → count / nulls / min / max / mean / std (Welford) / sum
+ * + quantiles (capped); categorical → count / nulls / distinct + top-N.
+ * @param {object} source  a record cursor (cursor.js / a backing adapter)
  * @param {object} opts  { col, dataStart?, numeric?, rows?, max?, topN?, maxDistinct?, onProgress? }
  *   rows = ascending DISPLAY rows to restrict to (a filter's matches), or null = all
  * @returns {Promise<object>}  numeric or categorical summary (see fields below)
  */
 async function scanColumnStats(source, { col, dataStart = 0, numeric = true, decimal = '.', rows = null, max = 5 * 1024 * 1024, topN = 12, maxDistinct = 100000, onProgress } = {}) {
-  const K = source.blockSize;
-  const nBlocks = source.blockOffsets.length;
-  const qByte = (source.quote || '"').charCodeAt(0);
-  const delimited = source.kind === 'delimited';
-  const subset = rows;
-  let sp = 0;
-
   let count = 0, nulls = 0, bad = 0;   // nulls = empty/missing; bad = present but not a number
   // numeric (Welford) + a capped value buffer for quantiles
   let min = Infinity, max_ = -Infinity, sum = 0, mean = 0, m2 = 0, nNum = 0;
@@ -727,52 +748,33 @@ async function scanColumnStats(source, { col, dataStart = 0, numeric = true, dec
   const freq = numeric ? null : new Map();
   let cappedDistinct = false;
 
-  for (let b = 0; b < nBlocks; b++) {
-    const s = source.blockOffsets[b];
-    const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
-    const bytes = await source.readRange(s, e - s);
-    const pos = splitRecordsPos(bytes, { kind: source.kind, quote: qByte });
-    for (let i = 0; i < pos.length; i++) {
-      const srcRow = b * K + i;
-      if (srcRow >= source.rowCount) break;
-      const disp = srcRow - dataStart;
-      if (disp < 0) continue;
-      if (subset) {
-        while (sp < subset.length && subset[sp] < disp) sp++;
-        if (sp >= subset.length || subset[sp] !== disp) continue;
-        sp++;
-      }
-      const rec = bytes.subarray(pos[i].start, pos[i].end);
-      const fields = delimited ? parseFields(rec, { delimiter: source.delimiter, quote: source.quote }) : [DEC$stats.decode(rec)];
-      const raw = fields[col];
-      count++;
-      if (numeric) {
-        if (raw == null || raw === '') { nulls++; continue; }
-        const x = parseNum(raw, decimal);
-        if (Number.isNaN(x)) { bad++; continue; }       // present but not a number → "non-numeric"
-        nNum++;
-        if (x < min) min = x;
-        if (x > max_) max_ = x;
-        sum += x;
-        const d = x - mean; mean += d / nNum; m2 += d * (x - mean);   // Welford
-        if (collecting) {
-          if (nv === vals.length) {
-            if (nv >= max) collecting = false;
-            else { const a = new Float64Array(vals.length * 2); a.set(vals); vals = a; }
-          }
-          if (collecting) vals[nv++] = x;
+  await source.eachRecord({ dataStart, rows, onProgress }, (disp, fields) => {
+    const raw = fields[col];
+    count++;
+    if (numeric) {
+      if (raw == null || raw === '') { nulls++; return; }
+      const x = parseNum(raw, decimal);
+      if (Number.isNaN(x)) { bad++; return; }       // present but not a number → "non-numeric"
+      nNum++;
+      if (x < min) min = x;
+      if (x > max_) max_ = x;
+      sum += x;
+      const d = x - mean; mean += d / nNum; m2 += d * (x - mean);   // Welford
+      if (collecting) {
+        if (nv === vals.length) {
+          if (nv >= max) collecting = false;
+          else { const a = new Float64Array(vals.length * 2); a.set(vals); vals = a; }
         }
-      } else {
-        if (raw == null || raw === '') { nulls++; continue; }
-        const cur = freq.get(raw);
-        if (cur !== undefined) freq.set(raw, cur + 1);
-        else if (freq.size < maxDistinct) freq.set(raw, 1);
-        else cappedDistinct = true;
+        if (collecting) vals[nv++] = x;
       }
+    } else {
+      if (raw == null || raw === '') { nulls++; return; }
+      const cur = freq.get(raw);
+      if (cur !== undefined) freq.set(raw, cur + 1);
+      else if (freq.size < maxDistinct) freq.set(raw, 1);
+      else cappedDistinct = true;
     }
-    if (onProgress) onProgress(b + 1, nBlocks);
-    if (subset && sp >= subset.length) break;
-  }
+  });
 
   if (numeric) {
     const std = nNum > 1 ? Math.sqrt(m2 / (nNum - 1)) : 0;
@@ -1005,6 +1007,7 @@ export {
   buildSourceFromIndex,
   indexOf,
   fileKey,
+  installRecordCursor,
   createRecordViewSource,
   LOADING,
   parseFilter,

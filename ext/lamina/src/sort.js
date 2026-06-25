@@ -7,50 +7,27 @@
 // (deferred); until then filter→sort handles huge files (the `rows` subset sorts
 // only the current filter's matches).
 
-import { splitRecordsPos, parseFields, parseNum } from './scan.js';
-
-const DEC = new TextDecoder();
+import { parseNum } from './scan.js';
 
 /**
- * @param {object} source  block index + readRange (source.js)
+ * Forward-scan a source extracting a key column + each row's LOCATOR, then order
+ * the rows by key. Iteration is delegated to source.eachRecord, so it works on any
+ * backing. Returns the same `{ offsets, lengths, nums }` result shape as filter,
+ * consumed by createResultView.
+ * @param {object} source  a record cursor (cursor.js / a backing adapter)
  * @param {object} opts  { col, dir?, dataStart?, numeric?, rows?, onProgress?, max? }
  *   rows = ascending DISPLAY rows to restrict to (a filter's matches), or null = all
  * @returns {Promise<{offsets:Float64Array, lengths:Float64Array, nums:Float64Array}>}
  *          ordered by key (nulls/NaN/empty last, stable)
  */
 export async function scanSortKeys(source, { col, dir = 'asc', dataStart = 0, numeric = true, decimal = '.', rows = null, onProgress, max = 5 * 1024 * 1024 } = {}) {
-  const K = source.blockSize;
-  const nBlocks = source.blockOffsets.length;
-  const qByte = (source.quote || '"').charCodeAt(0);
-  const delimited = source.kind === 'delimited';
-  const subset = rows;
-  let sp = 0;
   const recs = [];   // { off, len, num, key }
-  for (let b = 0; b < nBlocks; b++) {
-    const s = source.blockOffsets[b];
-    const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
-    const bytes = await source.readRange(s, e - s);
-    const pos = splitRecordsPos(bytes, { kind: source.kind, quote: qByte });
-    for (let i = 0; i < pos.length; i++) {
-      const srcRow = b * K + i;
-      if (srcRow >= source.rowCount) break;
-      const disp = srcRow - dataStart;
-      if (disp < 0) continue;
-      if (subset) {
-        while (sp < subset.length && subset[sp] < disp) sp++;
-        if (sp >= subset.length || subset[sp] !== disp) continue;
-        sp++;
-      }
-      const rec = bytes.subarray(pos[i].start, pos[i].end);
-      const fields = delimited ? parseFields(rec, { delimiter: source.delimiter, quote: source.quote }) : [DEC.decode(rec)];
-      const raw = fields[col];
-      const key = numeric ? (raw == null || raw === '' ? NaN : parseNum(raw, decimal)) : (raw == null ? '' : String(raw));
-      recs.push({ off: s + pos[i].start, len: pos[i].end - pos[i].start, num: disp, key });
-      if (recs.length > max) throw new Error('too many rows to sort — filter first');
-    }
-    if (onProgress) onProgress(b + 1, nBlocks);
-    if (subset && sp >= subset.length) break;
-  }
+  await source.eachRecord({ dataStart, rows, onProgress }, (disp, fields, loc0, loc1) => {
+    const raw = fields[col];
+    const key = numeric ? (raw == null || raw === '' ? NaN : parseNum(raw, decimal)) : (raw == null ? '' : String(raw));
+    recs.push({ off: loc0, len: loc1, num: disp, key });
+    if (recs.length > max) throw new Error('too many rows to sort — filter first');
+  });
 
   const n = recs.length;
   const idx = new Array(n);

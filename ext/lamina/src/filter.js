@@ -11,10 +11,9 @@
 // original row #), so it tracks SELECTIVITY not file size; capped (then "refine
 // the filter") rather than OOM.
 
-import { splitRecordsPos, parseFields, parseNum } from './scan.js';
+import { parseNum } from './scan.js';
 import { LOADING } from './viewsource.js';
 
-const DEC = new TextDecoder();
 const CMP = {
   '==': (a, b) => a === b, '!=': (a, b) => a !== b,
   '>': (a, b) => a > b, '>=': (a, b) => a >= b, '<': (a, b) => a < b, '<=': (a, b) => a <= b,
@@ -83,35 +82,19 @@ function grower() {
 
 /**
  * Forward-scan a source applying a predicate; return the matching rows as
- * `{ offsets, lengths, nums }` (Float64Arrays — byte offset, byte length, and
- * original DISPLAY row #). Reads every block once via source.readRange.
+ * `{ offsets, lengths, nums }` (Float64Arrays — the record LOCATOR loc0/loc1 and
+ * the original DISPLAY row #). Iteration is delegated to source.eachRecord, so this
+ * works on any backing (CSV byte-blocks, a windowed .dm, …) unchanged.
  * @param {object} opts  { predicate, dataStart?, onProgress?, max? }
  */
 export async function scanFilter(source, { predicate, dataStart = 0, onProgress, max = 16 * 1024 * 1024 } = {}) {
-  const K = source.blockSize;
-  const nBlocks = source.blockOffsets.length;
-  const qByte = (source.quote || '"').charCodeAt(0);
-  const delimited = source.kind === 'delimited';
   const offsets = grower(), lengths = grower(), nums = grower();
-  for (let b = 0; b < nBlocks; b++) {
-    const s = source.blockOffsets[b];
-    const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
-    const bytes = await source.readRange(s, e - s);
-    const pos = splitRecordsPos(bytes, { kind: source.kind, quote: qByte });
-    for (let i = 0; i < pos.length; i++) {
-      const srcRow = b * K + i;
-      if (srcRow >= source.rowCount) break;
-      const disp = srcRow - dataStart;
-      if (disp < 0) continue;                               // header / preamble
-      const rec = bytes.subarray(pos[i].start, pos[i].end);
-      const fields = delimited ? parseFields(rec, { delimiter: source.delimiter, quote: source.quote }) : [DEC.decode(rec)];
-      if (predicate(fields)) {
-        offsets.push(s + pos[i].start); lengths.push(pos[i].end - pos[i].start); nums.push(disp);
-        if (offsets.n > max) throw new Error('too many matches — refine the filter');
-      }
+  await source.eachRecord({ dataStart, onProgress }, (disp, fields, loc0, loc1) => {
+    if (predicate(fields)) {
+      offsets.push(loc0); lengths.push(loc1); nums.push(disp);
+      if (offsets.n > max) throw new Error('too many matches — refine the filter');
     }
-    if (onProgress) onProgress(b + 1, nBlocks);
-  }
+  });
   return { offsets: offsets.done(), lengths: lengths.done(), nums: nums.done() };
 }
 
@@ -131,14 +114,13 @@ export function createResultView(source, result, schema, { cacheRows = 1024 } = 
   const inflight = new Map();
   const readyCbs = [];
   const cols = schema ? schema.length : 1;
-  const delimited = source.kind === 'delimited';
   const notify = () => { for (const cb of readyCbs) { try { cb(); } catch (e) { console.error('[lamina] onReady threw', e); } } };
 
   function loadRow(r) {
     if (cache.has(r)) return Promise.resolve();
     if (inflight.has(r)) return inflight.get(r);
-    const p = Promise.resolve(source.readRange(offsets[r], lengths[r])).then((bytes) => {
-      cache.set(r, delimited ? parseFields(bytes, { delimiter: source.delimiter, quote: source.quote }) : [DEC.decode(bytes)]);
+    const p = Promise.resolve(source.readByLoc(offsets[r], lengths[r])).then((fields) => {
+      cache.set(r, fields);
       while (cache.size > cacheRows) cache.delete(cache.keys().next().value);
       inflight.delete(r); notify();
     }, (err) => { inflight.delete(r); console.error('[lamina] loadRow failed', err); });

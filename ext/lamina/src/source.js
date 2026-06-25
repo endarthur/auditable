@@ -7,6 +7,7 @@
 // separate builder with the SAME shape — the ViewSource doesn't care which.
 
 import { scanRecords, scanFileToIndex } from './scan.js';
+import { installRecordCursor } from './cursor.js';
 
 /**
  * @param {Uint8Array} bytes  the whole file (small/medium)
@@ -15,13 +16,13 @@ import { scanRecords, scanFileToIndex } from './scan.js';
  */
 export function buildMemorySource(bytes, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096 } = {}) {
   const idx = scanRecords(bytes, { kind, quote: quote.charCodeAt(0), blockSize });
-  return {
+  return installRecordCursor({
     kind, delimiter, quote, blockSize,
     blockOffsets: idx.blockOffsets,
     rowCount: idx.rowCount,
     totalBytes: idx.totalBytes,
     async readRange(offset, length) { return bytes.subarray(offset, offset + length); },
-  };
+  });
 }
 
 /**
@@ -53,13 +54,13 @@ export async function buildFileSource(file, { kind = 'delimited', delimiter = ',
 // buildFileSource (fresh scan) and buildSourceFromIndex (cached). readRange always
 // stays main-thread: it captures the live File, which can't cross a realm.
 function fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize }) {
-  return {
+  return installRecordCursor({
     kind, delimiter, quote, blockSize,
     blockOffsets: idx.blockOffsets,
     rowCount: idx.rowCount,
     totalBytes: idx.totalBytes,
     async readRange(offset, length) { return new Uint8Array(await file.slice(offset, offset + length).arrayBuffer()); },
-  };
+  });
 }
 
 /**
@@ -174,11 +175,11 @@ export async function buildStreamSource({ openStream, index, kind = 'delimited',
   // The index scan reuses scanFileToIndex over a File-like whose .stream() decompresses.
   const idx = index || await scanFileToIndex({ stream: openStream, size: 0 }, { kind, quote: quote.charCodeAt(0), blockSize, onProgress });
   const tape = makeTape(openStream, maxBuffer ? { maxBuffer } : {});
-  return {
+  return installRecordCursor({
     kind, delimiter, quote, blockSize,
     blockOffsets: idx.blockOffsets,
     rowCount: idx.rowCount,
     totalBytes: idx.totalBytes,                          // DECOMPRESSED size (from the scan)
     readRange(offset, length) { return tape.read(offset, length); },
-  };
+  });
 }
