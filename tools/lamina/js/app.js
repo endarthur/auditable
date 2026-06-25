@@ -978,12 +978,15 @@ $('#mFile').onclick = () => menuAt($('#mFile'), [
   { label: 'Open…    Ctrl+O', action: pickFile },
   { label: 'New window', action: () => window.open(location.href, '_blank') },
 ]);
-$('#mView').onclick = () => menuAt($('#mView'), [
+$('#mData').onclick = () => menuAt($('#mData'), [
+  { label: 'Add calculated column…', action: () => { if (hasFile()) openCalcEditor(null); } },
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
-  { label: 'Go to row…', action: () => $('#goto').focus() },
   { sep: true },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyFilter(''); } },
   { label: 'Clear sort', action: () => { if (current) { current.sort = null; recompute(); } } },
+]);
+$('#mView').onclick = () => menuAt($('#mView'), [
+  { label: 'Go to row…', action: () => $('#goto').focus() },
   { sep: true },
   { label: 'Autofit all columns', action: () => autofitAll() },
   { label: 'Reset column widths', action: () => resetColWidths() },

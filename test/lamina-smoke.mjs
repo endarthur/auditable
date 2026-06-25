@@ -374,27 +374,31 @@ try {
     ? ok(`columns: hide 'b' → ${col.afterHide.cols} cols (display col 1 now '${col.afterHide.c1}'); show all → ${col.restored}`)
     : fail(`column hide/show failed: ${JSON.stringify(col)}`);
 
-  // ── menubar + help overlay + View→Interpretation opens the popover ──
+  // ── menubar + help overlay + Data→Interpretation opens the popover ──
   const menu = await page.evaluate(async () => {
     window._lamina.open('mm.csv', new TextEncoder().encode('a,b\n1,2\n3,4\n'));   // a file must be open
     document.getElementById('mFile').click();            // open the File menu
     const fileItems = [...document.querySelectorAll('.ctxmenu .item')].map((e) => e.textContent);
-    document.getElementById('mView').click();            // (re)open View
+    document.getElementById('mData').click();            // open Data (calc / interpretation / clear filter+sort)
+    const dataItems = [...document.querySelectorAll('.ctxmenu .item')].map((e) => e.textContent);
+    document.getElementById('mView').click();            // open View (go-to-row / autofit / widths / show all)
     const viewItems = [...document.querySelectorAll('.ctxmenu .item')].map((e) => e.textContent);
-    // click "Interpretation…" and confirm the popover OPENS and STAYS open (the bug)
+    document.getElementById('mData').click();            // (re)open Data → click Interpretation
     [...document.querySelectorAll('.ctxmenu .item')].find((e) => e.textContent.startsWith('Interpretation')).click();
     await new Promise((r) => setTimeout(r, 20));
-    const optsOpen = document.getElementById('opts').classList.contains('show');
+    const optsOpen = document.getElementById('opts').classList.contains('show');   // popover OPENS and STAYS open
     window._lamina.showHelp('start');                    // Help → Getting started
     const startGuide = document.getElementById('helpBody').textContent.includes('right-click');
     window._lamina.showHelp('filter');                   // Help → Filter syntax
     const helpShown = document.getElementById('help').classList.contains('show');
     const helpHasOps = document.getElementById('helpBody').textContent.includes('contains');
     document.getElementById('helpClose').click();
-    return { fileItems, viewItems, optsOpen, startGuide, helpShown, helpHasOps, helpClosed: !document.getElementById('help').classList.contains('show') };
+    return { fileItems, dataItems, viewItems, optsOpen, startGuide, helpShown, helpHasOps, helpClosed: !document.getElementById('help').classList.contains('show') };
   });
-  (menu.fileItems.some((t) => t.startsWith('Open')) && menu.fileItems.includes('New window') && menu.viewItems.includes('Clear sort') && menu.optsOpen && menu.startGuide && menu.helpShown && menu.helpHasOps && menu.helpClosed)
-    ? ok(`menubar: File/View populate · View→Interpretation opens the popover · Help→filter overlay opens+closes`)
+  (menu.fileItems.some((t) => t.startsWith('Open')) && menu.fileItems.includes('New window')
+    && menu.dataItems.some((t) => t.startsWith('Add calculated')) && menu.dataItems.includes('Clear sort')
+    && menu.viewItems.includes('Show all columns') && menu.optsOpen && menu.startGuide && menu.helpShown && menu.helpHasOps && menu.helpClosed)
+    ? ok(`menubar: File/Data/View populate · Data→Interpretation opens the popover · Help→filter overlay opens+closes`)
     : fail(`menubar failed: ${JSON.stringify(menu)}`);
 
   // ── column statistics (numeric + categorical, respecting the filter) ──
