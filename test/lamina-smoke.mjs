@@ -384,13 +384,15 @@ try {
     [...document.querySelectorAll('.ctxmenu .item')].find((e) => e.textContent.startsWith('Interpretation')).click();
     await new Promise((r) => setTimeout(r, 20));
     const optsOpen = document.getElementById('opts').classList.contains('show');
+    window._lamina.showHelp('start');                    // Help → Getting started
+    const startGuide = document.getElementById('helpBody').textContent.includes('right-click');
     window._lamina.showHelp('filter');                   // Help → Filter syntax
     const helpShown = document.getElementById('help').classList.contains('show');
     const helpHasOps = document.getElementById('helpBody').textContent.includes('contains');
     document.getElementById('helpClose').click();
-    return { fileItems, viewItems, optsOpen, helpShown, helpHasOps, helpClosed: !document.getElementById('help').classList.contains('show') };
+    return { fileItems, viewItems, optsOpen, startGuide, helpShown, helpHasOps, helpClosed: !document.getElementById('help').classList.contains('show') };
   });
-  (menu.fileItems.some((t) => t.startsWith('Open')) && menu.fileItems.includes('New window') && menu.viewItems.includes('Clear sort') && menu.optsOpen && menu.helpShown && menu.helpHasOps && menu.helpClosed)
+  (menu.fileItems.some((t) => t.startsWith('Open')) && menu.fileItems.includes('New window') && menu.viewItems.includes('Clear sort') && menu.optsOpen && menu.startGuide && menu.helpShown && menu.helpHasOps && menu.helpClosed)
     ? ok(`menubar: File/View populate · View→Interpretation opens the popover · Help→filter overlay opens+closes`)
     : fail(`menubar failed: ${JSON.stringify(menu)}`);
 

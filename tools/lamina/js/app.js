@@ -696,6 +696,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Show all columns', action: () => showAllColumns() },
 ]);
 $('#mHelp').onclick = () => menuAt($('#mHelp'), [
+  { label: 'Getting started…', action: () => showHelp('start') },
   { label: 'Filter syntax…', action: () => showHelp('filter') },
   { label: 'Keyboard & mouse…', action: () => showHelp('keys') },
   { sep: true },
@@ -704,6 +705,14 @@ $('#mHelp').onclick = () => menuAt($('#mHelp'), [
 
 // ── help overlay ──
 const HELP = {
+  start: ['Getting started',
+    `<b>lamina</b> opens any file — even a multi-gigabyte one — and lets you scroll, filter, and sort it. It never loads the whole file, so size isn't the problem.<br><br>`
+    + `<b>Open</b> — File → Open (<code>Ctrl+O</code>) or drag a file in. CSV/TSV → table · text → lines · binary → hex · <code>.zip</code>/<code>.tar</code>/<code>.gz</code>/<code>.zst</code>/<code>.xz</code>/<code>.bz2</code> → peek inside.<br><br>`
+    + `<b>If a file reads wrong</b> — click the <b>kind badge</b> (top-right) or <b>View → Interpretation</b> to force the delimiter, header on/off, skip comment lines, or switch the decimal point/comma.<br><br>`
+    + `<b>Most actions live in right-click menus:</b><br>`
+    + `• <b>Right-click a column header</b> — Statistics · sort · filter by · number format · treat as text/number · hide/show · autofit.<br>`
+    + `• <b>Right-click a cell or selection</b> — copy (with header / row #) · filter by this value · column statistics.<br><br>`
+    + `<b>Filter</b> in the box (Enter) — e.g. <code>grade > 1 && lito == OXIDE</code> (see Filter syntax). <b>Sort</b> by clicking a header. <b>Jump</b> with the row # box. In a column's Statistics, click values to build a set filter.`],
   filter: ['Filter syntax',
     `Type an expression in the <b>filter</b> box — <b>Enter</b> applies, <b>Esc</b> clears.<br><br>`
     + `A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br>`
