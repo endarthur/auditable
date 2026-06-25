@@ -105,6 +105,32 @@ matches) and are selectivity-bounded (capped, "filter first" rather than OOM).
   checkpointing inflate; out of scope for now).
 - A Works `@gcu/lamina` surface.
 
+### UI / viewer (the formatting+stats slice)
+
+- Per-cell **color + conditional formatting** (value→color scales, data bars,
+  thresholds) — needs a loom render addition (`style.color`/`style.fill`; today
+  only `style.text`/`highlight`/`invalid` are honored) + a small rules engine.
+- **Popup distribution plots** in the stats panel (histogram / t-digest on
+  `@gcu/sluice`).
+- A **copy-friendly stats render** (clean TSV / Excel paste of a column summary).
+
+### Far-ahead (deliberate slices, not soon)
+
+- **Recents list** — persist FSAA `FileSystemFileHandle`s to IndexedDB; show in
+  the launcher empty-state + the File menu; re-grant permission on click →
+  `buildSourceFromIndex` from the existing index cache = instant reopen. Degrade
+  to metadata-only (re-pick) for drag/`<input>`/`file://` (no handle). Pairs with
+  the `name:size:mtime` cache key already in place.
+- **Multiple windows** — independent tables in their own windows/tabs (each its
+  own `current` + cache scope).
+- **File-type association** — a marker extension (`.lam` / `.lamina`, following
+  the GCU `.gcu` double-extension convention — see `design_gcu_extension_
+  convention`) registered via the deploy PWA manifest's `file_handlers`, so a
+  double-clicked `data.csv.lam` opens in the installed lamina PWA.
+- **numen (MCP) integration** — drive lamina as an agent surface (open a file,
+  filter, read a column's stats / a windowed slice), with affordances for
+  contrived/headless scenarios.
+
 ## Versioning
 
 Pre-1.0; the source/view/provider contracts are stable enough that `@gcu/strata`
