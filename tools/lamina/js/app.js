@@ -10,7 +10,14 @@
 import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, createLaminaProvider } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
+import { detectFormat, listZip, readZip, gunzipBytes } from '@gcu/archive';
 import { idbCache } from './idb-cache.js';
+
+// Resident-zip ceiling: @gcu/archive reads whole-zip-in-memory today (no range
+// reader), and a deflate entry can inflate to many× its stored size, so cap the
+// outer archive. Huge-archive windowing is a later slice gated on an archive
+// range-reader (spec §7a). 256 MB outer keeps us well under the buffer ceiling.
+const MAX_RESIDENT_ARCHIVE = 256 * 1024 * 1024;
 
 const $ = (s) => document.querySelector(s);
 let grid = null;
@@ -40,14 +47,20 @@ function fmtBytes(n) {
   return (n / 1073741824).toFixed(2) + ' GB';
 }
 
-function showBinary(name, totalBytes) {
+// The non-grid panel: binary handoff, archive guards, empty-archive notes.
+function showNote(name, badge, title, msg, meta) {
   if (grid) { grid.destroy(); grid = null; }
   $('#fileName').textContent = name;
   $('#empty').style.display = 'none';
   $('#grid').innerHTML = '';
   $('#binary').style.display = 'flex';
-  const badge = $('#kindBadge'); badge.style.display = ''; badge.textContent = 'binary';
-  $('#meta').textContent = `${fmtBytes(totalBytes)} · binary`;
+  $('#binary').querySelector('b').textContent = title;
+  $('#binaryMsg').textContent = msg;
+  const b = $('#kindBadge'); b.style.display = ''; b.textContent = badge;
+  $('#meta').textContent = meta;
+}
+function showBinary(name, totalBytes) {
+  showNote(name, 'binary', 'binary file', 'use the hex viewer for this one', `${fmtBytes(totalBytes)} · binary`);
 }
 
 // Mount a built source (memory or streaming) read-only. The source shape is the
@@ -76,9 +89,65 @@ function open(name, bytes) {
   mount(name, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
 }
 
+// Render in-memory bytes (a small file, or a decompressed archive entry) through
+// the RESIDENT memory source — no streaming, no index cache.
+function openInner(label, bytes) {
+  const d = detectKind(bytes.subarray(0, 65536));
+  if (d.kind === 'binary') return showBinary(label, bytes.length);
+  lastScan = 'resident';
+  mount(label, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
+}
+
+// ── archives (cheap RESIDENT tier, spec §7a): peek at a file inside a zip / a
+// .gz stream. Whole-archive-in-memory (archive has no range reader yet), so it's
+// guarded by size; huge-inner-file windowing is a later slice. ──
+async function openArchive(file, fmt) {
+  if (file.size > MAX_RESIDENT_ARCHIVE)
+    return showNote(file.name, fmt, 'archive too large',
+      `${fmtBytes(file.size)} — resident archive reading is memory-bound; huge-archive windowing is a later slice`,
+      `${fmtBytes(file.size)} · ${fmt}`);
+  $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
+  $('#meta').textContent = 'decompressing…';
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (fmt === 'gz') {
+    const inner = await gunzipBytes(bytes);
+    return openInner(`${file.name} › ${file.name.replace(/\.gz$/i, '')}`, inner instanceof Uint8Array ? inner : new Uint8Array(inner));
+  }
+  const entries = listZip(bytes).filter((e) => e.type === 'file' && !e.path.endsWith('/'));
+  if (!entries.length) return showNote(file.name, 'zip', 'empty archive', 'no files inside', `${fmtBytes(file.size)} · zip`);
+  if (entries.length === 1) return openZipEntry(file.name, bytes, entries[0].path);
+  showPicker(entries, (path) => openZipEntry(file.name, bytes, path));   // many → choose one
+}
+
+function openZipEntry(archiveName, bytes, path) {
+  const inner = readZip(bytes, path);
+  if (!inner) return showNote(archiveName, 'zip', 'entry not found', path, '—');
+  openInner(`${archiveName} › ${path}`, inner);
+}
+
+function showPicker(entries, onPick) {
+  const list = $('#pickerList');
+  list.innerHTML = '';
+  for (const e of entries) {
+    const item = document.createElement('div');
+    item.className = 'pk-item';
+    item.innerHTML = `<span class="pk-name"></span><span class="pk-size">${fmtBytes(e.size || 0)}</span>`;
+    item.querySelector('.pk-name').textContent = e.path;          // textContent — no markup injection
+    item.onclick = () => { $('#picker').classList.remove('show'); onPick(e.path); };
+    list.appendChild(item);
+  }
+  $('#picker').classList.add('show');
+}
+$('#picker').onclick = (e) => { if (e.target.id === 'picker') $('#picker').classList.remove('show'); };  // click backdrop to dismiss
+
 // Open a File — STREAMING source (never resident; the huge-file path). Detect off
 // the head slice, then stream the whole to build the block index.
 async function openFile(file) {
+  // 0. Archive? Peek inside (resident tier). Sniff the head's magic bytes.
+  const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  const fmt = detectFormat(head);
+  if (fmt === 'zip' || fmt === 'gz') return openArchive(file, fmt);
+
   // 1. Cache hit → rebuild the source from the stored index, no scan (instant).
   const key = fileKey(file);
   const cached = await idbCache.get(key);

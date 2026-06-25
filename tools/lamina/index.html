@@ -45,13 +45,26 @@
     color: #c89b3c; font-family: var(--mono); font-size: 14px; pointer-events: none; z-index: 10;
   }
   body.dragging #drop-hint { display: flex; }
+
+  #picker { position: absolute; inset: 38px 0 24px 0; display: none; align-items: center; justify-content: center;
+    background: rgba(10,10,10,0.7); z-index: 20; }
+  #picker.show { display: flex; }
+  #picker .pk-box { width: min(560px, 80vw); max-height: 70%; display: flex; flex-direction: column;
+    background: #1c1c1c; border: 1px solid #333; border-radius: 6px; overflow: hidden; }
+  #picker .pk-title { font-family: var(--mono); font-size: 12px; color: #c89b3c; padding: 10px 12px; border-bottom: 1px solid #2a2a2a; }
+  #picker .pk-list { overflow-y: auto; }
+  #picker .pk-item { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px; cursor: pointer;
+    font-family: var(--mono); font-size: 12px; color: #bbb; border-bottom: 1px solid #222; }
+  #picker .pk-item:hover { background: #262626; }
+  #picker .pk-item .pk-size { color: #777; }
 </style>
 <!-- Standalone @gcu/* resolution (a single-file build inlines these later). -->
 <script type="importmap">
 { "imports": {
-  "@gcu/loom":   "../../ext/loom/index.js",
-  "@gcu/lamina": "../../ext/lamina/index.js",
-  "@gcu/proc":   "../../ext/proc/index.js"
+  "@gcu/loom":    "../../ext/loom/index.js",
+  "@gcu/lamina":  "../../ext/lamina/index.js",
+  "@gcu/proc":    "../../ext/proc/index.js",
+  "@gcu/archive": "../../ext/archive/index.js"
 } }
 </script>
 </head>
@@ -65,9 +78,10 @@
   </div>
 
   <div id="grid"></div>
-  <div id="empty"><b>open any file</b><span>Open… · or drag a file anywhere — CSV/TSV → table, text → lines</span></div>
+  <div id="empty"><b>open any file</b><span>Open… · or drag a file anywhere — CSV/TSV → table, text → lines, .zip/.gz → peek inside</span></div>
   <div id="binary"><b>binary file</b><span id="binaryMsg">use the hex viewer for this one</span></div>
   <div id="drop-hint">drop to open</div>
+  <div id="picker"><div class="pk-box"><div class="pk-title">choose a file from the archive</div><div class="pk-list" id="pickerList"></div></div></div>
 
   <footer><span id="meta">—</span></footer>
 

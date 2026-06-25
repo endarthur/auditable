@@ -8,6 +8,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { zipSync, gzipSync } from '../ext/archive/vendor/fflate.module.mjs';
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
@@ -118,6 +119,44 @@ try {
   (cache.first.scan === 'worker' && cache.secondScan === 'cache' && cache.secondRows === cache.first.rows && cache.b === 'y3700')
     ? ok(`index cache: first open scanned (${cache.first.scan}), reopen hit the cache (${cache.first.rows} rows, deep row intact)`)
     : fail(`index cache failed: ${JSON.stringify(cache)}`);
+
+  // ── archive (resident tier): a CSV inside a zip → grid; a single entry auto-opens ──
+  const enc = new TextEncoder();
+  let zcsv = 'p,q\n'; for (let i = 0; i < 800; i++) zcsv += `${i},z${i}\n`;
+  const zipBytes = zipSync({ 'inner.csv': enc.encode(zcsv) });
+  const zipArr = Array.from(zipBytes);
+  const zipRes = await page.evaluate(async (arr) => {
+    const file = new File([new Uint8Array(arr)], 'bundle.zip');
+    await window._lamina.openFile(file);
+    const vs = window._laminaVS;
+    return { rows: vs.rowCount(), cols: vs.cols, scan: window._lamina.lastScan, name: document.getElementById('fileName').textContent };
+  }, zipArr);
+  (zipRes.rows === 800 && zipRes.cols === 2 && zipRes.scan === 'resident' && zipRes.name.includes('inner.csv'))
+    ? ok(`zip → single CSV entry auto-opened (${zipRes.rows} rows, label "${zipRes.name}")`)
+    : fail(`zip open failed: ${JSON.stringify(zipRes)}`);
+
+  // multi-entry zip → picker lists both; clicking one renders it
+  const zip2 = Array.from(zipSync({ 'a.csv': enc.encode('x\n1\n2\n3\n'), 'b.csv': enc.encode('y,z\n4,5\n6,7\n') }));
+  const pick = await page.evaluate(async (arr) => {
+    await window._lamina.openFile(new File([new Uint8Array(arr)], 'two.zip'));
+    const items = [...document.querySelectorAll('#picker.show .pk-item .pk-name')].map((n) => n.textContent);
+    document.querySelectorAll('#picker .pk-item')[1].click();     // pick b.csv
+    await new Promise((r) => setTimeout(r, 100));
+    return { items, cols: window._laminaVS.cols, rows: window._laminaVS.rowCount() };
+  }, zip2);
+  (pick.items.length === 2 && pick.items.includes('a.csv') && pick.items.includes('b.csv') && pick.cols === 2 && pick.rows === 2)
+    ? ok(`multi-entry zip → picker (${pick.items.join(', ')}), chose b.csv → ${pick.rows}×${pick.cols}`)
+    : fail(`zip picker failed: ${JSON.stringify(pick)}`);
+
+  // a .gz stream → decompress + render
+  const gzArr = Array.from(gzipSync(enc.encode('m\n' + Array.from({ length: 200 }, (_, i) => i).join('\n') + '\n')));
+  const gz = await page.evaluate(async (arr) => {
+    await window._lamina.openFile(new File([new Uint8Array(arr)], 'log.txt.gz'));
+    return { rows: window._laminaVS.rowCount(), name: document.getElementById('fileName').textContent };
+  }, gzArr);
+  (gz.rows === 201 && gz.name.includes('log.txt'))
+    ? ok(`.gz → decompressed + rendered (${gz.rows} rows, label "${gz.name}")`)
+    : fail(`gz open failed: ${JSON.stringify(gz)}`);
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
