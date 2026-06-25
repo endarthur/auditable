@@ -8,8 +8,8 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider, LOADING } from '@gcu/lamina';
-import { compileBool, validate } from '@gcu/expr';   // the filter language (superset of the old parseFilter — || / parens / functions / between, on top of && / == / ~ / in)
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
+import { compile, compileBool, validate, deps } from '@gcu/expr';   // the filter + calc-column language (superset of the old parseFilter — || / parens / functions / between, on top of && / == / ~ / in)
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
 import { detectDM, parseHeader, recordRange, decodeRecord } from '@gcu/dm';
@@ -97,6 +97,7 @@ function mount(name, d, src, totalBytes) {
   const baseVs = createRecordViewSource(src, { schema, dataStart });
   current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), colWidths: {}, colFormats: {}, _vis: null, file: null, bytes: null, force: {} };
   $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear();   // fresh file → clear filter + sort
+  initCalcState();
   recompute();
 }
 
@@ -332,7 +333,12 @@ function showColumnMenu(uc, x, y) {
     if (c.hidden.has(i)) items.push({ label: `Show ${c.baseVs.header(i).label}`, action: () => showColumn(i) });
   }
   if (c.hidden.size) items.push({ label: 'Show all columns', action: () => showAllColumns() });
-  items.push({ sep: true }, { label: 'Autofit all columns', action: () => autofitAll() });
+  items.push({ sep: true }, { label: 'Add calculated column…', action: () => openCalcEditor(null) });
+  if (c._schema0 && uc >= c._schema0.length) {                       // this IS a calc column → edit / remove
+    const ci = uc - c._schema0.length;
+    items.push({ label: `Edit ${name}…`, action: () => openCalcEditor(ci) }, { label: `Remove ${name}`, action: () => removeCalc(ci) });
+  }
+  items.push({ label: 'Autofit all columns', action: () => autofitAll() });
   showMenu(x, y, items);
 }
 
@@ -541,8 +547,137 @@ function mountDm(name, reader, h, totalBytes) {
   current = { source, d, schema: h.schema, dataStart: 0, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), colWidths: {}, colFormats: {}, _vis: null, file: null, bytes: null, force: {}, dm: true };
   $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear();
   lastScan = 'dm';
+  initCalcState();
   recompute();
 }
+
+// ── calculated columns (read-time derived columns; @gcu/expr) ──────────────────
+// Each is { name, expr, type }. They're NEVER materialized — applyCalcs rebuilds
+// the cursor + browse view as calc-decorated wrappers over the pristine originals
+// (kept as _src0 / _vs0 / _schema0), so filter / sort / stats / browse all see the
+// derived columns. Session-only (lost on reload); a saved "lens" is a future step.
+
+// Capture the pristine (undecorated) source/view/schema + an empty calc list. Called
+// right after a file mounts (mount / mountDm), before any calc is added.
+function initCalcState() {
+  const c = current;
+  c.calcs = [];
+  c._src0 = c.source; c._vs0 = c.baseVs; c._schema0 = c.schema;
+}
+
+// Rebuild source/baseVs/schema from the originals + the current calc list, then
+// re-run the active filter against the new schema (which re-renders). Compiling all
+// calcs against the FULL extended schema (base + every calc) keeps indices correct
+// under add/edit/remove and lets a calc reference an earlier calc.
+function applyCalcs() {
+  const c = current; if (!c) return;
+  const calcs = c.calcs;
+  if (!calcs.length) {
+    c.source = c._src0; c.baseVs = c._vs0; c.schema = c._schema0; c.d.schema = c._schema0;
+  } else {
+    const ext = [...c._schema0, ...calcs.map((x) => ({ name: x.name, type: x.type }))];
+    const compiled = calcs.map((x) => ({ name: x.name, type: x.type, fn: compile(x.expr, ext, { decimal: c.d.decimal }) }));
+    const baseCount = c._schema0.length;
+    c.schema = ext; c.d.schema = ext;
+    c.source = withCalcCursor(c._src0, baseCount, compiled);
+    c.baseVs = withCalcView(c._vs0, baseCount, compiled);
+  }
+  if (c.sort && c.sort.col >= c.schema.length) c.sort = null;     // a removed calc → drop a now-dangling sort
+  const box = $('#filter').value;                                 // a filter that referenced a removed calc → clear it (don't strand a red box)
+  if (box.trim() && !validate(box, c.schema).ok) { $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear(); }
+  return applyFilter($('#filter').value);                         // re-validate + re-run the filter, then recompute (sort)
+}
+
+// Programmatic add (the automation hook + the editor's commit share applyCalcs).
+async function addCalc(name, expr) {
+  const c = current; if (!c) return;
+  c.calcs.push({ name, expr, type: await inferCalcType(expr, c.schema) });
+  return applyCalcs();
+}
+function removeCalc(idx) { const c = current; if (!c) return; c.calcs.splice(idx, 1); return applyCalcs(); }
+
+// Sample the first visible rows to guess number-vs-text (display alignment + numeric
+// sort/stats); the column menu's "treat as text/number" stays the manual override.
+async function inferCalcType(expr, cols) {
+  const c = current;
+  let fn; try { fn = compile(expr, cols, { decimal: c.d.decimal }); } catch { return 'string'; }
+  const n = Math.min(6, c.baseVs.rowCount()); const out = [];
+  for (let r = 0; r < n; r++) { const row = await c.baseVs.ensureRow(r); if (row) out.push(fn(row)); }
+  const nn = out.filter((x) => x != null);
+  return nn.length && nn.every((x) => typeof x === 'number') ? 'number' : 'string';
+}
+
+// ── the calc-column editor popover ──
+let _calcEdit = null;                       // index being edited, or null (add mode)
+let _calcDraft = { ok: false };             // { ok, name, expr, type } from the live preview
+
+function openCalcEditor(idx) {
+  const c = current; if (!c) return;
+  closeOpts(); closeMenu();
+  _calcEdit = (idx == null ? null : idx);
+  const cur = idx == null ? null : c.calcs[idx];
+  $('#ceTitle').textContent = idx == null ? 'Add calculated column' : 'Edit calculated column';
+  $('#ceCommit').textContent = idx == null ? 'Add' : 'Save';
+  $('#ceName').value = cur ? cur.name : '';
+  $('#ceExpr').value = cur ? cur.expr : '';
+  $('#calcEditor').classList.add('show');
+  previewCalc();
+  $('#ceName').focus();
+  setTimeout(() => document.addEventListener('mousedown', onCalcDown), 0);
+}
+function closeCalcEditor() { $('#calcEditor').classList.remove('show'); document.removeEventListener('mousedown', onCalcDown); }
+function onCalcDown(e) { if (!$('#calcEditor').contains(e.target)) closeCalcEditor(); }
+
+// Live: validate name + expression, show deps, preview over the first visible rows.
+async function previewCalc() {
+  const c = current; if (!c) return;
+  _calcDraft = { ok: false };
+  const name = $('#ceName').value.trim();
+  const expr = $('#ceExpr').value;
+  const status = $('#ceStatus'), prev = $('#cePreview');
+  $('#ceName').classList.remove('err'); $('#ceExpr').classList.remove('err');
+
+  // name: valid ident, not colliding with a base column or another calc
+  let nameErr = '';
+  if (name) {
+    const taken = new Set([...c._schema0.map((x) => x.name.toLowerCase()), ...c.calcs.filter((_, i) => i !== _calcEdit).map((x) => x.name.toLowerCase())]);
+    if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(name)) nameErr = 'name: a letter then letters / digits / _ / -';
+    else if (taken.has(name.toLowerCase())) nameErr = `a column named "${name}" already exists`;
+    if (nameErr) $('#ceName').classList.add('err');
+  }
+
+  if (!expr.trim()) { status.className = 'ce-status'; status.textContent = nameErr || 'enter an expression'; prev.textContent = ''; $('#ceCommit').disabled = true; return; }
+  const v = validate(expr, c.schema);
+  if (!v.ok) { $('#ceExpr').classList.add('err'); status.className = 'ce-status err'; status.textContent = v.errors[0].message; prev.textContent = ''; $('#ceCommit').disabled = true; return; }
+
+  let fn; try { fn = compile(expr, c.schema, { decimal: c.d.decimal }); } catch (e) { status.className = 'ce-status err'; status.textContent = e.message; prev.textContent = ''; $('#ceCommit').disabled = true; return; }
+  const used = deps(expr);
+  status.className = nameErr ? 'ce-status err' : 'ce-status';
+  status.textContent = nameErr || `✓ uses: ${used.join(', ') || '(constants)'}`;
+
+  // preview over the first visible rows (the values the user can eyeball-check)
+  const n = Math.min(6, c.baseVs.rowCount()), out = [];
+  for (let r = 0; r < n; r++) { const row = await c.baseVs.ensureRow(r); out.push(row ? fn(row) : null); }
+  prev.textContent = out.length ? out.map((x, r) => `${String(r + 1).padStart(2)}  ${x == null ? '·' : x}`).join('\n') : '(no rows)';
+  const nn = out.filter((x) => x != null);
+  const type = nn.length && nn.every((x) => typeof x === 'number') ? 'number' : 'string';
+
+  const ok = !!name && !nameErr;
+  $('#ceCommit').disabled = !ok;
+  _calcDraft = { ok, name, expr, type };
+}
+function commitCalc() {
+  const c = current; if (!c || !_calcDraft.ok) return;
+  const entry = { name: _calcDraft.name, expr: _calcDraft.expr, type: _calcDraft.type };
+  if (_calcEdit == null) c.calcs.push(entry); else c.calcs[_calcEdit] = entry;
+  closeCalcEditor();
+  applyCalcs();
+}
+$('#ceName').addEventListener('input', previewCalc);
+$('#ceExpr').addEventListener('input', previewCalc);
+$('#ceExpr').addEventListener('keydown', (e) => { if (e.key === 'Enter') commitCalc(); else if (e.key === 'Escape') closeCalcEditor(); });
+$('#ceCommit').onclick = commitCalc;
+$('#ceCancel').onclick = closeCalcEditor;
 
 // Single-stream decoders that have NO browser streaming primitive (only gzip/
 // deflate do via DecompressionStream) → resident-only, size-guarded.
@@ -844,6 +979,7 @@ $('#mFile').onclick = () => menuAt($('#mFile'), [
 ]);
 $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
+  { label: 'Add calculated column…', action: () => { if (hasFile()) openCalcEditor(null); } },
   { label: 'Go to row…', action: () => $('#goto').focus() },
   { sep: true },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyFilter(''); } },
@@ -868,9 +1004,10 @@ const HELP = {
     + `<b>Open</b> — File → Open (<code>Ctrl+O</code>) or drag a file in. CSV/TSV → table · Datamine <code>.dm</code> → table · text → lines · binary → hex · <code>.zip</code>/<code>.tar</code>/<code>.gz</code>/<code>.zst</code>/<code>.xz</code>/<code>.bz2</code> → peek inside.<br><br>`
     + `<b>If a file reads wrong</b> — click the <b>kind badge</b> (top-right) or <b>View → Interpretation</b> to force the delimiter, header on/off, skip comment lines, or switch the decimal point/comma.<br><br>`
     + `<b>Most actions live in right-click menus:</b><br>`
-    + `• <b>Right-click a column header</b> — Statistics · sort · filter by · number format · treat as text/number · hide/show · autofit.<br>`
+    + `• <b>Right-click a column header</b> — Statistics · sort · filter by · number format · treat as text/number · hide/show · autofit · <b>add a calculated column</b>.<br>`
     + `• <b>Right-click a cell or selection</b> — copy (with header / row #) · filter by this value · column statistics.<br><br>`
-    + `<b>Filter</b> in the box (Enter) — e.g. <code>grade > 1 && lito == OXIDE</code> (see Filter syntax). <b>Sort</b> by clicking a header. <b>Jump</b> with the row # box. In a column's Statistics, click values to build a set filter.`],
+    + `<b>Filter</b> in the box (Enter) — e.g. <code>grade > 1 && lito == "OXIDE"</code> (see Filter syntax). <b>Sort</b> by clicking a header. <b>Jump</b> with the row # box. In a column's Statistics, click values to build a set filter.<br><br>`
+    + `<b>Calculated columns</b> — <b>View → Add calculated column…</b> (or a header's right-click). A derived column from a formula in the same language as the filter (<code>grade * density</code>, <code>if(au > 1, "ore", "waste")</code>); it's computed on the fly (never written), and you can filter, sort, and stat it like any column. Right-click its header to edit or remove it.`],
   filter: ['Filter syntax',
     `Type an expression in the <b>filter</b> box — <b>Enter</b> applies, <b>Esc</b> clears.<br><br>`
     + `A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br>`
@@ -999,10 +1136,10 @@ $('#filterGo').onclick = () => applyFilter($('#filter').value);
 // ── global keys: Ctrl+O open, Esc closes the help overlay ──
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'o') { e.preventDefault(); pickFile(); }
-  else if (e.key === 'Escape') $('#help').classList.remove('show');
+  else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

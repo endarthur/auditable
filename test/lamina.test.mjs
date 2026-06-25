@@ -8,6 +8,7 @@ import { createRecordScanner, scanRecords, scanFileToIndex, splitRecords, parseF
 import { detectKind } from '../ext/lamina/src/detect.js';
 import { buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey } from '../ext/lamina/src/source.js';
 import { createRecordViewSource, LOADING } from '../ext/lamina/src/viewsource.js';
+import { withCalcCursor, withCalcView } from '../ext/lamina/src/calc.js';
 import { parseFilter, scanFilter, createResultView } from '../ext/lamina/src/filter.js';
 import { scanSortKeys } from '../ext/lamina/src/sort.js';
 import { scanColumnStats } from '../ext/lamina/src/stats.js';
@@ -640,4 +641,47 @@ test('decimal comma: detect numeric + sort/stats/filter parse it', async () => {
   const p = parseFilter('grade > 1', [{ name: 'id' }, { name: 'grade' }], ',');     // expr literal stays dot
   assert.equal(p(['1', '1,5']), true);
   assert.equal(p(['2', '0,8']), false);
+});
+
+// ── calculated columns: cursor + view decorators (fn-injected; here a plain JS
+//    closure stands in for an @gcu/expr compiled fn) ──
+test('withCalcCursor: appends a derived column to the scan (filter/sort/stats see it)', async () => {
+  const csv = 'a,b\n1,10\n2,20\n3,30\n';
+  const base = buildMemorySource(B(csv), { kind: 'delimited', delimiter: ',', blockSize: 2 });
+  // calc "ab" = a * b, at index 2 (baseCount = 2). fn indexes the FULL extended row.
+  const calcs = [{ name: 'ab', type: 'number', fn: (f) => Number(f[0]) * Number(f[1]) }];
+  const src = withCalcCursor(base, 2, calcs);
+  const schema = [{ name: 'a', type: 'number' }, { name: 'b', type: 'number' }, { name: 'ab', type: 'number' }];
+
+  // filter ON the calc column
+  const result = await scanFilter(src, { predicate: (f) => f[2] >= 40, dataStart: 1 });
+  assert.deepEqual([...result.nums], [1, 2]);                 // rows 2*20=40, 3*30=90
+  // the result view reads the calc column back (display string) via readByLoc
+  const fv = createResultView(src, result, schema);
+  assert.deepEqual(await fv.ensureRow(0), ['2', '20', '40']);
+  assert.deepEqual(await fv.ensureRow(1), ['3', '30', '90']);
+});
+
+test('withCalcView: rowAt appends the calc field; cols/header extend', async () => {
+  const vs = createRecordViewSource(buildMemorySource(B('a,b\n1,10\n2,20\n'), { kind: 'delimited', blockSize: 4 }), {
+    schema: [{ name: 'a', type: 'number' }, { name: 'b', type: 'number' }], dataStart: 1,
+  });
+  const dec = withCalcView(vs, 2, [{ name: 'ab', type: 'number', fn: (f) => Number(f[0]) * Number(f[1]) }]);
+  assert.equal(dec.cols, 3);
+  assert.equal(dec.header(2).label, 'ab');
+  assert.equal(dec.header(2).calc, true);
+  assert.deepEqual(await dec.ensureRow(0), ['1', '10', '10']);
+  assert.deepEqual(await dec.ensureRow(1), ['2', '20', '40']);
+});
+
+test('calc chaining: a later calc references an earlier one', async () => {
+  const base = buildMemorySource(B('a\n5\n'), { kind: 'delimited', blockSize: 2 });
+  const calcs = [
+    { name: 'dbl', type: 'number', fn: (f) => Number(f[0]) * 2 },     // index 1
+    { name: 'plus1', type: 'number', fn: (f) => Number(f[1]) + 1 },   // index 2, reads dbl (index 1)
+  ];
+  const src = withCalcCursor(base, 1, calcs);
+  const got = [];
+  await src.eachRecord({ dataStart: 1 }, (disp, fields) => got.push(fields));
+  assert.deepEqual(got[0], ['5', 10, 11]);                   // a=5, dbl=10, plus1=10+1=11
 });

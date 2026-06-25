@@ -4,6 +4,7 @@ export { createRecordScanner, scanRecords, scanFileToIndex, splitRecords, splitR
 export { buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey } from './source.js';
 export { installRecordCursor } from './cursor.js';
 export { createRecordViewSource, LOADING } from './viewsource.js';
+export { withCalcCursor, withCalcView } from './calc.js';
 export { parseFilter, scanFilter, createResultView } from './filter.js';
 export { scanSortKeys } from './sort.js';
 export { scanColumnStats } from './stats.js';

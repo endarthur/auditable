@@ -78,6 +78,13 @@ those two invariants hold from a memory-sized CSV up to a tens-of-GB block model
 - **stats** (`stats.js`) — `scanColumnStats` iterates via `source.eachRecord` for
   a numeric (Welford + capped quantiles) or categorical (top-N + distinct)
   summary, optionally restricted to a filter's `rows`.
+- **calc** (`calc.js`) — calculated (read-time derived) columns. `withCalcCursor`
+  + `withCalcView` decorate a cursor / browse view to append computed columns; each
+  calc is `{ name, type, fn }` with `fn(fieldsSoFar) → value` precompiled by the
+  caller (e.g. @gcu/expr's `compile` against `[...baseColumns, ...calcNames]`), so
+  @gcu/lamina stays expression-engine-agnostic. Computed left-to-right (a calc may
+  reference an earlier calc); the cursor yields RAW values to the scans and
+  STRINGIFIED values to result/browse views. Never materialized.
 - **provider** (`provider.js`) — adapts a view to `@gcu/loom`'s cell-provider;
   `LOADING` → loom's injected `PENDING`.
 

@@ -572,6 +572,26 @@ try {
     ? ok(`.dm direct (${dm.rows}×${dm.cols}, deep row 240 FROM=${dm.deep[1]} via File.slice); stats✓ filter AU>0.5 → ${dm.filtered}; sort+filter top FROM=${dm.sortedTop[1]}`)
     : fail(`.dm direct failed: ${JSON.stringify(dm)}`);
 
+  // ── calculated columns (@gcu/expr) — a read-time derived column, filterable,
+  //    chainable, removable; the value never materializes ──
+  const calc = await page.evaluate(async () => {
+    window._lamina.open('calc.csv', new TextEncoder().encode('a,b\n2,10\n3,20\n4,30\n'));
+    await window._lamina.addCalc('ab', 'a * b');               // 20, 60, 120
+    await window._lamina.addCalc('big', 'if(ab > 50, "Y", "N")'); // chains off ab: N, Y, Y
+    const vs = window._laminaVS;
+    const cols = vs.cols, h1 = window._lamina.grid.provider.header(cols - 2).label, h2 = window._lamina.grid.provider.header(cols - 1).label;
+    const row1 = await vs.ensureRow(1);                        // a=3,b=20 → ab=60, big=Y
+    await window._lamina.applyFilter('ab > 50');               // filter ON the calc → 2 rows
+    const filtered = window._laminaVS.rowCount();
+    window._lamina.removeCalc(1); window._lamina.removeCalc(0); // remove both → back to base
+    const afterCols = window._laminaVS.cols, afterCalcs = window._lamina.calcs.length;
+    return { cols, h1, h2, ab1: row1[cols - 2], big1: row1[cols - 1], filtered, afterCols, afterCalcs };
+  });
+  (calc.cols === 4 && calc.h1 === 'ab' && calc.h2 === 'big' && calc.ab1 === '60' && calc.big1 === 'Y'
+    && calc.filtered === 2 && calc.afterCols === 2 && calc.afterCalcs === 0)
+    ? ok(`calc columns: ab=a*b (row1=${calc.ab1}) + big chains off it (${calc.big1}); filter ab>50 → ${calc.filtered}; remove → ${calc.afterCols} cols`)
+    : fail(`calc columns failed: ${JSON.stringify(calc)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
