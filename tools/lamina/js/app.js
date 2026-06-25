@@ -157,13 +157,15 @@ function mountView(vs, info = {}) {
     grid.onHeaderClick((dc) => toggleSort(vis[dc]));                                   // click → sort (underlying col)
     grid.onHeaderContextMenu(({ col, clientX, clientY }) => showColumnMenu(vis[col], clientX, clientY));
   }
+  grid.onContextMenu(({ row, col, sel, clientX, clientY }) => showCellMenu(row, col, sel, clientX, clientY));
 
   const shownRows = vs.rowCount();
   const baseRows = c.baseVs.rowCount();
   let rows = info.filtered ? `${shownRows.toLocaleString()} of ${baseRows.toLocaleString()} rows (filtered)` : `${shownRows.toLocaleString()} rows`;
   if (info.sorted) rows += ` · sorted ${c.sort.dir} by ${c.schema[c.sort.col].name}`;
   const cols = c.hidden.size ? `${vis.length} of ${total} cols` : `${vis.length} cols`;
-  $('#meta').textContent = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${c.d.kind}`;
+  c._meta = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${c.d.kind}`;   // remembered so a copy-flash can restore it
+  $('#meta').textContent = c._meta;
   window._laminaVS = vs;                                // automation hook
 }
 
@@ -203,6 +205,84 @@ function showFormatMenu(uc, x, y) {
 function hideColumn(uc) { if (current) { current.hidden.add(uc); rerender(); } }
 function showColumn(uc) { if (current) { current.hidden.delete(uc); rerender(); } }
 function showAllColumns() { if (current) { current.hidden.clear(); rerender(); } }
+
+// ── cell context menu: copy variants + filter-by-value + column stats ──
+function showCellMenu(row, col, sel, x, y) {
+  const c = current; if (!c || !grid) return;
+  const uc = (c._vis ? c._vis[col] : col);
+  const name = c.baseVs.header(uc).label;
+  const cell = grid.provider.cellAt(row, col);
+  const val = (cell && typeof cell === 'object') ? (cell.value ?? '') : '';
+  const nR = sel.r1 - sel.r0 + 1, nC = sel.c1 - sel.c0 + 1;
+  const shownVal = val.length > 24 ? val.slice(0, 24) + '…' : val;
+  const items = [
+    { label: nR * nC > 1 ? `Copy ${nR}×${nC}` : 'Copy', action: () => copySelection(sel, {}) },
+    { label: 'Copy with header', action: () => copySelection(sel, { header: true }) },
+    { label: 'Copy with row #', action: () => copySelection(sel, { rowNum: true }) },
+    { label: 'Copy with header + row #', action: () => copySelection(sel, { header: true, rowNum: true }) },
+    { sep: true },
+    { label: `Filter ${name} = ${shownVal || '(empty)'}`, action: () => filterByValue(uc, val) },
+    { label: `Statistics — ${name}…`, action: () => showColumnStats(uc) },
+  ];
+  showMenu(x, y, items);
+}
+
+// Build a TSV from a display selection (raw values for data fidelity) → clipboard.
+async function copySelection(sel, { header, rowNum } = {}) {
+  if (!grid) return;
+  const { r0, c0, r1, c1 } = sel;
+  for (let r = r0; r <= r1; r++) await window._laminaVS.ensureRow(r);     // load any off-screen rows in range
+  const lines = [];
+  if (header) {
+    const h = rowNum ? ['row'] : [];
+    for (let dc = c0; dc <= c1; dc++) h.push(grid.provider.header(dc).label);
+    lines.push(h.join('\t'));
+  }
+  for (let r = r0; r <= r1; r++) {
+    const out = rowNum ? [grid.provider.rowHeader(r)] : [];
+    for (let dc = c0; dc <= c1; dc++) { const cell = grid.provider.cellAt(r, dc); out.push(cell && typeof cell === 'object' ? (cell.value ?? '') : ''); }
+    lines.push(out.join('\t'));
+  }
+  copySuppressFlash = true;
+  copyText(lines.join('\n'));
+  copySuppressFlash = false;
+  flashCopied(`copied ${r1 - r0 + 1}×${c1 - c0 + 1}${header ? ' +header' : ''}${rowNum ? ' +row#' : ''}`);
+}
+
+// Clipboard write via a temp textarea + execCommand — works under file:// too
+// (navigator.clipboard is blocked there), matching loom's own copy path.
+function copyText(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:-1000px;left:0;opacity:0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); } catch { /* ignore */ }
+  ta.remove();
+  if (grid) grid.focus();
+}
+
+// Filter to the right-clicked cell's value (numeric → ==, else quoted ==).
+function filterByValue(uc, val) {
+  const name = current.baseVs.header(uc).label;
+  const numeric = current.schema[uc] && current.schema[uc].type === 'number';
+  const expr = (numeric && val !== '' && !Number.isNaN(Number(val)))
+    ? `${name} == ${val}`
+    : `${name} == "${String(val).replace(/"/g, '')}"`;
+  $('#filter').value = expr; syncFilterClear(); applyFilter(expr);
+}
+
+// ── copy feedback in the footer (menu copies + Ctrl+C) ──
+let copySuppressFlash = false;
+let _metaTimer = null;
+function flashCopied(msg) {
+  clearTimeout(_metaTimer);
+  $('#meta').textContent = '✓ ' + msg;
+  _metaTimer = setTimeout(() => { if (current && current._meta) $('#meta').textContent = current._meta; }, 1800);
+}
+document.addEventListener('copy', () => {                 // loom's Ctrl+C (menu copies suppress this)
+  if (copySuppressFlash || !grid) return;
+  const s = grid.getSelection(); if (!s) return;
+  flashCopied(`copied ${s.r1 - s.r0 + 1}×${s.c1 - s.c0 + 1}`);
+});
 // Persist the live grid's column widths into `current.colWidths` (keyed by
 // UNDERLYING col, so they survive hide/show + sort/filter re-renders).
 function captureWidths() {
@@ -665,9 +745,12 @@ async function showColumnStats(uc) {
   const name = c.baseVs.header(uc).label;
   const numeric = (c.schema[uc] && c.schema[uc].type) === 'number';
   const suffix = c.filterResult ? ' (filtered)' : '';
-  showOverlay(`Statistics — ${name}${suffix}`, '<div style="color:#777">computing…</div>');
+  showOverlay(`Statistics — ${name}${suffix}`, '<div style="color:#777">computing… 0%</div>');
   try {
-    const st = await scanColumnStats(c.source, { col: uc, dataStart: c.dataStart, numeric, rows: c.filterResult ? c.filterResult.nums : null });
+    const st = await scanColumnStats(c.source, {
+      col: uc, dataStart: c.dataStart, numeric, rows: c.filterResult ? c.filterResult.nums : null,
+      onProgress: (b, n) => { if ($('#help').classList.contains('show')) $('#helpBody').innerHTML = `<div style="color:#777">computing… ${n ? Math.round((100 * b) / n) : 0}%</div>`; },
+    });
     showOverlay(`Statistics — ${name}${suffix}`, renderStats(st));
   } catch (e) { showOverlay(`Statistics — ${name}`, `<div style="color:#c0584a">${e.message}</div>`); }
 }
@@ -707,4 +790,4 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') $('#help').classList.remove('show');
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };

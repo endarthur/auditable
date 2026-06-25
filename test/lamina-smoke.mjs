@@ -394,6 +394,26 @@ try {
     ? ok(`column stats: numeric (mean+median) + categorical (distinct + top values)`)
     : fail(`stats failed: ${JSON.stringify(stats)}`);
 
+  // ── cell context menu + copy variants + footer flash ──
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
+  const cm = await page.evaluate(async () => {
+    window._lamina.open('cm.csv', new TextEncoder().encode('id,grade,lito\n0,1.2,ox\n1,0.8,sulf\n2,3.4,ox\n'));
+    await window._laminaVS.ensureRow(0);
+    // copy a 2×2 range with header + row # (the cell-menu actions); read clipboard + footer flash
+    await window._lamina.copySelection({ r0: 0, c0: 0, r1: 1, c1: 1 }, { header: true, rowNum: true });
+    await new Promise((r) => setTimeout(r, 40));
+    const text = await navigator.clipboard.readText().catch(() => '');
+    const footer = document.getElementById('meta').textContent;
+    // and the cell menu's "Filter <col> = <value>" action
+    window._lamina.filterByValue(2, 'ox');                              // lito == ox
+    await new Promise((r) => setTimeout(r, 40));
+    return { text, footer, filtered: window._laminaVS.rowCount() };
+  });
+  const lines = (cm.text || '').split(/\r?\n/);                          // Windows clipboard uses CRLF
+  (lines[0] === 'row\tid\tgrade' && lines[1] === '1\t0\t1.2' && /✓ copied 2×2 \+header \+row#/.test(cm.footer) && cm.filtered === 2)
+    ? ok(`cell copy+header+row# → "${lines[0]}" / "${lines[1]}"; footer "${cm.footer}"; filter-by-value → ${cm.filtered} rows`)
+    : fail(`cell menu/copy failed: ${JSON.stringify({ lines: lines.slice(0, 2), footer: cm.footer, filtered: cm.filtered })}`);
+
   // ── per-column number format (display only; value unchanged) ──
   const fmt = await page.evaluate(async () => {
     window._lamina.open('nf.csv', new TextEncoder().encode('id,grade\n0,1.23456\n1,2.7\n'));
