@@ -82,6 +82,18 @@ class OPFSBackend extends HandleBackend {
     if (this._fallback) return this._fallback.createReadStream(p);
     return super.createReadStream(p);
   }
+  async toFile(p) {
+    if (this._fallback) return this._fallback.toFile(p);
+    return super.toFile(p);
+  }
+  async resolveHandle(p) {
+    if (this._fallback) return this._fallback.resolveHandle ? this._fallback.resolveHandle(p) : null;
+    return super.resolveHandle(p);
+  }
+  async readRange(p, offset, length) {
+    if (this._fallback) return this._fallback.readRange ? this._fallback.readRange(p, offset, length) : null;
+    return super.readRange(p, offset, length);
+  }
   async createWriter(p) {
     if (this._fallback) return this._fallback.createWriter(p);
     return super.createWriter(p);
@@ -114,6 +126,8 @@ class OPFSBackend extends HandleBackend {
   get persistent() { return this._fallback ? !!this._fallback.persistent : true; }
   get streamable() { return this._fallback ? !!this._fallback.streamable : true; }
   get estimatable() { return this._fallback ? !!this._fallback.estimatable : true; }
+  get nativeFile() { return this._fallback ? !!this._fallback.nativeFile : true; }
+  get rangeReadable() { return this._fallback ? !!this._fallback.rangeReadable : true; }
   get readonly() { return this._fallback ? !!this._fallback.readonly : false; }
   get portable() { return this._fallback ? !!this._fallback.portable : false; }
   get symlinks() { return this._fallback ? !!this._fallback.symlinks : false; }

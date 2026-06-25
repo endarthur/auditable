@@ -469,6 +469,25 @@ describe('VFS mount table', () => {
     assert.equal(caps.writable, true);
     assert.equal(caps.streamable, false);
     assert.equal(caps.symlinks, true);
+    assert.equal(caps.nativeFile, false);     // memory wraps resident bytes (toFile works, not lazy)
+    assert.equal(caps.rangeReadable, true);   // resident → a range is a cheap subarray
+  });
+
+  it('toFile returns a native File with the bytes (base fallback)', async () => {
+    const vfs = await VFS.create();
+    await vfs.writeFile('/big.csv', 'a,b\n1,2\n');
+    const f = await vfs.toFile('/big.csv');
+    assert.ok(f instanceof File);
+    assert.equal(f.name, 'big.csv');
+    assert.equal(await f.text(), 'a,b\n1,2\n');
+  });
+
+  it('readRange reads just a byte slice', async () => {
+    const vfs = await VFS.create();
+    await vfs.writeFile('/data.bin', new Uint8Array([10, 11, 12, 13, 14]));
+    const r = await vfs.readRange('/data.bin', 1, 3);
+    assert.ok(r instanceof Uint8Array);
+    assert.deepEqual([...r], [11, 12, 13]);
   });
 });
 
@@ -876,6 +895,19 @@ describe('IDBBackend', () => {
     const vfs = await VFS.create({ type: 'idb', name: 'test-str' });
     await vfs.writeFile('/hello.txt', 'world');
     assert.equal(await vfs.readFile('/hello.txt'), 'world');
+  });
+
+  it('toFile works (fallback); readRange is null on a non-seek backend', async () => {
+    mock.indexedDB._reset();
+    const vfs = await VFS.create({ type: 'idb', name: 'test-tofile' });
+    await vfs.writeFile('/x.csv', 'hello');
+    const f = await vfs.toFile('/x.csv');
+    assert.ok(f instanceof File);
+    assert.equal(await f.text(), 'hello');
+    const caps = vfs.capabilities('/');
+    assert.equal(caps.nativeFile, false);     // idb materializes — base fallback, honest
+    assert.equal(caps.rangeReadable, false);  // can't seek
+    assert.equal(await vfs.readRange('/x.csv', 0, 2), null);  // honest "not supported"
   });
 
   it('writeFile/readFile binary roundtrip', async () => {

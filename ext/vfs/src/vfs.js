@@ -121,6 +121,8 @@ class VFS extends EventEmitter {
       writable: !backend.readonly,
       streamable: !!backend.streamable,
       estimatable: !!backend.estimatable,
+      nativeFile: !!backend.nativeFile,
+      rangeReadable: !!backend.rangeReadable,
       exportable: backend.exportable !== false,
       portable: !!backend.portable,
       symlinks: !!backend.symlinks,
@@ -467,6 +469,30 @@ class VFS extends EventEmitter {
   createReadStream(p, opts) {
     const { backend, subpath } = this.resolve(p);
     return backend.createReadStream(subpath, opts);
+  }
+
+  // Resolve a path to a native `File` without decoding — the streaming escape
+  // hatch (vfs = phonebook, the consumer owns the pipe). `capabilities(p).nativeFile`
+  // tells you whether it's lazy (FSAA/OPFS) or a wrap-of-resident-bytes fallback.
+  async toFile(p, opts) {
+    checkPermission('readFile', p, opts?.principal);
+    const { backend, subpath } = this.resolve(p);
+    return backend.toFile(subpath);
+  }
+
+  // The backend-native handle (FSAA `FileSystemFileHandle`), or null.
+  async resolveHandle(p, opts) {
+    checkPermission('readFile', p, opts?.principal);
+    const { backend, subpath } = this.resolve(p);
+    return backend.resolveHandle ? backend.resolveHandle(subpath) : null;
+  }
+
+  // Read a byte range without reading the whole file. null where the backend
+  // can't seek (check `capabilities(p).rangeReadable`).
+  async readRange(p, offset, length, opts) {
+    checkPermission('readFile', p, opts?.principal);
+    const { backend, subpath } = this.resolve(p);
+    return backend.readRange ? backend.readRange(subpath, offset, length) : null;
   }
 
   async createWriter(p, opts) {

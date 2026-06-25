@@ -107,6 +107,22 @@ class Backend {
   createReadStream() { return null; }
   createWriter() { return null; }
 
+  // Resolve a path to its NATIVE source without decoding — a `File` the consumer
+  // can run its own stream/parse over and `postMessage`-transfer into a worker
+  // ("phonebook, then get out of the pipe"; spec_inbox/vfs-streaming-spec.md §1).
+  // Base fallback reads + wraps — works everywhere but is NOT lazy, so `nativeFile`
+  // stays false here; handle/OPFS override with the lazy native handle.
+  async toFile(p) {
+    const bytes = await this.readFile(p, 'bytes');
+    return new File([bytes], p.split('/').pop() || 'file');
+  }
+  // The backend-native file handle (FSAA `FileSystemFileHandle`, …), or null.
+  async resolveHandle() { return null; }
+  // Read a byte range WITHOUT reading the whole file. null ⇒ this backend can't
+  // seek — the caller checks `rangeReadable` and falls back knowingly; we never
+  // silently read a multi-GB file here (that would defeat the point).
+  async readRange() { return null; }
+
   // Worker-replication: return a structured-cloneable config that a worker
   // can pass back to the constructor (alongside the type string from
   // BACKEND_TYPES) to instantiate a peer backend that talks to the same
@@ -127,6 +143,8 @@ class Backend {
   get persistent() { return false; }
   get streamable() { return false; }
   get estimatable() { return false; }
+  get nativeFile() { return false; }    // toFile yields a lazy native handle (no full read)
+  get rangeReadable() { return false; } // readRange seeks (no full read)
   get exportable() { return true; }
   get portable() { return false; }
   get symlinks() { return false; }

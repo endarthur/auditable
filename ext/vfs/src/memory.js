@@ -111,6 +111,13 @@ class MemoryBackend extends Backend {
     return content;
   }
 
+  // Resident bytes → a range is a cheap subarray (no re-read).
+  get rangeReadable() { return true; }
+  async readRange(p, offset, length) {
+    const b = await this.readFile(p, 'bytes');
+    return b.subarray(offset, offset + length);
+  }
+
   async writeFile(p, content) {
     const [parent, name] = this._resolveParent(p);
     const existing = parent._children.get(name);

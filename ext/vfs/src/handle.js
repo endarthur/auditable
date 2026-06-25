@@ -320,6 +320,17 @@ class HandleBackend extends Backend {
   get persistent() { return true; }
   get streamable() { return true; }
   get estimatable() { return true; }
+  get nativeFile() { return true; }
+  get rangeReadable() { return true; }
+
+  // Native File / handle off the FSA file handle — lazy (no read), transferable.
+  async toFile(p) { return (await this._resolveFile(p)).getFile(); }
+  async resolveHandle(p) { return this._resolveFile(p); }
+  // Blob.slice is lazy; .arrayBuffer() reads ONLY the slice (a true seek).
+  async readRange(p, offset, length) {
+    const file = await (await this._resolveFile(p)).getFile();
+    return new Uint8Array(await file.slice(offset, offset + length).arrayBuffer());
+  }
   get recursiveRemove() { return true; }   // removeEntry({recursive}) — see _rmDir
 
   async estimate() {

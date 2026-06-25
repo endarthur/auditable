@@ -117,6 +117,10 @@ const info = await vfs.lstat("/data/latest.csv");            // stat the link it
 
 streaming is **native-only** — only backends with real streaming support (OPFS, FSAA, fetch) implement it. backends without native streaming (memory, idb, comment) don't pretend — `createReadStream` returns `null` and the VFS falls back to `readFile` at the call site. no simulated single-chunk iterables wrapping a full read.
 
+### the escape hatch: `toFile` / `readRange` (huge-file consumers — strata, BMA)
+
+A consumer doing its *own* multi-GB streaming (own line-splitter / parser, off-main-thread in a worker) doesn't want decoded chunks — it wants the **native source**. `toFile(path)` resolves a path to a `File` it can `File.stream()`/parse and `postMessage`-transfer into a worker; `readRange(path, offset, length)` does a random-access seek (parquet row groups, a sidecar index, a windowed grid scroll). This is *"vfs is the phonebook, the consumer owns the pipe."* On FSAA/OPFS these are **lazy** (off the file handle — no read), flagged `nativeFile` / `rangeReadable`; on memory/idb `toFile` falls back to a wrap-of-bytes (works, not lazy → `nativeFile` false) and `readRange` returns `null` where the backend can't seek (the consumer checks the flag and **never** silently reads a 2 GB file). See `spec_inbox/vfs-streaming-spec.md`.
+
 ```js
 // read as an async iterable of chunks (returns null if backend doesn't support it)
 const stream = vfs.createReadStream("/data/big.csv");
@@ -368,12 +372,17 @@ class Backend {
   async import(path, data)                  // bulk load from flat object
   createReadStream(path, opts)              // returns AsyncIterable<string|Uint8Array>, or null
   createWriter(path)                        // returns { write(chunk), close() }, or null
+  async toFile(path)                        // → native File (escape hatch: own-stream + worker-transfer)
+  async resolveHandle(path)                 // → backend-native handle (FSAA FileSystemFileHandle), or null
+  async readRange(path, offset, length)     // → Uint8Array byte range, or null (can't seek)
 
   // capability flags (static or getter)
   static type = "typename"                  // e.g. "memory", "idb", "opfs", "fsaa"
   get readonly()                            // default: false
   get persistent()                          // default: false — survives page reload
   get streamable()                          // default: false — createReadStream/createWriter work natively
+  get nativeFile()                          // default: false — toFile yields a LAZY native handle (no full read)
+  get rangeReadable()                       // default: false — readRange seeks (no full read)
   get estimatable()                         // default: false — estimate() returns real numbers
   get exportable()                          // default: true — export/import work
   get portable()                            // default: false — travels with the document
