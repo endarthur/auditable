@@ -8,6 +8,7 @@ import { createRecordScanner, scanRecords, scanFileToIndex, splitRecords, parseF
 import { detectKind } from '../ext/lamina/src/detect.js';
 import { buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey } from '../ext/lamina/src/source.js';
 import { createRecordViewSource, LOADING } from '../ext/lamina/src/viewsource.js';
+import { parseFilter, scanFilter, createFilteredViewSource } from '../ext/lamina/src/filter.js';
 import { createLaminaProvider } from '../ext/lamina/src/provider.js';
 
 const B = (s) => new TextEncoder().encode(s);
@@ -341,4 +342,52 @@ test('buildFileSource: injected `scan` dispatcher (the off-thread seam) is used;
   assert.deepEqual([...src.blockOffsets], [...mem.blockOffsets]);
   const off = src.blockOffsets[2];
   assert.deepEqual([...(await src.readRange(off, 12))], [...bytes.subarray(off, off + 12)]);  // readRange = File.slice, local
+});
+
+// ── filter (predicate scan + remap view) ──
+
+test('parseFilter: numeric, string, contains, AND, unknown column', () => {
+  const cols = [{ name: 'id' }, { name: 'grade' }, { name: 'lito' }];
+  assert.equal(parseFilter('grade > 2', cols)(['1', '2.5', 'ox']), true);
+  assert.equal(parseFilter('grade > 2', cols)(['1', '0.5', 'ox']), false);
+  assert.equal(parseFilter('lito == ox', cols)(['1', '2', 'ox']), true);
+  assert.equal(parseFilter('lito == "ox"', cols)(['1', '2', 'sulf']), false);
+  assert.equal(parseFilter('lito ~ XID', cols)(['1', '2', 'OXIDE']), true);     // contains, case-insensitive
+  assert.equal(parseFilter('grade >= 2 && lito == ox', cols)(['1', '2', 'ox']), true);
+  assert.equal(parseFilter('grade >= 2 && lito == ox', cols)(['1', '2', 'sulf']), false);
+  assert.equal(parseFilter('GRADE > 2', cols)(['1', '3', 'ox']), true);          // case-insensitive column
+  assert.equal(parseFilter('', cols), null);
+  assert.throws(() => parseFilter('nope > 1', cols), /unknown column/);
+});
+
+test('scanFilter + createFilteredViewSource: matches remap onto the base view', async () => {
+  let csv = 'id,grade,lito\n';
+  for (let i = 0; i < 1000; i++) csv += `${i},${(i % 5)},${['ox', 'sulf'][i % 2]}\n`;
+  const src = buildMemorySource(B(csv), { kind: 'delimited', delimiter: ',', blockSize: 64 });
+  const schema = [{ name: 'id' }, { name: 'grade', type: 'number' }, { name: 'lito' }];
+  const base = createRecordViewSource(src, { schema, dataStart: 1 });
+
+  const pred = parseFilter('grade >= 3 && lito == ox', schema);
+  const matches = await scanFilter(src, { predicate: pred, dataStart: 1 });
+  // rows where grade(i%5)>=3 AND lito(i%2)=='ox' (i even): i%5∈{3,4} and i even → among 0..999
+  let expect = 0;
+  for (let i = 0; i < 1000; i++) if ((i % 5) >= 3 && (i % 2) === 0) expect++;
+  assert.equal(matches.length, expect);
+
+  const fv = createFilteredViewSource(base, matches);
+  assert.equal(fv.rowCount(), expect);
+  const first = await fv.ensureRow(0);
+  assert.equal(Number(first[1]) >= 3, true);
+  assert.equal(first[2], 'ox');
+  assert.equal(fv.rowHeaderAt(0), matches[0] + 1);                 // original row number, not 1
+  assert.equal(fv.cols, 3);
+  assert.deepEqual(fv.header(1), { label: 'grade', type: 'number' });
+});
+
+test('scanFilter: max cap throws on a runaway match set', async () => {
+  let csv = 'n\n'; for (let i = 0; i < 500; i++) csv += `${i}\n`;
+  const src = buildMemorySource(B(csv), { kind: 'text', blockSize: 64 });
+  await assert.rejects(
+    scanFilter(src, { predicate: () => true, dataStart: 1, max: 10 }),
+    /too many matches/);
 });

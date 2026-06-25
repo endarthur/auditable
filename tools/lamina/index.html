@@ -21,6 +21,13 @@
   }
   #toolbar button:hover { background: #2e2e2e; border-color: #444; }
   #toolbar .spacer { flex: 1; }
+  #toolbar #filter {
+    flex: 1; min-width: 120px; font-family: var(--mono); font-size: 12px; color: #ddd;
+    background: #141414; border: 1px solid #333; border-radius: 3px; padding: 4px 8px;
+  }
+  #toolbar #filter:focus { outline: none; border-color: #4a78b0; }   /* info */
+  #toolbar #filter.err { border-color: #c0584a; }                    /* fault */
+  #toolbar #filter::placeholder { color: #555; }
   #toolbar .name { font-family: var(--mono); font-size: 12px; color: #888; }
   #toolbar .kind { font-family: var(--mono); font-size: 11px; color: #8cb878; border: 1px solid #2f4a28; border-radius: 3px; padding: 1px 6px; }
 
@@ -73,7 +80,7 @@
   <div id="toolbar">
     <span class="title">lamina</span>
     <button id="btnOpen">Open…</button>
-    <span class="spacer"></span>
+    <input id="filter" type="text" spellcheck="false" placeholder="filter…  e.g.  grade > 1  &&  lito == OXIDE">
     <span class="name" id="fileName">no file</span>
     <span class="kind" id="kindBadge" style="display:none"></span>
   </div>

@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, createLaminaProvider } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createFilteredViewSource, createLaminaProvider } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes } from '@gcu/archive';
 import { Unzip, UnzipInflate } from 'fflate';
@@ -24,6 +24,7 @@ const residentLimit = () => (typeof window.__LAMINA_RESIDENT_LIMIT__ === 'number
 const $ = (s) => document.querySelector(s);
 let grid = null;
 let lastScan = null;            // 'worker'|'inline'|'cache'|'resident'|'stream' — last index-scan path (automation hook)
+let current = null;             // { source, d, dataStart, baseVs, label, totalBytes } — the open file (for filtering)
 
 // ── off-thread index scan (a @gcu/proc module-call imports the lamina bundle and
 // runs scanFileToIndex over File.stream(); the File crosses by reference, the
@@ -52,6 +53,7 @@ function fmtBytes(n) {
 // The non-grid panel: binary handoff, archive guards, empty-archive notes.
 function showNote(name, badge, title, msg, meta) {
   if (grid) { grid.destroy(); grid = null; }
+  current = null; $('#filter').value = '';        // nothing filterable on a note panel
   $('#fileName').textContent = name;
   $('#empty').style.display = 'none';
   $('#grid').innerHTML = '';
@@ -65,24 +67,57 @@ function showBinary(name, totalBytes) {
   showNote(name, 'binary', 'binary file', 'use the hex viewer for this one', `${fmtBytes(totalBytes)} · binary`);
 }
 
-// Mount a built source (memory or streaming) read-only. The source shape is the
-// same either way, so this is shared.
+// Mount a built source (memory / streaming / tape) read-only. Builds the base
+// view, stores `current` (so the filter box can act on it), then renders.
 function mount(name, d, src, totalBytes) {
-  if (grid) { grid.destroy(); grid = null; }
-  $('#fileName').textContent = name;
-  $('#binary').style.display = 'none';
-  $('#empty').style.display = 'none';
-  const badge = $('#kindBadge'); badge.style.display = '';
-  badge.textContent = d.kind === 'delimited' ? `CSV · ${d.delimiter === '\t' ? 'TSV' : 'delimited'}` : d.kind;
-
   const kind = d.kind;                                  // 'delimited' | 'text'
   const schema = kind === 'delimited' ? d.schema : [{ name: 'line', type: 'string' }];
   const dataStart = kind === 'delimited' && d.hasHeader ? 1 : 0;
-  const vs = createRecordViewSource(src, { schema, dataStart });
-  grid = createGrid($('#grid'), createLaminaProvider(vs, { PENDING }), { readOnly: true, theme: 'dark', defaultColW: kind === 'text' ? 900 : 130 });
-  $('#meta').textContent = `${vs.rowCount().toLocaleString()} rows × ${vs.cols} cols · ${fmtBytes(totalBytes)} · ${d.kind}`;
+  const baseVs = createRecordViewSource(src, { schema, dataStart });
+  current = { source: src, d, dataStart, baseVs, label: name, totalBytes };
+  $('#filter').value = ''; $('#filter').classList.remove('err');     // fresh file → clear filter
+  mountView(baseVs);
+}
+
+// (Re)create the grid for a view (base or filtered) + update the footer.
+function mountView(vs, info) {
+  if (grid) { grid.destroy(); grid = null; }
+  const c = current;
+  $('#fileName').textContent = c.label;
+  $('#binary').style.display = 'none';
+  $('#empty').style.display = 'none';
+  const badge = $('#kindBadge'); badge.style.display = '';
+  badge.textContent = c.d.kind === 'delimited' ? `CSV · ${c.d.delimiter === '\t' ? 'TSV' : 'delimited'}` : c.d.kind;
+  grid = createGrid($('#grid'), createLaminaProvider(vs, { PENDING }), { readOnly: true, theme: 'dark', defaultColW: c.d.kind === 'text' ? 900 : 130 });
+  const shown = vs.rowCount();
+  const rows = (info && info.filtered)
+    ? `${shown.toLocaleString()} of ${c.baseVs.rowCount().toLocaleString()} rows (filtered)`
+    : `${shown.toLocaleString()} rows`;
+  $('#meta').textContent = `${rows} × ${vs.cols} cols · ${fmtBytes(c.totalBytes)} · ${c.d.kind}`;
   window._laminaVS = vs;                                // automation hook
 }
+
+// Apply a filter expression over the current file (forward scan → matching rows →
+// remap view). Empty clears. Bad column/expr marks the box red.
+async function applyFilter(str) {
+  const c = current;
+  if (!c) return;
+  if (!str.trim()) { $('#filter').classList.remove('err'); return mountView(c.baseVs); }
+  const cols = c.d.kind === 'delimited' ? c.d.schema : [{ name: 'line' }];
+  let predicate;
+  try { predicate = parseFilter(str, cols); } catch (e) { return filterErr(e); }
+  if (!predicate) return mountView(c.baseVs);
+  $('#filter').classList.remove('err');
+  $('#meta').textContent = 'filtering…';
+  try {
+    const matches = await scanFilter(c.source, {
+      predicate, dataStart: c.dataStart,
+      onProgress: (b, n) => { $('#meta').textContent = `filtering… ${n ? Math.round((100 * b) / n) : 0}%`; },
+    });
+    mountView(createFilteredViewSource(c.baseVs, matches), { filtered: true });
+  } catch (e) { filterErr(e); }
+}
+function filterErr(e) { $('#filter').classList.add('err'); $('#meta').textContent = `filter: ${e.message}`; }
 
 // Open raw bytes — memory source (the test hook + small files).
 function open(name, bytes) {
@@ -295,4 +330,10 @@ window.addEventListener('drop', async (e) => {
   if (f) openFile(f);
 });
 
-window._lamina = { open, openFile, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, canWorker };
+// ── filter box ──
+$('#filter').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') applyFilter(e.target.value);
+  else if (e.key === 'Escape') { e.target.value = ''; applyFilter(''); e.target.blur(); }
+});
+
+window._lamina = { open, openFile, applyFilter, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, canWorker };

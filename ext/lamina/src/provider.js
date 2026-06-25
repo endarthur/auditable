@@ -22,7 +22,7 @@ export function createLaminaProvider(vs, { PENDING } = {}) {
       return { value: v, state: 'raw', type: vs.colType(c), style: { text: v } };
     },
     header(c) { return vs.header(c); },
-    rowHeader(r) { return r + 1; },
+    rowHeader(r) { return vs.rowHeaderAt ? vs.rowHeaderAt(r) : r + 1; },   // filtered view reports the original row #
     onReady(cb) { return vs.onReady(cb); },
   };
 }

@@ -180,6 +180,33 @@ try {
     ? ok(`zip entry windowed via tape (no unpack): ${tape.rows} rows, deep=${tape.deep[0]}, rewind-back=${tape.back[0]}, reopen=${tape.second}`)
     : fail(`tape zip failed: ${JSON.stringify(tape)}`);
 
+  // ── filter: scan a CSV → matching rows; row header shows the original row # ──
+  const flt = await page.evaluate(async () => {
+    let csv = 'id,grade,lito\n';
+    for (let i = 0; i < 3000; i++) csv += `${i},${i % 5},${['ox', 'sulf'][i % 2]}\n`;
+    window._lamina.open('grades.csv', new TextEncoder().encode(csv));
+    const base = window._laminaVS.rowCount();
+    await window._lamina.applyFilter('grade >= 3 && lito == ox');         // i%5∈{3,4} and i even
+    let expect = 0; for (let i = 0; i < 3000; i++) if ((i % 5) >= 3 && (i % 2) === 0) expect++;
+    const vs = window._laminaVS;
+    const first = await vs.ensureRow(0);
+    const origRow = vs.rowHeaderAt(0);                                    // original row #, not 1
+    await window._lamina.applyFilter('');                                 // clear → back to base
+    return { base, expect, shown: vs.rowCount(), firstGrade: Number(first[1]), firstLito: first[2], origRow, cleared: window._laminaVS.rowCount() };
+  });
+  (flt.shown === flt.expect && flt.firstGrade >= 3 && flt.firstLito === 'ox' && flt.origRow > 1 && flt.cleared === flt.base)
+    ? ok(`filter: ${flt.shown}/${flt.base} rows match (grade≥3 ∧ ox); orig row #${flt.origRow}; clear restores ${flt.cleared}`)
+    : fail(`filter failed: ${JSON.stringify(flt)}`);
+
+  // a bad column marks the box red and doesn't crash
+  const bad = await page.evaluate(async () => {
+    await window._lamina.applyFilter('nope > 1');
+    return { err: document.getElementById('filter').classList.contains('err'), meta: document.getElementById('meta').textContent };
+  });
+  (bad.err && /unknown column/.test(bad.meta))
+    ? ok('filter: unknown column → box marked red, no crash')
+    : fail(`filter error-handling failed: ${JSON.stringify(bad)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
