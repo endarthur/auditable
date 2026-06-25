@@ -576,6 +576,10 @@ try {
   //    chainable, removable; the value never materializes ──
   const calc = await page.evaluate(async () => {
     window._lamina.open('calc.csv', new TextEncoder().encode('a,b\n2,10\n3,20\n4,30\n'));
+    document.getElementById('addCalc').click();               // toolbar button → the editor popover
+    const editorOpen = document.getElementById('calcEditor').classList.contains('show');
+    document.getElementById('ceCancel').click();
+    window.__calcEditorOpened = editorOpen;
     await window._lamina.addCalc('ab', 'a * b');               // 20, 60, 120
     await window._lamina.addCalc('big', 'if(ab > 50, "Y", "N")'); // chains off ab: N, Y, Y
     const vs = window._laminaVS;
@@ -585,11 +589,11 @@ try {
     const filtered = window._laminaVS.rowCount();
     window._lamina.removeCalc(1); window._lamina.removeCalc(0); // remove both → back to base
     const afterCols = window._laminaVS.cols, afterCalcs = window._lamina.calcs.length;
-    return { cols, h1, h2, ab1: row1[cols - 2], big1: row1[cols - 1], filtered, afterCols, afterCalcs };
+    return { cols, h1, h2, ab1: row1[cols - 2], big1: row1[cols - 1], filtered, afterCols, afterCalcs, editorOpen: window.__calcEditorOpened };
   });
   (calc.cols === 4 && calc.h1 === 'ab' && calc.h2 === 'big' && calc.ab1 === '60' && calc.big1 === 'Y'
-    && calc.filtered === 2 && calc.afterCols === 2 && calc.afterCalcs === 0)
-    ? ok(`calc columns: ab=a*b (row1=${calc.ab1}) + big chains off it (${calc.big1}); filter ab>50 → ${calc.filtered}; remove → ${calc.afterCols} cols`)
+    && calc.filtered === 2 && calc.afterCols === 2 && calc.afterCalcs === 0 && calc.editorOpen)
+    ? ok(`calc columns: ƒ+ col button opens editor; ab=a*b (row1=${calc.ab1}) + big chains off it (${calc.big1}); filter ab>50 → ${calc.filtered}; remove → ${calc.afterCols} cols`)
     : fail(`calc columns failed: ${JSON.stringify(calc)}`);
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));

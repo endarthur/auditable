@@ -678,6 +678,7 @@ $('#ceExpr').addEventListener('input', previewCalc);
 $('#ceExpr').addEventListener('keydown', (e) => { if (e.key === 'Enter') commitCalc(); else if (e.key === 'Escape') closeCalcEditor(); });
 $('#ceCommit').onclick = commitCalc;
 $('#ceCancel').onclick = closeCalcEditor;
+$('#addCalc').onclick = () => openCalcEditor(null);   // toolbar entry (header right-click is the contextual one)
 
 // Single-stream decoders that have NO browser streaming primitive (only gzip/
 // deflate do via DecompressionStream) → resident-only, size-guarded.
@@ -979,7 +980,6 @@ $('#mFile').onclick = () => menuAt($('#mFile'), [
 ]);
 $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
-  { label: 'Add calculated column…', action: () => { if (hasFile()) openCalcEditor(null); } },
   { label: 'Go to row…', action: () => $('#goto').focus() },
   { sep: true },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyFilter(''); } },
@@ -1007,7 +1007,7 @@ const HELP = {
     + `• <b>Right-click a column header</b> — Statistics · sort · filter by · number format · treat as text/number · hide/show · autofit · <b>add a calculated column</b>.<br>`
     + `• <b>Right-click a cell or selection</b> — copy (with header / row #) · filter by this value · column statistics.<br><br>`
     + `<b>Filter</b> in the box (Enter) — e.g. <code>grade > 1 && lito == "OXIDE"</code> (see Filter syntax). <b>Sort</b> by clicking a header. <b>Jump</b> with the row # box. In a column's Statistics, click values to build a set filter.<br><br>`
-    + `<b>Calculated columns</b> — <b>View → Add calculated column…</b> (or a header's right-click). A derived column from a formula in the same language as the filter (<code>grade * density</code>, <code>if(au > 1, "ore", "waste")</code>); it's computed on the fly (never written), and you can filter, sort, and stat it like any column. Right-click its header to edit or remove it.`],
+    + `<b>Calculated columns</b> — the <b>ƒ+ col</b> button (next to the filter), or a header's right-click. A derived column from a formula in the same language as the filter (<code>grade * density</code>, <code>if(au > 1, "ore", "waste")</code>); it's computed on the fly (never written), and you can filter, sort, and stat it like any column. Right-click its header to edit or remove it.`],
   filter: ['Filter syntax',
     `Type an expression in the <b>filter</b> box — <b>Enter</b> applies, <b>Esc</b> clears.<br><br>`
     + `A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br>`
