@@ -14,6 +14,11 @@ the strata surface, usable standalone.
   don't auto-re-sort (explicit re-apply)
 - **Group-by aggregation** — `count`/`sum`/`mean`/`min`/`max` → a *new* table you
   can view, derive on, save, or group again; units propagate
+- **Undo/redo + column ops** — the overlay is the op-log (batched paste = one undo
+  step); hide / show / reorder columns (a Columns… manager) + relabel column type
+- **Visible validation (the trust layer)** — checks are sift predicates that *must
+  hold*; failures tint the failing cells + flag the header (`⚠`), summarize in the
+  footer, drive filter-to-failures, and persist in the `.strata`
 - **Native `.strata` document** — a zip (schema + base columns + overlay +
   provenance) via `@gcu/archive`; growable per-column encoding
 - **Ingest anything tabular** — `tableFromCsv` is `@gcu/recon`-injectable (rich
@@ -95,7 +100,15 @@ t.isEdited(r, c) / t.revert(r, c) / t.dirtyCount()
 t.column(c) / t.columnByName(name)   // effective (merged) column as a fresh array
 t.commitRaw(r, c, raw)               // coerce a raw string by the column's type, then setCell
 t.addDerivedColumn({ name, formula, type?, unit? })   // a computed column; returns its index
+t.setColumnType(c, type)             // relabel (align/glyph/edit-coercion; existing values unchanged)
 t.schema / t.nrows / t.cols / t.baseCount / t.isDerived(c)
+
+// undo/redo over overlay edits (the op-log) — beginTxn/endTxn collapse a batch
+t.undo() / t.redo() / t.canUndo() / t.canRedo() / t.beginTxn() / t.endTxn()
+
+// validation — checks are sift predicates that MUST hold (the trust layer)
+t.addCheck({ name, formula }) / t.removeCheck(i) / t.clearChecks() / t.checks / t.checkCount
+t.runChecks()   // → { checks:[{name,formula,failed,columns}], failingRows:Set, failingCells:Map, total }
 ```
 
 The base array is **never mutated** — `_base[c]` always holds the source; the
@@ -151,6 +164,29 @@ The result *is* a `StrataTable`, so it composes — view it, derive on it, save 
 group it again. `sum`/`mean`/`min`/`max` skip non-numeric/null and inherit the
 source column's unit; `count` is unitless.
 
+## Validation — the trust layer
+
+A check is a [sift](../sift) predicate that *must hold*. `runChecks` evaluates
+every check over the whole table and returns the **complete** failing set, so the
+surface can tint every failing cell:
+
+```js
+table.addCheck({ name: 'from < to', formula: 'FROM < TO' });
+table.addCheck({ name: 'grade ≥ 0', formula: 'grade >= 0' });
+const r = table.runChecks();
+//  r.checks       → [{ name, formula, failed, columns }]
+//  r.failingRows  → Set(underlyingRow)        — the complete set (not a sample)
+//  r.failingCells → Map(row → Set(col))       — for the per-cell tint
+//  r.total        → failing-row count
+```
+
+Checks **persist in the `.strata`** (`document.checks`) — validation travels with
+the data. The surface tints failing cells (caution-red) + flags headers (`⚠`),
+summarizes in the footer, offers filter-to-failures (the OR of each check's
+negation), a **Checks…** manager dialog, and one-click header templates (not-null /
+≥ 0 / range). A throwing predicate counts as a failure. *(Deferred: interval
+gaps/overlaps via OVER windows; a `unique` cross-row check.)*
+
 ## The `.strata` document
 
 ```js
@@ -180,7 +216,7 @@ analytes (`Au`); without it, a minimal numeric/string sniffer. recon is
 
 ```bash
 node ext/strata/build.js           # bundle src/ → index.js
-node --test test/strata.test.mjs   # 37 tests (model, formula, view, group-by, .strata round-trip)
+node --test test/strata.test.mjs   # model, undo/redo, view, column ops, validation, group-by, .strata round-trip
 ```
 
 `ext/strata/demo.html` loads `examples/data/blockmodel-sample.csv` (serve over
@@ -192,10 +228,12 @@ Deliberate scope; the design (`spec_inbox/strata-spec.md`) tracks the full visio
 
 - **In-memory only.** Streaming/windowing over `@gcu/sluice` + `@gcu/proc` (for
   tens-of-millions of rows) is the deferred big-data path; v1 loads the table.
-- **Value-patch overlay only.** Structural ops (insert/delete/reorder rows at
-  scale) are §4 layers not yet built.
+- **Value-patch + column ops; rows are not structural-edited.** Column hide/show/
+  reorder/type ship; row insert/delete/reorder at scale are §4 layers not yet built.
 - **Single-column sort; per-row formulas.** Multi-key sort and aggregate-cell
   formulas (`sum(grade)` inline) are follow-ups.
+- **Validation is per-row predicates.** Interval gaps/overlaps (OVER windows) and a
+  `unique` cross-row check are deferred enrichments.
 - **`json` column payload.** Typed `.bin` packing arrives with the windowing path.
 - **Units carry but don't compute.** Unit-aware arithmetic is v2.
 

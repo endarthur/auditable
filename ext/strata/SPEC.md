@@ -11,7 +11,7 @@ document. The model is pure (zero DOM) and renders through
 
 | Field   | Value                                                       |
 |---------|-------------------------------------------------------------|
-| Version | 0.1 (shipped 2026-06)                                       |
+| Version | 0.2 (2026-06; undo/redo, column ops, validation over the 0.1 model) |
 | Status  | Pre-1.0                                                     |
 | License | MIT                                                        |
 | Owner   | endarthur                                                   |
@@ -52,8 +52,17 @@ table = createTable({ schema, columns, nrows })
   base     : columns[c][r]                 — immutable; never mutated
   overlay  : Map('r:c' → { value, base })  — sparse value patches (base cells only)
   derived  : Map(colIdx → { formula, deps, fn, cache })  — computed, not stored
+  checks   : [{ name, formula, pred }]     — validation rules (sift predicates that MUST hold)
   schema   : [{ name, type, unit?, role?, analyte?, derived?, formula? }]
 ```
+
+- **Undo/redo** (v0.2): the overlay *is* the op-log. `setCell`/`revert` record a
+  before/after group; `beginTxn`/`endTxn` collapse a batch (paste/fill/range-delete)
+  into ONE undo step; `undo`/`redo`/`canUndo`/`canRedo`. (Structural ops —
+  addDerivedColumn, setColumnType, group/transform — are NOT on the undo stack.)
+- **Column type relabel** (v0.2): `setColumnType(c, type)` changes alignment, the
+  header glyph, and how *future* edits coerce — existing values are NOT re-coerced
+  (base stays immutable; sort/display are value-driven).
 
 - **Row identity = the implicit ordinal** (§4.1). The base never reorders, so its
   ids are free — zero storage, permanently stable.
@@ -144,6 +153,32 @@ previewOverTransform(table, overSrc, { compile })      → { columns, warnings, 
   derived column's formula); join-refs from other open tables; unit convergence onto
   `@gcu/dimensions`. v1 produces a detached result, single-table.
 
+## Validation — the trust layer (v0.2)
+
+A **check** is a sift predicate that MUST hold (`FROM < TO`, `grade >= 0`). Checks
+run over the WHOLE table and their failures are made VISIBLE in the grid — strata
+as the trust layer of an estimate.
+
+```js
+table.addCheck({ name, formula })   // parse + keep (throws on bad syntax)
+table.removeCheck(i) / table.clearChecks() / table.checks / table.checkCount
+table.runChecks() → { checks:[{name,formula,failed,columns}], failingRows:Set,
+                      failingCells:Map(row→Set(col)), total }
+```
+
+- Per-row sift eval (NOT OVER's 5-row `check` sample), so `runChecks` yields the
+  **complete** failing set → every failing cell can be tinted. A throwing
+  predicate counts as a failure. (OVER's `check`/`require` stays the report/
+  transform-flow + interval-window tool.)
+- The provider tints failing cells (`setInvalid(row→cols)` → `style.invalid` +
+  `header.invalid`); loom draws a caution-red wash + a `⚠` header badge.
+- Checks **persist in the `.strata`** (`document.checks`) — validation travels
+  with the data. The app re-runs on each mutation (once per batch), summarizes in
+  the footer, offers **filter-to-failures** (OR of each check's negation), and a
+  **Checks…** manager dialog + one-click header templates (not-null / ≥0 / range).
+- *Deferred:* interval gaps/overlaps (downhole FROM/TO via OVER windows — the
+  BMA-wizard harvest); a `unique` cross-row check kind (needs a row-set filter).
+
 ## The native `.strata` document (§3)
 
 A zip (`@gcu/archive`, injected as `createWriter`/`readZip` — strata stays
@@ -152,7 +187,7 @@ formulas, overlay, and provenance.
 
 ```
 table.strata (zip)
-  document.json    { strata, name, created, rowCount, colCount, columns[], view? }
+  document.json    { strata, name, created, rowCount, colCount, columns[], view?, checks? }
   schema.json      { fields: [{ name, type, unit?, role?, analyte?, derived?, formula? }] }
   columns.json     { <name>: [base values] }     — immutable base, JSON payload
   overlay.json     { "r:c": { value, base } }     — the value-patch stack
@@ -182,15 +217,30 @@ string enum values loom compares against — strata never imports loom; the two 
 joined by the contract, not the code). recon and archive are dependency-injected,
 keeping strata pure and zero-dep.
 
+**Column projection** (v0.2) — the column-axis mirror of the row view: the provider
+holds a display-order array minus a hidden set, so loom sees only the visible
+columns, in order. `underCol(dc)` maps display→underlying (the app translates
+loom's col indices at every callback boundary); `hideColumn`/`showColumn`/
+`showAllColumns`/`columnOrder`/`setColumnOrder`/`resetColumnOrder`. The strata
+**surface** drives this from a **Columns…** manager dialog (drag/▲▼ reorder +
+visibility) and **per-column filters** (a funnel `▽` on filtered headers).
+The provider also delegates `undo`/`redo`/`beginBatch`/`endBatch` to the table and
+exposes `cellTitle` (hover provenance), `revert`, `setHighlight` (brushing), and
+`setInvalid` (validation) — the optional halves of the loom contract.
+
 ## Testing
 
-`test/strata.test.mjs` (37, in `npm test`): values/coercion, table+overlay
-(provenance, edit-back-clears, revert, effective column), derived columns
-(compute, recompute-on-edit, chains, errors, read-only), view (sort asc/desc/
-nulls, filter, filter∘sort, no-auto-resort, provider+view mapping), group-by
-(ops, unit propagation, composes, filtered subset, multi-key), and `.strata`
-round-trip (base+schema+overlay+derived, version + error guards). Plus
-`test/strata-smoke.mjs` + `test/strata-app-smoke.mjs` (Playwright, browser-only).
+`test/strata.test.mjs` (in `npm test`): values/coercion, table+overlay
+(provenance, edit-back-clears, revert, effective column), **undo/redo** (per-edit
+stack, txn collapses a batch, revert undoable), derived columns, **setColumnType**,
+view (sort/filter/mapping), **column projection** (hide/show + reorder + reorder∘hide),
+provider (header sort/filter/invalid flags, setInvalid tint, cellTitle, revert-maps),
+**validation** (runChecks failures/rows/cells, live-edit clears), group-by, OVER
+transform, and `.strata` round-trip (base+schema+overlay+derived + **checks**,
+version guards). Plus `test/strata-smoke.mjs` + `test/strata-app-smoke.mjs`
+(Playwright, browser-only) — the latter drives the full surface: edit/undo/redo,
+sort/filter/per-column-filter, hide/show/reorder/convert-type, right-click revert,
+validation + Checks dialog + filter-to-failures + check templates.
 
 ## What @gcu/strata is NOT
 
@@ -205,10 +255,14 @@ round-trip (base+schema+overlay+derived, version + error guards). Plus
 
 ## Open questions
 
+- **Validation enrichments:** interval gaps/overlaps (downhole FROM/TO via OVER
+  windows — the BMA-wizard harvest); a `unique` cross-row check (needs a row-set
+  filter — `view.setRowSet`, shared with linking's filter-to-linked).
+- **Selection-linking promoted:** filter-to-linked-rows + "N rows linked" + the
+  dee 3D-scene brush. (Brushing itself ships: strata↔strata + plate↔strata, §7.2.)
 - Streaming/windowed base + structural overlay at scale (§4 layers 4–5).
 - Multi-key sort; aggregate-cell formulas; pivots/group-by views.
 - Unit-aware arithmetic through formulas (§6).
-- Selection-as-predicate over the bus (§7.2) — lands with a chart surface.
 - Multi-window overlay merge (CRDT/Lamport on overlay ops, §4.1).
 
 ## Versioning

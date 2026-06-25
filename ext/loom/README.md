@@ -11,7 +11,13 @@ table-rendering kernel for the GCU stack.
   style}` *or* a `PENDING` sentinel, so a windowed/streaming backend can fill
   cells as chunks arrive
 - **State-aware drawing** — cells render their provenance: raw · edited (accent
-  bar) · derived (italic) · error (`#ERR`) · pending (`…`) · out-of-order
+  bar) · derived (italic) · error (`#ERR`) · pending (`…`) · out-of-order; plus
+  brushing (indigo) and validation (caution-red) cell washes
+- **Daily-driver ergonomics (v0.2)** — full keyboard nav, range delete/fill, TSV
+  copy/cut/paste (file://-safe), undo/redo with batched paste, column resize +
+  double-click autofit, hover tooltips, and cell/header context-menu events
+- **Rich headers** — type glyph (`# a ≡`), sort arrow (`↑/↓`), filter funnel (`▽`),
+  validation badge (`⚠`) — all driven by `provider.header(c)` flags
 - **First-class selection** — structured, normalized, published on commit
   (`onSelect`) for cross-surface brushing/linking
 - **Host-agnostic mount** — `createGrid(el, provider)`; no globals, no app-shell
@@ -73,10 +79,16 @@ loom renders whatever a provider gives it. A provider is a plain object:
 ```js
 provider.dims()        → { rows, cols }              // rows can be 50_000_000
 provider.cellAt(r, c)  → cell | null | PENDING       // null = blank
-provider.header(c)     → { label, type? } | string   // column band (default: A,B,…)
+provider.header(c)     → { label, type?, sort?, filtered?, invalid? } | string
 provider.rowHeader(r)  → string | number             // row band   (default: r+1)
 provider.commit(r, c, rawString)  → void | Promise   // an edit; provider coerces
 provider.onReady?(cb)  → unsubscribe                 // fires when a window lands → repaint
+
+// Optional (additive; absent ⇒ that feature is simply off):
+provider.undo?() / redo?() / canUndo?() / canRedo?()        // Ctrl+Z / Ctrl+Y
+provider.beginBatch?() / endBatch?()                        // group writes → one undo step
+provider.cellTitle?(r, c)  → string | null                 // hover tooltip text
+provider.setHighlight?(rowIds) / setInvalid?(rowColMap)     // brushing / validation tints
 ```
 
 A **cell** is the rich model — not a bare string:
@@ -118,6 +130,11 @@ grid.getSelection()            // normalized { r0, c0, r1, c1 } | null
 grid.setSelection(sel)         // set + repaint + notify
 grid.onSelect(cb)              // → unsubscribe; cb(normalizedSel) on commit
 grid.onHeaderClick(cb)         // → unsubscribe; cb(colIndex) on header click
+grid.onContextMenu(cb)         // → unsubscribe; cb({row,col,sel,clientX,clientY})
+grid.onHeaderContextMenu(cb)   // → unsubscribe; cb({col,clientX,clientY})
+grid.getColWidths()            // { colIndex: px } (the sparse non-default map)
+grid.setColWidths(map)         // restore widths (e.g. from a saved view-state)
+grid.autofitColumn(c)          // size a column to its header + visible cells
 grid.focus()                   // focus the grid (keyboard nav)
 grid.setColors(palette)        // swap the theme palette (e.g. dark ⇆ light)
 grid.destroy()                 // tear down listeners + DOM
@@ -160,11 +177,11 @@ Deliberate v1 scope; all additive later:
 
 - **Fixed row height.** A prefix-sum height index (variable rows / wrapped text)
   is a designed-in swap-in, not built.
-- **Not yet built** (extracted from calque's render core, reseam pending):
-  column resize, zoom, frozen header rows, hover tooltips, copy/paste. The cell
-  model and render loop are structured so these are additive.
+- **Not yet built:** zoom, frozen header rows, an a11y DOM mirror. (Column resize,
+  autofit, copy/paste, undo, tooltips, and context menus shipped in v0.2.)
+- **Column reorder/hide live in the provider, not loom** — loom renders whatever
+  columns the provider exposes; a loom-native header drag-to-reorder is unscoped.
 - **Single backing renderer** (2D canvas). No WebGL/GPU path.
-- **Edits are single-cell.** Range fill / paste-block land with copy/paste.
 
 ## Versioning
 

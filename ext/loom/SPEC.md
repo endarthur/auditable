@@ -12,7 +12,7 @@ model, standalone or embedded.
 
 | Field   | Value                                              |
 |---------|----------------------------------------------------|
-| Version | 0.1 (shipped 2026-06)                              |
+| Version | 0.2 (2026-06; daily-driver ergonomics + linking/validation tints over the 0.1 render core) |
 | Status  | Pre-1.0                                            |
 | License | MIT                                               |
 | Owner   | endarthur                                          |
@@ -112,6 +112,48 @@ Architectural, brutal to retrofit, all present in v0.1:
 4. **Host-agnostic mount** — `mount(el, provider)`, no globals → drops into a
    standalone page or an iframe surface unchanged.
 
+## Interaction (v0.2)
+
+Daily-driver ergonomics added over the 0.1 render core — all confined to `grid.js`
++ `render.js`, reaching data only through the provider contract:
+
+- **Keyboard** — arrows · Home/End · PageUp/Down · Ctrl+Home/End · Ctrl+Arrow
+  (jump to grid edge) · Shift-extend · Ctrl+A; Enter/Tab move; F2/type to edit.
+- **Range ops** — Delete/Backspace clears the selection rect; fill-down (Ctrl+D),
+  fill-right (Ctrl+R).
+- **Clipboard** — copy/cut/paste a rectangular range as TSV (Excel quoting),
+  single-cell→range fill, bounds-clipped block paste. Rides a hidden focus-holding
+  `<textarea>` so the native copy/cut/paste events carry `clipboardData` — no
+  permission prompt, and it works under `file://`.
+- **Undo/redo** — Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y via the optional provider contract
+  (below); multi-cell writes are bracketed in `beginBatch/endBatch` so a whole
+  paste/fill/range-delete is ONE undo step.
+- **Column resize** — drag a header border (5px handle); double-click to autofit
+  (measures header + visible cells). `getColWidths`/`setColWidths`/`autofitColumn`
+  on the instance.
+- **Hover tooltip** — `provider.cellTitle(r,c)` → a dwell tooltip (provenance:
+  was→now, a derived formula, a validation note…).
+- **Context menus** — right-click a cell → `onContextMenu({row,col,sel,clientX,
+  clientY})`; right-click a header → `onHeaderContextMenu({col,clientX,clientY})`.
+  loom only DETECTS the gesture and emits; the host builds the menu (so items run
+  through the host's own mutation/undo wiring). No listener → the native menu shows.
+
+### Optional provider contract (additive; absent ⇒ that feature is simply off)
+
+```
+provider.undo() / redo() / canUndo() / canRedo()    — Ctrl+Z/Y
+provider.beginBatch() / endBatch()                  — group writes into one undo step
+provider.cellTitle(r, c) → string | null            — hover tooltip text
+provider.setHighlight(rowIds) / setInvalid(map)     — row/cell tints (brushing / validation)
+```
+
+### Header + cell style flags (render)
+
+`header(c)` may add `sort: 'asc'|'desc'` (↑/↓ arrow), `filtered: true` (▽ funnel),
+`invalid: true` (⚠ badge), and `type` drives a muted glyph (`# a ≡ ◷ ✓`). A cell's
+`style` may add `highlight: true` (indigo brushing wash) or `invalid: true`
+(caution-red validation wash).
+
 ## Editability
 
 Drawn from cell state, not a separate flag: loom refuses to start an edit on a
@@ -130,12 +172,14 @@ via `visibleColRange`/`visibleRowRange` and draws only those cells — swapping 
 
 ## Testing
 
-- `test/loom.test.mjs` — 17 pure tests: model (enums, col letters, sel) +
-  geometry (uniform + custom-width round-trips, clamping) + the memory provider
-  (raw→edited overlay, range guards, row-of-objects). In `npm test`.
+- `test/loom.test.mjs` — pure tests: model (enums, col letters, sel) + TSV
+  clipboard (toTSV/parseTSV round-trips, Excel quoting) + geometry (uniform +
+  custom-width, clamping) + the memory provider (raw→edited overlay, range guards,
+  undo/redo + batch, cellTitle). In `npm test`.
 - `test/loom-smoke.mjs` — Playwright over loopback HTTP: mounts the demo, asserts
-  3 sized canvases, painted pixels, selection publish, edit→overlay, no console
-  errors. Browser-only (not in `npm test`).
+  canvases/paint/selection/edit, then drives keyboard nav, range-delete, fill,
+  copy/paste, undo/redo + one-undo-reverts-a-paste, hover tooltip, cell + header
+  context-menu emit, and column resize + autofit. Browser-only (not in `npm test`).
 
 ## What @gcu/loom is NOT
 
@@ -151,6 +195,10 @@ via `visibleColRange`/`visibleRowRange` and draws only those cells — swapping 
 
 - Variable row height (prefix-sum index) — reserved, not built.
 - Frozen *key columns* (pin `hole_id`/`depth`) — additive on the render core.
+- Column reorder / hide live in the *provider* (see `@gcu/strata`'s column
+  projection), not loom — loom just renders whatever columns the provider exposes.
+  A loom-native header drag-to-reorder is unscoped (it collides with the existing
+  header sort/resize/menu hit-testing).
 - An a11y DOM mirror for keyboard/screen-reader use.
 - Whether the second real consumer (a retrofitted calque) reshapes the provider —
   the two-examples discipline applies here too.
