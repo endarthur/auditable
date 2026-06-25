@@ -94,12 +94,13 @@ export async function scanFileToIndex(file, { kind = 'delimited', quote = DQUOTE
 }
 
 /**
- * Split a byte range (one or more blocks' worth) into record byte-slices, using
- * the same boundary rule as the scanner. Trailing \r is trimmed (CRLF). The \n
- * is excluded. This is what the windowed read calls after readRange.
- * @returns {Uint8Array[]} record byte slices, in order
+ * Split a byte range into record POSITIONS `{ start, end }` (relative to `bytes`,
+ * \n excluded, trailing \r trimmed) — same boundary rule as the scanner. The
+ * filter/sort scans use this to record each matching row's byte offset + length,
+ * so the result view can read a single row directly (no coarse-block read).
+ * @returns {{start:number,end:number}[]}
  */
-export function splitRecords(bytes, { kind = 'delimited', quote = DQUOTE } = {}) {
+export function splitRecordsPos(bytes, { kind = 'delimited', quote = DQUOTE } = {}) {
   const quoteAware = kind === 'delimited';
   const out = [];
   let start = 0, inQuote = false;
@@ -109,16 +110,24 @@ export function splitRecords(bytes, { kind = 'delimited', quote = DQUOTE } = {})
     if (b === NL && !inQuote) {
       let end = i;
       if (end > start && bytes[end - 1] === CR) end--;   // trim CRLF's \r
-      out.push(bytes.subarray(start, end));
+      out.push({ start, end });
       start = i + 1;
     }
   }
   if (start < bytes.length) {                              // trailing record, no \n
     let end = bytes.length;
     if (end > start && bytes[end - 1] === CR) end--;
-    out.push(bytes.subarray(start, end));
+    out.push({ start, end });
   }
   return out;
+}
+
+/**
+ * Split a byte range into record byte-slices (the windowed read's path).
+ * @returns {Uint8Array[]} record byte slices, in order
+ */
+export function splitRecords(bytes, opts) {
+  return splitRecordsPos(bytes, opts).map((p) => bytes.subarray(p.start, p.end));
 }
 
 /**

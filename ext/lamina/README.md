@@ -74,8 +74,8 @@ go-to-row, interpretation override, the index cache) lives in
 | `buildStreamSource({openStream, index?, …})` | the rewindable tape over a compressed stream |
 | `buildSourceFromIndex(file, index)` · `indexOf(source)` · `fileKey(file)` | index caching primitives |
 | `createRecordViewSource(source, {schema, dataStart, cacheBlocks?})` | the windowed view (`rowAt` → fields \| `LOADING` \| null; LRU; `onReady`) |
-| `parseFilter(str, columns)` · `scanFilter(source, opts)` · `createFilteredViewSource(base, matches)` | filter: predicate → matching rows → remap view |
-| `scanSortKeys(source, {col, dir, numeric, rows?, …})` | sort: key scan → ordered row array (consumed by the remap view) |
+| `parseFilter(str, columns)` · `scanFilter(source, opts)` → `{offsets,lengths,nums}` · `createResultView(source, result, schema)` | filter: predicate → matching rows (byte positions) → per-row result view |
+| `scanSortKeys(source, {col, dir, numeric, rows?, …})` → `{offsets,lengths,nums}` | sort: key scan → ordered result (same shape, consumed by `createResultView`) |
 | `createLaminaProvider(vs, {PENDING})` | adapt a view to the `@gcu/loom` cell-provider contract |
 
 ## Limitations

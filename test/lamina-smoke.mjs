@@ -181,6 +181,26 @@ try {
     ? ok(`zip entry windowed via tape (no unpack): ${tape.rows} rows, deep=${tape.deep[0]}, rewind-back=${tape.back[0]}, reopen=${tape.second}`)
     : fail(`tape zip failed: ${JSON.stringify(tape)}`);
 
+  // ── scattered filter reads deep result rows by offset (no block thrash) + × clears ──
+  const scat = await page.evaluate(async () => {
+    let csv = 'id,keep\n';
+    for (let i = 0; i < 20000; i++) csv += `${i},${i % 50 === 0 ? 'Y' : 'N'}\n`;   // 1-in-50 matches → scattered
+    window._lamina.open('scatter.csv', new TextEncoder().encode(csv));
+    const box = document.getElementById('filter');
+    box.value = 'keep == Y'; box.dispatchEvent(new Event('input'));   // as if typed → × appears
+    await window._lamina.applyFilter(box.value);
+    const vs = window._laminaVS;
+    const rows = vs.rowCount();
+    const deep = await vs.ensureRow(rows - 1);            // last matching row, read by offset
+    const clearShown = document.getElementById('filterWrap').classList.contains('has');
+    document.getElementById('filterClear').click();       // the × button
+    const afterClear = window._laminaVS.rowCount();
+    return { rows, deepId: deep[0], deepKeep: deep[1], clearShown, afterClear };
+  });
+  (scat.rows === 400 && scat.deepKeep === 'Y' && scat.deepId === '19950' && scat.clearShown && scat.afterClear === 20000)
+    ? ok(`scattered filter: ${scat.rows} rows read by offset (deep id=${scat.deepId}); × clears → ${scat.afterClear}`)
+    : fail(`scattered filter failed: ${JSON.stringify(scat)}`);
+
   // ── filter: scan a CSV → matching rows; row header shows the original row # ──
   const flt = await page.evaluate(async () => {
     let csv = 'id,grade,lito\n';

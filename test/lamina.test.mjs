@@ -8,7 +8,7 @@ import { createRecordScanner, scanRecords, scanFileToIndex, splitRecords, parseF
 import { detectKind } from '../ext/lamina/src/detect.js';
 import { buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey } from '../ext/lamina/src/source.js';
 import { createRecordViewSource, LOADING } from '../ext/lamina/src/viewsource.js';
-import { parseFilter, scanFilter, createFilteredViewSource } from '../ext/lamina/src/filter.js';
+import { parseFilter, scanFilter, createResultView } from '../ext/lamina/src/filter.js';
 import { scanSortKeys } from '../ext/lamina/src/sort.js';
 import { createLaminaProvider } from '../ext/lamina/src/provider.js';
 
@@ -361,28 +361,33 @@ test('parseFilter: numeric, string, contains, AND, unknown column', () => {
   assert.throws(() => parseFilter('nope > 1', cols), /unknown column/);
 });
 
-test('scanFilter + createFilteredViewSource: matches remap onto the base view', async () => {
+test('scanFilter + createResultView: per-row result read by byte offset', async () => {
   let csv = 'id,grade,lito\n';
   for (let i = 0; i < 1000; i++) csv += `${i},${(i % 5)},${['ox', 'sulf'][i % 2]}\n`;
   const src = buildMemorySource(B(csv), { kind: 'delimited', delimiter: ',', blockSize: 64 });
   const schema = [{ name: 'id' }, { name: 'grade', type: 'number' }, { name: 'lito' }];
-  const base = createRecordViewSource(src, { schema, dataStart: 1 });
 
   const pred = parseFilter('grade >= 3 && lito == ox', schema);
-  const matches = await scanFilter(src, { predicate: pred, dataStart: 1 });
+  const result = await scanFilter(src, { predicate: pred, dataStart: 1 });
   // rows where grade(i%5)>=3 AND lito(i%2)=='ox' (i even): i%5∈{3,4} and i even → among 0..999
   let expect = 0;
   for (let i = 0; i < 1000; i++) if ((i % 5) >= 3 && (i % 2) === 0) expect++;
-  assert.equal(matches.length, expect);
+  assert.equal(result.nums.length, expect);
+  assert.equal(result.offsets.length, expect);
+  assert.equal(result.lengths.length, expect);
 
-  const fv = createFilteredViewSource(base, matches);
+  const fv = createResultView(src, result, schema);
   assert.equal(fv.rowCount(), expect);
   const first = await fv.ensureRow(0);
   assert.equal(Number(first[1]) >= 3, true);
   assert.equal(first[2], 'ox');
-  assert.equal(fv.rowHeaderAt(0), matches[0] + 1);                 // original row number, not 1
+  assert.equal(fv.rowHeaderAt(0), result.nums[0] + 1);            // original row number, not 1
   assert.equal(fv.cols, 3);
   assert.deepEqual(fv.header(1), { label: 'grade', type: 'number' });
+  // a DEEP result row reads correctly (the offset path, not a block remap)
+  const last = await fv.ensureRow(expect - 1);
+  assert.equal(Number(last[1]) >= 3, true);
+  assert.equal(last[2], 'ox');
 });
 
 test('scanFilter: max cap throws on a runaway match set', async () => {
@@ -393,24 +398,23 @@ test('scanFilter: max cap throws on a runaway match set', async () => {
     /too many matches/);
 });
 
-// ── sort (key scan → ordered remap) ──
+// ── sort (key scan → ordered result; nums = display rows in sorted order) ──
 
-test('scanSortKeys: numeric asc/desc, nulls last; ordered view via createFilteredViewSource', async () => {
+test('scanSortKeys: numeric asc/desc, nulls last; result view reads sorted rows', async () => {
   const csv = 'id,grade\n0,3\n1,1\n2,\n3,2\n4,9\n';     // row 2 has empty grade → NaN → last
   const src = buildMemorySource(B(csv), { kind: 'delimited', delimiter: ',', blockSize: 2 });
   const schema = [{ name: 'id' }, { name: 'grade', type: 'number' }];
-  const base = createRecordViewSource(src, { schema, dataStart: 1 });
 
   const asc = await scanSortKeys(src, { col: 1, dir: 'asc', dataStart: 1, numeric: true });
   // grades: row0=3,row1=1,row2=NaN,row3=2,row4=9 → asc by grade: 1(r1),2(r3),3(r0),9(r4),NaN(r2)
-  assert.deepEqual([...asc], [1, 3, 0, 4, 2]);
-  const v = createFilteredViewSource(base, asc);
+  assert.deepEqual([...asc.nums], [1, 3, 0, 4, 2]);
+  const v = createResultView(src, asc, schema);
   assert.equal(v.rowCount(), 5);
   assert.deepEqual(await v.ensureRow(0), ['1', '1']);    // smallest grade first
   assert.equal(v.rowHeaderAt(0), 2);                     // original row # (1-based: data row 1 → 2)
 
   const desc = await scanSortKeys(src, { col: 1, dir: 'desc', dataStart: 1, numeric: true });
-  assert.deepEqual([...desc], [4, 0, 3, 1, 2]);          // 9,3,2,1 then NaN last (both dirs)
+  assert.deepEqual([...desc.nums], [4, 0, 3, 1, 2]);     // 9,3,2,1 then NaN last (both dirs)
 });
 
 test('scanSortKeys: string sort + subset (filter→sort composition)', async () => {
@@ -420,10 +424,10 @@ test('scanSortKeys: string sort + subset (filter→sort composition)', async () 
   // sort only the even rows (a subset, ascending) by column v (string)
   const subset = Float64Array.from([0, 2, 4, 6, 8]);
   const order = await scanSortKeys(src, { col: 1, dir: 'asc', dataStart: 1, numeric: false, rows: subset });
-  assert.equal(order.length, 5);                          // only the subset
-  for (const r of order) assert.equal(subset.includes(r), true);
+  assert.equal(order.nums.length, 5);                     // only the subset
+  for (const r of order.nums) assert.equal(subset.includes(r), true);
   // v of even rows (['c','a','b'][i%3]): r0=c,r2=b,r4=a,r6=c,r8=b → asc: a(4),b(2),b(8),c(0),c(6)
-  assert.deepEqual([...order], [4, 2, 8, 0, 6]);
+  assert.deepEqual([...order.nums], [4, 2, 8, 0, 6]);
 });
 
 test('scanSortKeys: max cap throws', async () => {

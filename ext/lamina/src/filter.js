@@ -1,15 +1,18 @@
-// @gcu/lamina — filter: a forward scan that builds a list of matching rows, and a
-// thin view that REMAPS display rows onto the base view through that list. The
-// filtered view reuses ALL of the base ViewSource's windowing / block-cache / tape
-// machinery — it's just an index permutation, so it works identically over a
-// memory, file, or compressed-tape source.
+// @gcu/lamina — filter: a forward scan that records the matching rows, and a
+// RESULT VIEW that reads each matching row directly by byte offset.
 //
-// Decagigabyte note: the match list is one entry per MATCHING row (a Float64 row
-// ordinal), so its size tracks selectivity, not file size — a selective filter
-// (the normal case: "find the high grades") stays tiny. A pathological filter that
-// keeps most of a 500M-row file is capped (refine the filter) rather than OOM.
+// Why per-row, not a remap onto the base view: a selective filter scatters its
+// matches across the file, so a screenful of results would touch ~one base block
+// (4096 rows) PER VISIBLE ROW — blowing the base LRU and thrashing (load→evict→
+// reload forever). Recording each match's (offset, length) lets the result view
+// read exactly the visible rows — small reads, a generous row LRU, no thrash.
+//
+// Decagigabyte note: the result is 3 × Float64 per matching row (offset, length,
+// original row #), so it tracks SELECTIVITY not file size; capped (then "refine
+// the filter") rather than OOM.
 
-import { splitRecords, parseFields } from './scan.js';
+import { splitRecordsPos, parseFields } from './scan.js';
+import { LOADING } from './viewsource.js';
 
 const DEC = new TextDecoder();
 const CMP = {
@@ -19,11 +22,9 @@ const CMP = {
 
 /**
  * Compile a filter string into a predicate over a parsed field array. Grammar:
- * one or more `col OP value` terms joined by `&&` (all must hold). OP is one of
- * == != > >= < <= ~ (contains) !~ (not contains). Numeric compare when the value
- * parses as a number (else string). Throws on a bad term / unknown column.
- * @param {string} str
- * @param {Array<{name:string}|string>} columns
+ * one or more `col OP value` terms joined by `&&`. OP: == != > >= < <= ~ !~.
+ * Numeric compare when the value parses as a number (else string). Throws on a
+ * bad term / unknown column.
  * @returns {(fields:string[])=>boolean | null}  null for an empty filter
  */
 export function parseFilter(str, columns) {
@@ -53,67 +54,100 @@ function compileTerm(term, names, lower) {
   if (op === '!~') { const v = val.toLowerCase(); return (f) => !String(f[i] ?? '').toLowerCase().includes(v); }
   const num = Number(val);
   const cmp = CMP[op];
-  if (val !== '' && !Number.isNaN(num)) {                  // numeric comparison
-    return (f) => { const x = Number(f[i]); return !Number.isNaN(x) && cmp(x, num); };
-  }
-  return (f) => cmp(String(f[i] ?? ''), val);              // string comparison
+  if (val !== '' && !Number.isNaN(num)) return (f) => { const x = Number(f[i]); return !Number.isNaN(x) && cmp(x, num); };
+  return (f) => cmp(String(f[i] ?? ''), val);
+}
+
+// A growable Float64Array (the result columns: offset / length / row#).
+function grower() {
+  let buf = new Float64Array(1024), n = 0;
+  return {
+    push(v) { if (n === buf.length) { const a = new Float64Array(buf.length * 2); a.set(buf); buf = a; } buf[n++] = v; },
+    get n() { return n; },
+    done() { return buf.slice(0, n); },
+  };
 }
 
 /**
- * Forward-scan a source applying a predicate, returning the matching DISPLAY rows
- * (base display row = source record − dataStart; the header is skipped). Reads
- * every block once via source.readRange — works over any backing (the tape too,
- * at one full inflate). Capped at `max` matches (then throws — refine the filter).
- * @param {object} source  block index + readRange (source.js)
- * @param {object} opts  { predicate, dataStart?, onProgress?(block,total), max? }
- * @returns {Promise<Float64Array>}  matching base display-row indices, ascending
+ * Forward-scan a source applying a predicate; return the matching rows as
+ * `{ offsets, lengths, nums }` (Float64Arrays — byte offset, byte length, and
+ * original DISPLAY row #). Reads every block once via source.readRange.
+ * @param {object} opts  { predicate, dataStart?, onProgress?, max? }
  */
 export async function scanFilter(source, { predicate, dataStart = 0, onProgress, max = 16 * 1024 * 1024 } = {}) {
   const K = source.blockSize;
   const nBlocks = source.blockOffsets.length;
   const qByte = (source.quote || '"').charCodeAt(0);
   const delimited = source.kind === 'delimited';
-  let buf = new Float64Array(1024), n = 0;
-  const push = (v) => {
-    if (n === buf.length) { const a = new Float64Array(buf.length * 2); a.set(buf); buf = a; }
-    buf[n++] = v;
-    if (n > max) throw new Error('too many matches — refine the filter');
-  };
+  const offsets = grower(), lengths = grower(), nums = grower();
   for (let b = 0; b < nBlocks; b++) {
     const s = source.blockOffsets[b];
     const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
-    const recs = splitRecords(await source.readRange(s, e - s), { kind: source.kind, quote: qByte });
-    for (let i = 0; i < recs.length; i++) {
+    const bytes = await source.readRange(s, e - s);
+    const pos = splitRecordsPos(bytes, { kind: source.kind, quote: qByte });
+    for (let i = 0; i < pos.length; i++) {
       const srcRow = b * K + i;
       if (srcRow >= source.rowCount) break;
       const disp = srcRow - dataStart;
-      if (disp < 0) continue;                               // header row
-      const fields = delimited ? parseFields(recs[i], { delimiter: source.delimiter, quote: source.quote }) : [DEC.decode(recs[i])];
-      if (predicate(fields)) push(disp);
+      if (disp < 0) continue;                               // header / preamble
+      const rec = bytes.subarray(pos[i].start, pos[i].end);
+      const fields = delimited ? parseFields(rec, { delimiter: source.delimiter, quote: source.quote }) : [DEC.decode(rec)];
+      if (predicate(fields)) {
+        offsets.push(s + pos[i].start); lengths.push(pos[i].end - pos[i].start); nums.push(disp);
+        if (offsets.n > max) throw new Error('too many matches — refine the filter');
+      }
     }
     if (onProgress) onProgress(b + 1, nBlocks);
   }
-  return buf.slice(0, n);                                    // exact-length copy (free the slack)
+  return { offsets: offsets.done(), lengths: lengths.done(), nums: nums.done() };
 }
 
 /**
- * A view that shows only the rows in `matches` (base display-row indices), reading
- * each through the base ViewSource — so windowing / caching / PENDING all come for
- * free. rowHeaderAt reports the ORIGINAL row number.
- * @param {object} base  a RecordViewSource (viewsource.js)
- * @param {Float64Array} matches
+ * A view over a RESULT SET (filter or sort): `{ offsets, lengths, nums }` rows
+ * read directly from the source by byte offset, with a generous row LRU — so a
+ * scattered result scrolls without touching the base blocks (no thrash). Same
+ * provider contract as the windowed view.
+ * @param {object} source  block index + readRange (source.js)
+ * @param {object} result  { offsets, lengths, nums } (Float64Arrays)
+ * @param {Array} schema   column descriptors (for header / colType)
+ * @param {object} opts     { cacheRows? }
  */
-export function createFilteredViewSource(base, matches) {
+export function createResultView(source, result, schema, { cacheRows = 1024 } = {}) {
+  const { offsets, lengths, nums } = result;
+  const cache = new Map();          // r → fields[]  (insertion-order LRU)
+  const inflight = new Map();
+  const readyCbs = [];
+  const cols = schema ? schema.length : 1;
+  const delimited = source.kind === 'delimited';
+  const notify = () => { for (const cb of readyCbs) { try { cb(); } catch (e) { console.error('[lamina] onReady threw', e); } } };
+
+  function loadRow(r) {
+    if (cache.has(r)) return Promise.resolve();
+    if (inflight.has(r)) return inflight.get(r);
+    const p = Promise.resolve(source.readRange(offsets[r], lengths[r])).then((bytes) => {
+      cache.set(r, delimited ? parseFields(bytes, { delimiter: source.delimiter, quote: source.quote }) : [DEC.decode(bytes)]);
+      while (cache.size > cacheRows) cache.delete(cache.keys().next().value);
+      inflight.delete(r); notify();
+    }, (err) => { inflight.delete(r); console.error('[lamina] loadRow failed', err); });
+    inflight.set(r, p);
+    return p;
+  }
+
   return {
-    kind: base.kind,
-    cols: base.cols,
-    schema: base.schema,
-    rowCount() { return matches.length; },
-    rowAt(r) { return (r < 0 || r >= matches.length) ? null : base.rowAt(matches[r]); },
-    async ensureRow(r) { return (r < 0 || r >= matches.length) ? null : base.ensureRow(matches[r]); },
-    rowHeaderAt(r) { return (r < 0 || r >= matches.length) ? r + 1 : matches[r] + 1; },  // original (1-based) row
-    header(c) { return base.header(c); },
-    colType(c) { return base.colType(c); },
-    onReady(cb) { return base.onReady(cb); },
+    kind: source.kind,
+    cols,
+    schema,
+    rowCount() { return offsets.length; },
+    rowAt(r) {
+      if (r < 0 || r >= offsets.length) return null;
+      if (cache.has(r)) { const v = cache.get(r); cache.delete(r); cache.set(r, v); return v; }   // LRU touch
+      loadRow(r);
+      return LOADING;
+    },
+    async ensureRow(r) { if (r < 0 || r >= offsets.length) return null; await loadRow(r); return this.rowAt(r); },
+    rowHeaderAt(r) { return (r < 0 || r >= nums.length) ? r + 1 : nums[r] + 1; },   // original (1-based) row
+    header(c) { return { label: schema && schema[c] ? schema[c].name : `col ${c + 1}`, type: this.colType(c) }; },
+    colType(c) { return (schema && schema[c] && schema[c].type) || 'string'; },
+    onReady(cb) { readyCbs.push(cb); return () => { const i = readyCbs.indexOf(cb); if (i >= 0) readyCbs.splice(i, 1); }; },
   };
 }

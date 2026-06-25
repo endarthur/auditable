@@ -54,11 +54,15 @@ those two invariants hold from a memory-sized CSV up to a tens-of-GB block model
   injectable for richer schema; `force` overrides a wrong guess.
 - **filter** (`filter.js`) — `parseFilter(str, columns)` compiles `col OP value`
   terms (`== != > >= < <= ~ !~`, `&&`) to a field-array predicate; `scanFilter`
-  forward-scans → a `Float64Array` of matching rows; `createFilteredViewSource`
-  is a thin **remap** view (`rowAt(d) = base.rowAt(matches[d])`) reusing all the
-  windowing machinery.
-- **sort** (`sort.js`) — `scanSortKeys` extracts a key column, sorts row ordinals
-  (nulls last, stable), returns a row-order array consumed by the same remap view.
+  forward-scans → a **result** `{ offsets, lengths, nums }` (byte offset + length
+  + original row # per match); `createResultView(source, result, schema)` reads
+  each result row **directly by byte offset** with its own row LRU. (NOT a remap
+  onto the base view: a selective result is scattered, so going through the base's
+  4096-row blocks would touch one block per visible row → LRU thrash. Per-row
+  reads touch only the visible rows.)
+- **sort** (`sort.js`) — `scanSortKeys` extracts a key column + each row's byte
+  position, sorts (nulls last, stable), returns the same `{ offsets, lengths,
+  nums }` result shape — consumed by the same `createResultView`.
 - **provider** (`provider.js`) — adapts a view to `@gcu/loom`'s cell-provider;
   `LOADING` → loom's injected `PENDING`.
 

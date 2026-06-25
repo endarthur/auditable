@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createFilteredViewSource, scanSortKeys, createLaminaProvider } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createResultView, scanSortKeys, createLaminaProvider } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
 import { Unzip, UnzipInflate } from 'fflate';
@@ -59,7 +59,7 @@ function fmtBytes(n) {
 // The non-grid panel: binary handoff, archive guards, empty-archive notes.
 function showNote(name, badge, title, msg, meta) {
   if (grid) { grid.destroy(); grid = null; }
-  current = null; $('#filter').value = '';        // nothing filterable on a note panel
+  current = null; $('#filter').value = ''; syncFilterClear();   // nothing filterable on a note panel
   $('#fileName').textContent = name;
   $('#empty').style.display = 'none';
   $('#grid').innerHTML = '';
@@ -80,8 +80,8 @@ function mount(name, d, src, totalBytes) {
   const schema = kind === 'delimited' ? d.schema : [{ name: 'line', type: 'string' }];
   const dataStart = d.dataStart != null ? d.dataStart : (kind === 'delimited' && d.hasHeader ? 1 : 0);
   const baseVs = createRecordViewSource(src, { schema, dataStart });
-  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterMatches: null, sort: null, hidden: new Set(), file: null, bytes: null, force: {} };
-  $('#filter').value = ''; $('#filter').classList.remove('err');     // fresh file → clear filter + sort
+  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), file: null, bytes: null, force: {} };
+  $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear();   // fresh file → clear filter + sort
   recompute();
 }
 
@@ -93,20 +93,20 @@ async function recompute() {
   if (!c) return;
   let view = c.baseVs;
   let info = {};
-  const subset = c.filterMatches;                       // ascending display rows, or null = all
+  const fr = c.filterResult;                            // { offsets, lengths, nums } or null
   if (c.sort) {
     $('#meta').textContent = 'sorting…';
     try {
       const numeric = (c.schema[c.sort.col] && c.schema[c.sort.col].type) === 'number';
       const order = await scanSortKeys(c.source, {
-        col: c.sort.col, dir: c.sort.dir, dataStart: c.dataStart, numeric, rows: subset,
+        col: c.sort.col, dir: c.sort.dir, dataStart: c.dataStart, numeric, rows: fr ? fr.nums : null,
         onProgress: (b, n) => { $('#meta').textContent = `sorting… ${n ? Math.round((100 * b) / n) : 0}%`; },
       });
-      view = createFilteredViewSource(c.baseVs, order);
-      info = { filtered: !!subset, sorted: true };
-    } catch (e) { $('#meta').textContent = `sort: ${e.message}`; c.sort = null; view = subset ? createFilteredViewSource(c.baseVs, subset) : c.baseVs; info = { filtered: !!subset }; }
-  } else if (subset) {
-    view = createFilteredViewSource(c.baseVs, subset);
+      view = createResultView(c.source, order, c.schema);
+      info = { filtered: !!fr, sorted: true };
+    } catch (e) { $('#meta').textContent = `sort: ${e.message}`; c.sort = null; view = fr ? createResultView(c.source, fr, c.schema) : c.baseVs; info = { filtered: !!fr }; }
+  } else if (fr) {
+    view = createResultView(c.source, fr, c.schema);
     info = { filtered: true };
   }
   mountView(view, info);
@@ -172,7 +172,7 @@ function showColumnMenu(uc, x, y) {
     { label: `Sort ${name} ↓`, action: () => { c.sort = { col: uc, dir: 'desc' }; recompute(); } },
   ];
   if (c.sort && c.sort.col === uc) items.push({ label: 'Clear sort', action: () => { c.sort = null; recompute(); } });
-  items.push({ sep: true }, { label: `Filter by ${name}…`, action: () => { $('#filter').value = `${name} `; $('#filter').focus(); } });
+  items.push({ sep: true }, { label: `Filter by ${name}…`, action: () => setFilterText(`${name} `) });
   items.push({ sep: true }, { label: `Hide ${name}`, action: () => hideColumn(uc) });
   for (let i = 0; i < c.baseVs.cols; i++) {
     if (c.hidden.has(i)) items.push({ label: `Show ${c.baseVs.header(i).label}`, action: () => showColumn(i) });
@@ -217,15 +217,15 @@ function toggleSort(col) {
 async function applyFilter(str) {
   const c = current;
   if (!c) return;
-  if (!str.trim()) { $('#filter').classList.remove('err'); c.filterMatches = null; return recompute(); }
+  if (!str.trim()) { $('#filter').classList.remove('err'); c.filterResult = null; return recompute(); }
   const cols = c.d.kind === 'delimited' ? c.d.schema : [{ name: 'line' }];
   let predicate;
   try { predicate = parseFilter(str, cols); } catch (e) { return filterErr(e); }
-  if (!predicate) { c.filterMatches = null; return recompute(); }
+  if (!predicate) { c.filterResult = null; return recompute(); }
   $('#filter').classList.remove('err');
   $('#meta').textContent = 'filtering…';
   try {
-    c.filterMatches = await scanFilter(c.source, {
+    c.filterResult = await scanFilter(c.source, {
       predicate, dataStart: c.dataStart,
       onProgress: (b, n) => { $('#meta').textContent = `filtering… ${n ? Math.round((100 * b) / n) : 0}%`; },
     });
@@ -532,7 +532,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
   { label: 'Go to row…', action: () => $('#goto').focus() },
   { sep: true },
-  { label: 'Clear filter', action: () => { $('#filter').value = ''; applyFilter(''); } },
+  { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyFilter(''); } },
   { label: 'Clear sort', action: () => { if (current) { current.sort = null; recompute(); } } },
   { sep: true },
   { label: 'Autofit all columns', action: () => autofitAll() },
@@ -587,10 +587,23 @@ window.addEventListener('drop', async (e) => {
 });
 
 // ── filter box ──
+// Set the filter box text so it lands in the input's native undo stack (Ctrl+Z
+// restores the prior content) — a plain `.value =` bypasses undo. Used by the
+// "Filter by <col>…" context action.
+function setFilterText(text) {
+  const inp = $('#filter');
+  inp.focus();
+  inp.select();
+  if (!document.execCommand('insertText', false, text)) inp.value = text;   // fallback
+  syncFilterClear();
+}
+function syncFilterClear() { $('#filterWrap').classList.toggle('has', $('#filter').value.length > 0); }
+$('#filter').addEventListener('input', syncFilterClear);
 $('#filter').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') applyFilter(e.target.value);
-  else if (e.key === 'Escape') { e.target.value = ''; applyFilter(''); e.target.blur(); }
+  else if (e.key === 'Escape') { e.target.value = ''; syncFilterClear(); applyFilter(''); e.target.blur(); }
 });
+$('#filterClear').onclick = () => { $('#filter').value = ''; syncFilterClear(); applyFilter(''); $('#filter').focus(); };
 
 // ── global keys: Ctrl+O open, Esc closes the help overlay ──
 window.addEventListener('keydown', (e) => {

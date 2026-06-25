@@ -99,12 +99,13 @@ async function scanFileToIndex(file, { kind = 'delimited', quote = DQUOTE, block
 }
 
 /**
- * Split a byte range (one or more blocks' worth) into record byte-slices, using
- * the same boundary rule as the scanner. Trailing \r is trimmed (CRLF). The \n
- * is excluded. This is what the windowed read calls after readRange.
- * @returns {Uint8Array[]} record byte slices, in order
+ * Split a byte range into record POSITIONS `{ start, end }` (relative to `bytes`,
+ * \n excluded, trailing \r trimmed) — same boundary rule as the scanner. The
+ * filter/sort scans use this to record each matching row's byte offset + length,
+ * so the result view can read a single row directly (no coarse-block read).
+ * @returns {{start:number,end:number}[]}
  */
-function splitRecords(bytes, { kind = 'delimited', quote = DQUOTE } = {}) {
+function splitRecordsPos(bytes, { kind = 'delimited', quote = DQUOTE } = {}) {
   const quoteAware = kind === 'delimited';
   const out = [];
   let start = 0, inQuote = false;
@@ -114,16 +115,24 @@ function splitRecords(bytes, { kind = 'delimited', quote = DQUOTE } = {}) {
     if (b === NL && !inQuote) {
       let end = i;
       if (end > start && bytes[end - 1] === CR) end--;   // trim CRLF's \r
-      out.push(bytes.subarray(start, end));
+      out.push({ start, end });
       start = i + 1;
     }
   }
   if (start < bytes.length) {                              // trailing record, no \n
     let end = bytes.length;
     if (end > start && bytes[end - 1] === CR) end--;
-    out.push(bytes.subarray(start, end));
+    out.push({ start, end });
   }
   return out;
+}
+
+/**
+ * Split a byte range into record byte-slices (the windowed read's path).
+ * @returns {Uint8Array[]} record byte slices, in order
+ */
+function splitRecords(bytes, opts) {
+  return splitRecordsPos(bytes, opts).map((p) => bytes.subarray(p.start, p.end));
 }
 
 /**
@@ -426,16 +435,18 @@ function createRecordViewSource(source, { schema = null, cacheBlocks = 16, dataS
 
 // ── src/filter.js ──
 
-// @gcu/lamina — filter: a forward scan that builds a list of matching rows, and a
-// thin view that REMAPS display rows onto the base view through that list. The
-// filtered view reuses ALL of the base ViewSource's windowing / block-cache / tape
-// machinery — it's just an index permutation, so it works identically over a
-// memory, file, or compressed-tape source.
+// @gcu/lamina — filter: a forward scan that records the matching rows, and a
+// RESULT VIEW that reads each matching row directly by byte offset.
 //
-// Decagigabyte note: the match list is one entry per MATCHING row (a Float64 row
-// ordinal), so its size tracks selectivity, not file size — a selective filter
-// (the normal case: "find the high grades") stays tiny. A pathological filter that
-// keeps most of a 500M-row file is capped (refine the filter) rather than OOM.
+// Why per-row, not a remap onto the base view: a selective filter scatters its
+// matches across the file, so a screenful of results would touch ~one base block
+// (4096 rows) PER VISIBLE ROW — blowing the base LRU and thrashing (load→evict→
+// reload forever). Recording each match's (offset, length) lets the result view
+// read exactly the visible rows — small reads, a generous row LRU, no thrash.
+//
+// Decagigabyte note: the result is 3 × Float64 per matching row (offset, length,
+// original row #), so it tracks SELECTIVITY not file size; capped (then "refine
+// the filter") rather than OOM.
 
 
 const DEC$filter = new TextDecoder();
@@ -446,11 +457,9 @@ const CMP = {
 
 /**
  * Compile a filter string into a predicate over a parsed field array. Grammar:
- * one or more `col OP value` terms joined by `&&` (all must hold). OP is one of
- * == != > >= < <= ~ (contains) !~ (not contains). Numeric compare when the value
- * parses as a number (else string). Throws on a bad term / unknown column.
- * @param {string} str
- * @param {Array<{name:string}|string>} columns
+ * one or more `col OP value` terms joined by `&&`. OP: == != > >= < <= ~ !~.
+ * Numeric compare when the value parses as a number (else string). Throws on a
+ * bad term / unknown column.
  * @returns {(fields:string[])=>boolean | null}  null for an empty filter
  */
 function parseFilter(str, columns) {
@@ -480,82 +489,114 @@ function compileTerm(term, names, lower) {
   if (op === '!~') { const v = val.toLowerCase(); return (f) => !String(f[i] ?? '').toLowerCase().includes(v); }
   const num = Number(val);
   const cmp = CMP[op];
-  if (val !== '' && !Number.isNaN(num)) {                  // numeric comparison
-    return (f) => { const x = Number(f[i]); return !Number.isNaN(x) && cmp(x, num); };
-  }
-  return (f) => cmp(String(f[i] ?? ''), val);              // string comparison
+  if (val !== '' && !Number.isNaN(num)) return (f) => { const x = Number(f[i]); return !Number.isNaN(x) && cmp(x, num); };
+  return (f) => cmp(String(f[i] ?? ''), val);
+}
+
+// A growable Float64Array (the result columns: offset / length / row#).
+function grower() {
+  let buf = new Float64Array(1024), n = 0;
+  return {
+    push(v) { if (n === buf.length) { const a = new Float64Array(buf.length * 2); a.set(buf); buf = a; } buf[n++] = v; },
+    get n() { return n; },
+    done() { return buf.slice(0, n); },
+  };
 }
 
 /**
- * Forward-scan a source applying a predicate, returning the matching DISPLAY rows
- * (base display row = source record − dataStart; the header is skipped). Reads
- * every block once via source.readRange — works over any backing (the tape too,
- * at one full inflate). Capped at `max` matches (then throws — refine the filter).
- * @param {object} source  block index + readRange (source.js)
- * @param {object} opts  { predicate, dataStart?, onProgress?(block,total), max? }
- * @returns {Promise<Float64Array>}  matching base display-row indices, ascending
+ * Forward-scan a source applying a predicate; return the matching rows as
+ * `{ offsets, lengths, nums }` (Float64Arrays — byte offset, byte length, and
+ * original DISPLAY row #). Reads every block once via source.readRange.
+ * @param {object} opts  { predicate, dataStart?, onProgress?, max? }
  */
 async function scanFilter(source, { predicate, dataStart = 0, onProgress, max = 16 * 1024 * 1024 } = {}) {
   const K = source.blockSize;
   const nBlocks = source.blockOffsets.length;
   const qByte = (source.quote || '"').charCodeAt(0);
   const delimited = source.kind === 'delimited';
-  let buf = new Float64Array(1024), n = 0;
-  const push = (v) => {
-    if (n === buf.length) { const a = new Float64Array(buf.length * 2); a.set(buf); buf = a; }
-    buf[n++] = v;
-    if (n > max) throw new Error('too many matches — refine the filter');
-  };
+  const offsets = grower(), lengths = grower(), nums = grower();
   for (let b = 0; b < nBlocks; b++) {
     const s = source.blockOffsets[b];
     const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
-    const recs = splitRecords(await source.readRange(s, e - s), { kind: source.kind, quote: qByte });
-    for (let i = 0; i < recs.length; i++) {
+    const bytes = await source.readRange(s, e - s);
+    const pos = splitRecordsPos(bytes, { kind: source.kind, quote: qByte });
+    for (let i = 0; i < pos.length; i++) {
       const srcRow = b * K + i;
       if (srcRow >= source.rowCount) break;
       const disp = srcRow - dataStart;
-      if (disp < 0) continue;                               // header row
-      const fields = delimited ? parseFields(recs[i], { delimiter: source.delimiter, quote: source.quote }) : [DEC$filter.decode(recs[i])];
-      if (predicate(fields)) push(disp);
+      if (disp < 0) continue;                               // header / preamble
+      const rec = bytes.subarray(pos[i].start, pos[i].end);
+      const fields = delimited ? parseFields(rec, { delimiter: source.delimiter, quote: source.quote }) : [DEC$filter.decode(rec)];
+      if (predicate(fields)) {
+        offsets.push(s + pos[i].start); lengths.push(pos[i].end - pos[i].start); nums.push(disp);
+        if (offsets.n > max) throw new Error('too many matches — refine the filter');
+      }
     }
     if (onProgress) onProgress(b + 1, nBlocks);
   }
-  return buf.slice(0, n);                                    // exact-length copy (free the slack)
+  return { offsets: offsets.done(), lengths: lengths.done(), nums: nums.done() };
 }
 
 /**
- * A view that shows only the rows in `matches` (base display-row indices), reading
- * each through the base ViewSource — so windowing / caching / PENDING all come for
- * free. rowHeaderAt reports the ORIGINAL row number.
- * @param {object} base  a RecordViewSource (viewsource.js)
- * @param {Float64Array} matches
+ * A view over a RESULT SET (filter or sort): `{ offsets, lengths, nums }` rows
+ * read directly from the source by byte offset, with a generous row LRU — so a
+ * scattered result scrolls without touching the base blocks (no thrash). Same
+ * provider contract as the windowed view.
+ * @param {object} source  block index + readRange (source.js)
+ * @param {object} result  { offsets, lengths, nums } (Float64Arrays)
+ * @param {Array} schema   column descriptors (for header / colType)
+ * @param {object} opts     { cacheRows? }
  */
-function createFilteredViewSource(base, matches) {
+function createResultView(source, result, schema, { cacheRows = 1024 } = {}) {
+  const { offsets, lengths, nums } = result;
+  const cache = new Map();          // r → fields[]  (insertion-order LRU)
+  const inflight = new Map();
+  const readyCbs = [];
+  const cols = schema ? schema.length : 1;
+  const delimited = source.kind === 'delimited';
+  const notify = () => { for (const cb of readyCbs) { try { cb(); } catch (e) { console.error('[lamina] onReady threw', e); } } };
+
+  function loadRow(r) {
+    if (cache.has(r)) return Promise.resolve();
+    if (inflight.has(r)) return inflight.get(r);
+    const p = Promise.resolve(source.readRange(offsets[r], lengths[r])).then((bytes) => {
+      cache.set(r, delimited ? parseFields(bytes, { delimiter: source.delimiter, quote: source.quote }) : [DEC$filter.decode(bytes)]);
+      while (cache.size > cacheRows) cache.delete(cache.keys().next().value);
+      inflight.delete(r); notify();
+    }, (err) => { inflight.delete(r); console.error('[lamina] loadRow failed', err); });
+    inflight.set(r, p);
+    return p;
+  }
+
   return {
-    kind: base.kind,
-    cols: base.cols,
-    schema: base.schema,
-    rowCount() { return matches.length; },
-    rowAt(r) { return (r < 0 || r >= matches.length) ? null : base.rowAt(matches[r]); },
-    async ensureRow(r) { return (r < 0 || r >= matches.length) ? null : base.ensureRow(matches[r]); },
-    rowHeaderAt(r) { return (r < 0 || r >= matches.length) ? r + 1 : matches[r] + 1; },  // original (1-based) row
-    header(c) { return base.header(c); },
-    colType(c) { return base.colType(c); },
-    onReady(cb) { return base.onReady(cb); },
+    kind: source.kind,
+    cols,
+    schema,
+    rowCount() { return offsets.length; },
+    rowAt(r) {
+      if (r < 0 || r >= offsets.length) return null;
+      if (cache.has(r)) { const v = cache.get(r); cache.delete(r); cache.set(r, v); return v; }   // LRU touch
+      loadRow(r);
+      return LOADING;
+    },
+    async ensureRow(r) { if (r < 0 || r >= offsets.length) return null; await loadRow(r); return this.rowAt(r); },
+    rowHeaderAt(r) { return (r < 0 || r >= nums.length) ? r + 1 : nums[r] + 1; },   // original (1-based) row
+    header(c) { return { label: schema && schema[c] ? schema[c].name : `col ${c + 1}`, type: this.colType(c) }; },
+    colType(c) { return (schema && schema[c] && schema[c].type) || 'string'; },
+    onReady(cb) { readyCbs.push(cb); return () => { const i = readyCbs.indexOf(cb); if (i >= 0) readyCbs.splice(i, 1); }; },
   };
 }
 
 // ── src/sort.js ──
 
-// @gcu/lamina — sort: a forward scan that extracts a key column, then sorts row
-// ordinals by it. The result is a row-order array consumed by the SAME remap view
-// as filter (createFilteredViewSource) — sort is just a different permutation.
+// @gcu/lamina — sort: a forward scan that extracts a key column + each row's byte
+// position, then orders the rows by key. Returns the same `{ offsets, lengths,
+// nums }` result shape as filter, consumed by createResultView (per-row reads, no
+// base-block thrash — a sorted view is scattered in base order too).
 //
-// In-memory (capped): the (row, key) arrays are one entry per sorted row, so this
-// is bounded at `max` rows (then throws — "filter first"). A true decagigabyte
-// sort is external-merge-to-OPFS (deferred, the heavy path); until then, the
-// composition filter→sort handles huge files: reduce with a filter, sort the rest.
-// `rows` (the current filter's matches, ascending) sorts only that subset.
+// In-memory + capped. A true decagigabyte sort is external-merge-to-OPFS
+// (deferred); until then filter→sort handles huge files (the `rows` subset sorts
+// only the current filter's matches).
 
 
 const DEC$sort = new TextDecoder();
@@ -563,22 +604,24 @@ const DEC$sort = new TextDecoder();
 /**
  * @param {object} source  block index + readRange (source.js)
  * @param {object} opts  { col, dir?, dataStart?, numeric?, rows?, onProgress?, max? }
- * @returns {Promise<Float64Array>}  display rows in sorted order (nulls/NaN last)
+ *   rows = ascending DISPLAY rows to restrict to (a filter's matches), or null = all
+ * @returns {Promise<{offsets:Float64Array, lengths:Float64Array, nums:Float64Array}>}
+ *          ordered by key (nulls/NaN/empty last, stable)
  */
 async function scanSortKeys(source, { col, dir = 'asc', dataStart = 0, numeric = true, rows = null, onProgress, max = 5 * 1024 * 1024 } = {}) {
   const K = source.blockSize;
   const nBlocks = source.blockOffsets.length;
   const qByte = (source.quote || '"').charCodeAt(0);
   const delimited = source.kind === 'delimited';
-  const subset = rows;                 // ascending display rows to restrict to, or null = all
+  const subset = rows;
   let sp = 0;
-  const outRows = [];
-  const keys = [];
+  const recs = [];   // { off, len, num, key }
   for (let b = 0; b < nBlocks; b++) {
     const s = source.blockOffsets[b];
     const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
-    const recs = splitRecords(await source.readRange(s, e - s), { kind: source.kind, quote: qByte });
-    for (let i = 0; i < recs.length; i++) {
+    const bytes = await source.readRange(s, e - s);
+    const pos = splitRecordsPos(bytes, { kind: source.kind, quote: qByte });
+    for (let i = 0; i < pos.length; i++) {
       const srcRow = b * K + i;
       if (srcRow >= source.rowCount) break;
       const disp = srcRow - dataStart;
@@ -588,45 +631,43 @@ async function scanSortKeys(source, { col, dir = 'asc', dataStart = 0, numeric =
         if (sp >= subset.length || subset[sp] !== disp) continue;
         sp++;
       }
-      const fields = delimited ? parseFields(recs[i], { delimiter: source.delimiter, quote: source.quote }) : [DEC$sort.decode(recs[i])];
+      const rec = bytes.subarray(pos[i].start, pos[i].end);
+      const fields = delimited ? parseFields(rec, { delimiter: source.delimiter, quote: source.quote }) : [DEC$sort.decode(rec)];
       const raw = fields[col];
-      outRows.push(disp);
-      // empty/missing numeric → NaN (sorts last), NOT 0 (Number('') === 0 would sort low)
-      keys.push(numeric ? (raw == null || raw === '' ? NaN : Number(raw)) : (raw == null ? '' : String(raw)));
-      if (outRows.length > max) throw new Error('too many rows to sort — filter first');
+      const key = numeric ? (raw == null || raw === '' ? NaN : Number(raw)) : (raw == null ? '' : String(raw));
+      recs.push({ off: s + pos[i].start, len: pos[i].end - pos[i].start, num: disp, key });
+      if (recs.length > max) throw new Error('too many rows to sort — filter first');
     }
     if (onProgress) onProgress(b + 1, nBlocks);
-    if (subset && sp >= subset.length) break;     // collected every wanted row
+    if (subset && sp >= subset.length) break;
   }
 
-  const n = outRows.length;
+  const n = recs.length;
   const idx = new Array(n);
   for (let i = 0; i < n; i++) idx[i] = i;
   const mul = dir === 'desc' ? -1 : 1;
   let cmp;
   if (numeric) {
     cmp = (a, b) => {
-      const ka = keys[a], kb = keys[b];
-      const na = Number.isNaN(ka), nb = Number.isNaN(kb);   // non-numeric → last, both directions
+      const ka = recs[a].key, kb = recs[b].key;
+      const na = Number.isNaN(ka), nb = Number.isNaN(kb);    // non-numeric → last, both directions
       if (na && nb) return a - b;
-      if (na) return 1;
-      if (nb) return -1;
-      return mul * (ka - kb) || (a - b);                    // stable on original order
+      if (na) return 1; if (nb) return -1;
+      return mul * (ka - kb) || (a - b);                     // stable on original order
     };
   } else {
     cmp = (a, b) => {
-      const ka = keys[a], kb = keys[b];
-      const ea = ka === '', eb = kb === '';                 // empty → last
+      const ka = recs[a].key, kb = recs[b].key;
+      const ea = ka === '', eb = kb === '';                  // empty → last
       if (ea && eb) return a - b;
-      if (ea) return 1;
-      if (eb) return -1;
+      if (ea) return 1; if (eb) return -1;
       return (ka < kb ? -1 : ka > kb ? 1 : 0) * mul || (a - b);
     };
   }
   idx.sort(cmp);
-  const order = new Float64Array(n);
-  for (let k = 0; k < n; k++) order[k] = outRows[idx[k]];
-  return order;
+  const offsets = new Float64Array(n), lengths = new Float64Array(n), nums = new Float64Array(n);
+  for (let k = 0; k < n; k++) { const r = recs[idx[k]]; offsets[k] = r.off; lengths[k] = r.len; nums[k] = r.num; }
+  return { offsets, lengths, nums };
 }
 
 // ── src/detect.js ──
@@ -825,6 +866,7 @@ export {
   scanRecords,
   scanFileToIndex,
   splitRecords,
+  splitRecordsPos,
   parseFields,
   buildMemorySource,
   buildFileSource,
@@ -836,7 +878,7 @@ export {
   LOADING,
   parseFilter,
   scanFilter,
-  createFilteredViewSource,
+  createResultView,
   scanSortKeys,
   detectKind,
   createLaminaProvider,
