@@ -1,0 +1,10 @@
+{
+  "name": "@gcu/dm",
+  "version": "0.1.0",
+  "description": "Read-only reader for Datamine .DM files (block models, drillholes, wireframes, strings) — SP/EP precision, endianness auto-detection, multi-word alpha, file constants, missing-value sentinels. Zero-dependency, browser-native, windowed (header + per-record) for arbitrarily large files. Format reverse-engineered from public sources (VMine + Maccelari BSD dmfile.h); excluded from copyright under the EU Software Directive.",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/dm"
+}
