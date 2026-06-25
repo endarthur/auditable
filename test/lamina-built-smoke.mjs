@@ -57,7 +57,7 @@ try {
     : fail(`worker scan in bundle: ${JSON.stringify(w)}`);
 
   const flt = await page.evaluate(async () => {
-    await window._lamina.applyFilter('v ~ y99');                 // contains "y99": y99, y990-999, y1990-1999, …
+    await window._lamina.applyFilter('v ~ "y99"');              // contains "y99" (text quoted): y99, y990-999, y1990-1999, …
     const shown = window._laminaVS.rowCount();
     await window._lamina.applyFilter('');
     return { shown, cleared: window._laminaVS.rowCount() };

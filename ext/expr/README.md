@@ -29,15 +29,23 @@ Carried from [hopper](https://github.com/gentropic/hopper)'s rule engine
 ```
 arithmetic     a + b - c * d / e        (unary -, parens; * / bind tighter than + -)
 comparison     <  >  <=  >=  =  !=       (= / != are blank-aware: blank = blank → true)
+               ==                        (alias for =)
 boolean        and  or  not             (case-insensitive; short-circuit)
+               &&  ||                    (aliases for and / or)
 range          x between lo and hi
-membership     x contains "needle"      (substring, or array membership)
+substring      x contains "needle"  ·  x ~ "needle"  ·  x !~ "needle"   (substring or array membership)
+set            x in "OXIDE", "SULF"     (membership; members stringified)
 regex          s matches "^DDH"
 blank tests    x is blank   x is filled
 literals       42   3.14   "text"   true   false
 columns        bare ident (case-insensitive): AU, fe_pct, OK-Indic
                bracket escape for awkward names: ["Cu (ppm)"]
 ```
+
+> A **bare word is a column**, a **quoted word is text** — so `fe > cu` compares two
+> columns, while `lito == "OXIDE"` tests against a literal. (This is the consistent
+> rule that makes calc-columns like `au * density` work.) The `&&`/`||`/`==`/`~`/`in`
+> forms make this a strict superset of lamina's former `parseFilter` dialect.
 
 > **Subtraction needs spaces.** `-` is a valid identifier character (so a column
 > like `OK-Indic` lexes as one name), therefore write `a - 5`, not `a-5` (which is
@@ -72,11 +80,13 @@ parse(src)                       // → analyzable AST (throws ExprParseError on
 evaluate(srcOrAst, valuesObj)    // tree-walk reference path; name-keyed record → value | null
 evalBool(srcOrAst, valuesObj)    // → boolean (blank → false)
 
-compile(srcOrAst, columns)       // → (fields[]) => value   — the hot path
-compileBool(srcOrAst, columns)   // → (fields[]) => boolean
+compile(srcOrAst, columns, opts) // → (fields[]) => value   — the hot path
+compileBool(srcOrAst, columns, opts) // → (fields[]) => boolean
 //   columns: ['AU','FROM','TO',…]; names bound to ARRAY INDICES at compile time,
 //   so the per-row closure takes the positional fields[] with NO per-row object
 //   allocation — built for a scan over a 500M-row file.
+//   opts.decimal: ',' reads comma-decimal field strings numerically (BR/EU files);
+//   evaluate(src, values, {decimal:','}) does the same on the tree-walk path.
 
 deps(srcOrAst)                   // → ['AU','OK-Indic',…]  (free column refs)
 validate(srcOrAst, columns?)     // → { ok, errors: [{kind:'parse'|'column', message, name?}] }

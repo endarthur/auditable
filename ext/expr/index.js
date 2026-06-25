@@ -21,7 +21,7 @@
 
 // Keyword operators + the words after `is` — matched case-insensitively. A column
 // literally named one of these must use the ["…"] bracket escape.
-const RESERVED = new Set(['and', 'or', 'not', 'between', 'contains', 'matches', 'is', 'blank', 'filled', 'true', 'false']);
+const RESERVED = new Set(['and', 'or', 'not', 'between', 'contains', 'in', 'matches', 'is', 'blank', 'filled', 'true', 'false']);
 
 // Pure total functions: name → [minArgs, maxArgs]. Carried (if/round/int/abs +
 // date parts) + geo math (log/exp/sqrt/pow/min/max/clamp) + explicit absent
@@ -45,7 +45,8 @@ function fail(msg) { throw new ExprParseError(msg); }
 // surrounding space (`a - 5`); `a-5` lexes as the single ident "a-5". A `["…"]`
 // bracket escapes any column name (spaces, punctuation, leading digit, keyword).
 function tokenize(src) {
-  const re = /(\s+)|(\[\s*"[^"]*"\s*\])|("[^"]*")|(<=|>=|!=|<|>|=)|([-+*/().,])|(\d+(?:\.\d+)?)|([A-Za-z_][A-Za-z0-9_-]*)/y;
+  // Multi-char ops first (longest match): && || == <= >= != !~ , then single < > = ~.
+  const re = /(\s+)|(\[\s*"[^"]*"\s*\])|("[^"]*")|(&&|\|\||==|<=|>=|!=|!~|<|>|=|~)|([-+*/().,])|(\d+(?:\.\d+)?)|([A-Za-z_][A-Za-z0-9_-]*)/y;
   const toks = [];
   let last = 0;
   while (last < src.length) {
@@ -115,18 +116,22 @@ function parse(src) {
   }
   function comparison() {
     const l = add();
-    if (op('<') || op('>') || op('<=') || op('>=') || op('=') || op('!=')) {
-      const o = toks[i].v; i++; return { t: 'cmp', op: o, l, r: add() };
+    if (op('<') || op('>') || op('<=') || op('>=') || op('=') || op('==') || op('!=')) {
+      let o = toks[i].v; i++; if (o === '==') o = '=';                  // == is an alias for =
+      return { t: 'cmp', op: o, l, r: add() };
     }
-    if (word('between')) { i++; const lo = add(); if (!word('and')) fail("expected 'and' in between"); i++; return { t: 'between', e: l, lo, hi: add() }; }
+    if (op('~')) { i++; return { t: 'contains', l, r: add() }; }        // a ~ b  (substring / membership)
+    if (op('!~')) { i++; return { t: 'not', e: { t: 'contains', l, r: add() } }; }
+    if (word('between')) { i++; const lo = add(); if (!(word('and') || op('&&'))) fail("expected 'and' in between"); i++; return { t: 'between', e: l, lo, hi: add() }; }
     if (word('contains')) { i++; return { t: 'contains', l, r: add() }; }
+    if (word('in')) { i++; const set = [add()]; while (op(',')) { i++; set.push(add()); } return { t: 'in', e: l, set }; }
     if (word('matches')) { i++; if (!toks[i] || toks[i].k !== 'str') fail("'matches' needs a string literal"); const re = toks[i].v; i++; return { t: 'matches', e: l, re }; }
     if (word('is')) { i++; if (word('blank')) { i++; return { t: 'isblank', e: l }; } if (word('filled')) { i++; return { t: 'isfilled', e: l }; } fail("'is' must be followed by 'blank' or 'filled'"); }
     return l;
   }
   function notE() { if (word('not')) { i++; return { t: 'not', e: comparison() }; } return comparison(); }
-  function andE() { let l = notE(); while (word('and')) { i++; l = { t: 'and', l, r: notE() }; } return l; }
-  function orE() { let l = andE(); while (word('or')) { i++; l = { t: 'or', l, r: andE() }; } return l; }
+  function andE() { let l = notE(); while (word('and') || op('&&')) { i++; l = { t: 'and', l, r: notE() }; } return l; }
+  function orE() { let l = andE(); while (word('or') || op('||')) { i++; l = { t: 'or', l, r: andE() }; } return l; }
   function expr() { return orE(); }
 
   const ast = expr();
@@ -142,63 +147,70 @@ const asAst = (x) => (typeof x === 'string' ? parse(x) : x);
 // closure compiler (compile.js). Keeping the value semantics in ONE place is what
 // makes the two paths bit-identical (the compiler's correctness oracle asserts it).
 //
-// The model: blank ≡ `null`. A single `absent` notion folds null/undefined/''/
+// The model: blank ≡ `null`, and a single `absent` notion folds null/undefined/''/
 // empty-array AND NaN together (the `x !== x` keystone), so a missing grade and a
-// NaN behave identically — and NEVER auto-cast to 0 (that silently corrupts means
-// / estimates; the ifnum/coalesce casts are the *explicit* opt-out). Every helper
-// is total: bad input → blank, never a throw.
+// NaN behave identically — and NEVER auto-cast to 0 (that silently corrupts means /
+// estimates; the ifnum/coalesce casts are the *explicit* opt-out). Every helper is
+// total: bad input → blank, never a throw.
+//
+// `num` is the single numeric-coercion point; eval/compile pass a decimal-bound
+// `N` (= makeNum(decimal)) into the helpers so a comma-decimal file (BR/EU) reads
+// numerically. The default is dot-decimal — existing callers are unaffected.
 
 function isBlank(v) {
   return v === null || v === undefined || v === '' || v !== v || (Array.isArray(v) && v.length === 0);
 }
-// Coerce to a finite number or null. Booleans/arrays/blank → null. (NaN folds into
-// blank via isBlank's `v !== v`.)
-function num(v) {
+// Coerce to a finite number or null. Booleans/arrays/blank → null. A comma-decimal
+// string is honoured only when decimal === ',' (and only for STRING values — an
+// actual number is used directly, so 3.5 never becomes 35).
+function num(v, decimal) {
   if (isBlank(v) || typeof v === 'boolean' || Array.isArray(v)) return null;
+  if (decimal === ',' && typeof v === 'string') { const n = Number(v.replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : null; }
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
+// A decimal-bound num for the hot path (compile binds it once; the per-row closures
+// close over it, no per-call decimal arg).
+function makeNum(decimal) { return decimal === ',' ? (v) => num(v, ',') : num; }
+
 function ord(a, b, o) { return o === '<' ? a < b : o === '>' ? a > b : o === '<=' ? a <= b : a >= b; }
-function eq(a, b) {
+function eq(a, b, N = num) {
   if (isBlank(a) && isBlank(b)) return true;       // blank = blank → true
   if (isBlank(a) || isBlank(b)) return false;      // x = blank → false
-  const na = num(a), nb = num(b);
+  const na = N(a), nb = N(b);
   return (na !== null && nb !== null) ? na === nb : String(a) === String(b);
 }
-function compare(a, b, o) {
-  if (o === '=') return eq(a, b);
-  if (o === '!=') return !eq(a, b);
+function compare(a, b, o, N = num) {
+  if (o === '=') return eq(a, b, N);
+  if (o === '!=') return !eq(a, b, N);
   if (isBlank(a) || isBlank(b)) return null;       // ordering on blank → blank
-  const na = num(a), nb = num(b);
+  const na = N(a), nb = N(b);
   return (na !== null && nb !== null) ? ord(na, nb, o) : ord(String(a), String(b), o);
 }
 
-// Finite-or-null guard for the math functions (keeps totality: ±Inf / NaN → blank).
-const fin = (x) => (Number.isFinite(x) ? x : null);
+const fin = (x) => (Number.isFinite(x) ? x : null);   // ±Inf / NaN → blank (totality)
 
-// Eager pure functions: name → (args[]) => value. Args are already-evaluated
-// values. `if` is NOT here (its branches are lazy — handled in each path). Every
-// fn returns blank on bad/blank input unless it's an explicit cast.
+// Eager pure functions: name → (args[], N) => value. Args are already-evaluated
+// values; N is the decimal-bound num. `if` is NOT here (lazy branches — handled in
+// each path). Every fn returns blank on bad/blank input unless it's an explicit cast.
 const FN = {
-  round: (a) => { const x = num(a[0]); if (x === null) return null; const d = a.length > 1 ? Math.trunc(num(a[1]) || 0) : 0; const f = Math.pow(10, d); return Math.round(x * f) / f; },
-  int: (a) => { const x = num(a[0]); return x === null ? null : Math.trunc(x); },
-  abs: (a) => { const x = num(a[0]); return x === null ? null : Math.abs(x); },
-  log: (a) => { const x = num(a[0]); return x === null ? null : fin(Math.log(x)); },
-  exp: (a) => { const x = num(a[0]); return x === null ? null : fin(Math.exp(x)); },
-  sqrt: (a) => { const x = num(a[0]); return x === null ? null : fin(Math.sqrt(x)); },
-  pow: (a) => { const x = num(a[0]), y = num(a[1]); return (x === null || y === null) ? null : fin(Math.pow(x, y)); },
-  min: (a) => { const ns = a.map(num).filter((x) => x !== null); return ns.length ? Math.min(...ns) : null; },
-  max: (a) => { const ns = a.map(num).filter((x) => x !== null); return ns.length ? Math.max(...ns) : null; },
-  clamp: (a) => { const x = num(a[0]), lo = num(a[1]), hi = num(a[2]); return (x === null || lo === null || hi === null) ? null : Math.min(Math.max(x, lo), hi); },
-  // date parts: read YYYY-MM-DD off an ISO date/datetime string (regex, no Date dep)
+  round: (a, N) => { const x = N(a[0]); if (x === null) return null; const d = a.length > 1 ? Math.trunc(N(a[1]) || 0) : 0; const f = Math.pow(10, d); return Math.round(x * f) / f; },
+  int: (a, N) => { const x = N(a[0]); return x === null ? null : Math.trunc(x); },
+  abs: (a, N) => { const x = N(a[0]); return x === null ? null : Math.abs(x); },
+  log: (a, N) => { const x = N(a[0]); return x === null ? null : fin(Math.log(x)); },
+  exp: (a, N) => { const x = N(a[0]); return x === null ? null : fin(Math.exp(x)); },
+  sqrt: (a, N) => { const x = N(a[0]); return x === null ? null : fin(Math.sqrt(x)); },
+  pow: (a, N) => { const x = N(a[0]), y = N(a[1]); return (x === null || y === null) ? null : fin(Math.pow(x, y)); },
+  min: (a, N) => { const ns = a.map((v) => N(v)).filter((x) => x !== null); return ns.length ? Math.min(...ns) : null; },
+  max: (a, N) => { const ns = a.map((v) => N(v)).filter((x) => x !== null); return ns.length ? Math.max(...ns) : null; },
+  clamp: (a, N) => { const x = N(a[0]), lo = N(a[1]), hi = N(a[2]); return (x === null || lo === null || hi === null) ? null : Math.min(Math.max(x, lo), hi); },
   year: (a) => datePart(a[0], 1),
   month: (a) => datePart(a[0], 2),
   day: (a) => datePart(a[0], 3),
-  // explicit absent-handling — the ONLY way a blank/NaN becomes a number:
-  ifnum: (a) => { const x = num(a[0]); return x === null ? a[1] : x; },          // x if numeric, else the default
+  ifnum: (a, N) => { const x = N(a[0]); return x === null ? a[1] : x; },          // x if numeric, else the default
   coalesce: (a) => { for (const v of a) if (!isBlank(v)) return v; return null; }, // first non-blank
-  isnum: (a) => num(a[0]) !== null,
-  isnan: (a) => !isBlank(a[0]) && num(a[0]) === null,    // present but not a number (junk cell)
+  isnum: (a, N) => N(a[0]) !== null,
+  isnan: (a, N) => !isBlank(a[0]) && N(a[0]) === null,    // present but not a number (junk cell)
   isblank: (a) => isBlank(a[0]),
   isfilled: (a) => !isBlank(a[0]),
 };
@@ -221,6 +233,12 @@ function contains(a, b) {
   const s = String(b);
   return Array.isArray(a) ? a.map(String).includes(s) : String(a).includes(s);
 }
+// Set membership: the value (stringified) is one of the listed members (stringified).
+function inSet(a, members) {
+  if (isBlank(a)) return false;
+  const s = String(a);
+  return members.some((m) => !isBlank(m) && String(m) === s);
+}
 function matches(a, re) {       // re = a precompiled RegExp or null (invalid pattern)
   if (isBlank(a) || !re) return false;
   return re.test(String(a));
@@ -235,45 +253,47 @@ function makeRegExp(src) { try { return new RegExp(src); } catch { return null; 
 // compile.js (positional closures); both share runtime.js so they agree.
 
 
-function ev(n, V) {
+function ev(n, V, N) {
   switch (n.t) {
     case 'num': case 'str': case 'bool': return n.v;
     case 'field': { const x = V[n.name]; return x === undefined ? null : x; }
-    case 'neg': { const a = num(ev(n.e, V)); return a === null ? null : -a; }
-    case '+': case '-': case '*': case '/': return arith(n.t, num(ev(n.l, V)), num(ev(n.r, V)));
-    case 'cmp': return compare(ev(n.l, V), ev(n.r, V), n.op);
+    case 'neg': { const a = N(ev(n.e, V, N)); return a === null ? null : -a; }
+    case '+': case '-': case '*': case '/': return arith(n.t, N(ev(n.l, V, N)), N(ev(n.r, V, N)));
+    case 'cmp': return compare(ev(n.l, V, N), ev(n.r, V, N), n.op, N);
     case 'between': {
-      const ge = compare(ev(n.e, V), ev(n.lo, V), '>='), le = compare(ev(n.e, V), ev(n.hi, V), '<=');
+      const ge = compare(ev(n.e, V, N), ev(n.lo, V, N), '>=', N), le = compare(ev(n.e, V, N), ev(n.hi, V, N), '<=', N);
       return (ge === null || le === null) ? null : (ge && le);
     }
-    case 'contains': return contains(ev(n.l, V), ev(n.r, V));
-    case 'matches': { if (n._re === undefined) n._re = makeRegExp(n.re); return matches(ev(n.e, V), n._re); }
+    case 'contains': return contains(ev(n.l, V, N), ev(n.r, V, N));
+    case 'in': return inSet(ev(n.e, V, N), n.set.map((m) => ev(m, V, N)));
+    case 'matches': { if (n._re === undefined) n._re = makeRegExp(n.re); return matches(ev(n.e, V, N), n._re); }
     case 'call':
-      if (n.fn === 'if') return ev(n.args[0], V) === true ? ev(n.args[1], V) : ev(n.args[2], V);   // lazy branches
-      return FN[n.fn](n.args.map((a) => ev(a, V)));
-    case 'isblank': return isBlank(ev(n.e, V));
-    case 'isfilled': return !isBlank(ev(n.e, V));
-    case 'not': return ev(n.e, V) !== true;
-    case 'and': return ev(n.l, V) === true && ev(n.r, V) === true;
-    case 'or': return ev(n.l, V) === true || ev(n.r, V) === true;
+      if (n.fn === 'if') return ev(n.args[0], V, N) === true ? ev(n.args[1], V, N) : ev(n.args[2], V, N);   // lazy branches
+      return FN[n.fn](n.args.map((a) => ev(a, V, N)), N);
+    case 'isblank': return isBlank(ev(n.e, V, N));
+    case 'isfilled': return !isBlank(ev(n.e, V, N));
+    case 'not': return ev(n.e, V, N) !== true;
+    case 'and': return ev(n.l, V, N) === true && ev(n.r, V, N) === true;
+    case 'or': return ev(n.l, V, N) === true || ev(n.r, V, N) === true;
   }
   return null;
 }
 
 // Raw value: boolean, number, string, set, or `null` (blank). For a calc-column.
-function evaluate(exprOrAst, values) {
-  const r = ev(asAst(exprOrAst), values || {});
+// opts.decimal === ',' reads comma-decimal field strings numerically.
+function evaluate(exprOrAst, values, opts = {}) {
+  const r = ev(asAst(exprOrAst), values || {}, makeNum(opts.decimal));
   return r === undefined ? null : r;
 }
 
 // Boolean reading (blank → false): for a filter / predicate body.
-function evalBool(exprOrAst, values) { return evaluate(exprOrAst, values) === true; }
+function evalBool(exprOrAst, values, opts) { return evaluate(exprOrAst, values, opts) === true; }
 
 // A value is constraint-valid iff it is blank OR the constraint holds (carried
 // from hopper — a useful "validation column" primitive; blank is require's job).
-function constraintValid(exprOrAst, values, target) {
+function constraintValid(exprOrAst, values, target, opts) {
   if (isBlank((values || {})[target])) return true;
-  return evaluate(exprOrAst, values) === true;
+  return evaluate(exprOrAst, values, opts) === true;
 }
 
 // ── src/compile.js ──
@@ -283,16 +303,16 @@ function constraintValid(exprOrAst, values, target) {
 // against a `columns` list. The per-row function then takes a POSITIONAL `fields[]`
 // and runs with no switch-dispatch, no AST re-traversal, and — crucially — no
 // per-row name→value object allocation. That last point is why this exists: lamina's
-// scan calls the compiled closure once per record over a 500M-row file, and it's
-// handed the positional `fields[]` the cursor already produced.
+// scan calls the compiled closure once per record over a 500M-row file, handed the
+// positional `fields[]` the cursor already produced.
 //
-// `compile(ast, columns)` is eval-free (no `new Function`) — CSP-safe — and reuses
-// runtime.js's helpers verbatim, so a compiled closure is bit-identical to the
-// tree-walk evaluator (eval.js). The correctness oracle in the tests asserts it.
-//
-// Field binding is CASE-INSENSITIVE against `columns` (geo columns are AU / IJK),
-// unlike the tree-walk's exact-case object lookup — the two agree on any record
-// whose keys match the columns, which is always the case in lamina.
+// `compile(ast, columns, opts)` is eval-free (no `new Function`) — CSP-safe — and
+// reuses runtime.js's helpers verbatim, so a compiled closure is bit-identical to
+// the tree-walk evaluator (eval.js). The correctness oracle in the tests asserts it.
+// `opts.decimal === ','` binds a comma-aware numeric coercion once (closed over by
+// the per-row closures, no per-row decimal arg). Field binding is CASE-INSENSITIVE
+// against `columns` (geo columns are AU / IJK), unlike the tree-walk's exact-case
+// object lookup — the two agree on any record whose keys match the columns.
 
 
 const BLANK = () => null;
@@ -307,7 +327,7 @@ function indexMap(columns) {
   return m;
 }
 
-function walk(n, idx) {
+function walk(n, idx, N) {
   switch (n.t) {
     case 'num': case 'str': case 'bool': { const v = n.v; return () => v; }
     case 'field': {
@@ -315,42 +335,43 @@ function walk(n, idx) {
       if (i === undefined) return BLANK;                       // unknown column → blank (validate() reports it)
       return (f) => { const x = f[i]; return x === undefined ? null : x; };
     }
-    case 'neg': { const c = walk(n.e, idx); return (f) => { const a = num(c(f)); return a === null ? null : -a; }; }
+    case 'neg': { const c = walk(n.e, idx, N); return (f) => { const a = N(c(f)); return a === null ? null : -a; }; }
     case '+': case '-': case '*': case '/': {
-      const cl = walk(n.l, idx), cr = walk(n.r, idx), t = n.t;
-      return (f) => arith(t, num(cl(f)), num(cr(f)));
+      const cl = walk(n.l, idx, N), cr = walk(n.r, idx, N), t = n.t;
+      return (f) => arith(t, N(cl(f)), N(cr(f)));
     }
-    case 'cmp': { const cl = walk(n.l, idx), cr = walk(n.r, idx), o = n.op; return (f) => compare(cl(f), cr(f), o); }
+    case 'cmp': { const cl = walk(n.l, idx, N), cr = walk(n.r, idx, N), o = n.op; return (f) => compare(cl(f), cr(f), o, N); }
     case 'between': {
-      const ce = walk(n.e, idx), clo = walk(n.lo, idx), chi = walk(n.hi, idx);
-      return (f) => { const ge = compare(ce(f), clo(f), '>='), le = compare(ce(f), chi(f), '<='); return (ge === null || le === null) ? null : (ge && le); };
+      const ce = walk(n.e, idx, N), clo = walk(n.lo, idx, N), chi = walk(n.hi, idx, N);
+      return (f) => { const ge = compare(ce(f), clo(f), '>=', N), le = compare(ce(f), chi(f), '<=', N); return (ge === null || le === null) ? null : (ge && le); };
     }
-    case 'contains': { const cl = walk(n.l, idx), cr = walk(n.r, idx); return (f) => contains(cl(f), cr(f)); }
-    case 'matches': { const ce = walk(n.e, idx), re = makeRegExp(n.re); return (f) => matches(ce(f), re); }
+    case 'contains': { const cl = walk(n.l, idx, N), cr = walk(n.r, idx, N); return (f) => contains(cl(f), cr(f)); }
+    case 'in': { const ce = walk(n.e, idx, N), cs = n.set.map((m) => walk(m, idx, N)); return (f) => inSet(ce(f), cs.map((c) => c(f))); }
+    case 'matches': { const ce = walk(n.e, idx, N), re = makeRegExp(n.re); return (f) => matches(ce(f), re); }
     case 'call': {
-      if (n.fn === 'if') { const cc = walk(n.args[0], idx), ct = walk(n.args[1], idx), ce = walk(n.args[2], idx); return (f) => (cc(f) === true ? ct(f) : ce(f)); }
-      const cargs = n.args.map((a) => walk(a, idx)), fn = FN[n.fn];
-      return (f) => fn(cargs.map((c) => c(f)));
+      if (n.fn === 'if') { const cc = walk(n.args[0], idx, N), ct = walk(n.args[1], idx, N), ce = walk(n.args[2], idx, N); return (f) => (cc(f) === true ? ct(f) : ce(f)); }
+      const cargs = n.args.map((a) => walk(a, idx, N)), fn = FN[n.fn];
+      return (f) => fn(cargs.map((c) => c(f)), N);
     }
-    case 'isblank': { const ce = walk(n.e, idx); return (f) => isBlank(ce(f)); }
-    case 'isfilled': { const ce = walk(n.e, idx); return (f) => !isBlank(ce(f)); }
-    case 'not': { const ce = walk(n.e, idx); return (f) => ce(f) !== true; }
-    case 'and': { const cl = walk(n.l, idx), cr = walk(n.r, idx); return (f) => cl(f) === true && cr(f) === true; }
-    case 'or': { const cl = walk(n.l, idx), cr = walk(n.r, idx); return (f) => cl(f) === true || cr(f) === true; }
+    case 'isblank': { const ce = walk(n.e, idx, N); return (f) => isBlank(ce(f)); }
+    case 'isfilled': { const ce = walk(n.e, idx, N); return (f) => !isBlank(ce(f)); }
+    case 'not': { const ce = walk(n.e, idx, N); return (f) => ce(f) !== true; }
+    case 'and': { const cl = walk(n.l, idx, N), cr = walk(n.r, idx, N); return (f) => cl(f) === true && cr(f) === true; }
+    case 'or': { const cl = walk(n.l, idx, N), cr = walk(n.r, idx, N); return (f) => cl(f) === true || cr(f) === true; }
   }
   return BLANK;
 }
 
-// compile(astOrSrc, columns) → (fields[]) => value. Alias compileValue.
-function compile(exprOrAst, columns) {
-  const c = walk(asAst(exprOrAst), indexMap(columns));
+// compile(astOrSrc, columns, opts) → (fields[]) => value. Alias compileValue.
+function compile(exprOrAst, columns, opts = {}) {
+  const c = walk(asAst(exprOrAst), indexMap(columns), makeNum(opts.decimal));
   return (fields) => { const r = c(fields || []); return r === undefined ? null : r; };
 }
 const compileValue = compile;
 
-// compileBool(astOrSrc, columns) → (fields[]) => bool (blank → false). For filters.
-function compileBool(exprOrAst, columns) {
-  const c = compile(exprOrAst, columns);
+// compileBool(astOrSrc, columns, opts) → (fields[]) => bool (blank → false). For filters.
+function compileBool(exprOrAst, columns, opts) {
+  const c = compile(exprOrAst, columns, opts);
   return (fields) => c(fields) === true;
 }
 
@@ -367,7 +388,8 @@ function deps(exprOrAst) {
   (function descend(n) {
     if (!n || typeof n !== 'object') return;
     if (n.t === 'field') { out.add(n.name); return; }
-    if (Array.isArray(n.args)) for (const a of n.args) descend(a);
+    if (Array.isArray(n.args)) for (const a of n.args) descend(a);   // function-call args
+    if (Array.isArray(n.set)) for (const a of n.set) descend(a);     // `in` set members
     for (const k of ['e', 'l', 'r', 'lo', 'hi']) if (n[k]) descend(n[k]);
   })(asAst(exprOrAst));
   return [...out];

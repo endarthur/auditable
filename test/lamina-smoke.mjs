@@ -188,7 +188,7 @@ try {
     for (let i = 0; i < 20000; i++) csv += `${i},${i % 50 === 0 ? 'Y' : 'N'}\n`;   // 1-in-50 matches → scattered
     window._lamina.open('scatter.csv', new TextEncoder().encode(csv));
     const box = document.getElementById('filter');
-    box.value = 'keep == Y'; box.dispatchEvent(new Event('input'));   // as if typed → × appears
+    box.value = 'keep == "Y"'; box.dispatchEvent(new Event('input'));   // as if typed → × appears (text values are quoted)
     await window._lamina.applyFilter(box.value);
     const vs = window._laminaVS;
     const rows = vs.rowCount();
@@ -208,7 +208,7 @@ try {
     for (let i = 0; i < 3000; i++) csv += `${i},${i % 5},${['ox', 'sulf'][i % 2]}\n`;
     window._lamina.open('grades.csv', new TextEncoder().encode(csv));
     const base = window._laminaVS.rowCount();
-    await window._lamina.applyFilter('grade >= 3 && lito == ox');         // i%5∈{3,4} and i even
+    await window._lamina.applyFilter('grade >= 3 && lito == "ox"');       // i%5∈{3,4} and i even (&& + quoted text via @gcu/expr)
     let expect = 0; for (let i = 0; i < 3000; i++) if ((i % 5) >= 3 && (i % 2) === 0) expect++;
     const vs = window._laminaVS;
     const first = await vs.ensureRow(0);
@@ -429,7 +429,7 @@ try {
     await new Promise((r) => setTimeout(r, 40));
     return { label, hidden: !document.getElementById('help').classList.contains('show'), rows: window._laminaVS.rowCount(), filter: document.getElementById('filter').value };
   });
-  (sclick.label === 'ox' && sclick.rows === 100 && /lito in ox/.test(sclick.filter))
+  (sclick.label === 'ox' && sclick.rows === 100 && /lito in "ox"/.test(sclick.filter))
     ? ok(`stats → click "${sclick.label}" filters to it (${sclick.rows} rows, "${sclick.filter}")`)
     : fail(`stat click-filter failed: ${JSON.stringify(sclick)}`);
 
@@ -451,7 +451,7 @@ try {
     const selCount = document.querySelectorAll('#helpBody .sfilter.sel').length;
     return { rows, filter, stillOpen, selCount };
   });
-  (multi.rows === 200 && /lito in ox, sulf/.test(multi.filter) && multi.stillOpen && multi.selCount === 2)
+  (multi.rows === 200 && /lito in "ox", "sulf"/.test(multi.filter) && multi.stillOpen && multi.selCount === 2)
     ? ok(`stats multi-select: ox + sulf → "${multi.filter}" (${multi.rows} rows, panel stays open)`)
     : fail(`multi-select failed: ${JSON.stringify(multi)}`);
 

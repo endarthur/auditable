@@ -16,7 +16,7 @@
 
 // Keyword operators + the words after `is` — matched case-insensitively. A column
 // literally named one of these must use the ["…"] bracket escape.
-const RESERVED = new Set(['and', 'or', 'not', 'between', 'contains', 'matches', 'is', 'blank', 'filled', 'true', 'false']);
+const RESERVED = new Set(['and', 'or', 'not', 'between', 'contains', 'in', 'matches', 'is', 'blank', 'filled', 'true', 'false']);
 
 // Pure total functions: name → [minArgs, maxArgs]. Carried (if/round/int/abs +
 // date parts) + geo math (log/exp/sqrt/pow/min/max/clamp) + explicit absent
@@ -40,7 +40,8 @@ function fail(msg) { throw new ExprParseError(msg); }
 // surrounding space (`a - 5`); `a-5` lexes as the single ident "a-5". A `["…"]`
 // bracket escapes any column name (spaces, punctuation, leading digit, keyword).
 function tokenize(src) {
-  const re = /(\s+)|(\[\s*"[^"]*"\s*\])|("[^"]*")|(<=|>=|!=|<|>|=)|([-+*/().,])|(\d+(?:\.\d+)?)|([A-Za-z_][A-Za-z0-9_-]*)/y;
+  // Multi-char ops first (longest match): && || == <= >= != !~ , then single < > = ~.
+  const re = /(\s+)|(\[\s*"[^"]*"\s*\])|("[^"]*")|(&&|\|\||==|<=|>=|!=|!~|<|>|=|~)|([-+*/().,])|(\d+(?:\.\d+)?)|([A-Za-z_][A-Za-z0-9_-]*)/y;
   const toks = [];
   let last = 0;
   while (last < src.length) {
@@ -110,18 +111,22 @@ export function parse(src) {
   }
   function comparison() {
     const l = add();
-    if (op('<') || op('>') || op('<=') || op('>=') || op('=') || op('!=')) {
-      const o = toks[i].v; i++; return { t: 'cmp', op: o, l, r: add() };
+    if (op('<') || op('>') || op('<=') || op('>=') || op('=') || op('==') || op('!=')) {
+      let o = toks[i].v; i++; if (o === '==') o = '=';                  // == is an alias for =
+      return { t: 'cmp', op: o, l, r: add() };
     }
-    if (word('between')) { i++; const lo = add(); if (!word('and')) fail("expected 'and' in between"); i++; return { t: 'between', e: l, lo, hi: add() }; }
+    if (op('~')) { i++; return { t: 'contains', l, r: add() }; }        // a ~ b  (substring / membership)
+    if (op('!~')) { i++; return { t: 'not', e: { t: 'contains', l, r: add() } }; }
+    if (word('between')) { i++; const lo = add(); if (!(word('and') || op('&&'))) fail("expected 'and' in between"); i++; return { t: 'between', e: l, lo, hi: add() }; }
     if (word('contains')) { i++; return { t: 'contains', l, r: add() }; }
+    if (word('in')) { i++; const set = [add()]; while (op(',')) { i++; set.push(add()); } return { t: 'in', e: l, set }; }
     if (word('matches')) { i++; if (!toks[i] || toks[i].k !== 'str') fail("'matches' needs a string literal"); const re = toks[i].v; i++; return { t: 'matches', e: l, re }; }
     if (word('is')) { i++; if (word('blank')) { i++; return { t: 'isblank', e: l }; } if (word('filled')) { i++; return { t: 'isfilled', e: l }; } fail("'is' must be followed by 'blank' or 'filled'"); }
     return l;
   }
   function notE() { if (word('not')) { i++; return { t: 'not', e: comparison() }; } return comparison(); }
-  function andE() { let l = notE(); while (word('and')) { i++; l = { t: 'and', l, r: notE() }; } return l; }
-  function orE() { let l = andE(); while (word('or')) { i++; l = { t: 'or', l, r: andE() }; } return l; }
+  function andE() { let l = notE(); while (word('and') || op('&&')) { i++; l = { t: 'and', l, r: notE() }; } return l; }
+  function orE() { let l = andE(); while (word('or') || op('||')) { i++; l = { t: 'or', l, r: andE() }; } return l; }
   function expr() { return orE(); }
 
   const ast = expr();

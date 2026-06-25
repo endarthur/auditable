@@ -84,6 +84,38 @@ test('compile — case-insensitive field binding + zero per-row allocation shape
   assert.equal(compile('ghost + 1', ['a'])([5]), null);
 });
 
+test('lamina-dialect operators — && || == ~ !~ in (superset of parseFilter)', () => {
+  const cols = ['grade', 'lito', 'code'];
+  const row = { grade: 2, lito: 'OXIDE', code: 'DDH0042' };
+  const f = (s) => compileBool(s, cols)([row.grade, row.lito, row.code]);
+  // && / || / == aliases
+  assert.equal(f('grade > 1 && lito == "OXIDE"'), true);
+  assert.equal(f('grade > 5 || lito == "OXIDE"'), true);
+  assert.equal(f('grade == 2'), true);
+  // ~ / !~ contains
+  assert.equal(f('code ~ "DDH"'), true);
+  assert.equal(f('code !~ "RC"'), true);
+  // in set membership (members quoted, as lamina's stats panel emits)
+  assert.equal(f('lito in "OXIDE", "SULF"'), true);
+  assert.equal(f('lito in "SULF", "TRANS"'), false);
+  // tree-walk agrees
+  assert.equal(evalBool('grade > 1 && lito in "OXIDE", "SULF"', row), true);
+  // deps sees `in` members + column
+  assert.deepEqual(deps('lito in "a", "b"'), ['lito']);
+});
+
+test('decimal-comma locale — comma-decimal field strings read numerically', () => {
+  // a BR/EU CSV: the field arrives as the string "3,5"
+  assert.equal(evaluate('grade * 2', { grade: '3,5' }, { decimal: ',' }), 7);
+  assert.equal(compileBool('grade > 3', ['grade'], { decimal: ',' })(['3,5']), true);
+  // default (dot) leaves "3,5" non-numeric → blank, never a throw
+  assert.equal(evaluate('grade * 2', { grade: '3,5' }), null);
+  // a real number value is untouched by comma mode (3.5 never becomes 35)
+  assert.equal(evaluate('grade * 2', { grade: 3.5 }, { decimal: ',' }), 7);
+  // string columns aren't coerced lazily — only where a number is needed
+  assert.equal(evalBool('lito == "OXIDE"', { lito: 'OXIDE' }, { decimal: ',' }), true);
+});
+
 test('blank-propagation invariant — a missing grade never becomes 0', () => {
   // the load-bearing safety rule: arithmetic on a blank stays blank
   assert.equal(evaluate('grade * tonnes', { tonnes: 100 }), null);

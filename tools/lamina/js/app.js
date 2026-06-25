@@ -8,7 +8,8 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider, LOADING } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider, LOADING } from '@gcu/lamina';
+import { compileBool, validate } from '@gcu/expr';   // the filter language (superset of the old parseFilter — || / parens / functions / between, on top of && / == / ~ / in)
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
 import { detectDM, parseHeader, recordRange, decodeRecord } from '@gcu/dm';
@@ -264,13 +265,17 @@ function copyText(text) {
   if (grid) grid.focus();
 }
 
-// Filter to the right-clicked cell's value (numeric → ==, else quoted ==).
+// A column reference for the filter grammar: a bare ident if safe, else the
+// ["…"] bracket escape (geo columns are "Cu (ppm)", "a Domains", …).
+function colRef(name) { return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(name) ? name : `[${JSON.stringify(name)}]`; }
+
+// Filter to the right-clicked cell's value (numeric → bare number, else quoted).
 function filterByValue(uc, val) {
   const name = current.baseVs.header(uc).label;
   const numeric = current.schema[uc] && current.schema[uc].type === 'number';
   const expr = (numeric && val !== '' && !Number.isNaN(Number(val)))
-    ? `${name} == ${val}`
-    : `${name} == "${String(val).replace(/"/g, '')}"`;
+    ? `${colRef(name)} == ${val}`
+    : `${colRef(name)} == "${String(val).replace(/"/g, '')}"`;
   $('#filter').value = expr; syncFilterClear(); applyFilter(expr);
 }
 
@@ -309,7 +314,7 @@ function showColumnMenu(uc, x, y) {
   ];
   if (c.sort && c.sort.col === uc) items.push({ label: 'Clear sort', action: () => { c.sort = null; recompute(); } });
   items.push({ sep: true }, { label: `Statistics — ${name}…`, action: () => showColumnStats(uc) });
-  items.push({ label: `Filter by ${name}…`, action: () => setFilterText(`${name} `) });
+  items.push({ label: `Filter by ${name}…`, action: () => setFilterText(`${colRef(name)} `) });
   const isNum = c.schema[uc] && c.schema[uc].type === 'number';       // force-type override (fixes a mis-detected column)
   items.push(isNum ? { label: 'Treat as text', action: () => setColType(uc, 'string') }
                    : { label: 'Treat as number', action: () => setColType(uc, 'number') });
@@ -382,9 +387,10 @@ async function applyFilter(str) {
   if (!c) return;
   if (!str.trim()) { $('#filter').classList.remove('err'); c.filterResult = null; return recompute(); }
   const cols = c.d.kind === 'delimited' ? c.d.schema : [{ name: 'line' }];
+  const v = validate(str, cols);                          // parse + unknown-column → red box, friendly message
+  if (!v.ok) return filterErr(new Error(v.errors[0].message));
   let predicate;
-  try { predicate = parseFilter(str, cols, c.d.decimal); } catch (e) { return filterErr(e); }
-  if (!predicate) { c.filterResult = null; return recompute(); }
+  try { predicate = compileBool(str, cols, { decimal: c.d.decimal }); } catch (e) { return filterErr(e); }
   $('#filter').classList.remove('err');
   $('#meta').textContent = 'filtering…';
   try {
@@ -869,9 +875,10 @@ const HELP = {
     `Type an expression in the <b>filter</b> box — <b>Enter</b> applies, <b>Esc</b> clears.<br><br>`
     + `A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br>`
     + `Operators: <code>==</code> <code>!=</code> <code>&gt;</code> <code>&gt;=</code> <code>&lt;</code> <code>&lt;=</code> <code>~</code> (contains) <code>!~</code> (not contains).<br>`
-    + `Combine with <code>&amp;&amp;</code> — all must hold: <code>grade >= 1 && lito == OXIDE</code>.<br>`
-    + `Match a set with <code>in</code>: <code>lito in OXIDE, SULF</code> (or click several values in a column's Statistics panel).<br><br>`
-    + `Values that look numeric compare numerically, otherwise as text. Column names are case-insensitive; quote values with spaces: <code>name == "Main Zone"</code>.<br>`
+    + `Combine with <code>&amp;&amp;</code> / <code>and</code> and <code>||</code> / <code>or</code>; group with parentheses: <code>(grade >= 1 || cu &gt; 0.3) && lito == "OXIDE"</code>.<br>`
+    + `Ranges: <code>grade between 1 and 5</code>. Sets: <code>lito in "OXIDE", "SULF"</code> (or click values in a column's Statistics panel). Patterns: <code>hole matches "^DDH"</code>. Blanks: <code>au is blank</code> / <code>au is filled</code>.<br>`
+    + `Functions: <code>round</code> <code>int</code> <code>abs</code> <code>sqrt</code> <code>log</code> <code>min</code> <code>max</code> <code>clamp</code> <code>if(c, a, b)</code> — e.g. <code>sqrt(au) > 0.5</code>.<br><br>`
+    + `<b>Quote text values</b> — a bare word is a <i>column name</i> (so <code>fe &gt; cu</code> compares two columns), a quoted word is text: <code>lito == "OXIDE"</code>. Column names are case-insensitive; bracket awkward ones: <code>["Cu (ppm)"] &gt; 30</code>.<br>`
     + `Right-click a column header for <b>Filter by &lt;col&gt;…</b> to prefill it.`],
   keys: ['Keyboard & mouse',
     `<b>Ctrl+O</b> — open a file<br><b>Enter</b> / <b>Esc</b> in the filter box — apply / clear<br>`
@@ -909,7 +916,7 @@ function applyStatFilter() {
   if (!current || _statsCol == null) return;
   const name = current.baseVs.header(_statsCol).label;
   if (_statsSelected.size === 0) { $('#filter').value = ''; syncFilterClear(); return applyFilter(''); }
-  const expr = `${name} in ${[...(_statsSelected)].join(', ')}`;
+  const expr = `${colRef(name)} in ${[...(_statsSelected)].map((v) => JSON.stringify(v)).join(', ')}`;
   $('#filter').value = expr; syncFilterClear(); applyFilter(expr);
 }
 

@@ -10,7 +10,8 @@ export function deps(exprOrAst) {
   (function descend(n) {
     if (!n || typeof n !== 'object') return;
     if (n.t === 'field') { out.add(n.name); return; }
-    if (Array.isArray(n.args)) for (const a of n.args) descend(a);
+    if (Array.isArray(n.args)) for (const a of n.args) descend(a);   // function-call args
+    if (Array.isArray(n.set)) for (const a of n.set) descend(a);     // `in` set members
     for (const k of ['e', 'l', 'r', 'lo', 'hi']) if (n[k]) descend(n[k]);
   })(asAst(exprOrAst));
   return [...out];
