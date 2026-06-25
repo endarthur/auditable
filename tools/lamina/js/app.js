@@ -708,12 +708,18 @@ function gotoRow(n) {
 $('#goto').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value) { gotoRow(Number(e.target.value)); } });
 
 // ── file pick ──
+// Type hints for the OS dialog (lamina still opens anything — All Files stays).
+const PICK_TYPES = [
+  { description: 'Tables', accept: { 'text/csv': ['.csv', '.tsv', '.tab', '.txt'], 'application/octet-stream': ['.dm', '.lam', '.lamina'] } },
+  { description: 'Archives', accept: { 'application/octet-stream': ['.zip', '.tar', '.gz', '.zst', '.xz', '.bz2'] } },
+];
 async function pickFile() {
   if (window.showOpenFilePicker) {
-    try { const [h] = await window.showOpenFilePicker(); if (h) openFile(await h.getFile()); } catch { /* cancelled */ }
+    try { const [h] = await window.showOpenFilePicker({ types: PICK_TYPES }); if (h) openFile(await h.getFile()); } catch { /* cancelled */ }
   } else {
     const inp = document.createElement('input');
     inp.type = 'file';
+    inp.accept = '.csv,.tsv,.tab,.txt,.dm,.lam,.lamina,.zip,.tar,.gz,.zst,.xz,.bz2';
     inp.onchange = () => { if (inp.files[0]) openFile(inp.files[0]); };
     inp.click();
   }
@@ -772,7 +778,7 @@ const HELP = {
     + `<b>row # box</b> — jump to a row<br>Selected cells <b>copy</b> as TSV (Ctrl+C).`],
   about: ['About lamina',
     `<b>lamina</b> — open any file, however large, and scroll, filter, and sort it. Windowed, read-only, offline.<br><br>`
-    + `Delimited → grid, text → lines, binary → hex. Reads inside zip / tar / gz / zst / xz / bz2, and windows huge compressed entries without unpacking. Detects GSLIB / Geo-EAS + whitespace dumps and skips <code>#</code> comment preambles.<br><br>`
+    + `Delimited → grid, text → lines, binary → hex. Opens <b>Datamine .dm</b> tables directly. Reads inside zip / tar / gz / zst / xz / bz2, and windows huge compressed entries without unpacking. Detects GSLIB / Geo-EAS + whitespace dumps and skips <code>#</code> comment preambles.<br><br>`
     + `Part of the Geoscientific Chaos Union — <code>gentropic.org</code>.`],
 };
 function showOverlay(title, html) {
