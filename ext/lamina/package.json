@@ -1,7 +1,7 @@
 {
   "name": "@gcu/lamina",
-  "version": "0.0.1",
-  "description": "A windowed, read-only viewer for arbitrarily huge files — record-offset block index over @gcu/vfs streaming + @gcu/loom. The finest stratum: thin slices (windows) of a file. delimited → grid, text → lines, binary → hex.",
+  "version": "0.1.0",
+  "description": "Open any file — even a multi-gigabyte one — and scroll, filter, and sort it. A windowed, read-only viewer: a coarse record-offset block index (~1 MB at 500M rows) + @gcu/loom. delimited → grid, text → lines, binary → hex; reads inside zip/tar/gz/zst/xz/bz2, and windows huge compressed entries without unpacking. The finest stratum: thin slices (windows) of a file.",
   "type": "module",
   "main": "index.js",
   "license": "MIT",
