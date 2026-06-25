@@ -7,4 +7,5 @@ export { parse, asAst, tokenize, CALLFNS, ExprParseError } from './parse.js';
 export { evaluate, evalBool, constraintValid } from './eval.js';
 export { compile, compileValue, compileBool } from './compile.js';
 export { deps, validate } from './analyze.js';
+export { complete } from './complete.js';
 export { isBlank, num, FN } from './runtime.js';

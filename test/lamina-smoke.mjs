@@ -629,6 +629,30 @@ try {
     ? ok(`gutter: grade→histogram (${gut.gradeBins} bins, ≈) · lito→top-${gut.litoSegs} bar · provider feeds loom`)
     : fail(`gutter failed: ${JSON.stringify(gut)}`);
 
+  // ── autocomplete (expr.complete) + smart-validate: values from the gutter sample,
+  //    column suggestions, and the "quote it as text" footgun hint ──
+  await page.evaluate(() => {
+    let csv = 'grade,lito\n';
+    for (let i = 0; i < 300; i++) csv += `${(i * 0.1).toFixed(1)},${['OXIDE', 'SULF', 'TRANS'][i % 3]}\n`;
+    window._lamina.open('ac.csv', new TextEncoder().encode(csv));
+  });
+  await page.waitForTimeout(150);   // gutter sample (the value list) must be ready
+  const ac = await page.evaluate(async () => {
+    const inp = document.getElementById('filter');
+    const fire = (val) => { inp.value = val; inp.setSelectionRange(val.length, val.length); inp.dispatchEvent(new Event('input')); };
+    fire('lito = ');                                     // value position → the column's sampled values, quoted
+    const valShown = document.getElementById('acPopup').classList.contains('show');
+    const valOpts = [...document.querySelectorAll('#acPopup .ac-item .ac-val')].map((e) => e.textContent);
+    fire('gr');                                          // operand prefix → columns
+    const colOpts = [...document.querySelectorAll('#acPopup .ac-item .ac-val')].map((e) => e.textContent);
+    fire('');                                            // clear the box back
+    await window._lamina.applyFilter('lito = ox');       // bare ox = unknown column → footgun hint
+    return { valShown, valOpts, colOpts, errMeta: document.getElementById('meta').textContent };
+  });
+  (ac.valShown && ac.valOpts.includes('"OXIDE"') && ac.colOpts.includes('grade') && /quote it as "ox"/.test(ac.errMeta))
+    ? ok(`autocomplete: lito= → values [${ac.valOpts.join(', ')}]; "gr" → ${ac.colOpts.join(', ')}; smart-validate hints "quote it as text"`)
+    : fail(`autocomplete/smart-validate failed: ${JSON.stringify(ac)}`);
+
   // ── responsive: a phone-width viewport → the toolbar wraps to two rows, the
   //    grid drops below it, nothing overflows horizontally ──
   await page.setViewportSize({ width: 360, height: 720 });

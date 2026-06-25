@@ -99,6 +99,11 @@ validate(srcOrAst, columns?)     // → { ok, errors: [{kind:'parse'|'column', m
 tokenize(src)                    // → [{kind, value, start, end}] — classified, positioned, tolerant
 //   kinds: column · string · number · operator · punct · keyword · function · boolean · error.
 //   For syntax highlighting + autocomplete; works on a half-typed expression.
+complete(src, pos, {columns, values})   // → { from, to, options:[{value, kind, detail}] }
+//   context-aware suggestions: columns / functions / keywords / operators, and — in
+//   a value position (after `col =`, `col in (`, …) — the column's VALUES, quoted.
+//   values: (col)=>string[] | {col:[…]}. The quoted-value suggestions are what close
+//   the bare-word-vs-quoted footgun (you pick "OXIDE" instead of typing bare ox).
 ```
 
 `evaluate` resolves columns by exact case; `compile` resolves **case-insensitively**

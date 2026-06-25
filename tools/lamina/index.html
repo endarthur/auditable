@@ -106,6 +106,20 @@
   #calcManager .cm-foot button { font-family: var(--mono); font-size: 12px; color: #d8c08a; background: #242424; border: 1px solid #5a4d2e; border-radius: 3px; padding: 5px 12px; cursor: pointer; }
   #calcManager .cm-foot button:hover { background: #2e2e2e; }
 
+  #acPopup {
+    position: fixed; z-index: 50; display: none; flex-direction: column; max-height: 240px; overflow-y: auto;
+    background: #1c1c1c; border: 1px solid #3a3a3a; border-radius: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    font-family: var(--mono); font-size: 12px;
+  }
+  #acPopup.show { display: flex; }
+  #acPopup .ac-item { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+  #acPopup .ac-item.sel, #acPopup .ac-item:hover { background: #2e2e2e; }
+  #acPopup .ac-val { color: #ddd; }
+  #acPopup .ac-val.ac-value { color: #8cb878; }       /* a data value — green, like cells */
+  #acPopup .ac-val.ac-function { color: #c89b3c; }    /* gold, like derived */
+  #acPopup .ac-val.ac-keyword, #acPopup .ac-val.ac-operator { color: #6aa0cf; }   /* info blue */
+  #acPopup .ac-kind { color: #666; font-size: 10px; }
+
   .ctxmenu {
     position: fixed; z-index: 40; min-width: 160px; background: #1c1c1c; border: 1px solid #333;
     border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); font-family: var(--mono); font-size: 12px;
@@ -255,6 +269,7 @@
   <div id="picker"><div class="pk-box"><div class="pk-title">choose a file from the archive</div><div class="pk-list" id="pickerList"></div></div></div>
 
   <footer><span id="meta">—</span><span class="spacer"></span><span id="build" title="lamina build">dev</span></footer>
+  <div id="acPopup"></div>
 
   <script type="module" src="./js/app.js"></script>
 </body>

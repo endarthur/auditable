@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parse, evaluate, evalBool, constraintValid, compile, compileBool, deps, validate, tokenize } from '../ext/expr/src/main.js';
+import { parse, evaluate, evalBool, constraintValid, compile, compileBool, deps, validate, tokenize, complete } from '../ext/expr/src/main.js';
 
 const fx = JSON.parse(readFileSync(new URL('./fixtures/expr.json', import.meta.url), 'utf8'));
 
@@ -142,6 +142,32 @@ test('tokenize — classified, positioned tokens for highlighting (tolerant)', (
   // function vs column, and tolerant on a half-typed expression
   assert.deepEqual(tokenize('round(au,').filter((t) => t.kind === 'function').map((t) => t.value), ['round']);
   assert.ok(tokenize('grade > @@@').some((t) => t.kind === 'error'));
+});
+
+test('complete — context-aware suggestions (columns / functions / values / operators)', () => {
+  const ctx = { columns: [{ name: 'grade', type: 'number' }, { name: 'lito', type: 'string' }, { name: 'Cu (ppm)', type: 'number' }], values: { lito: ['OXIDE', 'SULF', 'TRANS'] } };
+  const vals = (s, p) => complete(s, p == null ? s.length : p, ctx).options.map((o) => o.value);
+
+  // operand position (start) → columns + functions; awkward name bracketed
+  const start = complete('', 0, ctx).options;
+  assert.ok(start.some((o) => o.value === 'grade' && o.kind === 'column'));
+  assert.ok(start.some((o) => o.value === '["Cu (ppm)"]'));
+  assert.ok(start.some((o) => o.value === 'sqrt(' && o.kind === 'function'));
+
+  // prefix filters columns
+  assert.deepEqual(vals('gr'), ['grade']);
+
+  // VALUE position after `lito = ` → the column's values, quoted (footgun closed)
+  assert.deepEqual(vals('lito = '), ['"OXIDE"', '"SULF"', '"TRANS"']);
+  assert.deepEqual(vals('lito = "OX'), ['"OXIDE"']);                 // partial value, prefix
+  assert.deepEqual(vals('lito in ('), ['"OXIDE"', '"SULF"', '"TRANS"']);   // in-list value position
+
+  // operator position (operand just ended) → comparisons + keywords
+  const afterCol = complete('grade ', 6, ctx).options.map((o) => o.value);
+  assert.ok(afterCol.includes('between') && afterCol.includes('>') && afterCol.includes('is blank'));
+
+  // numeric column has no value list → falls through (offers columns, not a crash)
+  assert.doesNotThrow(() => complete('grade = ', 8, ctx));
 });
 
 test('decimal-comma locale — comma-decimal field strings read numerically', () => {

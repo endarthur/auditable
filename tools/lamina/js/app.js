@@ -9,7 +9,7 @@
 
 import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
-import { compile, compileBool, validate, deps } from '@gcu/expr';   // the filter + calc-column language (superset of the old parseFilter — || / parens / functions / between, on top of && / == / ~ / in)
+import { compile, compileBool, validate, deps, complete } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
 import { detectDM, parseHeader, recordRange, decodeRecord } from '@gcu/dm';
@@ -398,7 +398,7 @@ async function applyFilter(str) {
   if (!str.trim()) { $('#filter').classList.remove('err'); c.filterResult = null; return recompute(); }
   const cols = c.d.kind === 'delimited' ? c.d.schema : [{ name: 'line' }];
   const v = validate(str, cols);                          // parse + unknown-column → red box, friendly message
-  if (!v.ok) return filterErr(new Error(v.errors[0].message));
+  if (!v.ok) return filterErr(new Error(friendlyError(v.errors, cols)));
   let predicate;
   try { predicate = compileBool(str, cols, { decimal: c.d.decimal }); } catch (e) { return filterErr(e); }
   $('#filter').classList.remove('err');
@@ -694,7 +694,7 @@ async function previewCalc() {
 
   if (!expr.trim()) { status.className = 'ce-status'; status.textContent = nameErr || 'enter an expression'; prev.textContent = ''; $('#ceCommit').disabled = true; return; }
   const v = validate(expr, c.schema);
-  if (!v.ok) { $('#ceExpr').classList.add('err'); status.className = 'ce-status err'; status.textContent = v.errors[0].message; prev.textContent = ''; $('#ceCommit').disabled = true; return; }
+  if (!v.ok) { $('#ceExpr').classList.add('err'); status.className = 'ce-status err'; status.textContent = friendlyError(v.errors, c.schema); prev.textContent = ''; $('#ceCommit').disabled = true; return; }
 
   let fn; try { fn = compile(expr, c.schema, { decimal: c.d.decimal }); } catch (e) { status.className = 'ce-status err'; status.textContent = e.message; prev.textContent = ''; $('#ceCommit').disabled = true; return; }
   const used = deps(expr);
@@ -725,6 +725,93 @@ $('#ceExpr').addEventListener('keydown', (e) => { if (e.key === 'Enter') commitC
 $('#ceCommit').onclick = commitCalc;
 $('#ceCancel').onclick = closeCalcEditor;
 $('#addCalc').onclick = () => openCalcEditor(null);   // toolbar entry (header right-click is the contextual one)
+
+// ── autocomplete (expr.complete) on the filter + calc-expr inputs ───────────────
+// The value suggestions come from the gutter sample (a column's top categories),
+// so picking "OXIDE" from a list is how you avoid the bare-word-vs-quoted footgun.
+function columnValues(name) {
+  const c = current; if (!c || !c.gutter || !c.schema) return [];
+  const lc = String(name).toLowerCase();
+  const i = c.schema.findIndex((s) => s.name.toLowerCase() === lc);
+  return (i >= 0 && c.gutter[i] && c.gutter[i].values) || [];
+}
+const filterCtx = () => (current ? { columns: current.d.schema, values: columnValues } : null);
+const calcCtx = () => (current ? { columns: current.schema, values: columnValues } : null);
+
+const _ac = { input: null, res: null, sel: 0 };
+function attachAutocomplete(input, getCtx) {
+  input.addEventListener('input', () => acRefresh(input, getCtx));
+  input.addEventListener('keydown', (e) => acKeydown(e, input), true);   // capture: beat apply-on-Enter / commit-on-Enter
+  input.addEventListener('click', () => acRefresh(input, getCtx));
+  input.addEventListener('blur', () => setTimeout(acClose, 120));         // delay so a popup click lands first
+}
+function acRefresh(input, getCtx) {
+  if (_ac.suppress) return;                               // mid-accept: don't reopen (so Enter can then apply/commit)
+  const ctx = getCtx(); if (!ctx) return acClose();
+  const res = complete(input.value, input.selectionStart, ctx);
+  if (!res.options.length) return acClose();
+  _ac.input = input; _ac.res = res; _ac.sel = 0; acRender(input);
+}
+function acRender(input) {
+  const pop = $('#acPopup'); pop.innerHTML = '';
+  _ac.res.options.forEach((o, i) => {
+    const row = document.createElement('div'); row.className = 'ac-item' + (i === _ac.sel ? ' sel' : '');
+    const v = document.createElement('span'); v.className = 'ac-val ' + ('ac-' + o.kind); v.textContent = o.value;
+    const k = document.createElement('span'); k.className = 'ac-kind'; k.textContent = o.detail || o.kind;
+    row.appendChild(v); row.appendChild(k);
+    row.onmousedown = (e) => { e.preventDefault(); acAccept(i); };
+    pop.appendChild(row);
+  });
+  const r = input.getBoundingClientRect();
+  pop.style.left = Math.min(r.left, innerWidth - 300) + 'px';
+  pop.style.top = (r.bottom + 2) + 'px';
+  pop.style.minWidth = Math.min(Math.max(r.width, 180), 320) + 'px';
+  pop.classList.add('show');
+}
+function acClose() { const p = $('#acPopup'); if (p) p.classList.remove('show'); _ac.res = null; }
+function acKeydown(e, input) {
+  if (!_ac.res || !$('#acPopup').classList.contains('show')) return;     // closed → let the key through (Enter applies/commits)
+  const n = _ac.res.options.length;
+  if (e.key === 'ArrowDown') { e.preventDefault(); e.stopImmediatePropagation(); _ac.sel = (_ac.sel + 1) % n; acRender(input); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopImmediatePropagation(); _ac.sel = (_ac.sel - 1 + n) % n; acRender(input); }
+  else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopImmediatePropagation(); acAccept(_ac.sel); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); acClose(); }
+}
+function acAccept(i) {
+  const input = _ac.input, res = _ac.res; if (!res) return;
+  const o = res.options[i]; if (!o) return;
+  const spaceAfter = (o.kind === 'operator' || o.kind === 'keyword') && !o.value.endsWith('(');
+  const ins = o.value + (spaceAfter ? ' ' : '');
+  input.value = input.value.slice(0, res.from) + ins + input.value.slice(res.to);
+  const caret = res.from + ins.length;
+  input.focus(); input.setSelectionRange(caret, caret);
+  _ac.suppress = true; input.dispatchEvent(new Event('input')); _ac.suppress = false;   // sync syncFilterClear/previewCalc, but don't reopen
+  acClose();                                  // accepted → close; type a char to get the next suggestions
+}
+attachAutocomplete($('#filter'), filterCtx);
+attachAutocomplete($('#ceExpr'), calcCtx);
+
+// ── smart-validate: turn a bare error into a helpful one (closest column, or
+//    "quote it as text" — the footgun hint). ──
+function lev(a, b) {
+  const m = a.length, n = b.length; if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+function friendlyError(errors, cols) {
+  const e = errors[0];
+  if (e.kind !== 'column') return e.message;
+  const names = cols.map((c) => (typeof c === 'string' ? c : c.name));
+  const lb = e.name.toLowerCase();
+  let near = names.find((n) => n.toLowerCase().startsWith(lb)) || names.find((n) => n.toLowerCase().includes(lb));
+  if (!near) { let bd = 1e9; for (const n of names) { const d = lev(n.toLowerCase(), lb); if (d < bd) { bd = d; near = n; } } if (bd > Math.max(2, Math.ceil(lb.length / 2))) near = null; }
+  return e.message + (near ? ` — did you mean ${near}?` : ` — quote it as "${e.name}" if you meant text`);
+}
 
 // Single-stream decoders that have NO browser streaming primitive (only gzip/
 // deflate do via DecompressionStream) → resident-only, size-guarded.
@@ -1167,7 +1254,7 @@ async function computeGutterStats(source, schema, dataStart, decimal) {
     }
     const tot = [...a.freq.values()].reduce((s, v) => s + v, 0) || 1;
     const top = [...a.freq.entries()].sort((x, y) => y[1] - x[1]).slice(0, 8);
-    return { kind: 'cat', segments: top.map(([, nn]) => nn / tot), nullRate, approx: true };
+    return { kind: 'cat', segments: top.map(([, nn]) => nn / tot), values: top.map(([v]) => v), nullRate, approx: true };
   });
 }
 
