@@ -464,3 +464,41 @@ test('detect + parseFields: a UTF-8 BOM is stripped from the first column', () =
   // and a record whose bytes start with the BOM decodes clean
   assert.deepEqual(parseFields(new Uint8Array([0xEF, 0xBB, 0xBF, ...B('a,b,c')])), ['a', 'b', 'c']);
 });
+
+// ── detect: comment/preamble skip (the geology-export norm) ──
+
+test('detect: a #-comment preamble is skipped → real header + dataStart', () => {
+  const csv = B('# exported from FooMine\n# encoding: UTF-8\n# block size: 10\nId,X,Y,grade\n0,612105,9291005,1.2\n1,612115,9291005,0.8\n');
+  const d = detectKind(csv);
+  assert.equal(d.kind, 'delimited');
+  assert.equal(d.skip, 3);                                   // three '# …' lines
+  assert.equal(d.comment, '#');
+  assert.equal(d.hasHeader, true);
+  assert.equal(d.dataStart, 4);                              // 3 preamble + 1 header → first data is record 4
+  assert.deepEqual(d.schema.map((s) => s.name), ['Id', 'X', 'Y', 'grade']);
+  assert.equal(d.schema[3].type, 'number');
+});
+
+test('detect: force skip + force comment override', () => {
+  // a preamble with no comment char — force skip
+  const csv = B('junk line one\njunk two\nId,X\n0,1\n2,3\n');
+  const d = detectKind(csv, { force: { skip: 2 } });
+  assert.equal(d.skip, 2);
+  assert.equal(d.dataStart, 3);
+  assert.deepEqual(d.schema.map((s) => s.name), ['Id', 'X']);
+
+  // a ';'-comment preamble
+  const semi = B('; note\n; note 2\na,b\n1,2\n');
+  const d2 = detectKind(semi, { force: { comment: ';' } });
+  assert.equal(d2.skip, 2);
+  assert.deepEqual(d2.schema.map((s) => s.name), ['a', 'b']);
+});
+
+test('detect: a viewsource over a preamble file shows data rows, not comments', async () => {
+  const csv = B('# a\n# b\nId,v\n10,x\n20,y\n30,z\n');
+  const src = buildMemorySource(csv, { kind: 'delimited', delimiter: ',', blockSize: 2 });
+  const d = detectKind(csv);
+  const vs = createRecordViewSource(src, { schema: d.schema, dataStart: d.dataStart });
+  assert.equal(vs.rowCount(), 3);                            // 3 data rows (comments + header skipped)
+  assert.deepEqual(await vs.ensureRow(0), ['10', 'x']);     // first data row, not a comment
+});

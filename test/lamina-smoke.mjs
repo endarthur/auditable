@@ -252,6 +252,20 @@ try {
     ? ok(`.tar.gz → decompress → tar entry auto-opened (${targz.name})`)
     : fail(`.tar.gz failed: ${JSON.stringify(targz)}`);
 
+  // ── #-comment preamble (the block-model export norm) → real header skipped to ──
+  const pre = await page.evaluate(async () => {
+    let csv = '';
+    for (let i = 0; i < 12; i++) csv += `# meta line ${i}\n`;        // preamble
+    csv += 'Id,X,Y,grade\n';                                          // real header
+    for (let i = 0; i < 500; i++) csv += `${i},${612105 + i * 10},9291005,${(i * 0.01).toFixed(2)}\n`;
+    window._lamina.open('blockmodel.csv', new TextEncoder().encode(csv));
+    const vs = window._laminaVS;
+    return { cols: vs.cols, rows: vs.rowCount(), header: window._lamina.grid.provider.header(0).label, first: await vs.ensureRow(0) };
+  });
+  (pre.cols === 4 && pre.rows === 500 && pre.header === 'Id' && pre.first[0] === '0' && pre.first[1] === '612105')
+    ? ok(`#-preamble: skipped 12 comments → header "${pre.header}", ${pre.rows} data rows (first ${pre.first.join(',')})`)
+    : fail(`preamble failed: ${JSON.stringify(pre)}`);
+
   // ── interpretation override: a semicolon file forced to ';' + header off ──
   const ovr = await page.evaluate(async () => {
     const bytes = new TextEncoder().encode('a;b;c\n1;2;3\n4;5;6\n');

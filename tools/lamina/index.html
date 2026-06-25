@@ -45,7 +45,9 @@
   }
   #opts.show { display: flex; }
   #opts label { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
-  #opts select { font-family: var(--mono); font-size: 12px; color: #ddd; background: #141414; border: 1px solid #333; border-radius: 3px; padding: 3px 6px; }
+  #opts select, #opts input { font-family: var(--mono); font-size: 12px; color: #ddd; background: #141414; border: 1px solid #333; border-radius: 3px; padding: 3px 6px; }
+  #opts input { width: 72px; }
+  #opts input:focus, #opts select:focus { outline: none; border-color: #4a78b0; }
 
   #grid { position: absolute; left: 0; right: 0; top: 38px; bottom: 24px; }
   #empty, #binary {
@@ -106,6 +108,8 @@
     <label>View as <select id="optKind"><option value="">auto</option><option value="delimited">table</option><option value="text">text</option></select></label>
     <label>Delimiter <select id="optDelim"><option value="">auto</option><option value=",">comma</option><option value=";">semicolon</option><option value="&#9;">tab</option><option value="|">pipe</option></select></label>
     <label>Header <select id="optHeader"><option value="">auto</option><option value="yes">yes</option><option value="no">no</option></select></label>
+    <label>Skip rows <input id="optSkip" type="number" min="0" placeholder="auto"></label>
+    <label>Comment <input id="optComment" type="text" maxlength="2" placeholder="#"></label>
   </div>
 
   <div id="grid"></div>

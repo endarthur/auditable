@@ -56,12 +56,25 @@ function buildDelimited(lines, delimiter, forceHeader) {
   return { kind: 'delimited', delimiter, quote: '"', hasHeader, schema };
 }
 
+// How many leading lines to skip as a comment/preamble (the geology-export norm:
+// a block of `# …` metadata before the real header). Auto: a `comment` prefix
+// (forced, or `#` when line 0 starts with it) → skip leading lines that match.
+function leadingSkip(lines, f) {
+  if (f.skip != null) return { skip: f.skip | 0, comment: f.comment || null };
+  const comment = f.comment != null ? f.comment : (lines[0] && lines[0].startsWith('#') ? '#' : null);
+  if (!comment) return { skip: 0, comment: null };
+  let skip = 0;
+  while (skip < lines.length && lines[skip].startsWith(comment)) skip++;
+  return { skip, comment };
+}
+
 /**
  * @param {Uint8Array} sample  the file's head (e.g. first 64 KB)
  * @param {object} opts  { sniff?, force? }
  *   force overrides auto-detection (when the user corrects a wrong guess):
- *   { kind?: 'delimited'|'text'|'binary', delimiter?: char, hasHeader?: boolean }
- * @returns {{ kind, delimiter?, quote?, schema?, hasHeader? }}
+ *   { kind?: 'delimited'|'text'|'binary', delimiter?, hasHeader?, skip?, comment? }
+ * @returns {{ kind, delimiter?, quote?, schema?, hasHeader?, skip?, comment?, dataStart? }}
+ *   dataStart = records to skip before the first DATA row (preamble + header).
  */
 export function detectKind(sample, { sniff, force } = {}) {
   const f = force || {};
@@ -69,26 +82,30 @@ export function detectKind(sample, { sniff, force } = {}) {
   if (!f.kind && !f.delimiter && looksBinary(sample)) return { kind: 'binary' };
 
   const text = new TextDecoder().decode(sample);   // default decoder strips a leading BOM
-  const lines = text.split('\n').slice(0, 50).map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
+  const all = text.split('\n').slice(0, 200).map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
+  const { skip, comment } = leadingSkip(all, f);
+  const lines = all.slice(skip);                    // the body, past the preamble
 
-  if (f.kind === 'text') return { kind: 'text' };
-  if (f.delimiter) return buildDelimited(lines, f.delimiter, f.hasHeader);   // user forced a delimiter
+  if (f.kind === 'text') return { kind: 'text', skip, comment, dataStart: skip };
+
+  const finish = (r) => ({ ...r, skip, comment, dataStart: skip + (r.hasHeader ? 1 : 0) });
+  if (f.delimiter) return finish(buildDelimited(lines, f.delimiter, f.hasHeader));
 
   // recon enrichment (best-effort): if it finds a delimiter + fields, prefer it.
   if (typeof sniff === 'function') {
     try {
       const m = sniff(lines);
       if (m && m.delimiter && Array.isArray(m.fields) && m.fields.length > 1) {
-        return {
+        return finish({
           kind: 'delimited', delimiter: m.delimiter, quote: '"',
           hasHeader: f.hasHeader != null ? f.hasHeader : m.hasHeader !== false,
           schema: m.fields.map((fl) => ({ name: fl.name, type: fl.type || 'string', unit: fl.unit, role: fl.role })),
-        };
+        });
       }
     } catch { /* fall through to builtin */ }
   }
 
   const d = sniffDelimiter(lines.filter((l) => l !== ''));
-  if (!d) return { kind: 'text' };
-  return buildDelimited(lines, d.delimiter, f.hasHeader);
+  if (!d) return { kind: 'text', skip, comment, dataStart: skip };
+  return finish(buildDelimited(lines, d.delimiter, f.hasHeader));
 }

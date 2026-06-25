@@ -78,7 +78,7 @@ function showBinary(name, totalBytes) {
 function mount(name, d, src, totalBytes) {
   const kind = d.kind;                                  // 'delimited' | 'text'
   const schema = kind === 'delimited' ? d.schema : [{ name: 'line', type: 'string' }];
-  const dataStart = kind === 'delimited' && d.hasHeader ? 1 : 0;
+  const dataStart = d.dataStart != null ? d.dataStart : (kind === 'delimited' && d.hasHeader ? 1 : 0);
   const baseVs = createRecordViewSource(src, { schema, dataStart });
   current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterMatches: null, sort: null, file: null, bytes: null, force: {} };
   $('#filter').value = ''; $('#filter').classList.remove('err');     // fresh file → clear filter + sort
@@ -415,12 +415,16 @@ function openOpts() {
   $('#optKind').value = f.kind || '';
   $('#optDelim').value = f.delimiter || '';
   $('#optHeader').value = f.hasHeader === true ? 'yes' : f.hasHeader === false ? 'no' : '';
+  $('#optSkip').value = f.skip != null ? f.skip : '';
+  $('#optComment').value = f.comment != null ? f.comment : '';
   $('#opts').classList.toggle('show');
 }
 $('#kindBadge').onclick = () => { if (current) openOpts(); };
 $('#optKind').onchange = (e) => reopen({ kind: e.target.value });
 $('#optDelim').onchange = (e) => reopen({ delimiter: e.target.value });
 $('#optHeader').onchange = (e) => reopen({ hasHeader: e.target.value === 'yes' ? true : e.target.value === 'no' ? false : '' });
+$('#optSkip').onchange = (e) => reopen({ skip: e.target.value === '' ? '' : Math.max(0, e.target.value | 0) });   // '' = auto
+$('#optComment').onchange = (e) => reopen({ comment: e.target.value });                                           // '' = none/auto
 document.addEventListener('click', (e) => { if (!$('#opts').contains(e.target) && e.target.id !== 'kindBadge') $('#opts').classList.remove('show'); });
 
 // Go to a 1-based row: select it (loom scrolls the selection into view).
