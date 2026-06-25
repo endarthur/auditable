@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, createRecordViewSource, createLaminaProvider } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, createRecordViewSource, createLaminaProvider } from '@gcu/lamina';
 
 const $ = (s) => document.querySelector(s);
 let grid = null;
@@ -20,40 +20,54 @@ function fmtBytes(n) {
   return (n / 1073741824).toFixed(2) + ' GB';
 }
 
-// Open raw bytes (the single entry point — Open…, drag-drop, and the test hook).
-function open(name, bytes) {
+function showBinary(name, totalBytes) {
+  if (grid) { grid.destroy(); grid = null; }
+  $('#fileName').textContent = name;
+  $('#empty').style.display = 'none';
+  $('#grid').innerHTML = '';
+  $('#binary').style.display = 'flex';
+  const badge = $('#kindBadge'); badge.style.display = ''; badge.textContent = 'binary';
+  $('#meta').textContent = `${fmtBytes(totalBytes)} · binary`;
+}
+
+// Mount a built source (memory or streaming) read-only. The source shape is the
+// same either way, so this is shared.
+function mount(name, d, src, totalBytes) {
   if (grid) { grid.destroy(); grid = null; }
   $('#fileName').textContent = name;
   $('#binary').style.display = 'none';
   $('#empty').style.display = 'none';
-
-  const d = detectKind(bytes.subarray(0, 65536));
-  const badge = $('#kindBadge');
-  badge.style.display = '';
+  const badge = $('#kindBadge'); badge.style.display = '';
   badge.textContent = d.kind === 'delimited' ? `CSV · ${d.delimiter === '\t' ? 'TSV' : 'delimited'}` : d.kind;
-
-  if (d.kind === 'binary') {
-    $('#grid').innerHTML = '';
-    $('#binary').style.display = 'flex';
-    $('#meta').textContent = `${fmtBytes(bytes.length)} · binary`;
-    return;
-  }
 
   const kind = d.kind;                                  // 'delimited' | 'text'
   const schema = kind === 'delimited' ? d.schema : [{ name: 'line', type: 'string' }];
   const dataStart = kind === 'delimited' && d.hasHeader ? 1 : 0;
-  const src = buildMemorySource(bytes, { kind, delimiter: d.delimiter || ',', quote: d.quote || '"' });
   const vs = createRecordViewSource(src, { schema, dataStart });
-  const provider = createLaminaProvider(vs, { PENDING });
-  grid = createGrid($('#grid'), provider, { readOnly: true, theme: 'dark', defaultColW: kind === 'text' ? 900 : 130 });
-
-  $('#meta').textContent = `${vs.rowCount().toLocaleString()} rows × ${vs.cols} cols · ${fmtBytes(bytes.length)} · ${d.kind}`;
+  grid = createGrid($('#grid'), createLaminaProvider(vs, { PENDING }), { readOnly: true, theme: 'dark', defaultColW: kind === 'text' ? 900 : 130 });
+  $('#meta').textContent = `${vs.rowCount().toLocaleString()} rows × ${vs.cols} cols · ${fmtBytes(totalBytes)} · ${d.kind}`;
   window._laminaVS = vs;                                // automation hook
 }
 
+// Open raw bytes — memory source (the test hook + small files).
+function open(name, bytes) {
+  const d = detectKind(bytes.subarray(0, 65536));
+  if (d.kind === 'binary') return showBinary(name, bytes.length);
+  mount(name, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
+}
+
+// Open a File — STREAMING source (never resident; the huge-file path). Detect off
+// the head slice, then stream the whole to build the block index.
 async function openFile(file) {
-  // Proto: read the whole file (memory-sized). Streaming source is increment 4.
-  open(file.name, new Uint8Array(await file.arrayBuffer()));
+  const sample = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
+  const d = detectKind(sample);
+  if (d.kind === 'binary') return showBinary(file.name, file.size);
+  $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
+  const src = await buildFileSource(file, {
+    kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"',
+    onProgress: (r, t) => { $('#meta').textContent = `indexing… ${t ? Math.round((100 * r) / t) : 0}%`; },
+  });
+  mount(file.name, d, src, file.size);
 }
 
 // ── file pick ──

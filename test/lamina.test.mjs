@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRecordScanner, scanRecords, splitRecords, parseFields } from '../ext/lamina/src/scan.js';
 import { detectKind } from '../ext/lamina/src/detect.js';
-import { buildMemorySource } from '../ext/lamina/src/source.js';
+import { buildMemorySource, buildFileSource } from '../ext/lamina/src/source.js';
 import { createRecordViewSource, LOADING } from '../ext/lamina/src/viewsource.js';
 import { createLaminaProvider } from '../ext/lamina/src/provider.js';
 
@@ -202,4 +202,32 @@ test('provider: maps LOADING → injected PENDING; cells + header + dims', async
   assert.equal(p.cellAt(99, 0), null);
   assert.deepEqual(p.header(0), { label: 'id', type: 'number' });
   assert.equal(p.rowHeader(1), 2);
+});
+
+// ── streaming source (File.stream — never resident) ──
+
+test('buildFileSource: streaming scan === memory scan; readRange serves slices', async () => {
+  let csv = 'id,x\n';
+  for (let i = 0; i < 3000; i++) csv += `${i},v${i}\n`;
+  const bytes = B(csv);
+  const file = new File([bytes], 'big.csv');
+  const mem = buildMemorySource(bytes, { kind: 'delimited', blockSize: 256 });
+  const strm = await buildFileSource(file, { kind: 'delimited', blockSize: 256 });
+  assert.equal(strm.rowCount, mem.rowCount);
+  assert.equal(strm.totalBytes, mem.totalBytes);
+  assert.deepEqual([...strm.blockOffsets], [...mem.blockOffsets]);
+  const off = strm.blockOffsets[3];
+  const r = await strm.readRange(off, 16);                      // lazy slice
+  assert.deepEqual([...r], [...bytes.subarray(off, off + 16)]);
+});
+
+test('buildFileSource: a viewsource over a streamed File windows a deep row', async () => {
+  let csv = 'n\n';
+  for (let i = 0; i < 5000; i++) csv += `${i}\n`;
+  const file = new File([B(csv)], 'col.csv');
+  const src = await buildFileSource(file, { kind: 'text', blockSize: 512 });
+  const vs = createRecordViewSource(src, { schema: [{ name: 'n', type: 'number' }], dataStart: 1 });
+  assert.equal(vs.rowCount(), 5000);
+  assert.equal(vs.rowAt(4321), LOADING);                        // deep, not loaded
+  assert.deepEqual(await vs.ensureRow(4321), ['4321']);         // windowed via File.slice
 });

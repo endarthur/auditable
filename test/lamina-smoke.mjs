@@ -83,6 +83,22 @@ try {
   });
   bin.binaryShown ? ok('binary file → hex-handoff message shown') : fail('binary not handled');
 
+  // ── a streamed File (never-resident path) → block index + deep windowed row ──
+  const stream = await page.evaluate(async () => {
+    let csv = 'n,v\n';
+    for (let i = 0; i < 6000; i++) csv += `${i},x${i}\n`;
+    const file = new File([new TextEncoder().encode(csv)], 'stream.csv');
+    await window._lamina.openFile(file);                 // streams file.stream() → block index
+    const vs = window._laminaVS;
+    const R = 5000;                                      // a deep, unloaded block
+    const before = vs.rowAt(R);                          // LOADING
+    const row = await vs.ensureRow(R);                   // windowed via File.slice (lazy)
+    return { rows: vs.rowCount(), wasPending: typeof before === 'symbol', n: row[0], v: row[1] };
+  });
+  (stream.rows === 6000 && stream.wasPending && stream.n === '5000' && stream.v === 'x5000')
+    ? ok(`streamed File → ${stream.rows} rows; deep row 5000 windowed via File.slice (n=${stream.n})`)
+    : fail(`streaming open failed: ${JSON.stringify(stream)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
