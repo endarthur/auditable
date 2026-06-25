@@ -355,6 +355,21 @@ try {
     ? ok(`menubar: File/View populate · View→Interpretation opens the popover · Help→filter overlay opens+closes`)
     : fail(`menubar failed: ${JSON.stringify(menu)}`);
 
+  // ── autofit all columns / reset widths ──
+  const fit = await page.evaluate(async () => {
+    window._lamina.open('w.csv', new TextEncoder().encode('short,a_very_long_header_name_here\nx,y\n1,2\n'));
+    await window._laminaVS.ensureRow(0);
+    const before = Object.keys(window._lamina.grid.getColWidths()).length;   // no custom widths yet
+    window._lamina.autofitAll();
+    const after = window._lamina.grid.getColWidths();
+    window._lamina.resetColWidths();
+    const reset = Object.keys(window._lamina.grid.getColWidths()).length;
+    return { before, fitCount: Object.keys(after).length, w1: after[1], reset };
+  });
+  (fit.before === 0 && fit.fitCount === 2 && fit.w1 > 0 && fit.reset === 0)
+    ? ok(`autofit: all ${fit.fitCount} columns sized (long header → ${fit.w1}px), reset clears widths`)
+    : fail(`autofit failed: ${JSON.stringify(fit)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

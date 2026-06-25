@@ -158,6 +158,10 @@ function rerender() { if (current && current.view) mountView(current.view, curre
 function hideColumn(uc) { if (current) { current.hidden.add(uc); rerender(); } }
 function showColumn(uc) { if (current) { current.hidden.delete(uc); rerender(); } }
 function showAllColumns() { if (current) { current.hidden.clear(); rerender(); } }
+// Size every visible column to its content (header + visible cells — cheap, loom
+// samples only what's on screen). Reset returns them to the default width.
+function autofitAll() { if (!grid) return; const n = grid.provider.dims().cols; for (let c = 0; c < n; c++) grid.autofitColumn(c); }
+function resetColWidths() { if (grid) grid.setColWidths({}); }
 
 // Right-click a column header → sort / filter-by / hide / show.
 function showColumnMenu(uc, x, y) {
@@ -174,6 +178,7 @@ function showColumnMenu(uc, x, y) {
     if (c.hidden.has(i)) items.push({ label: `Show ${c.baseVs.header(i).label}`, action: () => showColumn(i) });
   }
   if (c.hidden.size) items.push({ label: 'Show all columns', action: () => showAllColumns() });
+  items.push({ sep: true }, { label: 'Autofit all columns', action: () => autofitAll() });
   showMenu(x, y, items);
 }
 
@@ -529,6 +534,9 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; applyFilter(''); } },
   { label: 'Clear sort', action: () => { if (current) { current.sort = null; recompute(); } } },
+  { sep: true },
+  { label: 'Autofit all columns', action: () => autofitAll() },
+  { label: 'Reset column widths', action: () => resetColWidths() },
   { label: 'Show all columns', action: () => showAllColumns() },
 ]);
 $('#mHelp').onclick = () => menuAt($('#mHelp'), [
@@ -552,6 +560,7 @@ const HELP = {
     + `<b>Click a column header</b> — sort (cycles ascending → descending → off)<br>`
     + `<b>Right-click a column header</b> — sort · filter by · hide / show columns<br>`
     + `<b>Click the kind badge</b> (top right) — change how the file is read (delimiter, header, skip rows, comment)<br>`
+    + `<b>Drag a column border</b> — resize · <b>double-click a border</b> — autofit that column · <b>View → Autofit all columns</b><br>`
     + `<b>row # box</b> — jump to a row<br>Selected cells <b>copy</b> as TSV (Ctrl+C).`],
   about: ['About lamina',
     `<b>lamina</b> — open any file, however large, and scroll, filter, and sort it. Windowed, read-only, offline.<br><br>`
@@ -589,4 +598,4 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') $('#help').classList.remove('show');
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, autofitAll, resetColWidths, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
