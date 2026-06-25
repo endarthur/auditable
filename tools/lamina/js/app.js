@@ -680,6 +680,7 @@ function menuAt(btn, items) { const r = btn.getBoundingClientRect(); showMenu(r.
 const hasFile = () => !!current;
 $('#mFile').onclick = () => menuAt($('#mFile'), [
   { label: 'Open…    Ctrl+O', action: pickFile },
+  { label: 'New window', action: () => window.open(location.href, '_blank') },
 ]);
 $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
@@ -830,3 +831,12 @@ window.addEventListener('keydown', (e) => {
 });
 
 window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+
+// File Handling API: when the installed PWA is launched by opening a .lam/.lamina
+// file (manifest file_handlers), the handle(s) arrive here. No-op in a normal tab.
+if ('launchQueue' in window && 'LaunchParams' in window) {
+  window.launchQueue.setConsumer(async (params) => {
+    if (!params || !params.files || !params.files.length) return;
+    try { openFile(await params.files[0].getFile()); } catch { /* permission / not a file */ }
+  });
+}

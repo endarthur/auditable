@@ -371,7 +371,7 @@ try {
     document.getElementById('helpClose').click();
     return { fileItems, viewItems, optsOpen, helpShown, helpHasOps, helpClosed: !document.getElementById('help').classList.contains('show') };
   });
-  (menu.fileItems.some((t) => t.startsWith('Open')) && menu.viewItems.includes('Clear sort') && menu.optsOpen && menu.helpShown && menu.helpHasOps && menu.helpClosed)
+  (menu.fileItems.some((t) => t.startsWith('Open')) && menu.fileItems.includes('New window') && menu.viewItems.includes('Clear sort') && menu.optsOpen && menu.helpShown && menu.helpHasOps && menu.helpClosed)
     ? ok(`menubar: File/View populate · View→Interpretation opens the popover · Help→filter overlay opens+closes`)
     : fail(`menubar failed: ${JSON.stringify(menu)}`);
 

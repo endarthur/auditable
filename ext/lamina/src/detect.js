@@ -152,7 +152,7 @@ export function detectKind(sample, { sniff, force, name } = {}) {
   // A .csv/.tsv/.tab extension is a strong "this is a table" signal — accept the
   // best delimiter even when column counts are inconsistent (ragged/quoted rows),
   // where a generic sniff would bail to text. Otherwise require ≥0.6 consistency.
-  const csvHint = /\.(csv|tsv|tab)$/i.test(name || '');
+  const csvHint = /\.(csv|tsv|tab|lam|lamina)$/i.test(name || '');   // .lam/.lamina = lamina's marker ext (delimited data)
   if (d && (d.consistent >= 0.6 || (csvHint && d.columns >= 2))) return finish(buildDelimited(lines, d.delimiter, f.hasHeader));
   return { kind: 'text', skip, comment, dataStart: skip };
 }
