@@ -840,3 +840,10 @@ if ('launchQueue' in window && 'LaunchParams' in window) {
     try { openFile(await params.files[0].getFile()); } catch { /* permission / not a file */ }
   });
 }
+
+// Jump-list "Open file…" shortcut (manifest shortcuts → ./?open=1): pop the
+// picker on launch. Best-effort — the launch may not carry a user gesture, in
+// which case the picker is declined silently and the user clicks File → Open.
+if (new URLSearchParams(location.search).has('open')) {
+  try { pickFile(); } catch { /* no activation on launch */ }
+}
