@@ -31,7 +31,13 @@ let current = null;             // { source, d, dataStart, baseVs, label, totalB
 // ~1 MB index comes back). Keeps the tab responsive on tens-of-GB. On file://
 // cross-blob workers are blocked, so we skip it; any worker failure falls back to
 // the inline scan in openFile. ──
-const LAMINA_URL = new URL('../../ext/lamina/index.js', document.baseURI).href;  // matches the import map (relative to the document, not js/app.js)
+// Worker module URL for the off-thread scan. In the single-file build the boot
+// sets __LAMINA_BUNDLE_URL__ to the inlined @gcu/lamina blob URL (importable from
+// the worker, same-origin); in the dev harness it resolves the served bundle
+// against the document (the import map's anchor — app.js is one dir deeper).
+const LAMINA_URL = (typeof window.__LAMINA_BUNDLE_URL__ === 'string')
+  ? window.__LAMINA_BUNDLE_URL__
+  : new URL('../../ext/lamina/index.js', document.baseURI).href;
 const canWorker = location.protocol !== 'file:' && typeof Worker !== 'undefined';
 let _pm = null;
 const pm = () => (_pm ||= new ProcessManager());

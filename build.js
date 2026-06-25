@@ -1618,6 +1618,77 @@ if (target === 'scan') {
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: lamina — the windowed "open any huge file" viewer, single-file
+// ══════════════════════════════════════════════════
+// A registry build (blob URLs + import map, like auditable/works) but tiny: the
+// app (tools/lamina/js) + its four library bundles + fflate. The dev harness's
+// bare specifiers (@gcu/loom, …) and the ./idb-cache.js relative import are
+// rewritten to '#'-form and resolved by the inline import map. The boot also
+// exposes the @gcu/lamina blob URL as window.__LAMINA_BUNDLE_URL__ so the
+// off-thread scan worker can import it (same-origin blob → module-call).
+// Output: lamina.html (standalone, offline). The PWA shell (manifest/sw/icon)
+// is added by the gentropic/lamina deploy repo, exactly as works does.
+if (target === 'lamina') {
+  const lamDir = path.join(__dirname, 'tools/lamina');
+  const lamJsDir = path.join(lamDir, 'js');
+
+  // Specifier → registry name. Order of `libs` is the import/exec order; `app`
+  // is appended last so its imports resolve against an already-populated map.
+  const SPEC = {
+    '@gcu/loom': '#loom', '@gcu/lamina': '#lamina', '@gcu/proc': '#proc',
+    '@gcu/archive': '#archive', 'fflate': '#fflate', './idb-cache.js': '#idb-cache',
+  };
+  const libs = [
+    ['loom',    'ext/loom/index.js'],
+    ['lamina',  'ext/lamina/index.js'],
+    ['proc',    'ext/proc/index.js'],
+    ['archive', 'ext/archive/index.js'],
+    ['fflate',  'ext/archive/vendor/fflate.module.mjs'],
+  ];
+  const modules = [];
+  for (const [name, rel] of libs) {
+    const p = path.join(__dirname, rel);
+    if (!fs.existsSync(p)) { console.error(`Error: ${rel} not found — build the ext package first.`); process.exit(1); }
+    modules.push({ name, source: fs.readFileSync(p, 'utf8').replace(/^\n+/, '').replace(/\n+$/, '') });
+  }
+  modules.push({ name: 'idb-cache', source: fs.readFileSync(path.join(lamJsDir, 'idb-cache.js'), 'utf8').trim() });
+
+  // The app: rewrite each `from '<spec>'` to its '#'-form (the import map keys).
+  let appSrc = fs.readFileSync(path.join(lamJsDir, 'app.js'), 'utf8');
+  for (const [from, to] of Object.entries(SPEC)) appSrc = appSrc.split(`from '${from}'`).join(`from '${to}'`);
+  modules.push({ name: 'app', source: appSrc.trim() });
+
+  // Boot: registry → blob URLs → import map (+ the worker bundle URL) → import all.
+  const entries = modules.map((m) =>
+    JSON.stringify(m.name) + ': ' + JSON.stringify(m.source).replace(/<\/script>/gi, '<\\/script>'));
+  const order = JSON.stringify(modules.map((m) => m.name));
+  const boot =
+    '(async () => {\n' +
+    'const _S = {\n' + entries.join(',\n') + '\n};\n' +
+    'const _O = ' + order + ';\n' +
+    'const _U = {};\n' +
+    "for (const n of _O) _U[n] = URL.createObjectURL(new Blob([_S[n] + '\\n//# sourceURL=lamina/' + n + '.js\\n'], { type: 'application/javascript' }));\n" +
+    'window.__LAMINA_BUNDLE_URL__ = _U["lamina"];\n' +   // the off-thread scan imports this from its worker
+    "const _m = document.createElement('script'); _m.type = 'importmap';\n" +
+    'const _im = {}; for (const n of _O) _im["#" + n] = _U[n];\n' +
+    "_m.textContent = JSON.stringify({ imports: _im }); document.body.appendChild(_m);\n" +
+    'for (const n of _O) await import(_U[n]);\n' +
+    '_m.remove();\n' +
+    '})();\n';
+
+  // Template: strip the dev import map + the module <script src>, inline the boot.
+  let html = fs.readFileSync(path.join(lamDir, 'index.html'), 'utf8');
+  html = html.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
+  html = html.replace(/<script type="module" src="\.\/js\/app\.js"><\/script>/,
+    '<script>\n' + boot + '</script>');
+
+  const outPath = path.join(__dirname, 'lamina.html');
+  fs.writeFileSync(outPath, html);
+  console.log(`Built lamina.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB, ${modules.length} modules)`);
+  process.exit(0);
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: auditable editions (editions/auditable-<name>.html)
 // ══════════════════════════════════════════════════
 // A pre-bundled "edition" = the base notebook with a curated set of extensions
