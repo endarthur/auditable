@@ -111,12 +111,12 @@ async function recompute() {
   let view = c.baseVs;
   let info = {};
   const fr = c.filterResult;                            // { offsets, lengths, nums } or null
-  if (c.sort) {
+  if (c.sort && c.sort.length) {                         // c.sort is an array of { col, dir } keys (multi-column)
     $('#meta').textContent = 'sorting…';
     try {
-      const numeric = (c.schema[c.sort.col] && c.schema[c.sort.col].type) === 'number';
+      const keys = c.sort.map((s) => ({ col: s.col, dir: s.dir, numeric: (c.schema[s.col] && c.schema[s.col].type) === 'number' }));
       const order = await scanSortKeys(c.source, {
-        col: c.sort.col, dir: c.sort.dir, dataStart: c.dataStart, numeric, decimal: c.d.decimal, rows: fr ? fr.nums : null,
+        keys, dataStart: c.dataStart, decimal: c.d.decimal, rows: fr ? fr.nums : null,
         onProgress: (b, n) => { $('#meta').textContent = `sorting… ${n ? Math.round((100 * b) / n) : 0}%`; },
       });
       view = createResultView(c.source, order, c.schema);
@@ -160,7 +160,7 @@ function mountView(vs, info = {}) {
       }
       return cell;
     },
-    header(dc) { const uc = vis[dc]; const h = base.header(uc); if (c.sort && c.sort.col === uc) h.sort = c.sort.dir; return h; },
+    header(dc) { const uc = vis[dc]; const h = base.header(uc); const sk = c.sort && c.sort.find((s) => s.col === uc); if (sk) h.sort = sk.dir; return h; },
     headerGutter(dc) { const uc = vis[dc]; return (showGutter && c.gutter) ? (c.gutter[uc] || null) : null; },
     rowHeader(r) { return base.rowHeader(r); },
     onReady(cb) { return base.onReady(cb); },
@@ -185,7 +185,7 @@ function mountView(vs, info = {}) {
   const shownRows = vs.rowCount();
   const baseRows = c.baseVs.rowCount();
   let rows = info.filtered ? `${shownRows.toLocaleString()} of ${baseRows.toLocaleString()} rows (filtered)` : `${shownRows.toLocaleString()} rows`;
-  if (info.sorted) rows += ` · sorted ${c.sort.dir} by ${c.schema[c.sort.col].name}`;
+  if (info.sorted && c.sort) rows += ` · sorted by ${c.sort.map((s) => c.schema[s.col].name + (s.dir === 'desc' ? ' ↓' : ' ↑')).join(', ')}`;
   const cols = c.hidden.size ? `${vis.length} of ${total} cols` : `${vis.length} cols`;
   const skipped = c.d.skip ? ` · ${c.d.skip} ${c.d.comment ? c.d.comment + '-' : ''}comment lines skipped` : '';
   const kindLabel = c.d.dm ? 'dm' : c.d.kind;
@@ -316,11 +316,17 @@ function resetColWidths() { if (current) current.colWidths = {}; if (grid) grid.
 function showColumnMenu(uc, x, y) {
   const c = current; if (!c) return;
   const name = c.baseVs.header(uc).label;
+  const sorted = c.sort || [];
   const items = [
-    { label: `Sort ${name} ↑`, action: () => { c.sort = { col: uc, dir: 'asc' }; recompute(); } },
-    { label: `Sort ${name} ↓`, action: () => { c.sort = { col: uc, dir: 'desc' }; recompute(); } },
+    { label: `Sort ${name} ↑`, action: () => { c.sort = [{ col: uc, dir: 'asc' }]; recompute(); } },
+    { label: `Sort ${name} ↓`, action: () => { c.sort = [{ col: uc, dir: 'desc' }]; recompute(); } },
   ];
-  if (c.sort && c.sort.col === uc) items.push({ label: 'Clear sort', action: () => { c.sort = null; recompute(); } });
+  if (sorted.length && !sorted.some((s) => s.col === uc)) {           // add as a tiebreaker after the current keys
+    items.push(
+      { label: `Then by ${name} ↑`, action: () => { c.sort = [...sorted, { col: uc, dir: 'asc' }]; recompute(); } },
+      { label: `Then by ${name} ↓`, action: () => { c.sort = [...sorted, { col: uc, dir: 'desc' }]; recompute(); } });
+  }
+  if (sorted.length) items.push({ label: 'Clear sort', action: () => { c.sort = null; recompute(); } });
   items.push({ sep: true }, { label: `Statistics — ${name}…`, action: () => showColumnStats(uc) });
   items.push({ label: `Filter by ${name}…`, action: () => setFilterText(`${colRef(name)} `) });
   const isNum = c.schema[uc] && c.schema[uc].type === 'number';       // force-type override (fixes a mis-detected column)
@@ -385,10 +391,13 @@ function showMenu(x, y, items) { closeMenu(); openLevel(items, x, y, 0); setTime
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 
 // Cycle a column's sort: none → asc → desc → none. Switching columns starts asc.
+// Cycle the PRIMARY sort on a column: none → asc → desc → none (replaces any
+// multi-key sort). Secondary keys are added via the header menu's "Then by".
 function toggleSort(col) {
   const c = current; if (!c) return;
-  if (!c.sort || c.sort.col !== col) c.sort = { col, dir: 'asc' };
-  else if (c.sort.dir === 'asc') c.sort = { col, dir: 'desc' };
+  const cur = c.sort && c.sort.length === 1 && c.sort[0].col === col ? c.sort[0] : null;
+  if (!cur) c.sort = [{ col, dir: 'asc' }];
+  else if (cur.dir === 'asc') c.sort = [{ col, dir: 'desc' }];
   else c.sort = null;
   return recompute();
 }
@@ -591,7 +600,7 @@ function applyCalcs() {
     c.source = withCalcCursor(c._src0, baseCount, compiled);
     c.baseVs = withCalcView(c._vs0, baseCount, compiled);
   }
-  if (c.sort && c.sort.col >= c.schema.length) c.sort = null;     // a removed calc → drop a now-dangling sort
+  if (c.sort) { c.sort = c.sort.filter((s) => s.col < c.schema.length); if (!c.sort.length) c.sort = null; }   // a removed calc → drop dangling sort keys
   const box = $('#filter').value;                                 // a filter that referenced a removed calc → clear it (don't strand a red box)
   if (box.trim() && !validate(box, c.schema).ok) { $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear(); }
   const r = applyFilter($('#filter').value);                      // re-validate + re-run the filter, then recompute (sort)

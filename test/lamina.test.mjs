@@ -685,3 +685,19 @@ test('calc chaining: a later calc references an earlier one', async () => {
   await src.eachRecord({ dataStart: 1 }, (disp, fields) => got.push(fields));
   assert.deepEqual(got[0], ['5', 10, 11]);                   // a=5, dbl=10, plus1=10+1=11
 });
+
+test('scanSortKeys: MULTI-key — sort by lito asc, then grade desc (ties broken)', async () => {
+  const csv = 'lito,grade\nB,1\nA,3\nB,9\nA,2\nB,5\n';   // rows: (B,1)(A,3)(B,9)(A,2)(B,5)
+  const src = buildMemorySource(B(csv), { kind: 'delimited', delimiter: ',', blockSize: 2 });
+  const order = await scanSortKeys(src, {
+    keys: [{ col: 0, dir: 'asc', numeric: false }, { col: 1, dir: 'desc', numeric: true }], dataStart: 1,
+  });
+  // A's first (grade desc: 3,2), then B's (grade desc: 9,5,1)
+  const schema = [{ name: 'lito' }, { name: 'grade', type: 'number' }];
+  const v = createResultView(src, order, schema);
+  assert.deepEqual(await v.ensureRow(0), ['A', '3']);
+  assert.deepEqual(await v.ensureRow(1), ['A', '2']);
+  assert.deepEqual(await v.ensureRow(2), ['B', '9']);
+  assert.deepEqual(await v.ensureRow(3), ['B', '5']);
+  assert.deepEqual(await v.ensureRow(4), ['B', '1']);
+});
