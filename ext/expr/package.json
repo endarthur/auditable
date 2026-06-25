@@ -1,0 +1,10 @@
+{
+  "name": "@gcu/expr",
+  "version": "0.1.0",
+  "description": "A small, total, CSP-safe expression calculus over one record's fields — arithmetic, comparisons, boolean (and/or/not), between/contains/matches, is blank/filled, and a pure function set (if/round/int/abs, dates, geo math log/exp/sqrt/pow/min/max/clamp, casts ifnum/coalesce, tests isnum/isnan/isblank/isfilled). Two faces (value + boolean), two paths (tree-walk reference + compiled positional closures, no eval/new Function), analyzable (deps + validate). The shared small tier of the GCU expression stack; powers lamina calc-columns + filters. Carried from hopper's rule engine.",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/expr"
+}

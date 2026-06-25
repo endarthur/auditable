@@ -1,0 +1,57 @@
+{
+  "description": "@gcu/expr evaluation vectors — the carried core (from hopper's rule engine: arithmetic, comparison, boolean, between/contains/matches, is blank/filled, totality) + the GCU additions (geo math, casts, tests, bracket escape, case-insensitive idents). verb: omitted/relevant = evalBool, calculate = evaluate (null = blank), constrain = constraintValid(target).",
+  "vectors": [
+    { "expr": "fe_pct between 0 and 100", "values": { "fe_pct": 64.2 }, "expected": true },
+    { "expr": "fe_pct between 0 and 100", "values": { "fe_pct": 140 }, "expected": false },
+    { "expr": "fe_pct > 60", "values": { "fe_pct": 64.2 }, "expected": true },
+    { "expr": "fe_pct > 60", "values": { "fe_pct": 46.2 }, "expected": false },
+    { "expr": "fe_pct >= 60", "values": { "fe_pct": 60 }, "expected": true },
+    { "expr": "resample = \"yes\"", "values": { "resample": "yes" }, "expected": true },
+    { "expr": "resample = \"yes\"", "values": { "resample": "no" }, "expected": false },
+    { "expr": "resample != \"yes\"", "values": { "resample": "no" }, "expected": true },
+    { "expr": "litho contains \"itabirite\"", "values": { "litho": ["itabirite", "canga"] }, "expected": true },
+    { "expr": "litho contains \"hematitite\"", "values": { "litho": ["itabirite", "canga"] }, "expected": false },
+    { "expr": "site_id is filled", "values": { "site_id": "QF-118" }, "expected": true },
+    { "expr": "site_id is blank", "values": {}, "expected": true },
+    { "expr": "fe_pct > 60 and lithology = \"itabirite\"", "values": { "fe_pct": 64.2, "lithology": "itabirite" }, "expected": true },
+    { "expr": "fe_pct > 60 or lithology = \"canga\"", "values": { "fe_pct": 10, "lithology": "canga" }, "expected": true },
+    { "expr": "not (fe_pct > 60)", "values": { "fe_pct": 10 }, "expected": true },
+
+    { "note": "blank evaluates false for a boolean reading", "verb": "relevant", "expr": "resample = \"yes\"", "values": {}, "expected": false },
+    { "note": "a constraint passes on an empty answer", "verb": "constrain", "target": "fe_pct", "expr": "fe_pct between 0 and 100", "values": {}, "expectedConstraintValid": true },
+    { "note": "a filled answer must satisfy the constraint", "verb": "constrain", "target": "fe_pct", "expr": "fe_pct between 0 and 100", "values": { "fe_pct": 140 }, "expectedConstraintValid": false },
+
+    { "note": "÷0 → blank, never throws (totality)", "verb": "calculate", "expr": "a / b", "values": { "a": 5, "b": 0 }, "expected": null },
+    { "note": "precedence (* before +)", "verb": "calculate", "expr": "a + b * 2", "values": { "a": 1, "b": 3 }, "expected": 7 },
+    { "note": "parens override precedence", "verb": "calculate", "expr": "(a + b) * 2", "values": { "a": 1, "b": 3 }, "expected": 8 },
+    { "note": "subtraction needs surrounding space", "verb": "calculate", "expr": "a - 5", "values": { "a": 12 }, "expected": 7 },
+
+    { "note": "if() picks a branch", "verb": "calculate", "expr": "if(grade > 1, \"ore\", \"waste\")", "values": { "grade": 2.5 }, "expected": "ore" },
+    { "note": "round to 2 dp", "verb": "calculate", "expr": "round(x, 2)", "values": { "x": 3.14159 }, "expected": 3.14 },
+    { "note": "int truncates", "verb": "calculate", "expr": "int(x)", "values": { "x": 3.9 }, "expected": 3 },
+    { "note": "abs", "verb": "calculate", "expr": "abs(x)", "values": { "x": -4.5 }, "expected": 4.5 },
+
+    { "note": "geo: sqrt", "verb": "calculate", "expr": "sqrt(x)", "values": { "x": 9 }, "expected": 3 },
+    { "note": "geo: sqrt of negative → blank (totality)", "verb": "calculate", "expr": "sqrt(x)", "values": { "x": -1 }, "expected": null },
+    { "note": "geo: pow", "verb": "calculate", "expr": "pow(b, e)", "values": { "b": 2, "e": 10 }, "expected": 1024 },
+    { "note": "geo: log of 0 → blank", "verb": "calculate", "expr": "log(x)", "values": { "x": 0 }, "expected": null },
+    { "note": "geo: min over args", "verb": "calculate", "expr": "min(a, b, c)", "values": { "a": 5, "b": 2, "c": 9 }, "expected": 2 },
+    { "note": "geo: max skips blanks", "verb": "calculate", "expr": "max(a, b)", "values": { "a": 5 }, "expected": 5 },
+    { "note": "geo: clamp", "verb": "calculate", "expr": "clamp(x, 0, 10)", "values": { "x": 14 }, "expected": 10 },
+
+    { "note": "cast: ifnum keeps a number", "verb": "calculate", "expr": "ifnum(g, 0)", "values": { "g": 1.5 }, "expected": 1.5 },
+    { "note": "cast: ifnum substitutes for a blank (explicit opt-out of blank-propagation)", "verb": "calculate", "expr": "ifnum(g, 0)", "values": {}, "expected": 0 },
+    { "note": "cast: coalesce takes the first non-blank", "verb": "calculate", "expr": "coalesce(a, b, c)", "values": { "b": 7 }, "expected": 7 },
+    { "note": "blank propagates by default — NO silent NaN→0", "verb": "calculate", "expr": "g + 1", "values": {}, "expected": null },
+
+    { "note": "test: isnum", "expr": "isnum(g)", "values": { "g": 2.1 }, "expected": true },
+    { "note": "test: isnan (present but not numeric)", "expr": "isnan(g)", "values": { "g": "ND" }, "expected": true },
+    { "note": "test: isnan false for a real number", "expr": "isnan(g)", "values": { "g": 3 }, "expected": false },
+    { "note": "test: isblank()", "expr": "isblank(g)", "values": {}, "expected": true },
+
+    { "note": "bracket escape for an awkward column name", "verb": "calculate", "expr": "[\"Cu (ppm)\"] * 2", "values": { "Cu (ppm)": 50 }, "expected": 100 },
+    { "note": "hyphenated column lexes bare (OK-Indic from a real block model)", "expr": "OK-Indic = 1", "values": { "OK-Indic": 1 }, "expected": true },
+    { "note": "keywords are case-insensitive", "expr": "a > 1 AND b < 5", "values": { "a": 2, "b": 3 }, "expected": true },
+    { "note": "matches a regex", "expr": "code matches \"^DDH\"", "values": { "code": "DDH0042" }, "expected": true }
+  ]
+}
