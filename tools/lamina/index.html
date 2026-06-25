@@ -28,16 +28,31 @@
   #toolbar #tbBreak { display: none; }                        /* a flex line-break; only active on narrow (below) */
   #toolbar #filterWrap { flex: 1 1 auto; min-width: 140px; max-width: 460px; position: relative; display: flex; }
   #toolbar #filter {
-    flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; color: #ddd;
-    background: #141414; border: 1px solid #333; border-radius: 3px; padding: 4px 24px 4px 8px;
+    flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px;
+    color: transparent; caret-color: #ddd; background: transparent;   /* text drawn by the #filterHL overlay behind */
+    position: relative; z-index: 1; border: 1px solid #333; border-radius: 3px; padding: 4px 24px 4px 8px;
   }
   #toolbar #filter:focus { outline: none; border-color: #4a78b0; }   /* info */
   #toolbar #filter.err { border-color: #c0584a; }                    /* fault */
   #toolbar #filter::placeholder { color: #555; }
   #toolbar #filterClear {
-    position: absolute; right: 1px; top: 1px; bottom: 1px; width: 22px; padding: 0;
+    position: absolute; right: 1px; top: 1px; bottom: 1px; width: 22px; padding: 0; z-index: 2;   /* above the input */
     background: transparent; border: none; color: #777; font-size: 15px; line-height: 1; cursor: pointer; display: none;
   }
+  /* ── expr syntax-highlight overlay (a colored layer behind a transparent input;
+     monospace + single-line ⇒ aligns by construction, just scroll-synced) ── */
+  .exprhl {
+    position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; white-space: pre;
+    box-sizing: border-box; border: 1px solid transparent; border-radius: 3px; background: #141414;
+    font-family: var(--mono); color: transparent;
+  }
+  #filterHL { padding: 4px 24px 4px 8px; font-size: 12px; }
+  #ceExprHL { padding: 4px 8px; font-size: 12px; }
+  .exprwrap { position: relative; flex: 1; min-width: 0; display: flex; }
+  #filter::selection, #ceExpr::selection { background: rgba(74,120,176,0.35); }   /* let colors show through a selection */
+  .hl-column { color: #ddd; } .hl-string { color: #8cb878; } .hl-number { color: #c0a36e; }
+  .hl-keyword, .hl-operator { color: #6aa0cf; } .hl-function { color: #c89b3c; }
+  .hl-boolean { color: #c0a36e; } .hl-punct { color: #888; } .hl-error { color: #c0584a; }
   #toolbar #filterClear:hover { color: #ddd; }
   #toolbar #filterWrap.has #filterClear { display: block; }
   #toolbar #goto {
@@ -73,6 +88,7 @@
   #calcEditor label { display: flex; align-items: center; gap: 10px; }
   #calcEditor .ce-lab { width: 40px; color: #888; }
   #calcEditor input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; color: #ddd; background: #141414; border: 1px solid #333; border-radius: 3px; padding: 4px 8px; }
+  #calcEditor #ceExpr { color: transparent; caret-color: #ddd; background: transparent; position: relative; z-index: 1; }   /* text drawn by #ceExprHL */
   #calcEditor input:focus { outline: none; border-color: #4a78b0; }     /* info */
   #calcEditor input.err { border-color: #c0584a; }                       /* fault */
   #calcEditor .ce-status { min-height: 15px; color: #8cb878; }           /* go/ok */
@@ -194,7 +210,7 @@
     #toolbar #filterWrap { order: 8; flex: 1 1 0; min-width: 0; max-width: none; }   /* basis 0 so the long placeholder doesn't push the buttons to a 3rd row */
     #filterGo { order: 9; } #addCalc { order: 10; } #toolbar #goto { order: 11; width: 60px; }
     /* 16px inputs stop iOS Safari from zooming the page when one is focused */
-    #toolbar #filter, #toolbar #goto, #calcEditor input, #opts input, #opts select { font-size: 16px; }
+    #toolbar #filter, #toolbar #goto, #calcEditor input, #opts input, #opts select, #filterHL, #ceExprHL { font-size: 16px; }
     /* roomier tap targets */
     #toolbar button, #calcEditor .ce-actions button, #calcManager .cm-acts button, #calcManager .cm-foot button { padding-top: 6px; padding-bottom: 6px; }
     .ctxmenu .item { padding: 8px 12px; }
@@ -222,7 +238,7 @@
     <button class="mb" id="mData">Data</button>
     <button class="mb" id="mView">View</button>
     <button class="mb" id="mHelp">Help</button>
-    <span id="filterWrap"><input id="filter" type="text" spellcheck="false" placeholder="filter…  e.g.  grade > 1  &&  lito == OXIDE"><button id="filterClear" title="clear filter (Esc)" tabindex="-1">×</button></span>
+    <span id="filterWrap"><div id="filterHL" class="exprhl" aria-hidden="true"></div><input id="filter" type="text" spellcheck="false" placeholder="filter…  e.g.  grade > 1 and lito = &quot;OXIDE&quot;"><button id="filterClear" title="clear filter (Esc)" tabindex="-1">×</button></span>
     <button id="filterGo" title="apply filter (Enter)">Filter</button>
     <button id="addCalc" title="Add calculated column — derive a column from a formula">ƒ+ col</button>
     <input id="goto" type="number" min="1" placeholder="row #" title="go to row">
@@ -249,7 +265,7 @@
   <div id="calcEditor">
     <div class="ce-title" id="ceTitle">Add calculated column</div>
     <label><span class="ce-lab">Name</span><input id="ceName" type="text" spellcheck="false" placeholder="e.g. grade_x_dens"></label>
-    <label><span class="ce-lab">Expr</span><input id="ceExpr" type="text" spellcheck="false" placeholder="e.g. grade * density   ·   if(au > 1, &quot;ore&quot;, &quot;waste&quot;)"></label>
+    <label><span class="ce-lab">Expr</span><span class="exprwrap"><div id="ceExprHL" class="exprhl" aria-hidden="true"></div><input id="ceExpr" type="text" spellcheck="false" placeholder="e.g. grade * density   ·   if(au > 1, &quot;ore&quot;, &quot;waste&quot;)"></span></label>
     <div id="ceStatus" class="ce-status"></div>
     <div class="ce-prevhdr">preview · first rows</div>
     <div id="cePreview" class="ce-preview"></div>

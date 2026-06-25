@@ -653,6 +653,21 @@ try {
     ? ok(`autocomplete: lito= → values [${ac.valOpts.join(', ')}]; "gr" → ${ac.colOpts.join(', ')}; smart-validate hints "quote it as text"`)
     : fail(`autocomplete/smart-validate failed: ${JSON.stringify(ac)}`);
 
+  // ── syntax highlighting: the overlay (expr.tokenize) colours the filter text ──
+  const hl = await page.evaluate(() => {
+    const inp = document.getElementById('filter');
+    inp.value = 'grade > 1 and lito = "OXIDE"'; inp.setSelectionRange(0, 0); inp.dispatchEvent(new Event('input'));
+    const hlEl = document.getElementById('filterHL');
+    const by = (cls) => [...hlEl.querySelectorAll('.' + cls)].map((e) => e.textContent);
+    const transparent = getComputedStyle(inp).color === 'rgba(0, 0, 0, 0)';   // text drawn by the overlay, not the input
+    const out = { col: by('hl-column'), str: by('hl-string'), kw: by('hl-keyword'), num: by('hl-number'), transparent };
+    inp.value = ''; inp.dispatchEvent(new Event('input'));        // clean up AFTER reading the spans
+    return out;
+  });
+  (hl.transparent && hl.col.join() === 'grade,lito' && hl.str.join() === '"OXIDE"' && hl.kw.join() === 'and' && hl.num.join() === '1')
+    ? ok(`highlight: overlay colours columns [${hl.col}], string ${hl.str}, keyword ${hl.kw}, number ${hl.num} (no CM6)`)
+    : fail(`highlight failed: ${JSON.stringify(hl)}`);
+
   // ── responsive: a phone-width viewport → the toolbar wraps to two rows, the
   //    grid drops below it, nothing overflows horizontally ──
   await page.setViewportSize({ width: 360, height: 720 });

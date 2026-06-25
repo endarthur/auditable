@@ -9,7 +9,7 @@
 
 import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
-import { compile, compileBool, validate, deps, complete } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete
+import { compile, compileBool, validate, deps, complete, tokenize } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
 import { detectDM, parseHeader, recordRange, decodeRecord } from '@gcu/dm';
@@ -680,6 +680,7 @@ async function previewCalc() {
   _calcDraft = { ok: false };
   const name = $('#ceName').value.trim();
   const expr = $('#ceExpr').value;
+  syncHL($('#ceExpr'), $('#ceExprHL'));                 // keep the highlight layer in step
   const status = $('#ceStatus'), prev = $('#cePreview');
   $('#ceName').classList.remove('err'); $('#ceExpr').classList.remove('err');
 
@@ -790,6 +791,29 @@ function acAccept(i) {
 }
 attachAutocomplete($('#filter'), filterCtx);
 attachAutocomplete($('#ceExpr'), calcCtx);
+
+// ── syntax highlighting: a colored layer (driven by expr.tokenize) behind the
+// transparent-text input. No CM6 — monospace + single-line makes the overlay align
+// by construction; we just keep it scroll-synced. ──
+function renderExprHL(hl, src) {
+  if (!hl) return;
+  const toks = tokenize(src);
+  let html = '', pos = 0;
+  for (const t of toks) {
+    if (t.start > pos) html += esc(src.slice(pos, t.start));   // whitespace / gaps
+    html += `<span class="hl-${t.kind}">${esc(t.value)}</span>`;
+    pos = t.end;
+  }
+  if (pos < src.length) html += esc(src.slice(pos));
+  hl.innerHTML = html;
+}
+function syncHL(input, hl) { renderExprHL(hl, input.value); hl.scrollLeft = input.scrollLeft; }
+// caret moves / horizontal scroll without a value change → keep the layer aligned
+for (const [inId, hlId] of [['filter', 'filterHL'], ['ceExpr', 'ceExprHL']]) {
+  const inp = $('#' + inId), hl = $('#' + hlId);
+  const s = () => { hl.scrollLeft = inp.scrollLeft; };
+  inp.addEventListener('scroll', s); inp.addEventListener('keyup', s); inp.addEventListener('click', s);
+}
 
 // ── smart-validate: turn a bare error into a helpful one (closest column, or
 //    "quote it as text" — the footgun hint). ──
@@ -1325,7 +1349,7 @@ function setFilterText(text) {
   if (!document.execCommand('insertText', false, text)) inp.value = text;   // fallback
   syncFilterClear();
 }
-function syncFilterClear() { $('#filterWrap').classList.toggle('has', $('#filter').value.length > 0); }
+function syncFilterClear() { $('#filterWrap').classList.toggle('has', $('#filter').value.length > 0); syncHL($('#filter'), $('#filterHL')); }
 $('#filter').addEventListener('input', syncFilterClear);
 $('#filter').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') applyFilter(e.target.value);
