@@ -1001,9 +1001,12 @@ async function pickFile() {
   if (window.showOpenFilePicker) {
     try { const [h] = await window.showOpenFilePicker({ types: PICK_TYPES }); if (h) openFile(await h.getFile()); } catch { /* cancelled */ }
   } else {
+    // The <input> fallback (Firefox + ALL mobile, where showOpenFilePicker doesn't
+    // exist). NO `accept` filter: lamina opens anything, and on Android the OS
+    // picker hides files whose extension has no registered MIME — which is exactly
+    // what greys out a .dm. Showing everything is both on-brand and the .dm fix.
     const inp = document.createElement('input');
     inp.type = 'file';
-    inp.accept = '.csv,.tsv,.tab,.txt,.dm,.lam,.lamina,.zip,.tar,.gz,.zst,.xz,.bz2';
     inp.onchange = () => { if (inp.files[0]) openFile(inp.files[0]); };
     inp.click();
   }
@@ -1185,6 +1188,16 @@ window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hid
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;
 $('#build').title = `lamina build — ${__LAMINA_BUILD__}`;
+
+// Keep --tb (the layout's top offset) synced to the toolbar's ACTUAL height, so
+// everything below follows however the toolbar wraps on narrow / phone widths
+// (one row on desktop, two-plus when the filter cluster drops below the menus).
+{
+  const tb = $('#toolbar');
+  const syncTb = () => document.documentElement.style.setProperty('--tb', tb.offsetHeight + 'px');
+  if (window.ResizeObserver) new ResizeObserver(syncTb).observe(tb); else window.addEventListener('resize', syncTb);
+  syncTb();
+}
 
 // File Handling API: when the installed PWA is launched by opening a .lam/.lamina
 // file (manifest file_handlers), the handle(s) arrive here. No-op in a normal tab.

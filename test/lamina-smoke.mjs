@@ -609,6 +609,25 @@ try {
     ? ok(`calc columns: ƒ+ col opens editor; header marked ƒ; manager lists [${calc.listed}] → remove → [${calc.listedAfter}]; filter ab>50 → ${calc.filtered}; remove all → ${calc.afterCols} cols`)
     : fail(`calc columns failed: ${JSON.stringify(calc)}`);
 
+  // ── responsive: a phone-width viewport → the toolbar wraps to two rows, the
+  //    grid drops below it, nothing overflows horizontally ──
+  await page.setViewportSize({ width: 360, height: 720 });
+  await page.evaluate(() => window._lamina.open('r.csv', new TextEncoder().encode('a,b\n1,2\n3,4\n')));
+  await page.waitForTimeout(80);   // let the ResizeObserver sync --tb to the wrapped toolbar height
+  const resp = await page.evaluate(() => {
+    const tb = document.getElementById('toolbar'), grid = document.getElementById('grid');
+    const tbH = tb.offsetHeight, gridTop = grid.getBoundingClientRect().top;
+    return {
+      tbH, gridTop,
+      tbFits: tb.scrollWidth <= tb.clientWidth + 1,                                  // wrapped, not clipped
+      titleHidden: getComputedStyle(document.querySelector('#toolbar .title')).display === 'none',
+      filterOnRow2: document.getElementById('filterWrap').getBoundingClientRect().top > document.getElementById('mFile').getBoundingClientRect().top + 4,
+    };
+  });
+  (resp.tbH >= 70 && Math.abs(resp.gridTop - resp.tbH) < 3 && resp.tbFits && resp.titleHidden && resp.filterOnRow2)
+    ? ok(`responsive: toolbar wraps to ${resp.tbH}px (title hidden · filter on row 2) · grid below it · no overflow`)
+    : fail(`responsive failed: ${JSON.stringify(resp)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

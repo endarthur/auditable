@@ -9,11 +9,11 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='96' fill='%23121212'/%3E%3Crect x='96' y='150' width='320' height='40' rx='6' fill='%238a9099'/%3E%3Crect x='96' y='236' width='320' height='40' rx='6' fill='%23c89b3c'/%3E%3Crect x='96' y='322' width='320' height='40' rx='6' fill='%238a9099'/%3E%3C/svg%3E">
 <meta name="theme-color" content="#121212">
 <style>
-  :root { --mono: 'Space Mono', ui-monospace, monospace; --sans: 'Barlow', system-ui, sans-serif; }
+  :root { --mono: 'Space Mono', ui-monospace, monospace; --sans: 'Barlow', system-ui, sans-serif; --tb: 38px; --ft: 24px; }   /* --tb/--ft: toolbar + footer heights (the media query retunes --tb when the toolbar wraps) */
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: #121212; color: #bbb; font-family: var(--sans); overflow: hidden; }
   #toolbar {
-    position: absolute; left: 0; right: 0; top: 0; height: 38px; display: flex; align-items: center;
+    position: absolute; left: 0; right: 0; top: 0; height: var(--tb); display: flex; align-items: center;
     gap: 8px; padding: 0 10px; border-bottom: 1px solid #2a2a2a; background: #1a1a1a;
   }
   #toolbar .title { font-family: var(--mono); font-size: 13px; color: #c89b3c; }
@@ -25,6 +25,7 @@
   #toolbar .mb { background: transparent; border-color: transparent; padding: 4px 9px; }
   #toolbar .mb:hover { background: #2a2a2a; border-color: #333; }
   #toolbar .spacer { flex: 1; }
+  #toolbar #tbBreak { display: none; }                        /* a flex line-break; only active on narrow (below) */
   #toolbar #filterWrap { flex: 1 1 auto; min-width: 140px; max-width: 460px; position: relative; display: flex; }
   #toolbar #filter {
     flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; color: #ddd;
@@ -53,7 +54,7 @@
   #toolbar .kind:hover { border-color: #8cb878; }
 
   #opts {
-    position: absolute; top: 40px; right: 10px; z-index: 30; display: none; flex-direction: column; gap: 8px;
+    position: absolute; top: calc(var(--tb) + 2px); right: 10px; z-index: 30; display: none; flex-direction: column; gap: 8px;
     background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 12px 14px;
     font-family: var(--mono); font-size: 12px; color: #bbb; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
   }
@@ -63,7 +64,7 @@
   #opts input:focus, #opts select:focus { outline: none; border-color: #4a78b0; }
 
   #calcEditor {
-    position: absolute; top: 56px; left: 50%; transform: translateX(-50%); z-index: 38; display: none; flex-direction: column; gap: 8px;
+    position: absolute; top: calc(var(--tb) + 18px); left: 50%; transform: translateX(-50%); z-index: 38; display: none; flex-direction: column; gap: 8px;
     width: min(460px, 92vw); background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 14px 16px;
     font-family: var(--mono); font-size: 12px; color: #bbb; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
   }
@@ -85,7 +86,7 @@
   #calcEditor #ceCommit { color: #d8c08a; border-color: #5a4d2e; }       /* action accent */
   #calcEditor #ceCommit:disabled { color: #555; border-color: #2a2a2a; cursor: default; background: #1c1c1c; }
 
-  #calcManager { position: absolute; inset: 38px 0 24px 0; z-index: 35; display: none; align-items: center; justify-content: center; background: rgba(10,10,10,0.7); }
+  #calcManager { position: absolute; inset: var(--tb) 0 var(--ft) 0; z-index: 35; display: none; align-items: center; justify-content: center; background: rgba(10,10,10,0.7); }
   #calcManager.show { display: flex; }
   #calcManager .cm-box { width: min(560px, 86vw); max-height: 78%; display: flex; flex-direction: column; background: #1c1c1c; border: 1px solid #333; border-radius: 6px; overflow: hidden; }
   #calcManager .cm-head { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid #2a2a2a; font-family: var(--mono); font-size: 13px; color: #c89b3c; }
@@ -117,7 +118,7 @@
   #help .help-body .sfilter:hover { color: #c89b3c; border-bottom-color: #c89b3c; }
   #help .help-body .sfilter.sel { background: rgba(200,155,60,0.18); color: #c89b3c; border-bottom-color: transparent; }
 
-  #help { position: absolute; inset: 38px 0 24px 0; z-index: 35; display: none; align-items: center; justify-content: center; background: rgba(10,10,10,0.7); }
+  #help { position: absolute; inset: var(--tb) 0 var(--ft) 0; z-index: 35; display: none; align-items: center; justify-content: center; background: rgba(10,10,10,0.7); }
   #help.show { display: flex; }
   #help .help-box { width: min(620px, 84vw); max-height: 78%; display: flex; flex-direction: column; background: #1c1c1c; border: 1px solid #333; border-radius: 6px; overflow: hidden; }
   #help .help-head { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid #2a2a2a; font-family: var(--mono); font-size: 13px; color: #c89b3c; }
@@ -127,9 +128,9 @@
   #help .help-body code { color: #c89b3c; }
   #help .help-body b { color: #ddd; font-weight: 600; }
 
-  #grid { position: absolute; left: 0; right: 0; top: 38px; bottom: 24px; }
+  #grid { position: absolute; left: 0; right: 0; top: var(--tb); bottom: var(--ft); }
   #empty, #binary {
-    position: absolute; inset: 38px 0 24px 0; display: flex; flex-direction: column;
+    position: absolute; inset: var(--tb) 0 var(--ft) 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 8px; color: #555; font-family: var(--mono);
     font-size: 13px; text-align: center;
   }
@@ -138,20 +139,20 @@
   #empty { pointer-events: none; }
 
   footer {
-    position: absolute; left: 0; right: 0; bottom: 0; height: 24px; display: flex; align-items: center;
+    position: absolute; left: 0; right: 0; bottom: 0; height: var(--ft); display: flex; align-items: center;
     gap: 16px; padding: 0 12px; border-top: 1px solid #2a2a2a; background: #161616;
     font-family: var(--mono); font-size: 11px; color: #777;
   }
   footer .spacer { flex: 1; }
   footer #build { color: #555; cursor: default; }      /* build stamp — far right, muted */
   #drop-hint {
-    position: absolute; inset: 38px 6px 30px 6px; border: 2px dashed #c89b3c; border-radius: 6px;
+    position: absolute; inset: var(--tb) 6px calc(var(--ft) + 6px) 6px; border: 2px dashed #c89b3c; border-radius: 6px;
     background: rgba(200,155,60,0.06); display: none; align-items: center; justify-content: center;
     color: #c89b3c; font-family: var(--mono); font-size: 14px; pointer-events: none; z-index: 10;
   }
   body.dragging #drop-hint { display: flex; }
 
-  #picker { position: absolute; inset: 38px 0 24px 0; display: none; align-items: center; justify-content: center;
+  #picker { position: absolute; inset: var(--tb) 0 var(--ft) 0; display: none; align-items: center; justify-content: center;
     background: rgba(10,10,10,0.7); z-index: 20; }
   #picker.show { display: flex; }
   #picker .pk-box { width: min(560px, 80vw); max-height: 70%; display: flex; flex-direction: column;
@@ -162,6 +163,30 @@
     font-family: var(--mono); font-size: 12px; color: #bbb; border-bottom: 1px solid #222; }
   #picker .pk-item:hover { background: #262626; }
   #picker .pk-item .pk-size { color: #777; }
+
+  /* ── responsive: phones / narrow windows. The toolbar wraps to two rows
+     (menus + kind on top, the filter cluster below); --tb grows so every
+     absolutely-positioned panel drops below it. The grid is a native scroll div,
+     so it already pans on touch. ── */
+  @media (max-width: 620px) {
+    :root { --tb: 78px; }
+    #toolbar { flex-wrap: wrap; height: auto; min-height: var(--tb); row-gap: 4px; gap: 6px; padding: 4px 8px; }
+    #toolbar .title { display: none; }
+    #toolbar #fileName { display: none; }                     /* the kind badge + the tab title carry it */
+    #mFile { order: 1; } #mData { order: 2; } #mView { order: 3; } #mHelp { order: 4; }
+    #toolbar .spacer { order: 5; }
+    #kindBadge { order: 6; }
+    #toolbar #tbBreak { order: 7; display: block; flex-basis: 100%; height: 0; }   /* break → filter cluster on row 2 */
+    #toolbar #filterWrap { order: 8; flex: 1 1 0; min-width: 0; max-width: none; }   /* basis 0 so the long placeholder doesn't push the buttons to a 3rd row */
+    #filterGo { order: 9; } #addCalc { order: 10; } #toolbar #goto { order: 11; width: 60px; }
+    /* 16px inputs stop iOS Safari from zooming the page when one is focused */
+    #toolbar #filter, #toolbar #goto, #calcEditor input, #opts input, #opts select { font-size: 16px; }
+    /* roomier tap targets */
+    #toolbar button, #calcEditor .ce-actions button, #calcManager .cm-acts button, #calcManager .cm-foot button { padding-top: 6px; padding-bottom: 6px; }
+    .ctxmenu .item { padding: 8px 12px; }
+    #opts { left: 8px; right: 8px; }                          /* the interpretation popover spans the width */
+    #opts select, #opts input { width: 150px; }
+  }
 </style>
 <!-- Standalone @gcu/* resolution (a single-file build inlines these later). -->
 <script type="importmap">
@@ -187,6 +212,7 @@
     <button id="filterGo" title="apply filter (Enter)">Filter</button>
     <button id="addCalc" title="Add calculated column — derive a column from a formula">ƒ+ col</button>
     <input id="goto" type="number" min="1" placeholder="row #" title="go to row">
+    <span id="tbBreak" aria-hidden="true"></span>
     <span class="spacer"></span>
     <span class="name" id="fileName">no file</span>
     <span class="kind" id="kindBadge" style="display:none" title="click to change how this file is read"></span>
