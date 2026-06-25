@@ -283,6 +283,29 @@ try {
     ? ok(`override: forced ';' → ${ovr.forcedCols} cols (auto saw ${ovr.autoCols}); header off → ${ovr.rows} rows`)
     : fail(`override failed: ${JSON.stringify(ovr)}`);
 
+  // ── whitespace-delimited + Geo-EAS ──
+  const ws = await page.evaluate(async () => {
+    let csv = 'id      x         grade\n';
+    for (let i = 0; i < 400; i++) csv += `${i}\t${612105 + i * 10}    ${(i * 0.01).toFixed(2)}\n`;
+    window._lamina.open('gslib.dat', new TextEncoder().encode(csv));
+    const vs = window._laminaVS;
+    return { cols: vs.cols, rows: vs.rowCount(), header: window._lamina.grid.provider.header(2).label, first: await vs.ensureRow(0) };
+  });
+  (ws.cols === 3 && ws.rows === 400 && ws.header === 'grade' && ws.first[0] === '0')
+    ? ok(`whitespace-delimited → ${ws.cols} cols, header "${ws.header}", ${ws.rows} rows`)
+    : fail(`whitespace failed: ${JSON.stringify(ws)}`);
+
+  const geo = await page.evaluate(async () => {
+    let csv = 'Block model export\n3\nID\nGrade\nLito\n';   // Geo-EAS: title, count, names
+    for (let i = 0; i < 300; i++) csv += `${i} ${(i * 0.02).toFixed(2)} ox\n`;
+    window._lamina.open('model.geoeas', new TextEncoder().encode(csv));
+    const vs = window._laminaVS;
+    return { cols: vs.cols, rows: vs.rowCount(), h0: window._lamina.grid.provider.header(0).label, h1: window._lamina.grid.provider.header(1).label, first: await vs.ensureRow(0) };
+  });
+  (geo.cols === 3 && geo.rows === 300 && geo.h0 === 'ID' && geo.h1 === 'Grade' && geo.first[2] === 'ox')
+    ? ok(`Geo-EAS → ${geo.cols} cols (${geo.h0}, ${geo.h1}, …), ${geo.rows} data rows`)
+    : fail(`Geo-EAS failed: ${JSON.stringify(geo)}`);
+
   // ── go-to-row scrolls a deep row into selection ──
   const go = await page.evaluate(async () => {
     let csv = 'id\n'; for (let i = 0; i < 5000; i++) csv += `${i}\n`;

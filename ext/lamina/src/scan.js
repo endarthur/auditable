@@ -128,6 +128,10 @@ export function splitRecords(bytes, { kind = 'delimited', quote = DQUOTE } = {})
  */
 export function parseFields(recordBytes, { delimiter = ',', quote = '"' } = {}) {
   const s = new TextDecoder().decode(recordBytes);
+  if (delimiter === ' ') {                          // whitespace mode: split on runs (GSLIB / scientific dumps)
+    const t = s.trim();
+    return t === '' ? [''] : t.split(/\s+/);
+  }
   const fields = [];
   let i = 0, field = '', inQ = false;
   while (i < s.length) {

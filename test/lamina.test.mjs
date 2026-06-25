@@ -502,3 +502,35 @@ test('detect: a viewsource over a preamble file shows data rows, not comments', 
   assert.equal(vs.rowCount(), 3);                            // 3 data rows (comments + header skipped)
   assert.deepEqual(await vs.ensureRow(0), ['10', 'x']);     // first data row, not a comment
 });
+
+// ── whitespace-delimited + Geo-EAS ──
+
+test('detect + parse: whitespace-delimited (runs of spaces)', () => {
+  const ws = B('id    x       grade\n0     612105  1.20\n1     612115  0.85\n');
+  const d = detectKind(ws);
+  assert.equal(d.kind, 'delimited');
+  assert.equal(d.delimiter, ' ');
+  assert.deepEqual(d.schema.map((s) => s.name), ['id', 'x', 'grade']);
+  assert.deepEqual(parseFields(B('0     612105  1.20'), { delimiter: ' ' }), ['0', '612105', '1.20']);
+});
+
+test('detect: GSLIB / Geo-EAS (count + one name per line + whitespace data)', () => {
+  const geo = B('Some block model\n3\nID\nGrade\nLito\n0 1.2 ox\n1 0.8 sulf\n2 2.1 ox\n');
+  const d = detectKind(geo);
+  assert.equal(d.kind, 'delimited');
+  assert.equal(d.geoeas, true);
+  assert.equal(d.delimiter, ' ');
+  assert.equal(d.dataStart, 5);                          // title + count + 3 names
+  assert.equal(d.hasHeader, false);
+  assert.deepEqual(d.schema.map((s) => s.name), ['ID', 'Grade', 'Lito']);
+  assert.equal(d.schema[1].type, 'number');             // Grade
+});
+
+test('detect: a viewsource over a Geo-EAS file shows the data rows', async () => {
+  const geo = B('title\n2\nX\nY\n10 20\n30 40\n50 60\n');
+  const src = buildMemorySource(geo, { kind: 'delimited', delimiter: ' ', blockSize: 2 });
+  const d = detectKind(geo);
+  const vs = createRecordViewSource(src, { schema: d.schema, dataStart: d.dataStart });
+  assert.equal(vs.rowCount(), 3);
+  assert.deepEqual(await vs.ensureRow(0), ['10', '20']);
+});

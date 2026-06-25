@@ -133,6 +133,10 @@ function splitRecords(bytes, { kind = 'delimited', quote = DQUOTE } = {}) {
  */
 function parseFields(recordBytes, { delimiter = ',', quote = '"' } = {}) {
   const s = new TextDecoder().decode(recordBytes);
+  if (delimiter === ' ') {                          // whitespace mode: split on runs (GSLIB / scientific dumps)
+    const t = s.trim();
+    return t === '' ? [''] : t.split(/\s+/);
+  }
   const fields = [];
   let i = 0, field = '', inQ = false;
   while (i < s.length) {
@@ -632,7 +636,13 @@ async function scanSortKeys(source, { col, dir = 'asc', dataStart = 0, numeric =
 // `sniff` is INJECTED for richer schema (types/units/roles); a solid builtin runs
 // without it. Zero-dep.
 
-const DELIMS = [',', '\t', ';', '|'];
+const DELIMS = [',', '\t', ';', '|', ' '];   // ' ' = whitespace-run mode (GSLIB / scientific dumps)
+
+// Split a line by a delimiter; ' ' means split on whitespace runs (trimmed).
+function splitBy(line, delim) {
+  if (delim === ' ') { const t = line.trim(); return t === '' ? [] : t.split(/\s+/); }
+  return line.split(delim);
+}
 
 // Binary = a NUL byte (text files don't have them) or a high ratio of control
 // bytes (excluding \t \n \r). Cheap + reliable on a head sample.
@@ -653,12 +663,20 @@ function isNumeric(s) { return s !== '' && /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+
 function sniffDelimiter(lines) {
   let best = null, bestScore = 0;
   for (const d of DELIMS) {
-    const counts = lines.map((l) => l.split(d).length - 1).filter((c, i) => lines[i] !== '');
+    const counts = lines.map((l) => splitBy(l, d).length - 1).filter((c, i) => lines[i] !== '');
     if (!counts.length) continue;
     const mode = counts.sort((a, b) => a - b)[Math.floor(counts.length / 2)]; // median count
     if (mode < 1) continue;
     const consistent = counts.filter((c) => c === mode).length / counts.length;
-    const score = mode * consistent;                  // more columns + more consistent = better
+    // Whitespace is the fallback delimiter and would also "split" prose, so gate
+    // it on the data being NUMERIC (geology/scientific whitespace dumps are) — and
+    // discount it so a real punctuation delimiter on the same data wins.
+    if (d === ' ') {
+      const toks = lines.flatMap((l) => splitBy(l, d));
+      const numFrac = toks.length ? toks.filter(isNumeric).length / toks.length : 0;
+      if (numFrac < 0.5) continue;                    // prose / non-numeric → not whitespace-delimited
+    }
+    const score = mode * consistent * (d === ' ' ? 0.9 : 1);
     if (score > bestScore) { bestScore = score; best = { delimiter: d, columns: mode + 1, consistent }; }
   }
   return best && best.consistent >= 0.6 ? best : null;
@@ -668,7 +686,7 @@ function sniffDelimiter(lines) {
 // forced (true/false) or guessed (row 0 all-text + a later numeric). Column count
 // = the median row length (robust to a stray ragged row). Shared by auto + forced.
 function buildDelimited(lines, delimiter, forceHeader) {
-  const rows = lines.filter((l) => l !== '').map((l) => l.split(delimiter));
+  const rows = lines.filter((l) => l !== '').map((l) => splitBy(l, delimiter));
   const lens = rows.map((r) => r.length).sort((a, b) => a - b);
   const columns = Math.max(1, lens[Math.floor(lens.length / 2)] || 1);
   const head = rows[0] || [];
@@ -697,6 +715,30 @@ function leadingSkip(lines, f) {
   return { skip, comment };
 }
 
+// GSLIB / Geo-EAS: line 0 = title, line 1 = an integer N (column count), lines
+// 2..N+1 = one column NAME per line, then N-column (usually whitespace) data.
+// Column names come from the preamble, not a header row → schema + dataStart=N+2.
+function detectGeoEAS(lines) {
+  if (lines.length < 4) return null;
+  const n = Number((lines[1] || '').trim());
+  if (!Number.isInteger(n) || n < 1 || n > 1000 || lines.length < n + 3) return null;
+  const names = lines.slice(2, 2 + n).map((l) => l.trim());
+  if (names.some((nm) => nm === '')) return null;
+  const first = lines[2 + n] || '';
+  for (const delim of [' ', ',', '\t']) {              // data delimiter (whitespace is the norm)
+    const tok = splitBy(first, delim);
+    if (tok.length === n && tok.some(isNumeric)) {
+      const dataRows = lines.slice(2 + n, 2 + n + 20).map((l) => splitBy(l, delim));
+      const schema = names.map((nm, c) => {
+        const vals = dataRows.map((r) => r[c]).filter((v) => v != null && v !== '');
+        return { name: nm, type: vals.length && vals.every(isNumeric) ? 'number' : 'string' };
+      });
+      return { kind: 'delimited', delimiter: delim, quote: '"', hasHeader: false, schema, dataStart: 2 + n, geoeas: true, skip: 0, comment: null };
+    }
+  }
+  return null;
+}
+
 /**
  * @param {Uint8Array} sample  the file's head (e.g. first 64 KB)
  * @param {object} opts  { sniff?, force? }
@@ -712,6 +754,10 @@ function detectKind(sample, { sniff, force } = {}) {
 
   const text = new TextDecoder().decode(sample);   // default decoder strips a leading BOM
   const all = text.split('\n').slice(0, 200).map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
+
+  // GSLIB / Geo-EAS structured preamble (only when nothing is forced).
+  if (!f.kind && !f.delimiter && f.skip == null) { const g = detectGeoEAS(all); if (g) return g; }
+
   const { skip, comment } = leadingSkip(all, f);
   const lines = all.slice(skip);                    // the body, past the preamble
 
