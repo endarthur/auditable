@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider, LOADING } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
 import { detectDM, parseHeader, recordRange, decodeRecord } from '@gcu/dm';
@@ -20,8 +20,11 @@ import { idbCache } from './idb-cache.js';
 // rewindable tape (buildStreamSource): no RAM/disk blowup, forward-cheap, far-seek
 // rewinds. (spec §7a — the third backing between resident and materialized-OPFS.)
 const RESIDENT_LIMIT = 32 * 1024 * 1024;
-// A .dm is decoded to a delimited table resident (so filter/sort/stats work for
-// free). Above this record count we decline (windowed .dm browse is roadmapped).
+// A .dm at or below this record count is decoded WHOLE to a delimited table
+// (resident — so filter/sort/stats work for free, the common assay-table case).
+// Above it we WINDOW the .dm: scroll all records read-only via @gcu/dm's O(1)
+// record access (records never span a page) — no resident decode, no RAM blowup.
+// Filter/sort/stats over a windowed .dm need the record-iterating scan (roadmap).
 const DM_RECORD_CAP = 2_000_000;
 // Bumped whenever detection logic changes — a stale cached `detect` (e.g. from
 // before comment-preamble skipping) must NOT be reused. idbCache entries carry
@@ -29,6 +32,7 @@ const DM_RECORD_CAP = 2_000_000;
 const CACHE_VERSION = 2;
 const cacheFresh = (c) => c && c.v === CACHE_VERSION;
 const residentLimit = () => (typeof window.__LAMINA_RESIDENT_LIMIT__ === 'number' ? window.__LAMINA_RESIDENT_LIMIT__ : RESIDENT_LIMIT);
+const dmCap = () => (typeof window.__LAMINA_DM_CAP__ === 'number' ? window.__LAMINA_DM_CAP__ : DM_RECORD_CAP);   // test hook: force the windowed path on a small fixture
 
 const $ = (s) => document.querySelector(s);
 let grid = null;
@@ -133,7 +137,7 @@ function mountView(vs, info = {}) {
   $('#binary').style.display = 'none';
   $('#empty').style.display = 'none';
   const badge = $('#kindBadge'); badge.style.display = '';
-  badge.textContent = c.d.kind === 'delimited' ? `CSV · ${c.d.delimiter === '\t' ? 'TSV' : 'delimited'}` : c.d.kind;
+  badge.textContent = c.d.dm ? 'dm' : c.d.kind === 'delimited' ? `CSV · ${c.d.delimiter === '\t' ? 'TSV' : 'delimited'}` : c.d.kind;
 
   const base = createLaminaProvider(vs, { PENDING });
   const total = c.baseVs.cols;
@@ -174,7 +178,8 @@ function mountView(vs, info = {}) {
   if (info.sorted) rows += ` · sorted ${c.sort.dir} by ${c.schema[c.sort.col].name}`;
   const cols = c.hidden.size ? `${vis.length} of ${total} cols` : `${vis.length} cols`;
   const skipped = c.d.skip ? ` · ${c.d.skip} ${c.d.comment ? c.d.comment + '-' : ''}comment lines skipped` : '';
-  c._meta = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${c.d.kind}${skipped}`;   // remembered so a copy-flash can restore it
+  const kindLabel = c.d.dm ? 'dm · windowed browse' : c.d.kind;
+  c._meta = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${kindLabel}${skipped}`;   // remembered so a copy-flash can restore it
   $('#meta').textContent = c._meta;
   window._laminaVS = vs;                                // automation hook
 }
@@ -218,10 +223,10 @@ function showCellMenu(row, col, sel, x, y) {
     { label: 'Copy with header', action: () => copySelection(sel, { header: true }) },
     { label: 'Copy with row #', action: () => copySelection(sel, { rowNum: true }) },
     { label: 'Copy with header + row #', action: () => copySelection(sel, { header: true, rowNum: true }) },
-    { sep: true },
-    { label: `Filter ${name} = ${shownVal || '(empty)'}`, action: () => filterByValue(uc, val) },
-    { label: `Statistics — ${name}…`, action: () => showColumnStats(uc) },
   ];
+  if (!c.dm) items.push({ sep: true },                                // filter / stats need the resident scan
+    { label: `Filter ${name} = ${shownVal || '(empty)'}`, action: () => filterByValue(uc, val) },
+    { label: `Statistics — ${name}…`, action: () => showColumnStats(uc) });
   showMenu(x, y, items);
 }
 
@@ -297,13 +302,15 @@ function resetColWidths() { if (current) current.colWidths = {}; if (grid) grid.
 function showColumnMenu(uc, x, y) {
   const c = current; if (!c) return;
   const name = c.baseVs.header(uc).label;
-  const items = [
-    { label: `Sort ${name} ↑`, action: () => { c.sort = { col: uc, dir: 'asc' }; recompute(); } },
-    { label: `Sort ${name} ↓`, action: () => { c.sort = { col: uc, dir: 'desc' }; recompute(); } },
-  ];
-  if (c.sort && c.sort.col === uc) items.push({ label: 'Clear sort', action: () => { c.sort = null; recompute(); } });
-  items.push({ sep: true }, { label: `Statistics — ${name}…`, action: () => showColumnStats(uc) });
-  items.push({ label: `Filter by ${name}…`, action: () => setFilterText(`${name} `) });
+  const items = [];
+  if (!c.dm) {                                                        // sort / stats / filter need the resident scan
+    items.push(
+      { label: `Sort ${name} ↑`, action: () => { c.sort = { col: uc, dir: 'asc' }; recompute(); } },
+      { label: `Sort ${name} ↓`, action: () => { c.sort = { col: uc, dir: 'desc' }; recompute(); } });
+    if (c.sort && c.sort.col === uc) items.push({ label: 'Clear sort', action: () => { c.sort = null; recompute(); } });
+    items.push({ sep: true }, { label: `Statistics — ${name}…`, action: () => showColumnStats(uc) });
+    items.push({ label: `Filter by ${name}…`, action: () => setFilterText(`${name} `) });
+  }
   const isNum = c.schema[uc] && c.schema[uc].type === 'number';       // force-type override (fixes a mis-detected column)
   items.push(isNum ? { label: 'Treat as text', action: () => setColType(uc, 'string') }
                    : { label: 'Treat as number', action: () => setColType(uc, 'number') });
@@ -363,6 +370,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(
 // Cycle a column's sort: none → asc → desc → none. Switching columns starts asc.
 function toggleSort(col) {
   const c = current; if (!c) return;
+  if (dmBrowseOnly('sort')) return;
   if (!c.sort || c.sort.col !== col) c.sort = { col, dir: 'asc' };
   else if (c.sort.dir === 'asc') c.sort = { col, dir: 'desc' };
   else c.sort = null;
@@ -374,6 +382,7 @@ function toggleSort(col) {
 async function applyFilter(str) {
   const c = current;
   if (!c) return;
+  if (c.dm) { if (str.trim()) dmBrowseOnly('filter'); return; }
   if (!str.trim()) { $('#filter').classList.remove('err'); c.filterResult = null; return recompute(); }
   const cols = c.d.kind === 'delimited' ? c.d.schema : [{ name: 'line' }];
   let predicate;
@@ -396,7 +405,13 @@ function filterErr(e) { $('#filter').classList.add('err'); $('#meta').textConten
 function open(name, bytes, force) {
   if (!force) {                                                        // Datamine .dm?
     const dmFmt = detectDM(bytes.subarray(0, Math.min(4096, bytes.length)));
-    if (dmFmt) { try { const h = parseHeader(bytes, dmFmt); return mountDm(name, bytes, h, bytes.length); } catch { /* fall through */ } }
+    if (dmFmt) {
+      try {
+        const h = parseHeader(bytes, dmFmt);
+        const reader = (off, len) => Promise.resolve(bytes.subarray(off, off + len));   // already resident
+        return routeDm(name, h, reader, bytes, bytes.length);
+      } catch { /* fall through */ }
+    }
   }
   const d = detectKind(bytes.subarray(0, 65536), { force, name });
   if (d.kind === 'binary') return showBinary(name, bytes.length);
@@ -413,15 +428,19 @@ function openInner(label, bytes) {
   mount(label, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
 }
 
-// ── Datamine .dm (binary table) → decode records to a delimited table and run
-// the normal pipeline (filter/sort/stats/format all work). Resident, capped;
-// huge block models (windowed .dm) are a roadmap follow-on. ──
-function mountDm(name, buf, h, totalBytes) {
-  if (h.recordCount > DM_RECORD_CAP) {
-    return showNote(name, 'dm', 'large .dm',
-      `${h.recordCount.toLocaleString()} records — the .dm view is resident for now (windowed .dm browse is roadmapped)`,
-      `${fmtBytes(totalBytes)} · dm`);
-  }
+// ── Datamine .dm (binary table). Route on size: small → decode whole to a
+// delimited table (the full pipeline — filter/sort/stats/format); huge → window
+// it read-only (browse). `reader(off,len) → Promise<Uint8Array>` abstracts the
+// backing (File.slice for a picked file, a subarray for resident bytes). ──
+function routeDm(name, h, reader, residentBytes, totalBytes) {
+  return h.recordCount > dmCap()
+    ? mountDmWindowed(name, reader, h, totalBytes)
+    : mountDmResident(name, residentBytes, h, totalBytes);
+}
+
+// Small .dm → decode every record to a TSV table and run the normal pipeline
+// (filter/sort/stats/format all work because it's now just a delimited source).
+function mountDmResident(name, buf, h, totalBytes) {
   $('#meta').textContent = 'decoding .dm…';
   const names = h.schema.map((f) => f.name);
   const lines = [names.join('\t')];
@@ -434,6 +453,86 @@ function mountDm(name, buf, h, totalBytes) {
   const d = { kind: 'delimited', delimiter: '\t', quote: '"', hasHeader: true, schema: h.schema, dataStart: 1, decimal: '.' };
   lastScan = 'resident';
   mount(name, d, buildMemorySource(bytes, { kind: 'delimited', delimiter: '\t' }), totalBytes);
+}
+
+// A windowed .dm ViewSource: a block is K contiguous records, read on demand via
+// `reader` + decodeRecord, held in a small LRU — only a few screenfuls resident,
+// never the file. Same shape as createRecordViewSource (rowAt sync → fields |
+// LOADING | null) so the loom provider + grid windowing work unchanged. Values
+// are stringified to match the CSV path (the provider writes row[c] into the cell).
+function createDmViewSource(reader, h, { cacheBlocks = 16, blockSize = 256 } = {}) {
+  const K = blockSize;
+  const n = h.recordCount;
+  const cols = h.schema.length;
+  const cache = new Map();          // block → fields[][]  (insertion-order LRU)
+  const inflight = new Map();
+  const readyCbs = [];
+  const notify = () => { for (const cb of readyCbs) { try { cb(); } catch (e) { console.error('[lamina] onReady threw', e); } } };
+
+  function loadBlock(b) {
+    if (cache.has(b)) return Promise.resolve();
+    if (inflight.has(b)) return inflight.get(b);
+    const i0 = b * K, i1 = Math.min(n, i0 + K);
+    const start = recordRange(h, i0).offset;
+    const last = recordRange(h, i1 - 1);
+    const end = last.offset + last.length;                  // span may cross pages — per-record offsets index in
+    const p = Promise.resolve(reader(start, end - start)).then((bytes) => {
+      const rows = [];
+      for (let i = i0; i < i1; i++) {
+        const r = recordRange(h, i);
+        const vals = decodeRecord(bytes.subarray(r.offset - start, r.offset - start + r.length), h);
+        rows.push(vals.map((v) => (v == null ? '' : String(v))));
+      }
+      cache.set(b, rows);
+      while (cache.size > cacheBlocks) cache.delete(cache.keys().next().value);   // evict oldest
+      inflight.delete(b); notify();
+    }, (err) => { inflight.delete(b); console.error('[lamina] dm loadBlock failed', err); });
+    inflight.set(b, p);
+    return p;
+  }
+
+  return {
+    kind: 'delimited', cols, schema: h.schema,
+    rowCount() { return n; },
+    rowAt(r) {
+      if (r < 0 || r >= n) return null;
+      const b = Math.floor(r / K);
+      if (cache.has(b)) { const rows = cache.get(b); cache.delete(b); cache.set(b, rows); return rows[r - b * K] || null; }   // LRU touch
+      loadBlock(b);
+      return LOADING;
+    },
+    async ensureRow(r) { if (r >= 0 && r < n) await loadBlock(Math.floor(r / K)); return this.rowAt(r); },
+    header(c) { return { label: h.schema[c] ? h.schema[c].name : `col ${c + 1}`, type: this.colType(c) }; },
+    colType(c) { return (h.schema[c] && h.schema[c].type) || 'string'; },
+    onReady(cb) { readyCbs.push(cb); return () => { const i = readyCbs.indexOf(cb); if (i >= 0) readyCbs.splice(i, 1); }; },
+  };
+}
+
+// Huge .dm → mount the windowed ViewSource directly (browse-only: no resident
+// source, so filter/sort/stats are guarded off until the record-iterating scan
+// lands — see dmBrowseOnly).
+function mountDmWindowed(name, reader, h, totalBytes) {
+  if (grid) { grid.destroy(); grid = null; }
+  const baseVs = createDmViewSource(reader, h);
+  const d = { kind: 'delimited', delimiter: '\t', quote: '"', hasHeader: true, schema: h.schema, dataStart: 0, decimal: '.', dm: true };
+  current = { source: null, d, schema: h.schema, dataStart: 0, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), colWidths: {}, colFormats: {}, _vis: null, file: null, bytes: null, force: {}, dm: true };
+  $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear();
+  lastScan = 'dm-windowed';
+  mountView(baseVs, {});
+}
+
+// Browse-only guard: filter / sort / stats over a windowed .dm need the
+// record-iterating scan (roadmap). Until then, flash a footer note instead.
+function dmBrowseOnly(what) {
+  if (current && current.dm) { noteFooter(`${what} isn't available on a windowed .dm yet — browse, copy & go-to-row work`); return true; }
+  return false;
+}
+// A transient footer message that restores the file's meta line after a moment
+// (like flashCopied, but no ✓ and a touch longer — used for the dm browse note).
+function noteFooter(msg) {
+  clearTimeout(_metaTimer);
+  $('#meta').textContent = msg;
+  _metaTimer = setTimeout(() => { if (current && current._meta) $('#meta').textContent = current._meta; }, 2600);
 }
 
 // Single-stream decoders that have NO browser streaming primitive (only gzip/
@@ -615,14 +714,16 @@ async function openFile(file, force) {
     const fmt = detectFormat(head);
     if (fmt === 'zip' || fmt === 'gz' || fmt === 'tar' || fmt === 'zst' || fmt === 'xz' || fmt === 'bz2') return openArchive(file, fmt);
 
-    // Datamine .dm (binary table) — sniff the DD page; resident-decode to a table.
+    // Datamine .dm (binary table) — sniff the DD page; small → resident table,
+    // huge → windowed browse (read only the on-screen records via File.slice).
     const dmHead = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
     const dmFmt = detectDM(dmHead);
     if (dmFmt) {
       try {
         const h = parseHeader(dmHead, dmFmt);
-        if (h.recordCount > DM_RECORD_CAP) return mountDm(file.name, dmHead, h, file.size);   // shows the size note
-        return mountDm(file.name, new Uint8Array(await file.arrayBuffer()), h, file.size);
+        const reader = (off, len) => file.slice(off, off + len).arrayBuffer().then((b) => new Uint8Array(b));
+        const resident = h.recordCount > dmCap() ? null : new Uint8Array(await file.arrayBuffer());
+        return routeDm(file.name, h, reader, resident, file.size);
       } catch (e) { console.warn('[lamina] .dm parse failed, falling back', e); }
     }
   }
@@ -778,7 +879,7 @@ const HELP = {
     + `<b>row # box</b> — jump to a row<br>Selected cells <b>copy</b> as TSV (Ctrl+C).`],
   about: ['About lamina',
     `<b>lamina</b> — open any file, however large, and scroll, filter, and sort it. Windowed, read-only, offline.<br><br>`
-    + `Delimited → grid, text → lines, binary → hex. Opens <b>Datamine .dm</b> tables directly. Reads inside zip / tar / gz / zst / xz / bz2, and windows huge compressed entries without unpacking. Detects GSLIB / Geo-EAS + whitespace dumps and skips <code>#</code> comment preambles.<br><br>`
+    + `Delimited → grid, text → lines, binary → hex. Opens <b>Datamine .dm</b> tables directly — small ones fully (filter / sort / stats), giant block models windowed (scroll-only, for now). Reads inside zip / tar / gz / zst / xz / bz2, and windows huge compressed entries without unpacking. Detects GSLIB / Geo-EAS + whitespace dumps and skips <code>#</code> comment preambles.<br><br>`
     + `Part of the Geoscientific Chaos Union — <code>gentropic.org</code>.`],
 };
 function showOverlay(title, html) {
@@ -840,6 +941,7 @@ let _statsCol = null;          // the column the open stats panel describes (for
 const _statsSelected = new Set();   // categorical values toggled in the panel → an `in` filter
 async function showColumnStats(uc) {
   const c = current; if (!c) return;
+  if (dmBrowseOnly('statistics')) return;
   _statsCol = uc; _statsSelected.clear();
   const name = c.baseVs.header(uc).label;
   const numeric = (c.schema[uc] && c.schema[uc].type) === 'number';

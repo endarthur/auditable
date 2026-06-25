@@ -558,6 +558,26 @@ try {
     ? ok(`.dm → decoded table (${dm.rows} rows × ${dm.cols} cols, BHID='${dm.first[0]}'); filter AU>0.5 → ${dm.filtered}`)
     : fail(`.dm open failed: ${JSON.stringify(dm)}`);
 
+  // ── huge .dm → WINDOWED browse (force the path with a tiny cap): scroll all
+  // records read-only via File.slice, no resident decode; deep rows resolve. ──
+  const dmw = await page.evaluate(async (arr) => {
+    window.__LAMINA_DM_CAP__ = 100;                          // force windowed for the 250-record fixture
+    await window._lamina.openFile(new File([new Uint8Array(arr)], 'big.dm'));
+    const vs = window._laminaVS;
+    const rows = vs.rowCount(), cols = vs.cols, scan = window._lamina.lastScan;
+    const first = await vs.ensureRow(0);                     // block 0
+    const deep = await vs.ensureRow(240);                    // a far block → File.slice window
+    const badge = document.querySelector('#kindBadge').textContent;
+    await window._lamina.applyFilter('AU > 0.5');            // browse-only → must NOT reduce the row set
+    const afterFilter = window._laminaVS.rowCount();
+    window.__LAMINA_DM_CAP__ = undefined;
+    return { rows, cols, scan, first, deep, badge, afterFilter };
+  }, dmArr);
+  (dmw.scan === 'dm-windowed' && dmw.rows === 250 && dmw.cols === 4 && dmw.first[0] === 'DDH00000'
+    && dmw.deep[0] === 'DDH00000' && Number(dmw.deep[1]) === 240 && dmw.badge === 'dm' && dmw.afterFilter === 250)
+    ? ok(`.dm windowed → ${dmw.rows} rows browsed via File.slice (deep row 240 FROM=${dmw.deep[1]}); filter is browse-only (rows stay ${dmw.afterFilter})`)
+    : fail(`.dm windowed failed: ${JSON.stringify(dmw)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
