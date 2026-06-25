@@ -350,6 +350,37 @@ try {
     ? ok(`filter-to-failures shows ${v2.shown} failing rows; removeCheck clears validation`)
     : fail(`filter-to-failures/clear failed: ${JSON.stringify(v2)}`);
 
+  // ── Checks… dialog: add via the inputs (listed + live count), then ✕ removes ──
+  await page.evaluate(() => { window._strataApp.clearFilters(); window._strataApp.runCommand('strata:checks'); });
+  await page.waitForSelector('.strata-checks-modal', { timeout: 2000 });
+  await page.fill('.strata-checks-modal input[placeholder^="condition"]', 'Au_gpt <= 8');
+  await page.evaluate(() => [...document.querySelectorAll('.strata-checks-modal button')].find((b) => b.textContent === 'Add').click());
+  await page.waitForTimeout(60);
+  const cd = await page.evaluate(() => {
+    const app = window._strataApp;
+    return { count: app.table.checkCount, formula: app.table.checks[0] && app.table.checks[0].formula, total: app.validation && app.validation.total, hasRow: !!document.querySelector('.strata-checks-modal div > span') };
+  });
+  (cd.count === 1 && cd.formula === 'Au_gpt <= 8' && cd.total > 0 && cd.hasRow)
+    ? ok(`Checks dialog: added "Au_gpt <= 8" → ${cd.total} failing, listed`)
+    : fail(`checks dialog add failed: ${JSON.stringify(cd)}`);
+  await page.evaluate(() => [...document.querySelectorAll('.strata-checks-modal button')].find((b) => b.textContent === '✕').click());
+  await page.waitForTimeout(40);
+  const removed = await page.evaluate(() => window._strataApp.table.checkCount);
+  removed === 0 ? ok('Checks dialog: ✕ removes the check') : fail(`remove failed: ${removed}`);
+  await page.keyboard.press('Escape');
+
+  // ── checks persist through a .strata save/reopen ──
+  const rt2 = await page.evaluate(async () => {
+    const app = window._strataApp;
+    app.addCheck('au>=0', 'Au_gpt >= 0');
+    const bytes = await app.saveBytes();
+    app.open('rt.strata', bytes);
+    return { count: app.table.checkCount, name: app.table.checks[0] && app.table.checks[0].name };
+  });
+  (rt2.count === 1 && rt2.name === 'au>=0')
+    ? ok('checks persist through .strata save/reopen')
+    : fail(`checks round-trip failed: ${JSON.stringify(rt2)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);

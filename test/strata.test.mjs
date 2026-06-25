@@ -740,3 +740,16 @@ test('document: derived columns round-trip as formula (not stored data)', async 
   assert.equal(t2.getCell(1, 0).value, 7);          // overlay survived
   assert.equal(t2.dirtyCount(), 1);
 });
+
+test('document: validation checks round-trip with the doc', async () => {
+  const t = gtTable();
+  t.addCheck({ name: 'grade<=10', formula: 'grade <= 10' });
+  const bytes = await writeStrata(t, { createWriter, name: 'd' });
+  const doc = JSON.parse(new TextDecoder().decode(readZip(bytes, 'document.json')));
+  assert.deepEqual(doc.checks, [{ name: 'grade<=10', formula: 'grade <= 10' }]);
+
+  const { table: t2 } = readStrata(bytes, { readZip });
+  assert.equal(t2.checkCount, 1);
+  assert.deepEqual(t2.checks, [{ name: 'grade<=10', formula: 'grade <= 10' }]);
+  assert.equal(t2.runChecks().checks[0].name, 'grade<=10');  // runs on the reopened table
+});

@@ -58,6 +58,8 @@ export async function writeStrata(table, opts = {}) {
     columns: columnsManifest,
   };
   if (opts.view) document.view = opts.view;
+  // Validation checks travel with the doc — the trust layer is part of the data.
+  if (table.checkCount) document.checks = table.checks;   // [{ name, formula }]
 
   // BASE columns only (not merged, not derived) — the overlay is stored
   // separately so base⊕overlay reconstitutes losslessly on load.
@@ -137,6 +139,9 @@ export function readStrata(bytes, opts = {}) {
     const i = k.indexOf(':');
     table.setCell(Number(k.slice(0, i)), Number(k.slice(i + 1)), overlay[k].value);
   }
+
+  // Restore validation checks (skip any that no longer parse against this schema).
+  for (const c of (document.checks || [])) { try { table.addCheck(c); } catch { /* drop a stale check */ } }
 
   return { table, document };
 }

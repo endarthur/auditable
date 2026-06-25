@@ -452,6 +452,7 @@ export function createStrataApp(host) {
     for (const hc of hidn) items.push({ label: `Show ${table.schema[hc].name}`, run: () => { provider.showColumn(hc); grid.refresh(); } });
     if (hidn.length > 1) items.push({ label: 'Show all columns', run: () => { provider.showAllColumns(); grid.refresh(); } });
     items.push({ label: 'Columns…', run: () => openColumnsDialog() });
+    items.push({ label: 'Checks…', run: () => openChecksDialog() });
     items.push('---', { label: 'Autofit column', run: () => grid.autofitColumn(dc) }); // loom op = DISPLAY col
     const nEd = editedInColumn(uc);
     if (nEd > 0) items.push({ label: `Revert ${nEd} edit${nEd > 1 ? 's' : ''} in column`, run: () => revertColumn(uc) });
@@ -648,6 +649,68 @@ export function createStrataApp(host) {
     recomposeFilter();
   }
 
+  // The Checks… manager dialog: list checks (name · condition · live ⚠N/✓ + ✕),
+  // add a check (name + condition), and Filter to failures. Live-apply.
+  function openChecksDialog() {
+    if (!table) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'strata-checks-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1200';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#1e1e1e;border:1px solid #444;border-radius:6px;width:min(480px,94vw);max-height:82vh;display:flex;flex-direction:column;gap:10px;padding:14px;font-family:var(--mono,monospace)';
+    box.innerHTML = '<div style="color:#c89b3c;font-size:13px">Checks — conditions that must hold</div>';
+    const dlgBtn = (label, onclick, opts = {}) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = `border-radius:4px;padding:4px 10px;font:11px var(--mono,monospace);cursor:pointer;`
+        + (opts.primary ? 'background:#3a2f1a;color:#e0b050;border:1px solid #6b5524' : 'background:#242424;color:#bbb;border:1px solid #333');
+      b.onclick = onclick;
+      return b;
+    };
+    const inp = (ph) => { const e = document.createElement('input'); e.placeholder = ph; e.spellcheck = false; e.style.cssText = 'background:#141414;color:#ddd;border:1px solid #333;border-radius:4px;padding:5px 8px;font:12px var(--mono,monospace)'; return e; };
+    const listEl = document.createElement('div');
+    listEl.style.cssText = 'flex:1;min-height:40px;overflow:auto;display:flex;flex-direction:column;gap:3px';
+    box.appendChild(listEl);
+    function render() {
+      listEl.innerHTML = '';
+      const cs = table.checks;
+      if (!cs.length) { const e = document.createElement('div'); e.textContent = 'No checks yet — add one below.'; e.style.cssText = 'color:#666;font-size:12px;padding:6px'; listEl.appendChild(e); return; }
+      cs.forEach((c, i) => {
+        const failed = validation && validation.checks[i] ? validation.checks[i].failed : 0;
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 6px;border:1px solid #2a2a2a;border-radius:4px;background:#161616';
+        const txt = document.createElement('div'); txt.style.cssText = 'flex:1;min-width:0';
+        const nm = document.createElement('div'); nm.textContent = c.name; nm.style.cssText = 'color:#ccc;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+        const fm = document.createElement('div'); fm.textContent = c.formula; fm.style.cssText = 'color:#777;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+        txt.append(nm, fm);
+        const badge = document.createElement('span'); badge.textContent = failed > 0 ? `⚠ ${failed.toLocaleString()}` : '✓';
+        badge.style.cssText = `font-size:11px;white-space:nowrap;color:${failed > 0 ? '#d46a6a' : '#7fb37f'}`;
+        row.append(txt, badge, dlgBtn('✕', () => { removeCheck(i); render(); }));
+        listEl.appendChild(row);
+      });
+    }
+    const addWrap = document.createElement('div');
+    addWrap.style.cssText = 'display:flex;gap:6px;align-items:center';
+    const nameI = inp('name (optional)'); nameI.style.cssText += ';flex:0 0 120px';
+    const condI = inp('condition that must hold, e.g.  FROM < TO'); condI.style.flex = '1';
+    const doAdd = () => { if (condI.value.trim() && addCheck(nameI.value, condI.value)) { nameI.value = ''; condI.value = ''; render(); condI.focus(); } };
+    condI.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
+    addWrap.append(nameI, condI, dlgBtn('Add', doAdd, { primary: true }));
+    box.appendChild(addWrap);
+    const footer = document.createElement('div');
+    footer.style.cssText = 'display:flex;gap:8px;align-items:center';
+    const spacer = document.createElement('span'); spacer.style.flex = '1';
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); };
+    footer.append(dlgBtn('Filter to failures', () => { filterToFailures(); close(); }), spacer, dlgBtn('Close', close, { primary: true }));
+    box.appendChild(footer);
+    overlay.appendChild(box);
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('keydown', onKey, true);
+    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+    document.body.appendChild(overlay);
+    render();
+  }
+
   // ── chrome ──
   function setTitle() {
     $('#fileName').firstChild.textContent = docName;  // app's own filename display
@@ -719,6 +782,7 @@ export function createStrataApp(host) {
     { id: 'strata:redo', label: 'Redo', when: () => !!table && table.canRedo(),
       run: () => { if (provider && provider.redo) { provider.redo(); grid.refresh(); } } },
     { id: 'strata:columns', label: 'Columns…', when: () => !!table, run: () => openColumnsDialog() },
+    { id: 'strata:checks', label: 'Checks…', when: () => !!table, run: () => openChecksDialog() },
     { id: 'strata:ungroup', btn: '#btnUngroup', label: '← Data', visible: () => !!detailTable, when: () => true,
       run: () => ungroup() },
   ];
