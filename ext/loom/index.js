@@ -398,6 +398,7 @@ const DARK_COLORS = {
   cellPending: '#555', cellOutOfOrder: '#c8a13c', hdrGlyph: '#6f6f6f',
   editedBar: '#c89b3c', selFill: 'rgba(200,155,60,0.12)', selStroke: '#c89b3c',
   highlightFill: 'rgba(120,130,225,0.22)',   // cross-surface brushing tint (indigo)
+  invalidFill: 'rgba(212,106,106,0.20)',     // validation-failure tint (caution red)
   bg: '#121212', scrollThumb: '#3a3a3a', scrollTrack: '#161616',
 };
 
@@ -407,6 +408,7 @@ const LIGHT_COLORS = {
   cellPending: '#bbb', cellOutOfOrder: '#9a7a1a', hdrGlyph: '#aaa',
   editedBar: '#8a6c2a', selFill: 'rgba(138,108,42,0.12)', selStroke: '#8a6c2a',
   highlightFill: 'rgba(90,100,190,0.16)',   // cross-surface brushing tint (indigo)
+  invalidFill: 'rgba(176,48,48,0.13)',      // validation-failure tint (caution red)
   bg: '#fff', scrollThumb: '#c4c4c4', scrollTrack: '#ececec',
 };
 
@@ -428,6 +430,11 @@ function drawCell(ctx, cell, x, y, w, h, g) {
   // surface (strata-spec §7; distinct colour from the local amber selection).
   if (cell.style && cell.style.highlight) {
     ctx.fillStyle = c.highlightFill;
+    ctx.fillRect(x + 1, y, w - 1, h);
+  }
+  // Validation-failure wash (a check that must hold failed on this cell).
+  if (cell.style && cell.style.invalid) {
+    ctx.fillStyle = c.invalidFill;
     ctx.fillRect(x + 1, y, w - 1, h);
   }
 
@@ -580,6 +587,11 @@ function paintColHeaders(g, c0, c1, sx, vw) {
     if (obj && h.filtered) {
       ctx.fillStyle = g.colors.hdrText;
       ctx.fillText('▽', rx, metrics.hdrH / 2);
+      rx -= 11;
+    }
+    if (obj && h.invalid) {
+      ctx.fillStyle = g.colors.cellError;
+      ctx.fillText('⚠', rx, metrics.hdrH / 2);
     }
     ctx.restore();
   }

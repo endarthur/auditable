@@ -15,6 +15,7 @@
 
 import { coerceValue, fmtCell, COL_TYPES } from './values.js';
 import { compileFormula, FORMULA_ERROR } from './formula.js';
+import { parsePredicate, evaluatePredicate, predicateColumns } from './predicate.js';
 
 /**
  * @param {object} spec
@@ -26,6 +27,7 @@ export function createTable({ schema, columns, nrows }) {
   const nbase = columns.length;          // base columns occupy indices 0..nbase-1
   const overlay = new Map();             // 'r:c' → { value, base }   (base cells only)
   const derived = new Map();             // colIdx → { name, type, formula, deps, fn, cache }
+  const checks = [];                     // [{ name, formula, pred }] — validation rules that MUST hold
   const key = (r, c) => r + ':' + c;
 
   // Undo/redo over overlay edits — "every action reversible" made real, nearly
@@ -127,6 +129,44 @@ export function createTable({ schema, columns, nrows }) {
       if (c < 0 || c >= schema.length || !COL_TYPES.includes(type)) return;
       schema[c] = { ...schema[c], type };
       const d = derived.get(c); if (d) d.type = type;
+    },
+
+    // ── validation (the trust layer) ──
+    // A check is a sift predicate that MUST hold; checks travel with the doc.
+    // addCheck parses + keeps the rule (throws on bad syntax). runChecks
+    // evaluates every check over the WHOLE table (all rows, effective values
+    // incl. edits + derived) → per-check failed counts + the COMPLETE failing-row
+    // set + a row→cols map of failing cells (for the visible per-cell tint).
+    addCheck({ name, formula }) {
+      const pred = parsePredicate(formula);   // throws on disallowed syntax
+      checks.push({ name: name || formula, formula, pred });
+      return checks.length - 1;
+    },
+    removeCheck(i) { if (i >= 0 && i < checks.length) checks.splice(i, 1); },
+    clearChecks() { checks.length = 0; },
+    get checks() { return checks.map((c) => ({ name: c.name, formula: c.formula })); },
+    get checkCount() { return checks.length; },
+    runChecks() {
+      const nameIdx = new Map(schema.map((s, k) => [s.name, k]));
+      const perCheck = [];
+      const failingRows = new Set();
+      const failingCells = new Map();         // underlyingRow → Set(underlyingCol)
+      for (const c of checks) {
+        const cols = predicateColumns(c.pred).map((n) => nameIdx.get(n)).filter((i) => i != null);
+        let failed = 0;
+        for (let r = 0; r < nrows; r++) {
+          const get = (name) => { const ci = nameIdx.get(name); return ci == null ? undefined : readValue(ci, r); };
+          let ok; try { ok = evaluatePredicate(c.pred, get); } catch { ok = false; }
+          if (!ok) {
+            failed++;
+            failingRows.add(r);
+            let set = failingCells.get(r); if (!set) { set = new Set(); failingCells.set(r, set); }
+            for (const ci of cols) set.add(ci);
+          }
+        }
+        perCheck.push({ name: c.name, formula: c.formula, failed, columns: cols });
+      }
+      return { checks: perCheck, failingRows, failingCells, total: failingRows.size };
     },
 
     // ── undo / redo (over overlay edits) ──

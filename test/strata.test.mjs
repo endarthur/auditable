@@ -225,6 +225,21 @@ test('provider: reorder + hide compose; order keeps a hidden column positioned',
   assert.equal(p.header(1).label, 'grade'); // returns to its ordered slot
 });
 
+test('provider: setInvalid tints failing cells + flags the header', () => {
+  const t = sampleTable();
+  const p = createTableProvider(t);
+  assert.equal(p.cellAt(2, 1).style.invalid, undefined);
+  assert.equal(p.header(1).invalid, undefined);
+  p.setInvalid(new Map([[2, new Set([1])]]));     // row 2, col 1 (grade)
+  assert.equal(p.cellAt(2, 1).style.invalid, true);
+  assert.equal(p.cellAt(0, 1).style.invalid, undefined); // a clean row
+  assert.equal(p.header(1).invalid, true);
+  assert.equal(p.header(0).invalid, undefined);
+  p.setInvalid(null);
+  assert.equal(p.cellAt(2, 1).style.invalid, undefined);
+  assert.equal(p.header(1).invalid, undefined);
+});
+
 test('provider: header marks filtered columns (funnel)', () => {
   const t = sampleTable();
   const v = createView(t);
@@ -260,6 +275,32 @@ test('provider: revert maps through the view and is undoable', () => {
   assert.equal(t.isEdited(ur, 1), false);
   assert.equal(t.undo(), true);                           // the revert was recorded
   assert.equal(t.isEdited(ur, 1), true);
+});
+
+test('table: runChecks reports failures + failing rows/cells over the whole table', () => {
+  const t = createTable({
+    schema: [{ name: 'from', type: 'number' }, { name: 'to', type: 'number' }, { name: 'grade', type: 'number' }],
+    columns: [[0, 5, 10], [5, 4, 20], [1.2, -0.3, 2.0]],   // row 1: to<from; row 1: grade<0
+    nrows: 3,
+  });
+  t.addCheck({ name: 'from<to', formula: 'from < to' });
+  t.addCheck({ name: 'grade>=0', formula: 'grade >= 0' });
+  const r = t.runChecks();
+  assert.equal(r.checks[0].failed, 1);           // row 1 (to=4 < from=5)
+  assert.equal(r.checks[1].failed, 1);           // row 1 (grade=-0.3)
+  assert.equal(r.total, 1);                       // both failures on row 1
+  assert.deepEqual([...r.failingRows], [1]);
+  assert.deepEqual([...r.failingCells.get(1)].sort((a, b) => a - b), [0, 1, 2]); // from,to,grade
+});
+
+test('table: a check edits live — fixing the value clears the failure', () => {
+  const t = sampleTable();                        // grade col 1: [0.5,1.5,2.5]
+  t.addCheck({ name: 'grade<2', formula: 'grade < 2' });
+  assert.equal(t.runChecks().total, 1);          // row 2 (2.5)
+  t.setCell(2, 1, 1.0);                            // fix it
+  assert.equal(t.runChecks().total, 0);
+  t.removeCheck(0);
+  assert.equal(t.checkCount, 0);
 });
 
 // ── ingest: built-in sniffer ──

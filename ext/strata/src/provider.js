@@ -30,6 +30,8 @@ const TYPE = { number: 'number', category: 'category', string: 'string' };
 export function createTableProvider(table, view) {
   const readyListeners = [];
   let highlight = null;   // Set<baseOrdinal> | null — rows brushed by an incoming selection
+  let invalidCells = null; // Map<underlyingRow, Set<underlyingCol>> | null — validation failures
+  let invalidCols = null;  // Set<underlyingCol> — columns with ≥1 failing cell (header ⚠ badge)
   // Which columns the active filter touches (for the header funnel glyph),
   // memoized by the filter-predicate identity (a fresh object per setFilter).
   let _fpRef, _fpCols = null;
@@ -91,11 +93,15 @@ export function createTableProvider(table, view) {
       } else {
         out = { value: cell.value, state: cell.edited ? STATE_EDITED : STATE_RAW, type, style: { text: fmtCell(cell.value) } };
       }
-      // Brushing tints the WHOLE row — empty cells in a brushed row get a blank
-      // highlighted cell so the row tints edge-to-edge (loom skips null cells).
-      if (hl) {
-        if (out == null) return { value: null, state: STATE_RAW, type, style: { text: '', highlight: true } };
-        out.style = { ...out.style, highlight: true };
+      // Brushing tints the whole row (indigo); validation tints failing cells
+      // (caution). Both need a cell object even where the value is empty (loom
+      // skips null cells), so synthesize a blank one when needed.
+      const inv = invalidCells ? !!(invalidCells.get(ur) && invalidCells.get(ur).has(uc)) : false;
+      if (hl || inv) {
+        if (out == null) out = { value: null, state: STATE_RAW, type, style: { text: '' } };
+        else out.style = { ...out.style };
+        if (hl) out.style.highlight = true;
+        if (inv) out.style.invalid = true;
       }
       return out;
     },
@@ -108,6 +114,7 @@ export function createTableProvider(table, view) {
       if (view && view.sortSpec && view.sortSpec.by === s.name) h.sort = view.sortSpec.dir;
       const fc = filteredCols();
       if (fc && fc.has(s.name)) h.filtered = true;
+      if (invalidCols && invalidCols.has(underC(c))) h.invalid = true;
       return h;
     },
 
@@ -178,6 +185,15 @@ export function createTableProvider(table, view) {
       notify();
     },
     get highlightCount() { return highlight ? highlight.size : 0; },
+
+    // Validation tint (the trust layer): a row→cols map of failing cells. loom
+    // draws a caution wash on them + a ⚠ on affected column headers. null clears.
+    setInvalid(map) {
+      invalidCells = map || null;
+      invalidCols = null;
+      if (invalidCells) { invalidCols = new Set(); for (const set of invalidCells.values()) for (const c of set) invalidCols.add(c); }
+      notify();
+    },
 
     onReady(cb) {
       readyListeners.push(cb);

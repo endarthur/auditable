@@ -93,287 +93,6 @@ function compileFormula(formula, columnNames) {
   return { formula, deps, fn };
 }
 
-// ── src/table.js ──
-
-// @gcu/strata — table: the in-memory working model (strata-spec §2 role 1, §4
-// layers 1-3). An immutable typed-columnar BASE + a sparse value-patch OVERLAY +
-// DERIVED columns (formula-defined, computed not stored); every read is
-// base⊕overlay, derived columns recompute from it. This is the spine that makes
-// strata auditable and non-destructive by construction: the source is never
-// mutated, edits are an op log, a cell's base value is always recoverable, and
-// derived columns carry their formula (not baked-in values).
-//
-// v1 scope: base + value patches + per-row derived columns. Deferred §4 layers:
-// structural ops (tombstones/inserts/reorder), the view pipeline. Row identity =
-// implicit ordinal (§4.1). Base columns are plain arrays (null-clean); typed-
-// array packing is a windowing-era optimization.
-//
-// Pure (new Function for formulas works in any JS env; no DOM). Node-testable.
-
-
-/**
- * @param {object} spec
- * @param {Array<{name,type,unit?,role?,analyte?}>} spec.schema  BASE column descriptors
- * @param {Array<Array>} spec.columns   per-column base arrays (length nrows)
- * @param {number} spec.nrows
- */
-function createTable({ schema, columns, nrows }) {
-  const nbase = columns.length;          // base columns occupy indices 0..nbase-1
-  const overlay = new Map();             // 'r:c' → { value, base }   (base cells only)
-  const derived = new Map();             // colIdx → { name, type, formula, deps, fn, cache }
-  const key = (r, c) => r + ':' + c;
-
-  // Undo/redo over overlay edits — "every action reversible" made real, nearly
-  // free off the overlay (which is already an op-log in spirit). Each entry is a
-  // GROUP of cell ops [{r,c,before,after}] where before/after are the overlay
-  // state ({value,base} | null). beginTxn/endTxn collapse a batch (paste, fill,
-  // range-delete) into ONE group so a single undo reverts the whole batch.
-  const undoStack = [], redoStack = [];
-  let txn = null, txnDepth = 0;
-  const ovSnap = (r, c) => { const o = overlay.get(key(r, c)); return o ? { value: o.value, base: o.base } : null; };
-  const ovRestore = (r, c, s) => { const k = key(r, c); if (s) overlay.set(k, { value: s.value, base: s.base }); else overlay.delete(k); };
-  function recordAround(r, c, mutate) {
-    const before = ovSnap(r, c);
-    mutate();
-    const after = ovSnap(r, c);
-    if ((before === null && after === null) || (before && after && before.value === after.value)) return; // no-op
-    const op = { r, c, before, after };
-    if (txn) txn.push(op);
-    else { undoStack.push([op]); redoStack.length = 0; }
-  }
-  function applyGroup(ops, useBefore) {
-    for (let i = ops.length - 1; i >= 0; i--) ovRestore(ops[i].r, ops[i].c, useBefore ? ops[i].before : ops[i].after);
-    invalidateDerived();
-  }
-
-  // Read a cell's effective value by column index (base⊕overlay, or derived).
-  function readValue(c, r, stack) {
-    if (derived.has(c)) return derivedColumn(c, stack)[r];
-    const k = key(r, c);
-    return overlay.has(k) ? overlay.get(k).value : columns[c][r];
-  }
-
-  // Compute (and cache) a derived column. Lazy, with a cycle guard; a per-row
-  // formula error becomes FORMULA_ERROR (rendered as state:error).
-  function derivedColumn(c, stack) {
-    const d = derived.get(c);
-    if (d.cache) return d.cache;
-    stack = stack || new Set();
-    if (stack.has(c)) throw new Error(`strata: cyclic derived column "${d.name}"`);
-    stack.add(c);
-    const depIdx = d.deps.map((n) => schema.findIndex((s) => s.name === n));
-    const out = new Array(nrows);
-    for (let r = 0; r < nrows; r++) {
-      const args = depIdx.map((ci) => readValue(ci, r, stack));
-      try { out[r] = d.fn(...args); } catch { out[r] = FORMULA_ERROR; }
-    }
-    stack.delete(c);
-    d.cache = out;
-    return out;
-  }
-
-  // v1: invalidate ALL derived caches on any base edit (correct; recompute is
-  // lazy on next read). Targeted dependent-only invalidation is a later
-  // optimization that matters at scale, not at v1's small-data regime.
-  function invalidateDerived() { for (const d of derived.values()) d.cache = null; }
-
-  const t = {
-    schema,
-    nrows,
-    get cols() { return schema.length; },
-    get baseCount() { return nbase; },
-    _base: columns,
-    _overlay: overlay,
-
-    isDerived(c) { return derived.has(c); },
-    baseValue(r, c) { return columns[c][r]; },
-    isEdited(r, c) { return overlay.has(key(r, c)); },
-
-    // Merged read: { value, edited, base, derived? }.
-    getCell(r, c) {
-      if (derived.has(c)) return { value: derivedColumn(c)[r], edited: false, base: null, derived: true };
-      const k = key(r, c);
-      if (overlay.has(k)) { const o = overlay.get(k); return { value: o.value, edited: true, base: o.base }; }
-      const v = columns[c][r];
-      return { value: v, edited: false, base: v };
-    },
-
-    // Write a value patch (base columns only — derived cells are computed).
-    setCell(r, c, value) {
-      if (derived.has(c)) return;
-      recordAround(r, c, () => {
-        const k = key(r, c);
-        const base = columns[c][r];
-        if (value === base || (value == null && base == null)) overlay.delete(k);
-        else overlay.set(k, { value, base });
-      });
-      invalidateDerived();
-    },
-
-    revert(r, c) { recordAround(r, c, () => overlay.delete(key(r, c))); invalidateDerived(); },
-    dirtyCount() { return overlay.size; },
-
-    // Change a column's declared type (number/category/string). RELABEL ONLY —
-    // existing values are not re-coerced (the base stays immutable; sort/display
-    // are value-driven, so unaffected). The type drives alignment, the header
-    // glyph, and how FUTURE edits coerce. A schema op (like addDerivedColumn) —
-    // not on the undo stack. Unknown type ignored.
-    setColumnType(c, type) {
-      if (c < 0 || c >= schema.length || !COL_TYPES.includes(type)) return;
-      schema[c] = { ...schema[c], type };
-      const d = derived.get(c); if (d) d.type = type;
-    },
-
-    // ── undo / redo (over overlay edits) ──
-    // beginTxn/endTxn bracket a batch so it collapses to one undo step; nesting
-    // is depth-counted (loom's batched writes never nest, but it's safe). A bare
-    // setCell outside a txn is its own one-op group.
-    beginTxn() { txnDepth++; if (!txn) txn = []; },
-    endTxn() { txnDepth--; if (txnDepth <= 0) { if (txn && txn.length) { undoStack.push(txn); redoStack.length = 0; } txn = null; txnDepth = 0; } },
-    undo() { if (!undoStack.length) return false; const g = undoStack.pop(); applyGroup(g, true); redoStack.push(g); return true; },
-    redo() { if (!redoStack.length) return false; const g = redoStack.pop(); applyGroup(g, false); undoStack.push(g); return true; },
-    canUndo() { return undoStack.length > 0; },
-    canRedo() { return redoStack.length > 0; },
-
-    // The effective values of column c as a fresh array (base⊕overlay, or the
-    // derived computation). The bridge to the rest of the workspace.
-    column(c) {
-      if (derived.has(c)) return derivedColumn(c).slice();
-      const out = columns[c].slice();
-      for (const [k, o] of overlay) {
-        const i = k.indexOf(':');
-        if (Number(k.slice(i + 1)) === c) out[Number(k.slice(0, i))] = o.value;
-      }
-      return out;
-    },
-
-    columnByName(name) {
-      const i = schema.findIndex((s) => s.name === name);
-      return i < 0 ? null : this.column(i);
-    },
-
-    displayAt(r, c) {
-      const v = this.getCell(r, c).value;
-      return v === FORMULA_ERROR ? '#ERR' : fmtCell(v);
-    },
-
-    commitRaw(r, c, raw) { this.setCell(r, c, coerceValue(raw, schema[c].type)); },
-
-    // Add a derived column: a JS formula over existing columns (base or earlier
-    // derived). Appended after the existing columns; returns its index. Throws
-    // on a formula syntax error.
-    addDerivedColumn({ name, formula, type = 'number', unit }) {
-      const { deps, fn } = compileFormula(formula, schema.map((s) => s.name));
-      const field = { name, type, derived: true, formula };
-      if (unit) field.unit = unit;
-      schema.push(field);
-      derived.set(schema.length - 1, { name, type, formula, deps, fn, cache: null });
-      return schema.length - 1;
-    },
-  };
-  return t;
-}
-
-// ── src/ingest.js ──
-
-// @gcu/strata — ingest: source adapters into the working model (strata-spec §6).
-//
-// v1: CSV/TSV → a typed StrataTable. Schema detection is recon-injectable: pass
-// @gcu/recon's `sniff` for the rich path (roles, units, analytes — so an
-// `Au_gpt` column arrives typed number with unit g/t and analyte Au), or omit it
-// and strata uses a minimal built-in sniffer (delimiter + numeric/string only),
-// so it ingests CSV standalone without a recon dependency. recon is *injected*,
-// not imported — keeps strata zero-dep and lets a Works surface pass
-// `(await load('@gcu/recon')).sniff`.
-//
-// Pure, zero-dep (beyond ./values, ./table).
-
-
-// recon type → strata type. Generous matching (recon may say numeric/integer/
-// float/categorical/text); unknown → string.
-function mapReconType(t) {
-  if (!t) return 'string';
-  if (/num|int|float|real|double/i.test(t)) return 'number';
-  if (/cat/i.test(t)) return 'category';
-  return 'string';
-}
-
-// Normalize to \n, split, drop trailing blank lines.
-function splitLines(text) {
-  const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
-  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
-  return lines;
-}
-
-// Pick the delimiter by counting candidates in the header line.
-function detectCsvDelimiter(headerLine) {
-  const cands = [',', '\t', ';', '|'];
-  let best = ',', bestN = -1;
-  for (const d of cands) {
-    const n = headerLine.split(d).length - 1;
-    if (n > bestN) { bestN = n; best = d; }
-  }
-  return best;
-}
-
-// Minimal schema sniffer (the recon-less fallback): delimiter + per-column
-// number-vs-string inference over a sample.
-function builtinSniff(lines) {
-  const delimiter = detectCsvDelimiter(lines[0] || '');
-  const header = (lines[0] || '').split(delimiter);
-  const sample = lines.slice(1, 51);
-  const columns = header.map((name, c) => {
-    let numeric = true, saw = false;
-    for (const ln of sample) {
-      const v = ln.split(delimiter)[c];
-      if (v == null || v.trim() === '') continue;
-      saw = true;
-      if (Number.isNaN(Number(v.trim()))) { numeric = false; break; }
-    }
-    return { name: name.trim(), type: saw && numeric ? 'number' : 'string' };
-  });
-  return { delimiter, columns };
-}
-
-/**
- * Parse CSV/TSV text into a StrataTable.
- * @param {string} text
- * @param {object} [opts]
- * @param {function} [opts.sniff]  @gcu/recon sniff(lines) → manifest. If given,
- *   used for delimiter + rich schema; else the built-in sniffer is used.
- * @param {number} [opts.sampleSize=200]  lines fed to the sniffer.
- */
-function tableFromCsv(text, opts = {}) {
-  const lines = splitLines(text);
-  if (lines.length === 0) return createTable({ schema: [], columns: [], nrows: 0 });
-
-  let delimiter, schema;
-  if (typeof opts.sniff === 'function') {
-    const sample = lines.slice(0, (opts.sampleSize || 200) + 1);
-    const m = opts.sniff(sample);
-    delimiter = m.delimiter || detectCsvDelimiter(lines[0]);
-    schema = m.columns.map((col) => ({
-      name: col.name,
-      type: mapReconType(col.type),
-      ...(col.unit ? { unit: col.unit } : {}),
-      ...(col.role ? { role: col.role } : {}),
-      ...(col.analyte ? { analyte: col.analyte } : {}),
-    }));
-  } else {
-    const s = builtinSniff(lines);
-    delimiter = s.delimiter;
-    schema = s.columns.map((col) => ({ name: col.name, type: col.type }));
-  }
-
-  const ncols = schema.length;
-  const columns = Array.from({ length: ncols }, () => []);
-  for (let i = 1; i < lines.length; i++) {
-    const cells = lines[i].split(delimiter);
-    for (let c = 0; c < ncols; c++) columns[c].push(coerceValue(cells[c], schema[c].type));
-  }
-  return createTable({ schema, columns, nrows: lines.length - 1 });
-}
-
 // ── ../sift/src/predicate.js ──
 
 // @gcu/sift — predicate: a structured, safe boolean-expression spec for filters
@@ -636,6 +355,326 @@ function _wrap(n) { return n && PARENS.has(n.op) ? '(' + _str(n) + ')' : _str(n)
 //     re-exports the same symbols — no source duplication.
 // Surfaces that need the evaluator (plate) get it via @gcu/strata's re-export, so
 // they never double-inline sift alongside strata.
+
+// ── src/table.js ──
+
+// @gcu/strata — table: the in-memory working model (strata-spec §2 role 1, §4
+// layers 1-3). An immutable typed-columnar BASE + a sparse value-patch OVERLAY +
+// DERIVED columns (formula-defined, computed not stored); every read is
+// base⊕overlay, derived columns recompute from it. This is the spine that makes
+// strata auditable and non-destructive by construction: the source is never
+// mutated, edits are an op log, a cell's base value is always recoverable, and
+// derived columns carry their formula (not baked-in values).
+//
+// v1 scope: base + value patches + per-row derived columns. Deferred §4 layers:
+// structural ops (tombstones/inserts/reorder), the view pipeline. Row identity =
+// implicit ordinal (§4.1). Base columns are plain arrays (null-clean); typed-
+// array packing is a windowing-era optimization.
+//
+// Pure (new Function for formulas works in any JS env; no DOM). Node-testable.
+
+
+/**
+ * @param {object} spec
+ * @param {Array<{name,type,unit?,role?,analyte?}>} spec.schema  BASE column descriptors
+ * @param {Array<Array>} spec.columns   per-column base arrays (length nrows)
+ * @param {number} spec.nrows
+ */
+function createTable({ schema, columns, nrows }) {
+  const nbase = columns.length;          // base columns occupy indices 0..nbase-1
+  const overlay = new Map();             // 'r:c' → { value, base }   (base cells only)
+  const derived = new Map();             // colIdx → { name, type, formula, deps, fn, cache }
+  const checks = [];                     // [{ name, formula, pred }] — validation rules that MUST hold
+  const key = (r, c) => r + ':' + c;
+
+  // Undo/redo over overlay edits — "every action reversible" made real, nearly
+  // free off the overlay (which is already an op-log in spirit). Each entry is a
+  // GROUP of cell ops [{r,c,before,after}] where before/after are the overlay
+  // state ({value,base} | null). beginTxn/endTxn collapse a batch (paste, fill,
+  // range-delete) into ONE group so a single undo reverts the whole batch.
+  const undoStack = [], redoStack = [];
+  let txn = null, txnDepth = 0;
+  const ovSnap = (r, c) => { const o = overlay.get(key(r, c)); return o ? { value: o.value, base: o.base } : null; };
+  const ovRestore = (r, c, s) => { const k = key(r, c); if (s) overlay.set(k, { value: s.value, base: s.base }); else overlay.delete(k); };
+  function recordAround(r, c, mutate) {
+    const before = ovSnap(r, c);
+    mutate();
+    const after = ovSnap(r, c);
+    if ((before === null && after === null) || (before && after && before.value === after.value)) return; // no-op
+    const op = { r, c, before, after };
+    if (txn) txn.push(op);
+    else { undoStack.push([op]); redoStack.length = 0; }
+  }
+  function applyGroup(ops, useBefore) {
+    for (let i = ops.length - 1; i >= 0; i--) ovRestore(ops[i].r, ops[i].c, useBefore ? ops[i].before : ops[i].after);
+    invalidateDerived();
+  }
+
+  // Read a cell's effective value by column index (base⊕overlay, or derived).
+  function readValue(c, r, stack) {
+    if (derived.has(c)) return derivedColumn(c, stack)[r];
+    const k = key(r, c);
+    return overlay.has(k) ? overlay.get(k).value : columns[c][r];
+  }
+
+  // Compute (and cache) a derived column. Lazy, with a cycle guard; a per-row
+  // formula error becomes FORMULA_ERROR (rendered as state:error).
+  function derivedColumn(c, stack) {
+    const d = derived.get(c);
+    if (d.cache) return d.cache;
+    stack = stack || new Set();
+    if (stack.has(c)) throw new Error(`strata: cyclic derived column "${d.name}"`);
+    stack.add(c);
+    const depIdx = d.deps.map((n) => schema.findIndex((s) => s.name === n));
+    const out = new Array(nrows);
+    for (let r = 0; r < nrows; r++) {
+      const args = depIdx.map((ci) => readValue(ci, r, stack));
+      try { out[r] = d.fn(...args); } catch { out[r] = FORMULA_ERROR; }
+    }
+    stack.delete(c);
+    d.cache = out;
+    return out;
+  }
+
+  // v1: invalidate ALL derived caches on any base edit (correct; recompute is
+  // lazy on next read). Targeted dependent-only invalidation is a later
+  // optimization that matters at scale, not at v1's small-data regime.
+  function invalidateDerived() { for (const d of derived.values()) d.cache = null; }
+
+  const t = {
+    schema,
+    nrows,
+    get cols() { return schema.length; },
+    get baseCount() { return nbase; },
+    _base: columns,
+    _overlay: overlay,
+
+    isDerived(c) { return derived.has(c); },
+    baseValue(r, c) { return columns[c][r]; },
+    isEdited(r, c) { return overlay.has(key(r, c)); },
+
+    // Merged read: { value, edited, base, derived? }.
+    getCell(r, c) {
+      if (derived.has(c)) return { value: derivedColumn(c)[r], edited: false, base: null, derived: true };
+      const k = key(r, c);
+      if (overlay.has(k)) { const o = overlay.get(k); return { value: o.value, edited: true, base: o.base }; }
+      const v = columns[c][r];
+      return { value: v, edited: false, base: v };
+    },
+
+    // Write a value patch (base columns only — derived cells are computed).
+    setCell(r, c, value) {
+      if (derived.has(c)) return;
+      recordAround(r, c, () => {
+        const k = key(r, c);
+        const base = columns[c][r];
+        if (value === base || (value == null && base == null)) overlay.delete(k);
+        else overlay.set(k, { value, base });
+      });
+      invalidateDerived();
+    },
+
+    revert(r, c) { recordAround(r, c, () => overlay.delete(key(r, c))); invalidateDerived(); },
+    dirtyCount() { return overlay.size; },
+
+    // Change a column's declared type (number/category/string). RELABEL ONLY —
+    // existing values are not re-coerced (the base stays immutable; sort/display
+    // are value-driven, so unaffected). The type drives alignment, the header
+    // glyph, and how FUTURE edits coerce. A schema op (like addDerivedColumn) —
+    // not on the undo stack. Unknown type ignored.
+    setColumnType(c, type) {
+      if (c < 0 || c >= schema.length || !COL_TYPES.includes(type)) return;
+      schema[c] = { ...schema[c], type };
+      const d = derived.get(c); if (d) d.type = type;
+    },
+
+    // ── validation (the trust layer) ──
+    // A check is a sift predicate that MUST hold; checks travel with the doc.
+    // addCheck parses + keeps the rule (throws on bad syntax). runChecks
+    // evaluates every check over the WHOLE table (all rows, effective values
+    // incl. edits + derived) → per-check failed counts + the COMPLETE failing-row
+    // set + a row→cols map of failing cells (for the visible per-cell tint).
+    addCheck({ name, formula }) {
+      const pred = parsePredicate(formula);   // throws on disallowed syntax
+      checks.push({ name: name || formula, formula, pred });
+      return checks.length - 1;
+    },
+    removeCheck(i) { if (i >= 0 && i < checks.length) checks.splice(i, 1); },
+    clearChecks() { checks.length = 0; },
+    get checks() { return checks.map((c) => ({ name: c.name, formula: c.formula })); },
+    get checkCount() { return checks.length; },
+    runChecks() {
+      const nameIdx = new Map(schema.map((s, k) => [s.name, k]));
+      const perCheck = [];
+      const failingRows = new Set();
+      const failingCells = new Map();         // underlyingRow → Set(underlyingCol)
+      for (const c of checks) {
+        const cols = predicateColumns(c.pred).map((n) => nameIdx.get(n)).filter((i) => i != null);
+        let failed = 0;
+        for (let r = 0; r < nrows; r++) {
+          const get = (name) => { const ci = nameIdx.get(name); return ci == null ? undefined : readValue(ci, r); };
+          let ok; try { ok = evaluatePredicate(c.pred, get); } catch { ok = false; }
+          if (!ok) {
+            failed++;
+            failingRows.add(r);
+            let set = failingCells.get(r); if (!set) { set = new Set(); failingCells.set(r, set); }
+            for (const ci of cols) set.add(ci);
+          }
+        }
+        perCheck.push({ name: c.name, formula: c.formula, failed, columns: cols });
+      }
+      return { checks: perCheck, failingRows, failingCells, total: failingRows.size };
+    },
+
+    // ── undo / redo (over overlay edits) ──
+    // beginTxn/endTxn bracket a batch so it collapses to one undo step; nesting
+    // is depth-counted (loom's batched writes never nest, but it's safe). A bare
+    // setCell outside a txn is its own one-op group.
+    beginTxn() { txnDepth++; if (!txn) txn = []; },
+    endTxn() { txnDepth--; if (txnDepth <= 0) { if (txn && txn.length) { undoStack.push(txn); redoStack.length = 0; } txn = null; txnDepth = 0; } },
+    undo() { if (!undoStack.length) return false; const g = undoStack.pop(); applyGroup(g, true); redoStack.push(g); return true; },
+    redo() { if (!redoStack.length) return false; const g = redoStack.pop(); applyGroup(g, false); undoStack.push(g); return true; },
+    canUndo() { return undoStack.length > 0; },
+    canRedo() { return redoStack.length > 0; },
+
+    // The effective values of column c as a fresh array (base⊕overlay, or the
+    // derived computation). The bridge to the rest of the workspace.
+    column(c) {
+      if (derived.has(c)) return derivedColumn(c).slice();
+      const out = columns[c].slice();
+      for (const [k, o] of overlay) {
+        const i = k.indexOf(':');
+        if (Number(k.slice(i + 1)) === c) out[Number(k.slice(0, i))] = o.value;
+      }
+      return out;
+    },
+
+    columnByName(name) {
+      const i = schema.findIndex((s) => s.name === name);
+      return i < 0 ? null : this.column(i);
+    },
+
+    displayAt(r, c) {
+      const v = this.getCell(r, c).value;
+      return v === FORMULA_ERROR ? '#ERR' : fmtCell(v);
+    },
+
+    commitRaw(r, c, raw) { this.setCell(r, c, coerceValue(raw, schema[c].type)); },
+
+    // Add a derived column: a JS formula over existing columns (base or earlier
+    // derived). Appended after the existing columns; returns its index. Throws
+    // on a formula syntax error.
+    addDerivedColumn({ name, formula, type = 'number', unit }) {
+      const { deps, fn } = compileFormula(formula, schema.map((s) => s.name));
+      const field = { name, type, derived: true, formula };
+      if (unit) field.unit = unit;
+      schema.push(field);
+      derived.set(schema.length - 1, { name, type, formula, deps, fn, cache: null });
+      return schema.length - 1;
+    },
+  };
+  return t;
+}
+
+// ── src/ingest.js ──
+
+// @gcu/strata — ingest: source adapters into the working model (strata-spec §6).
+//
+// v1: CSV/TSV → a typed StrataTable. Schema detection is recon-injectable: pass
+// @gcu/recon's `sniff` for the rich path (roles, units, analytes — so an
+// `Au_gpt` column arrives typed number with unit g/t and analyte Au), or omit it
+// and strata uses a minimal built-in sniffer (delimiter + numeric/string only),
+// so it ingests CSV standalone without a recon dependency. recon is *injected*,
+// not imported — keeps strata zero-dep and lets a Works surface pass
+// `(await load('@gcu/recon')).sniff`.
+//
+// Pure, zero-dep (beyond ./values, ./table).
+
+
+// recon type → strata type. Generous matching (recon may say numeric/integer/
+// float/categorical/text); unknown → string.
+function mapReconType(t) {
+  if (!t) return 'string';
+  if (/num|int|float|real|double/i.test(t)) return 'number';
+  if (/cat/i.test(t)) return 'category';
+  return 'string';
+}
+
+// Normalize to \n, split, drop trailing blank lines.
+function splitLines(text) {
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+  return lines;
+}
+
+// Pick the delimiter by counting candidates in the header line.
+function detectCsvDelimiter(headerLine) {
+  const cands = [',', '\t', ';', '|'];
+  let best = ',', bestN = -1;
+  for (const d of cands) {
+    const n = headerLine.split(d).length - 1;
+    if (n > bestN) { bestN = n; best = d; }
+  }
+  return best;
+}
+
+// Minimal schema sniffer (the recon-less fallback): delimiter + per-column
+// number-vs-string inference over a sample.
+function builtinSniff(lines) {
+  const delimiter = detectCsvDelimiter(lines[0] || '');
+  const header = (lines[0] || '').split(delimiter);
+  const sample = lines.slice(1, 51);
+  const columns = header.map((name, c) => {
+    let numeric = true, saw = false;
+    for (const ln of sample) {
+      const v = ln.split(delimiter)[c];
+      if (v == null || v.trim() === '') continue;
+      saw = true;
+      if (Number.isNaN(Number(v.trim()))) { numeric = false; break; }
+    }
+    return { name: name.trim(), type: saw && numeric ? 'number' : 'string' };
+  });
+  return { delimiter, columns };
+}
+
+/**
+ * Parse CSV/TSV text into a StrataTable.
+ * @param {string} text
+ * @param {object} [opts]
+ * @param {function} [opts.sniff]  @gcu/recon sniff(lines) → manifest. If given,
+ *   used for delimiter + rich schema; else the built-in sniffer is used.
+ * @param {number} [opts.sampleSize=200]  lines fed to the sniffer.
+ */
+function tableFromCsv(text, opts = {}) {
+  const lines = splitLines(text);
+  if (lines.length === 0) return createTable({ schema: [], columns: [], nrows: 0 });
+
+  let delimiter, schema;
+  if (typeof opts.sniff === 'function') {
+    const sample = lines.slice(0, (opts.sampleSize || 200) + 1);
+    const m = opts.sniff(sample);
+    delimiter = m.delimiter || detectCsvDelimiter(lines[0]);
+    schema = m.columns.map((col) => ({
+      name: col.name,
+      type: mapReconType(col.type),
+      ...(col.unit ? { unit: col.unit } : {}),
+      ...(col.role ? { role: col.role } : {}),
+      ...(col.analyte ? { analyte: col.analyte } : {}),
+    }));
+  } else {
+    const s = builtinSniff(lines);
+    delimiter = s.delimiter;
+    schema = s.columns.map((col) => ({ name: col.name, type: col.type }));
+  }
+
+  const ncols = schema.length;
+  const columns = Array.from({ length: ncols }, () => []);
+  for (let i = 1; i < lines.length; i++) {
+    const cells = lines[i].split(delimiter);
+    for (let c = 0; c < ncols; c++) columns[c].push(coerceValue(cells[c], schema[c].type));
+  }
+  return createTable({ schema, columns, nrows: lines.length - 1 });
+}
 
 // ── src/view.js ──
 
@@ -1107,6 +1146,8 @@ const TYPE = { number: 'number', category: 'category', string: 'string' };
 function createTableProvider(table, view) {
   const readyListeners = [];
   let highlight = null;   // Set<baseOrdinal> | null — rows brushed by an incoming selection
+  let invalidCells = null; // Map<underlyingRow, Set<underlyingCol>> | null — validation failures
+  let invalidCols = null;  // Set<underlyingCol> — columns with ≥1 failing cell (header ⚠ badge)
   // Which columns the active filter touches (for the header funnel glyph),
   // memoized by the filter-predicate identity (a fresh object per setFilter).
   let _fpRef, _fpCols = null;
@@ -1168,11 +1209,15 @@ function createTableProvider(table, view) {
       } else {
         out = { value: cell.value, state: cell.edited ? STATE_EDITED : STATE_RAW, type, style: { text: fmtCell(cell.value) } };
       }
-      // Brushing tints the WHOLE row — empty cells in a brushed row get a blank
-      // highlighted cell so the row tints edge-to-edge (loom skips null cells).
-      if (hl) {
-        if (out == null) return { value: null, state: STATE_RAW, type, style: { text: '', highlight: true } };
-        out.style = { ...out.style, highlight: true };
+      // Brushing tints the whole row (indigo); validation tints failing cells
+      // (caution). Both need a cell object even where the value is empty (loom
+      // skips null cells), so synthesize a blank one when needed.
+      const inv = invalidCells ? !!(invalidCells.get(ur) && invalidCells.get(ur).has(uc)) : false;
+      if (hl || inv) {
+        if (out == null) out = { value: null, state: STATE_RAW, type, style: { text: '' } };
+        else out.style = { ...out.style };
+        if (hl) out.style.highlight = true;
+        if (inv) out.style.invalid = true;
       }
       return out;
     },
@@ -1185,6 +1230,7 @@ function createTableProvider(table, view) {
       if (view && view.sortSpec && view.sortSpec.by === s.name) h.sort = view.sortSpec.dir;
       const fc = filteredCols();
       if (fc && fc.has(s.name)) h.filtered = true;
+      if (invalidCols && invalidCols.has(underC(c))) h.invalid = true;
       return h;
     },
 
@@ -1255,6 +1301,15 @@ function createTableProvider(table, view) {
       notify();
     },
     get highlightCount() { return highlight ? highlight.size : 0; },
+
+    // Validation tint (the trust layer): a row→cols map of failing cells. loom
+    // draws a caution wash on them + a ⚠ on affected column headers. null clears.
+    setInvalid(map) {
+      invalidCells = map || null;
+      invalidCols = null;
+      if (invalidCells) { invalidCols = new Set(); for (const set of invalidCells.values()) for (const c of set) invalidCols.add(c); }
+      notify();
+    },
 
     onReady(cb) {
       readyListeners.push(cb);

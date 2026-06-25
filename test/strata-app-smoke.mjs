@@ -326,6 +326,30 @@ try {
     ? ok(`Columns dialog: reorder (${dlg.order0}→${dlg.orderMoved}) + hide (${dlg.cols0}→${dlg.colsHidden}) + reset/show-all restore`)
     : fail(`columns dialog failed: ${JSON.stringify(dlg)}`);
 
+  // ── validation: a check tints failing cells + summarizes; filter-to-failures ──
+  await page.evaluate(() => window._strataApp.clearFilters());   // clear global + per-column filters
+  const v1 = await page.evaluate(() => {
+    const app = window._strataApp;
+    app.addCheck('au<=5', 'Au_gpt <= 5');
+    const ci = app.table.schema.findIndex((s) => s.name === 'Au_gpt');
+    return { total: app.validation.total, nrows: app.table.nrows, hdr: app.grid.provider.header(ci).invalid, footer: document.getElementById('meta').textContent };
+  });
+  (v1.total > 0 && v1.total < v1.nrows && v1.hdr === true && /failing rows/.test(v1.footer))
+    ? ok(`validation: Au_gpt<=5 → ${v1.total} failing rows + header ⚠ + footer`)
+    : fail(`validation failed: ${JSON.stringify(v1)}`);
+  const v2 = await page.evaluate(() => {
+    const app = window._strataApp;
+    const total = app.validation.total;
+    app.filterToFailures();
+    const shown = app.view.length;
+    app.applyFilter('');
+    app.removeCheck(0);
+    return { total, shown, cleared: app.validation };
+  });
+  (v2.shown === v2.total && v2.cleared === null)
+    ? ok(`filter-to-failures shows ${v2.shown} failing rows; removeCheck clears validation`)
+    : fail(`filter-to-failures/clear failed: ${JSON.stringify(v2)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);

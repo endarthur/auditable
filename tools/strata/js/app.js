@@ -44,6 +44,7 @@ export function createStrataApp(host) {
   let sortState = null;                       // { col, dir } — the click-to-sort cycle
   let globalFilterStr = '';                   // the #filter box expression
   const colFilters = new Map();               // colName → per-column expr string ("Au_gpt > 2")
+  let validation = null;                       // last table.runChecks() result, or null (no checks)
   let detailTable = null, detailName = null;  // the pre-group table, for "← Data"
 
   // ── cross-surface brushing/linking (Works only; host.selection capability) ──
@@ -104,15 +105,21 @@ export function createStrataApp(host) {
     $('#filter').value = '';
     $('#filter').classList.remove('err');
     provider = createTableProvider(table, view);
-    // Track dirty + footer on every commit (loom repaints on its own).
+    // Track dirty + footer + re-validate on every mutation (commit/undo/redo/
+    // revert). Re-validation runs ONCE per edit — and once per BATCH, not per
+    // cell: beginBatch/endBatch gate it so a 100-cell paste validates once.
+    let batching = 0;
+    const afterMutation = () => { host.setDirty(true); updateFooter(); if (!batching) runValidation(); };
     const commit = provider.commit.bind(provider);
-    provider.commit = (r, c, v) => { commit(r, c, v); host.setDirty(true); updateFooter(); };
-    // Undo/redo/revert are mutations too — wrap them to refresh dirty + footer
-    // (loom calls undo/redo on Ctrl+Z/Y; revert is driven by the context menu).
+    provider.commit = (r, c, v) => { commit(r, c, v); afterMutation(); };
     for (const m of ['undo', 'redo', 'revert']) {
       const fn = provider[m] && provider[m].bind(provider);
-      if (fn) provider[m] = (...a) => { const r = fn(...a); host.setDirty(true); updateFooter(); return r; };
+      if (fn) provider[m] = (...a) => { const r = fn(...a); afterMutation(); return r; };
     }
+    const beginB = provider.beginBatch && provider.beginBatch.bind(provider);
+    const endB = provider.endBatch && provider.endBatch.bind(provider);
+    if (beginB) provider.beginBatch = () => { batching++; beginB(); };
+    if (endB) provider.endBatch = () => { endB(); batching = Math.max(0, batching - 1); if (batching === 0) { updateFooter(); runValidation(); } };
 
     if (grid) grid.destroy();
     $('#empty').style.display = 'none';
@@ -128,6 +135,7 @@ export function createStrataApp(host) {
     updateFooter();
     refreshCommands();  // enable/show the table-dependent commands (+ ungroup vis)
     applyHighlight();   // re-tint for the current incoming selection (new provider)
+    runValidation();    // tint any failing cells (checks carried by the doc)
   }
 
   // Open bytes into a live grid. The single entry point — toolbar, drag-drop,
@@ -601,6 +609,45 @@ export function createStrataApp(host) {
     render();
   }
 
+  // ── validation (the trust layer) ──
+  // Run every check over the whole table → tint failing cells + the footer
+  // summary. Cheap re-run on each edit (small-data v1; big-data is on-demand).
+  function runValidation() {
+    if (!table || !provider) return;
+    if (table.checkCount > 0) {
+      validation = table.runChecks();
+      provider.setInvalid(validation.failingCells);
+    } else {
+      validation = null;
+      provider.setInvalid(null);
+    }
+    updateFooter();
+  }
+  function addCheck(name, formula) {
+    if (!table) return false;
+    try { table.addCheck({ name: (name || '').trim() || formula, formula }); runValidation(); return true; }
+    catch (e) { flash('check error: ' + e.message); return false; }
+  }
+  function removeCheck(i) { if (table) { table.removeCheck(i); runValidation(); } }
+  // Filter the grid to JUST the failing rows: rows where ANY check fails = OR of
+  // each check's negation (reusing the same sift engine). Clears other filters
+  // first so it shows exactly the failures, not failures∩current-filter.
+  function filterToFailures() {
+    const cs = table ? table.checks : [];
+    if (!cs.length || !view) return;
+    colFilters.clear();
+    globalFilterStr = cs.map((c) => `!(${c.formula})`).join(' || ');
+    $('#filter').value = globalFilterStr;
+    recomposeFilter();
+  }
+  // Clear the global box + every per-column filter.
+  function clearFilters() {
+    globalFilterStr = '';
+    colFilters.clear();
+    $('#filter').value = '';
+    recomposeFilter();
+  }
+
   // ── chrome ──
   function setTitle() {
     $('#fileName').firstChild.textContent = docName;  // app's own filename display
@@ -615,7 +662,9 @@ export function createStrataApp(host) {
       : `${total.toLocaleString()} rows`;
     const sortStr = sortState ? ` · sort ${table.schema[sortState.col].name} ${sortState.dir === 'desc' ? '↓' : '↑'}` : '';
     const units = table.schema.filter((s) => s.unit).map((s) => `${s.name}=${s.unit}`).join(' ');
-    $('#meta').textContent = `${rowsStr} × ${table.cols} cols${sortStr}${units ? ' · ' + units : ''}`;
+    let meta = `${rowsStr} × ${table.cols} cols${sortStr}${units ? ' · ' + units : ''}`;
+    if (validation) meta += validation.total > 0 ? `  ·  ⚠ ${validation.total.toLocaleString()} failing row${validation.total > 1 ? 's' : ''}` : '  ·  ✓ valid';
+    $('#meta').textContent = meta;
     $('#dirty').textContent = table.dirtyCount();
     $('#dot').style.visibility = host.dirty ? 'visible' : 'hidden';
   }
@@ -734,6 +783,9 @@ export function createStrataApp(host) {
     openFile: (name, bytes) => openBytes(name, bytes),
     saveBytes: buildStrataBytes,
     addColumn, applyFilter, cycleSort, groupByColumn, ungroup, transformWith,
+    addCheck, removeCheck, runValidation, filterToFailures, clearFilters,
+    get checks() { return table ? table.checks : []; },
+    get validation() { return validation; },
     // The command registry — enumerable + invokable by id (the seam a shared
     // palette / keybindings / MCP agent will drive; today the toolbar does).
     get commands() { return commands.map((c) => ({ id: c.id, label: c.label, enabled: c.when ? !!c.when() : true })); },
