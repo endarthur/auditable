@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRecordScanner, scanRecords, scanFileToIndex, splitRecords, parseFields } from '../ext/lamina/src/scan.js';
 import { detectKind } from '../ext/lamina/src/detect.js';
-import { buildMemorySource, buildFileSource, buildSourceFromIndex, indexOf, fileKey } from '../ext/lamina/src/source.js';
+import { buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey } from '../ext/lamina/src/source.js';
 import { createRecordViewSource, LOADING } from '../ext/lamina/src/viewsource.js';
 import { createLaminaProvider } from '../ext/lamina/src/provider.js';
 
@@ -230,6 +230,65 @@ test('buildFileSource: a viewsource over a streamed File windows a deep row', as
   assert.equal(vs.rowCount(), 5000);
   assert.equal(vs.rowAt(4321), LOADING);                        // deep, not loaded
   assert.deepEqual(await vs.ensureRow(4321), ['4321']);         // windowed via File.slice
+});
+
+// A re-openable byte stream (stands in for a decompression: the tape is
+// compression-agnostic — it just needs fresh forward bytes from 0 each open).
+function streamOf(bytes, chunkSize = 256) {
+  let opens = 0;
+  const fn = () => {
+    opens++;
+    let pos = 0;
+    return new ReadableStream({
+      pull(c) {
+        if (pos >= bytes.length) { c.close(); return; }
+        const end = Math.min(pos + chunkSize, bytes.length);
+        c.enqueue(bytes.subarray(pos, end)); pos = end;
+      },
+    });
+  };
+  fn.opens = () => opens;
+  return fn;
+}
+
+test('buildStreamSource: index == memory scan; tape serves forward + near-back, rewinds on far-back', async () => {
+  let csv = 'id,x\n';
+  for (let i = 0; i < 4000; i++) csv += `${i},v${i}\n`;
+  const bytes = B(csv);
+  const mem = buildMemorySource(bytes, { kind: 'delimited', blockSize: 128 });
+  const os = streamOf(bytes);
+  const src = await buildStreamSource({ openStream: os, kind: 'delimited', blockSize: 128, maxBuffer: 4096 });
+  assert.equal(src.rowCount, mem.rowCount);
+  assert.deepEqual([...src.blockOffsets], [...mem.blockOffsets]);
+  const afterScan = os.opens();                                  // the index scan opened the stream once
+
+  const a = await src.readRange(1000, 20);                        // first read → opens the tape
+  assert.deepEqual([...a], [...bytes.subarray(1000, 1020)]);
+  const afterFirst = os.opens();
+  assert.equal(afterFirst, afterScan + 1);
+
+  const b2 = await src.readRange(1005, 10);                       // near-back, inside the buffer → no reopen
+  assert.deepEqual([...b2], [...bytes.subarray(1005, 1015)]);
+  assert.equal(os.opens(), afterFirst);
+
+  const c = await src.readRange(50000, 30);                       // far forward, same stream → no reopen
+  assert.deepEqual([...c], [...bytes.subarray(50000, 50030)]);
+  assert.equal(os.opens(), afterFirst);
+
+  const before = os.opens();
+  const d = await src.readRange(100, 20);                         // far back, past the buffer → REWIND
+  assert.deepEqual([...d], [...bytes.subarray(100, 120)]);
+  assert.equal(os.opens(), before + 1);
+});
+
+test('buildStreamSource: a viewsource over the tape resolves a deep row', async () => {
+  let csv = 'n\n';
+  for (let i = 0; i < 6000; i++) csv += `${i}\n`;
+  const src = await buildStreamSource({ openStream: streamOf(B(csv)), kind: 'text', blockSize: 512, maxBuffer: 8192 });
+  const vs = createRecordViewSource(src, { schema: [{ name: 'n' }], dataStart: 1 });
+  assert.equal(vs.rowCount(), 6000);
+  assert.deepEqual(await vs.ensureRow(5500), ['5500']);          // deep, windowed through the tape
+  assert.deepEqual(await vs.ensureRow(10), ['10']);             // back near the top → rewind, still correct
 });
 
 test('scanFileToIndex == scanRecords (the worker-callable entry); quote BYTE in opts', async () => {

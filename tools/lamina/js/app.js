@@ -8,20 +8,22 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, createLaminaProvider } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, createLaminaProvider } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes } from '@gcu/archive';
+import { Unzip, UnzipInflate } from 'fflate';
 import { idbCache } from './idb-cache.js';
 
-// Resident-zip ceiling: @gcu/archive reads whole-zip-in-memory today (no range
-// reader), and a deflate entry can inflate to many× its stored size, so cap the
-// outer archive. Huge-archive windowing is a later slice gated on an archive
-// range-reader (spec §7a). 256 MB outer keeps us well under the buffer ceiling.
-const MAX_RESIDENT_ARCHIVE = 256 * 1024 * 1024;
+// Below this COMPRESSED size we decompress the archive whole (resident — best UX:
+// true random access + cacheable index). Above it we WINDOW the entry through the
+// rewindable tape (buildStreamSource): no RAM/disk blowup, forward-cheap, far-seek
+// rewinds. (spec §7a — the third backing between resident and materialized-OPFS.)
+const RESIDENT_LIMIT = 32 * 1024 * 1024;
+const residentLimit = () => (typeof window.__LAMINA_RESIDENT_LIMIT__ === 'number' ? window.__LAMINA_RESIDENT_LIMIT__ : RESIDENT_LIMIT);
 
 const $ = (s) => document.querySelector(s);
 let grid = null;
-let lastScan = null;            // 'worker' | 'inline' — which index-scan path the last openFile took (automation hook)
+let lastScan = null;            // 'worker'|'inline'|'cache'|'resident'|'stream' — last index-scan path (automation hook)
 
 // ── off-thread index scan (a @gcu/proc module-call imports the lamina bundle and
 // runs scanFileToIndex over File.stream(); the File crosses by reference, the
@@ -98,31 +100,122 @@ function openInner(label, bytes) {
   mount(label, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
 }
 
-// ── archives (cheap RESIDENT tier, spec §7a): peek at a file inside a zip / a
-// .gz stream. Whole-archive-in-memory (archive has no range reader yet), so it's
-// guarded by size; huge-inner-file windowing is a later slice. ──
+// ── archives (spec §7a): peek inside a zip / a .gz. Small archives decompress
+// whole (RESIDENT — best UX). Large ones WINDOW the entry through the rewindable
+// tape (no RAM/disk), keyed off the COMPRESSED size so we never load a huge zip. ──
 async function openArchive(file, fmt) {
-  if (file.size > MAX_RESIDENT_ARCHIVE)
-    return showNote(file.name, fmt, 'archive too large',
-      `${fmtBytes(file.size)} — resident archive reading is memory-bound; huge-archive windowing is a later slice`,
-      `${fmtBytes(file.size)} · ${fmt}`);
   $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
-  $('#meta').textContent = 'decompressing…';
-  const bytes = new Uint8Array(await file.arrayBuffer());
+
   if (fmt === 'gz') {
-    const inner = await gunzipBytes(bytes);
-    return openInner(`${file.name} › ${file.name.replace(/\.gz$/i, '')}`, inner instanceof Uint8Array ? inner : new Uint8Array(inner));
+    const innerLabel = `${file.name} › ${file.name.replace(/\.gz$/i, '')}`;
+    const gzStream = () => file.stream().pipeThrough(new DecompressionStream('gzip'));
+    if (file.size <= residentLimit()) {
+      $('#meta').textContent = 'decompressing…';
+      const inner = await gunzipBytes(new Uint8Array(await file.arrayBuffer()));
+      return openInner(innerLabel, inner instanceof Uint8Array ? inner : new Uint8Array(inner));
+    }
+    return openStreamSource(file, innerLabel, gzStream, 'gz');           // huge → tape
   }
-  const entries = listZip(bytes).filter((e) => e.type === 'file' && !e.path.endsWith('/'));
+
+  // zip
+  if (file.size <= residentLimit()) {
+    $('#meta').textContent = 'decompressing…';
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const entries = listZip(bytes).filter((e) => e.type === 'file' && !e.path.endsWith('/'));
+    if (!entries.length) return showNote(file.name, 'zip', 'empty archive', 'no files inside', `${fmtBytes(file.size)} · zip`);
+    const openOne = (path) => { const inner = readZip(bytes, path); inner ? openInner(`${file.name} › ${path}`, inner) : showNote(file.name, 'zip', 'entry not found', path, '—'); };
+    return entries.length === 1 ? openOne(entries[0].path) : showPicker(entries, openOne);
+  }
+
+  // huge zip → stream-enumerate (no full load), then window the chosen entry via the tape
+  $('#meta').textContent = 'reading archive…';
+  const entries = (await listZipStreaming(file)).filter((e) => !e.path.endsWith('/'));
   if (!entries.length) return showNote(file.name, 'zip', 'empty archive', 'no files inside', `${fmtBytes(file.size)} · zip`);
-  if (entries.length === 1) return openZipEntry(file.name, bytes, entries[0].path);
-  showPicker(entries, (path) => openZipEntry(file.name, bytes, path));   // many → choose one
+  const openOne = (path) => openStreamSource(file, `${file.name} › ${path}`, zipEntryStream(file, path), 'zip', path);
+  return entries.length === 1 ? openOne(entries[0].path) : showPicker(entries, openOne);
 }
 
-function openZipEntry(archiveName, bytes, path) {
-  const inner = readZip(bytes, path);
-  if (!inner) return showNote(archiveName, 'zip', 'entry not found', path, '—');
-  openInner(`${archiveName} › ${path}`, inner);
+// Build a windowed source over a re-openable decompressed stream (the tape). Peek
+// the decompressed head to detect kind, reuse a cached index when present.
+async function openStreamSource(file, label, openStream, badge, entryPath) {
+  $('#fileName').textContent = label; $('#empty').style.display = 'none';
+  const head = await readHead(openStream, 65536);
+  const d = detectKind(head);
+  if (d.kind === 'binary') return showBinary(label, head.length);        // size unknown until scanned
+  const key = `${fileKey(file)}::${entryPath || badge}`;
+  const cached = await idbCache.get(key);
+  const opts = { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' };
+  let src;
+  if (cached && cached.index) {
+    lastScan = 'cache';
+    src = await buildStreamSource({ openStream, index: cached.index, ...opts });
+  } else {
+    lastScan = 'stream';
+    $('#meta').textContent = 'indexing…';
+    src = await buildStreamSource({ openStream, ...opts });
+    idbCache.set(key, { detect: d, index: indexOf(src) });               // best-effort sidecar
+  }
+  mount(label, d, src, src.totalBytes);
+}
+
+// Pull the first n bytes of a stream (for detection), then cancel.
+async function readHead(openStream, n) {
+  const reader = openStream().getReader();
+  const parts = []; let got = 0;
+  while (got < n) { const { done, value } = await reader.read(); if (done) break; parts.push(value); got += value.length; }
+  try { reader.cancel(); } catch { /* ignore */ }
+  const out = new Uint8Array(Math.min(got, n)); let w = 0;
+  for (const p of parts) { const take = Math.min(p.length, n - w); out.set(p.subarray(0, take), w); w += take; if (w >= n) break; }
+  return out;
+}
+
+// ── streaming zip (fflate Unzip, no full load) — enumerate + per-entry stream ──
+
+// List entries by streaming the zip's local headers (no decompression, low memory).
+function listZipStreaming(file) {
+  return new Promise((resolve, reject) => {
+    const uz = new Unzip(); uz.register(UnzipInflate);
+    const entries = [];
+    uz.onfile = (f) => { entries.push({ path: f.name, size: f.originalSize || 0 }); };  // don't start() → skip data
+    (async () => {
+      const reader = file.stream().getReader();
+      try {
+        for (;;) { const { done, value } = await reader.read(); if (done) { uz.push(new Uint8Array(0), true); break; } uz.push(value, false); }
+        resolve(entries);
+      } catch (e) { reject(e); }
+    })();
+  });
+}
+
+// A re-openable decompressed ReadableStream for ONE zip entry (re-runs the unzip
+// from the start each call = rewindable; backpressured — one chunk per pull).
+function zipEntryStream(file, path) {
+  return () => {
+    let uz, srcReader, started = false, finished = false;
+    const pending = [];
+    const setup = () => {
+      uz = new Unzip(); uz.register(UnzipInflate);
+      uz.onfile = (f) => {
+        if (f.name !== path) return;                                     // others: don't start → fflate skips their data
+        f.ondata = (err, chunk, final) => { if (err) throw err; if (chunk && chunk.length) pending.push(chunk); if (final) finished = true; };
+        f.start();
+      };
+      srcReader = file.stream().getReader();
+    };
+    return new ReadableStream({
+      async pull(controller) {
+        if (!started) { setup(); started = true; }
+        while (pending.length === 0 && !finished) {
+          const { done, value } = await srcReader.read();
+          if (done) { uz.push(new Uint8Array(0), true); break; }
+          uz.push(value, false);
+        }
+        if (pending.length) controller.enqueue(pending.shift());
+        else controller.close();
+      },
+      cancel() { try { srcReader && srcReader.cancel(); } catch { /* ignore */ } },
+    });
+  };
 }
 
 function showPicker(entries, onPick) {

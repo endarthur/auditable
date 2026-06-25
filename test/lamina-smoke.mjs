@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { zipSync, gzipSync } from '../ext/archive/vendor/fflate.module.mjs';
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css' };
 const server = http.createServer((req, res) => {
   const f = path.join(repo, decodeURIComponent(req.url.split('?')[0]));
   if (!f.startsWith(repo) || !fs.existsSync(f)) { res.writeHead(404); res.end(); return; }
@@ -157,6 +157,28 @@ try {
   (gz.rows === 201 && gz.name.includes('log.txt'))
     ? ok(`.gz → decompressed + rendered (${gz.rows} rows, label "${gz.name}")`)
     : fail(`gz open failed: ${JSON.stringify(gz)}`);
+
+  // ── tape: window a zip entry WITHOUT unpacking (forces the streaming path by
+  // dropping the resident threshold to 0) — deep row resolves; reopen hits cache ──
+  let bcsv = 'id,v\n'; for (let i = 0; i < 5000; i++) bcsv += `${i},w${i}\n`;
+  const bigZip = Array.from(zipSync({ 'big.csv': enc.encode(bcsv) }, { level: 6 }));
+  const tape = await page.evaluate(async (arr) => {
+    window.__LAMINA_RESIDENT_LIMIT__ = 0;                                  // force the tape, even for a tiny zip
+    await window._lamina.cache.clear();
+    const file = new File([new Uint8Array(arr)], 'huge.zip');
+    await window._lamina.openFile(file);                                   // stream-enumerate → 1 entry → tape
+    const first = { scan: window._lamina.lastScan, rows: window._laminaVS.rowCount(), name: document.getElementById('fileName').textContent };
+    const deep = await window._laminaVS.ensureRow(4200);                   // forward-windowed through the tape
+    const back = await window._laminaVS.ensureRow(15);                     // far back → rewind, still correct
+    await window._lamina.openFile(file);                                   // reopen → cached stream index
+    const second = window._lamina.lastScan;
+    window.__LAMINA_RESIDENT_LIMIT__ = undefined;
+    return { ...first, deep, back, second };
+  }, bigZip);
+  (tape.scan === 'stream' && tape.rows === 5000 && tape.deep[0] === '4200' && tape.back[0] === '15'
+    && tape.name.includes('big.csv') && tape.second === 'cache')
+    ? ok(`zip entry windowed via tape (no unpack): ${tape.rows} rows, deep=${tape.deep[0]}, rewind-back=${tape.back[0]}, reopen=${tape.second}`)
+    : fail(`tape zip failed: ${JSON.stringify(tape)}`);
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');

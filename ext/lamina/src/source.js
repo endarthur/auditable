@@ -91,3 +91,94 @@ export function buildSourceFromIndex(file, index) {
 export function fileKey(file) {
   return [file.name, file.size, file.lastModified || 0].join(':');
 }
+
+// ── the "tape": a rewindable read head over a forward-only (compressed) stream ──
+//
+// A deflate/gzip stream can't random-seek (back-references + no skip), so this
+// keeps ONE decompression reader + a cursor + a rolling tail buffer. readRange:
+//  · within the buffer        → served free
+//  · forward of the cursor    → pull (inflate) ahead until reached
+//  · behind the buffer        → REWIND: reopen the stream from 0 and fast-forward
+// Sequential / near scrolling is cheap; a far jump inflates proportional to the
+// distance (the inherent cost — surfaced as PENDING). All reads are serialized on
+// a single queue (one tape, one head). `openStream()` must return a FRESH
+// decompressed ReadableStream from offset 0 each call (re-openable = rewindable).
+function makeTape(openStream, { maxBuffer = 16 * 1024 * 1024 } = {}) {
+  let reader = null;          // current decompression reader (null until first read / after rewind)
+  let cursor = 0;             // decompressed bytes pulled so far (next byte the reader yields)
+  let bufStart = 0;           // decompressed offset of the buffer's first byte
+  let chunks = [];            // contiguous decoded chunks covering [bufStart, cursor)
+  let bufLen = 0;             // = cursor - bufStart
+  let eof = false;
+  let q = Promise.resolve();  // serialization queue
+
+  function rewind() {
+    if (reader) { try { reader.cancel(); } catch { /* ignore */ } }
+    reader = openStream().getReader();
+    cursor = 0; bufStart = 0; chunks = []; bufLen = 0; eof = false;
+  }
+
+  async function ensure(end, keepFloor) {
+    while (cursor < end && !eof) {
+      const { done, value } = await reader.read();
+      if (done) { eof = true; break; }
+      chunks.push(value); cursor += value.length; bufLen += value.length;
+      // Evict whole front chunks that are entirely before keepFloor, while over budget.
+      while (bufLen > maxBuffer && chunks.length && bufStart + chunks[0].length <= keepFloor) {
+        const c = chunks.shift(); bufStart += c.length; bufLen -= c.length;
+      }
+    }
+  }
+
+  function slice(off, end) {
+    const out = new Uint8Array(Math.max(0, end - off));
+    let p = bufStart;
+    for (const c of chunks) {
+      const cs = p, ce = p + c.length;
+      const s = Math.max(off, cs), e = Math.min(end, ce);
+      if (s < e) out.set(c.subarray(s - cs, e - cs), s - off);
+      p = ce;
+      if (ce >= end) break;
+    }
+    return out;
+  }
+
+  function read(off, length) {
+    const run = async () => {
+      if (reader === null || off < bufStart) rewind();    // first read, or a jump behind the buffer → rewind
+      const end = off + length;
+      await ensure(end, off);                             // keepFloor = off: never evict what we're about to serve
+      return slice(off, Math.min(end, cursor));           // clamp to EOF
+    };
+    const p = q.then(run);
+    q = p.catch(() => {});                                // keep the queue alive after an error
+    return p;
+  }
+
+  return { read };
+}
+
+/**
+ * Window a forward-only (typically COMPRESSED) byte stream WITHOUT unpacking it to
+ * RAM or disk — the third backing between resident and materialized-OPFS. One
+ * forward pass builds the block index (in DECOMPRESSED byte-space); reads go
+ * through the rewindable tape (see makeTape). `openStream()` returns a fresh
+ * decompressed ReadableStream from 0 each call (a .gz = File→DecompressionStream;
+ * a zip entry = a re-runnable fflate streaming unzip — supplied by the host).
+ * Pass a cached `index` (an `indexOf(source)` value) to SKIP the decompress-scan
+ * on reopen — the tape still serves reads through a fresh `openStream`.
+ * @param {object} opts  { openStream, index?, kind, delimiter, quote, blockSize?, maxBuffer?, onProgress? }
+ * @returns {Promise<source>}  same shape as buildMemorySource (readRange is the tape)
+ */
+export async function buildStreamSource({ openStream, index, kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, maxBuffer, onProgress } = {}) {
+  // The index scan reuses scanFileToIndex over a File-like whose .stream() decompresses.
+  const idx = index || await scanFileToIndex({ stream: openStream, size: 0 }, { kind, quote: quote.charCodeAt(0), blockSize, onProgress });
+  const tape = makeTape(openStream, maxBuffer ? { maxBuffer } : {});
+  return {
+    kind, delimiter, quote, blockSize,
+    blockOffsets: idx.blockOffsets,
+    rowCount: idx.rowCount,
+    totalBytes: idx.totalBytes,                          // DECOMPRESSED size (from the scan)
+    readRange(offset, length) { return tape.read(offset, length); },
+  };
+}
