@@ -80,7 +80,7 @@ function mount(name, d, src, totalBytes) {
   const schema = kind === 'delimited' ? d.schema : [{ name: 'line', type: 'string' }];
   const dataStart = d.dataStart != null ? d.dataStart : (kind === 'delimited' && d.hasHeader ? 1 : 0);
   const baseVs = createRecordViewSource(src, { schema, dataStart });
-  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterMatches: null, sort: null, file: null, bytes: null, force: {} };
+  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterMatches: null, sort: null, hidden: new Set(), file: null, bytes: null, force: {} };
   $('#filter').value = ''; $('#filter').classList.remove('err');     // fresh file → clear filter + sort
   recompute();
 }
@@ -112,31 +112,91 @@ async function recompute() {
   mountView(view, info);
 }
 
-// (Re)create the grid for a view + wire header-click sorting + update the footer.
+// (Re)create the grid for a view + wire header sort/context + column hide/show +
+// update the footer. The provider is wrapped to (a) remap display columns past
+// hidden ones and (b) stamp the sort arrow onto the active column.
 function mountView(vs, info = {}) {
   if (grid) { grid.destroy(); grid = null; }
   const c = current;
+  c.view = vs; c.info = info;                           // remember for a cheap re-render (hide/show)
   $('#fileName').textContent = c.label;
   $('#binary').style.display = 'none';
   $('#empty').style.display = 'none';
   const badge = $('#kindBadge'); badge.style.display = '';
   badge.textContent = c.d.kind === 'delimited' ? `CSV · ${c.d.delimiter === '\t' ? 'TSV' : 'delimited'}` : c.d.kind;
 
-  // Provider with a sort indicator stamped onto the active column's header.
-  const provider = createLaminaProvider(vs, { PENDING });
-  const baseHeader = provider.header.bind(provider);
-  provider.header = (col) => { const h = baseHeader(col); if (c.sort && c.sort.col === col) h.sort = c.sort.dir; return h; };
+  const base = createLaminaProvider(vs, { PENDING });
+  const total = c.baseVs.cols;
+  const vis = [];                                        // display col → underlying col (skipping hidden)
+  for (let i = 0; i < total; i++) if (!c.hidden.has(i)) vis.push(i);
+  const provider = {
+    dims() { return { rows: vs.rowCount(), cols: vis.length }; },
+    cellAt(r, dc) { return base.cellAt(r, vis[dc]); },
+    header(dc) { const uc = vis[dc]; const h = base.header(uc); if (c.sort && c.sort.col === uc) h.sort = c.sort.dir; return h; },
+    rowHeader(r) { return base.rowHeader(r); },
+    onReady(cb) { return base.onReady(cb); },
+  };
 
   grid = createGrid($('#grid'), provider, { readOnly: true, theme: 'dark', defaultColW: c.d.kind === 'text' ? 900 : 130 });
-  if (c.d.kind === 'delimited') grid.onHeaderClick((col) => toggleSort(col));   // click a header to sort
+  if (c.d.kind === 'delimited') {
+    grid.onHeaderClick((dc) => toggleSort(vis[dc]));                                   // click → sort (underlying col)
+    grid.onHeaderContextMenu(({ col, clientX, clientY }) => showColumnMenu(vis[col], clientX, clientY));
+  }
 
-  const shown = vs.rowCount();
-  const base = c.baseVs.rowCount();
-  let rows = info.filtered ? `${shown.toLocaleString()} of ${base.toLocaleString()} rows (filtered)` : `${shown.toLocaleString()} rows`;
+  const shownRows = vs.rowCount();
+  const baseRows = c.baseVs.rowCount();
+  let rows = info.filtered ? `${shownRows.toLocaleString()} of ${baseRows.toLocaleString()} rows (filtered)` : `${shownRows.toLocaleString()} rows`;
   if (info.sorted) rows += ` · sorted ${c.sort.dir} by ${c.schema[c.sort.col].name}`;
-  $('#meta').textContent = `${rows} × ${vs.cols} cols · ${fmtBytes(c.totalBytes)} · ${c.d.kind}`;
+  const cols = c.hidden.size ? `${vis.length} of ${total} cols` : `${vis.length} cols`;
+  $('#meta').textContent = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${c.d.kind}`;
   window._laminaVS = vs;                                // automation hook
 }
+
+// Cheap re-render of the current view (after a column hide/show — the data view
+// is unchanged, only which columns show).
+function rerender() { if (current && current.view) mountView(current.view, current.info); }
+function hideColumn(uc) { if (current) { current.hidden.add(uc); rerender(); } }
+function showColumn(uc) { if (current) { current.hidden.delete(uc); rerender(); } }
+function showAllColumns() { if (current) { current.hidden.clear(); rerender(); } }
+
+// Right-click a column header → sort / filter-by / hide / show.
+function showColumnMenu(uc, x, y) {
+  const c = current; if (!c) return;
+  const name = c.baseVs.header(uc).label;
+  const items = [
+    { label: `Sort ${name} ↑`, action: () => { c.sort = { col: uc, dir: 'asc' }; recompute(); } },
+    { label: `Sort ${name} ↓`, action: () => { c.sort = { col: uc, dir: 'desc' }; recompute(); } },
+  ];
+  if (c.sort && c.sort.col === uc) items.push({ label: 'Clear sort', action: () => { c.sort = null; recompute(); } });
+  items.push({ sep: true }, { label: `Filter by ${name}…`, action: () => { $('#filter').value = `${name} `; $('#filter').focus(); } });
+  items.push({ sep: true }, { label: `Hide ${name}`, action: () => hideColumn(uc) });
+  for (let i = 0; i < c.baseVs.cols; i++) {
+    if (c.hidden.has(i)) items.push({ label: `Show ${c.baseVs.header(i).label}`, action: () => showColumn(i) });
+  }
+  if (c.hidden.size) items.push({ label: 'Show all columns', action: () => showAllColumns() });
+  showMenu(x, y, items);
+}
+
+// A lightweight context menu (items: {label, action} | {sep:true}).
+function showMenu(x, y, items) {
+  closeMenu();
+  const m = document.createElement('div'); m.id = 'ctxmenu';
+  for (const it of items) {
+    if (it.sep) { const s = document.createElement('div'); s.className = 'sep'; m.appendChild(s); continue; }
+    const el = document.createElement('div'); el.className = 'item'; el.textContent = it.label;
+    el.onclick = () => { closeMenu(); it.action(); };
+    m.appendChild(el);
+  }
+  m.style.left = x + 'px'; m.style.top = y + 'px';
+  document.body.appendChild(m);
+  const r = m.getBoundingClientRect();                  // keep on-screen
+  if (r.right > innerWidth) m.style.left = Math.max(0, x - r.width) + 'px';
+  if (r.bottom > innerHeight) m.style.top = Math.max(0, y - r.height) + 'px';
+  setTimeout(() => document.addEventListener('mousedown', onDocDown), 0);
+}
+function onDocDown(e) { const m = document.getElementById('ctxmenu'); if (m && !m.contains(e.target)) closeMenu(); }
+function closeMenu() { const m = document.getElementById('ctxmenu'); if (m) m.remove(); document.removeEventListener('mousedown', onDocDown); }
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 
 // Cycle a column's sort: none → asc → desc → none. Switching columns starts asc.
 function toggleSort(col) {
@@ -467,4 +527,4 @@ $('#filter').addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { e.target.value = ''; applyFilter(''); e.target.blur(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };

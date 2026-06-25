@@ -318,6 +318,22 @@ try {
     ? ok(`go-to-row: row 4000 selected (r0=${go.r0})`)
     : fail(`go-to-row failed: ${JSON.stringify(go)}`);
 
+  // ── column hide / show (remaps display columns past hidden ones) ──
+  const col = await page.evaluate(async () => {
+    window._lamina.open('c.csv', new TextEncoder().encode('a,b,c,d\n1,2,3,4\n5,6,7,8\n'));
+    const all = window._laminaVS.cols;
+    const h0 = window._lamina.grid.provider.header(0).label;
+    window._lamina.hideColumn(1);                        // hide 'b'
+    await window._laminaVS.ensureRow(0);                 // load the block so cellAt is ready
+    const afterHide = { cols: window._lamina.grid.provider.dims().cols, c1: window._lamina.grid.provider.header(1).label, cell1: window._lamina.grid.provider.cellAt(0, 1).value };
+    window._lamina.showAllColumns();
+    const restored = window._lamina.grid.provider.dims().cols;
+    return { all, h0, afterHide, restored };
+  });
+  (col.all === 4 && col.afterHide.cols === 3 && col.afterHide.c1 === 'c' && col.afterHide.cell1 === '3' && col.restored === 4)
+    ? ok(`columns: hide 'b' → ${col.afterHide.cols} cols (display col 1 now '${col.afterHide.c1}'); show all → ${col.restored}`)
+    : fail(`column hide/show failed: ${JSON.stringify(col)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

@@ -49,6 +49,14 @@
   #opts input { width: 72px; }
   #opts input:focus, #opts select:focus { outline: none; border-color: #4a78b0; }
 
+  #ctxmenu {
+    position: fixed; z-index: 40; min-width: 160px; background: #1c1c1c; border: 1px solid #333;
+    border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); font-family: var(--mono); font-size: 12px;
+  }
+  #ctxmenu .item { padding: 5px 10px; border-radius: 3px; color: #ccc; cursor: pointer; white-space: nowrap; }
+  #ctxmenu .item:hover { background: #2e2e2e; }
+  #ctxmenu .sep { height: 1px; background: #2f2f2f; margin: 4px 6px; }
+
   #grid { position: absolute; left: 0; right: 0; top: 38px; bottom: 24px; }
   #empty, #binary {
     position: absolute; inset: 38px 0 24px 0; display: flex; flex-direction: column;
