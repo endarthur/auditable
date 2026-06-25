@@ -177,7 +177,10 @@ function mountView(vs, info = {}) {
     grid.onHeaderContextMenu(({ col, clientX, clientY }) => showColumnMenu(vis[col], clientX, clientY));
   }
   grid.onContextMenu(({ row, col, sel, clientX, clientY }) => showCellMenu(row, col, sel, clientX, clientY));
-  if (c.d.kind === 'delimited') grid.onGutterClick((dc) => showColumnStats(vis[dc]));   // click a distribution glyph → full stats
+  if (c.d.kind === 'delimited') {
+    grid.onGutterClick((dc) => showColumnStats(vis[dc]));               // tap a distribution glyph → full stats
+    grid.onGutterBrush((dc, lo, hi) => brushFilter(vis[dc], lo, hi));   // drag a numeric range → a `between` filter
+  }
 
   const shownRows = vs.rowCount();
   const baseRows = c.baseVs.rowCount();
@@ -1144,6 +1147,12 @@ $('#mData').onclick = () => menuAt($('#mData'), [
   { sep: true },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyFilter(''); } },
   { label: 'Clear sort', action: () => { if (current) { current.sort = null; recompute(); } } },
+  { sep: true },
+  { label: 'Gutter brush', submenu: [
+    { label: (brushMode === 'auto' ? '✓ ' : '') + 'Auto (apply if small, stage if huge)', action: () => setBrushMode('auto') },
+    { label: (brushMode === 'apply' ? '✓ ' : '') + 'Apply on release', action: () => setBrushMode('apply') },
+    { label: (brushMode === 'stage' ? '✓ ' : '') + 'Stage (press Enter to run)', action: () => setBrushMode('stage') },
+  ] },
 ]);
 $('#mView').onclick = () => menuAt($('#mView'), [
   { label: (showGutter ? '✓ ' : '') + 'Column distributions', action: () => { showGutter = !showGutter; refreshGutter(); } },
@@ -1228,6 +1237,31 @@ function applyStatFilter() {
 const GUTTER_H = 26, GUTTER_SAMPLE = 8192, GUTTER_BINS = 22;
 let showGutter = true;
 
+// ── gutter brush → filter ──────────────────────────────────────────────────────
+// Drag a range on a numeric column's histogram → a `col between A and B` filter.
+// Conservative by design: nothing filters during the drag (loom shows a preview
+// band, emits once on release); a tap (< threshold) opens stats instead; Esc
+// cancels. On release we either apply or STAGE (fill the box, press Enter) — auto
+// by row count, since a filter on a huge file is a full scan.
+const BRUSH_AUTO_ROWS = 2_000_000;
+let brushMode = (() => { try { return localStorage.getItem('lamina.brushMode') || 'auto'; } catch { return 'auto'; } })();   // 'auto' | 'apply' | 'stage'
+function setBrushMode(m) { brushMode = m; try { localStorage.setItem('lamina.brushMode', m); } catch { /* ignore */ } }
+const roundSig = (x) => (x === 0 || !Number.isFinite(x) ? x : Number(x.toPrecision(4)));
+
+function brushFilter(uc, lo, hi) {
+  const c = current; if (!c) return;
+  const g = c.gutter && c.gutter[uc];
+  if (!g || g.kind !== 'hist' || g.min == null || g.max == null || !(g.max > g.min)) return showColumnStats(uc);   // categorical / flat → stats, not a range
+  const span = g.max - g.min;
+  const a = roundSig(g.min + lo * span), b = roundSig(g.max != null ? g.min + hi * span : g.max);
+  const name = c.baseVs.header(uc).label;
+  const expr = `${colRef(name)} between ${a} and ${b}`;
+  $('#filter').value = expr; syncFilterClear();
+  const apply = brushMode === 'apply' || (brushMode === 'auto' && c.baseVs.rowCount() < BRUSH_AUTO_ROWS);
+  if (apply) return applyFilter(expr);
+  $('#filter').focus(); $('#meta').textContent = 'filter staged — press Enter to apply';   // big file → don't auto-scan
+}
+
 async function refreshGutter() {
   const c = current; if (!c) return;
   if (!showGutter || c.d.kind !== 'delimited') { c.gutter = null; return rerender(); }
@@ -1270,11 +1304,11 @@ async function computeGutterStats(source, schema, dataStart, decimal) {
     if (!a || !a.n) return null;
     const nullRate = a.nulls / a.n;
     if (a.num) {
-      if (!a.vals.length || !(a.max > a.min)) return { kind: 'hist', bins: [], nullRate, approx: true };
+      if (!a.vals.length || !(a.max > a.min)) return { kind: 'hist', bins: [], nullRate, approx: true, min: a.vals.length ? a.min : null, max: a.vals.length ? a.max : null };
       const lo = a.min, span = a.max - a.min, bins = new Array(GUTTER_BINS).fill(0);
       for (const v of a.vals) { let k = Math.floor((v - lo) / span * GUTTER_BINS); if (k >= GUTTER_BINS) k = GUTTER_BINS - 1; if (k < 0) k = 0; bins[k]++; }
       const mx = Math.max(...bins) || 1;
-      return { kind: 'hist', bins: bins.map((x) => x / mx), nullRate, approx: true };
+      return { kind: 'hist', bins: bins.map((x) => x / mx), nullRate, approx: true, min: a.min, max: a.max };   // min/max → the brush maps a drag fraction to a value range
     }
     const tot = [...a.freq.values()].reduce((s, v) => s + v, 0) || 1;
     const top = [...a.freq.entries()].sort((x, y) => y[1] - x[1]).slice(0, 8);
@@ -1364,7 +1398,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

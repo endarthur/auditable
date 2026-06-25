@@ -668,6 +668,25 @@ try {
     ? ok(`highlight: overlay colours columns [${hl.col}], string ${hl.str}, keyword ${hl.kw}, number ${hl.num} (no CM6)`)
     : fail(`highlight failed: ${JSON.stringify(hl)}`);
 
+  // ── gutter brush → filter (ac.csv still open: 300 rows, grade 0..29.9 numeric).
+  //    A numeric range brush writes `grade between A and B`; apply vs stage by mode. ──
+  const brush = await page.evaluate(async () => {
+    window._lamina.setBrushMode('apply');
+    await window._lamina.applyFilter('');                 // clean slate
+    await window._lamina.brushFilter(0, 0.0, 0.5);        // grade col, lower half of the range (apply → await the scan)
+    const box = document.getElementById('filter').value, rows = window._laminaVS.rowCount();
+    window._lamina.setBrushMode('stage');
+    window._lamina.applyFilter('');
+    window._lamina.brushFilter(0, 0.0, 0.5);             // stage: fills the box, does NOT apply
+    const stagedBox = document.getElementById('filter').value, stagedRows = window._laminaVS.rowCount();
+    window._lamina.setBrushMode('auto'); window._lamina.applyFilter('');
+    return { box, rows, stagedBox, stagedRows };
+  });
+  (/^grade between [\d.]+ and [\d.]+$/.test(brush.box) && brush.rows > 0 && brush.rows < 300
+    && /^grade between/.test(brush.stagedBox) && brush.stagedRows === 300)
+    ? ok(`brush: drag → "${brush.box}" applied (${brush.rows}/300); stage mode fills box but holds (${brush.stagedRows}/300, press Enter)`)
+    : fail(`brush failed: ${JSON.stringify(brush)}`);
+
   // ── responsive: a phone-width viewport → the toolbar wraps to two rows, the
   //    grid drops below it, nothing overflows horizontally ──
   await page.setViewportSize({ width: 360, height: 720 });

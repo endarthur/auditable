@@ -72,6 +72,8 @@ export function createGrid(element, provider, options = {}) {
     headerListeners: [],
     headerContextListeners: [],
     gutterListeners: [],
+    gutterBrushListeners: [],
+    gutterBrush: null,
     contextListeners: [],
     _cleanup: [],
   };
@@ -512,7 +514,11 @@ export function createGrid(element, provider, options = {}) {
   function onHeaderMouseDown(e) {
     if (e.button !== 0) return;
     const c = colBorderAt(e.clientX);
-    if (c < 0) return;                 // not on a border → let click→sort happen
+    if (c < 0) {                       // not on a resize border — maybe a gutter brush
+      const rect = colHdr.getBoundingClientRect();
+      if (M.hdrGutterH > 0 && (e.clientY - rect.top) > M.hdrLabelH) { startGutterBrush(e, rect); }
+      return;                          // (label area is inert: sort lives in the menu)
+    }
     e.preventDefault();
     g.suppressHeaderClick = true;      // the ensuing click must not also sort
     const startX = e.clientX, startW = colWOf(c);
@@ -542,6 +548,33 @@ export function createGrid(element, provider, options = {}) {
     autofitCol(c);
   }
 
+  // Gutter brush: drag a range across a column's distribution glyph. NO filtering
+  // happens during the drag — only a preview band; on release we emit onGutterBrush
+  // (col, loFrac, hiFrac) ONCE. A drag under the threshold is a tap → onGutterClick
+  // (stats), not a brush. Esc cancels mid-drag. (The host decides apply-vs-stage.)
+  function startGutterBrush(e, rect) {
+    const col = colAtX(M, e.clientX - rect.left + scroll.scrollLeft);
+    if (col < 0 || col >= M.totalCols) return;
+    e.preventDefault();
+    g.suppressHeaderClick = true;
+    const cw = colWOf(col), colLeft = colXOf(col) - scroll.scrollLeft;
+    const at = (clientX) => Math.max(0, Math.min(cw, clientX - rect.left - colLeft));
+    const x0 = at(e.clientX);
+    g.gutterBrush = { col, x0, x1: x0, moved: false };
+    repaint();
+    const onMove = (ev) => { g.gutterBrush.x1 = at(ev.clientX); if (Math.abs(g.gutterBrush.x1 - x0) > 4) g.gutterBrush.moved = true; repaint(); };
+    const done = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); window.removeEventListener('keydown', onKey, true); };
+    const onUp = () => {
+      const b = g.gutterBrush; done(); g.gutterBrush = null; repaint();
+      if (!b) return;                                  // cancelled by Esc
+      if (!b.moved) { for (const cb of g.gutterListeners) { try { cb(col); } catch (err) { console.error('[loom] onGutterClick threw', err); } } return; }
+      const lo = Math.min(b.x0, b.x1) / cw, hi = Math.max(b.x0, b.x1) / cw;
+      for (const cb of g.gutterBrushListeners) { try { cb(col, lo, hi); } catch (err) { console.error('[loom] onGutterBrush threw', err); } }
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') { done(); g.gutterBrush = null; repaint(); } };
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp); window.addEventListener('keydown', onKey, true);
+  }
+
   // Column-header click → emit the column index (for click-to-sort, etc.).
   // Suppressed right after a border drag / autofit so a resize doesn't sort.
   function onHeaderClickEvt(e) {
@@ -549,10 +582,8 @@ export function createGrid(element, provider, options = {}) {
     const rect = colHdr.getBoundingClientRect();
     const c = colAtX(M, e.clientX - rect.left + scroll.scrollLeft);
     if (c < 0 || c >= M.totalCols) return;
-    if (M.hdrGutterH > 0 && (e.clientY - rect.top) > M.hdrLabelH) {     // clicked the gutter strip, not the label → distribution, not sort
-      for (const cb of g.gutterListeners) { try { cb(c); } catch (err) { console.error('[loom] onGutterClick listener threw', err); } }
-      return;
-    }
+    // (gutter taps/brushes are handled in startGutterBrush via mousedown/up; a label
+    // click is inert — sort lives in the header menu.)
     for (const cb of g.headerListeners) { try { cb(c); } catch (err) { console.error('[loom] onHeaderClick listener threw', err); } }
   }
   // Right-click a column header → emit (col, clientX, clientY); the host builds
@@ -671,6 +702,7 @@ export function createGrid(element, provider, options = {}) {
     onContextMenu(cb) { g.contextListeners.push(cb); return () => { const i = g.contextListeners.indexOf(cb); if (i >= 0) g.contextListeners.splice(i, 1); }; },
     onHeaderContextMenu(cb) { g.headerContextListeners.push(cb); return () => { const i = g.headerContextListeners.indexOf(cb); if (i >= 0) g.headerContextListeners.splice(i, 1); }; },
     onGutterClick(cb) { g.gutterListeners.push(cb); return () => { const i = g.gutterListeners.indexOf(cb); if (i >= 0) g.gutterListeners.splice(i, 1); }; },
+    onGutterBrush(cb) { g.gutterBrushListeners.push(cb); return () => { const i = g.gutterBrushListeners.indexOf(cb); if (i >= 0) g.gutterBrushListeners.splice(i, 1); }; },
     // Column widths (the sparse non-default map). get returns a copy; set
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.

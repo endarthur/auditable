@@ -232,6 +232,14 @@ export function paintColHeaders(g, c0, c1, sx, vw) {
     }
     // Per-column distribution gutter (opt-in via headerGutterH + provider.headerGutter).
     if (metrics.hdrGutterH > 0 && provider.headerGutter) drawGutter(ctx, g, provider.headerGutter(c), x, metrics.hdrLabelH, cw, metrics.hdrGutterH);
+    // Live brush band (preview only — no filtering happens until release).
+    if (g.gutterBrush && g.gutterBrush.col === c) {
+      const b = g.gutterBrush, bx0 = x + Math.min(b.x0, b.x1), bw = Math.abs(b.x1 - b.x0);
+      ctx.fillStyle = g.colors.selFill;
+      ctx.fillRect(bx0, metrics.hdrLabelH, bw, metrics.hdrGutterH);
+      ctx.strokeStyle = g.colors.selStroke; ctx.lineWidth = 1;
+      ctx.strokeRect(bx0 + 0.5, metrics.hdrLabelH + 0.5, Math.max(bw - 1, 0), metrics.hdrGutterH - 1);
+    }
     ctx.restore();
   }
 }
