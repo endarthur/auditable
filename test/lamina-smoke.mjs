@@ -280,10 +280,10 @@ try {
     for (let i = 0; i < 500; i++) csv += `${i},${612105 + i * 10},9291005,${(i * 0.01).toFixed(2)}\n`;
     window._lamina.open('blockmodel.csv', new TextEncoder().encode(csv));
     const vs = window._laminaVS;
-    return { cols: vs.cols, rows: vs.rowCount(), header: window._lamina.grid.provider.header(0).label, first: await vs.ensureRow(0) };
+    return { cols: vs.cols, rows: vs.rowCount(), header: window._lamina.grid.provider.header(0).label, first: await vs.ensureRow(0), footer: document.getElementById('meta').textContent };
   });
-  (pre.cols === 4 && pre.rows === 500 && pre.header === 'Id' && pre.first[0] === '0' && pre.first[1] === '612105')
-    ? ok(`#-preamble: skipped 12 comments → header "${pre.header}", ${pre.rows} data rows (first ${pre.first.join(',')})`)
+  (pre.cols === 4 && pre.rows === 500 && pre.header === 'Id' && pre.first[0] === '0' && pre.first[1] === '612105' && /12 .*comment lines skipped/.test(pre.footer))
+    ? ok(`#-preamble: skipped 12 comments → header "${pre.header}", ${pre.rows} rows; footer notes the skip`)
     : fail(`preamble failed: ${JSON.stringify(pre)}`);
 
   // ── interpretation override: a semicolon file forced to ';' + header off ──
@@ -358,11 +358,11 @@ try {
   const menu = await page.evaluate(async () => {
     window._lamina.open('mm.csv', new TextEncoder().encode('a,b\n1,2\n3,4\n'));   // a file must be open
     document.getElementById('mFile').click();            // open the File menu
-    const fileItems = [...document.querySelectorAll('#ctxmenu .item')].map((e) => e.textContent);
+    const fileItems = [...document.querySelectorAll('.ctxmenu .item')].map((e) => e.textContent);
     document.getElementById('mView').click();            // (re)open View
-    const viewItems = [...document.querySelectorAll('#ctxmenu .item')].map((e) => e.textContent);
+    const viewItems = [...document.querySelectorAll('.ctxmenu .item')].map((e) => e.textContent);
     // click "Interpretation…" and confirm the popover OPENS and STAYS open (the bug)
-    [...document.querySelectorAll('#ctxmenu .item')].find((e) => e.textContent.startsWith('Interpretation')).click();
+    [...document.querySelectorAll('.ctxmenu .item')].find((e) => e.textContent.startsWith('Interpretation')).click();
     await new Promise((r) => setTimeout(r, 20));
     const optsOpen = document.getElementById('opts').classList.contains('show');
     window._lamina.showHelp('filter');                   // Help → Filter syntax
@@ -393,6 +393,23 @@ try {
   (stats.numTitle.includes('grade') && stats.numHasMean && stats.numHasMedian && stats.catHasDistinct && stats.catHasOx)
     ? ok(`column stats: numeric (mean+median) + categorical (distinct + top values)`)
     : fail(`stats failed: ${JSON.stringify(stats)}`);
+
+  // ── click a categorical top-value in the stats panel → filter ──
+  const sclick = await page.evaluate(async () => {
+    let csv = 'id,lito\n';
+    for (let i = 0; i < 300; i++) csv += `${i},${['ox', 'sulf', 'trans'][i % 3]}\n`;
+    window._lamina.open('sc.csv', new TextEncoder().encode(csv));
+    await window._lamina.showColumnStats(1);             // categorical 'lito'
+    await new Promise((r) => setTimeout(r, 40));
+    const sf = document.querySelector('#helpBody .sfilter');
+    const label = sf && sf.textContent;
+    sf.click();                                          // → filter by that value, close overlay
+    await new Promise((r) => setTimeout(r, 40));
+    return { label, hidden: !document.getElementById('help').classList.contains('show'), rows: window._laminaVS.rowCount(), filter: document.getElementById('filter').value };
+  });
+  (sclick.label === 'ox' && sclick.hidden && sclick.rows === 100 && /lito == "ox"/.test(sclick.filter))
+    ? ok(`stats → click "${sclick.label}" filters to it (${sclick.rows} rows, "${sclick.filter}")`)
+    : fail(`stat click-filter failed: ${JSON.stringify(sclick)}`);
 
   // ── cell context menu + copy variants + footer flash ──
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});

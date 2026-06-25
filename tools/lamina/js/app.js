@@ -19,6 +19,11 @@ import { idbCache } from './idb-cache.js';
 // rewindable tape (buildStreamSource): no RAM/disk blowup, forward-cheap, far-seek
 // rewinds. (spec §7a — the third backing between resident and materialized-OPFS.)
 const RESIDENT_LIMIT = 32 * 1024 * 1024;
+// Bumped whenever detection logic changes — a stale cached `detect` (e.g. from
+// before comment-preamble skipping) must NOT be reused. idbCache entries carry
+// this; a mismatch is treated as a miss (re-detect + re-scan).
+const CACHE_VERSION = 2;
+const cacheFresh = (c) => c && c.v === CACHE_VERSION;
 const residentLimit = () => (typeof window.__LAMINA_RESIDENT_LIMIT__ === 'number' ? window.__LAMINA_RESIDENT_LIMIT__ : RESIDENT_LIMIT);
 
 const $ = (s) => document.querySelector(s);
@@ -164,7 +169,8 @@ function mountView(vs, info = {}) {
   let rows = info.filtered ? `${shownRows.toLocaleString()} of ${baseRows.toLocaleString()} rows (filtered)` : `${shownRows.toLocaleString()} rows`;
   if (info.sorted) rows += ` · sorted ${c.sort.dir} by ${c.schema[c.sort.col].name}`;
   const cols = c.hidden.size ? `${vis.length} of ${total} cols` : `${vis.length} cols`;
-  c._meta = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${c.d.kind}`;   // remembered so a copy-flash can restore it
+  const skipped = c.d.skip ? ` · ${c.d.skip} ${c.d.comment ? c.d.comment + '-' : ''}comment lines skipped` : '';
+  c._meta = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${c.d.kind}${skipped}`;   // remembered so a copy-flash can restore it
   $('#meta').textContent = c._meta;
   window._laminaVS = vs;                                // automation hook
 }
@@ -190,18 +196,6 @@ function fmtNumber(num, fmt) {
   return null;
 }
 function setColFormat(uc, fmt) { if (current) { current.colFormats[uc] = fmt; rerender(); } }
-function showFormatMenu(uc, x, y) {
-  const set = (fmt) => setColFormat(uc, fmt);
-  showMenu(x, y, [
-    { label: 'Auto', action: () => set(null) },
-    { label: '0 decimals', action: () => set({ mode: 'fixed', digits: 0 }) },
-    { label: '2 decimals', action: () => set({ mode: 'fixed', digits: 2 }) },
-    { label: '3 decimals', action: () => set({ mode: 'fixed', digits: 3 }) },
-    { label: '4 decimals', action: () => set({ mode: 'fixed', digits: 4 }) },
-    { label: 'Scientific', action: () => set({ mode: 'sci', digits: 3 }) },
-    { label: 'Thousands (1,234)', action: () => set({ mode: 'group' }) },
-  ]);
-}
 function hideColumn(uc) { if (current) { current.hidden.add(uc); rerender(); } }
 function showColumn(uc) { if (current) { current.hidden.delete(uc); rerender(); } }
 function showAllColumns() { if (current) { current.hidden.clear(); rerender(); } }
@@ -309,7 +303,15 @@ function showColumnMenu(uc, x, y) {
   const isNum = c.schema[uc] && c.schema[uc].type === 'number';       // force-type override (fixes a mis-detected column)
   items.push(isNum ? { label: 'Treat as text', action: () => setColType(uc, 'string') }
                    : { label: 'Treat as number', action: () => setColType(uc, 'number') });
-  if (isNum) items.push({ label: 'Number format ▸', action: (r) => showFormatMenu(uc, r.right, r.top) });
+  if (isNum) items.push({ label: 'Number format', submenu: [
+    { label: 'Auto', action: () => setColFormat(uc, null) },
+    { label: '0 decimals', action: () => setColFormat(uc, { mode: 'fixed', digits: 0 }) },
+    { label: '2 decimals', action: () => setColFormat(uc, { mode: 'fixed', digits: 2 }) },
+    { label: '3 decimals', action: () => setColFormat(uc, { mode: 'fixed', digits: 3 }) },
+    { label: '4 decimals', action: () => setColFormat(uc, { mode: 'fixed', digits: 4 }) },
+    { label: 'Scientific', action: () => setColFormat(uc, { mode: 'sci', digits: 3 }) },
+    { label: 'Thousands (1,234)', action: () => setColFormat(uc, { mode: 'group' }) },
+  ] });
   items.push({ sep: true }, { label: `Hide ${name}`, action: () => hideColumn(uc) });
   for (let i = 0; i < c.baseVs.cols; i++) {
     if (c.hidden.has(i)) items.push({ label: `Show ${c.baseVs.header(i).label}`, action: () => showColumn(i) });
@@ -319,25 +321,39 @@ function showColumnMenu(uc, x, y) {
   showMenu(x, y, items);
 }
 
-// A lightweight context menu (items: {label, action} | {sep:true}).
-function showMenu(x, y, items) {
-  closeMenu();
-  const m = document.createElement('div'); m.id = 'ctxmenu';
+// A lightweight context menu with hover submenus. Items: {label, action(rect)} |
+// {label, submenu:[items]} | {sep:true}. Hovering a submenu item opens its child
+// to the right (parent stays); hovering a leaf closes any open child.
+let _menus = [];   // open menu divs, parent → child chain
+function openLevel(items, x, y, level) {
+  closeFrom(level);
+  const m = document.createElement('div'); m.className = 'ctxmenu';
   for (const it of items) {
     if (it.sep) { const s = document.createElement('div'); s.className = 'sep'; m.appendChild(s); continue; }
-    const el = document.createElement('div'); el.className = 'item'; el.textContent = it.label;
-    el.onclick = () => { const r = el.getBoundingClientRect(); closeMenu(); it.action(r); };   // rect → submenus can anchor
+    const el = document.createElement('div'); el.className = 'item';
+    const lab = document.createElement('span'); lab.textContent = it.label; el.appendChild(lab);
+    if (it.submenu) {
+      const arr = document.createElement('span'); arr.className = 'arr'; arr.textContent = '▸'; el.appendChild(arr);
+      const open = () => { const r = el.getBoundingClientRect(); openLevel(it.submenu, r.right - 3, r.top - 5, level + 1); };
+      el.onmouseenter = open;
+      el.onclick = (e) => { e.stopPropagation(); open(); };
+    } else {
+      el.onmouseenter = () => closeFrom(level + 1);      // leaving the submenu-opener row closes the child
+      el.onclick = () => { const r = el.getBoundingClientRect(); closeMenu(); it.action && it.action(r); };
+    }
     m.appendChild(el);
   }
-  m.style.left = x + 'px'; m.style.top = y + 'px';
   document.body.appendChild(m);
-  const r = m.getBoundingClientRect();                  // keep on-screen
-  if (r.right > innerWidth) m.style.left = Math.max(0, x - r.width) + 'px';
-  if (r.bottom > innerHeight) m.style.top = Math.max(0, y - r.height) + 'px';
-  setTimeout(() => document.addEventListener('mousedown', onDocDown), 0);
+  m.style.left = x + 'px'; m.style.top = y + 'px';
+  const r = m.getBoundingClientRect();                   // keep on-screen
+  if (r.right > innerWidth) m.style.left = Math.max(0, x - r.width - (level ? 8 : 0)) + 'px';
+  if (r.bottom > innerHeight) m.style.top = Math.max(0, innerHeight - r.height) + 'px';
+  _menus[level] = m;
 }
-function onDocDown(e) { const m = document.getElementById('ctxmenu'); if (m && !m.contains(e.target)) closeMenu(); }
-function closeMenu() { const m = document.getElementById('ctxmenu'); if (m) m.remove(); document.removeEventListener('mousedown', onDocDown); }
+function closeFrom(level) { for (let i = _menus.length - 1; i >= level; i--) if (_menus[i]) _menus[i].remove(); _menus.length = Math.min(_menus.length, level); }
+function closeMenu() { closeFrom(0); document.removeEventListener('mousedown', onDocDown); }
+function onDocDown(e) { if (!_menus.some((m) => m && m.contains(e.target))) closeMenu(); }
+function showMenu(x, y, items) { closeMenu(); openLevel(items, x, y, 0); setTimeout(() => document.addEventListener('mousedown', onDocDown), 0); }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 
 // Cycle a column's sort: none → asc → desc → none. Switching columns starts asc.
@@ -469,14 +485,14 @@ async function openStreamSource(file, label, openStream, badge, entryPath) {
   const cached = await idbCache.get(key);
   const opts = { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' };
   let src;
-  if (cached && cached.index) {
+  if (cacheFresh(cached) && cached.index) {
     lastScan = 'cache';
     src = await buildStreamSource({ openStream, index: cached.index, ...opts });
   } else {
     lastScan = 'stream';
     $('#meta').textContent = 'indexing…';
     src = await buildStreamSource({ openStream, ...opts });
-    idbCache.set(key, { detect: d, index: indexOf(src) });               // best-effort sidecar
+    idbCache.set(key, { v: CACHE_VERSION, detect: d, index: indexOf(src) });   // best-effort sidecar
   }
   mount(label, d, src, src.totalBytes);
 }
@@ -572,7 +588,7 @@ async function openFile(file, force) {
   // 1. Cache hit → rebuild the source from the stored index, no scan (instant).
   const key = fileKey(file);
   const cached = forced ? null : await idbCache.get(key);
-  if (cached) {
+  if (cacheFresh(cached)) {
     lastScan = 'cache';
     if (cached.detect.kind === 'binary') return showBinary(file.name, file.size);
     $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
@@ -584,7 +600,7 @@ async function openFile(file, force) {
   // 2. Miss (or forced) → detect off the head, scan (off-thread when we can), then cache.
   const sample = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
   const d = detectKind(sample, { force, name: file.name });
-  if (d.kind === 'binary') { if (!forced) idbCache.set(key, { detect: d, index: null }); return showBinary(file.name, file.size); }
+  if (d.kind === 'binary') { if (!forced) idbCache.set(key, { v: CACHE_VERSION, detect: d, index: null }); return showBinary(file.name, file.size); }
   $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
   const opts = { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' };
   const onProgress = (r, t) => { $('#meta').textContent = `indexing… ${t ? Math.round((100 * r) / t) : 0}%`; };
@@ -596,7 +612,7 @@ async function openFile(file, force) {
   } else {
     src = await buildFileSource(file, { ...opts, onProgress }); lastScan = 'inline';            // file:// — inline only
   }
-  if (!forced) idbCache.set(key, { detect: d, index: indexOf(src) });   // cache only the auto interpretation
+  if (!forced) idbCache.set(key, { v: CACHE_VERSION, detect: d, index: indexOf(src) });   // cache only the auto interpretation
   mount(file.name, d, src, file.size);
   current.file = file; current.force = force || {};                 // remember for re-open with new force
 }
@@ -712,6 +728,11 @@ function showOverlay(title, html) {
 function showHelp(topic) { const [title, body] = HELP[topic] || HELP.about; showOverlay(title, body); }
 $('#helpClose').onclick = () => $('#help').classList.remove('show');
 $('#help').onclick = (e) => { if (e.target.id === 'help') $('#help').classList.remove('show'); };
+// Click a categorical top-value in the stats panel → filter to it.
+$('#helpBody').addEventListener('click', (e) => {
+  const sf = e.target.closest('.sfilter');
+  if (sf && _statsCol != null) { $('#help').classList.remove('show'); filterByValue(_statsCol, sf.dataset.v); }
+});
 
 // ── column statistics (respects the current filter) ──
 const fmtN = (x) => x == null ? '—' : (Math.abs(x) >= 1e6 || (x !== 0 && Math.abs(x) < 1e-4) ? x.toExponential(4) : (Number.isInteger(x) ? x.toLocaleString() : x.toPrecision(6).replace(/\.?0+$/, '')));
@@ -732,16 +753,19 @@ function renderStats(st) {
   }
   let h = '<table style="border-collapse:collapse">';
   h += row('count', st.count.toLocaleString()) + row('nulls', st.nulls.toLocaleString()) + row('distinct', st.distinct.toLocaleString() + (st.cappedDistinct ? '+' : ''));
-  h += '</table><div style="margin-top:12px;color:#888">top values</div><table style="border-collapse:collapse;margin-top:4px">';
+  h += '</table><div style="margin-top:12px;color:#888">top values <span style="color:#666">(click to filter)</span></div><table style="border-collapse:collapse;margin-top:4px">';
   for (const t of st.top) {
     const pct = st.count ? (100 * t.n / st.count).toFixed(1) : '0';
-    h += `<tr><td style="color:#ddd;padding-right:18px;max-width:340px;overflow:hidden;text-overflow:ellipsis">${esc(t.value)}</td><td style="text-align:right;color:#bbb">${t.n.toLocaleString()} <span style="color:#777">(${pct}%)</span></td></tr>`;
+    const v = esc(t.value).replace(/"/g, '&quot;');
+    h += `<tr><td style="padding-right:18px;max-width:340px;overflow:hidden;text-overflow:ellipsis"><span class="sfilter" data-v="${v}">${esc(t.value)}</span></td><td style="text-align:right;color:#bbb">${t.n.toLocaleString()} <span style="color:#777">(${pct}%)</span></td></tr>`;
   }
   return h + '</table>';
 }
 
+let _statsCol = null;   // the column the open stats panel describes (for click-to-filter on categorical values)
 async function showColumnStats(uc) {
   const c = current; if (!c) return;
+  _statsCol = uc;
   const name = c.baseVs.header(uc).label;
   const numeric = (c.schema[uc] && c.schema[uc].type) === 'number';
   const suffix = c.filterResult ? ' (filtered)' : '';

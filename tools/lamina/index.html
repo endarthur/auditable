@@ -58,13 +58,16 @@
   #opts input { width: 72px; }
   #opts input:focus, #opts select:focus { outline: none; border-color: #4a78b0; }
 
-  #ctxmenu {
+  .ctxmenu {
     position: fixed; z-index: 40; min-width: 160px; background: #1c1c1c; border: 1px solid #333;
     border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); font-family: var(--mono); font-size: 12px;
   }
-  #ctxmenu .item { padding: 5px 10px; border-radius: 3px; color: #ccc; cursor: pointer; white-space: nowrap; }
-  #ctxmenu .item:hover { background: #2e2e2e; }
-  #ctxmenu .sep { height: 1px; background: #2f2f2f; margin: 4px 6px; }
+  .ctxmenu .item { display: flex; justify-content: space-between; gap: 16px; padding: 5px 10px; border-radius: 3px; color: #ccc; cursor: pointer; white-space: nowrap; }
+  .ctxmenu .item:hover { background: #2e2e2e; }
+  .ctxmenu .item .arr { color: #777; }
+  .ctxmenu .sep { height: 1px; background: #2f2f2f; margin: 4px 6px; }
+  #help .help-body .sfilter { color: #ddd; cursor: pointer; border-bottom: 1px dotted #555; }
+  #help .help-body .sfilter:hover { color: #c89b3c; border-bottom-color: #c89b3c; }
 
   #help { position: absolute; inset: 38px 0 24px 0; z-index: 35; display: none; align-items: center; justify-content: center; background: rgba(10,10,10,0.7); }
   #help.show { display: flex; }
