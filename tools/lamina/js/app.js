@@ -10,7 +10,7 @@
 import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createFilteredViewSource, scanSortKeys, createLaminaProvider } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
-import { detectFormat, listZip, readZip, gunzipBytes } from '@gcu/archive';
+import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
 import { Unzip, UnzipInflate } from 'fflate';
 import { idbCache } from './idb-cache.js';
 
@@ -187,21 +187,41 @@ function openInner(label, bytes) {
   mount(label, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
 }
 
-// ── archives (spec §7a): peek inside a zip / a .gz. Small archives decompress
-// whole (RESIDENT — best UX). Large ones WINDOW the entry through the rewindable
-// tape (no RAM/disk), keyed off the COMPRESSED size so we never load a huge zip. ──
+// Single-stream decoders that have NO browser streaming primitive (only gzip/
+// deflate do via DecompressionStream) → resident-only, size-guarded.
+const SINGLE_STREAM = { zst: unzstdBytes, xz: unxzBytes, bz2: unbz2Bytes };
+
+// ── archives (spec §7a): peek inside zip / tar / gz / zst / xz / bz2. Small
+// archives decompress whole (RESIDENT — best UX). A huge zip/gz WINDOWS the entry
+// through the rewindable tape (no RAM/disk); zst/xz/bz2 have no browser streaming
+// decoder so they stay resident (size-guarded). ──
 async function openArchive(file, fmt) {
   $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
+  const tooLarge = () => showNote(file.name, fmt, 'archive too large',
+    `${fmtBytes(file.size)} — ${fmt} has no streaming decoder; resident decode is memory-bound`, `${fmtBytes(file.size)} · ${fmt}`);
 
   if (fmt === 'gz') {
     const innerLabel = `${file.name} › ${file.name.replace(/\.gz$/i, '')}`;
-    const gzStream = () => file.stream().pipeThrough(new DecompressionStream('gzip'));
     if (file.size <= residentLimit()) {
       $('#meta').textContent = 'decompressing…';
       const inner = await gunzipBytes(new Uint8Array(await file.arrayBuffer()));
-      return openInner(innerLabel, inner instanceof Uint8Array ? inner : new Uint8Array(inner));
+      return openDecompressed(innerLabel, inner instanceof Uint8Array ? inner : new Uint8Array(inner));
     }
-    return openStreamSource(file, innerLabel, gzStream, 'gz');           // huge → tape
+    return openStreamSource(file, innerLabel, () => file.stream().pipeThrough(new DecompressionStream('gzip')), 'gz');
+  }
+
+  if (SINGLE_STREAM[fmt]) {                                   // zst / xz / bz2 — resident only
+    if (file.size > residentLimit()) return tooLarge();
+    $('#meta').textContent = 'decompressing…';
+    const inner = await SINGLE_STREAM[fmt](new Uint8Array(await file.arrayBuffer()));
+    return openDecompressed(`${file.name} › ${file.name.replace(new RegExp('\\.' + fmt + '$', 'i'), '')}`, inner instanceof Uint8Array ? inner : new Uint8Array(inner));
+  }
+
+  if (fmt === 'tar') {                                        // resident multi-entry
+    if (file.size > residentLimit()) return tooLarge();
+    $('#meta').textContent = 'reading archive…';
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    return openTar(file.name, bytes);
   }
 
   // zip
@@ -210,7 +230,7 @@ async function openArchive(file, fmt) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const entries = listZip(bytes).filter((e) => e.type === 'file' && !e.path.endsWith('/'));
     if (!entries.length) return showNote(file.name, 'zip', 'empty archive', 'no files inside', `${fmtBytes(file.size)} · zip`);
-    const openOne = (path) => { const inner = readZip(bytes, path); inner ? openInner(`${file.name} › ${path}`, inner) : showNote(file.name, 'zip', 'entry not found', path, '—'); };
+    const openOne = (path) => { const inner = readZip(bytes, path); inner ? openDecompressed(`${file.name} › ${path}`, inner) : showNote(file.name, 'zip', 'entry not found', path, '—'); };
     return entries.length === 1 ? openOne(entries[0].path) : showPicker(entries, openOne);
   }
 
@@ -219,6 +239,20 @@ async function openArchive(file, fmt) {
   const entries = (await listZipStreaming(file)).filter((e) => !e.path.endsWith('/'));
   if (!entries.length) return showNote(file.name, 'zip', 'empty archive', 'no files inside', `${fmtBytes(file.size)} · zip`);
   const openOne = (path) => openStreamSource(file, `${file.name} › ${path}`, zipEntryStream(file, path), 'zip', path);
+  return entries.length === 1 ? openOne(entries[0].path) : showPicker(entries, openOne);
+}
+
+// Resident bytes from a decompress: if they're a tar (the .tar.gz / .tar.zst
+// case), list its entries; otherwise view them directly.
+function openDecompressed(label, bytes) {
+  if (detectFormat(bytes) === 'tar') return openTar(label, bytes);
+  openInner(label, bytes);
+}
+
+function openTar(label, bytes) {
+  const entries = listTar(bytes).filter((e) => e.type === 'file' && !e.path.endsWith('/'));
+  if (!entries.length) return showNote(label, 'tar', 'empty archive', 'no files inside', '—');
+  const openOne = (path) => { const inner = readTar(bytes, path); inner ? openInner(`${label} › ${path}`, inner) : showNote(label, 'tar', 'entry not found', path, '—'); };
   return entries.length === 1 ? openOne(entries[0].path) : showPicker(entries, openOne);
 }
 
@@ -325,10 +359,13 @@ $('#picker').onclick = (e) => { if (e.target.id === 'picker') $('#picker').class
 async function openFile(file, force) {
   const forced = force && Object.keys(force).length > 0;              // user overrode detection → fresh, no cache
 
-  // 0. Archive? Peek inside (resident tier). Sniff the head's magic bytes.
-  const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
-  const fmt = detectFormat(head);
-  if (fmt === 'zip' || fmt === 'gz') return openArchive(file, fmt);
+  // 0. Archive? Peek inside. Sniff the head's magic bytes (≥263 for tar's ustar
+  // magic at offset 257). Forcing kind/delimiter skips the archive route.
+  if (!forced) {
+    const head = new Uint8Array(await file.slice(0, 512).arrayBuffer());
+    const fmt = detectFormat(head);
+    if (fmt === 'zip' || fmt === 'gz' || fmt === 'tar' || fmt === 'zst' || fmt === 'xz' || fmt === 'bz2') return openArchive(file, fmt);
+  }
 
   // 1. Cache hit → rebuild the source from the stored index, no scan (instant).
   const key = fileKey(file);

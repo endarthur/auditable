@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { zipSync, gzipSync } from '../ext/archive/vendor/fflate.module.mjs';
+import { writeTar } from '../ext/archive/src/tar.js';
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css' };
@@ -227,6 +228,29 @@ try {
   (srt.a0 <= srt.a1 && srt.dTop === srt.expectMax && srt.fRows === srt.expectFiltered && srt.fTop === srt.expectFTop)
     ? ok(`sort: asc (${srt.a0}≤${srt.a1}), desc top=${srt.dTop}; filter+sort → ${srt.fRows} rows, top=${srt.fTop}`)
     : fail(`sort failed: ${JSON.stringify(srt)}`);
+
+  // ── tar (multi-entry) + .tar.gz (decompress → tar picker) ──
+  const tarBytes = writeTar({ 'a.csv': enc.encode('x,y\n1,2\n3,4\n'), 'b.csv': enc.encode('p\nq\nr\n') });
+  const tarArr = Array.from(tarBytes);
+  const tar = await page.evaluate(async (arr) => {
+    await window._lamina.openFile(new File([new Uint8Array(arr)], 'bundle.tar'));
+    const items = [...document.querySelectorAll('#picker.show .pk-item .pk-name')].map((n) => n.textContent);
+    document.querySelectorAll('#picker .pk-item')[0].click();
+    await new Promise((r) => setTimeout(r, 60));
+    return { items, cols: window._laminaVS.cols };
+  }, tarArr);
+  (tar.items.length === 2 && tar.items.includes('a.csv') && tar.cols === 2)
+    ? ok(`tar → picker (${tar.items.join(', ')}), entry → ${tar.cols} cols`)
+    : fail(`tar failed: ${JSON.stringify(tar)}`);
+
+  const targzArr = Array.from(gzipSync(writeTar({ 'inner.csv': enc.encode('m,n\n9,8\n') })));
+  const targz = await page.evaluate(async (arr) => {
+    await window._lamina.openFile(new File([new Uint8Array(arr)], 'data.tar.gz'));   // 1-entry tar → auto-opens
+    return { cols: window._laminaVS.cols, name: document.getElementById('fileName').textContent };
+  }, targzArr);
+  (targz.cols === 2 && targz.name.includes('inner.csv'))
+    ? ok(`.tar.gz → decompress → tar entry auto-opened (${targz.name})`)
+    : fail(`.tar.gz failed: ${JSON.stringify(targz)}`);
 
   // ── interpretation override: a semicolon file forced to ';' + header off ──
   const ovr = await page.evaluate(async () => {
