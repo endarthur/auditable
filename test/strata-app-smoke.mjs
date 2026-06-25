@@ -381,6 +381,20 @@ try {
     ? ok('checks persist through .strata save/reopen')
     : fail(`checks round-trip failed: ${JSON.stringify(rt2)}`);
 
+  // ── header ▾ "Require not null" template → a one-click check ──
+  await page.evaluate(() => { window._strataApp.clearFilters(); window._strataApp.table.clearChecks(); window._strataApp.runValidation(); });
+  await page.mouse.click(hbox.x + 186, hbox.y + 12, { button: 'right' });   // Au_gpt header
+  await page.waitForTimeout(60);
+  await page.evaluate(() => { const m = document.querySelector('.strata-ctx'); const it = [...m.querySelectorAll('div')].find((d) => d.textContent === 'Require not null'); if (it) it.click(); });
+  await page.waitForTimeout(60);
+  const tmpl = await page.evaluate(() => {
+    const app = window._strataApp;
+    return { count: app.table.checkCount, formula: app.table.checks[0] && app.table.checks[0].formula };
+  });
+  (tmpl.count === 1 && tmpl.formula === 'Au_gpt != null')
+    ? ok(`header ▾ "Require not null" → check "${tmpl.formula}"`)
+    : fail(`require-template failed: ${JSON.stringify(tmpl)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);

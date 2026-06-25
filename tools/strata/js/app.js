@@ -447,6 +447,12 @@ export function createStrataApp(host) {
     if (sorted) items.push({ label: 'Clear sort', run: () => applySort(uc, null) });
     items.push('---', { label: colFilters.has(name) ? 'Edit filter…' : 'Filter…', run: () => openColFilter(uc, name) });
     if (colFilters.has(name)) items.push({ label: 'Clear filter', run: () => { colFilters.delete(name); recomposeFilter(); } });
+    // Quick validation checks (one-click predicate templates → the trust layer).
+    items.push('---', { label: 'Require not null', run: () => addCheck(`${name} not null`, `${name} != null`) });
+    if (table.schema[uc].type === 'number') {
+      items.push({ label: 'Require ≥ 0', run: () => addCheck(`${name} ≥ 0`, `${name} >= 0`) });
+      items.push({ label: 'Require range…', run: () => openRangeCheck(name) });
+    }
     items.push('---', { label: 'Hide column', run: () => { provider.hideColumn(uc); grid.refresh(); } });
     const hidn = provider.hiddenColumns();
     for (const hc of hidn) items.push({ label: `Show ${table.schema[hc].name}`, run: () => { provider.showColumn(hc); grid.refresh(); } });
@@ -630,6 +636,20 @@ export function createStrataApp(host) {
     catch (e) { flash('check error: ' + e.message); return false; }
   }
   function removeCheck(i) { if (table) { table.removeCheck(i); runValidation(); } }
+  // Range-check template: prompt min/max → a "col >= lo && col <= hi" check
+  // (either bound optional). The one-click geo QA every column wants.
+  async function openRangeCheck(name) {
+    const v = await formModal(`Range check — ${name}`, [
+      { name: 'lo', label: 'Minimum (optional)', placeholder: 'e.g. 0' },
+      { name: 'hi', label: 'Maximum (optional)', placeholder: 'e.g. 100' },
+    ]);
+    if (!v) return;
+    const lo = (v.lo || '').trim(), hi = (v.hi || '').trim();
+    const parts = [];
+    if (lo !== '') parts.push(`${name} >= ${lo}`);
+    if (hi !== '') parts.push(`${name} <= ${hi}`);
+    if (parts.length) addCheck(`${name} in range`, parts.join(' && '));
+  }
   // Filter the grid to JUST the failing rows: rows where ANY check fails = OR of
   // each check's negation (reusing the same sift engine). Clears other filters
   // first so it shows exactly the failures, not failures∩current-filter.
