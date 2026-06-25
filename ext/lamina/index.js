@@ -716,7 +716,7 @@ function createResultView(source, result, schema, { cacheRows = 1024 } = {}) {
     },
     async ensureRow(r) { if (r < 0 || r >= offsets.length) return null; await loadRow(r); return this.rowAt(r); },
     rowHeaderAt(r) { return (r < 0 || r >= nums.length) ? r + 1 : nums[r] + 1; },   // original (1-based) row
-    header(c) { return { label: schema && schema[c] ? schema[c].name : `col ${c + 1}`, type: this.colType(c) }; },
+    header(c) { return { label: schema && schema[c] ? schema[c].name : `col ${c + 1}`, type: this.colType(c), calc: !!(schema && schema[c] && schema[c].calc) }; },
     colType(c) { return (schema && schema[c] && schema[c].type) || 'string'; },
     onReady(cb) { readyCbs.push(cb); return () => { const i = readyCbs.indexOf(cb); if (i >= 0) readyCbs.splice(i, 1); }; },
   };

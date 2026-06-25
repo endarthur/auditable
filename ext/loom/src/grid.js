@@ -489,7 +489,7 @@ export function createGrid(element, provider, options = {}) {
     // ▽, invalid ⚠ — ~11px each) after it. Reserve them so autofit doesn't clip the
     // glyph against the label or run the label under the sort arrow.
     const obj = h && typeof h === 'object';
-    const glyphExtra = obj && h.type ? 12 : 0;
+    const glyphExtra = obj && (h.type || h.calc) ? 12 : 0;
     let rightExtra = 0;
     if (obj && h.sort) rightExtra += 11;
     if (obj && h.filtered) rightExtra += 11;

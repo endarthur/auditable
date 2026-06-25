@@ -385,7 +385,7 @@ test('scanFilter + createResultView: per-row result read by byte offset', async 
   assert.equal(first[2], 'ox');
   assert.equal(fv.rowHeaderAt(0), result.nums[0] + 1);            // original row number, not 1
   assert.equal(fv.cols, 3);
-  assert.deepEqual(fv.header(1), { label: 'grade', type: 'number' });
+  assert.deepEqual(fv.header(1), { label: 'grade', type: 'number', calc: false });
   // a DEEP result row reads correctly (the offset path, not a block remap)
   const last = await fv.ensureRow(expect - 1);
   assert.equal(Number(last[1]) >= 3, true);

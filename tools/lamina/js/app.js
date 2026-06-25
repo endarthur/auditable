@@ -575,7 +575,7 @@ function applyCalcs() {
   if (!calcs.length) {
     c.source = c._src0; c.baseVs = c._vs0; c.schema = c._schema0; c.d.schema = c._schema0;
   } else {
-    const ext = [...c._schema0, ...calcs.map((x) => ({ name: x.name, type: x.type }))];
+    const ext = [...c._schema0, ...calcs.map((x) => ({ name: x.name, type: x.type, calc: true }))];
     const compiled = calcs.map((x) => ({ name: x.name, type: x.type, fn: compile(x.expr, ext, { decimal: c.d.decimal }) }));
     const baseCount = c._schema0.length;
     c.schema = ext; c.d.schema = ext;
@@ -607,9 +607,44 @@ async function inferCalcType(expr, cols) {
   return nn.length && nn.every((x) => typeof x === 'number') ? 'number' : 'string';
 }
 
+// ── the calc-column manager (the list) ──
+function openCalcManager() {
+  const c = current; if (!c) return;
+  closeOpts(); closeMenu();
+  renderCalcManager();
+  $('#calcManager').classList.add('show');
+}
+function closeCalcManager() { $('#calcManager').classList.remove('show'); }
+function renderCalcManager() {
+  const c = current; if (!c) return;
+  const list = $('#cmList'); list.innerHTML = '';
+  if (!c.calcs.length) {
+    const e = document.createElement('div'); e.className = 'cm-empty';
+    e.textContent = 'No calculated columns yet. Add one to derive a column from a formula — e.g. grade * density.';
+    list.appendChild(e); return;
+  }
+  c.calcs.forEach((cc, i) => {
+    const row = document.createElement('div'); row.className = 'cm-row';
+    const meta = document.createElement('div'); meta.className = 'cm-meta';
+    const nm = document.createElement('span'); nm.className = 'cm-name'; nm.textContent = cc.name;
+    const ex = document.createElement('code'); ex.className = 'cm-expr'; ex.textContent = cc.expr;
+    meta.appendChild(nm); meta.appendChild(ex);
+    const acts = document.createElement('div'); acts.className = 'cm-acts';
+    const ed = document.createElement('button'); ed.textContent = 'Edit'; ed.onclick = () => { closeCalcManager(); _mgrReturn = true; openCalcEditor(i); };
+    const rm = document.createElement('button'); rm.textContent = 'Remove'; rm.onclick = () => { removeCalc(i); renderCalcManager(); };
+    acts.appendChild(ed); acts.appendChild(rm);
+    row.appendChild(meta); row.appendChild(acts);
+    list.appendChild(row);
+  });
+}
+$('#cmClose').onclick = closeCalcManager;
+$('#cmAdd').onclick = () => { closeCalcManager(); _mgrReturn = true; openCalcEditor(null); };
+$('#calcManager').onclick = (e) => { if (e.target.id === 'calcManager') closeCalcManager(); };   // backdrop dismiss
+
 // ── the calc-column editor popover ──
 let _calcEdit = null;                       // index being edited, or null (add mode)
 let _calcDraft = { ok: false };             // { ok, name, expr, type } from the live preview
+let _mgrReturn = false;                     // reopen the manager after the editor closes (came from it)
 
 function openCalcEditor(idx) {
   const c = current; if (!c) return;
@@ -625,7 +660,10 @@ function openCalcEditor(idx) {
   $('#ceName').focus();
   setTimeout(() => document.addEventListener('mousedown', onCalcDown), 0);
 }
-function closeCalcEditor() { $('#calcEditor').classList.remove('show'); document.removeEventListener('mousedown', onCalcDown); }
+function closeCalcEditor() {
+  $('#calcEditor').classList.remove('show'); document.removeEventListener('mousedown', onCalcDown);
+  if (_mgrReturn) { _mgrReturn = false; openCalcManager(); }   // came from the manager → return to it
+}
 function onCalcDown(e) { if (!$('#calcEditor').contains(e.target)) closeCalcEditor(); }
 
 // Live: validate name + expression, show deps, preview over the first visible rows.
@@ -979,7 +1017,7 @@ $('#mFile').onclick = () => menuAt($('#mFile'), [
   { label: 'New window', action: () => window.open(location.href, '_blank') },
 ]);
 $('#mData').onclick = () => menuAt($('#mData'), [
-  { label: 'Add calculated column…', action: () => { if (hasFile()) openCalcEditor(null); } },
+  { label: 'Calculated columns…', action: () => { if (hasFile()) openCalcManager(); } },
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
   { sep: true },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyFilter(''); } },
@@ -1010,7 +1048,7 @@ const HELP = {
     + `• <b>Right-click a column header</b> — Statistics · sort · filter by · number format · treat as text/number · hide/show · autofit · <b>add a calculated column</b>.<br>`
     + `• <b>Right-click a cell or selection</b> — copy (with header / row #) · filter by this value · column statistics.<br><br>`
     + `<b>Filter</b> in the box (Enter) — e.g. <code>grade > 1 && lito == "OXIDE"</code> (see Filter syntax). <b>Sort</b> by clicking a header. <b>Jump</b> with the row # box. In a column's Statistics, click values to build a set filter.<br><br>`
-    + `<b>Calculated columns</b> — the <b>ƒ+ col</b> button (next to the filter), or a header's right-click. A derived column from a formula in the same language as the filter (<code>grade * density</code>, <code>if(au > 1, "ore", "waste")</code>); it's computed on the fly (never written), and you can filter, sort, and stat it like any column. Right-click its header to edit or remove it.`],
+    + `<b>Calculated columns</b> (marked <code>ƒ</code> in the header) — add with the <b>ƒ+ col</b> button (next to the filter) or a header's right-click; see and manage them all under <b>Data → Calculated columns…</b>. A derived column from a formula in the same language as the filter (<code>grade * density</code>, <code>if(au > 1, "ore", "waste")</code>); it's computed on the fly (never written), and you can filter, sort, and stat it like any column.`],
   filter: ['Filter syntax',
     `Type an expression in the <b>filter</b> box — <b>Enter</b> applies, <b>Esc</b> clears.<br><br>`
     + `A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br>`
@@ -1139,10 +1177,10 @@ $('#filterGo').onclick = () => applyFilter($('#filter').value);
 // ── global keys: Ctrl+O open, Esc closes the help overlay ──
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'o') { e.preventDefault(); pickFile(); }
-  else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); }
+  else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

@@ -198,11 +198,14 @@ export function paintColHeaders(g, c0, c1, sx, vw) {
     ctx.rect(x + 1, 0, cw - 2, metrics.hdrH);
     ctx.clip();
     ctx.textAlign = 'left';
-    // Type glyph (muted), then the label.
-    const glyph = (h && typeof h === 'object' && h.type) ? TYPE_GLYPH[h.type] : '';
+    // Type glyph (muted), then the label. A calculated/derived column shows an ƒ
+    // in the derived accent instead of its type glyph, so it's visibly not a
+    // source column.
+    const calc = h && typeof h === 'object' && h.calc;
+    const glyph = calc ? 'ƒ' : ((h && typeof h === 'object' && h.type) ? TYPE_GLYPH[h.type] : '');
     let lx = x + PAD;
     if (glyph) {
-      ctx.fillStyle = g.colors.hdrGlyph || g.colors.cellPending;
+      ctx.fillStyle = calc ? (g.colors.cellDerived || g.colors.hdrText) : (g.colors.hdrGlyph || g.colors.cellPending);
       ctx.fillText(glyph, lx, metrics.hdrH / 2);
       lx += 12;
       ctx.fillStyle = g.colors.hdrText;

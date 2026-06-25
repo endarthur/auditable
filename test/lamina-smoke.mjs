@@ -396,7 +396,7 @@ try {
     return { fileItems, dataItems, viewItems, optsOpen, startGuide, helpShown, helpHasOps, helpClosed: !document.getElementById('help').classList.contains('show') };
   });
   (menu.fileItems.some((t) => t.startsWith('Open')) && menu.fileItems.includes('New window')
-    && menu.dataItems.some((t) => t.startsWith('Add calculated')) && menu.dataItems.includes('Clear sort')
+    && menu.dataItems.some((t) => t.startsWith('Calculated columns')) && menu.dataItems.includes('Clear sort')
     && menu.viewItems.includes('Show all columns') && menu.optsOpen && menu.startGuide && menu.helpShown && menu.helpHasOps && menu.helpClosed)
     ? ok(`menubar: File/Data/View populate · Data→Interpretation opens the popover · Help→filter overlay opens+closes`)
     : fail(`menubar failed: ${JSON.stringify(menu)}`);
@@ -591,13 +591,22 @@ try {
     const row1 = await vs.ensureRow(1);                        // a=3,b=20 → ab=60, big=Y
     await window._lamina.applyFilter('ab > 50');               // filter ON the calc → 2 rows
     const filtered = window._laminaVS.rowCount();
-    window._lamina.removeCalc(1); window._lamina.removeCalc(0); // remove both → back to base
+    // the manager lists both, marks them ƒ, and removes from the list
+    window._lamina.openCalcManager();
+    const mgrShown = document.getElementById('calcManager').classList.contains('show');
+    const listed = [...document.querySelectorAll('#cmList .cm-name')].map((e) => e.textContent);
+    const headerCalc = window._lamina.grid.provider.header(2).calc === true;   // 'ab' header flagged calc → ƒ glyph
+    [...document.querySelectorAll('#cmList .cm-acts button')].find((b) => b.textContent === 'Remove').click();   // remove first via the manager
+    const listedAfter = [...document.querySelectorAll('#cmList .cm-name')].map((e) => e.textContent);
+    document.getElementById('cmClose').click();
+    window._lamina.removeCalc(0);                               // remove the remaining → back to base
     const afterCols = window._laminaVS.cols, afterCalcs = window._lamina.calcs.length;
-    return { cols, h1, h2, ab1: row1[cols - 2], big1: row1[cols - 1], filtered, afterCols, afterCalcs, editorOpen: window.__calcEditorOpened };
+    return { cols, h1, h2, ab1: row1[cols - 2], big1: row1[cols - 1], filtered, afterCols, afterCalcs, editorOpen: window.__calcEditorOpened, mgrShown, listed, headerCalc, listedAfter };
   });
   (calc.cols === 4 && calc.h1 === 'ab' && calc.h2 === 'big' && calc.ab1 === '60' && calc.big1 === 'Y'
-    && calc.filtered === 2 && calc.afterCols === 2 && calc.afterCalcs === 0 && calc.editorOpen)
-    ? ok(`calc columns: ƒ+ col button opens editor; ab=a*b (row1=${calc.ab1}) + big chains off it (${calc.big1}); filter ab>50 → ${calc.filtered}; remove → ${calc.afterCols} cols`)
+    && calc.filtered === 2 && calc.afterCols === 2 && calc.afterCalcs === 0 && calc.editorOpen
+    && calc.mgrShown && calc.headerCalc && calc.listed.join(',') === 'ab,big' && calc.listedAfter.join(',') === 'big')
+    ? ok(`calc columns: ƒ+ col opens editor; header marked ƒ; manager lists [${calc.listed}] → remove → [${calc.listedAfter}]; filter ab>50 → ${calc.filtered}; remove all → ${calc.afterCols} cols`)
     : fail(`calc columns failed: ${JSON.stringify(calc)}`);
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));
