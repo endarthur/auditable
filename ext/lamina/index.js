@@ -478,13 +478,24 @@ function colIndex(name, names, lower) {
   return i;
 }
 
+function unquote(v) {
+  v = v.trim();
+  return (v.length >= 2 && ((v[0] === '"' && v.endsWith('"')) || (v[0] === "'" && v.endsWith("'")))) ? v.slice(1, -1) : v;
+}
+
 function compileTerm(term, names, lower) {
+  // `col in a, b, c` — set membership (the natural OR for multiple categorical values)
+  const im = term.match(/^(.+?)\s+in\s+(.+)$/i);
+  if (im) {
+    const i = colIndex(im[1].trim(), names, lower);
+    const set = new Set(im[2].split(',').map(unquote).filter((s) => s !== ''));
+    return (f) => set.has(String(f[i] ?? ''));
+  }
   const m = term.match(/^(.+?)\s*(!~|~|>=|<=|==|!=|>|<)\s*(.*)$/);
   if (!m) throw new Error(`bad filter term: "${term}"`);
   const i = colIndex(m[1].trim(), names, lower);
   const op = m[2];
-  let val = m[3].trim();
-  if (val.length >= 2 && ((val[0] === '"' && val.endsWith('"')) || (val[0] === "'" && val.endsWith("'")))) val = val.slice(1, -1);
+  const val = unquote(m[3]);
   if (op === '~') { const v = val.toLowerCase(); return (f) => String(f[i] ?? '').toLowerCase().includes(v); }
   if (op === '!~') { const v = val.toLowerCase(); return (f) => !String(f[i] ?? '').toLowerCase().includes(v); }
   const num = Number(val);

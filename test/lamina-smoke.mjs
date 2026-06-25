@@ -407,9 +407,31 @@ try {
     await new Promise((r) => setTimeout(r, 40));
     return { label, hidden: !document.getElementById('help').classList.contains('show'), rows: window._laminaVS.rowCount(), filter: document.getElementById('filter').value };
   });
-  (sclick.label === 'ox' && sclick.hidden && sclick.rows === 100 && /lito == "ox"/.test(sclick.filter))
+  (sclick.label === 'ox' && sclick.rows === 100 && /lito in ox/.test(sclick.filter))
     ? ok(`stats → click "${sclick.label}" filters to it (${sclick.rows} rows, "${sclick.filter}")`)
     : fail(`stat click-filter failed: ${JSON.stringify(sclick)}`);
+
+  // ── multi-select in the stats panel → `col in a, b` (OR) ──
+  const multi = await page.evaluate(async () => {
+    let csv = 'id,lito\n';
+    for (let i = 0; i < 300; i++) csv += `${i},${['ox', 'sulf', 'trans'][i % 3]}\n`;
+    window._lamina.open('sm.csv', new TextEncoder().encode(csv));
+    await window._lamina.showColumnStats(1);
+    await new Promise((r) => setTimeout(r, 40));
+    const spans = [...document.querySelectorAll('#helpBody .sfilter')];
+    spans.find((s) => s.textContent === 'ox').click();      // select ox
+    await new Promise((r) => setTimeout(r, 20));
+    spans.find((s) => s.textContent === 'sulf').click();    // + sulf (panel stays open)
+    await new Promise((r) => setTimeout(r, 30));
+    const rows = window._laminaVS.rowCount();
+    const filter = document.getElementById('filter').value;
+    const stillOpen = document.getElementById('help').classList.contains('show');
+    const selCount = document.querySelectorAll('#helpBody .sfilter.sel').length;
+    return { rows, filter, stillOpen, selCount };
+  });
+  (multi.rows === 200 && /lito in ox, sulf/.test(multi.filter) && multi.stillOpen && multi.selCount === 2)
+    ? ok(`stats multi-select: ox + sulf → "${multi.filter}" (${multi.rows} rows, panel stays open)`)
+    : fail(`multi-select failed: ${JSON.stringify(multi)}`);
 
   // ── cell context menu + copy variants + footer flash ──
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});

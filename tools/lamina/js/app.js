@@ -705,7 +705,8 @@ const HELP = {
     `Type an expression in the <b>filter</b> box — <b>Enter</b> applies, <b>Esc</b> clears.<br><br>`
     + `A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br>`
     + `Operators: <code>==</code> <code>!=</code> <code>&gt;</code> <code>&gt;=</code> <code>&lt;</code> <code>&lt;=</code> <code>~</code> (contains) <code>!~</code> (not contains).<br>`
-    + `Combine with <code>&amp;&amp;</code> — all must hold: <code>grade >= 1 && lito == OXIDE</code>.<br><br>`
+    + `Combine with <code>&amp;&amp;</code> — all must hold: <code>grade >= 1 && lito == OXIDE</code>.<br>`
+    + `Match a set with <code>in</code>: <code>lito in OXIDE, SULF</code> (or click several values in a column's Statistics panel).<br><br>`
     + `Values that look numeric compare numerically, otherwise as text. Column names are case-insensitive; quote values with spaces: <code>name == "Main Zone"</code>.<br>`
     + `Right-click a column header for <b>Filter by &lt;col&gt;…</b> to prefill it.`],
   keys: ['Keyboard & mouse',
@@ -728,11 +729,24 @@ function showOverlay(title, html) {
 function showHelp(topic) { const [title, body] = HELP[topic] || HELP.about; showOverlay(title, body); }
 $('#helpClose').onclick = () => $('#help').classList.remove('show');
 $('#help').onclick = (e) => { if (e.target.id === 'help') $('#help').classList.remove('show'); };
-// Click a categorical top-value in the stats panel → filter to it.
+// Click categorical top-values in the stats panel to build a set filter — toggles
+// each value (panel stays open), applying `col in a, b, …` live. Close to see the
+// grid. (A single value is just `col in v`; deselect all clears the filter.)
 $('#helpBody').addEventListener('click', (e) => {
   const sf = e.target.closest('.sfilter');
-  if (sf && _statsCol != null) { $('#help').classList.remove('show'); filterByValue(_statsCol, sf.dataset.v); }
+  if (!sf || _statsCol == null) return;
+  const v = sf.dataset.v;
+  if (_statsSelected.has(v)) { _statsSelected.delete(v); sf.classList.remove('sel'); }
+  else { _statsSelected.add(v); sf.classList.add('sel'); }
+  applyStatFilter();
 });
+function applyStatFilter() {
+  if (!current || _statsCol == null) return;
+  const name = current.baseVs.header(_statsCol).label;
+  if (_statsSelected.size === 0) { $('#filter').value = ''; syncFilterClear(); return applyFilter(''); }
+  const expr = `${name} in ${[...(_statsSelected)].join(', ')}`;
+  $('#filter').value = expr; syncFilterClear(); applyFilter(expr);
+}
 
 // ── column statistics (respects the current filter) ──
 const fmtN = (x) => x == null ? '—' : (Math.abs(x) >= 1e6 || (x !== 0 && Math.abs(x) < 1e-4) ? x.toExponential(4) : (Number.isInteger(x) ? x.toLocaleString() : x.toPrecision(6).replace(/\.?0+$/, '')));
@@ -753,7 +767,7 @@ function renderStats(st) {
   }
   let h = '<table style="border-collapse:collapse">';
   h += row('count', st.count.toLocaleString()) + row('nulls', st.nulls.toLocaleString()) + row('distinct', st.distinct.toLocaleString() + (st.cappedDistinct ? '+' : ''));
-  h += '</table><div style="margin-top:12px;color:#888">top values <span style="color:#666">(click to filter)</span></div><table style="border-collapse:collapse;margin-top:4px">';
+  h += '</table><div style="margin-top:12px;color:#888">top values <span style="color:#666">(click to toggle a filter set)</span></div><table style="border-collapse:collapse;margin-top:4px">';
   for (const t of st.top) {
     const pct = st.count ? (100 * t.n / st.count).toFixed(1) : '0';
     const v = esc(t.value).replace(/"/g, '&quot;');
@@ -762,10 +776,11 @@ function renderStats(st) {
   return h + '</table>';
 }
 
-let _statsCol = null;   // the column the open stats panel describes (for click-to-filter on categorical values)
+let _statsCol = null;          // the column the open stats panel describes (for click-to-filter)
+const _statsSelected = new Set();   // categorical values toggled in the panel → an `in` filter
 async function showColumnStats(uc) {
   const c = current; if (!c) return;
-  _statsCol = uc;
+  _statsCol = uc; _statsSelected.clear();
   const name = c.baseVs.header(uc).label;
   const numeric = (c.schema[uc] && c.schema[uc].type) === 'number';
   const suffix = c.filterResult ? ' (filtered)' : '';

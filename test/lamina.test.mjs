@@ -597,3 +597,18 @@ test('scanColumnStats: numeric column counts nulls vs non-numeric (bad) separate
   assert.equal(st.bad, 2);          // "oops" + "NA"
   assert.equal(st.max, 3);
 });
+
+test('parseFilter: `in` set membership (OR for multiple categorical values)', () => {
+  const cols = [{ name: 'lito' }];
+  const p = parseFilter('lito in ox, sulf', cols);
+  assert.equal(p(['ox']), true);
+  assert.equal(p(['sulf']), true);
+  assert.equal(p(['trans']), false);
+  // quoted values + a single-value set
+  assert.equal(parseFilter('lito in "Main Zone"', cols)(['Main Zone']), true);
+  // composes with && on another column
+  const p2 = parseFilter('lito in ox,sulf && grade > 1', [{ name: 'lito' }, { name: 'grade' }]);
+  assert.equal(p2(['ox', '2']), true);
+  assert.equal(p2(['ox', '0.5']), false);
+  assert.equal(p2(['trans', '2']), false);
+});

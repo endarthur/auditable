@@ -6,6 +6,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>lamina</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='96' fill='%23121212'/%3E%3Crect x='96' y='150' width='320' height='40' rx='6' fill='%238a9099'/%3E%3Crect x='96' y='236' width='320' height='40' rx='6' fill='%23c89b3c'/%3E%3Crect x='96' y='322' width='320' height='40' rx='6' fill='%238a9099'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#121212">
 <style>
   :root { --mono: 'Space Mono', ui-monospace, monospace; --sans: 'Barlow', system-ui, sans-serif; }
   * { box-sizing: border-box; }
@@ -66,8 +68,9 @@
   .ctxmenu .item:hover { background: #2e2e2e; }
   .ctxmenu .item .arr { color: #777; }
   .ctxmenu .sep { height: 1px; background: #2f2f2f; margin: 4px 6px; }
-  #help .help-body .sfilter { color: #ddd; cursor: pointer; border-bottom: 1px dotted #555; }
+  #help .help-body .sfilter { color: #ddd; cursor: pointer; border-bottom: 1px dotted #555; padding: 0 3px; border-radius: 3px; }
   #help .help-body .sfilter:hover { color: #c89b3c; border-bottom-color: #c89b3c; }
+  #help .help-body .sfilter.sel { background: rgba(200,155,60,0.18); color: #c89b3c; border-bottom-color: transparent; }
 
   #help { position: absolute; inset: 38px 0 24px 0; z-index: 35; display: none; align-items: center; justify-content: center; background: rgba(10,10,10,0.7); }
   #help.show { display: flex; }
