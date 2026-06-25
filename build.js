@@ -1636,13 +1636,14 @@ if (target === 'lamina') {
   // is appended last so its imports resolve against an already-populated map.
   const SPEC = {
     '@gcu/loom': '#loom', '@gcu/lamina': '#lamina', '@gcu/proc': '#proc',
-    '@gcu/archive': '#archive', 'fflate': '#fflate', './idb-cache.js': '#idb-cache',
+    '@gcu/archive': '#archive', '@gcu/dm': '#dm', 'fflate': '#fflate', './idb-cache.js': '#idb-cache',
   };
   const libs = [
     ['loom',    'ext/loom/index.js'],
     ['lamina',  'ext/lamina/index.js'],
     ['proc',    'ext/proc/index.js'],
     ['archive', 'ext/archive/index.js'],
+    ['dm',      'ext/dm/index.js'],
     ['fflate',  'ext/archive/vendor/fflate.module.mjs'],
   ];
   const modules = [];

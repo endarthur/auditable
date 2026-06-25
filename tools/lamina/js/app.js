@@ -11,6 +11,7 @@ import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
+import { detectDM, parseHeader, recordRange, decodeRecord } from '@gcu/dm';
 import { Unzip, UnzipInflate } from 'fflate';
 import { idbCache } from './idb-cache.js';
 
@@ -19,6 +20,9 @@ import { idbCache } from './idb-cache.js';
 // rewindable tape (buildStreamSource): no RAM/disk blowup, forward-cheap, far-seek
 // rewinds. (spec §7a — the third backing between resident and materialized-OPFS.)
 const RESIDENT_LIMIT = 32 * 1024 * 1024;
+// A .dm is decoded to a delimited table resident (so filter/sort/stats work for
+// free). Above this record count we decline (windowed .dm browse is roadmapped).
+const DM_RECORD_CAP = 2_000_000;
 // Bumped whenever detection logic changes — a stale cached `detect` (e.g. from
 // before comment-preamble skipping) must NOT be reused. idbCache entries carry
 // this; a mismatch is treated as a miss (re-detect + re-scan).
@@ -390,6 +394,10 @@ function filterErr(e) { $('#filter').classList.add('err'); $('#meta').textConten
 // Open raw bytes — memory source (the test hook + small files). `force` overrides
 // auto-detection (the interpretation popover re-opens with it).
 function open(name, bytes, force) {
+  if (!force) {                                                        // Datamine .dm?
+    const dmFmt = detectDM(bytes.subarray(0, Math.min(4096, bytes.length)));
+    if (dmFmt) { try { const h = parseHeader(bytes, dmFmt); return mountDm(name, bytes, h, bytes.length); } catch { /* fall through */ } }
+  }
   const d = detectKind(bytes.subarray(0, 65536), { force, name });
   if (d.kind === 'binary') return showBinary(name, bytes.length);
   mount(name, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
@@ -403,6 +411,29 @@ function openInner(label, bytes) {
   if (d.kind === 'binary') return showBinary(label, bytes.length);
   lastScan = 'resident';
   mount(label, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
+}
+
+// ── Datamine .dm (binary table) → decode records to a delimited table and run
+// the normal pipeline (filter/sort/stats/format all work). Resident, capped;
+// huge block models (windowed .dm) are a roadmap follow-on. ──
+function mountDm(name, buf, h, totalBytes) {
+  if (h.recordCount > DM_RECORD_CAP) {
+    return showNote(name, 'dm', 'large .dm',
+      `${h.recordCount.toLocaleString()} records — the .dm view is resident for now (windowed .dm browse is roadmapped)`,
+      `${fmtBytes(totalBytes)} · dm`);
+  }
+  $('#meta').textContent = 'decoding .dm…';
+  const names = h.schema.map((f) => f.name);
+  const lines = [names.join('\t')];
+  for (let i = 0; i < h.recordCount; i++) {
+    const r = recordRange(h, i);
+    const vals = decodeRecord(buf.subarray(r.offset, r.offset + r.length), h);
+    lines.push(vals.map((v) => (v == null ? '' : String(v).replace(/[\t\r\n]/g, ' '))).join('\t'));
+  }
+  const bytes = new TextEncoder().encode(lines.join('\n') + '\n');
+  const d = { kind: 'delimited', delimiter: '\t', quote: '"', hasHeader: true, schema: h.schema, dataStart: 1, decimal: '.' };
+  lastScan = 'resident';
+  mount(name, d, buildMemorySource(bytes, { kind: 'delimited', delimiter: '\t' }), totalBytes);
 }
 
 // Single-stream decoders that have NO browser streaming primitive (only gzip/
@@ -583,6 +614,17 @@ async function openFile(file, force) {
     const head = new Uint8Array(await file.slice(0, 512).arrayBuffer());
     const fmt = detectFormat(head);
     if (fmt === 'zip' || fmt === 'gz' || fmt === 'tar' || fmt === 'zst' || fmt === 'xz' || fmt === 'bz2') return openArchive(file, fmt);
+
+    // Datamine .dm (binary table) — sniff the DD page; resident-decode to a table.
+    const dmHead = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
+    const dmFmt = detectDM(dmHead);
+    if (dmFmt) {
+      try {
+        const h = parseHeader(dmHead, dmFmt);
+        if (h.recordCount > DM_RECORD_CAP) return mountDm(file.name, dmHead, h, file.size);   // shows the size note
+        return mountDm(file.name, new Uint8Array(await file.arrayBuffer()), h, file.size);
+      } catch (e) { console.warn('[lamina] .dm parse failed, falling back', e); }
+    }
   }
 
   // 1. Cache hit → rebuild the source from the stored index, no scan (instant).
@@ -707,7 +749,7 @@ $('#mHelp').onclick = () => menuAt($('#mHelp'), [
 const HELP = {
   start: ['Getting started',
     `<b>lamina</b> opens any file — even a multi-gigabyte one — and lets you scroll, filter, and sort it. It never loads the whole file, so size isn't the problem.<br><br>`
-    + `<b>Open</b> — File → Open (<code>Ctrl+O</code>) or drag a file in. CSV/TSV → table · text → lines · binary → hex · <code>.zip</code>/<code>.tar</code>/<code>.gz</code>/<code>.zst</code>/<code>.xz</code>/<code>.bz2</code> → peek inside.<br><br>`
+    + `<b>Open</b> — File → Open (<code>Ctrl+O</code>) or drag a file in. CSV/TSV → table · Datamine <code>.dm</code> → table · text → lines · binary → hex · <code>.zip</code>/<code>.tar</code>/<code>.gz</code>/<code>.zst</code>/<code>.xz</code>/<code>.bz2</code> → peek inside.<br><br>`
     + `<b>If a file reads wrong</b> — click the <b>kind badge</b> (top-right) or <b>View → Interpretation</b> to force the delimiter, header on/off, skip comment lines, or switch the decimal point/comma.<br><br>`
     + `<b>Most actions live in right-click menus:</b><br>`
     + `• <b>Right-click a column header</b> — Statistics · sort · filter by · number format · treat as text/number · hide/show · autofit.<br>`

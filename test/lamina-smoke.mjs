@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { zipSync, gzipSync } from '../ext/archive/vendor/fflate.module.mjs';
 import { writeTar } from '../ext/archive/src/tar.js';
+import { makeDM } from './dm-make.mjs';
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css' };
@@ -538,6 +539,24 @@ try {
   (fit.before === 0 && fit.fitCount === 2 && fit.w1 > 0 && fit.reset === 0)
     ? ok(`autofit: all ${fit.fitCount} columns sized (long header → ${fit.w1}px), reset clears widths`)
     : fail(`autofit failed: ${JSON.stringify(fit)}`);
+
+  // ── Datamine .dm → decoded table (full pipeline: filter works on it) ──
+  const dmBuf = makeDM(
+    [{ name: 'BHID', type: 'A', width: 8 }, { name: 'FROM', type: 'N' }, { name: 'TO', type: 'N' }, { name: 'AU', type: 'N' }],
+    Array.from({ length: 250 }, (_, i) => ({ BHID: 'DDH' + String(i % 5).padStart(5, '0'), FROM: i, TO: i + 1, AU: (i % 10) * 0.1 })),
+    { precision: 'sp' });
+  const dmArr = Array.from(new Uint8Array(dmBuf));
+  const dm = await page.evaluate(async (arr) => {
+    await window._lamina.openFile(new File([new Uint8Array(arr)], 'model.dm'));
+    const vs = window._laminaVS;
+    const first = await vs.ensureRow(0);
+    const cols = vs.cols, rows = vs.rowCount(), h0 = window._lamina.grid.provider.header(0).label;
+    await window._lamina.applyFilter('AU > 0.5');          // .dm is now a normal table → filter works
+    return { cols, rows, h0, first, filtered: window._laminaVS.rowCount() };
+  }, dmArr);
+  (dm.cols === 4 && dm.rows === 250 && dm.h0 === 'BHID' && dm.first[0] === 'DDH00000' && Number(dm.first[1]) === 0 && dm.filtered > 0 && dm.filtered < 250)
+    ? ok(`.dm → decoded table (${dm.rows} rows × ${dm.cols} cols, BHID='${dm.first[0]}'); filter AU>0.5 → ${dm.filtered}`)
+    : fail(`.dm open failed: ${JSON.stringify(dm)}`);
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
