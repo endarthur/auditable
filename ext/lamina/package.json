@@ -1,0 +1,10 @@
+{
+  "name": "@gcu/lamina",
+  "version": "0.0.1",
+  "description": "A windowed, read-only viewer for arbitrarily huge files — record-offset block index over @gcu/vfs streaming + @gcu/loom. The finest stratum: thin slices (windows) of a file. delimited → grid, text → lines, binary → hex.",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/lamina"
+}

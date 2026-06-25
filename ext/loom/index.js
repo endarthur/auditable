@@ -702,6 +702,7 @@ function createGrid(element, provider, options = {}) {
     sel: null,
     selDrag: false,
     editing: null,
+    readOnly: !!options.readOnly,   // refuse edits/paste/fill/clear (a viewer, e.g. lamina)
     selectListeners: [],
     headerListeners: [],
     headerContextListeners: [],
@@ -840,6 +841,7 @@ function createGrid(element, provider, options = {}) {
 
   // ── edit lifecycle ──
   function startEdit(row, col, initialChar) {
+    if (g.readOnly) return;
     if (g.editing) cancelEdit();
     const cur = provider.cellAt(row, col);
     // Computed (derived) or not-yet-loaded (pending) cells aren't editable —
@@ -965,12 +967,14 @@ function createGrid(element, provider, options = {}) {
     refresh();
   }
   function clearRange() {
+    if (g.readOnly) return;
     const s = normSel(g.sel); if (!s) return;
     const w = [];
     for (let r = s.r0; r <= s.r1; r++) for (let c = s.c0; c <= s.c1; c++) w.push([r, c, '']);
     applyWrites(w);
   }
   function fillDown() {
+    if (g.readOnly) return;
     const s = normSel(g.sel); if (!s || s.r1 === s.r0) return;
     const w = [];
     for (let c = s.c0; c <= s.c1; c++) {
@@ -980,6 +984,7 @@ function createGrid(element, provider, options = {}) {
     applyWrites(w);
   }
   function fillRight() {
+    if (g.readOnly) return;
     const s = normSel(g.sel); if (!s || s.c1 === s.c0) return;
     const w = [];
     for (let r = s.r0; r <= s.r1; r++) {
@@ -1007,14 +1012,14 @@ function createGrid(element, provider, options = {}) {
     e.clipboardData.setData('text/plain', toTSV(m));
   }
   function onCut(e) {
-    if (g.editing) return;
+    if (g.editing || g.readOnly) return;
     const m = selMatrix(); if (!m) return;
     e.preventDefault();
     e.clipboardData.setData('text/plain', toTSV(m));
     clearRange();
   }
   function onPaste(e) {
-    if (g.editing) return; // the cell input pastes into itself
+    if (g.editing || g.readOnly) return; // the cell input pastes into itself
     if (!e.clipboardData) return;
     e.preventDefault();
     const text = e.clipboardData.getData('text/plain');

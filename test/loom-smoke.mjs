@@ -245,6 +245,27 @@ try {
     ? ok(`autofit shrank the 'domain' category column to ${fit}px`)
     : fail(`autofit produced ${fit} (expected a number in [30,100))`);
 
+  // ── readOnly grid refuses edits (lamina's viewer mode) ──
+  const ro = await page.evaluate(async () => {
+    const m = await import('./index.js');
+    const div = document.createElement('div');
+    div.style.cssText = 'position:absolute;left:0;top:0;width:300px;height:160px';
+    document.body.appendChild(div);
+    const p = m.createMemoryProvider({ columns: [{ name: 'a' }], rows: [[1], [2], [3]] });
+    const g = m.createGrid(div, p, { readOnly: true });
+    g.setSelection({ r0: 0, c0: 0, r1: 0, c1: 0 });
+    g.focus();
+    const ta = div.querySelector('textarea');
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: '9', bubbles: true, cancelable: true })); // would start an edit
+    const editingAfterType = !!div.querySelector('input');
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true })); // would clear
+    g.destroy(); div.remove();
+    return { editingAfterType, overlay: p._overlay.size };
+  });
+  (!ro.editingAfterType && ro.overlay === 0)
+    ? ok('readOnly grid refuses edit + delete (overlay stayed empty)')
+    : fail(`readOnly leaked a mutation: ${JSON.stringify(ro)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
