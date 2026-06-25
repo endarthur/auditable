@@ -134,6 +134,12 @@ matches) and are selectivity-bounded (capped, "filter first" rather than OOM).
 - **numen (MCP) integration** — drive lamina as an agent surface (open a file,
   filter, read a column's stats / a windowed slice), with affordances for
   contrived/headless scenarios.
+- **Touch / mobile ergonomics** — the engine is platform-agnostic and, being
+  never-resident, a multi-GB file is actually viable on a tablet / phone-via-DeX
+  (the index + a few windows are all that's resident; just slower scan I/O). The
+  rough edges are interaction: context menus need long-press (today right-click),
+  column-resize drag is fiddly on touch (autofit-all covers it), and the toolbar
+  wants a narrow-width reflow.
 
 ## Versioning
 
