@@ -166,13 +166,14 @@ function mountView(vs, info = {}) {
     onReady(cb) { return base.onReady(cb); },
   };
 
-  grid = createGrid($('#grid'), provider, { readOnly: true, theme: 'dark', defaultColW: c.d.kind === 'text' ? 900 : 130, headerGutterH: (showGutter && c.gutter) ? GUTTER_H : 0 });
+  grid = createGrid($('#grid'), provider, { readOnly: true, theme: 'dark', defaultColW: c.d.kind === 'text' ? 900 : 130, headerGutterH: (showGutter && c.d.kind === 'delimited') ? GUTTER_H : 0 });
   // reapply persisted column widths (stored by UNDERLYING col → display indices)
   const dw = {};
   for (let dc = 0; dc < vis.length; dc++) { const w = c.colWidths[vis[dc]]; if (w != null) dw[dc] = w; }
   if (Object.keys(dw).length) grid.setColWidths(dw);
   if (c.d.kind === 'delimited') {
-    grid.onHeaderClick((dc) => toggleSort(vis[dc]));                                   // click → sort (underlying col)
+    // No sort-on-label-click — confusing for a viewer; sort lives in the header
+    // right-click menu (Sort ↑/↓). The label click is inert; the gutter click → stats.
     grid.onHeaderContextMenu(({ col, clientX, clientY }) => showColumnMenu(vis[col], clientX, clientY));
   }
   grid.onContextMenu(({ row, col, sel, clientX, clientY }) => showCellMenu(row, col, sel, clientX, clientY));
@@ -1120,13 +1121,17 @@ let showGutter = true;
 
 async function refreshGutter() {
   const c = current; if (!c) return;
-  if (!showGutter) { c.gutter = null; return rerender(); }
+  if (!showGutter || c.d.kind !== 'delimited') { c.gutter = null; return rerender(); }
+  // Footer feedback only if the sample scan actually drags (huge file) — a 150ms
+  // debounce, so a small file never flashes the message (and footer-reading tests stay clean).
+  const slow = setTimeout(() => { if (current === c) $('#meta').textContent = 'profiling columns…'; }, 150);
   try {
     const g = await computeGutterStats(c.source, c.schema, c.dataStart, c.d.decimal);
     if (current !== c) return;                       // a newer file opened mid-scan
     c.gutter = g;
   } catch (e) { console.warn('[lamina] gutter stats failed', e); c.gutter = null; }
-  rerender();
+  finally { clearTimeout(slow); }
+  rerender();                                        // repaints with the bars + restores the footer meta (c._meta)
 }
 
 // One bounded scan → per-column { kind:'hist', bins:[0..1], nullRate, approx } |

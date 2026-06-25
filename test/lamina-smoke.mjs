@@ -229,7 +229,7 @@ try {
     ? ok('filter: unknown column → box marked red, no crash')
     : fail(`filter error-handling failed: ${JSON.stringify(bad)}`);
 
-  // ── sort: header-click cycles asc/desc; composes with filter ──
+  // ── sort (via the column menu / toggleSort — not header-click): asc/desc; composes with filter ──
   const srt = await page.evaluate(async () => {
     let csv = 'id,grade\n';
     const grades = [];
