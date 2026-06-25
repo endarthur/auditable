@@ -6,27 +6,25 @@
 // @gcu/expr — parser. A small, *total*, pure expression calculus over the fields
 // of one record. Totality is the security boundary: no loops, recursion, I/O, or
 // unbounded ops; every expression terminates and (post-parse) never throws at eval
-// time. Carried from hopper's rule engine (SPEC-hopper-rules §3), then adapted for
-// the GCU data stack: repeat-aggregates dropped (v1 non-goal), min/max repurposed
-// as scalar functions, a geo math + cast/test function set added, identifiers made
-// case-insensitive (geo columns are AU / IJK / OK-Indic), and the field escape
-// switched from `${id}` to a `["any column name"]` bracket.
+// time. The canonical surface is SQL-WHERE-flavored — the dialect this audience
+// already reads ("filter rows") — with a terse `if()` for the value face, and the
+// blank model deliberately friendlier than SQL's NULL (blank = blank → true; no
+// `= NULL` trap). C-style spellings (&&, ==, ~, <>, single-quoted strings, parenless
+// `in`) still parse, silently tolerated, but the documented/highlighted form is one.
 //
-// Pipeline: tokenize → parse to an analyzable AST. `evaluate` (tree-walk, the
-// reference path) and `compile` (positional closures, the hot path) consume the
-// AST; `deps`/`validate` analyze it. Blank is represented as `null`.
+// Pipeline: lex → parse to an analyzable AST. `evaluate` (tree-walk reference) and
+// `compile` (positional closures, hot path) consume the AST; `deps`/`validate`/
+// `tokenize` analyze it. Blank is `null`.
 //
 // Precedence ladder (low→high): or < and < not < comparison < additive <
-// multiplicative < unary < primary — so `(` is an unambiguous full sub-expression.
+// multiplicative < unary < primary.
 
-// Keyword operators + the words after `is` — matched case-insensitively. A column
-// literally named one of these must use the ["…"] bracket escape.
-const RESERVED = new Set(['and', 'or', 'not', 'between', 'contains', 'in', 'matches', 'is', 'blank', 'filled', 'true', 'false']);
+// Keyword operators / words — matched case-insensitively. A column literally named
+// one of these needs the ["…"] bracket escape.
+const RESERVED = new Set(['and', 'or', 'not', 'between', 'contains', 'in', 'like', 'matches', 'is', 'blank', 'filled', 'true', 'false']);
 
-// Pure total functions: name → [minArgs, maxArgs]. Carried (if/round/int/abs +
-// date parts) + geo math (log/exp/sqrt/pow/min/max/clamp) + explicit absent
-// handling (casts ifnum/coalesce, tests isnum/isnan/isblank/isfilled). `if` is
-// special (lazy branches) but listed here for arity + call-syntax recognition.
+// Pure total functions: name → [minArgs, maxArgs]. `if` is special (lazy branches)
+// but listed for arity + call-syntax recognition.
 const CALLFNS = {
   if: [3, 3], round: [1, 2], int: [1, 1], abs: [1, 1],
   year: [1, 1], month: [1, 1], day: [1, 1],
@@ -40,38 +38,55 @@ class ExprParseError extends Error {
 function fail(msg) { throw new ExprParseError(msg); }
 
 // ── lexer ──────────────────────────────────────────────────────────────────
-// Bare field refs are case-insensitive idents. Because `-` is a valid ident char
-// (so hyphenated column names like OK-Indic lex as one token), SUBTRACTION needs
-// surrounding space (`a - 5`); `a-5` lexes as the single ident "a-5". A `["…"]`
-// bracket escapes any column name (spaces, punctuation, leading digit, keyword).
-function tokenize(src) {
-  // Multi-char ops first (longest match): && || == <= >= != !~ , then single < > = ~.
-  const re = /(\s+)|(\[\s*"[^"]*"\s*\])|("[^"]*")|(&&|\|\||==|<=|>=|!=|!~|<|>|=|~)|([-+*/().,])|(\d+(?:\.\d+)?)|([A-Za-z_][A-Za-z0-9_-]*)/y;
+// Bare field refs are case-insensitive idents (`-` is a valid ident char, so a
+// column like OK-Indic lexes as one token → SUBTRACTION needs spaces: `a - 5`).
+// Strings: "double" (canonical) or 'single' (tolerated). Numbers: ints, decimals,
+// leading-dot (.5) and scientific (1e4, 2.5e-3). `["…"]` escapes any column name.
+const TOKEN_RE = /(\s+)|(\[\s*"[^"]*"\s*\])|("[^"]*"|'[^']*')|(&&|\|\||==|<>|<=|>=|!=|!~|<|>|=|~)|([-+*/(),])|((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][A-Za-z0-9_-]*)/y;
+
+// Lex into tokens carrying source positions. `tolerant` (for highlighting) emits a
+// 1-char 'err' token on an unexpected character instead of throwing.
+function lexAll(src, tolerant) {
   const toks = [];
   let last = 0;
   while (last < src.length) {
-    re.lastIndex = last;
-    const m = re.exec(src);
-    if (!m) fail(`unexpected character at ${last}: "${src.slice(last, last + 8)}"`);
-    last = re.lastIndex;
-    if (m[1] !== undefined) continue;                                       // whitespace
-    else if (m[2] !== undefined) toks.push({ k: 'field', v: m[2].replace(/^\[\s*"/, '').replace(/"\s*\]$/, '') });
-    else if (m[3] !== undefined) toks.push({ k: 'str', v: m[3].slice(1, -1) });
-    else if (m[4] !== undefined) toks.push({ k: 'op', v: m[4] });
-    else if (m[5] !== undefined) toks.push({ k: 'op', v: m[5] });
-    else if (m[6] !== undefined) toks.push({ k: 'num', v: parseFloat(m[6]) });
-    else toks.push({ k: 'word', v: m[7] });
+    TOKEN_RE.lastIndex = last;
+    const m = TOKEN_RE.exec(src);
+    if (!m) {
+      if (tolerant) { toks.push({ k: 'err', v: src[last], start: last, end: last + 1 }); last++; continue; }
+      fail(`unexpected character at ${last}: "${src.slice(last, last + 8)}"`);
+    }
+    const start = last; last = TOKEN_RE.lastIndex;
+    if (m[1] !== undefined) continue;                                        // whitespace
+    let k, v;
+    if (m[2] !== undefined) { k = 'field'; v = m[2].replace(/^\[\s*"/, '').replace(/"\s*\]$/, ''); }
+    else if (m[3] !== undefined) { k = 'str'; v = m[3].slice(1, -1); }       // "double" or 'single'
+    else if (m[4] !== undefined) { k = 'op'; v = m[4]; }
+    else if (m[5] !== undefined) { k = 'op'; v = m[5]; }
+    else if (m[6] !== undefined) { k = 'num'; v = parseFloat(m[6]); }
+    else { k = 'word'; v = m[7]; }
+    toks.push({ k, v, start, end: last });
   }
   return toks;
 }
 
+// SQL LIKE pattern → an anchored RegExp source (% = any run, _ = one char).
+function likeToRegex(pat) {
+  const esc = String(pat).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');   // escape regex specials (NOT % or _)
+  return '^' + esc.replace(/%/g, '.*').replace(/_/g, '.') + '$';
+}
+
 // ── parser ───────────────────────────────────────────────────────────────────
 function parse(src) {
-  const toks = tokenize(src);
+  const toks = lexAll(src, false);
   let i = 0;
   const op = (v) => toks[i] && toks[i].k === 'op' && toks[i].v === v;
-  const word = (v) => toks[i] && toks[i].k === 'word' && toks[i].v.toLowerCase() === v;   // keywords are case-insensitive
+  const word = (v) => toks[i] && toks[i].k === 'word' && toks[i].v.toLowerCase() === v;       // keywords are case-insensitive
+  const peekWord = (v) => toks[i + 1] && toks[i + 1].k === 'word' && toks[i + 1].v.toLowerCase() === v;
   const eatOp = (v) => { if (!op(v)) fail(`expected '${v}'`); i++; };
+  const eatStr = () => { if (!toks[i] || toks[i].k !== 'str') fail('expected a quoted string'); const v = toks[i].v; i++; return v; };
+  // `in (a, b, …)` — parens optional (SQL canonical with; tolerated without).
+  const inList = () => { const paren = op('('); if (paren) i++; const set = [add()]; while (op(',')) { i++; set.push(add()); } if (paren) eatOp(')'); return set; };
 
   function primary() {
     const t = toks[i];
@@ -82,7 +97,6 @@ function parse(src) {
     if (t.k === 'field') { i++; return { t: 'field', name: t.v }; }     // ["…"] bracket escape
     if (t.k === 'word') {
       const lw = t.v.toLowerCase();
-      // pure function call: fn ( expr [, expr]* ) — args are full expressions
       if (CALLFNS[lw] && toks[i + 1] && toks[i + 1].k === 'op' && toks[i + 1].v === '(') {
         i += 2;
         const args = [];
@@ -96,7 +110,7 @@ function parse(src) {
       if (lw === 'true') return { t: 'bool', v: true };
       if (lw === 'false') return { t: 'bool', v: false };
       if (RESERVED.has(lw)) fail(`unexpected keyword '${t.v}'`);
-      return { t: 'field', name: t.v };                                 // bare ident → field (original case kept)
+      return { t: 'field', name: t.v };                                 // bare ident → column (original case kept)
     }
     fail(`unexpected '${t.v}'`);
   }
@@ -116,17 +130,29 @@ function parse(src) {
   }
   function comparison() {
     const l = add();
-    if (op('<') || op('>') || op('<=') || op('>=') || op('=') || op('==') || op('!=')) {
-      let o = toks[i].v; i++; if (o === '==') o = '=';                  // == is an alias for =
+    if (op('<') || op('>') || op('<=') || op('>=') || op('=') || op('==') || op('!=') || op('<>')) {
+      let o = toks[i].v; i++; if (o === '==') o = '='; if (o === '<>') o = '!=';     // tolerate C / SQL not-equal
       return { t: 'cmp', op: o, l, r: add() };
     }
-    if (op('~')) { i++; return { t: 'contains', l, r: add() }; }        // a ~ b  (substring / membership)
+    if (op('~')) { i++; return { t: 'contains', l, r: add() }; }
     if (op('!~')) { i++; return { t: 'not', e: { t: 'contains', l, r: add() } }; }
     if (word('between')) { i++; const lo = add(); if (!(word('and') || op('&&'))) fail("expected 'and' in between"); i++; return { t: 'between', e: l, lo, hi: add() }; }
     if (word('contains')) { i++; return { t: 'contains', l, r: add() }; }
-    if (word('in')) { i++; const set = [add()]; while (op(',')) { i++; set.push(add()); } return { t: 'in', e: l, set }; }
-    if (word('matches')) { i++; if (!toks[i] || toks[i].k !== 'str') fail("'matches' needs a string literal"); const re = toks[i].v; i++; return { t: 'matches', e: l, re }; }
-    if (word('is')) { i++; if (word('blank')) { i++; return { t: 'isblank', e: l }; } if (word('filled')) { i++; return { t: 'isfilled', e: l }; } fail("'is' must be followed by 'blank' or 'filled'"); }
+    if (word('in')) { i++; return { t: 'in', e: l, set: inList() }; }
+    if (word('like')) { i++; return { t: 'matches', e: l, re: likeToRegex(eatStr()) }; }
+    if (word('matches')) { i++; return { t: 'matches', e: l, re: eatStr() }; }
+    if (word('not')) {                                                    // postfix negation: `x not in/contains/like …`
+      if (peekWord('in')) { i += 2; return { t: 'not', e: { t: 'in', e: l, set: inList() } }; }
+      if (peekWord('contains')) { i += 2; return { t: 'not', e: { t: 'contains', l, r: add() } }; }
+      if (peekWord('like')) { i += 2; return { t: 'not', e: { t: 'matches', e: l, re: likeToRegex(eatStr()) } }; }
+    }
+    if (word('is')) {
+      i++;
+      let neg = false; if (word('not')) { neg = true; i++; }              // `is not blank` / `is not filled`
+      if (word('blank')) { i++; return neg ? { t: 'isfilled', e: l } : { t: 'isblank', e: l }; }
+      if (word('filled')) { i++; return neg ? { t: 'isblank', e: l } : { t: 'isfilled', e: l }; }
+      fail("'is' must be followed by 'blank' or 'filled'");
+    }
     return l;
   }
   function notE() { if (word('not')) { i++; return { t: 'not', e: comparison() }; } return comparison(); }
@@ -140,6 +166,22 @@ function parse(src) {
 }
 
 const asAst = (x) => (typeof x === 'string' ? parse(x) : x);
+
+// ── tokenize: classified, positioned tokens for syntax highlighting + completion.
+// Best-effort (tolerant lexer) so it works on a half-typed expression. kinds:
+// column · string · number · operator · punct · keyword · function · boolean · error.
+function tokenize(src) {
+  return lexAll(String(src == null ? '' : src), true).map((t) => {
+    let kind;
+    if (t.k === 'err') kind = 'error';
+    else if (t.k === 'str') kind = 'string';
+    else if (t.k === 'num') kind = 'number';
+    else if (t.k === 'field') kind = 'column';
+    else if (t.k === 'op') kind = (t.v === '(' || t.v === ')' || t.v === ',') ? 'punct' : 'operator';
+    else { const lw = String(t.v).toLowerCase(); kind = (lw === 'true' || lw === 'false') ? 'boolean' : CALLFNS[lw] ? 'function' : RESERVED.has(lw) ? 'keyword' : 'column'; }
+    return { kind, value: src.slice(t.start, t.end), start: t.start, end: t.end };
+  });
+}
 
 // ── src/runtime.js ──
 
@@ -424,6 +466,7 @@ function validate(exprOrAst, columns) {
 export {
   parse,
   asAst,
+  tokenize,
   CALLFNS,
   ExprParseError,
   evaluate,

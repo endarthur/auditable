@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parse, evaluate, evalBool, constraintValid, compile, compileBool, deps, validate } from '../ext/expr/src/main.js';
+import { parse, evaluate, evalBool, constraintValid, compile, compileBool, deps, validate, tokenize } from '../ext/expr/src/main.js';
 
 const fx = JSON.parse(readFileSync(new URL('./fixtures/expr.json', import.meta.url), 'utf8'));
 
@@ -102,6 +102,46 @@ test('lamina-dialect operators — && || == ~ !~ in (superset of parseFilter)', 
   assert.equal(evalBool('grade > 1 && lito in "OXIDE", "SULF"', row), true);
   // deps sees `in` members + column
   assert.deepEqual(deps('lito in "a", "b"'), ['lito']);
+});
+
+test('SQL-canonical surface — is not blank / not in / not contains / like / <> / scientific / single-quote', () => {
+  // is not blank / is not filled
+  assert.equal(evalBool('grade is not blank', { grade: 1 }), true);
+  assert.equal(evalBool('grade is not blank', {}), false);
+  assert.equal(evalBool('grade is not filled', {}), true);
+  // not in / not contains / not like (postfix)
+  assert.equal(evalBool('lito not in ("SULF", "TRANS")', { lito: 'OXIDE' }), true);
+  assert.equal(evalBool('code not contains "RC"', { code: 'DDH1' }), true);
+  assert.equal(evalBool('code not like "RC%"', { code: 'DDH1' }), true);
+  // in with parens (canonical) and without (tolerated) agree
+  assert.equal(evalBool('lito in ("OXIDE", "SULF")', { lito: 'OXIDE' }), true);
+  assert.equal(evalBool('lito in "OXIDE", "SULF"', { lito: 'OXIDE' }), true);
+  // like: % = any run, _ = one char, anchored
+  assert.equal(evalBool('code like "DDH%"', { code: 'DDH0042' }), true);
+  assert.equal(evalBool('code like "DD_0042"', { code: 'DDH0042' }), true);
+  assert.equal(evalBool('code like "RC%"', { code: 'DDH0042' }), false);
+  // <> not-equal + single-quoted string (both tolerated)
+  assert.equal(evalBool("lito <> 'WASTE'", { lito: 'OXIDE' }), true);
+  // scientific + leading-dot numbers
+  assert.equal(evaluate('au * 1e4', { au: 0.0005 }), 5);
+  assert.equal(evaluate('grade > .5', { grade: 0.7 }), true);
+  assert.equal(evaluate('1.5e-3 * 1000', {}), 1.5);
+});
+
+test('tokenize — classified, positioned tokens for highlighting (tolerant)', () => {
+  const toks = tokenize('grade between 1.2 and 3.8 and lito = "OXIDE"');
+  const byKind = (k) => toks.filter((t) => t.kind === k).map((t) => t.value);
+  assert.deepEqual(byKind('column'), ['grade', 'lito']);
+  assert.deepEqual(byKind('keyword'), ['between', 'and', 'and']);
+  assert.deepEqual(byKind('number'), ['1.2', '3.8']);
+  assert.deepEqual(byKind('string'), ['"OXIDE"']);
+  assert.deepEqual(byKind('operator'), ['=']);
+  // positions are usable for an overlay
+  const g = toks.find((t) => t.value === 'grade');
+  assert.equal(g.start, 0); assert.equal(g.end, 5);
+  // function vs column, and tolerant on a half-typed expression
+  assert.deepEqual(tokenize('round(au,').filter((t) => t.kind === 'function').map((t) => t.value), ['round']);
+  assert.ok(tokenize('grade > @@@').some((t) => t.kind === 'error'));
 });
 
 test('decimal-comma locale — comma-decimal field strings read numerically', () => {

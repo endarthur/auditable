@@ -1063,14 +1063,12 @@ const HELP = {
     + `<b>Filter</b> in the box (Enter) — e.g. <code>grade > 1 && lito == "OXIDE"</code> (see Filter syntax). <b>Sort</b> by clicking a header. <b>Jump</b> with the row # box. In a column's Statistics, click values to build a set filter.<br><br>`
     + `<b>Calculated columns</b> (marked <code>ƒ</code> in the header) — add with the <b>ƒ+ col</b> button (next to the filter) or a header's right-click; see and manage them all under <b>Data → Calculated columns…</b>. A derived column from a formula in the same language as the filter (<code>grade * density</code>, <code>if(au > 1, "ore", "waste")</code>); it's computed on the fly (never written), and you can filter, sort, and stat it like any column.`],
   filter: ['Filter syntax',
-    `Type an expression in the <b>filter</b> box — <b>Enter</b> applies, <b>Esc</b> clears.<br><br>`
-    + `A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br>`
-    + `Operators: <code>==</code> <code>!=</code> <code>&gt;</code> <code>&gt;=</code> <code>&lt;</code> <code>&lt;=</code> <code>~</code> (contains) <code>!~</code> (not contains).<br>`
-    + `Combine with <code>&amp;&amp;</code> / <code>and</code> and <code>||</code> / <code>or</code>; group with parentheses: <code>(grade >= 1 || cu &gt; 0.3) && lito == "OXIDE"</code>.<br>`
-    + `Ranges: <code>grade between 1 and 5</code>. Sets: <code>lito in "OXIDE", "SULF"</code> (or click values in a column's Statistics panel). Patterns: <code>hole matches "^DDH"</code>. Blanks: <code>au is blank</code> / <code>au is filled</code>.<br>`
-    + `Functions: <code>round</code> <code>int</code> <code>abs</code> <code>sqrt</code> <code>log</code> <code>min</code> <code>max</code> <code>clamp</code> <code>if(c, a, b)</code> — e.g. <code>sqrt(au) > 0.5</code>.<br><br>`
-    + `<b>Quote text values</b> — a bare word is a <i>column name</i> (so <code>fe &gt; cu</code> compares two columns), a quoted word is text: <code>lito == "OXIDE"</code>. Column names are case-insensitive; bracket awkward ones: <code>["Cu (ppm)"] &gt; 30</code>.<br>`
-    + `Right-click a column header for <b>Filter by &lt;col&gt;…</b> to prefill it.`],
+    `The filter is a <b>SQL <code>WHERE</code></b>-style expression — <b>Enter</b> applies, <b>Esc</b> clears. A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br><br>`
+    + `<b>Compare</b> <code>=</code> <code>!=</code> <code>&gt;</code> <code>&gt;=</code> <code>&lt;</code> <code>&lt;=</code> · <b>combine</b> <code>and</code> <code>or</code> <code>not</code>, group with parentheses: <code>(grade >= 1 or cu > 0.3) and lito = "OXIDE"</code>.<br>`
+    + `<b>Range</b> <code>grade between 1 and 5</code> · <b>set</b> <code>lito in ("OXIDE", "SULF")</code> (or click values in a column's Statistics) · <b>text</b> <code>code contains "DDH"</code>, <code>code like "DDH%"</code>, <code>code matches "^DDH"</code> · <b>blanks</b> <code>au is blank</code> / <code>au is filled</code> (and <code>is not blank</code>).<br>`
+    + `<b>Functions</b> <code>round int abs sqrt log min max clamp if(c, a, b)</code> — e.g. <code>sqrt(au) > 0.5</code>.<br><br>`
+    + `<b>Quote text values</b> (like SQL) — a bare word is a <i>column</i> (so <code>fe &gt; cu</code> compares two columns), a quoted word is text: <code>lito = "OXIDE"</code>. Columns are case-insensitive; bracket awkward names: <code>["Cu (ppm)"] &gt; 30</code>. Blanks behave sanely — <code>blank = blank</code> is true, no SQL <code>NULL</code> trap.<br>`
+    + `<span style="color:#666">(C-style <code>==</code> <code>&amp;&amp;</code> <code>~</code> also work, if that's your habit.)</span> Right-click a column header for <b>Filter by &lt;col&gt;…</b>.`],
   keys: ['Keyboard & mouse',
     `<b>Ctrl+O</b> — open a file<br><b>Enter</b> / <b>Esc</b> in the filter box — apply / clear<br>`
     + `<b>Click a column header</b> — sort (cycles ascending → descending → off)<br>`

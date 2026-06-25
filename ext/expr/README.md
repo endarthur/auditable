@@ -26,26 +26,32 @@ Carried from [hopper](https://github.com/gentropic/hopper)'s rule engine
 
 ## Language
 
+The canonical surface is **SQL `WHERE`-flavored** — the dialect the data audience
+already reads — with a terse `if()` for the value face. C-style spellings still
+parse (silently tolerated) so nobody's muscle memory is punished, but the one
+documented/highlighted form is SQL.
+
 ```
 arithmetic     a + b - c * d / e        (unary -, parens; * / bind tighter than + -)
-comparison     <  >  <=  >=  =  !=       (= / != are blank-aware: blank = blank → true)
-               ==                        (alias for =)
+compare        =  !=  <  >  <=  >=       (blank-aware: blank = blank → true; NO SQL NULL trap)
 boolean        and  or  not             (case-insensitive; short-circuit)
-               &&  ||                    (aliases for and / or)
-range          x between lo and hi
-substring      x contains "needle"  ·  x ~ "needle"  ·  x !~ "needle"   (substring or array membership)
-set            x in "OXIDE", "SULF"     (membership; members stringified)
-regex          s matches "^DDH"
+range          grade between 1 and 5
+set            lito in ("OXIDE", "SULF")
+text           code contains "DDH"  ·  code like "DDH%"  ·  code matches "^DDH"
+negate         is not blank · not in (…) · not contains · not like
 blank tests    x is blank   x is filled
-literals       42   3.14   "text"   true   false
+literals       42   3.14   .5   1.5e-3   "text"   true   false
 columns        bare ident (case-insensitive): AU, fe_pct, OK-Indic
                bracket escape for awkward names: ["Cu (ppm)"]
+
+tolerated (parse, not the canonical form):  ==  <>  &&  ||  ~  !~  'single quotes'  in "a","b"
 ```
 
-> A **bare word is a column**, a **quoted word is text** — so `fe > cu` compares two
-> columns, while `lito == "OXIDE"` tests against a literal. (This is the consistent
-> rule that makes calc-columns like `au * density` work.) The `&&`/`||`/`==`/`~`/`in`
-> forms make this a strict superset of lamina's former `parseFilter` dialect.
+> A **bare word is a column**, a **quoted word is text** — like SQL — so `fe > cu`
+> compares two columns, while `lito = "OXIDE"` tests a literal. (This is also what
+> makes calc-columns like `au * density` work.) Blanks are friendlier than SQL:
+> `blank = blank → true` and there's no `= NULL`-returns-nothing trap; use
+> `is blank` / `is filled`.
 
 > **Subtraction needs spaces.** `-` is a valid identifier character (so a column
 > like `OK-Indic` lexes as one name), therefore write `a - 5`, not `a-5` (which is
@@ -90,6 +96,9 @@ compileBool(srcOrAst, columns, opts) // → (fields[]) => boolean
 
 deps(srcOrAst)                   // → ['AU','OK-Indic',…]  (free column refs)
 validate(srcOrAst, columns?)     // → { ok, errors: [{kind:'parse'|'column', message, name?}] }
+tokenize(src)                    // → [{kind, value, start, end}] — classified, positioned, tolerant
+//   kinds: column · string · number · operator · punct · keyword · function · boolean · error.
+//   For syntax highlighting + autocomplete; works on a half-typed expression.
 ```
 
 `evaluate` resolves columns by exact case; `compile` resolves **case-insensitively**

@@ -3,7 +3,7 @@
 // positional closures), analyzable (deps + validate). The shared "small tier" of
 // the GCU expression stack; @gcu/over is the heavy cross-record DSL.
 // Public surface (manifest-is-truth; @gcu/build bundles from here).
-export { parse, asAst, CALLFNS, ExprParseError } from './parse.js';
+export { parse, asAst, tokenize, CALLFNS, ExprParseError } from './parse.js';
 export { evaluate, evalBool, constraintValid } from './eval.js';
 export { compile, compileValue, compileBool } from './compile.js';
 export { deps, validate } from './analyze.js';
