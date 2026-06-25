@@ -60,6 +60,17 @@ export function createRecordScanner({ kind = 'delimited', quote = DQUOTE, blockS
   };
 }
 
+/**
+ * Parse a numeric field honouring the decimal separator. `decimal: ','` (the
+ * European/Brazilian convention, usually paired with ';' delimiters) strips
+ * '.' thousands separators and treats ',' as the decimal point. Default '.' is
+ * a plain Number(). Used by detect / sort / stats / filter so a comma-decimal
+ * file reads as numeric everywhere.
+ */
+export function parseNum(s, decimal) {
+  return decimal === ',' ? Number(String(s).replace(/\./g, '').replace(',', '.')) : Number(s);
+}
+
 /** Convenience: scan a whole Uint8Array in one shot (tests / small files). */
 export function scanRecords(bytes, opts) {
   const s = createRecordScanner(opts);

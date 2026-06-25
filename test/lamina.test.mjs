@@ -4,7 +4,7 @@
 // reconstruct any window. Pure, in `npm test`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRecordScanner, scanRecords, scanFileToIndex, splitRecords, parseFields } from '../ext/lamina/src/scan.js';
+import { createRecordScanner, scanRecords, scanFileToIndex, splitRecords, parseFields, parseNum } from '../ext/lamina/src/scan.js';
 import { detectKind } from '../ext/lamina/src/detect.js';
 import { buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey } from '../ext/lamina/src/source.js';
 import { createRecordViewSource, LOADING } from '../ext/lamina/src/viewsource.js';
@@ -611,4 +611,33 @@ test('parseFilter: `in` set membership (OR for multiple categorical values)', ()
   assert.equal(p2(['ox', '2']), true);
   assert.equal(p2(['ox', '0.5']), false);
   assert.equal(p2(['trans', '2']), false);
+});
+
+// ── decimal comma (European / Brazilian) ──
+
+test('parseNum: decimal comma vs point', () => {
+  assert.equal(parseNum('1,5', ','), 1.5);
+  assert.equal(parseNum('1.234,56', ','), 1234.56);   // dot thousands stripped
+  assert.equal(parseNum('612105,5', ','), 612105.5);
+  assert.equal(parseNum('1.5', '.'), 1.5);
+  assert.equal(parseNum('2.5', undefined), 2.5);       // default = point
+});
+
+test('decimal comma: detect numeric + sort/stats/filter parse it', async () => {
+  const csv = 'id;grade\n1;1,5\n2;0,8\n3;2,25\n';      // ;-delimited, comma decimals
+  assert.equal(detectKind(B(csv)).schema[1].type, 'string');                       // default point → grade looks like text
+  const d = detectKind(B(csv), { force: { delimiter: ';', decimal: ',' } });
+  assert.equal(d.decimal, ',');
+  assert.equal(d.schema[1].type, 'number');                                         // comma → grade is numeric
+
+  const src = buildMemorySource(B(csv), { kind: 'delimited', delimiter: ';', blockSize: 2 });
+  const st = await scanColumnStats(src, { col: 1, dataStart: 1, numeric: true, decimal: ',' });
+  assert.equal(st.n, 3); assert.equal(st.min, 0.8); assert.equal(st.max, 2.25); assert.equal(st.bad, 0);
+
+  const order = await scanSortKeys(src, { col: 1, dir: 'asc', dataStart: 1, numeric: true, decimal: ',' });
+  assert.deepEqual([...order.nums], [1, 0, 2]);                                      // 0,8 < 1,5 < 2,25
+
+  const p = parseFilter('grade > 1', [{ name: 'id' }, { name: 'grade' }], ',');     // expr literal stays dot
+  assert.equal(p(['1', '1,5']), true);
+  assert.equal(p(['2', '0,8']), false);
 });

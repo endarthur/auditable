@@ -286,6 +286,25 @@ try {
     ? ok(`#-preamble: skipped 12 comments → header "${pre.header}", ${pre.rows} rows; footer notes the skip`)
     : fail(`preamble failed: ${JSON.stringify(pre)}`);
 
+  // ── decimal-comma: a ;-delimited comma-decimal file → force decimal=',' ──
+  const dec = await page.evaluate(async () => {
+    let csv = 'id;grade\n';
+    for (let i = 0; i < 200; i++) csv += `${i};${(i % 10) + ',5'}\n`;   // grades like "3,5"
+    window._lamina.open('br.csv', new TextEncoder().encode(csv), { delimiter: ';' });
+    const before = window._lamina.current.schema[1].type;               // 'string' (commas under point)
+    window._lamina.reopen({ delimiter: ';', decimal: ',' });
+    await new Promise((r) => setTimeout(r, 40));
+    const after = window._lamina.current.schema[1].type;                // 'number' now
+    await window._lamina.showColumnStats(1);
+    await new Promise((r) => setTimeout(r, 40));
+    const body = document.getElementById('helpBody').textContent;
+    document.getElementById('helpClose').click();
+    return { before, after, max: /max\s*9\.5/.test(body), hasMean: /mean/.test(body) };
+  });
+  (dec.before === 'string' && dec.after === 'number' && dec.max && dec.hasMean)
+    ? ok(`decimal comma: "3,5" recognized → numeric (mean+max parsed; max 9.5)`)
+    : fail(`decimal comma failed: ${JSON.stringify(dec)}`);
+
   // ── interpretation override: a semicolon file forced to ';' + header off ──
   const ovr = await page.evaluate(async () => {
     const bytes = new TextEncoder().encode('a;b;c\n1;2;3\n4;5;6\n');

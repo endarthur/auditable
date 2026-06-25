@@ -24,7 +24,12 @@ function looksBinary(sample) {
   return n > 0 && ctrl / n > 0.3;
 }
 
-function isNumeric(s) { return s !== '' && /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s.trim()); }
+function isNumeric(s, decimal) {
+  let t = String(s).trim();
+  if (t === '') return false;
+  if (decimal === ',') t = t.replace(/\./g, '').replace(',', '.');   // 1.234,56 → 1234.56
+  return /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t);
+}
 
 // Pick the delimiter with a consistent, >0 column count across the sample lines.
 function sniffDelimiter(lines) {
@@ -52,20 +57,20 @@ function sniffDelimiter(lines) {
 // Build a delimited result (schema + header guess) for a known delimiter. Header:
 // forced (true/false) or guessed (row 0 all-text + a later numeric). Column count
 // = the median row length (robust to a stray ragged row). Shared by auto + forced.
-function buildDelimited(lines, delimiter, forceHeader) {
+function buildDelimited(lines, delimiter, forceHeader, decimal) {
   const rows = lines.filter((l) => l !== '').map((l) => splitBy(l, delimiter));
   const lens = rows.map((r) => r.length).sort((a, b) => a - b);
   const columns = Math.max(1, lens[Math.floor(lens.length / 2)] || 1);
   const head = rows[0] || [];
   let hasHeader;
   if (forceHeader === true || forceHeader === false) hasHeader = forceHeader;
-  else hasHeader = head.length > 0 && head.every((c) => !isNumeric(c)) && rows.slice(1, 20).some((r) => r.some(isNumeric));
+  else hasHeader = head.length > 0 && head.every((c) => !isNumeric(c, decimal)) && rows.slice(1, 20).some((r) => r.some((v) => isNumeric(v, decimal)));
   const dataRows = rows.slice(hasHeader ? 1 : 0, hasHeader ? 21 : 20);
   const schema = [];
   for (let c = 0; c < columns; c++) {
     const name = hasHeader && head[c] != null && head[c] !== '' ? head[c] : `col ${c + 1}`;
     const vals = dataRows.map((r) => r[c]).filter((v) => v != null && v !== '');
-    schema.push({ name, type: vals.length && vals.every(isNumeric) ? 'number' : 'string' });
+    schema.push({ name, type: vals.length && vals.every((v) => isNumeric(v, decimal)) ? 'number' : 'string' });
   }
   return { kind: 'delimited', delimiter, quote: '"', hasHeader, schema };
 }
@@ -85,7 +90,7 @@ function leadingSkip(lines, f) {
 // GSLIB / Geo-EAS: line 0 = title, line 1 = an integer N (column count), lines
 // 2..N+1 = one column NAME per line, then N-column (usually whitespace) data.
 // Column names come from the preamble, not a header row → schema + dataStart=N+2.
-function detectGeoEAS(lines) {
+function detectGeoEAS(lines, decimal) {
   if (lines.length < 4) return null;
   const n = Number((lines[1] || '').trim());
   if (!Number.isInteger(n) || n < 1 || n > 1000 || lines.length < n + 3) return null;
@@ -93,14 +98,15 @@ function detectGeoEAS(lines) {
   if (names.some((nm) => nm === '')) return null;
   const first = lines[2 + n] || '';
   for (const delim of [' ', ',', '\t']) {              // data delimiter (whitespace is the norm)
+    if (delim === ',' && decimal === ',') continue;     // can't be both delimiter and decimal
     const tok = splitBy(first, delim);
-    if (tok.length === n && tok.some(isNumeric)) {
+    if (tok.length === n && tok.some((v) => isNumeric(v, decimal))) {
       const dataRows = lines.slice(2 + n, 2 + n + 20).map((l) => splitBy(l, delim));
       const schema = names.map((nm, c) => {
         const vals = dataRows.map((r) => r[c]).filter((v) => v != null && v !== '');
-        return { name: nm, type: vals.length && vals.every(isNumeric) ? 'number' : 'string' };
+        return { name: nm, type: vals.length && vals.every((v) => isNumeric(v, decimal)) ? 'number' : 'string' };
       });
-      return { kind: 'delimited', delimiter: delim, quote: '"', hasHeader: false, schema, dataStart: 2 + n, geoeas: true, skip: 0, comment: null };
+      return { kind: 'delimited', delimiter: delim, quote: '"', hasHeader: false, schema, dataStart: 2 + n, geoeas: true, skip: 0, comment: null, decimal };
     }
   }
   return null;
@@ -120,19 +126,20 @@ export function detectKind(sample, { sniff, force, name } = {}) {
   if (f.kind === 'binary') return { kind: 'binary' };
   if (!f.kind && !f.delimiter && looksBinary(sample)) return { kind: 'binary' };
 
+  const decimal = f.decimal === ',' ? ',' : '.';   // decimal separator (',' = European/Brazilian)
   const text = new TextDecoder().decode(sample);   // default decoder strips a leading BOM
   const all = text.split('\n').slice(0, 200).map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
 
   // GSLIB / Geo-EAS structured preamble (only when nothing is forced).
-  if (!f.kind && !f.delimiter && f.skip == null) { const g = detectGeoEAS(all); if (g) return g; }
+  if (!f.kind && !f.delimiter && f.skip == null) { const g = detectGeoEAS(all, decimal); if (g) return g; }
 
   const { skip, comment } = leadingSkip(all, f);
   const lines = all.slice(skip);                    // the body, past the preamble
 
   if (f.kind === 'text') return { kind: 'text', skip, comment, dataStart: skip };
 
-  const finish = (r) => ({ ...r, skip, comment, dataStart: skip + (r.hasHeader ? 1 : 0) });
-  if (f.delimiter) return finish(buildDelimited(lines, f.delimiter, f.hasHeader));
+  const finish = (r) => ({ ...r, skip, comment, decimal, dataStart: skip + (r.hasHeader ? 1 : 0) });
+  if (f.delimiter) return finish(buildDelimited(lines, f.delimiter, f.hasHeader, decimal));
 
   // recon enrichment (best-effort): if it finds a delimiter + fields, prefer it.
   if (typeof sniff === 'function') {
@@ -153,6 +160,6 @@ export function detectKind(sample, { sniff, force, name } = {}) {
   // best delimiter even when column counts are inconsistent (ragged/quoted rows),
   // where a generic sniff would bail to text. Otherwise require ≥0.6 consistency.
   const csvHint = /\.(csv|tsv|tab|lam|lamina)$/i.test(name || '');   // .lam/.lamina = lamina's marker ext (delimited data)
-  if (d && (d.consistent >= 0.6 || (csvHint && d.columns >= 2))) return finish(buildDelimited(lines, d.delimiter, f.hasHeader));
+  if (d && (d.consistent >= 0.6 || (csvHint && d.columns >= 2))) return finish(buildDelimited(lines, d.delimiter, f.hasHeader, decimal));
   return { kind: 'text', skip, comment, dataStart: skip };
 }

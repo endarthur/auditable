@@ -7,7 +7,7 @@
 // (deferred); until then filter→sort handles huge files (the `rows` subset sorts
 // only the current filter's matches).
 
-import { splitRecordsPos, parseFields } from './scan.js';
+import { splitRecordsPos, parseFields, parseNum } from './scan.js';
 
 const DEC = new TextDecoder();
 
@@ -18,7 +18,7 @@ const DEC = new TextDecoder();
  * @returns {Promise<{offsets:Float64Array, lengths:Float64Array, nums:Float64Array}>}
  *          ordered by key (nulls/NaN/empty last, stable)
  */
-export async function scanSortKeys(source, { col, dir = 'asc', dataStart = 0, numeric = true, rows = null, onProgress, max = 5 * 1024 * 1024 } = {}) {
+export async function scanSortKeys(source, { col, dir = 'asc', dataStart = 0, numeric = true, decimal = '.', rows = null, onProgress, max = 5 * 1024 * 1024 } = {}) {
   const K = source.blockSize;
   const nBlocks = source.blockOffsets.length;
   const qByte = (source.quote || '"').charCodeAt(0);
@@ -44,7 +44,7 @@ export async function scanSortKeys(source, { col, dir = 'asc', dataStart = 0, nu
       const rec = bytes.subarray(pos[i].start, pos[i].end);
       const fields = delimited ? parseFields(rec, { delimiter: source.delimiter, quote: source.quote }) : [DEC.decode(rec)];
       const raw = fields[col];
-      const key = numeric ? (raw == null || raw === '' ? NaN : Number(raw)) : (raw == null ? '' : String(raw));
+      const key = numeric ? (raw == null || raw === '' ? NaN : parseNum(raw, decimal)) : (raw == null ? '' : String(raw));
       recs.push({ off: s + pos[i].start, len: pos[i].end - pos[i].start, num: disp, key });
       if (recs.length > max) throw new Error('too many rows to sort — filter first');
     }

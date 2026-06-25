@@ -11,7 +11,7 @@
 // original row #), so it tracks SELECTIVITY not file size; capped (then "refine
 // the filter") rather than OOM.
 
-import { splitRecordsPos, parseFields } from './scan.js';
+import { splitRecordsPos, parseFields, parseNum } from './scan.js';
 import { LOADING } from './viewsource.js';
 
 const DEC = new TextDecoder();
@@ -27,12 +27,12 @@ const CMP = {
  * bad term / unknown column.
  * @returns {(fields:string[])=>boolean | null}  null for an empty filter
  */
-export function parseFilter(str, columns) {
+export function parseFilter(str, columns, decimal = '.') {
   const names = (columns || []).map((c) => (typeof c === 'string' ? c : c.name));
   const lower = names.map((n) => n.toLowerCase());
   const terms = String(str || '').split('&&').map((s) => s.trim()).filter(Boolean);
   if (!terms.length) return null;
-  const fns = terms.map((t) => compileTerm(t, names, lower));
+  const fns = terms.map((t) => compileTerm(t, names, lower, decimal));
   return (fields) => { for (const f of fns) if (!f(fields)) return false; return true; };
 }
 
@@ -48,7 +48,7 @@ function unquote(v) {
   return (v.length >= 2 && ((v[0] === '"' && v.endsWith('"')) || (v[0] === "'" && v.endsWith("'")))) ? v.slice(1, -1) : v;
 }
 
-function compileTerm(term, names, lower) {
+function compileTerm(term, names, lower, decimal) {
   // `col in a, b, c` — set membership (the natural OR for multiple categorical values)
   const im = term.match(/^(.+?)\s+in\s+(.+)$/i);
   if (im) {
@@ -63,9 +63,11 @@ function compileTerm(term, names, lower) {
   const val = unquote(m[3]);
   if (op === '~') { const v = val.toLowerCase(); return (f) => String(f[i] ?? '').toLowerCase().includes(v); }
   if (op === '!~') { const v = val.toLowerCase(); return (f) => !String(f[i] ?? '').toLowerCase().includes(v); }
+  // The expression's literal stays dot-decimal (Number); the cell value parses
+  // by the file's decimal separator (so a comma-decimal file compares correctly).
   const num = Number(val);
   const cmp = CMP[op];
-  if (val !== '' && !Number.isNaN(num)) return (f) => { const x = Number(f[i]); return !Number.isNaN(x) && cmp(x, num); };
+  if (val !== '' && !Number.isNaN(num)) return (f) => { const x = parseNum(f[i], decimal); return !Number.isNaN(x) && cmp(x, num); };
   return (f) => cmp(String(f[i] ?? ''), val);
 }
 

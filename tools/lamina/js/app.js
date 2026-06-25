@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createResultView, scanSortKeys, scanColumnStats, createLaminaProvider } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
 import { Unzip, UnzipInflate } from 'fflate';
@@ -104,7 +104,7 @@ async function recompute() {
     try {
       const numeric = (c.schema[c.sort.col] && c.schema[c.sort.col].type) === 'number';
       const order = await scanSortKeys(c.source, {
-        col: c.sort.col, dir: c.sort.dir, dataStart: c.dataStart, numeric, rows: fr ? fr.nums : null,
+        col: c.sort.col, dir: c.sort.dir, dataStart: c.dataStart, numeric, decimal: c.d.decimal, rows: fr ? fr.nums : null,
         onProgress: (b, n) => { $('#meta').textContent = `sorting… ${n ? Math.round((100 * b) / n) : 0}%`; },
       });
       view = createResultView(c.source, order, c.schema);
@@ -143,7 +143,7 @@ function mountView(vs, info = {}) {
       const cell = base.cellAt(r, uc);
       const fmt = c.colFormats[uc];
       if (fmt && cell && typeof cell === 'object' && cell.type === 'number') {
-        const num = Number(cell.value);
+        const num = parseNum(cell.value, c.d.decimal);
         if (!Number.isNaN(num)) { const t = fmtNumber(num, fmt); if (t != null) return { ...cell, style: { ...cell.style, text: t } }; }
       }
       return cell;
@@ -373,7 +373,7 @@ async function applyFilter(str) {
   if (!str.trim()) { $('#filter').classList.remove('err'); c.filterResult = null; return recompute(); }
   const cols = c.d.kind === 'delimited' ? c.d.schema : [{ name: 'line' }];
   let predicate;
-  try { predicate = parseFilter(str, cols); } catch (e) { return filterErr(e); }
+  try { predicate = parseFilter(str, cols, c.d.decimal); } catch (e) { return filterErr(e); }
   if (!predicate) { c.filterResult = null; return recompute(); }
   $('#filter').classList.remove('err');
   $('#meta').textContent = 'filtering…';
@@ -642,6 +642,7 @@ function openOpts() {
   $('#optHeader').value = f.hasHeader === true ? 'yes' : f.hasHeader === false ? 'no' : '';
   $('#optSkip').value = f.skip != null ? f.skip : '';
   $('#optComment').value = f.comment != null ? f.comment : '';
+  $('#optDecimal').value = f.decimal === ',' ? ',' : '';
   opts.classList.add('show');
   setTimeout(() => document.addEventListener('mousedown', onOptsDown), 0);
 }
@@ -653,6 +654,7 @@ $('#optDelim').onchange = (e) => reopen({ delimiter: e.target.value });
 $('#optHeader').onchange = (e) => reopen({ hasHeader: e.target.value === 'yes' ? true : e.target.value === 'no' ? false : '' });
 $('#optSkip').onchange = (e) => reopen({ skip: e.target.value === '' ? '' : Math.max(0, e.target.value | 0) });   // '' = auto
 $('#optComment').onchange = (e) => reopen({ comment: e.target.value });                                           // '' = none/auto
+$('#optDecimal').onchange = (e) => reopen({ decimal: e.target.value });                                           // '' = point, ',' = comma
 
 // Go to a 1-based row: select it (loom scrolls the selection into view).
 function gotoRow(n) {
@@ -788,7 +790,7 @@ async function showColumnStats(uc) {
   showOverlay(`Statistics — ${name}${suffix}`, '<div style="color:#777">computing… 0%</div>');
   try {
     const st = await scanColumnStats(c.source, {
-      col: uc, dataStart: c.dataStart, numeric, rows: c.filterResult ? c.filterResult.nums : null,
+      col: uc, dataStart: c.dataStart, numeric, decimal: c.d.decimal, rows: c.filterResult ? c.filterResult.nums : null,
       onProgress: (b, n) => { if ($('#help').classList.contains('show')) $('#helpBody').innerHTML = `<div style="color:#777">computing… ${n ? Math.round((100 * b) / n) : 0}%</div>`; },
     });
     showOverlay(`Statistics — ${name}${suffix}`, renderStats(st));

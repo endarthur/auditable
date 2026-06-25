@@ -4,7 +4,7 @@
 // (collected + sorted, capped); categorical → count / nulls / distinct + top-N.
 // Same scan shape as filter/sort — no new dependency.
 
-import { splitRecordsPos, parseFields } from './scan.js';
+import { splitRecordsPos, parseFields, parseNum } from './scan.js';
 
 const DEC = new TextDecoder();
 
@@ -14,7 +14,7 @@ const DEC = new TextDecoder();
  *   rows = ascending DISPLAY rows to restrict to (a filter's matches), or null = all
  * @returns {Promise<object>}  numeric or categorical summary (see fields below)
  */
-export async function scanColumnStats(source, { col, dataStart = 0, numeric = true, rows = null, max = 5 * 1024 * 1024, topN = 12, maxDistinct = 100000, onProgress } = {}) {
+export async function scanColumnStats(source, { col, dataStart = 0, numeric = true, decimal = '.', rows = null, max = 5 * 1024 * 1024, topN = 12, maxDistinct = 100000, onProgress } = {}) {
   const K = source.blockSize;
   const nBlocks = source.blockOffsets.length;
   const qByte = (source.quote || '"').charCodeAt(0);
@@ -51,7 +51,7 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
       count++;
       if (numeric) {
         if (raw == null || raw === '') { nulls++; continue; }
-        const x = Number(raw);
+        const x = parseNum(raw, decimal);
         if (Number.isNaN(x)) { bad++; continue; }       // present but not a number → "non-numeric"
         nNum++;
         if (x < min) min = x;
