@@ -76,6 +76,7 @@ go-to-row, interpretation override, the index cache) lives in
 | `createRecordViewSource(source, {schema, dataStart, cacheBlocks?})` | the windowed view (`rowAt` → fields \| `LOADING` \| null; LRU; `onReady`) |
 | `parseFilter(str, columns)` · `scanFilter(source, opts)` → `{offsets,lengths,nums}` · `createResultView(source, result, schema)` | filter: predicate → matching rows (byte positions) → per-row result view |
 | `scanSortKeys(source, {col, dir, numeric, rows?, …})` → `{offsets,lengths,nums}` | sort: key scan → ordered result (same shape, consumed by `createResultView`) |
+| `scanColumnStats(source, {col, numeric, rows?, …})` | one-pass column summary — numeric (count/nulls/min/max/mean/std/sum + quantiles) or categorical (distinct + top-N); `rows` restricts to a filter's matches |
 | `createLaminaProvider(vs, {PENDING})` | adapt a view to the `@gcu/loom` cell-provider contract |
 
 ## Limitations

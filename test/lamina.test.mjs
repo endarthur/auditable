@@ -10,6 +10,7 @@ import { buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromI
 import { createRecordViewSource, LOADING } from '../ext/lamina/src/viewsource.js';
 import { parseFilter, scanFilter, createResultView } from '../ext/lamina/src/filter.js';
 import { scanSortKeys } from '../ext/lamina/src/sort.js';
+import { scanColumnStats } from '../ext/lamina/src/stats.js';
 import { createLaminaProvider } from '../ext/lamina/src/provider.js';
 
 const B = (s) => new TextEncoder().encode(s);
@@ -537,4 +538,50 @@ test('detect: a viewsource over a Geo-EAS file shows the data rows', async () =>
   const vs = createRecordViewSource(src, { schema: d.schema, dataStart: d.dataStart });
   assert.equal(vs.rowCount(), 3);
   assert.deepEqual(await vs.ensureRow(0), ['10', '20']);
+});
+
+// ── detect: .csv extension biases an ambiguous file to a table ──
+
+test('detect: ragged .csv (low consistency) → table via the name hint, text without', () => {
+  // rows with varying column counts → consistency < 0.6 → would be text generically
+  const ragged = B('a,b,c\n1,2\n3,4,5,6\n7\n8,9,10\n');
+  assert.equal(detectKind(ragged).kind, 'text');                       // no name → bails to text
+  const d = detectKind(ragged, { name: 'blockmodel.csv' });            // .csv → trust it's a table
+  assert.equal(d.kind, 'delimited');
+  assert.equal(d.delimiter, ',');
+});
+
+// ── column statistics ──
+
+test('scanColumnStats: numeric summary + quantiles', async () => {
+  let csv = 'id,grade\n';
+  for (let i = 0; i <= 100; i++) csv += `${i},${i}\n`;                  // grade 0..100
+  const src = buildMemorySource(B(csv), { kind: 'delimited', blockSize: 16 });
+  const st = await scanColumnStats(src, { col: 1, dataStart: 1, numeric: true });
+  assert.equal(st.kind, 'number');
+  assert.equal(st.count, 101);
+  assert.equal(st.n, 101);
+  assert.equal(st.min, 0);
+  assert.equal(st.max, 100);
+  assert.equal(st.mean, 50);
+  assert.equal(st.quantiles.p50, 50);
+  assert.equal(st.sum, 5050);
+});
+
+test('scanColumnStats: categorical top-N + distinct; respects the rows subset', async () => {
+  let csv = 'lito\n';
+  const lits = ['ox', 'ox', 'ox', 'sulf', 'sulf', 'trans'];
+  for (let i = 0; i < 600; i++) csv += `${lits[i % 6]}\n`;
+  const src = buildMemorySource(B(csv), { kind: 'text', blockSize: 64 });
+  const st = await scanColumnStats(src, { col: 0, dataStart: 1, numeric: false });
+  assert.equal(st.kind, 'string');
+  assert.equal(st.count, 600);
+  assert.equal(st.distinct, 3);
+  assert.equal(st.top[0].value, 'ox');
+  assert.equal(st.top[0].n, 300);
+
+  // restrict to a subset (e.g. a filter's matches) — first 60 display rows
+  const subset = Float64Array.from(Array.from({ length: 60 }, (_, i) => i));
+  const st2 = await scanColumnStats(src, { col: 0, dataStart: 1, numeric: false, rows: subset });
+  assert.equal(st2.count, 60);
 });

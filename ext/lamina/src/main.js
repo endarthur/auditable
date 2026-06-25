@@ -5,5 +5,6 @@ export { buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromI
 export { createRecordViewSource, LOADING } from './viewsource.js';
 export { parseFilter, scanFilter, createResultView } from './filter.js';
 export { scanSortKeys } from './sort.js';
+export { scanColumnStats } from './stats.js';
 export { detectKind } from './detect.js';
 export { createLaminaProvider } from './provider.js';

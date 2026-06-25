@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createResultView, scanSortKeys, createLaminaProvider } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, parseFilter, scanFilter, createResultView, scanSortKeys, scanColumnStats, createLaminaProvider } from '@gcu/lamina';
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
 import { Unzip, UnzipInflate } from 'fflate';
@@ -80,7 +80,7 @@ function mount(name, d, src, totalBytes) {
   const schema = kind === 'delimited' ? d.schema : [{ name: 'line', type: 'string' }];
   const dataStart = d.dataStart != null ? d.dataStart : (kind === 'delimited' && d.hasHeader ? 1 : 0);
   const baseVs = createRecordViewSource(src, { schema, dataStart });
-  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), file: null, bytes: null, force: {} };
+  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), colWidths: {}, _vis: null, file: null, bytes: null, force: {} };
   $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear();   // fresh file → clear filter + sort
   recompute();
 }
@@ -116,6 +116,7 @@ async function recompute() {
 // update the footer. The provider is wrapped to (a) remap display columns past
 // hidden ones and (b) stamp the sort arrow onto the active column.
 function mountView(vs, info = {}) {
+  captureWidths();                                       // persist the outgoing grid's column widths
   if (grid) { grid.destroy(); grid = null; }
   const c = current;
   c.view = vs; c.info = info;                           // remember for a cheap re-render (hide/show)
@@ -129,6 +130,7 @@ function mountView(vs, info = {}) {
   const total = c.baseVs.cols;
   const vis = [];                                        // display col → underlying col (skipping hidden)
   for (let i = 0; i < total; i++) if (!c.hidden.has(i)) vis.push(i);
+  c._vis = vis;
   const provider = {
     dims() { return { rows: vs.rowCount(), cols: vis.length }; },
     cellAt(r, dc) { return base.cellAt(r, vis[dc]); },
@@ -138,6 +140,10 @@ function mountView(vs, info = {}) {
   };
 
   grid = createGrid($('#grid'), provider, { readOnly: true, theme: 'dark', defaultColW: c.d.kind === 'text' ? 900 : 130 });
+  // reapply persisted column widths (stored by UNDERLYING col → display indices)
+  const dw = {};
+  for (let dc = 0; dc < vis.length; dc++) { const w = c.colWidths[vis[dc]]; if (w != null) dw[dc] = w; }
+  if (Object.keys(dw).length) grid.setColWidths(dw);
   if (c.d.kind === 'delimited') {
     grid.onHeaderClick((dc) => toggleSort(vis[dc]));                                   // click → sort (underlying col)
     grid.onHeaderContextMenu(({ col, clientX, clientY }) => showColumnMenu(vis[col], clientX, clientY));
@@ -158,10 +164,17 @@ function rerender() { if (current && current.view) mountView(current.view, curre
 function hideColumn(uc) { if (current) { current.hidden.add(uc); rerender(); } }
 function showColumn(uc) { if (current) { current.hidden.delete(uc); rerender(); } }
 function showAllColumns() { if (current) { current.hidden.clear(); rerender(); } }
+// Persist the live grid's column widths into `current.colWidths` (keyed by
+// UNDERLYING col, so they survive hide/show + sort/filter re-renders).
+function captureWidths() {
+  if (!grid || !current || !current._vis) return;
+  const w = grid.getColWidths();                         // display-keyed
+  for (const k in w) { const uc = current._vis[k]; if (uc != null) current.colWidths[uc] = w[k]; }
+}
 // Size every visible column to its content (header + visible cells — cheap, loom
 // samples only what's on screen). Reset returns them to the default width.
-function autofitAll() { if (!grid) return; const n = grid.provider.dims().cols; for (let c = 0; c < n; c++) grid.autofitColumn(c); }
-function resetColWidths() { if (grid) grid.setColWidths({}); }
+function autofitAll() { if (!grid) return; const n = grid.provider.dims().cols; for (let c = 0; c < n; c++) grid.autofitColumn(c); captureWidths(); }
+function resetColWidths() { if (current) current.colWidths = {}; if (grid) grid.setColWidths({}); }
 
 // Right-click a column header → sort / filter-by / hide / show.
 function showColumnMenu(uc, x, y) {
@@ -172,7 +185,8 @@ function showColumnMenu(uc, x, y) {
     { label: `Sort ${name} ↓`, action: () => { c.sort = { col: uc, dir: 'desc' }; recompute(); } },
   ];
   if (c.sort && c.sort.col === uc) items.push({ label: 'Clear sort', action: () => { c.sort = null; recompute(); } });
-  items.push({ sep: true }, { label: `Filter by ${name}…`, action: () => setFilterText(`${name} `) });
+  items.push({ sep: true }, { label: `Statistics — ${name}…`, action: () => showColumnStats(uc) });
+  items.push({ label: `Filter by ${name}…`, action: () => setFilterText(`${name} `) });
   items.push({ sep: true }, { label: `Hide ${name}`, action: () => hideColumn(uc) });
   for (let i = 0; i < c.baseVs.cols; i++) {
     if (c.hidden.has(i)) items.push({ label: `Show ${c.baseVs.header(i).label}`, action: () => showColumn(i) });
@@ -237,7 +251,7 @@ function filterErr(e) { $('#filter').classList.add('err'); $('#meta').textConten
 // Open raw bytes — memory source (the test hook + small files). `force` overrides
 // auto-detection (the interpretation popover re-opens with it).
 function open(name, bytes, force) {
-  const d = detectKind(bytes.subarray(0, 65536), { force });
+  const d = detectKind(bytes.subarray(0, 65536), { force, name });
   if (d.kind === 'binary') return showBinary(name, bytes.length);
   mount(name, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
   current.bytes = bytes; current.force = force || {};                 // remember for re-open with new force
@@ -246,7 +260,7 @@ function open(name, bytes, force) {
 // Render in-memory bytes (a small file, or a decompressed archive entry) through
 // the RESIDENT memory source — no streaming, no index cache.
 function openInner(label, bytes) {
-  const d = detectKind(bytes.subarray(0, 65536));
+  const d = detectKind(bytes.subarray(0, 65536), { name: label });
   if (d.kind === 'binary') return showBinary(label, bytes.length);
   lastScan = 'resident';
   mount(label, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
@@ -326,7 +340,7 @@ function openTar(label, bytes) {
 async function openStreamSource(file, label, openStream, badge, entryPath) {
   $('#fileName').textContent = label; $('#empty').style.display = 'none';
   const head = await readHead(openStream, 65536);
-  const d = detectKind(head);
+  const d = detectKind(head, { name: label });
   if (d.kind === 'binary') return showBinary(label, head.length);        // size unknown until scanned
   const key = `${fileKey(file)}::${entryPath || badge}`;
   const cached = await idbCache.get(key);
@@ -446,7 +460,7 @@ async function openFile(file, force) {
 
   // 2. Miss (or forced) → detect off the head, scan (off-thread when we can), then cache.
   const sample = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
-  const d = detectKind(sample, { force });
+  const d = detectKind(sample, { force, name: file.name });
   if (d.kind === 'binary') { if (!forced) idbCache.set(key, { detect: d, index: null }); return showBinary(file.name, file.size); }
   $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
   const opts = { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' };
@@ -558,7 +572,7 @@ const HELP = {
   keys: ['Keyboard & mouse',
     `<b>Ctrl+O</b> — open a file<br><b>Enter</b> / <b>Esc</b> in the filter box — apply / clear<br>`
     + `<b>Click a column header</b> — sort (cycles ascending → descending → off)<br>`
-    + `<b>Right-click a column header</b> — sort · filter by · hide / show columns<br>`
+    + `<b>Right-click a column header</b> — statistics · sort · filter by · hide / show columns<br>`
     + `<b>Click the kind badge</b> (top right) — change how the file is read (delimiter, header, skip rows, comment)<br>`
     + `<b>Drag a column border</b> — resize · <b>double-click a border</b> — autofit that column · <b>View → Autofit all columns</b><br>`
     + `<b>row # box</b> — jump to a row<br>Selected cells <b>copy</b> as TSV (Ctrl+C).`],
@@ -567,14 +581,52 @@ const HELP = {
     + `Delimited → grid, text → lines, binary → hex. Reads inside zip / tar / gz / zst / xz / bz2, and windows huge compressed entries without unpacking. Detects GSLIB / Geo-EAS + whitespace dumps and skips <code>#</code> comment preambles.<br><br>`
     + `Part of the Geoscientific Chaos Union — <code>gentropic.org</code>.`],
 };
-function showHelp(topic) {
-  const [title, body] = HELP[topic] || HELP.about;
+function showOverlay(title, html) {
   $('#helpTitle').textContent = title;
-  $('#helpBody').innerHTML = body;
+  $('#helpBody').innerHTML = html;
   $('#help').classList.add('show');
 }
+function showHelp(topic) { const [title, body] = HELP[topic] || HELP.about; showOverlay(title, body); }
 $('#helpClose').onclick = () => $('#help').classList.remove('show');
 $('#help').onclick = (e) => { if (e.target.id === 'help') $('#help').classList.remove('show'); };
+
+// ── column statistics (respects the current filter) ──
+const fmtN = (x) => x == null ? '—' : (Math.abs(x) >= 1e6 || (x !== 0 && Math.abs(x) < 1e-4) ? x.toExponential(4) : (Number.isInteger(x) ? x.toLocaleString() : x.toPrecision(6).replace(/\.?0+$/, '')));
+const esc = (s) => String(s).replace(/[&<>]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
+
+function renderStats(st) {
+  const row = (k, v) => `<tr><td style="color:#888;padding-right:18px">${k}</td><td style="text-align:right">${v}</td></tr>`;
+  if (st.kind === 'number') {
+    let h = '<table style="border-collapse:collapse">';
+    h += row('count', st.count.toLocaleString()) + row('non-null', st.n.toLocaleString()) + row('nulls', st.nulls.toLocaleString());
+    h += row('min', fmtN(st.min)) + row('max', fmtN(st.max)) + row('mean', fmtN(st.mean)) + row('std', fmtN(st.std)) + row('sum', fmtN(st.sum));
+    if (st.quantiles) {
+      const q = st.quantiles;
+      h += row('p5', fmtN(q.p5)) + row('p25', fmtN(q.p25)) + row('<b>median</b>', `<b>${fmtN(q.p50)}</b>`) + row('p75', fmtN(q.p75)) + row('p95', fmtN(q.p95));
+    } else if (st.quantilesCapped) h += row('quantiles', '<span style="color:#777">too many values</span>');
+    return h + '</table>';
+  }
+  let h = '<table style="border-collapse:collapse">';
+  h += row('count', st.count.toLocaleString()) + row('nulls', st.nulls.toLocaleString()) + row('distinct', st.distinct.toLocaleString() + (st.cappedDistinct ? '+' : ''));
+  h += '</table><div style="margin-top:12px;color:#888">top values</div><table style="border-collapse:collapse;margin-top:4px">';
+  for (const t of st.top) {
+    const pct = st.count ? (100 * t.n / st.count).toFixed(1) : '0';
+    h += `<tr><td style="color:#ddd;padding-right:18px;max-width:340px;overflow:hidden;text-overflow:ellipsis">${esc(t.value)}</td><td style="text-align:right;color:#bbb">${t.n.toLocaleString()} <span style="color:#777">(${pct}%)</span></td></tr>`;
+  }
+  return h + '</table>';
+}
+
+async function showColumnStats(uc) {
+  const c = current; if (!c) return;
+  const name = c.baseVs.header(uc).label;
+  const numeric = (c.schema[uc] && c.schema[uc].type) === 'number';
+  const suffix = c.filterResult ? ' (filtered)' : '';
+  showOverlay(`Statistics — ${name}${suffix}`, '<div style="color:#777">computing…</div>');
+  try {
+    const st = await scanColumnStats(c.source, { col: uc, dataStart: c.dataStart, numeric, rows: c.filterResult ? c.filterResult.nums : null });
+    showOverlay(`Statistics — ${name}${suffix}`, renderStats(st));
+  } catch (e) { showOverlay(`Statistics — ${name}`, `<div style="color:#c0584a">${e.message}</div>`); }
+}
 
 // ── drag-drop ──
 window.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dragging'); });
@@ -611,4 +663,4 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') $('#help').classList.remove('show');
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, autofitAll, resetColWidths, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, autofitAll, resetColWidths, showColumnStats, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };

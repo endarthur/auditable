@@ -375,6 +375,40 @@ try {
     ? ok(`menubar: File/View populate · View→Interpretation opens the popover · Help→filter overlay opens+closes`)
     : fail(`menubar failed: ${JSON.stringify(menu)}`);
 
+  // ── column statistics (numeric + categorical, respecting the filter) ──
+  const stats = await page.evaluate(async () => {
+    let csv = 'id,grade,lito\n';
+    for (let i = 0; i <= 200; i++) csv += `${i},${i % 11},${['ox', 'sulf'][i % 2]}\n`;
+    window._lamina.open('s2.csv', new TextEncoder().encode(csv));
+    await window._lamina.showColumnStats(1);             // numeric column 'grade'
+    await new Promise((r) => setTimeout(r, 40));
+    const numBody = document.getElementById('helpBody').textContent;
+    const numTitle = document.getElementById('helpTitle').textContent;
+    await window._lamina.showColumnStats(2);             // categorical 'lito'
+    await new Promise((r) => setTimeout(r, 40));
+    const catBody = document.getElementById('helpBody').textContent;
+    document.getElementById('helpClose').click();
+    return { numTitle, numHasMean: /mean/.test(numBody), numHasMedian: /median/.test(numBody), catHasDistinct: /distinct/.test(catBody), catHasOx: /ox/.test(catBody) };
+  });
+  (stats.numTitle.includes('grade') && stats.numHasMean && stats.numHasMedian && stats.catHasDistinct && stats.catHasOx)
+    ? ok(`column stats: numeric (mean+median) + categorical (distinct + top values)`)
+    : fail(`stats failed: ${JSON.stringify(stats)}`);
+
+  // ── column widths persist across a re-render (autofit then sort) ──
+  const persist = await page.evaluate(async () => {
+    window._lamina.open('p2.csv', new TextEncoder().encode('a,b\n1,2\n3,4\n5,6\n'));
+    await window._laminaVS.ensureRow(0);
+    window._lamina.autofitAll();
+    const before = window._lamina.grid.getColWidths();
+    const w0 = before[0];
+    await window._lamina.toggleSort(0);                  // re-mounts the grid
+    const after = window._lamina.grid.getColWidths();
+    return { w0, kept: after[0], same: after[0] === w0 };
+  });
+  (persist.w0 > 0 && persist.same)
+    ? ok(`column widths persist across re-render (autofit ${persist.w0}px survived a sort)`)
+    : fail(`width persistence failed: ${JSON.stringify(persist)}`);
+
   // ── autofit all columns / reset widths ──
   const fit = await page.evaluate(async () => {
     window._lamina.open('w.csv', new TextEncoder().encode('short,a_very_long_header_name_here\nx,y\n1,2\n'));

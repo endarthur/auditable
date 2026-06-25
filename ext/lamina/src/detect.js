@@ -46,7 +46,7 @@ function sniffDelimiter(lines) {
     const score = mode * consistent * (d === ' ' ? 0.9 : 1);
     if (score > bestScore) { bestScore = score; best = { delimiter: d, columns: mode + 1, consistent }; }
   }
-  return best && best.consistent >= 0.6 ? best : null;
+  return best;   // best candidate (may be low-consistency); the caller gates it
 }
 
 // Build a delimited result (schema + header guess) for a known delimiter. Header:
@@ -111,10 +111,11 @@ function detectGeoEAS(lines) {
  * @param {object} opts  { sniff?, force? }
  *   force overrides auto-detection (when the user corrects a wrong guess):
  *   { kind?: 'delimited'|'text'|'binary', delimiter?, hasHeader?, skip?, comment? }
+ *   name = the filename (a .csv/.tsv/.tab extension biases an ambiguous file to a table).
  * @returns {{ kind, delimiter?, quote?, schema?, hasHeader?, skip?, comment?, dataStart? }}
  *   dataStart = records to skip before the first DATA row (preamble + header).
  */
-export function detectKind(sample, { sniff, force } = {}) {
+export function detectKind(sample, { sniff, force, name } = {}) {
   const f = force || {};
   if (f.kind === 'binary') return { kind: 'binary' };
   if (!f.kind && !f.delimiter && looksBinary(sample)) return { kind: 'binary' };
@@ -148,6 +149,10 @@ export function detectKind(sample, { sniff, force } = {}) {
   }
 
   const d = sniffDelimiter(lines.filter((l) => l !== ''));
-  if (!d) return { kind: 'text', skip, comment, dataStart: skip };
-  return finish(buildDelimited(lines, d.delimiter, f.hasHeader));
+  // A .csv/.tsv/.tab extension is a strong "this is a table" signal — accept the
+  // best delimiter even when column counts are inconsistent (ragged/quoted rows),
+  // where a generic sniff would bail to text. Otherwise require ≥0.6 consistency.
+  const csvHint = /\.(csv|tsv|tab)$/i.test(name || '');
+  if (d && (d.consistent >= 0.6 || (csvHint && d.columns >= 2))) return finish(buildDelimited(lines, d.delimiter, f.hasHeader));
+  return { kind: 'text', skip, comment, dataStart: skip };
 }
