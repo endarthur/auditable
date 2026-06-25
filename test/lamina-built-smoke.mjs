@@ -73,6 +73,12 @@ try {
   }, zipArr);
   (zip.rows === 2 && zip.name.includes('inner.csv')) ? ok(`zip entry opened in bundle (${zip.name})`) : fail(`zip in bundle: ${JSON.stringify(zip)}`);
 
+  // build stamp injected (version · content-hash · date) — visible in the footer + window._lamina.build
+  const stamp = await page.evaluate(() => ({ footer: document.getElementById('build').textContent, api: window._lamina.build }));
+  (/^\d+\.\d+\.\d+ · [0-9a-f]{7} · \d{4}-\d{2}-\d{2}$/.test(stamp.footer) && stamp.footer === stamp.api)
+    ? ok(`build stamp present (${stamp.footer})`)
+    : fail(`build stamp missing/malformed: ${JSON.stringify(stamp)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

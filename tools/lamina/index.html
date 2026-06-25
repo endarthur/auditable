@@ -99,6 +99,8 @@
     gap: 16px; padding: 0 12px; border-top: 1px solid #2a2a2a; background: #161616;
     font-family: var(--mono); font-size: 11px; color: #777;
   }
+  footer .spacer { flex: 1; }
+  footer #build { color: #555; cursor: default; }      /* build stamp — far right, muted */
   #drop-hint {
     position: absolute; inset: 38px 6px 30px 6px; border: 2px dashed #c89b3c; border-radius: 6px;
     background: rgba(200,155,60,0.06); display: none; align-items: center; justify-content: center;
@@ -164,7 +166,7 @@
   <div id="drop-hint">drop to open</div>
   <div id="picker"><div class="pk-box"><div class="pk-title">choose a file from the archive</div><div class="pk-list" id="pickerList"></div></div></div>
 
-  <footer><span id="meta">—</span></footer>
+  <footer><span id="meta">—</span><span class="spacer"></span><span id="build" title="lamina build">dev</span></footer>
 
   <script type="module" src="./js/app.js"></script>
 </body>

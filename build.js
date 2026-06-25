@@ -1677,17 +1677,26 @@ if (target === 'lamina') {
     '_m.remove();\n' +
     '})();\n';
 
+  // Build stamp: "<version> · <content-hash> · <date>". The hash is a content hash
+  // of the bundle (weir's trick — a git SHA can't go here, a commit can't contain
+  // its own hash; the content hash changes exactly when the code does). Computed
+  // BEFORE substituting the placeholder, so the id is never part of its own hash.
+  const lamVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'ext/lamina/package.json'), 'utf8')).version || '0.0.0';
+  const lamBuildId = require('crypto').createHash('sha256').update(boot).digest('hex').slice(0, 7);
+  const lamStamp = `${lamVersion} · ${lamBuildId} · ${buildDateFromGit()}`;
+  const bootStamped = boot.replace("const __LAMINA_BUILD__ = 'dev';", () => `const __LAMINA_BUILD__ = '${lamStamp}';`);
+
   // Template: strip the dev import map + the module <script src>, inline the boot
   // gzip-compressed into a self-extracting loader (the boot is ~all the bytes —
   // the JSON-stringified module sources — so this is a big win; decompress is ~ms).
   const { compressRuntimeNode: compressLaminaRuntime } = require('./make_example');
   let html = fs.readFileSync(path.join(lamDir, 'index.html'), 'utf8');
   html = html.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
-  html = html.replace(/<script type="module" src="\.\/js\/app\.js"><\/script>/, compressLaminaRuntime(boot));
+  html = html.replace(/<script type="module" src="\.\/js\/app\.js"><\/script>/, compressLaminaRuntime(bootStamped));
 
   const outPath = path.join(__dirname, 'lamina.html');
   fs.writeFileSync(outPath, html);
-  console.log(`Built lamina.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB compressed, ${modules.length} modules)`);
+  console.log(`Built lamina.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB compressed, ${modules.length} modules) — build ${lamStamp}`);
   process.exit(0);
 }
 

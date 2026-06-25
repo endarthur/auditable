@@ -27,6 +27,14 @@ const CACHE_VERSION = 2;
 const cacheFresh = (c) => c && c.v === CACHE_VERSION;
 const residentLimit = () => (typeof window.__LAMINA_RESIDENT_LIMIT__ === 'number' ? window.__LAMINA_RESIDENT_LIMIT__ : RESIDENT_LIMIT);
 
+// Build stamp — replaced at build time (build.js lamina target) with
+// "<version> · <content-hash> · <date>"; stays 'dev' in the unbuilt harness. The
+// hash is a content hash of the bundle (a git SHA can't go here — a commit can't
+// contain its own hash), so it changes exactly when the code does. Shown in the
+// footer (far right) + the About panel so we know which lamina is loaded without
+// bumping the version every time.
+const __LAMINA_BUILD__ = 'dev';
+
 const $ = (s) => document.querySelector(s);
 let grid = null;
 let lastScan = null;            // 'worker'|'inline'|'cache'|'resident'|'stream' — last index-scan path (automation hook)
@@ -875,7 +883,8 @@ const HELP = {
   about: ['About lamina',
     `<b>lamina</b> — open any file, however large, and scroll, filter, and sort it. Windowed, read-only, offline.<br><br>`
     + `Delimited → grid, text → lines, binary → hex. Opens <b>Datamine .dm</b> tables directly — at any size, decoded on the fly (no conversion), with the same filter / sort / stats as CSV. Reads inside zip / tar / gz / zst / xz / bz2, and windows huge compressed entries without unpacking. Detects GSLIB / Geo-EAS + whitespace dumps and skips <code>#</code> comment preambles.<br><br>`
-    + `Part of the Geoscientific Chaos Union — <code>gentropic.org</code>.`],
+    + `Part of the Geoscientific Chaos Union — <code>gentropic.org</code>.<br><br>`
+    + `<span style="color:#666">build <code>${__LAMINA_BUILD__}</code></span>`],
 };
 function showOverlay(title, html) {
   $('#helpTitle').textContent = title;
@@ -986,7 +995,11 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') $('#help').classList.remove('show');
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+
+// Build stamp in the footer (far right) — set once; persists past file meta updates.
+$('#build').textContent = __LAMINA_BUILD__;
+$('#build').title = `lamina build — ${__LAMINA_BUILD__}`;
 
 // File Handling API: when the installed PWA is launched by opening a .lam/.lamina
 // file (manifest file_handlers), the handle(s) arrive here. No-op in a normal tab.
