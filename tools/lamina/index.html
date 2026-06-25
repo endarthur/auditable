@@ -42,7 +42,10 @@
   #toolbar #goto {
     width: 64px; font-family: var(--mono); font-size: 12px; color: #ddd; background: #141414;
     border: 1px solid #333; border-radius: 3px; padding: 4px 6px;
+    -moz-appearance: textfield; appearance: textfield;          /* drop the native (un-themeable) spinner */
   }
+  #toolbar #goto::-webkit-outer-spin-button,
+  #toolbar #goto::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   #toolbar #goto:focus { outline: none; border-color: #4a78b0; }
   #toolbar #goto::placeholder { color: #555; }
   #toolbar .name { font-family: var(--mono); font-size: 12px; color: #888; }
@@ -134,6 +137,7 @@
     <button class="mb" id="mView">View</button>
     <button class="mb" id="mHelp">Help</button>
     <span id="filterWrap"><input id="filter" type="text" spellcheck="false" placeholder="filter…  e.g.  grade > 1  &&  lito == OXIDE"><button id="filterClear" title="clear filter (Esc)" tabindex="-1">×</button></span>
+    <button id="filterGo" title="apply filter (Enter)">Filter</button>
     <input id="goto" type="number" min="1" placeholder="row #" title="go to row">
     <span class="name" id="fileName">no file</span>
     <span class="kind" id="kindBadge" style="display:none" title="click to change how this file is read"></span>

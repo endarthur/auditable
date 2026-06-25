@@ -823,6 +823,7 @@ $('#filter').addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { e.target.value = ''; syncFilterClear(); applyFilter(''); e.target.blur(); }
 });
 $('#filterClear').onclick = () => { $('#filter').value = ''; syncFilterClear(); applyFilter(''); $('#filter').focus(); };
+$('#filterGo').onclick = () => applyFilter($('#filter').value);
 
 // ── global keys: Ctrl+O open, Esc closes the help overlay ──
 window.addEventListener('keydown', (e) => {
