@@ -30,8 +30,11 @@ const port = server.address().port;
 const browser = await chromium.launch();
 const page = await browser.newPage();
 const errors = [];
-page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-page.on('pageerror', (e) => errors.push(String(e)));
+// The deliberate egress-block test trips a CSP-violation console error on purpose —
+// that's the proof the lock fires, not a real fault, so don't count it.
+const expectedCsp = (t) => /Content Security Policy|Refused to connect/i.test(t);
+page.on('console', (m) => { if (m.type() === 'error' && !expectedCsp(m.text())) errors.push(m.text()); });
+page.on('pageerror', (e) => { if (!expectedCsp(String(e))) errors.push(String(e)); });
 
 try {
   await page.goto(`http://127.0.0.1:${port}/lamina.html`, { waitUntil: 'networkidle' });
@@ -44,6 +47,16 @@ try {
     return { rows: window._laminaVS.rowCount(), canvases: document.querySelectorAll('#grid canvas').length };
   });
   (mem.rows === 2000 && mem.canvases === 3) ? ok(`memory open → ${mem.rows} rows, grid painted`) : fail(`memory open: ${JSON.stringify(mem)}`);
+
+  // The enterprise guarantee: CSP connect-src 'none' must BLOCK egress. A same-origin
+  // fetch would succeed without CSP (served over http here) — so a rejection proves
+  // the lock is live, not just that the app happens not to call out.
+  const egress = await page.evaluate(async () => {
+    try { await fetch(location.href, { cache: 'no-store' }); return 'ALLOWED'; }
+    catch { return 'blocked'; }
+  });
+  (egress === 'blocked') ? ok('CSP connect-src \'none\' blocks egress (same-origin fetch rejected) — networkless')
+    : fail(`egress NOT blocked: ${egress}`);
 
   // The build's riskiest seam: the off-thread scan worker importing the inlined bundle.
   const w = await page.evaluate(async () => {

@@ -4,6 +4,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Networkless by construction: connect-src 'none' bans ALL egress (fetch/XHR/WebSocket/
+     beacon) — your data cannot leave the page. The other directives only let the inlined,
+     self-contained runtime boot (it unpacks itself via eval + blob: module URLs; nothing
+     external loads). Enterprise: open it air-gapped, from a file share, behind any proxy. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'unsafe-inline'; img-src data:; worker-src 'self' blob:; child-src 'self' blob:; manifest-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>lamina</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='96' fill='%23121212'/%3E%3Crect x='96' y='150' width='320' height='40' rx='6' fill='%238a9099'/%3E%3Crect x='96' y='236' width='320' height='40' rx='6' fill='%23c89b3c'/%3E%3Crect x='96' y='322' width='320' height='40' rx='6' fill='%238a9099'/%3E%3C/svg%3E">
