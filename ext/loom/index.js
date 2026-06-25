@@ -1124,7 +1124,18 @@ function createGrid(element, provider, options = {}) {
     ctx.font = '600 ' + g.hdrFontPx + 'px ' + g.mono;
     const h = provider.header ? provider.header(c) : null;
     const label = h == null ? '' : (typeof h === 'string' ? h : (h.label ?? ''));
-    w = Math.max(w, ctx.measureText(String(label)).width);
+    // The header paints decorations the label measure misses: a muted type glyph
+    // (+12 advance) before the label, and right-edge indicators (sort ↑/↓, filter
+    // ▽, invalid ⚠ — ~11px each) after it. Reserve them so autofit doesn't clip the
+    // glyph against the label or run the label under the sort arrow.
+    const obj = h && typeof h === 'object';
+    const glyphExtra = obj && h.type ? 12 : 0;
+    let rightExtra = 0;
+    if (obj && h.sort) rightExtra += 11;
+    if (obj && h.filtered) rightExtra += 11;
+    if (obj && h.invalid) rightExtra += 11;
+    if (rightExtra) rightExtra += 4;                 // gap between the label and the indicators
+    w = Math.max(w, ctx.measureText(String(label)).width + glyphExtra + rightExtra);
     ctx.font = g.fontPx + 'px ' + g.mono;
     const [r0, r1] = visibleRowRange(M, scroll.scrollTop, body.clientHeight);
     for (let r = r0; r <= r1; r++) w = Math.max(w, ctx.measureText(cellPlainText(r, c)).width);
