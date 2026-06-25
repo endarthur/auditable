@@ -497,19 +497,66 @@ function gotoRow(n) {
 $('#goto').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value) { gotoRow(Number(e.target.value)); } });
 
 // ── file pick ──
-$('#btnOpen').onclick = async () => {
+async function pickFile() {
   if (window.showOpenFilePicker) {
-    try {
-      const [h] = await window.showOpenFilePicker();
-      if (h) openFile(await h.getFile());
-    } catch { /* cancelled */ }
+    try { const [h] = await window.showOpenFilePicker(); if (h) openFile(await h.getFile()); } catch { /* cancelled */ }
   } else {
     const inp = document.createElement('input');
     inp.type = 'file';
     inp.onchange = () => { if (inp.files[0]) openFile(inp.files[0]); };
     inp.click();
   }
+}
+
+// ── menubar (File / View / Help) — reuses the showMenu helper, dark-themed ──
+function menuAt(btn, items) { const r = btn.getBoundingClientRect(); showMenu(r.left, r.bottom + 2, items); }
+const hasFile = () => !!current;
+$('#mFile').onclick = () => menuAt($('#mFile'), [
+  { label: 'Open…    Ctrl+O', action: pickFile },
+]);
+$('#mView').onclick = () => menuAt($('#mView'), [
+  { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
+  { label: 'Go to row…', action: () => $('#goto').focus() },
+  { sep: true },
+  { label: 'Clear filter', action: () => { $('#filter').value = ''; applyFilter(''); } },
+  { label: 'Clear sort', action: () => { if (current) { current.sort = null; recompute(); } } },
+  { label: 'Show all columns', action: () => showAllColumns() },
+]);
+$('#mHelp').onclick = () => menuAt($('#mHelp'), [
+  { label: 'Filter syntax…', action: () => showHelp('filter') },
+  { label: 'Keyboard & mouse…', action: () => showHelp('keys') },
+  { sep: true },
+  { label: 'About lamina', action: () => showHelp('about') },
+]);
+
+// ── help overlay ──
+const HELP = {
+  filter: ['Filter syntax',
+    `Type an expression in the <b>filter</b> box — <b>Enter</b> applies, <b>Esc</b> clears.<br><br>`
+    + `A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br>`
+    + `Operators: <code>==</code> <code>!=</code> <code>&gt;</code> <code>&gt;=</code> <code>&lt;</code> <code>&lt;=</code> <code>~</code> (contains) <code>!~</code> (not contains).<br>`
+    + `Combine with <code>&amp;&amp;</code> — all must hold: <code>grade >= 1 && lito == OXIDE</code>.<br><br>`
+    + `Values that look numeric compare numerically, otherwise as text. Column names are case-insensitive; quote values with spaces: <code>name == "Main Zone"</code>.<br>`
+    + `Right-click a column header for <b>Filter by &lt;col&gt;…</b> to prefill it.`],
+  keys: ['Keyboard & mouse',
+    `<b>Ctrl+O</b> — open a file<br><b>Enter</b> / <b>Esc</b> in the filter box — apply / clear<br>`
+    + `<b>Click a column header</b> — sort (cycles ascending → descending → off)<br>`
+    + `<b>Right-click a column header</b> — sort · filter by · hide / show columns<br>`
+    + `<b>Click the kind badge</b> (top right) — change how the file is read (delimiter, header, skip rows, comment)<br>`
+    + `<b>row # box</b> — jump to a row<br>Selected cells <b>copy</b> as TSV (Ctrl+C).`],
+  about: ['About lamina',
+    `<b>lamina</b> — open any file, however large, and scroll, filter, and sort it. Windowed, read-only, offline.<br><br>`
+    + `Delimited → grid, text → lines, binary → hex. Reads inside zip / tar / gz / zst / xz / bz2, and windows huge compressed entries without unpacking. Detects GSLIB / Geo-EAS + whitespace dumps and skips <code>#</code> comment preambles.<br><br>`
+    + `Part of the Geoscientific Chaos Union — <code>gentropic.org</code>.`],
 };
+function showHelp(topic) {
+  const [title, body] = HELP[topic] || HELP.about;
+  $('#helpTitle').textContent = title;
+  $('#helpBody').innerHTML = body;
+  $('#help').classList.add('show');
+}
+$('#helpClose').onclick = () => $('#help').classList.remove('show');
+$('#help').onclick = (e) => { if (e.target.id === 'help') $('#help').classList.remove('show'); };
 
 // ── drag-drop ──
 window.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dragging'); });
@@ -527,4 +574,10 @@ $('#filter').addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { e.target.value = ''; applyFilter(''); e.target.blur(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+// ── global keys: Ctrl+O open, Esc closes the help overlay ──
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'o') { e.preventDefault(); pickFile(); }
+  else if (e.key === 'Escape') $('#help').classList.remove('show');
+});
+
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };

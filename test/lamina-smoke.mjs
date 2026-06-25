@@ -334,6 +334,22 @@ try {
     ? ok(`columns: hide 'b' → ${col.afterHide.cols} cols (display col 1 now '${col.afterHide.c1}'); show all → ${col.restored}`)
     : fail(`column hide/show failed: ${JSON.stringify(col)}`);
 
+  // ── menubar + help overlay ──
+  const menu = await page.evaluate(async () => {
+    document.getElementById('mFile').click();            // open the File menu
+    const fileItems = [...document.querySelectorAll('#ctxmenu .item')].map((e) => e.textContent);
+    document.getElementById('mView').click();            // (re)open View
+    const viewItems = [...document.querySelectorAll('#ctxmenu .item')].map((e) => e.textContent);
+    window._lamina.showHelp('filter');                   // Help → Filter syntax
+    const helpShown = document.getElementById('help').classList.contains('show');
+    const helpHasOps = document.getElementById('helpBody').textContent.includes('contains');
+    document.getElementById('helpClose').click();
+    return { fileItems, viewItems, helpShown, helpHasOps, helpClosed: !document.getElementById('help').classList.contains('show') };
+  });
+  (menu.fileItems.some((t) => t.startsWith('Open')) && menu.viewItems.includes('Clear sort') && menu.helpShown && menu.helpHasOps && menu.helpClosed)
+    ? ok(`menubar: File(${menu.fileItems.length}) / View(${menu.viewItems.length}) / Help → filter-syntax overlay opens + closes`)
+    : fail(`menubar failed: ${JSON.stringify(menu)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
