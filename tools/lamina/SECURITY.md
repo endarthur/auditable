@@ -14,7 +14,9 @@ for environments where the data is sensitive and must not leave the machine.
 - **No external resources.** No CDN, no remote scripts or styles, no web fonts
   (font names are referenced with system fallbacks — nothing is downloaded), no
   analytics, no telemetry, no auto-update. The favicon is an inline `data:` image.
-  The entire runtime is inlined (gzip-compressed) in the one file.
+  The entire runtime is inlined **in the clear** in the one file (no `eval`, no
+  self-extractor) — so the CSP needs no `'unsafe-eval'`, and what runs is exactly
+  what you can read.
 - **No account, no server, no SaaS.** Nothing to log in to; no backend; no
   data-processing agreement. It reads only the local files you open.
 - **Read-only.** lamina never modifies the files it opens.
@@ -44,7 +46,7 @@ for environments where the data is sensitive and must not leave the machine.
 
 ```
 default-src 'none';
-script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:;
+script-src 'self' 'unsafe-inline' blob:;
 style-src 'unsafe-inline';
 img-src data:;
 worker-src 'self' blob:;
@@ -55,7 +57,9 @@ base-uri 'none';
 form-action 'none'
 ```
 
-`'unsafe-eval'` and `blob:` are used **only at load**, to unpack the inlined
-runtime from the same file and run it as ES-module blobs — there are no remote
-origins in `script-src`, so no external code can be loaded. `connect-src 'none'`
-is the line that matters for data confidentiality: it makes egress impossible.
+No `'unsafe-eval'` — the runtime is inlined in the clear, not unpacked at load.
+`'unsafe-inline'` covers that inlined boot, which **is** the application, present
+in the file you audit (not loaded from anywhere); `blob:` isolates each module as
+its own ES module. There are **no remote origins** in `script-src`, so no external
+code can ever load — and `connect-src 'none'` is the line that matters for
+confidentiality: it makes data egress impossible.

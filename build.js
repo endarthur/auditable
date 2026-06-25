@@ -1688,16 +1688,18 @@ if (target === 'lamina') {
   const bootStamped = boot.replace("const __LAMINA_BUILD__ = 'dev';", () => `const __LAMINA_BUILD__ = '${lamStamp}';`);
 
   // Template: strip the dev import map + the module <script src>, inline the boot
-  // gzip-compressed into a self-extracting loader (the boot is ~all the bytes —
-  // the JSON-stringified module sources — so this is a big win; decompress is ~ms).
-  const { compressRuntimeNode: compressLaminaRuntime } = require('./make_example');
+  // IN THE CLEAR (no gzip self-extractor → no `eval`, so the CSP needs no
+  // 'unsafe-eval'). lamina favors a strict CSP over a smaller on-disk file — the
+  // wire size is ~unchanged after the server re-gzips. (`</script>` inside module
+  // sources is already escaped in the registry; the function replacement avoids
+  // the $&/$1 backref trap since the boot is full of `${…}` from module code.)
   let html = fs.readFileSync(path.join(lamDir, 'index.html'), 'utf8');
   html = html.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
-  html = html.replace(/<script type="module" src="\.\/js\/app\.js"><\/script>/, compressLaminaRuntime(bootStamped));
+  html = html.replace(/<script type="module" src="\.\/js\/app\.js"><\/script>/, () => `<script>\n${bootStamped}\n</script>`);
 
   const outPath = path.join(__dirname, 'lamina.html');
   fs.writeFileSync(outPath, html);
-  console.log(`Built lamina.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB compressed, ${modules.length} modules) — build ${lamStamp}`);
+  console.log(`Built lamina.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB in the clear, ${modules.length} modules) — build ${lamStamp}`);
   process.exit(0);
 }
 
