@@ -394,6 +394,23 @@ try {
     ? ok(`column stats: numeric (mean+median) + categorical (distinct + top values)`)
     : fail(`stats failed: ${JSON.stringify(stats)}`);
 
+  // ── per-column number format (display only; value unchanged) ──
+  const fmt = await page.evaluate(async () => {
+    window._lamina.open('nf.csv', new TextEncoder().encode('id,grade\n0,1.23456\n1,2.7\n'));
+    await window._laminaVS.ensureRow(0);
+    const raw = window._lamina.grid.provider.cellAt(0, 1).style.text;     // 'grade' col, auto
+    window._lamina.setColFormat(1, { mode: 'fixed', digits: 2 });
+    const fixed = window._lamina.grid.provider.cellAt(0, 1).style.text;   // 2 decimals
+    window._lamina.setColFormat(1, { mode: 'sci', digits: 3 });
+    const sci = window._lamina.grid.provider.cellAt(0, 1).style.text;
+    window._lamina.setColFormat(1, null);
+    const auto = window._lamina.grid.provider.cellAt(0, 1).style.text;
+    return { raw, fixed, sci, auto };
+  });
+  (fmt.raw === '1.23456' && fmt.fixed === '1.23' && /^1\.235e/.test(fmt.sci) && fmt.auto === '1.23456')
+    ? ok(`number format: 2-decimals (${fmt.fixed}), scientific (${fmt.sci}), auto restores (${fmt.auto})`)
+    : fail(`number format failed: ${JSON.stringify(fmt)}`);
+
   // ── force column type (number ↔ text) changes sort + stats ──
   const ftype = await page.evaluate(async () => {
     // a column that looks numeric but should be text (codes); x keeps it a real table

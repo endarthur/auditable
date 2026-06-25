@@ -80,7 +80,7 @@ function mount(name, d, src, totalBytes) {
   const schema = kind === 'delimited' ? d.schema : [{ name: 'line', type: 'string' }];
   const dataStart = d.dataStart != null ? d.dataStart : (kind === 'delimited' && d.hasHeader ? 1 : 0);
   const baseVs = createRecordViewSource(src, { schema, dataStart });
-  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), colWidths: {}, _vis: null, file: null, bytes: null, force: {} };
+  current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), colWidths: {}, colFormats: {}, _vis: null, file: null, bytes: null, force: {} };
   $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear();   // fresh file → clear filter + sort
   recompute();
 }
@@ -133,7 +133,16 @@ function mountView(vs, info = {}) {
   c._vis = vis;
   const provider = {
     dims() { return { rows: vs.rowCount(), cols: vis.length }; },
-    cellAt(r, dc) { return base.cellAt(r, vis[dc]); },
+    cellAt(r, dc) {
+      const uc = vis[dc];
+      const cell = base.cellAt(r, uc);
+      const fmt = c.colFormats[uc];
+      if (fmt && cell && typeof cell === 'object' && cell.type === 'number') {
+        const num = Number(cell.value);
+        if (!Number.isNaN(num)) { const t = fmtNumber(num, fmt); if (t != null) return { ...cell, style: { ...cell.style, text: t } }; }
+      }
+      return cell;
+    },
     header(dc) { const uc = vis[dc]; const h = base.header(uc); if (c.sort && c.sort.col === uc) h.sort = c.sort.dir; return h; },
     rowHeader(r) { return base.rowHeader(r); },
     onReady(cb) { return base.onReady(cb); },
@@ -169,6 +178,28 @@ function setColType(uc, type) {
   current.schema[uc].type = type;
   recompute();
 }
+
+// Per-column number display format (null = auto/raw). Applied in the cellAt wrap.
+function fmtNumber(num, fmt) {
+  if (!fmt) return null;
+  if (fmt.mode === 'fixed') return num.toFixed(fmt.digits);
+  if (fmt.mode === 'sci') return num.toExponential(fmt.digits);
+  if (fmt.mode === 'group') return num.toLocaleString();
+  return null;
+}
+function setColFormat(uc, fmt) { if (current) { current.colFormats[uc] = fmt; rerender(); } }
+function showFormatMenu(uc, x, y) {
+  const set = (fmt) => setColFormat(uc, fmt);
+  showMenu(x, y, [
+    { label: 'Auto', action: () => set(null) },
+    { label: '0 decimals', action: () => set({ mode: 'fixed', digits: 0 }) },
+    { label: '2 decimals', action: () => set({ mode: 'fixed', digits: 2 }) },
+    { label: '3 decimals', action: () => set({ mode: 'fixed', digits: 3 }) },
+    { label: '4 decimals', action: () => set({ mode: 'fixed', digits: 4 }) },
+    { label: 'Scientific', action: () => set({ mode: 'sci', digits: 3 }) },
+    { label: 'Thousands (1,234)', action: () => set({ mode: 'group' }) },
+  ]);
+}
 function hideColumn(uc) { if (current) { current.hidden.add(uc); rerender(); } }
 function showColumn(uc) { if (current) { current.hidden.delete(uc); rerender(); } }
 function showAllColumns() { if (current) { current.hidden.clear(); rerender(); } }
@@ -198,6 +229,7 @@ function showColumnMenu(uc, x, y) {
   const isNum = c.schema[uc] && c.schema[uc].type === 'number';       // force-type override (fixes a mis-detected column)
   items.push(isNum ? { label: 'Treat as text', action: () => setColType(uc, 'string') }
                    : { label: 'Treat as number', action: () => setColType(uc, 'number') });
+  if (isNum) items.push({ label: 'Number format ▸', action: (r) => showFormatMenu(uc, r.right, r.top) });
   items.push({ sep: true }, { label: `Hide ${name}`, action: () => hideColumn(uc) });
   for (let i = 0; i < c.baseVs.cols; i++) {
     if (c.hidden.has(i)) items.push({ label: `Show ${c.baseVs.header(i).label}`, action: () => showColumn(i) });
@@ -214,7 +246,7 @@ function showMenu(x, y, items) {
   for (const it of items) {
     if (it.sep) { const s = document.createElement('div'); s.className = 'sep'; m.appendChild(s); continue; }
     const el = document.createElement('div'); el.className = 'item'; el.textContent = it.label;
-    el.onclick = () => { closeMenu(); it.action(); };
+    el.onclick = () => { const r = el.getBoundingClientRect(); closeMenu(); it.action(r); };   // rect → submenus can anchor
     m.appendChild(el);
   }
   m.style.left = x + 'px'; m.style.top = y + 'px';
@@ -583,7 +615,7 @@ const HELP = {
   keys: ['Keyboard & mouse',
     `<b>Ctrl+O</b> — open a file<br><b>Enter</b> / <b>Esc</b> in the filter box — apply / clear<br>`
     + `<b>Click a column header</b> — sort (cycles ascending → descending → off)<br>`
-    + `<b>Right-click a column header</b> — statistics · sort · filter by · hide / show columns<br>`
+    + `<b>Right-click a column header</b> — statistics · sort · filter by · number format · treat as text/number · hide / show<br>`
     + `<b>Click the kind badge</b> (top right) — change how the file is read (delimiter, header, skip rows, comment)<br>`
     + `<b>Drag a column border</b> — resize · <b>double-click a border</b> — autofit that column · <b>View → Autofit all columns</b><br>`
     + `<b>row # box</b> — jump to a row<br>Selected cells <b>copy</b> as TSV (Ctrl+C).`],
@@ -675,4 +707,4 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') $('#help').classList.remove('show');
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, autofitAll, resetColWidths, showColumnStats, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, pickFile, showHelp, cache: idbCache, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, canWorker };
