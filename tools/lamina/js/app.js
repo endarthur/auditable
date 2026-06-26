@@ -1836,7 +1836,7 @@ window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hid
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;
-$('#build').title = `lamina build — ${__LAMINA_BUILD__}`;
+$('#build').title = `lamina build — ${__LAMINA_BUILD__} · verify at gentropic.org/security`;
 applyTheme();                                          // sync data-theme + meta theme-color (the first-paint script set the attr; this keeps it authoritative)
 
 // Keep --tb (the layout's top offset) synced to the toolbar's ACTUAL height, so

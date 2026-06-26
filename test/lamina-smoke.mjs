@@ -823,6 +823,19 @@ try {
     ? ok('column-profile: stats popup renders a histogram canvas + log toggle + quantiles')
     : fail(`column-profile failed: ${JSON.stringify(prof)}`);
 
+  // ── security wing link: banner link is clickable + footer build-stamp links out ──
+  const sec = await page.evaluate(() => {
+    const a = document.querySelector('#empty .empty-sec a'), b = document.getElementById('build');
+    return {
+      bannerHref: a && a.href, bannerClickable: a && getComputedStyle(a).pointerEvents === 'auto',
+      footerTag: b && b.tagName, footerHref: b && b.getAttribute('href'),
+    };
+  });
+  (/gentropic\.org\/security$/.test(sec.bannerHref || '') && sec.bannerClickable
+    && sec.footerTag === 'A' && /gentropic\.org\/security$/.test(sec.footerHref || ''))
+    ? ok('security wing: empty-state link clickable + footer build-stamp links to /security')
+    : fail(`security link failed: ${JSON.stringify(sec)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
