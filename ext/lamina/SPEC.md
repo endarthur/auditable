@@ -161,14 +161,19 @@ matches) and are selectivity-bounded (capped, "filter first" rather than OOM).
   never-resident scale story, and a short recipes section (filter→sort, stats on
   a filtered set, peek inside a zip). Discoverability — the useful actions are in
   context menus a newcomer won't think to open.
-- **Columns panel v2:** the right-docked slide-out (View → Columns…) ships v1 —
+- **Columns panel:** the right-docked slide-out (View → Columns…) ships —
   searchable column list, per-row visibility checkbox + type badge + sampled
-  null-rate + a ⋯ menu (the existing per-column actions), bulk show/hide/invert.
-  Pure consolidation of `c.hidden`/`colFormats`/`colScale`/`gutter` state; the grid
-  re-lays-out via loom's own ResizeObserver when `#grid`'s right inset changes. **v2
-  (soon):** column **reorder** (drag — a new `colOrder` layer through the `_vis`
-  map, display-only) + **pin/freeze** left columns (needs frozen-column support in
-  `@gcu/loom` itself — keep ID/coords visible scrolling right across a wide model).
+  null-rate + a ⋯ menu (the existing per-column actions), bulk show/hide/invert, and
+  **drag-to-reorder** (grip handle → a `c.colOrder` layer reconciled by
+  `effectiveOrder`, threaded through `_vis`; display-only, app-side, no loom change).
+  Pure consolidation of `c.hidden`/`colOrder`/`colFormats`/`colScale`/`gutter` state;
+  the grid re-lays-out via loom's own ResizeObserver when `#grid`'s right inset
+  changes. Visibility + order + formats + color-scale + width all round-trip through
+  a **lens** (by column name). **Still v2:** **pin/freeze** left columns — needs
+  frozen-column support in `@gcu/loom` itself (a fourth render band like `rowHdr`,
+  touching paint/geometry/hit-test/resize; benefits the strata surface too), so it's
+  a deliberate loom mini-project, not an app tack-on. Grid-header drag-reorder
+  (vs the panel's) would also be a loom change — deferred; panel-reorder covers it.
 - **Toolbar / filter layout polish:** reserve space so the kind-badge popover
   doesn't sit under the toolbar edge; keep the filter box from growing under it;
   fold the apply button into the box; let the filter box grow to multiple lines

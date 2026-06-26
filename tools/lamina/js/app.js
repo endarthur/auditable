@@ -161,8 +161,8 @@ function mountView(vs, info = {}) {
 
   const base = createLaminaProvider(vs, { PENDING });
   const total = c.baseVs.cols;
-  const vis = [];                                        // display col → underlying col (skipping hidden)
-  for (let i = 0; i < total; i++) if (!c.hidden.has(i)) vis.push(i);
+  const vis = [];                                        // display col → underlying col (reordered, skipping hidden)
+  for (const uc of effectiveOrder(c)) if (!c.hidden.has(uc)) vis.push(uc);
   c._vis = vis;
   const provider = {
     dims() { return { rows: vs.rowCount(), cols: vis.length }; },
@@ -304,6 +304,27 @@ function hideColumn(uc) { if (current) { current.hidden.add(uc); rerender(); } }
 function showColumn(uc) { if (current) { current.hidden.delete(uc); rerender(); } }
 function showAllColumns() { if (current) { current.hidden.clear(); rerender(); } }
 
+// Display order of UNDERLYING column indices, reconciled with the current schema:
+// honor c.colOrder where valid, then append any unlisted indices (a new calc column,
+// or a lens that didn't name them) in natural order. null/absent → natural order.
+function effectiveOrder(c) {
+  const n = c.schema.length;
+  if (!c.colOrder || !c.colOrder.length) return Array.from({ length: n }, (_, i) => i);
+  const seen = new Set(), out = [];
+  for (const uc of c.colOrder) if (uc >= 0 && uc < n && !seen.has(uc)) { out.push(uc); seen.add(uc); }
+  for (let i = 0; i < n; i++) if (!seen.has(i)) out.push(i);
+  return out;
+}
+// Move column `fromUc` to just before `toUc` in the display order (panel drag).
+function reorderCol(fromUc, toUc) {
+  const c = current; if (!c || fromUc === toUc) return;
+  const order = effectiveOrder(c);
+  order.splice(order.indexOf(fromUc), 1);
+  order.splice(order.indexOf(toUc), 0, fromUc);
+  c.colOrder = order;
+  rerender();                                            // rebuilds _vis (+ renderColPanel via the mountView hook)
+}
+
 // ── columns panel (right-docked slide-out) ─────────────────────────────────────
 // A searchable list of every column with a visibility checkbox + type + null-rate +
 // a ⋯ menu (the existing per-column actions). Pure consolidation of existing state
@@ -323,14 +344,21 @@ function updateCpCount() {
   const c = current; if (!c) return;
   $('#cpCount').textContent = `${c.schema.length - c.hidden.size} of ${c.schema.length} shown`;
 }
+let _cpDragUc = null;
 function renderColPanel() {
   const c = current; if (!c || !_colPanelOpen) return;
   const list = $('#cpList'); const q = $('#cpSearch').value.trim().toLowerCase();
   list.textContent = '';
-  for (let uc = 0; uc < c.schema.length; uc++) {
+  for (const uc of effectiveOrder(c)) {                  // list in DISPLAY order so drag matches the grid
     const s = c.schema[uc]; if (q && !s.name.toLowerCase().includes(q)) continue;
     const visible = !c.hidden.has(uc);
     const row = document.createElement('div'); row.className = 'cp-row' + (visible ? '' : ' off');
+    const grip = document.createElement('span'); grip.className = 'cp-grip'; grip.textContent = '⠿'; grip.title = 'drag to reorder'; grip.draggable = true;
+    grip.addEventListener('dragstart', (e) => { _cpDragUc = uc; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', s.name); } catch { /* ignore */ } row.classList.add('cp-dragging'); });
+    grip.addEventListener('dragend', () => { row.classList.remove('cp-dragging'); list.querySelectorAll('.cp-over').forEach((x) => x.classList.remove('cp-over')); _cpDragUc = null; });
+    row.addEventListener('dragover', (e) => { if (_cpDragUc == null) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; row.classList.add('cp-over'); });
+    row.addEventListener('dragleave', () => row.classList.remove('cp-over'));
+    row.addEventListener('drop', (e) => { e.preventDefault(); row.classList.remove('cp-over'); if (_cpDragUc != null && _cpDragUc !== uc) reorderCol(_cpDragUc, uc); });
     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = visible;
     cb.onchange = () => { if (cb.checked) c.hidden.delete(uc); else c.hidden.add(uc); row.classList.toggle('off', !cb.checked); updateCpCount(); rerender(); };
     const ty = document.createElement('span'); ty.className = 'cp-type' + (s.type === 'number' ? ' num' : ''); ty.textContent = s.type === 'number' ? '#' : 'abc';
@@ -341,7 +369,7 @@ function renderColPanel() {
     if (pct != null && pct > 0) { nu.textContent = pct + '%∅'; nu.title = pct + '% blank (sampled)'; }
     const more = document.createElement('button'); more.className = 'cp-more'; more.textContent = '⋯'; more.title = 'column actions';
     more.onclick = () => { const r = more.getBoundingClientRect(); showColumnMenu(uc, r.left - 150, r.bottom + 2); };
-    row.append(cb, ty, nm, nu, more); list.appendChild(row);
+    row.append(grip, cb, ty, nm, nu, more); list.appendChild(row);
   }
   updateCpCount();
 }
@@ -809,6 +837,8 @@ function buildLens() {
     if (Object.keys(o).length) cols[nm] = o;
   }
   if (Object.keys(cols).length) lens.columns = cols;
+  const order = effectiveOrder(c);                          // column display order (names), only if reordered from natural
+  if (!order.every((uc, i) => uc === i)) lens.order = order.map(nameOf).filter(Boolean);
   return lens;
 }
 
@@ -871,7 +901,12 @@ async function applyLensView(lens) {
     if (cfg.hidden) c.hidden.add(i);
     if (cfg.width != null) c.colWidths[i] = cfg.width;
   }
-  await recompute();                                                      // sort + render with formats/hidden
+  if (Array.isArray(lens.order)) {                                        // column display order (by name; unlisted appended by effectiveOrder)
+    const ord = [];
+    for (const nm of lens.order) { const i = idx(nm); if (i >= 0 && !ord.includes(i)) ord.push(i); }
+    c.colOrder = ord.length ? ord : null;
+  }
+  await recompute();                                                      // sort + render with formats/hidden + order
   if (current !== c) return;
   if (lens.columns && Object.values(lens.columns).some((cfg) => cfg.colorScale)) {   // color-scale needs the gutter (min/max)
     await refreshGutter();
@@ -1889,7 +1924,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

@@ -862,6 +862,24 @@ try {
     ? ok(`columns panel: lists ${cp.rows} cols · toggle + search + bulk-hide work`)
     : fail(`columns panel failed: ${JSON.stringify(cp)}`);
 
+  // ── column reorder: moves display order + round-trips through a lens ──
+  const ro = await page.evaluate(async () => {
+    const L = window._lamina; L.showAllColumns();
+    const before = L.current._vis.map((uc) => L.current.schema[uc].name);
+    L.reorderCol(2, 0);                                   // move col #2 to the front
+    await new Promise((r) => setTimeout(r, 30));
+    const after = L.current._vis.map((uc) => L.current.schema[uc].name);
+    const lens = L.buildLens();                           // order captured by name?
+    L.current.colOrder = null; await new Promise((r) => setTimeout(r, 10));   // reset
+    await L.applyLens(lens); await new Promise((r) => setTimeout(r, 60));     // re-apply
+    const restored = L.current._vis.map((uc) => L.current.schema[uc].name);
+    return { before, after, lensOrder: lens.order, restored };
+  });
+  (ro.after[0] === ro.before[2] && JSON.stringify(ro.after) !== JSON.stringify(ro.before)
+    && Array.isArray(ro.lensOrder) && JSON.stringify(ro.restored) === JSON.stringify(ro.after))
+    ? ok(`column reorder: moves display order + round-trips through a lens (${ro.after.join(',')})`)
+    : fail(`column reorder failed: ${JSON.stringify(ro)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
