@@ -20,6 +20,12 @@ function buildDateFromGit() {
 
 const target = (process.argv.find(a => a.startsWith('--target=')) || '').split('=')[1] || '';
 const lean = process.argv.includes('--lean');
+// `@collab` modules are OPT-IN: excluded by default, included only with --collab.
+// (The inverse of `@optional`, which ships by default and drops under --lean.) Used
+// to fence the P2P-presence collab feature out of the default/public artifact — it
+// runtime-imports its carrier from a CDN, which the networkless/Sealed story can't
+// carry. See spec_inbox/SPEC-gcu-seal.md + the federated-collab roadmap.
+const collab = process.argv.includes('--collab');
 const compress = process.argv.includes('--compress');
 const execModeArg = (process.argv.find(a => a.startsWith('--exec-mode=')) || '').split('=')[1] || '';
 const runOnLoadArg = (process.argv.find(a => a.startsWith('--run-on-load=')) || '').split('=')[1] || '';
@@ -80,6 +86,7 @@ function processModules(mainPath, moduleDir, opts = {}) {
   for (const rawLine of mainSrc.split('\n')) {
     const line = rawLine.replace(/\r$/, '');   // CRLF-safe; $ in the regex won't anchor across \r
     if (opts.lean && line.includes('@optional')) continue;
+    if (!opts.collab && line.includes('@collab')) continue;   // opt-in; default off
     const m = line.match(/^import\s+.*['"](\.\.?\/.+?)['"];?\s*(?:\/\/.*)?$/);
     if (m) importPaths.push(m[1]);
   }
@@ -1787,6 +1794,7 @@ function processModulesAsRegistry(mainPath, moduleDir, opts = {}) {
     // match (the $ in the regex sits before \r, not after, on Windows).
     const line = rawLine.replace(/\r$/, '');
     if (opts.lean && line.includes('@optional')) continue;
+    if (!opts.collab && line.includes('@collab')) continue;   // opt-in; default off
     const m = line.match(/^import\s+.*['"](\.\.?\/.+?)['"];?\s*(?:\/\/.*)?$/);
     if (m) importPaths.push(m[1]);
   }
@@ -1928,7 +1936,10 @@ function buildAuditableRegistry(opts) {
     { name: 'gcu-markdown', file: 'ext/markdown/index.js' },
     { name: 'proc',         file: 'ext/proc/index.js' },
     { name: 'coreutils',    file: 'ext/coreutils/index.js' },
-    { name: 'sync',         file: 'ext/sync/index.js' },
+    // @gcu/sync ships ONLY with --collab — it's the carrier for presence.js (also
+    // @collab-gated). Without it the default/public artifact carries no P2P/federation
+    // code at all (clean reach.network for the Sealed declaration). See the seal spec.
+    ...(collab ? [{ name: 'sync', file: 'ext/sync/index.js' }] : []),
     { name: 'menu',         file: 'ext/menu/index.js' },
     { name: 'dialog',       file: 'ext/dialog/index.js' },
     { name: 'term',         file: 'ext/term/index.js' },
@@ -1938,7 +1949,7 @@ function buildAuditableRegistry(opts) {
   ];
 
   // ── gather: base src/js modules, then prepend the ext bundles ──
-  const modules = processModulesAsRegistry(path.join(jsDir, 'main.js'), jsDir, { lean });
+  const modules = processModulesAsRegistry(path.join(jsDir, 'main.js'), jsDir, { lean, collab });
   for (const e of EXT_MODULE_ENTRIES) {
     const p = path.join(__dirname, e.file);
     if (!fs.existsSync(p)) continue;

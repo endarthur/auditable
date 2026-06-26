@@ -80,7 +80,7 @@ import './size-compare.js'; // @optional
 import './shim.js';
 import './mcp-access.js';
 import './mcp-adapter.js';
-import './presence.js';
+import './presence.js'; // @collab — opt-in only (--collab); P2P presence runtime-imports its carrier from a CDN, fenced out of the default/public build
 import './ipynb-bridge.js';
 import './license-warn.js';
 import './globals.js';
