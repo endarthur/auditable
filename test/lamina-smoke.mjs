@@ -875,6 +875,25 @@ try {
     ? ok('column-profile: stats popup renders a histogram canvas + log toggle + quantiles')
     : fail(`column-profile failed: ${JSON.stringify(prof)}`);
 
+  // ── type override round-trips through a lens (treat-as) ──
+  const tov = await page.evaluate(async (text) => {
+    const L = window._lamina;
+    L.open('block.csv', new TextEncoder().encode(text));
+    await new Promise((r) => setTimeout(r, 40));
+    L.setColType(1, 'string');                            // treat grade as text
+    await new Promise((r) => setTimeout(r, 20));
+    const lens = L.buildLens();
+    L.open('block.csv', new TextEncoder().encode(text));  // fresh (grade back to number)
+    await new Promise((r) => setTimeout(r, 40));
+    const before = L.current.schema[1].type;
+    await L.applyLens(lens);
+    await new Promise((r) => setTimeout(r, 60));
+    return { lensType: lens.columns && lens.columns.grade && lens.columns.grade.type, before, after: L.current.schema[1].type };
+  }, csv);
+  (tov.lensType === 'string' && tov.before === 'number' && tov.after === 'string')
+    ? ok(`type override: treat-as round-trips through a lens (grade ${tov.before}→${tov.after})`)
+    : fail(`type override failed: ${JSON.stringify(tov)}`);
+
   // ── go-to-column: scroll the grid to a column (panel name click) ──
   const gtc = await page.evaluate(async (text) => {
     const L = window._lamina;

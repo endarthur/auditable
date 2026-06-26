@@ -234,6 +234,8 @@ function rerender() { if (current && current.view) mountView(current.view, curre
 function setColType(uc, type) {
   if (!current || !current.schema[uc]) return;
   current.schema[uc].type = type;
+  current.typeOverrides = current.typeOverrides || {};
+  current.typeOverrides[current.schema[uc].name] = type;   // by name → round-trips in the lens
   recompute();
 }
 
@@ -956,6 +958,7 @@ function buildLens() {
     if (cs) o.colorScale = { scale: cs.scale, palette: cs.palette, reverse: cs.reverse, clip: cs.clip };   // lo/hi are data-specific → recomputed on apply
     if (c.hidden.has(uc)) o.hidden = true;
     if (c.colWidths[uc] != null) o.width = c.colWidths[uc];
+    if (c.typeOverrides && c.typeOverrides[nm]) o.type = c.typeOverrides[nm];   // treat-as override
     if (Object.keys(o).length) cols[nm] = o;
   }
   if (Object.keys(cols).length) lens.columns = cols;
@@ -1023,6 +1026,7 @@ async function applyLensView(lens) {
     if (cfg.format) c.colFormats[i] = cfg.format;
     if (cfg.hidden) c.hidden.add(i);
     if (cfg.width != null) c.colWidths[i] = cfg.width;
+    if (cfg.type && c.schema[i]) { c.schema[i].type = cfg.type; c.typeOverrides = c.typeOverrides || {}; c.typeOverrides[name] = cfg.type; }   // treat-as override
   }
   if (Array.isArray(lens.order)) {                                        // column display order (by name; unlisted appended by effectiveOrder)
     const ord = [];
