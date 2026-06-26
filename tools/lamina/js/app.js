@@ -217,6 +217,7 @@ function mountView(vs, info = {}) {
   c._meta = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${kindLabel}${skipped}`;   // remembered so a copy-flash can restore it
   $('#meta').textContent = c._meta;
   window._laminaVS = vs;                                // automation hook
+  if (_colPanelOpen) renderColPanel();                  // keep the columns panel in sync (gutter-ready, menu-hide, new file)
 }
 
 // Cheap re-render of the current view (after a column hide/show — the data view
@@ -302,6 +303,60 @@ function setColFormat(uc, fmt) { if (current) { current.colFormats[uc] = fmt; re
 function hideColumn(uc) { if (current) { current.hidden.add(uc); rerender(); } }
 function showColumn(uc) { if (current) { current.hidden.delete(uc); rerender(); } }
 function showAllColumns() { if (current) { current.hidden.clear(); rerender(); } }
+
+// ── columns panel (right-docked slide-out) ─────────────────────────────────────
+// A searchable list of every column with a visibility checkbox + type + null-rate +
+// a ⋯ menu (the existing per-column actions). Pure consolidation of existing state
+// (c.hidden / colFormats / colScale / gutter + showColumnMenu); reorder + pin = v2.
+let _colPanelOpen = false;
+function toggleColPanel(force) {
+  _colPanelOpen = force != null ? force : !_colPanelOpen;
+  if (_colPanelOpen && !current) { _colPanelOpen = false; return; }
+  closeMenu();
+  const p = $('#colPanel');
+  p.classList.toggle('show', _colPanelOpen);
+  // loom's own ResizeObserver repaints the grid when #grid's right inset changes.
+  document.documentElement.style.setProperty('--cp', _colPanelOpen ? p.offsetWidth + 'px' : '0px');
+  if (_colPanelOpen) { renderColPanel(); $('#cpSearch').focus(); }
+}
+function updateCpCount() {
+  const c = current; if (!c) return;
+  $('#cpCount').textContent = `${c.schema.length - c.hidden.size} of ${c.schema.length} shown`;
+}
+function renderColPanel() {
+  const c = current; if (!c || !_colPanelOpen) return;
+  const list = $('#cpList'); const q = $('#cpSearch').value.trim().toLowerCase();
+  list.textContent = '';
+  for (let uc = 0; uc < c.schema.length; uc++) {
+    const s = c.schema[uc]; if (q && !s.name.toLowerCase().includes(q)) continue;
+    const visible = !c.hidden.has(uc);
+    const row = document.createElement('div'); row.className = 'cp-row' + (visible ? '' : ' off');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = visible;
+    cb.onchange = () => { if (cb.checked) c.hidden.delete(uc); else c.hidden.add(uc); row.classList.toggle('off', !cb.checked); updateCpCount(); rerender(); };
+    const ty = document.createElement('span'); ty.className = 'cp-type' + (s.type === 'number' ? ' num' : ''); ty.textContent = s.type === 'number' ? '#' : 'abc';
+    const nm = document.createElement('span'); nm.className = 'cp-name'; nm.textContent = s.name; nm.title = s.name;
+    if (s.calc) { const f = document.createElement('span'); f.className = 'cp-calc'; f.textContent = 'ƒ '; nm.prepend(f); }
+    const g = c.gutter && c.gutter[uc]; const pct = g && g.nullRate != null ? Math.round(g.nullRate * 100) : null;
+    const nu = document.createElement('span'); nu.className = 'cp-null';
+    if (pct != null && pct > 0) { nu.textContent = pct + '%∅'; nu.title = pct + '% blank (sampled)'; }
+    const more = document.createElement('button'); more.className = 'cp-more'; more.textContent = '⋯'; more.title = 'column actions';
+    more.onclick = () => { const r = more.getBoundingClientRect(); showColumnMenu(uc, r.left - 150, r.bottom + 2); };
+    row.append(cb, ty, nm, nu, more); list.appendChild(row);
+  }
+  updateCpCount();
+}
+$('#cpClose').onclick = () => toggleColPanel(false);
+$('#cpSearch').oninput = renderColPanel;
+$('#colPanel').querySelectorAll('.cp-bulk button').forEach((b) => {
+  b.onclick = () => {
+    const c = current; if (!c) return;
+    const act = b.dataset.cp;
+    if (act === 'all') c.hidden.clear();
+    else if (act === 'none') { for (let i = 0; i < c.schema.length; i++) c.hidden.add(i); }
+    else for (let i = 0; i < c.schema.length; i++) { if (c.hidden.has(i)) c.hidden.delete(i); else c.hidden.add(i); }
+    renderColPanel(); rerender();
+  };
+});
 
 // ── cell context menu: copy variants + filter-by-value + column stats ──
 function showCellMenu(row, col, sel, x, y) {
@@ -1517,6 +1572,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
     { label: (theme === 'dark' ? '✓ ' : '') + 'Dark', action: () => setTheme('dark') },
     { label: (theme === 'light' ? '✓ ' : '') + 'Light', action: () => setTheme('light') },
   ] },
+  { label: 'Columns…', action: () => toggleColPanel() },
   { label: 'Go to row…', action: () => $('#goto').focus() },
   { sep: true },
   { label: 'Autofit all columns', action: () => autofitAll() },
@@ -1833,7 +1889,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

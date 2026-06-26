@@ -836,6 +836,32 @@ try {
     ? ok('security wing: empty-state link clickable + footer build-stamp links to /security')
     : fail(`security link failed: ${JSON.stringify(sec)}`);
 
+  // ── columns panel: lists columns, toggles visibility, searches, bulk hide ──
+  const cp = await page.evaluate(async () => {
+    const L = window._lamina;
+    L.showAllColumns();
+    L.toggleColPanel(true);
+    await new Promise((r) => setTimeout(r, 30));
+    const rows = document.querySelectorAll('#cpList .cp-row').length;
+    const total = L.current.schema.length;
+    const cb = document.querySelector('#cpList .cp-row input');      // toggle the first column off
+    cb.checked = false; cb.dispatchEvent(new Event('change'));
+    await new Promise((r) => setTimeout(r, 40));
+    const hiddenAfter = L.current.hidden.size;
+    const search = document.getElementById('cpSearch');             // search filters the list
+    search.value = 'zzz_nomatch'; search.dispatchEvent(new Event('input'));
+    const rowsFiltered = document.querySelectorAll('#cpList .cp-row').length;
+    search.value = ''; search.dispatchEvent(new Event('input'));
+    document.querySelector('#colPanel .cp-bulk button[data-cp="none"]').click();   // bulk hide all
+    await new Promise((r) => setTimeout(r, 40));
+    const allHidden = L.current.hidden.size === total;
+    L.showAllColumns(); L.toggleColPanel(false);
+    return { rows, total, hiddenAfter, rowsFiltered, allHidden };
+  });
+  (cp.rows === cp.total && cp.hiddenAfter === 1 && cp.rowsFiltered === 0 && cp.allHidden)
+    ? ok(`columns panel: lists ${cp.rows} cols · toggle + search + bulk-hide work`)
+    : fail(`columns panel failed: ${JSON.stringify(cp)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

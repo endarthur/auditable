@@ -161,6 +161,14 @@ matches) and are selectivity-bounded (capped, "filter first" rather than OOM).
   never-resident scale story, and a short recipes section (filter→sort, stats on
   a filtered set, peek inside a zip). Discoverability — the useful actions are in
   context menus a newcomer won't think to open.
+- **Columns panel v2:** the right-docked slide-out (View → Columns…) ships v1 —
+  searchable column list, per-row visibility checkbox + type badge + sampled
+  null-rate + a ⋯ menu (the existing per-column actions), bulk show/hide/invert.
+  Pure consolidation of `c.hidden`/`colFormats`/`colScale`/`gutter` state; the grid
+  re-lays-out via loom's own ResizeObserver when `#grid`'s right inset changes. **v2
+  (soon):** column **reorder** (drag — a new `colOrder` layer through the `_vis`
+  map, display-only) + **pin/freeze** left columns (needs frozen-column support in
+  `@gcu/loom` itself — keep ID/coords visible scrolling right across a wide model).
 - **Toolbar / filter layout polish:** reserve space so the kind-badge popover
   doesn't sit under the toolbar edge; keep the filter box from growing under it;
   fold the apply button into the box; let the filter box grow to multiple lines

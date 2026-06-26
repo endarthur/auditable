@@ -31,6 +31,12 @@
   }   /* --tb/--ft: toolbar + footer heights (the media query retunes --tb when the toolbar wraps) */
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); overflow: hidden; }
+  /* themed scrollbars — every scroll area (autocomplete, dialogs, lists), both themes */
+  * { scrollbar-width: thin; scrollbar-color: var(--bd2) transparent; }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
   #toolbar {
     position: absolute; left: 0; right: 0; top: 0; height: var(--tb); display: flex; align-items: center;
     gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--border); background: var(--bg-bar);
@@ -198,7 +204,35 @@
   #help .prof-log.on { color: var(--accent); border-color: var(--accent); }
   #help .help-body b { color: var(--text-hi); font-weight: 600; }
 
-  #grid { position: absolute; left: 0; right: 0; top: var(--tb); bottom: var(--ft); }
+  #grid { position: absolute; left: 0; right: var(--cp, 0); top: var(--tb); bottom: var(--ft); }
+  /* columns panel — right-docked slide-out: visibility toggles + per-column config */
+  #colPanel {
+    position: absolute; top: var(--tb); right: 0; bottom: var(--ft); width: 266px; z-index: 15;
+    display: flex; flex-direction: column; background: var(--bg-panel); border-left: 1px solid var(--bd2);
+    font-family: var(--mono); font-size: 12px; transform: translateX(100%); transition: transform .16s ease;
+  }
+  #colPanel.show { transform: translateX(0); }
+  #colPanel .cp-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  #colPanel .cp-title { font-weight: 600; color: var(--text-hi); }
+  #colPanel .cp-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 17px; line-height: 1; padding: 0 2px; }
+  #colPanel .cp-close:hover { color: var(--text-hi); }
+  #colPanel .cp-search { margin: 8px 10px 6px; padding: 4px 8px; background: var(--bg-field); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font: inherit; }
+  #colPanel .cp-bulk { display: flex; gap: 6px; padding: 0 10px 6px; }
+  #colPanel .cp-bulk button { flex: 1; padding: 3px 4px; background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 4px; color: var(--muted); cursor: pointer; font: inherit; font-size: 11px; }
+  #colPanel .cp-bulk button:hover { color: var(--text-hi); border-color: var(--muted); }
+  #colPanel .cp-count { padding: 0 10px 6px; color: var(--dim); font-size: 11px; }
+  #colPanel .cp-list { flex: 1; overflow-y: auto; padding: 2px 6px 8px; }
+  #colPanel .cp-row { display: flex; align-items: center; gap: 7px; padding: 3px 4px; border-radius: 4px; }
+  #colPanel .cp-row:hover { background: var(--bg-hover); }
+  #colPanel .cp-row input { cursor: pointer; margin: 0; flex: none; }
+  #colPanel .cp-type { color: var(--dim); font-size: 10px; width: 22px; flex: none; }
+  #colPanel .cp-type.num { color: var(--num); }
+  #colPanel .cp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  #colPanel .cp-row.off .cp-name { color: var(--dim); }
+  #colPanel .cp-calc { color: var(--accent); }
+  #colPanel .cp-null { color: var(--dim); font-size: 10px; min-width: 34px; text-align: right; flex: none; }
+  #colPanel .cp-more { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 3px; font-size: 13px; flex: none; }
+  #colPanel .cp-more:hover { color: var(--text-hi); }
   #empty, #binary {
     position: absolute; inset: var(--tb) 0 var(--ft) 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 8px; color: var(--faint); font-family: var(--mono);
@@ -340,6 +374,14 @@
   <div id="binary"><b>binary file</b><span id="binaryMsg">use the hex viewer for this one</span></div>
   <div id="drop-hint">drop to open</div>
   <div id="picker"><div class="pk-box"><div class="pk-title">choose a file from the archive</div><div class="pk-list" id="pickerList"></div></div></div>
+
+  <div id="colPanel">
+    <div class="cp-head"><span class="cp-title">Columns</span><button class="cp-close" id="cpClose" title="close">×</button></div>
+    <input id="cpSearch" class="cp-search" type="text" placeholder="filter columns…" spellcheck="false">
+    <div class="cp-bulk"><button data-cp="all">Show all</button><button data-cp="none">Hide all</button><button data-cp="invert">Invert</button></div>
+    <div class="cp-count" id="cpCount"></div>
+    <div class="cp-list" id="cpList"></div>
+  </div>
 
   <footer><span id="meta">—</span><span class="spacer"></span><a id="build" href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer" title="verify this build">dev</a></footer>
   <div id="acPopup"></div>
