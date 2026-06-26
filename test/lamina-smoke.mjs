@@ -742,6 +742,20 @@ try {
     ? ok('export: CSV quoting + TSV + filtered view + column subset all serialize correctly')
     : fail(`export failed: ${JSON.stringify(exp)}`);
 
+  // ── theme: View → Theme flips the chrome (CSS vars) + re-skins the grid ──
+  const th = await page.evaluate(() => {
+    const bg = () => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+    window._lamina.setTheme('light');
+    const lightBg = bg(), lightAttr = document.documentElement.dataset.theme, lightCanvases = document.querySelectorAll('#grid canvas').length;
+    window._lamina.setTheme('dark');
+    const darkBg = bg(), darkAttr = document.documentElement.dataset.theme;
+    window._lamina.setTheme('auto');
+    return { lightBg, lightAttr, darkBg, darkAttr, lightCanvases };
+  });
+  (th.lightAttr === 'light' && th.darkAttr === 'dark' && th.lightBg && th.lightBg !== th.darkBg && th.lightCanvases === 3)
+    ? ok(`theme: light/dark/auto flips chrome (--bg ${th.lightBg} ≠ ${th.darkBg}) + re-skins the grid`)
+    : fail(`theme failed: ${JSON.stringify(th)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

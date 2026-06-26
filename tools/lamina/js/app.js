@@ -38,6 +38,21 @@ const __LAMINA_BUILD__ = 'dev';
 
 const $ = (s) => document.querySelector(s);
 let grid = null;
+
+// ── theme (light / dark / auto) — no settings dialog; a View menu toggle. The
+// chrome reads CSS vars (--bg etc., flipped by :root[data-theme]); the grid uses
+// loom's own light/dark palette (createGrid theme). Persisted in localStorage. ──
+let theme = (() => { try { return localStorage.getItem('lamina.theme') || 'auto'; } catch { return 'auto'; } })();
+const effectiveTheme = () => (theme === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme);
+function applyTheme() {
+  const eff = effectiveTheme();
+  document.documentElement.dataset.theme = eff;
+  const tc = document.querySelector('meta[name="theme-color"]');
+  if (tc) tc.content = (getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || (eff === 'light' ? '#f4f4f3' : '#121212'));
+  rerender();                                          // re-create the grid with loom's matching palette
+}
+function setTheme(t) { theme = t; try { localStorage.setItem('lamina.theme', t); } catch { /* ignore */ } applyTheme(); }
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (theme === 'auto') applyTheme(); });
 let lastScan = null;            // 'worker'|'inline'|'cache'|'resident'|'stream' — last index-scan path (automation hook)
 let current = null;             // { source, d, dataStart, baseVs, label, totalBytes } — the open file (for filtering)
 
@@ -171,7 +186,7 @@ function mountView(vs, info = {}) {
     onReady(cb) { return base.onReady(cb); },
   };
 
-  grid = createGrid($('#grid'), provider, { readOnly: true, theme: 'dark', defaultColW: c.d.kind === 'text' ? 900 : 130, headerGutterH: (showGutter && c.d.kind === 'delimited') ? GUTTER_H : 0 });
+  grid = createGrid($('#grid'), provider, { readOnly: true, theme: effectiveTheme(), defaultColW: c.d.kind === 'text' ? 900 : 130, headerGutterH: (showGutter && c.d.kind === 'delimited') ? GUTTER_H : 0 });
   // reapply persisted column widths (stored by UNDERLYING col → display indices)
   const dw = {};
   for (let dc = 0; dc < vis.length; dc++) { const w = c.colWidths[vis[dc]]; if (w != null) dw[dc] = w; }
@@ -1271,6 +1286,11 @@ $('#mData').onclick = () => menuAt($('#mData'), [
 ]);
 $('#mView').onclick = () => menuAt($('#mView'), [
   { label: (showGutter ? '✓ ' : '') + 'Column distributions', action: () => { showGutter = !showGutter; refreshGutter(); } },
+  { label: 'Theme', submenu: [
+    { label: (theme === 'auto' ? '✓ ' : '') + 'Auto (system)', action: () => setTheme('auto') },
+    { label: (theme === 'dark' ? '✓ ' : '') + 'Dark', action: () => setTheme('dark') },
+    { label: (theme === 'light' ? '✓ ' : '') + 'Light', action: () => setTheme('light') },
+  ] },
   { label: 'Go to row…', action: () => $('#goto').focus() },
   { sep: true },
   { label: 'Autofit all columns', action: () => autofitAll() },
@@ -1548,11 +1568,12 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;
 $('#build').title = `lamina build — ${__LAMINA_BUILD__}`;
+applyTheme();                                          // sync data-theme + meta theme-color (the first-paint script set the attr; this keeps it authoritative)
 
 // Keep --tb (the layout's top offset) synced to the toolbar's ACTUAL height, so
 // everything below follows however the toolbar wraps on narrow / phone widths
