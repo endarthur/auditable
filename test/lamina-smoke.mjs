@@ -875,6 +875,19 @@ try {
     ? ok('column-profile: stats popup renders a histogram canvas + log toggle + quantiles')
     : fail(`column-profile failed: ${JSON.stringify(prof)}`);
 
+  // ── go-to-column: scroll the grid to a column (panel name click) ──
+  const gtc = await page.evaluate(async (text) => {
+    const L = window._lamina;
+    L.open('block.csv', new TextEncoder().encode(text));
+    await new Promise((r) => setTimeout(r, 40));
+    L.scrollToColumn(2);                                  // lito (underlying 2) → display col 2 (no reorder/hidden)
+    await new Promise((r) => setTimeout(r, 20));
+    const sel = L.grid.getSelection();
+    return { c0: sel && sel.c0, uc: L.current._vis[sel ? sel.c0 : 0] };
+  }, csv);
+  (gtc.uc === 2) ? ok(`go-to-column: selects the target column (display col ${gtc.c0} → underlying ${gtc.uc})`)
+    : fail(`go-to-column failed: ${JSON.stringify(gtc)}`);
+
   // ── in-grid find (Ctrl+F): locate-and-jump, substring + regex + whole-cell + count ──
   const fnd = await page.evaluate(async (text) => {
     const L = window._lamina;

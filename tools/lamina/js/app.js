@@ -338,6 +338,16 @@ function pinnedFirstOrder(c) {
   for (const uc of order) (pin.has(uc) ? a : b).push(uc);
   return a.concat(b);
 }
+// Go-to-column: scroll the grid so column `uc` is visible (+ select it at the current
+// row). loom scrolls a selection into view, so this is the jump. Hidden → no-op.
+function scrollToColumn(uc) {
+  const c = current; if (!c || !grid) return;
+  const dc = (c._vis || []).indexOf(uc);
+  if (dc < 0) return;                                    // hidden — not in the grid
+  const sel = grid.getSelection(); const r = sel ? sel.r0 : 0;
+  grid.setSelection({ r0: r, c0: dc, r1: r, c1: dc });
+  grid.focus();
+}
 // Pin/unpin a column (freeze it on the left). Pinned columns render leftmost + frozen.
 function togglePin(uc) {
   const c = current; if (!c) return;
@@ -469,7 +479,8 @@ function renderColPanel() {
     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = visible;
     cb.onchange = () => { if (cb.checked) c.hidden.delete(uc); else c.hidden.add(uc); row.classList.toggle('off', !cb.checked); updateCpCount(); rerender(); };
     const ty = document.createElement('span'); ty.className = 'cp-type' + (s.type === 'number' ? ' num' : ''); ty.textContent = s.type === 'number' ? '#' : 'abc';
-    const nm = document.createElement('span'); nm.className = 'cp-name'; nm.textContent = s.name; nm.title = s.name;
+    const nm = document.createElement('span'); nm.className = 'cp-name'; nm.textContent = s.name; nm.title = visible ? 'scroll to column' : s.name;
+    if (visible) nm.onclick = () => scrollToColumn(uc);
     if (s.calc) { const f = document.createElement('span'); f.className = 'cp-calc'; f.textContent = 'ƒ '; nm.prepend(f); }
     const g = c.gutter && c.gutter[uc]; const pct = g && g.nullRate != null ? Math.round(g.nullRate * 100) : null;
     const nu = document.createElement('span'); nu.className = 'cp-null';
@@ -2188,7 +2199,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

@@ -263,6 +263,8 @@
   #colPanel .cp-type { color: var(--dim); font-size: 10px; width: 22px; flex: none; }
   #colPanel .cp-type.num { color: var(--num); }
   #colPanel .cp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  #colPanel .cp-row:not(.off) .cp-name { cursor: pointer; }
+  #colPanel .cp-row:not(.off) .cp-name:hover { color: var(--accent); }
   #colPanel .cp-row.off .cp-name { color: var(--dim); }
   #colPanel .cp-calc { color: var(--accent); }
   #colPanel .cp-null { color: var(--dim); font-size: 10px; min-width: 34px; text-align: right; flex: none; }
