@@ -17,7 +17,11 @@ const vendorDir = path.join(__dirname, 'vendor');
 
 const files = ['detect.js', 'source.js', 'sink.js', 'zip.js', 'tar.js', 'gz.js', 'zst.js', 'xz.js', 'bz2.js', 'walk.js', 'writer.js', 'api.js'];
 
-const chunks = [];
+// Two bundles from one source: the full index.js, and index.nowasm.js — the same
+// thing WITHOUT the xz-decompress vendor (the lone WebAssembly decoder). The wasm-free
+// variant lets a strict-CSP host (lamina: no 'wasm-unsafe-eval') bundle @gcu/archive
+// without carrying a WASM module it can't even instantiate; unxzBytes there throws a
+// clear "not in this build" error and the caller degrades gracefully.
 
 // ── Vendor: fflate + fzstd ────────────────────────────────────────────
 // Each vendored copy is the prebuilt ESM bundle from npm, wrapped in an
@@ -57,71 +61,12 @@ const VENDORED_EXPORTS = {
   seekBzip:      ['Bunzip'],
 };
 
-for (const [vname, vfile] of [
+const VENDORS = [
   ['fflate',        'fflate.module.mjs'],
   ['fzstd',         'fzstd.module.mjs'],
   ['xzDecompress',  'xz-decompress.module.mjs'],
   ['seekBzip',      'seek-bzip.module.mjs'],
-]) {
-  const p = path.join(vendorDir, vfile);
-  if (!fs.existsSync(p)) {
-    console.warn(`archive: vendor/${vfile} not found — ${vname}-dependent formats won't work in the bundle`);
-    continue;
-  }
-  const stripped = _stripVendorExports(fs.readFileSync(p, 'utf8'));
-  const exportList = VENDORED_EXPORTS[vname].join(', ');
-  const wrapped =
-    `const ${vname} = (() => {\n${stripped}\nreturn { ${exportList} };\n})();`;
-  // Cosmetic license-file naming: vendored bundle is vname'd but on-disk
-  // LICENSEs use the npm-package name (kebab-case for the multi-word ones).
-  const licName = vname === 'xzDecompress' ? 'xz-decompress'
-                : vname === 'seekBzip'     ? 'seek-bzip'
-                : vname;
-  chunks.push(`// -- vendor/${vfile} (MIT, see ext/archive/vendor/LICENSE-${licName}) --\n\n${wrapped}`);
-}
-
-// Alias bindings — let src/ code refer to the symbols it imported by name
-// at dev time. fzstd's `decompress` and `Decompress` shadow fflate's by
-// design (we want the zstd ones in our zst.js), so they get explicit
-// _fzstd-prefixed names; the fflate counterparts stay unprefixed.
-chunks.push(`// -- vendor alias bindings (collision-safe namespacing) --
-
-const unzipSync = fflate.unzipSync;
-const zipSync = fflate.zipSync;
-const gzipSync_fflate = fflate.gzipSync;
-const gunzipSync_fflate = fflate.gunzipSync;
-const Unzip = fflate.Unzip;
-const UnzipInflate = fflate.UnzipInflate;
-const UnzipPassThrough = fflate.UnzipPassThrough;
-const Zip = fflate.Zip;
-const ZipDeflate = fflate.ZipDeflate;
-const ZipPassThrough = fflate.ZipPassThrough;
-const fzstd_decompress = fzstd.decompress;
-const fzstd_Decompress = fzstd.Decompress;
-const fzstd_ZstdErrorCode = fzstd.ZstdErrorCode;
-const XzReadableStream = xzDecompress.XzReadableStream;
-const Bunzip = seekBzip.Bunzip;
-`);
-
-for (const file of files) {
-  let src = fs.readFileSync(path.join(srcDir, file), 'utf8');
-  src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
-  src = src.replace(/^import\s*\{[^}]*\}\s*from\s*['"].*['"];?\s*$/gm, '');
-  src = src.replace(/^export\s*\{[^}]*\}\s*from\s*['"].*['"];?\s*$/gm, '');
-  src = src.replace(/^export\s*\{[\s\S]*?\};?\s*$/gm, '');
-  src = src.replace(/^export function /gm, 'function ');
-  src = src.replace(/^export async function /gm, 'async function ');
-  src = src.replace(/^export const /gm, 'const ');
-  src = src.replace(/^export let /gm, 'let ');
-  src = src.replace(/^export class /gm, 'class ');
-  src = src.replace(/^\n+/, '').replace(/\n+$/, '');
-  chunks.push(`// -- ${file} --\n\n${src}`);
-}
-
-const header = `// @gcu/archive — archive format handling for the GCU stack
-// Auto-generated from ext/archive/src/ + ext/archive/vendor/ — do not edit directly.
-// fflate (MIT) vendored at ext/archive/vendor/fflate.module.mjs.
-`;
+];
 
 const footer = `
 export {
@@ -139,7 +84,81 @@ export {
 };
 `;
 
-const output = header + '\n' + chunks.join('\n\n') + footer;
-const outPath = path.join(__dirname, 'index.js');
-fs.writeFileSync(outPath, output);
-console.log(`Built ${outPath} (${(output.length / 1024).toFixed(1)} KB)`);
+function buildOutput(noXz) {
+  const chunks = [];
+
+  for (const [vname, vfile] of VENDORS) {
+    if (noXz && vname === 'xzDecompress') continue;       // skip the lone WASM decoder
+    const p = path.join(vendorDir, vfile);
+    if (!fs.existsSync(p)) {
+      console.warn(`archive: vendor/${vfile} not found — ${vname}-dependent formats won't work in the bundle`);
+      continue;
+    }
+    const stripped = _stripVendorExports(fs.readFileSync(p, 'utf8'));
+    const exportList = VENDORED_EXPORTS[vname].join(', ');
+    const wrapped = `const ${vname} = (() => {\n${stripped}\nreturn { ${exportList} };\n})();`;
+    const licName = vname === 'xzDecompress' ? 'xz-decompress' : vname === 'seekBzip' ? 'seek-bzip' : vname;
+    chunks.push(`// -- vendor/${vfile} (MIT, see ext/archive/vendor/LICENSE-${licName}) --\n\n${wrapped}`);
+  }
+
+  // Alias bindings — let src/ code refer to the symbols it imported by name at dev
+  // time. In the no-xz build the xz vendor is gone AND xz.js is swapped for a stub
+  // (below), so there's no XzReadableStream reference at all — keeping the bundle
+  // free of the literal "WebAssembly" so a reviewer's grep stays clean.
+  const xzAlias = noXz ? '' : 'const XzReadableStream = xzDecompress.XzReadableStream;';
+  chunks.push(`// -- vendor alias bindings (collision-safe namespacing) --
+
+const unzipSync = fflate.unzipSync;
+const zipSync = fflate.zipSync;
+const gzipSync_fflate = fflate.gzipSync;
+const gunzipSync_fflate = fflate.gunzipSync;
+const Unzip = fflate.Unzip;
+const UnzipInflate = fflate.UnzipInflate;
+const UnzipPassThrough = fflate.UnzipPassThrough;
+const Zip = fflate.Zip;
+const ZipDeflate = fflate.ZipDeflate;
+const ZipPassThrough = fflate.ZipPassThrough;
+const fzstd_decompress = fzstd.decompress;
+const fzstd_Decompress = fzstd.Decompress;
+const fzstd_ZstdErrorCode = fzstd.ZstdErrorCode;
+${xzAlias}
+const Bunzip = seekBzip.Bunzip;
+`);
+
+  // In the wasm-free build, xz.js's WASM-backed decoder is replaced by a stub: the
+  // three functions it exports, throwing for decode (api.js degrades on the throw).
+  const XZ_STUB = `// -- xz.js (wasm-free stub — xz decode omitted) --
+
+async function unxzBytes() { throw new Error('archive: xz decode is not in this (wasm-free) build'); }
+async function xzBytes() { throw new Error('archive: xz encode is not available (decode-only, and omitted from this build)'); }
+function _xzInnerName(n) { if (!n) return 'data'; const l = n.toLowerCase(); if (l.endsWith('.txz')) return n.slice(0, -4) + '.tar'; if (l.endsWith('.xz')) return n.slice(0, -3); return n; }`;
+
+  for (const file of files) {
+    if (noXz && file === 'xz.js') { chunks.push(XZ_STUB); continue; }
+    let src = fs.readFileSync(path.join(srcDir, file), 'utf8');
+    src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
+    src = src.replace(/^import\s*\{[^}]*\}\s*from\s*['"].*['"];?\s*$/gm, '');
+    src = src.replace(/^export\s*\{[^}]*\}\s*from\s*['"].*['"];?\s*$/gm, '');
+    src = src.replace(/^export\s*\{[\s\S]*?\};?\s*$/gm, '');
+    src = src.replace(/^export function /gm, 'function ');
+    src = src.replace(/^export async function /gm, 'async function ');
+    src = src.replace(/^export const /gm, 'const ');
+    src = src.replace(/^export let /gm, 'let ');
+    src = src.replace(/^export class /gm, 'class ');
+    src = src.replace(/^\n+/, '').replace(/\n+$/, '');
+    chunks.push(`// -- ${file} --\n\n${src}`);
+  }
+
+  const header = `// @gcu/archive${noXz ? ' (wasm-free — no xz)' : ''} — archive format handling for the GCU stack
+// Auto-generated from ext/archive/src/ + ext/archive/vendor/ — do not edit directly.
+// fflate (MIT) vendored at ext/archive/vendor/fflate.module.mjs.${noXz ? '\n// xz-decompress (WASM) omitted; unxzBytes throws "not in this build".' : ''}
+`;
+  return header + '\n' + chunks.join('\n\n') + footer;
+}
+
+for (const [noXz, name] of [[false, 'index.js'], [true, 'index.nowasm.js']]) {
+  const output = buildOutput(noXz);
+  const outPath = path.join(__dirname, name);
+  fs.writeFileSync(outPath, output);
+  console.log(`Built ${outPath} (${(output.length / 1024).toFixed(1)} KB)`);
+}

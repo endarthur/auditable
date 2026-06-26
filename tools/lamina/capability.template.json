@@ -29,8 +29,7 @@
   "third_party": [
     { "name": "fflate", "license": "MIT", "copyright": "© Arjun Barrett", "use": "zip/gz decode (via @gcu/archive)" },
     { "name": "fzstd", "license": "MIT", "copyright": "© Arjun Barrett", "use": "zstd decode" },
-    { "name": "seek-bzip", "license": "MIT", "copyright": "© C. Scott Ananian", "use": "bzip2 decode" },
-    { "name": "xz-decompress", "license": "MIT", "use": "xz decode" }
+    { "name": "seek-bzip", "license": "MIT", "copyright": "© C. Scott Ananian", "use": "bzip2 decode" }
   ],
   "source": "https://github.com/gentropic/auditable (ext/lamina + tools/lamina)",
   "license": "MIT"

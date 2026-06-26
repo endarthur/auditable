@@ -1649,7 +1649,7 @@ if (target === 'lamina') {
     ['loom',    'ext/loom/index.js'],
     ['lamina',  'ext/lamina/index.js'],
     ['proc',    'ext/proc/index.js'],
-    ['archive', 'ext/archive/index.js'],
+    ['archive', 'ext/archive/index.nowasm.js'],   // wasm-free — lamina's CSP has no 'wasm-unsafe-eval' (drops xz)
     ['dm',      'ext/dm/index.js'],
     ['expr',    'ext/expr/index.js'],
     ['fflate',  'ext/archive/vendor/fflate.module.mjs'],
@@ -1709,7 +1709,7 @@ if (target === 'lamina') {
   // those minified bundles dropped their copyright headers. Retain the full licenses
   // here so the single-file artifact stays MIT-compliant + self-contained ("view
   // source; that's the point"). lamina carries no @gcu/licenses surface.
-  const noticeLibs = ['fflate', 'fzstd', 'seek-bzip', 'xz-decompress'];
+  const noticeLibs = ['fflate', 'fzstd', 'seek-bzip'];   // xz-decompress (WASM) is not in lamina's wasm-free archive build
   const notices = noticeLibs.map((n) => {
     const p = path.join(__dirname, 'ext/archive/vendor', 'LICENSE-' + n);
     return fs.existsSync(p) ? `\n===== ${n} =====\n${fs.readFileSync(p, 'utf8').trim()}\n` : `\n===== ${n} ===== (MIT — license file missing at build)\n`;

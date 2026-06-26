@@ -11,7 +11,7 @@ import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
 import { compile, compileBool, validate, deps, complete, tokenize } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
 import { ProcessManager } from '@gcu/proc';
-import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unxzBytes, unbz2Bytes } from '@gcu/archive';
+import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
 import { detectDM, parseHeader, recordRange, decodeRecord } from '@gcu/dm';
 import { Unzip, UnzipInflate } from 'fflate';
 import { idbCache } from './idb-cache.js';
@@ -1281,14 +1281,19 @@ function friendlyError(errors, cols) {
 
 // Single-stream decoders that have NO browser streaming primitive (only gzip/
 // deflate do via DecompressionStream) → resident-only, size-guarded.
-const SINGLE_STREAM = { zst: unzstdBytes, xz: unxzBytes, bz2: unbz2Bytes };
+const SINGLE_STREAM = { zst: unzstdBytes, bz2: unbz2Bytes };   // xz handled separately (WASM, not in this build)
 
-// ── archives (spec §7a): peek inside zip / tar / gz / zst / xz / bz2. Small
+// ── archives (spec §7a): peek inside zip / tar / gz / zst / bz2. Small
 // archives decompress whole (RESIDENT — best UX). A huge zip/gz WINDOWS the entry
-// through the rewindable tape (no RAM/disk); zst/xz/bz2 have no browser streaming
-// decoder so they stay resident (size-guarded). ──
+// through the rewindable tape (no RAM/disk); zst/bz2 have no browser streaming
+// decoder so they stay resident (size-guarded). xz is WASM-only → not in this
+// build (wasm-free for the strict CSP); openArchive shows a clear note. ──
 async function openArchive(file, fmt) {
   $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
+  if (fmt === 'xz' || fmt === 'tar.xz') {                     // WASM decoder; lamina ships wasm-free for its strict offline CSP
+    return showNote(file.name, 'xz', 'xz isn’t supported in this build',
+      'lamina ships WASM-free for its strict offline CSP (no \'wasm-unsafe-eval\'); xz needs a WASM decoder. Re-compress as .gz, .zst, or .zip.', `${fmtBytes(file.size)} · xz`);
+  }
   const tooLarge = () => showNote(file.name, fmt, 'archive too large',
     `${fmtBytes(file.size)} — ${fmt} has no streaming decoder; resident decode is memory-bound`, `${fmtBytes(file.size)} · ${fmt}`);
 
@@ -1302,7 +1307,7 @@ async function openArchive(file, fmt) {
     return openStreamSource(file, innerLabel, () => file.stream().pipeThrough(new DecompressionStream('gzip')), 'gz');
   }
 
-  if (SINGLE_STREAM[fmt]) {                                   // zst / xz / bz2 — resident only
+  if (SINGLE_STREAM[fmt]) {                                   // zst / bz2 — resident only
     if (file.size > residentLimit()) return tooLarge();
     $('#meta').textContent = 'decompressing…';
     const inner = await SINGLE_STREAM[fmt](new Uint8Array(await file.arrayBuffer()));
@@ -1558,7 +1563,7 @@ $('#goto').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.targe
 // Type hints for the OS dialog (lamina still opens anything — All Files stays).
 const PICK_TYPES = [
   { description: 'Tables', accept: { 'text/csv': ['.csv', '.tsv', '.tab', '.txt'], 'application/octet-stream': ['.dm', '.lam', '.lamina'] } },
-  { description: 'Archives', accept: { 'application/octet-stream': ['.zip', '.tar', '.gz', '.zst', '.xz', '.bz2'] } },
+  { description: 'Archives', accept: { 'application/octet-stream': ['.zip', '.tar', '.gz', '.zst', '.bz2'] } },
 ];
 async function pickFile() {
   if (window.showOpenFilePicker) {
@@ -1626,7 +1631,7 @@ $('#mHelp').onclick = () => menuAt($('#mHelp'), [
 const HELP = {
   start: ['Getting started',
     `<b>lamina</b> opens any file — even a multi-gigabyte one — and lets you scroll, filter, and sort it. It never loads the whole file, so size isn't the problem.<br><br>`
-    + `<b>Open</b> — File → Open (<code>Ctrl+O</code>) or drag a file in. CSV/TSV → table · Datamine <code>.dm</code> → table · text → lines · binary → hex · <code>.zip</code>/<code>.tar</code>/<code>.gz</code>/<code>.zst</code>/<code>.xz</code>/<code>.bz2</code> → peek inside.<br><br>`
+    + `<b>Open</b> — File → Open (<code>Ctrl+O</code>) or drag a file in. CSV/TSV → table · Datamine <code>.dm</code> → table · text → lines · binary → hex · <code>.zip</code>/<code>.tar</code>/<code>.gz</code>/<code>.zst</code>/<code>.bz2</code> → peek inside.<br><br>`
     + `<b>If a file reads wrong</b> — click the <b>kind badge</b> (top-right) or <b>Data → Interpretation</b> to force the delimiter, header on/off, skip comment lines, or switch the decimal point/comma.<br><br>`
     + `<b>Column distributions</b> — each header shows a mini distribution + null-rate bar (a histogram for numbers, a top-values bar for categories; <code>≈</code> = sampled). Click a glyph for full statistics. Toggle under <b>View → Column distributions</b>.<br><br>`
     + `<b>Most actions live in right-click menus:</b><br>`
@@ -1652,9 +1657,9 @@ const HELP = {
     + `<b>row # box</b> — jump to a row<br>Selected cells <b>copy</b> as TSV (Ctrl+C).`],
   about: ['About lamina',
     `<b>lamina</b> — open any file, however large, and scroll, filter, and sort it. Windowed, read-only, offline.<br><br>`
-    + `Delimited → grid, text → lines, binary → hex. Opens <b>Datamine .dm</b> tables directly — at any size, decoded on the fly (no conversion), with the same filter / sort / stats as CSV. Reads inside zip / tar / gz / zst / xz / bz2, and windows huge compressed entries without unpacking. Detects GSLIB / Geo-EAS + whitespace dumps and skips <code>#</code> comment preambles.<br><br>`
+    + `Delimited → grid, text → lines, binary → hex. Opens <b>Datamine .dm</b> tables directly — at any size, decoded on the fly (no conversion), with the same filter / sort / stats as CSV. Reads inside zip / tar / gz / zst / bz2, and windows huge compressed entries without unpacking. Detects GSLIB / Geo-EAS + whitespace dumps and skips <code>#</code> comment preambles.<br><br>`
     + `Part of the Geoscientific Chaos Union — <code>gentropic.org</code>.<br><br>`
-    + `<span style="color:var(--dim)">MIT. Bundles <code>fflate · fzstd · seek-bzip · xz-decompress</code> (all MIT) for reading archives — full notices in this file's source.</span><br>`
+    + `<span style="color:var(--dim)">MIT. Bundles <code>fflate · fzstd · seek-bzip</code> (all MIT) for reading archives — full notices in this file's source.</span><br>`
     + `<span style="color:var(--dim)">build <code>${__LAMINA_BUILD__}</code></span>`],
 };
 function showOverlay(title, html) {
