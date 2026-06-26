@@ -780,6 +780,19 @@ try {
     ? ok(`color scale: viridis low ${heat.loBg} ≠ high ${heat.hiBg}; log + palette remap the mid; readable fg; toggles off`)
     : fail(`color scale failed: ${JSON.stringify(heat)}`);
 
+  // ── column-profile popup: the stats popup shows a histogram + a log toggle ──
+  const prof = await page.evaluate(async () => {
+    await window._lamina.showColumnStats(1);              // grade (numeric) on the open file
+    const canvas = document.getElementById('profHist'), logBtn = document.getElementById('profLog');
+    const drew = !!(canvas && canvas.width > 0);          // a real (DPR-sized) canvas was drawn onto
+    const hasMedian = document.getElementById('helpBody').textContent.includes('median');
+    document.getElementById('help').classList.remove('show');
+    return { hasCanvas: !!canvas, drew, hasLog: !!logBtn, hasMedian };
+  });
+  (prof.hasCanvas && prof.drew && prof.hasLog && prof.hasMedian)
+    ? ok('column-profile: stats popup renders a histogram canvas + log toggle + quantiles')
+    : fail(`column-profile failed: ${JSON.stringify(prof)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

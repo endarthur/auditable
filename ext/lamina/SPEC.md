@@ -72,9 +72,11 @@ those two invariants hold from a memory-sized CSV up to a tens-of-GB block model
   scattered, so going through the base's 4096-row blocks would touch one block per
   visible row → LRU thrash. Per-row reads touch only the visible rows.)
 - **sort** (`sort.js`) — `scanSortKeys` iterates via `source.eachRecord`,
-  extracting a key column + each row's locator, sorts (nulls last, stable),
+  extracting the key column(s) + each row's locator, sorts (nulls last, stable),
   returns the same `{ offsets, lengths, nums }` result shape — consumed by the
-  same `createResultView`.
+  same `createResultView`. **Multi-key**: `keys: [{col, dir, numeric}]` sorts by
+  each key left-to-right (ties broken by the next); the single-key `{col,dir,numeric}`
+  form still works.
 - **stats** (`stats.js`) — `scanColumnStats` iterates via `source.eachRecord` for
   a numeric (Welford + capped quantiles) or categorical (top-N + distinct)
   summary, optionally restricted to a filter's `rows`.

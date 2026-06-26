@@ -6,6 +6,22 @@
 
 import { parseNum } from './scan.js';
 
+const HIST_BINS = 40;
+// Bin nv values from `vals` into a {bins, min, max, log} histogram (linear, or log
+// over [min,max] with min>0). Counts only; the renderer scales them.
+function histify(vals, nv, lo, hi, nbins, log) {
+  const bins = new Array(nbins).fill(0);
+  const l0 = log ? Math.log(lo) : lo, span = (log ? Math.log(hi) : hi) - l0 || 1;
+  for (let i = 0; i < nv; i++) {
+    const v = vals[i];
+    if (log && v <= 0) continue;
+    let k = Math.floor(((log ? Math.log(v) : v) - l0) / span * nbins);
+    if (k >= nbins) k = nbins - 1; if (k < 0) k = 0;
+    bins[k]++;
+  }
+  return { bins, min: lo, max: hi, log: !!log };
+}
+
 /**
  * One forward scan over a column (optionally restricted to a filter's `rows`),
  * accumulating a summary. Iteration is delegated to source.eachRecord, so it works
@@ -55,13 +71,18 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
 
   if (numeric) {
     const std = nNum > 1 ? Math.sqrt(m2 / (nNum - 1)) : 0;
-    let quantiles = null;
+    let quantiles = null, histogram = null, logHistogram = null;
     if (collecting && nv > 0) {
       const sl = vals.slice(0, nv).sort((a, b) => a - b);
       const q = (p) => sl[Math.min(nv - 1, Math.round(p * (nv - 1)))];
       quantiles = { p5: q(0.05), p25: q(0.25), p50: q(0.5), p75: q(0.75), p95: q(0.95) };
+      // full-resolution histograms for the column-profile popup (from the collected
+      // value buffer, same basis as the quantiles → consistent; capped flag carries).
+      histogram = histify(vals, nv, min, max_, HIST_BINS, false);
+      const posMin = sl.find((v) => v > 0);
+      if (posMin != null && max_ > posMin) logHistogram = histify(vals, nv, posMin, max_, HIST_BINS, true);
     }
-    return { kind: 'number', count, nulls, bad, n: nNum, min: nNum ? min : null, max: nNum ? max_ : null, mean: nNum ? mean : null, std, sum, quantiles, quantilesCapped: !collecting };
+    return { kind: 'number', count, nulls, bad, n: nNum, min: nNum ? min : null, max: nNum ? max_ : null, mean: nNum ? mean : null, std, sum, quantiles, histogram, logHistogram, quantilesCapped: !collecting };
   }
   const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN).map(([value, n]) => ({ value, n }));
   return { kind: 'string', count, nulls, distinct: freq.size, cappedDistinct, top };

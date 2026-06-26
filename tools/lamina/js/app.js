@@ -1571,26 +1571,55 @@ async function computeGutterStats(source, schema, dataStart, decimal) {
 const fmtN = (x) => x == null ? '—' : (Math.abs(x) >= 1e6 || (x !== 0 && Math.abs(x) < 1e-4) ? x.toExponential(4) : (Number.isInteger(x) ? x.toLocaleString() : x.toPrecision(6).replace(/\.?0+$/, '')));
 const esc = (s) => String(s).replace(/[&<>]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
 
+// Draw the column-profile histogram onto a canvas: bars + a quantile overlay
+// (p25–p75 band, median line, p5/p95 ticks). Theme-aware (reads CSS vars).
+function drawProfileHist(canvas, hist, q) {
+  const W = canvas.clientWidth || 380, H = canvas.clientHeight || 120, dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  const cv = getComputedStyle(document.documentElement);
+  const bar = cv.getPropertyValue('--ok').trim() || '#8cb878', acc = cv.getPropertyValue('--accent').trim() || '#c89b3c', band = cv.getPropertyValue('--accent-soft').trim() || 'rgba(200,155,60,0.18)';
+  const bins = hist.bins, n = bins.length, mx = Math.max(...bins) || 1, bw = W / n, mt = 3, plotH = H - mt - 1;
+  const lo = hist.log ? Math.log(hist.min) : hist.min, span = ((hist.log ? Math.log(hist.max) : hist.max) - lo) || 1;
+  const xOf = (v) => { if (hist.log && v <= 0) return 0; return Math.max(0, Math.min(1, ((hist.log ? Math.log(v) : v) - lo) / span)) * W; };
+  if (q) { ctx.fillStyle = band; ctx.fillRect(xOf(q.p25), 0, Math.max(xOf(q.p75) - xOf(q.p25), 1), H); }   // IQR band
+  ctx.fillStyle = bar;
+  for (let i = 0; i < n; i++) { const bh = (bins[i] / mx) * plotH; if (bh > 0) ctx.fillRect(i * bw, mt + (plotH - bh), Math.max(bw - 1, 0.5), bh); }
+  if (q) {
+    ctx.strokeStyle = acc; ctx.lineWidth = 1;
+    const line = (x) => { ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, 0); ctx.lineTo(Math.round(x) + 0.5, H); ctx.stroke(); };
+    line(xOf(q.p50));                                            // median
+    ctx.globalAlpha = 0.4; line(xOf(q.p5)); line(xOf(q.p95)); ctx.globalAlpha = 1;   // whiskers
+  }
+}
+
 function renderStats(st) {
-  const row = (k, v) => `<tr><td style="color:#888;padding-right:18px">${k}</td><td style="text-align:right">${v}</td></tr>`;
+  const row = (k, v) => `<tr><td style="color:var(--muted);padding-right:18px">${k}</td><td style="text-align:right">${v}</td></tr>`;
   if (st.kind === 'number') {
-    let h = '<table style="border-collapse:collapse">';
+    let h = '';
+    if (st.histogram) {                                         // the column-profile chart
+      h += `<div class="prof-wrap"><canvas id="profHist" class="prof-hist"></canvas>`;
+      if (st.logHistogram) h += `<button id="profLog" class="prof-log" title="log scale (for skewed / log-normal data)">log x</button>`;
+      h += `</div>`;
+      if (st.quantilesCapped) h += `<div style="color:var(--dim);font-size:11px;margin:-6px 0 8px">≈ from a sample (too many values for exact)</div>`;
+    }
+    h += '<table style="border-collapse:collapse">';
     h += row('count', st.count.toLocaleString()) + row('non-null', st.n.toLocaleString()) + row('nulls', st.nulls.toLocaleString());
-    if (st.bad) h += row('<span style="color:#c89b3c">non-numeric</span>', `<span style="color:#c89b3c">${st.bad.toLocaleString()}</span>`);   // failed to parse
+    if (st.bad) h += row('<span style="color:var(--accent)">non-numeric</span>', `<span style="color:var(--accent)">${st.bad.toLocaleString()}</span>`);
     h += row('min', fmtN(st.min)) + row('max', fmtN(st.max)) + row('mean', fmtN(st.mean)) + row('std', fmtN(st.std)) + row('sum', fmtN(st.sum));
     if (st.quantiles) {
       const q = st.quantiles;
       h += row('p5', fmtN(q.p5)) + row('p25', fmtN(q.p25)) + row('<b>median</b>', `<b>${fmtN(q.p50)}</b>`) + row('p75', fmtN(q.p75)) + row('p95', fmtN(q.p95));
-    } else if (st.quantilesCapped) h += row('quantiles', '<span style="color:#777">too many values</span>');
+    } else if (st.quantilesCapped) h += row('quantiles', '<span style="color:var(--dim)">too many values</span>');
     return h + '</table>';
   }
   let h = '<table style="border-collapse:collapse">';
   h += row('count', st.count.toLocaleString()) + row('nulls', st.nulls.toLocaleString()) + row('distinct', st.distinct.toLocaleString() + (st.cappedDistinct ? '+' : ''));
-  h += '</table><div style="margin-top:12px;color:#888">top values <span style="color:#666">(click to toggle a filter set)</span></div><table style="border-collapse:collapse;margin-top:4px">';
+  h += '</table><div style="margin-top:12px;color:var(--muted)">top values <span style="color:var(--dim)">(click to toggle a filter set)</span></div><table style="border-collapse:collapse;margin-top:4px;width:100%">';
   for (const t of st.top) {
     const pct = st.count ? (100 * t.n / st.count).toFixed(1) : '0';
     const v = esc(t.value).replace(/"/g, '&quot;');
-    h += `<tr><td style="padding-right:18px;max-width:340px;overflow:hidden;text-overflow:ellipsis"><span class="sfilter" data-v="${v}">${esc(t.value)}</span></td><td style="text-align:right;color:#bbb">${t.n.toLocaleString()} <span style="color:#777">(${pct}%)</span></td></tr>`;
+    h += `<tr><td style="padding:1px 18px 1px 0;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:linear-gradient(90deg, var(--accent-soft) ${pct}%, transparent ${pct}%)"><span class="sfilter" data-v="${v}">${esc(t.value)}</span></td><td style="text-align:right;color:var(--text)">${t.n.toLocaleString()} <span style="color:var(--dim)">(${pct}%)</span></td></tr>`;
   }
   return h + '</table>';
 }
@@ -1610,7 +1639,15 @@ async function showColumnStats(uc) {
       onProgress: (b, n) => { if ($('#help').classList.contains('show')) $('#helpBody').innerHTML = `<div style="color:#777">computing… ${n ? Math.round((100 * b) / n) : 0}%</div>`; },
     });
     showOverlay(`Statistics — ${name}${suffix}`, renderStats(st));
-  } catch (e) { showOverlay(`Statistics — ${name}`, `<div style="color:#c0584a">${e.message}</div>`); }
+    const canvas = $('#profHist');
+    if (canvas && st.histogram) {
+      let logOn = false;
+      const draw = () => drawProfileHist(canvas, logOn && st.logHistogram ? st.logHistogram : st.histogram, st.quantiles);
+      requestAnimationFrame(draw);                              // after layout (canvas has a width)
+      const lg = $('#profLog');
+      if (lg) lg.onclick = () => { logOn = !logOn; lg.classList.toggle('on', logOn); draw(); };
+    }
+  } catch (e) { showOverlay(`Statistics — ${name}`, `<div style="color:var(--fault)">${e.message}</div>`); }
 }
 
 // ── drag-drop ──
