@@ -486,8 +486,11 @@ function drawCell(ctx, cell, x, y, w, h, g) {
   }
 }
 
-// Paint the visible body cells + grid lines + selection.
-function paintCells(g, c0, r0, c1, r1, sx, sy, vw, vh) {
+// Paint the visible body cells + grid lines + selection. With pinned columns, the
+// body is two bands: the SCROLLING region (cols c0..c1, offset by sx, clipped right
+// of the frozen band) and the FROZEN band (cols 0..P-1, no sx offset, clipped to the
+// left strip). `pinnedW` = the band's pixel width (= colXAt(P)).
+function paintCells(g, c0, r0, c1, r1, sx, sy, vw, vh, P = 0, pinnedW = 0) {
   const { ctx, dpr, metrics, provider } = g;
   const rowH = metrics.rowH;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -495,85 +498,75 @@ function paintCells(g, c0, r0, c1, r1, sx, sy, vw, vh) {
   ctx.fillStyle = g.colors.bg;
   ctx.fillRect(0, 0, vw, vh);
 
-  // Grid lines.
-  ctx.strokeStyle = g.colors.gridLine;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let c = c0; c <= c1 + 1; c++) {
-    const x = Math.round(colXAt(metrics, c) - sx) + 0.5;
-    ctx.moveTo(x, 0); ctx.lineTo(x, vh);
-  }
-  for (let r = r0; r <= r1 + 1; r++) {
-    const y = Math.round(r * rowH - sy) + 0.5;
-    ctx.moveTo(0, y); ctx.lineTo(vw, y);
-  }
-  ctx.stroke();
-
-  // Cells.
-  for (let r = r0; r <= r1; r++) {
-    const y = r * rowH - sy;
-    for (let c = c0; c <= c1; c++) {
-      const cell = provider.cellAt(r, c);
-      if (cell == null) continue;            // empty cell — leave blank
-      const x = colXAt(metrics, c) - sx;
-      drawCell(ctx, cell, x, y, colW(metrics, c), rowH, g);
+  // Draw a contiguous column range [cLo,cHi] with x-offset xOff, clipped to [clipX0,clipX1].
+  const drawRange = (cLo, cHi, xOff, clipX0, clipX1) => {
+    if (cHi < cLo || clipX1 <= clipX0) return;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(clipX0, 0, clipX1 - clipX0, vh); ctx.clip();
+    ctx.strokeStyle = g.colors.gridLine; ctx.lineWidth = 1; ctx.beginPath();
+    for (let c = cLo; c <= cHi + 1; c++) { const x = Math.round(colXAt(metrics, c) - xOff) + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, vh); }
+    for (let r = r0; r <= r1 + 1; r++) { const y = Math.round(r * rowH - sy) + 0.5; ctx.moveTo(clipX0, y); ctx.lineTo(clipX1, y); }
+    ctx.stroke();
+    for (let r = r0; r <= r1; r++) {
+      const y = r * rowH - sy;
+      for (let c = cLo; c <= cHi; c++) {
+        const cell = provider.cellAt(r, c);
+        if (cell == null) continue;
+        drawCell(ctx, cell, colXAt(metrics, c) - xOff, y, colW(metrics, c), rowH, g);
+      }
     }
-  }
+    ctx.restore();
+  };
 
-  // Selection overlay.
+  drawRange(c0, c1, sx, pinnedW, vw);                 // scrolling region (right of the band)
+  if (P > 0) drawRange(0, P - 1, 0, 0, pinnedW);      // frozen pinned band
+
+  // Selection overlay — drawn in whichever band(s) it spans, each clipped.
   const sel = g.sel;
   if (sel) {
     const ns = {
       r0: Math.min(sel.r0, sel.r1), c0: Math.min(sel.c0, sel.c1),
       r1: Math.max(sel.r0, sel.r1), c1: Math.max(sel.c0, sel.c1),
     };
-    const x0 = colXAt(metrics, ns.c0) - sx;
-    const y0 = ns.r0 * rowH - sy;
-    const x1 = colXAt(metrics, ns.c1 + 1) - sx;
-    const y1 = (ns.r1 + 1) * rowH - sy;
-    ctx.fillStyle = g.colors.selFill;
-    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
-    ctx.strokeStyle = g.colors.selStroke;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x0 + 0.5, y0 + 0.5, x1 - x0 - 1, y1 - y0 - 1);
+    const y0 = ns.r0 * rowH - sy, y1 = (ns.r1 + 1) * rowH - sy;
+    const drawSel = (xOff, clipX0, clipX1) => {
+      ctx.save(); ctx.beginPath(); ctx.rect(clipX0, 0, clipX1 - clipX0, vh); ctx.clip();
+      const x0 = colXAt(metrics, ns.c0) - xOff, x1 = colXAt(metrics, ns.c1 + 1) - xOff;
+      ctx.fillStyle = g.colors.selFill; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+      ctx.strokeStyle = g.colors.selStroke; ctx.lineWidth = 2; ctx.strokeRect(x0 + 0.5, y0 + 0.5, x1 - x0 - 1, y1 - y0 - 1);
+      ctx.restore();
+    };
+    drawSel(sx, pinnedW, vw);
+    if (P > 0) drawSel(0, 0, pinnedW);
+  }
+
+  if (P > 0 && pinnedW < vw) {                         // frozen-band separator
+    ctx.strokeStyle = g.colors.hdrBorder; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pinnedW + 0.5, 0); ctx.lineTo(pinnedW + 0.5, vh); ctx.stroke();
   }
 }
 
-// Column header band: the column *name* (provider.header), not a letter.
-function paintColHeaders(g, c0, c1, sx, vw) {
+// Column header band: the column *name* (provider.header), not a letter. Mirrors the
+// body's scrolling/frozen split when columns are pinned.
+function paintColHeaders(g, c0, c1, sx, vw, P = 0, pinnedW = 0) {
   const { colHdrCtx: ctx, dpr, metrics, provider } = g;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, vw, metrics.hdrH);
   ctx.fillStyle = g.colors.hdrBg;
   ctx.fillRect(0, 0, vw, metrics.hdrH);
 
-  ctx.strokeStyle = g.colors.hdrBorder;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let c = c0; c <= c1 + 1; c++) {
-    const x = Math.round(colXAt(metrics, c) - sx) + 0.5;
-    ctx.moveTo(x, 0); ctx.lineTo(x, metrics.hdrH);
-  }
-  ctx.moveTo(0, metrics.hdrH - 0.5); ctx.lineTo(vw, metrics.hdrH - 0.5);
-  ctx.stroke();
-
-  ctx.font = '600 ' + g.hdrFontPx + 'px ' + g.mono;
-  ctx.fillStyle = g.colors.hdrText;
-  ctx.textBaseline = 'middle';
-  ctx.textAlign = 'left';
-  for (let c = c0; c <= c1; c++) {
+  // Draw one header cell at the given x (already offset).
+  const drawHdrCol = (c, x) => {
     const h = provider.header ? provider.header(c) : null;
     const label = h == null ? colLetter(c) : (typeof h === 'string' ? h : (h.label ?? colLetter(c)));
     const cw = colW(metrics, c);
-    const x = colXAt(metrics, c) - sx;
     ctx.save();
     ctx.beginPath();
     ctx.rect(x + 1, 0, cw - 2, metrics.hdrH);
     ctx.clip();
+    ctx.font = '600 ' + g.hdrFontPx + 'px ' + g.mono;
+    ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
-    // Type glyph (muted), then the label. A calculated/derived column shows an ƒ
-    // in the derived accent instead of its type glyph, so it's visibly not a
-    // source column.
     const calc = h && typeof h === 'object' && h.calc;
     const glyph = calc ? 'ƒ' : ((h && typeof h === 'object' && h.type) ? TYPE_GLYPH[h.type] : '');
     let lx = x + PAD;
@@ -581,31 +574,16 @@ function paintColHeaders(g, c0, c1, sx, vw) {
       ctx.fillStyle = calc ? (g.colors.cellDerived || g.colors.hdrText) : (g.colors.hdrGlyph || g.colors.cellPending);
       ctx.fillText(glyph, lx, metrics.hdrLabelH / 2);
       lx += 12;
-      ctx.fillStyle = g.colors.hdrText;
     }
+    ctx.fillStyle = g.colors.hdrText;
     ctx.fillText(String(label), lx, metrics.hdrLabelH / 2);
-    // Right-edge state indicators: sort arrow (far right) + filter funnel (left
-    // of it). Both make active view-state visible in the grid, not just a panel.
     const obj = h && typeof h === 'object';
     let rx = x + cw - 4;
     ctx.textAlign = 'right';
-    if (obj && h.sort) {
-      ctx.fillStyle = g.colors.hdrText;
-      ctx.fillText(h.sort === 'desc' ? '↓' : '↑', rx, metrics.hdrLabelH / 2);
-      rx -= 11;
-    }
-    if (obj && h.filtered) {
-      ctx.fillStyle = g.colors.hdrText;
-      ctx.fillText('▽', rx, metrics.hdrLabelH / 2);
-      rx -= 11;
-    }
-    if (obj && h.invalid) {
-      ctx.fillStyle = g.colors.cellError;
-      ctx.fillText('⚠', rx, metrics.hdrLabelH / 2);
-    }
-    // Per-column distribution gutter (opt-in via headerGutterH + provider.headerGutter).
+    if (obj && h.sort) { ctx.fillStyle = g.colors.hdrText; ctx.fillText(h.sort === 'desc' ? '↓' : '↑', rx, metrics.hdrLabelH / 2); rx -= 11; }
+    if (obj && h.filtered) { ctx.fillStyle = g.colors.hdrText; ctx.fillText('▽', rx, metrics.hdrLabelH / 2); rx -= 11; }
+    if (obj && h.invalid) { ctx.fillStyle = g.colors.cellError; ctx.fillText('⚠', rx, metrics.hdrLabelH / 2); }
     if (metrics.hdrGutterH > 0 && provider.headerGutter) drawGutter(ctx, g, provider.headerGutter(c), x, metrics.hdrLabelH, cw, metrics.hdrGutterH);
-    // Live brush band (preview only — no filtering happens until release).
     if (g.gutterBrush && g.gutterBrush.col === c) {
       const b = g.gutterBrush, bx0 = x + Math.min(b.x0, b.x1), bw = Math.abs(b.x1 - b.x0);
       ctx.fillStyle = g.colors.selFill;
@@ -614,7 +592,25 @@ function paintColHeaders(g, c0, c1, sx, vw) {
       ctx.strokeRect(bx0 + 0.5, metrics.hdrLabelH + 0.5, Math.max(bw - 1, 0), metrics.hdrGutterH - 1);
     }
     ctx.restore();
-  }
+  };
+
+  const drawHdrRange = (cLo, cHi, xOff, clipX0, clipX1) => {
+    if (cHi < cLo || clipX1 <= clipX0) return;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(clipX0, 0, clipX1 - clipX0, metrics.hdrH); ctx.clip();
+    ctx.strokeStyle = g.colors.hdrBorder; ctx.lineWidth = 1; ctx.beginPath();
+    for (let c = cLo; c <= cHi + 1; c++) { const x = Math.round(colXAt(metrics, c) - xOff) + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, metrics.hdrH); }
+    ctx.stroke();
+    for (let c = cLo; c <= cHi; c++) drawHdrCol(c, colXAt(metrics, c) - xOff);
+    ctx.restore();
+  };
+
+  drawHdrRange(c0, c1, sx, pinnedW, vw);                // scrolling headers
+  if (P > 0) drawHdrRange(0, P - 1, 0, 0, pinnedW);     // frozen headers
+
+  ctx.strokeStyle = g.colors.hdrBorder; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, metrics.hdrH - 0.5); ctx.lineTo(vw, metrics.hdrH - 0.5); ctx.stroke();   // band bottom
+  if (P > 0 && pinnedW < vw) { ctx.beginPath(); ctx.moveTo(pinnedW + 0.5, 0); ctx.lineTo(pinnedW + 0.5, metrics.hdrH); ctx.stroke(); }   // separator
 }
 
 // Draw a column's distribution glyph in the header gutter strip. `gd` (from
@@ -694,12 +690,17 @@ function paintRowHeaders(g, r0, r1, sy, vh) {
 // Full repaint of the three bands.
 function paint(g) {
   if (!g.ctx) return;
+  const M = g.metrics;
   const sx = g.scrollEl.scrollLeft, sy = g.scrollEl.scrollTop;
   const vw = g.canvas.width / g.dpr, vh = g.canvas.height / g.dpr;
-  const [c0, c1] = visibleColRange(g.metrics, sx, vw);
-  const [r0, r1] = visibleRowRange(g.metrics, sy, vh);
-  paintCells(g, c0, r0, c1, r1, sx, sy, vw, vh);
-  paintColHeaders(g, c0, c1, sx, vw);
+  const P = Math.min(M.pinnedCols || 0, M.totalCols);
+  const pinnedW = P > 0 ? Math.min(colXAt(M, P), vw) : 0;
+  // The scrolling region starts past the frozen band: its visible columns are those
+  // under the viewport strip [sx+pinnedW, sx+vw]. (At sx=0 the first is column P.)
+  const [c0, c1] = visibleColRange(M, sx + pinnedW, vw - pinnedW);
+  const [r0, r1] = visibleRowRange(M, sy, vh);
+  paintCells(g, Math.max(c0, P), r0, c1, r1, sx, sy, vw, vh, P, pinnedW);
+  paintColHeaders(g, Math.max(c0, P), c1, sx, vw, P, pinnedW);
   paintRowHeaders(g, r0, r1, sy, vh);
 }
 
@@ -765,6 +766,7 @@ function createGrid(element, provider, options = {}) {
       hdrH: (options.hdrH || 24) + (options.headerGutterH || 0),
       rowHdrW: options.rowHdrW || 48,
       colWidths: options.colWidths || {},
+      pinnedCols: options.pinnedCols || 0,   // first N display columns frozen on the left
       totalRows: dims.rows,
       totalCols: dims.cols,
     },
@@ -892,9 +894,14 @@ function createGrid(element, provider, options = {}) {
     if (notify && changed) emitSelect();
   }
 
+  // px width of the frozen pinned band (= left edge of the first scrolling column).
+  function pinnedW() { const p = M.pinnedCols || 0; return p > 0 ? colXOf(Math.min(p, M.totalCols)) : 0; }
+  // Map a clientX to model-space x, pin-aware: inside the frozen band, scroll doesn't apply.
+  function modelX(clientX, rectLeft) { const lx = clientX - rectLeft; const pw = pinnedW(); return lx < pw ? lx : lx + scroll.scrollLeft; }
+
   function pointToCell(clientX, clientY) {
     const rect = scroll.getBoundingClientRect();
-    const x = clientX - rect.left + scroll.scrollLeft;
+    const x = modelX(clientX, rect.left);
     const y = clientY - rect.top + scroll.scrollTop;
     return cellAt(M, x, y);
   }
@@ -1180,7 +1187,7 @@ function createGrid(element, provider, options = {}) {
   // column c grabs column c-1, the standard spreadsheet feel).
   function colBorderAt(clientX) {
     const rect = colHdr.getBoundingClientRect();
-    const x = clientX - rect.left + scroll.scrollLeft;
+    const x = modelX(clientX, rect.left);
     if (x < 0) return -1;
     const c = Math.max(0, colAtX(M, x));
     let hit = -1;
@@ -1257,11 +1264,12 @@ function createGrid(element, provider, options = {}) {
   // (col, loFrac, hiFrac) ONCE. A drag under the threshold is a tap → onGutterClick
   // (stats), not a brush. Esc cancels mid-drag. (The host decides apply-vs-stage.)
   function startGutterBrush(e, rect) {
-    const col = colAtX(M, e.clientX - rect.left + scroll.scrollLeft);
+    const localX = e.clientX - rect.left, pw = pinnedW(), pinned = localX < pw;
+    const col = colAtX(M, pinned ? localX : localX + scroll.scrollLeft);
     if (col < 0 || col >= M.totalCols) return;
     e.preventDefault();
     g.suppressHeaderClick = true;
-    const cw = colWOf(col), colLeft = colXOf(col) - scroll.scrollLeft;
+    const cw = colWOf(col), colLeft = colXOf(col) - (pinned ? 0 : scroll.scrollLeft);
     const at = (clientX) => Math.max(0, Math.min(cw, clientX - rect.left - colLeft));
     const x0 = at(e.clientX);
     g.gutterBrush = { col, x0, x1: x0, moved: false };
@@ -1412,6 +1420,9 @@ function createGrid(element, provider, options = {}) {
     // view-state. autofitColumn measures the header + visible cells.
     getColWidths() { return { ...M.colWidths }; },
     setColWidths(widths) { M.colWidths = { ...(widths || {}) }; sizeCanvases(); repaint(); },
+    // Freeze the first N display columns on the left (pin/freeze). 0 = none.
+    setPinnedCols(n) { M.pinnedCols = Math.max(0, Math.min(n | 0, M.totalCols)); repaint(); },
+    getPinnedCols() { return M.pinnedCols || 0; },
     autofitColumn(c) { autofitCol(c); },
     focus() { g.clip.focus(); },
     setColors(colors) {

@@ -161,9 +161,10 @@ function mountView(vs, info = {}) {
 
   const base = createLaminaProvider(vs, { PENDING });
   const total = c.baseVs.cols;
-  const vis = [];                                        // display col → underlying col (reordered, skipping hidden)
-  for (const uc of effectiveOrder(c)) if (!c.hidden.has(uc)) vis.push(uc);
-  c._vis = vis;
+  const vis = [];                                        // display col → underlying col (pinned-first, reordered, skipping hidden)
+  let pinnedVis = 0;
+  for (const uc of pinnedFirstOrder(c)) { if (c.hidden.has(uc)) continue; vis.push(uc); if (c.pinned && c.pinned.has(uc)) pinnedVis++; }
+  c._vis = vis; c._pinnedCount = pinnedVis;
   const provider = {
     dims() { return { rows: vs.rowCount(), cols: vis.length }; },
     cellAt(r, dc) {
@@ -191,7 +192,7 @@ function mountView(vs, info = {}) {
     onReady(cb) { return base.onReady(cb); },
   };
 
-  grid = createGrid($('#grid'), provider, { readOnly: true, theme: effectiveTheme(), defaultColW: c.d.kind === 'text' ? 900 : 130, headerGutterH: (showGutter && c.d.kind === 'delimited') ? GUTTER_H : 0 });
+  grid = createGrid($('#grid'), provider, { readOnly: true, theme: effectiveTheme(), defaultColW: c.d.kind === 'text' ? 900 : 130, headerGutterH: (showGutter && c.d.kind === 'delimited') ? GUTTER_H : 0, pinnedCols: c._pinnedCount || 0 });
   // reapply persisted column widths (stored by UNDERLYING col → display indices)
   const dw = {};
   for (let dc = 0; dc < vis.length; dc++) { const w = c.colWidths[vis[dc]]; if (w != null) dw[dc] = w; }
@@ -324,6 +325,22 @@ function reorderCol(fromUc, toUc) {
   c.colOrder = order;
   rerender();                                            // rebuilds _vis (+ renderColPanel via the mountView hook)
 }
+// Display order with pinned columns hoisted to the front (each group keeps colOrder).
+// loom freezes the first N display columns, so pinned-first + a count = pin/freeze.
+function pinnedFirstOrder(c) {
+  const order = effectiveOrder(c), pin = c.pinned;
+  if (!pin || !pin.size) return order;
+  const a = [], b = [];
+  for (const uc of order) (pin.has(uc) ? a : b).push(uc);
+  return a.concat(b);
+}
+// Pin/unpin a column (freeze it on the left). Pinned columns render leftmost + frozen.
+function togglePin(uc) {
+  const c = current; if (!c) return;
+  c.pinned = c.pinned || new Set();
+  if (c.pinned.has(uc)) c.pinned.delete(uc); else c.pinned.add(uc);
+  rerender();
+}
 
 // ── columns panel (right-docked slide-out) ─────────────────────────────────────
 // A searchable list of every column with a visibility checkbox + type + null-rate +
@@ -349,10 +366,11 @@ function renderColPanel() {
   const c = current; if (!c || !_colPanelOpen) return;
   const list = $('#cpList'); const q = $('#cpSearch').value.trim().toLowerCase();
   list.textContent = '';
-  for (const uc of effectiveOrder(c)) {                  // list in DISPLAY order so drag matches the grid
+  for (const uc of pinnedFirstOrder(c)) {                // list in DISPLAY order (pinned-first) so it matches the grid
     const s = c.schema[uc]; if (q && !s.name.toLowerCase().includes(q)) continue;
     const visible = !c.hidden.has(uc);
-    const row = document.createElement('div'); row.className = 'cp-row' + (visible ? '' : ' off');
+    const isPinned = !!(c.pinned && c.pinned.has(uc));
+    const row = document.createElement('div'); row.className = 'cp-row' + (visible ? '' : ' off') + (isPinned ? ' pinned' : '');
     const grip = document.createElement('span'); grip.className = 'cp-grip'; grip.textContent = '⠿'; grip.title = 'drag to reorder'; grip.draggable = true;
     grip.addEventListener('dragstart', (e) => { _cpDragUc = uc; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', s.name); } catch { /* ignore */ } row.classList.add('cp-dragging'); });
     grip.addEventListener('dragend', () => { row.classList.remove('cp-dragging'); list.querySelectorAll('.cp-over').forEach((x) => x.classList.remove('cp-over')); _cpDragUc = null; });
@@ -367,9 +385,11 @@ function renderColPanel() {
     const g = c.gutter && c.gutter[uc]; const pct = g && g.nullRate != null ? Math.round(g.nullRate * 100) : null;
     const nu = document.createElement('span'); nu.className = 'cp-null';
     if (pct != null && pct > 0) { nu.textContent = pct + '%∅'; nu.title = pct + '% blank (sampled)'; }
+    const pin = document.createElement('button'); pin.className = 'cp-pin' + (isPinned ? ' on' : ''); pin.textContent = '📌'; pin.title = isPinned ? 'unfreeze column' : 'freeze column (keep visible while scrolling)';
+    pin.onclick = () => togglePin(uc);
     const more = document.createElement('button'); more.className = 'cp-more'; more.textContent = '⋯'; more.title = 'column actions';
     more.onclick = () => { const r = more.getBoundingClientRect(); showColumnMenu(uc, r.left - 150, r.bottom + 2); };
-    row.append(grip, cb, ty, nm, nu, more); list.appendChild(row);
+    row.append(grip, cb, ty, nm, nu, pin, more); list.appendChild(row);
   }
   updateCpCount();
 }
@@ -839,6 +859,7 @@ function buildLens() {
   if (Object.keys(cols).length) lens.columns = cols;
   const order = effectiveOrder(c);                          // column display order (names), only if reordered from natural
   if (!order.every((uc, i) => uc === i)) lens.order = order.map(nameOf).filter(Boolean);
+  if (c.pinned && c.pinned.size) lens.pinned = order.filter((uc) => c.pinned.has(uc)).map(nameOf).filter(Boolean);
   return lens;
 }
 
@@ -905,6 +926,10 @@ async function applyLensView(lens) {
     const ord = [];
     for (const nm of lens.order) { const i = idx(nm); if (i >= 0 && !ord.includes(i)) ord.push(i); }
     c.colOrder = ord.length ? ord : null;
+  }
+  if (Array.isArray(lens.pinned)) {                                       // frozen columns (by name)
+    c.pinned = new Set();
+    for (const nm of lens.pinned) { const i = idx(nm); if (i >= 0) c.pinned.add(i); }
   }
   await recompute();                                                      // sort + render with formats/hidden + order
   if (current !== c) return;
@@ -1929,7 +1954,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

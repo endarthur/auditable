@@ -61,6 +61,7 @@ export function createGrid(element, provider, options = {}) {
       hdrH: (options.hdrH || 24) + (options.headerGutterH || 0),
       rowHdrW: options.rowHdrW || 48,
       colWidths: options.colWidths || {},
+      pinnedCols: options.pinnedCols || 0,   // first N display columns frozen on the left
       totalRows: dims.rows,
       totalCols: dims.cols,
     },
@@ -188,9 +189,14 @@ export function createGrid(element, provider, options = {}) {
     if (notify && changed) emitSelect();
   }
 
+  // px width of the frozen pinned band (= left edge of the first scrolling column).
+  function pinnedW() { const p = M.pinnedCols || 0; return p > 0 ? colXOf(Math.min(p, M.totalCols)) : 0; }
+  // Map a clientX to model-space x, pin-aware: inside the frozen band, scroll doesn't apply.
+  function modelX(clientX, rectLeft) { const lx = clientX - rectLeft; const pw = pinnedW(); return lx < pw ? lx : lx + scroll.scrollLeft; }
+
   function pointToCell(clientX, clientY) {
     const rect = scroll.getBoundingClientRect();
-    const x = clientX - rect.left + scroll.scrollLeft;
+    const x = modelX(clientX, rect.left);
     const y = clientY - rect.top + scroll.scrollTop;
     return cellAt(M, x, y);
   }
@@ -476,7 +482,7 @@ export function createGrid(element, provider, options = {}) {
   // column c grabs column c-1, the standard spreadsheet feel).
   function colBorderAt(clientX) {
     const rect = colHdr.getBoundingClientRect();
-    const x = clientX - rect.left + scroll.scrollLeft;
+    const x = modelX(clientX, rect.left);
     if (x < 0) return -1;
     const c = Math.max(0, colAtX(M, x));
     let hit = -1;
@@ -553,11 +559,12 @@ export function createGrid(element, provider, options = {}) {
   // (col, loFrac, hiFrac) ONCE. A drag under the threshold is a tap → onGutterClick
   // (stats), not a brush. Esc cancels mid-drag. (The host decides apply-vs-stage.)
   function startGutterBrush(e, rect) {
-    const col = colAtX(M, e.clientX - rect.left + scroll.scrollLeft);
+    const localX = e.clientX - rect.left, pw = pinnedW(), pinned = localX < pw;
+    const col = colAtX(M, pinned ? localX : localX + scroll.scrollLeft);
     if (col < 0 || col >= M.totalCols) return;
     e.preventDefault();
     g.suppressHeaderClick = true;
-    const cw = colWOf(col), colLeft = colXOf(col) - scroll.scrollLeft;
+    const cw = colWOf(col), colLeft = colXOf(col) - (pinned ? 0 : scroll.scrollLeft);
     const at = (clientX) => Math.max(0, Math.min(cw, clientX - rect.left - colLeft));
     const x0 = at(e.clientX);
     g.gutterBrush = { col, x0, x1: x0, moved: false };
@@ -708,6 +715,9 @@ export function createGrid(element, provider, options = {}) {
     // view-state. autofitColumn measures the header + visible cells.
     getColWidths() { return { ...M.colWidths }; },
     setColWidths(widths) { M.colWidths = { ...(widths || {}) }; sizeCanvases(); repaint(); },
+    // Freeze the first N display columns on the left (pin/freeze). 0 = none.
+    setPinnedCols(n) { M.pinnedCols = Math.max(0, Math.min(n | 0, M.totalCols)); repaint(); },
+    getPinnedCols() { return M.pinnedCols || 0; },
     autofitColumn(c) { autofitCol(c); },
     focus() { g.clip.focus(); },
     setColors(colors) {

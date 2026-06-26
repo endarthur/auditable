@@ -810,6 +810,25 @@ try {
     ? ok(`lens: round-trips filter + sort + calc by name (${lensRT.afterRows} of ${N} rows after apply)`)
     : fail(`lens round-trip failed: ${JSON.stringify(lensRT)}`);
 
+  // ── column pin/freeze: pins to the front, drives loom's frozen band, round-trips ──
+  const pinT = await page.evaluate(async () => {
+    const L = window._lamina; L.showAllColumns(); L.current.pinned = null; L.current.colOrder = null;
+    await new Promise((r) => setTimeout(r, 20));
+    L.togglePin(2);                                          // pin underlying col #2
+    await new Promise((r) => setTimeout(r, 40));
+    const c = L.current;
+    const frontIsPinned = c._vis[0] === 2 && c._pinnedCount === 1;
+    const loomPinned = L.grid.getPinnedCols();
+    const lens = L.buildLens();
+    c.pinned = null; await new Promise((r) => setTimeout(r, 10));
+    await L.applyLens(lens); await new Promise((r) => setTimeout(r, 60));
+    const restored = !!(L.current.pinned && L.current.pinned.has(2)) && L.current._vis[0] === 2;
+    return { frontIsPinned, loomPinned, lensPinned: lens.pinned, restored };
+  });
+  (pinT.frontIsPinned && pinT.loomPinned === 1 && Array.isArray(pinT.lensPinned) && pinT.restored)
+    ? ok(`pin/freeze: hoists to front + drives loom's frozen band + round-trips (pinned ${JSON.stringify(pinT.lensPinned)})`)
+    : fail(`pin/freeze failed: ${JSON.stringify(pinT)}`);
+
   // ── column-profile popup: the stats popup shows a histogram + a log toggle ──
   const prof = await page.evaluate(async () => {
     await window._lamina.showColumnStats(1);              // grade (numeric) on the open file
@@ -864,7 +883,8 @@ try {
 
   // ── column reorder: moves display order + round-trips through a lens ──
   const ro = await page.evaluate(async () => {
-    const L = window._lamina; L.showAllColumns();
+    const L = window._lamina; L.current.pinned = null; L.current.colOrder = null; L.showAllColumns();   // reset, then rerender
+    await new Promise((r) => setTimeout(r, 20));
     const before = L.current._vis.map((uc) => L.current.schema[uc].name);
     L.reorderCol(2, 0);                                   // move col #2 to the front
     await new Promise((r) => setTimeout(r, 30));

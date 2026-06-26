@@ -237,6 +237,10 @@
   #colPanel .cp-null { color: var(--dim); font-size: 10px; min-width: 34px; text-align: right; flex: none; }
   #colPanel .cp-more { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 3px; font-size: 13px; flex: none; }
   #colPanel .cp-more:hover { color: var(--text-hi); }
+  #colPanel .cp-pin { background: none; border: none; cursor: pointer; padding: 0 2px; font-size: 11px; flex: none; opacity: .25; filter: grayscale(1); }
+  #colPanel .cp-pin:hover { opacity: .7; }
+  #colPanel .cp-pin.on { opacity: 1; filter: none; }
+  #colPanel .cp-row.pinned { background: var(--accent-faint); }
   #empty, #binary {
     position: absolute; inset: var(--tb) 0 var(--ft) 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 8px; color: var(--faint); font-family: var(--mono);

@@ -185,14 +185,20 @@ artifact in the GCU enterprise-profile sense:
   null-rate + a ⋯ menu (the existing per-column actions), bulk show/hide/invert, and
   **drag-to-reorder** (grip handle → a `c.colOrder` layer reconciled by
   `effectiveOrder`, threaded through `_vis`; display-only, app-side, no loom change).
-  Pure consolidation of `c.hidden`/`colOrder`/`colFormats`/`colScale`/`gutter` state;
-  the grid re-lays-out via loom's own ResizeObserver when `#grid`'s right inset
-  changes. Visibility + order + formats + color-scale + width all round-trip through
-  a **lens** (by column name). **Still v2:** **pin/freeze** left columns — needs
-  frozen-column support in `@gcu/loom` itself (a fourth render band like `rowHdr`,
-  touching paint/geometry/hit-test/resize; benefits the strata surface too), so it's
-  a deliberate loom mini-project, not an app tack-on. Grid-header drag-reorder
-  (vs the panel's) would also be a loom change — deferred; panel-reorder covers it.
+  Pure consolidation of `c.hidden`/`colOrder`/`pinned`/`colFormats`/`colScale`/`gutter`
+  state; the grid re-lays-out via loom's own ResizeObserver when `#grid`'s right inset
+  changes. Visibility + order + **pinned** + formats + color-scale + width all
+  round-trip through a **lens** (by column name).
+- **Pin/freeze (shipped):** a 📌 per-row toggle freezes a column on the left so it
+  stays visible while you scroll right across a wide model. Built as a real
+  **`@gcu/loom`** capability (`pinnedCols` option + `setPinnedCols(n)`): loom freezes
+  the first N *display* columns as a non-horizontally-scrolling band (paint splits
+  into scrolling-region-clipped-right + frozen-band; every hit-test path —
+  `pointToCell`/`colBorderAt`/gutter-brush — is pin-aware; the scroll spacer is
+  unchanged). lamina drives it by hoisting pinned columns to the front of the display
+  order (`pinnedFirstOrder`) + passing the visible pinned count. **The strata surface
+  inherits it for free.** (Grid-header drag-reorder — vs the panel's — is still a
+  future loom add; panel-reorder covers the need.)
 - **Toolbar / filter layout polish:** reserve space so the kind-badge popover
   doesn't sit under the toolbar edge; keep the filter box from growing under it;
   fold the apply button into the box; let the filter box grow to multiple lines
