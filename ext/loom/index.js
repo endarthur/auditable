@@ -623,12 +623,14 @@ function drawGutter(ctx, g, gd, x, top, cw, gh) {
   const plotTop = top + padTop, plotH = Math.max(0, gh - padTop - nullH - 1);
   if (gd.kind === 'hist' && gd.bins && gd.bins.length) {
     const n = gd.bins.length, bw = w / n;
-    ctx.fillStyle = g.colors.cellNum;
-    for (let i = 0; i < n; i++) {
-      const v = gd.bins[i] || 0; if (v <= 0) continue;
-      const bh = Math.max(v * plotH, 1);
-      ctx.fillRect(x0 + i * bw, plotTop + (plotH - bh), Math.max(bw - 0.5, 0.5), bh);
-    }
+    const bars = (bins, alpha) => {
+      ctx.globalAlpha = alpha; ctx.fillStyle = g.colors.cellNum;
+      for (let i = 0; i < bins.length; i++) { const v = bins[i] || 0; if (v <= 0) continue; const bh = Math.max(v * plotH, 1); ctx.fillRect(x0 + i * bw, plotTop + (plotH - bh), Math.max(bw - 0.5, 0.5), bh); }
+      ctx.globalAlpha = 1;
+    };
+    // filter-reactive: the global shape faint, the filtered subset solid over it.
+    if (gd.filtered && gd.filtered.bins) { bars(gd.bins, 0.28); bars(gd.filtered.bins, 1); }
+    else bars(gd.bins, 1);
   } else if (gd.kind === 'cat' && gd.segments && gd.segments.length) {
     const total = gd.segments.reduce((s, v) => s + v, 0) || 1;
     let cx = x0;

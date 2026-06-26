@@ -687,6 +687,24 @@ try {
     ? ok(`brush: drag → "${brush.box}" applied (${brush.rows}/300); stage mode fills box but holds (${brush.stagedRows}/300, press Enter)`)
     : fail(`brush failed: ${JSON.stringify(brush)}`);
 
+  // ── filter-reactive gutters: an active filter overlays the matched-rows
+  //    distribution (numeric/hist) on the global one ──
+  const react = await page.evaluate(async () => {
+    window._lamina.setBrushMode('apply');
+    await window._lamina.applyFilter('grade < 5');        // a sub-range → a distinct filtered shape
+    await new Promise((r) => setTimeout(r, 120));         // refreshGutterFiltered is async
+    const prov = window._lamina.grid.provider;
+    const g0 = prov.headerGutter(0);                      // grade column (numeric)
+    const hasFiltered = !!(g0 && g0.filtered && g0.filtered.bins && g0.filtered.bins.length);
+    await window._lamina.applyFilter('');                 // clear → overlay gone
+    await new Promise((r) => setTimeout(r, 60));
+    const cleared = !window._lamina.grid.provider.headerGutter(0).filtered;
+    return { hasFiltered, cleared };
+  });
+  (react.hasFiltered && react.cleared)
+    ? ok('filter-reactive gutter: matched-rows histogram overlays the global; clears with the filter')
+    : fail(`filter-reactive gutter failed: ${JSON.stringify(react)}`);
+
   // ── responsive: a phone-width viewport → the toolbar wraps to two rows, the
   //    grid drops below it, nothing overflows horizontally ──
   await page.setViewportSize({ width: 360, height: 720 });

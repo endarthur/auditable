@@ -161,7 +161,12 @@ function mountView(vs, info = {}) {
       return cell;
     },
     header(dc) { const uc = vis[dc]; const h = base.header(uc); const sk = c.sort && c.sort.find((s) => s.col === uc); if (sk) h.sort = sk.dir; return h; },
-    headerGutter(dc) { const uc = vis[dc]; return (showGutter && c.gutter) ? (c.gutter[uc] || null) : null; },
+    headerGutter(dc) {
+      const uc = vis[dc]; if (!(showGutter && c.gutter)) return null;
+      const g = c.gutter[uc]; if (!g) return null;
+      const f = c.gutterFiltered && c.gutterFiltered[uc];
+      return f ? { ...g, filtered: f } : g;             // filter-reactive: the filtered overlay rides on the global spec
+    },
     rowHeader(r) { return base.rowHeader(r); },
     onReady(cb) { return base.onReady(cb); },
   };
@@ -407,7 +412,7 @@ function toggleSort(col) {
 async function applyFilter(str) {
   const c = current;
   if (!c) return;
-  if (!str.trim()) { $('#filter').classList.remove('err'); c.filterResult = null; return recompute(); }
+  if (!str.trim()) { $('#filter').classList.remove('err'); c.filterResult = null; const r = recompute(); refreshGutterFiltered(); return r; }
   const cols = c.d.kind === 'delimited' ? c.d.schema : [{ name: 'line' }];
   const v = validate(str, cols);                          // parse + unknown-column → red box, friendly message
   if (!v.ok) return filterErr(new Error(friendlyError(v.errors, cols)));
@@ -420,7 +425,7 @@ async function applyFilter(str) {
       predicate, dataStart: c.dataStart,
       onProgress: (b, n) => { $('#meta').textContent = `filtering… ${n ? Math.round((100 * b) / n) : 0}%`; },
     });
-    return recompute();
+    const r = recompute(); refreshGutterFiltered(); return r;   // overlay the matched-rows distribution on the gutters
   } catch (e) { filterErr(e); }
 }
 function filterErr(e) { $('#filter').classList.add('err'); $('#meta').textContent = `filter: ${e.message}`; }
@@ -1271,8 +1276,42 @@ function brushFilter(uc, lo, hi) {
   $('#filter').focus(); $('#meta').textContent = 'filter staged — press Enter to apply';   // big file → don't auto-scan
 }
 
+// Filter-reactive overlay: the distribution of the current filter's matches,
+// binned on the GLOBAL min/max so it aligns, drawn solid over the faint global.
+// Numeric (hist) only; stride-sampled across the matches so it stays cheap.
+async function refreshGutterFiltered() {
+  const c = current; if (!c) return;
+  if (!showGutter || c.d.kind !== 'delimited' || !c.gutter || !c.filterResult || !c.filterResult.nums.length) {
+    if (c.gutterFiltered) { c.gutterFiltered = null; rerender(); }
+    return;
+  }
+  try {
+    const g = await computeGutterFiltered(c.source, c.schema, c.dataStart, c.d.decimal, c.gutter, c.filterResult.nums);
+    if (current !== c) return;
+    c.gutterFiltered = g; rerender();
+  } catch (e) { console.warn('[lamina] filtered gutter failed', e); }
+}
+async function computeGutterFiltered(source, schema, dataStart, decimal, global, matchRows) {
+  const stride = Math.max(1, Math.ceil(matchRows.length / GUTTER_SAMPLE));   // even sample across the matches
+  const sub = []; for (let i = 0; i < matchRows.length; i += stride) sub.push(matchRows[i]);
+  const cols = schema.length;
+  const acc = schema.map((s, i) => (s.type === 'number' && global[i] && global[i].kind === 'hist' && global[i].min != null && global[i].max > global[i].min)
+    ? { lo: global[i].min, span: global[i].max - global[i].min, bins: new Array(GUTTER_BINS).fill(0), any: false } : null);
+  await source.eachRecord({ dataStart, rows: sub }, (disp, fields) => {
+    for (let i = 0; i < cols; i++) {
+      const a = acc[i]; if (!a) continue;
+      const raw = fields[i]; if (raw == null || raw === '') continue;
+      const x = parseNum(raw, decimal); if (Number.isNaN(x)) continue;
+      let k = Math.floor((x - a.lo) / a.span * GUTTER_BINS); if (k >= GUTTER_BINS) k = GUTTER_BINS - 1; if (k < 0) k = 0;
+      a.bins[k]++; a.any = true;
+    }
+  });
+  return acc.map((a) => (a && a.any ? { kind: 'hist', bins: (() => { const mx = Math.max(...a.bins) || 1; return a.bins.map((x) => x / mx); })() } : null));
+}
+
 async function refreshGutter() {
   const c = current; if (!c) return;
+  c.gutterFiltered = null;                              // global changed → drop any stale filtered overlay
   if (!showGutter || c.d.kind !== 'delimited') { c.gutter = null; return rerender(); }
   // Footer feedback only if the sample scan actually drags (huge file) — a 150ms
   // debounce, so a small file never flashes the message (and footer-reading tests stay clean).
