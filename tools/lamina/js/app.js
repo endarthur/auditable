@@ -172,9 +172,10 @@ function mountView(vs, info = {}) {
       let style = cell.style;
       const fmt = c.colFormats[uc];
       if (fmt && cell.type === 'number') { const num = parseNum(cell.value, c.d.decimal); if (!Number.isNaN(num)) { const t = fmtNumber(num, fmt); if (t != null) style = { ...style, text: t }; } }
-      if (c.colScale && c.colScale.has(uc) && cell.type === 'number') {
-        const g = c.gutter && c.gutter[uc];
-        if (g && g.min != null && g.max > g.min) { const num = parseNum(cell.value, c.d.decimal); if (!Number.isNaN(num)) { const sc = scaleColor((num - g.min) / (g.max - g.min)); style = { ...style, bg: sc.bg, fg: sc.fg }; } }
+      const cs = c.colScale && c.colScale.get(uc);
+      if (cs && cell.type === 'number' && cs.hi > cs.lo) {
+        const num = parseNum(cell.value, c.d.decimal);
+        if (!Number.isNaN(num)) { const sc = scaleColor(scaleT(num, cs), cs.palette); style = { ...style, bg: sc.bg, fg: sc.fg }; }
       }
       return style === cell.style ? cell : { ...cell, style };
     },
@@ -229,21 +230,63 @@ function setColType(uc, type) {
   recompute();
 }
 
-// Cell color-scale (heatmap): viridis (perceptual, colour-blind-safe — switchboard
-// CVD lineage). t∈[0,1] → a cell bg + a luminance-picked readable text colour. The
-// fully-filled cell is theme-independent.
-const VIRIDIS = [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]];
-function scaleColor(t) {
+// Cell color-scale (heatmap). Perceptual, colour-blind-safe ramps (switchboard CVD
+// lineage): sequential viridis/magma + a diverging blue–red (for cutoff-relative).
+// t∈[0,1] → a cell bg + a luminance-picked readable text colour; fully-filled cells
+// are theme-independent.
+const PALETTES = {
+  viridis: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]],
+  magma: [[0, 0, 4], [81, 18, 124], [183, 55, 121], [252, 137, 97], [252, 253, 191]],
+  bluered: [[33, 102, 172], [146, 197, 222], [247, 247, 247], [244, 165, 130], [178, 24, 43]],   // diverging
+};
+function scaleColor(t, palette) {
+  const P = PALETTES[palette] || PALETTES.viridis;
   t = Math.max(0, Math.min(1, t));
-  const n = VIRIDIS.length - 1, i = Math.min(n - 1, Math.floor(t * n)), f = t * n - i, a = VIRIDIS[i], b = VIRIDIS[i + 1];
+  const n = P.length - 1, i = Math.min(n - 1, Math.floor(t * n)), f = t * n - i, a = P[i], b = P[i + 1];
   const r = Math.round(a[0] + (b[0] - a[0]) * f), g = Math.round(a[1] + (b[1] - a[1]) * f), bl = Math.round(a[2] + (b[2] - a[2]) * f);
   return { bg: `rgb(${r},${g},${bl})`, fg: (0.299 * r + 0.587 * g + 0.114 * bl) / 255 > 0.6 ? '#111' : '#f5f5f5' };
 }
+// Map a value → t∈[0,1] under a color-scale config { scale, lo, hi, reverse }.
+function scaleT(num, cs) {
+  let t;
+  if (cs.scale === 'log') { const lo = Math.max(cs.lo, 1e-12), hi = Math.max(cs.hi, lo * 1.0000001), v = Math.max(num, lo); t = (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)); }
+  else t = (num - cs.lo) / ((cs.hi - cs.lo) || 1);
+  t = Math.max(0, Math.min(1, t));
+  return cs.reverse ? 1 - t : t;
+}
+
+// colScale is a Map<col → { scale, clip, palette, reverse, lo, hi }>.
+function colScaleDefault(uc) {
+  const c = current, g = c.gutter && c.gutter[uc];
+  return { scale: 'linear', clip: false, palette: 'viridis', reverse: false, lo: g && g.min != null ? g.min : 0, hi: g && g.max != null ? g.max : 1 };
+}
 function toggleColorScale(uc) {
   const c = current; if (!c) return;
-  c.colScale = c.colScale || new Set();
-  if (c.colScale.has(uc)) c.colScale.delete(uc); else c.colScale.add(uc);
+  c.colScale = c.colScale || new Map();
+  if (c.colScale.has(uc)) c.colScale.delete(uc); else c.colScale.set(uc, colScaleDefault(uc));
   rerender();
+}
+async function setColScaleOpt(uc, patch) {
+  const c = current; if (!c || !c.colScale || !c.colScale.has(uc)) return;
+  const cs = { ...c.colScale.get(uc), ...patch };
+  if ('clip' in patch) {                                 // recompute bounds: robust p5–p95 (sampled) vs the full min/max
+    if (patch.clip) { const b = await computeClipBounds(uc); if (b) { cs.lo = b.lo; cs.hi = b.hi; } }
+    else { const g = c.gutter && c.gutter[uc]; if (g) { cs.lo = g.min; cs.hi = g.max; } }
+    if (current !== c) return;
+  }
+  if (cs.scale === 'log' && cs.lo <= 0) cs.lo = cs.hi > 0 ? cs.hi / 1000 : 1e-6;   // log needs a positive floor
+  c.colScale.set(uc, cs); rerender();
+}
+// Robust scale bounds from the gutter sample: p5 / p95 (tames outliers / log-normal tails).
+async function computeClipBounds(uc) {
+  const c = current; const vals = [];
+  await c.source.eachRecord({ dataStart: c.dataStart, limit: GUTTER_SAMPLE }, (disp, fields) => {
+    const x = parseNum(fields[uc], c.d.decimal); if (!Number.isNaN(x)) vals.push(x);
+  });
+  if (vals.length < 2) return null;
+  vals.sort((a, b) => a - b);
+  const q = (p) => vals[Math.min(vals.length - 1, Math.max(0, Math.round(p * (vals.length - 1))))];
+  return { lo: q(0.05), hi: q(0.95) };
 }
 
 // Per-column number display format (null = auto/raw). Applied in the cellAt wrap.
@@ -381,7 +424,24 @@ function showColumnMenu(uc, x, y) {
     { label: 'Scientific', action: () => setColFormat(uc, { mode: 'sci', digits: 3 }) },
     { label: 'Thousands (1,234)', action: () => setColFormat(uc, { mode: 'group' }) },
   ] });
-  if (isNum && !c.dm) items.push({ label: ((c.colScale && c.colScale.has(uc)) ? '✓ ' : '') + 'Color scale', action: () => toggleColorScale(uc) });   // heatmap the cells by value
+  if (isNum) {                                                        // heatmap the cells by value
+    const cs = c.colScale && c.colScale.get(uc);
+    const sub = [{ label: (cs ? '✓ ' : '') + 'On', action: () => toggleColorScale(uc) }];
+    if (cs) sub.push(
+      { sep: true },
+      { label: 'Scale', submenu: [
+        { label: (cs.scale === 'linear' ? '✓ ' : '') + 'Linear', action: () => setColScaleOpt(uc, { scale: 'linear' }) },
+        { label: (cs.scale === 'log' ? '✓ ' : '') + 'Log', action: () => setColScaleOpt(uc, { scale: 'log' }) },
+      ] },
+      { label: (cs.clip ? '✓ ' : '') + 'Clip outliers (p5–p95)', action: () => setColScaleOpt(uc, { clip: !cs.clip }) },
+      { label: 'Palette', submenu: [
+        { label: (cs.palette === 'viridis' ? '✓ ' : '') + 'Viridis', action: () => setColScaleOpt(uc, { palette: 'viridis' }) },
+        { label: (cs.palette === 'magma' ? '✓ ' : '') + 'Magma', action: () => setColScaleOpt(uc, { palette: 'magma' }) },
+        { label: (cs.palette === 'bluered' ? '✓ ' : '') + 'Blue–red (diverging)', action: () => setColScaleOpt(uc, { palette: 'bluered' }) },
+      ] },
+      { label: (cs.reverse ? '✓ ' : '') + 'Reverse', action: () => setColScaleOpt(uc, { reverse: !cs.reverse }) });
+    items.push({ label: 'Color scale', submenu: sub });
+  }
   items.push({ sep: true }, { label: `Hide ${name}`, action: () => hideColumn(uc) });
   for (let i = 0; i < c.baseVs.cols; i++) {
     if (c.hidden.has(i)) items.push({ label: `Show ${c.baseVs.header(i).label}`, action: () => showColumn(i) });
@@ -1589,7 +1649,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

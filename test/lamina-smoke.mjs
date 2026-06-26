@@ -765,12 +765,19 @@ try {
     const prov = window._lamina.grid.provider;
     await window._laminaVS.ensureRow(0); await window._laminaVS.ensureRow(49);
     const lo = prov.cellAt(0, 1), hi = prov.cellAt(49, 1);   // low grade vs high grade
+    await window._laminaVS.ensureRow(25);
+    const linMid = prov.cellAt(25, 1).style.bg;           // mid cell, linear viridis
+    await window._lamina.setColScaleOpt(1, { scale: 'log' });
+    const logMid = prov.cellAt(25, 1).style.bg;           // log remaps the mid
+    await window._lamina.setColScaleOpt(1, { scale: 'linear', palette: 'magma' });
+    const magMid = prov.cellAt(25, 1).style.bg;           // different palette
     window._lamina.toggleColorScale(1);
     const off = prov.cellAt(49, 1);
-    return { loBg: lo && lo.style && lo.style.bg, hiBg: hi && hi.style && hi.style.bg, hasFg: !!(hi && hi.style && hi.style.fg), offBg: off && off.style && off.style.bg };
+    return { loBg: lo && lo.style && lo.style.bg, hiBg: hi && hi.style && hi.style.bg, hasFg: !!(hi && hi.style && hi.style.fg), offBg: off && off.style && off.style.bg, linMid, logMid, magMid };
   });
-  (heat.loBg && heat.hiBg && heat.loBg !== heat.hiBg && heat.hasFg && !heat.offBg)
-    ? ok(`color scale: cells heat-mapped (low ${heat.loBg} ≠ high ${heat.hiBg}, readable fg); toggles off`)
+  (heat.loBg && heat.hiBg && heat.loBg !== heat.hiBg && heat.hasFg && !heat.offBg
+    && heat.logMid !== heat.linMid && heat.magMid !== heat.linMid)
+    ? ok(`color scale: viridis low ${heat.loBg} ≠ high ${heat.hiBg}; log + palette remap the mid; readable fg; toggles off`)
     : fail(`color scale failed: ${JSON.stringify(heat)}`);
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));
