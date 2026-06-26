@@ -1563,7 +1563,8 @@ const HELP = {
     `<b>lamina</b> — open any file, however large, and scroll, filter, and sort it. Windowed, read-only, offline.<br><br>`
     + `Delimited → grid, text → lines, binary → hex. Opens <b>Datamine .dm</b> tables directly — at any size, decoded on the fly (no conversion), with the same filter / sort / stats as CSV. Reads inside zip / tar / gz / zst / xz / bz2, and windows huge compressed entries without unpacking. Detects GSLIB / Geo-EAS + whitespace dumps and skips <code>#</code> comment preambles.<br><br>`
     + `Part of the Geoscientific Chaos Union — <code>gentropic.org</code>.<br><br>`
-    + `<span style="color:#666">build <code>${__LAMINA_BUILD__}</code></span>`],
+    + `<span style="color:var(--dim)">MIT. Bundles <code>fflate · fzstd · seek-bzip · xz-decompress</code> (all MIT) for reading archives — full notices in this file's source.</span><br>`
+    + `<span style="color:var(--dim)">build <code>${__LAMINA_BUILD__}</code></span>`],
 };
 function showOverlay(title, html) {
   $('#helpTitle').textContent = title;

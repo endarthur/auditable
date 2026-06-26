@@ -1704,6 +1704,20 @@ if (target === 'lamina') {
   html = html.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
   html = html.replace(/<script type="module" src="\.\/js\/app\.js"><\/script>/, () => `<script>\n${bootStamped}\n</script>`);
 
+  // Third-party notices — lamina is MIT, but bundles a few MIT-licensed archive
+  // decoders via @gcu/archive (fflate/fzstd/seek-bzip/xz-decompress), and some of
+  // those minified bundles dropped their copyright headers. Retain the full licenses
+  // here so the single-file artifact stays MIT-compliant + self-contained ("view
+  // source; that's the point"). lamina carries no @gcu/licenses surface.
+  const noticeLibs = ['fflate', 'fzstd', 'seek-bzip', 'xz-decompress'];
+  const notices = noticeLibs.map((n) => {
+    const p = path.join(__dirname, 'ext/archive/vendor', 'LICENSE-' + n);
+    return fs.existsSync(p) ? `\n===== ${n} =====\n${fs.readFileSync(p, 'utf8').trim()}\n` : `\n===== ${n} ===== (MIT — license file missing at build)\n`;
+  }).join('');
+  const noticeBlock = `<!-- THIRD-PARTY NOTICES\nlamina is MIT (© Arthur Endlein Correia / Geoscientific Chaos Union, gentropic.org).\nIt bundles, via @gcu/archive, these MIT-licensed archive decoders:\n${notices}\n-->\n`
+    .replace(/--+(?=[^>])/g, '-');   // no stray `--` runs inside an HTML comment
+  html = html.replace('</head>', noticeBlock + '</head>');
+
   const outPath = path.join(__dirname, 'lamina.html');
   fs.writeFileSync(outPath, html);
   console.log(`Built lamina.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB in the clear, ${modules.length} modules) — build ${lamStamp}`);
