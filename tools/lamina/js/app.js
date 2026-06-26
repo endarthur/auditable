@@ -632,6 +632,101 @@ async function inferCalcType(expr, cols) {
   return nn.length && nn.every((x) => typeof x === 'number') ? 'number' : 'string';
 }
 
+// ── streaming export (the "extract" leg) ───────────────────────────────────────
+// Write the CURRENT view (filtered + sorted + calc + chosen columns) to CSV/TSV —
+// never-resident via the File System Access API (a buffered <a download> fallback
+// where FSAA is absent). Get the 50k rows that matter out of the 500M.
+function csvField(v, delim, q) {
+  const s = v == null ? '' : String(v);
+  return (s.includes(delim) || s.includes(q) || s.includes('\n') || s.includes('\r')) ? q + s.split(q).join(q + q) + q : s;
+}
+// Iterate the chosen view row-by-row (sequential → the block LRU keeps it cheap),
+// serialize, and push batches to a sink ({ write, close }). Cancellable via signal.
+async function runExport({ delimiter = ',', header = true, allRows = false, colIdx, sink, onProgress, signal }) {
+  const c = current; if (!c) return 0;
+  const view = allRows ? c.baseVs : (c.view || c.baseVs);     // current view (filtered/sorted) vs the whole table
+  const n = view.rowCount(), q = '"';
+  const idx = colIdx && colIdx.length ? colIdx : c.schema.map((_, i) => i);
+  let buf = header ? idx.map((i) => csvField(c.schema[i].name, delimiter, q)).join(delimiter) + '\n' : '';
+  let written = 0;
+  for (let r = 0; r < n; r++) {
+    if (signal && signal.cancelled) break;
+    const row = await view.ensureRow(r);
+    buf += (row ? idx.map((i) => csvField(row[i], delimiter, q)).join(delimiter) : '') + '\n';
+    written++;
+    if (buf.length > 65536) { await sink.write(buf); buf = ''; }
+    if (onProgress && (r & 2047) === 0) onProgress(r, n);
+  }
+  await sink.write(buf);
+  await sink.close();
+  return written;
+}
+// Automation hook + the small-file path: serialize the whole export to a string.
+async function exportToString(opts = {}) {
+  const parts = [];
+  await runExport({ ...opts, sink: { write: (t) => parts.push(t), close: () => {} } });
+  return parts.join('');
+}
+function downloadText(text, name) {                            // fallback when FSAA is absent (Firefox/Safari)
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+let _exSignal = null;
+function openExportDialog() {
+  const c = current; if (!c) return;
+  closeMenu();
+  const list = $('#exCols'); list.innerHTML = '';
+  c.schema.forEach((s, i) => {
+    const lab = document.createElement('label'); lab.className = 'ex-col';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !c.hidden.has(i); cb.dataset.i = String(i);
+    const nm = document.createElement('span'); nm.textContent = s.name; if (s.calc) nm.style.color = '#d8c08a';
+    lab.appendChild(cb); lab.appendChild(nm); list.appendChild(lab);
+  });
+  $('#exProgress').textContent = '';
+  $('#exDelim').value = c.d.delimiter === '\t' ? 'tab' : 'comma';
+  const scoped = !!(c.filterResult || (c.sort && c.sort.length));     // a scope choice only matters when a filter/sort is active
+  $('#exScopeRow').style.display = scoped ? '' : 'none';
+  $('#exScope').value = scoped ? 'view' : 'all';
+  $('#exportDialog').classList.add('show');
+}
+function closeExportDialog() { if (_exSignal) _exSignal.cancelled = true; $('#exportDialog').classList.remove('show'); }
+function gatherExportOpts() {
+  const d = $('#exDelim').value;
+  return {
+    delimiter: d === 'tab' ? '\t' : d === 'semi' ? ';' : d === 'pipe' ? '|' : ',',
+    header: $('#exHeader').checked,
+    allRows: $('#exScope').value === 'all',
+    colIdx: [...$('#exCols').querySelectorAll('input:checked')].map((cb) => Number(cb.dataset.i)),
+  };
+}
+async function doExport() {
+  const c = current; if (!c) return;
+  const opts = gatherExportOpts();
+  if (!opts.colIdx.length) { $('#exProgress').textContent = 'pick at least one column'; return; }
+  const ext = opts.delimiter === '\t' ? '.tsv' : '.csv';
+  const fname = (c.label || 'export').replace(/\.[^.]*$/, '') + ext;
+  const signal = { cancelled: false }; _exSignal = signal;
+  let sink;
+  if (window.showSaveFilePicker) {
+    let handle;
+    try { handle = await window.showSaveFilePicker({ suggestedName: fname, types: [{ description: 'Delimited text', accept: { 'text/csv': [ext] } }] }); }
+    catch { _exSignal = null; return; }                       // user cancelled the picker
+    const w = await handle.createWritable();
+    sink = { write: (t) => w.write(t), close: () => w.close() };
+  } else {                                                     // buffered download (size-capped)
+    const parts = []; let total = 0;
+    sink = { write: (t) => { total += t.length; if (total > 256 * 1024 * 1024) throw new Error('too large for the download fallback — use a Chromium browser for streaming export'); parts.push(t); }, close: () => downloadText(parts.join(''), fname) };
+  }
+  try {
+    const n = await runExport({ ...opts, sink, signal, onProgress: (r, tot) => { $('#exProgress').textContent = `exporting… ${tot ? Math.round(100 * r / tot) : 0}%  (${r.toLocaleString()} rows)`; } });
+    $('#exProgress').textContent = signal.cancelled ? 'cancelled' : `✓ ${n.toLocaleString()} rows → ${fname}`;
+    if (!signal.cancelled) setTimeout(() => { if (_exSignal === signal) $('#exportDialog').classList.remove('show'); }, 1100);
+  } catch (e) { $('#exProgress').textContent = 'export failed: ' + e.message; }
+  finally { _exSignal = null; }
+}
+
 // ── the calc-column manager (the list) ──
 function openCalcManager() {
   const c = current; if (!c) return;
@@ -808,6 +903,10 @@ function acAccept(i) {
 }
 attachAutocomplete($('#filter'), filterCtx);
 attachAutocomplete($('#ceExpr'), calcCtx);
+
+$('#exRun').onclick = doExport;
+$('#exCancel').onclick = closeExportDialog;
+$('#exportDialog').onclick = (e) => { if (e.target.id === 'exportDialog') closeExportDialog(); };
 
 // ── syntax highlighting: a colored layer (driven by expr.tokenize) behind the
 // transparent-text input. No CM6 — monospace + single-line makes the overlay align
@@ -1156,6 +1255,8 @@ $('#mFile').onclick = () => menuAt($('#mFile'), [
   { label: 'New window', action: () => window.open(location.href, '_blank') },
 ]);
 $('#mData').onclick = () => menuAt($('#mData'), [
+  { label: 'Export…', action: () => { if (hasFile()) openExportDialog(); } },
+  { sep: true },
   { label: 'Calculated columns…', action: () => { if (hasFile()) openCalcManager(); } },
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
   { sep: true },
@@ -1195,6 +1296,7 @@ const HELP = {
     + `• <b>Right-click a column header</b> — Statistics · sort · filter by · number format · treat as text/number · hide/show · autofit · <b>add a calculated column</b>.<br>`
     + `• <b>Right-click a cell or selection</b> — copy (with header / row #) · filter by this value · column statistics.<br><br>`
     + `<b>Filter</b> in the box (Enter) — e.g. <code>grade > 1 && lito == "OXIDE"</code> (see Filter syntax). <b>Sort</b> by clicking a header. <b>Jump</b> with the row # box. In a column's Statistics, click values to build a set filter.<br><br>`
+    + `<b>Export</b> — <b>Data → Export…</b> writes the current view (filtered · sorted · calc columns · chosen columns) to CSV/TSV, streamed straight to a file you pick — never uploaded, never fully held in memory.<br><br>`
     + `<b>Calculated columns</b> (marked <code>ƒ</code> in the header) — add with the <b>ƒ+ col</b> button (next to the filter) or a header's right-click; see and manage them all under <b>Data → Calculated columns…</b>. A derived column from a formula in the same language as the filter (<code>grade * density</code>, <code>if(au > 1, "ore", "waste")</code>); it's computed on the fly (never written), and you can filter, sort, and stat it like any column.`],
   filter: ['Filter syntax',
     `The filter is a <b>SQL <code>WHERE</code></b>-style expression — <b>Enter</b> applies, <b>Esc</b> clears. A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br><br>`
@@ -1443,10 +1545,10 @@ $('#filterGo').onclick = () => applyFilter($('#filter').value);
 // ── global keys: Ctrl+O open, Esc closes the help overlay ──
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'o') { e.preventDefault(); pickFile(); }
-  else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); }
+  else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

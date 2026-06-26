@@ -19,7 +19,8 @@ for environments where the data is sensitive and must not leave the machine.
   what you can read.
 - **No account, no server, no SaaS.** Nothing to log in to; no backend; no
   data-processing agreement. It reads only the local files you open.
-- **Read-only.** lamina never modifies the files it opens.
+- **Read-only.** lamina never modifies the files it opens. (Export writes a *new*
+  file you choose, locally via the File System Access API — never an upload.)
 
 ## Deployment
 

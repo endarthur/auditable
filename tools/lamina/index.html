@@ -127,6 +127,23 @@
   #calcManager .cm-foot button { font-family: var(--mono); font-size: 12px; color: #d8c08a; background: #242424; border: 1px solid #5a4d2e; border-radius: 3px; padding: 5px 12px; cursor: pointer; }
   #calcManager .cm-foot button:hover { background: #2e2e2e; }
 
+  #exportDialog { position: absolute; inset: var(--tb) 0 var(--ft) 0; z-index: 36; display: none; align-items: center; justify-content: center; background: rgba(10,10,10,0.7); }
+  #exportDialog.show { display: flex; }
+  #exportDialog .ex-box { width: min(440px, 90vw); max-height: 82%; display: flex; flex-direction: column; background: #1c1c1c; border: 1px solid #333; border-radius: 6px; overflow: hidden; }
+  #exportDialog .ex-head { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid #2a2a2a; font-family: var(--mono); font-size: 13px; color: #c89b3c; }
+  #exportDialog .ex-head button { background: none; border: none; color: #888; font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  #exportDialog .ex-body { overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; font-family: var(--mono); font-size: 12px; color: #bbb; }
+  #exportDialog .ex-row { display: flex; align-items: center; gap: 10px; }
+  #exportDialog .ex-lab { width: 52px; color: #888; }
+  #exportDialog select { flex: 1; font-family: var(--mono); font-size: 12px; color: #ddd; background: #141414; border: 1px solid #333; border-radius: 3px; padding: 4px 6px; }
+  #exportDialog .ex-colhdr { color: #666; font-size: 11px; margin-top: 2px; }
+  #exportDialog .ex-cols { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow-y: auto; border: 1px solid #2a2a2a; border-radius: 3px; padding: 6px 8px; background: #141414; }
+  #exportDialog .ex-col { display: flex; align-items: center; gap: 8px; }
+  #exportDialog .ex-foot { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-top: 1px solid #2a2a2a; }
+  #exportDialog .ex-prog { flex: 1; color: #8cb878; font-family: var(--mono); font-size: 11px; }
+  #exportDialog #exRun { font-family: var(--mono); font-size: 12px; color: #d8c08a; background: #242424; border: 1px solid #5a4d2e; border-radius: 3px; padding: 5px 14px; cursor: pointer; }
+  #exportDialog #exRun:hover { background: #2e2e2e; }
+
   #acPopup {
     position: fixed; z-index: 50; display: none; flex-direction: column; max-height: 240px; overflow-y: auto;
     background: #1c1c1c; border: 1px solid #3a3a3a; border-radius: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
@@ -281,6 +298,18 @@
     <div class="cm-head"><span>Calculated columns</span><button id="cmClose" title="close (Esc)">×</button></div>
     <div class="cm-list" id="cmList"></div>
     <div class="cm-foot"><button id="cmAdd">+ Add calculated column</button></div>
+  </div></div>
+
+  <div id="exportDialog"><div class="ex-box">
+    <div class="ex-head"><span>Export</span><button id="exCancel" title="close (Esc)">×</button></div>
+    <div class="ex-body">
+      <label class="ex-row"><span class="ex-lab">Format</span><select id="exDelim"><option value="comma">CSV (comma)</option><option value="tab">TSV (tab)</option><option value="semi">semicolon</option><option value="pipe">pipe</option></select></label>
+      <label class="ex-row"><input id="exHeader" type="checkbox" checked><span>Header row</span></label>
+      <label class="ex-row" id="exScopeRow"><span class="ex-lab">Rows</span><select id="exScope"><option value="view">Current view (filtered / sorted)</option><option value="all">All rows</option></select></label>
+      <div class="ex-colhdr">Columns</div>
+      <div class="ex-cols" id="exCols"></div>
+    </div>
+    <div class="ex-foot"><span id="exProgress" class="ex-prog"></span><button id="exRun">Export</button></div>
   </div></div>
 
   <div id="grid"></div>

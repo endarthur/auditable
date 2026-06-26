@@ -724,6 +724,24 @@ try {
     ? ok(`responsive: toolbar wraps to ${resp.tbH}px (title hidden · filter on row 2) · grid below it · no overflow`)
     : fail(`responsive failed: ${JSON.stringify(resp)}`);
 
+  // ── streaming export: serialize the current view (filtered + sorted + calc +
+  //    chosen columns) to CSV/TSV. Tests the serializer via the string sink. ──
+  const exp = await page.evaluate(async () => {
+    window._lamina.open('ex.csv', new TextEncoder().encode('id,name,grade\n1,"a,b",2.5\n2,c,9\n3,d,0.1\n'));
+    await new Promise((r) => setTimeout(r, 30));
+    const all = await window._lamina.exportToString({ delimiter: ',', header: true });   // whole table, CSV
+    await window._lamina.applyFilter('grade > 1');                                        // → rows 1 & 2
+    const filtered = await window._lamina.exportToString({ delimiter: '\t', header: true });  // current view, TSV
+    const cols = await window._lamina.exportToString({ delimiter: ',', header: false, colIdx: [2], allRows: true });  // grade only, no header, ALL rows (ignores the active filter)
+    await window._lamina.applyFilter('');
+    return { all, filtered, cols };
+  });
+  (exp.all === 'id,name,grade\n1,"a,b",2.5\n2,c,9\n3,d,0.1\n'           // CSV quoting of "a,b" preserved
+    && exp.filtered === 'id\tname\tgrade\n1\ta,b\t2.5\n2\tc\t9\n'        // TSV, filtered to grade>1, tab needs no quote for "a,b"
+    && exp.cols === '2.5\n9\n0.1\n')                                     // single column, no header, all rows
+    ? ok('export: CSV quoting + TSV + filtered view + column subset all serialize correctly')
+    : fail(`export failed: ${JSON.stringify(exp)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
