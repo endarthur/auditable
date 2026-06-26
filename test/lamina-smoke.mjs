@@ -831,6 +831,18 @@ try {
     ? ok(`record card: ${rec.count} fields for ${rec.rownum} (grade=${rec.grade.v})`)
     : fail(`record card failed: ${JSON.stringify(rec)}`);
 
+  // ── selection stats: select a numeric range → count · sum · mean · min · max ──
+  const ss = await page.evaluate(async (text) => {
+    const L = window._lamina;
+    L.open('block.csv', new TextEncoder().encode(text));   // fresh: display col 1 = grade
+    await new Promise((r) => setTimeout(r, 40));
+    await L.updateSelStats({ r0: 0, c0: 1, r1: 9, c1: 1 }); // grade, rows 0..9 (0.00..0.09)
+    return document.getElementById('selStats').textContent;
+  }, csv);
+  (/sel 10\b/.test(ss) && /Σ 0\.45/.test(ss) && /x̄ 0\.045/.test(ss) && /max 0\.09/.test(ss))
+    ? ok(`selection stats: ${ss}`)
+    : fail(`selection stats failed: ${JSON.stringify(ss)}`);
+
   // ── column pin/freeze: pins to the front, drives loom's frozen band, round-trips ──
   const pinT = await page.evaluate(async () => {
     const L = window._lamina; L.showAllColumns(); L.current.pinned = null; L.current.colOrder = null;

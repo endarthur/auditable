@@ -217,7 +217,8 @@ function mountView(vs, info = {}) {
   const kindLabel = c.d.dm ? 'dm' : c.d.kind;
   c._meta = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${kindLabel}${skipped}`;   // remembered so a copy-flash can restore it
   $('#meta').textContent = c._meta;
-  if (c.d.kind === 'delimited') grid.onSelect((s) => { if (_recPanelOpen && s) renderRecordCard(s.r0); });   // record card follows the selection
+  grid.onSelect(onSelectionChanged);                    // drives the record card + footer selection stats
+  $('#selStats').textContent = '';                      // fresh grid → no selection yet
   window._laminaVS = vs;                                // automation hook
   if (_colPanelOpen) renderColPanel();                  // keep the columns panel in sync (gutter-ready, menu-hide, new file)
   if (_recPanelOpen) renderRecordCard(_recRow);         // re-resolve the record after a sort/filter/new file
@@ -389,6 +390,48 @@ async function renderRecordCard(row) {
   }
 }
 $('#rpClose').onclick = () => toggleRecordPanel(false);
+
+// ── selection stats (footer) ────────────────────────────────────────────────────
+// Select a range → count · sum · mean · min · max (numeric) in the footer, like a
+// spreadsheet's status bar. Debounced (a drag fires onSelect a lot); bounded by a cell
+// cap (a whole-column select stays cheap, marked + when capped). Reads cached/loaded
+// rows via the active view. One handler drives both this and the record card.
+let _selTimer = null;
+const SEL_STATS_CAP = 50000;
+function onSelectionChanged(sel) {
+  if (_recPanelOpen && sel) renderRecordCard(sel.r0);
+  clearTimeout(_selTimer);
+  _selTimer = setTimeout(() => updateSelStats(sel), 90);
+}
+async function updateSelStats(sel) {
+  const el = $('#selStats'), c = current;
+  if (!el) return;
+  if (!c || !sel) { el.textContent = ''; return; }
+  const r0 = Math.min(sel.r0, sel.r1), r1 = Math.max(sel.r0, sel.r1);
+  const c0 = Math.min(sel.c0, sel.c1), c1 = Math.max(sel.c0, sel.c1);
+  const cells = (r1 - r0 + 1) * (c1 - c0 + 1);
+  if (cells <= 1) { el.textContent = ''; return; }
+  const perRow = c1 - c0 + 1, rEnd = Math.min(r1, r0 + Math.floor(SEL_STATS_CAP / perRow));
+  const capped = rEnd < r1;
+  const vs = c.view || window._laminaVS;
+  let count = 0, n = 0, sum = 0, min = Infinity, max = -Infinity;
+  for (let r = r0; r <= rEnd; r++) {
+    const fields = await vs.ensureRow(r);
+    if (current !== c) return;                          // file changed mid-scan
+    if (!fields) continue;
+    for (let dc = c0; dc <= c1; dc++) {
+      const uc = c._vis ? c._vis[dc] : dc; if (uc == null) continue;
+      const raw = fields[uc];
+      if (raw == null || raw === '') continue;
+      count++;
+      if (c.schema[uc] && c.schema[uc].type === 'number') { const x = parseNum(raw, c.d.decimal); if (!Number.isNaN(x)) { n++; sum += x; if (x < min) min = x; if (x > max) max = x; } }
+    }
+  }
+  if (current !== c) return;
+  let s = `sel ${count.toLocaleString()}${capped ? '+' : ''}`;
+  if (n > 0) s += ` · Σ ${fmtN(sum)} · x̄ ${fmtN(sum / n)} · min ${fmtN(min)} · max ${fmtN(max)}`;
+  el.textContent = s;
+}
 
 let _colPanelOpen = false;
 function toggleColPanel(force) {
@@ -2002,7 +2045,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, toggleRecordPanel, renderRecordCard, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, toggleRecordPanel, renderRecordCard, updateSelStats, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;
