@@ -26,6 +26,12 @@ for environments where the data is sensitive and must not leave the machine.
   data-processing agreement. It reads only the local files you open.
 - **Read-only.** lamina never modifies the files it opens. (Export writes a *new*
   file you choose, locally via the File System Access API — never an upload.)
+- **Local state stays local.** lamina caches a file's block index and an optional
+  **recents** list (file handles + names) in IndexedDB — to reopen quickly. This is
+  **local only, never transmitted** (it can't be — `connect-src 'none'`). Reopening a
+  recent **re-grants permission** through the browser (no silent re-read), the list is
+  **clearable** (File → Clear recents), and recents can be **turned off** entirely
+  (File → Remember recent files). On a shared machine, clear it or leave it off.
 
 ## Deployment
 

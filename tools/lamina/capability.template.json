@@ -16,9 +16,10 @@
     "telemetry": false
   },
   "filesystem": {
-    "reads": "user-opened files only (picker / drag-drop)",
+    "reads": "user-opened files only (picker / drag-drop / a recent, which re-grants permission)",
     "writes": "user-initiated export only, to a user-chosen path (OS Save dialog)",
-    "silent_or_arbitrary_io": false
+    "silent_or_arbitrary_io": false,
+    "local_state": "block-index cache + an optional recents list (file handles + names) in IndexedDB — local only, never transmitted; reopening a recent re-grants permission (no silent re-read); clearable + disableable"
   },
   "host_needs": {
     "secure_origin": true,

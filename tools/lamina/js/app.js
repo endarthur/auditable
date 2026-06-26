@@ -1680,9 +1680,72 @@ const PICK_TYPES = [
   { description: 'Tables', accept: { 'text/csv': ['.csv', '.tsv', '.tab', '.txt'], 'application/octet-stream': ['.dm', '.lam', '.lamina'] } },
   { description: 'Archives', accept: { 'application/octet-stream': ['.zip', '.tar', '.gz', '.zst', '.bz2'] } },
 ];
+// ── recents (local · opt-in · clearable) ────────────────────────────────────────
+// Remember opened files so they reopen fast. LOCAL only — stored in IndexedDB (under a
+// reserved key in the index cache), never transmitted; doesn't touch the
+// connect-src 'none' guarantee. An FSAA handle persists (reopening re-grants
+// permission via the browser — no silent re-read); without one (drag / <input> /
+// file://) we keep the name and re-pick. Transparent (shown), clearable (Clear), and
+// disableable (File → Remember recent files). Declared in SECURITY.md + capability.json.
+const RECENTS_KEY = '__recents__', RECENTS_MAX = 12;
+let _recents = [];
+let _remember = (() => { try { return localStorage.getItem('lamina.recents') !== 'off'; } catch { return true; } })();
+
+async function refreshRecents() { try { _recents = (_remember && (await idbCache.get(RECENTS_KEY))) || []; } catch { _recents = []; } renderEmptyRecents(); }
+async function addRecent(file, handle) {
+  if (!_remember || !file) return;
+  try {
+    const key = file.name + ':' + file.size;
+    const list = (await idbCache.get(RECENTS_KEY)) || [];
+    _recents = [{ name: file.name, size: file.size, mtime: file.lastModified || 0, handle: handle || null }]
+      .concat(list.filter((e) => e.name + ':' + e.size !== key)).slice(0, RECENTS_MAX);
+    await idbCache.set(RECENTS_KEY, _recents);
+    renderEmptyRecents();
+  } catch { /* best-effort */ }
+}
+async function clearRecents() { try { await idbCache.set(RECENTS_KEY, []); } catch { /* ignore */ } _recents = []; renderEmptyRecents(); }
+function setRemember(on) { _remember = on; try { localStorage.setItem('lamina.recents', on ? 'on' : 'off'); } catch { /* ignore */ } if (on) refreshRecents(); else clearRecents(); }
+
+// Reopen a recent: with a handle → re-grant permission + getFile (instant via the
+// index cache); without → re-pick (we can't, and won't, silently re-read).
+async function openRecent(entry) {
+  closeMenu();
+  if (entry && entry.handle && entry.handle.getFile) {
+    try {
+      const h = entry.handle;
+      if (h.queryPermission) {
+        let p = await h.queryPermission({ mode: 'read' });
+        if (p !== 'granted' && h.requestPermission) p = await h.requestPermission({ mode: 'read' });
+        if (p !== 'granted') { $('#meta').textContent = 'permission denied — open it again'; return; }
+      }
+      const f = await h.getFile();
+      addRecent(f, h);
+      return openFile(f);
+    } catch { $('#meta').textContent = `couldn't reopen “${entry.name}” — pick it again`; return pickFile(); }
+  }
+  $('#meta').textContent = `“${entry.name}” has no saved handle — pick it again`;
+  return pickFile();
+}
+
+// Recents shown on the empty state (the prime reopen moment). Chips need
+// pointer-events (the banner is otherwise click-through for drops).
+function renderEmptyRecents() {
+  const el = $('#emptyRecents'); if (!el) return;
+  el.textContent = '';
+  if (!_remember || !_recents.length) return;
+  const lab = document.createElement('span'); lab.className = 'er-label'; lab.textContent = 'recent:';
+  el.appendChild(lab);
+  for (const e of _recents.slice(0, 8)) {
+    const chip = document.createElement('a'); chip.className = 'er-chip' + (e.handle ? '' : ' nohandle');
+    chip.textContent = e.name; chip.title = e.handle ? 'reopen' : 'no saved handle — re-pick';
+    chip.onclick = () => openRecent(e);
+    el.appendChild(chip);
+  }
+}
+
 async function pickFile() {
   if (window.showOpenFilePicker) {
-    try { const [h] = await window.showOpenFilePicker({ types: PICK_TYPES }); if (h) openFile(await h.getFile()); } catch { /* cancelled */ }
+    try { const [h] = await window.showOpenFilePicker({ types: PICK_TYPES }); if (h) { const f = await h.getFile(); addRecent(f, h); openFile(f); } } catch { /* cancelled */ }
   } else {
     // The <input> fallback (Firefox + ALL mobile, where showOpenFilePicker doesn't
     // exist). NO `accept` filter: lamina opens anything, and on Android the OS
@@ -1690,7 +1753,7 @@ async function pickFile() {
     // what greys out a .dm. Showing everything is both on-brand and the .dm fix.
     const inp = document.createElement('input');
     inp.type = 'file';
-    inp.onchange = () => { if (inp.files[0]) openFile(inp.files[0]); };
+    inp.onchange = () => { if (inp.files[0]) { addRecent(inp.files[0], null); openFile(inp.files[0]); } };
     inp.click();
   }
 }
@@ -1698,10 +1761,19 @@ async function pickFile() {
 // ── menubar (File / View / Help) — reuses the showMenu helper, dark-themed ──
 function menuAt(btn, items) { const r = btn.getBoundingClientRect(); showMenu(r.left, r.bottom + 2, items); }
 const hasFile = () => !!current;
-$('#mFile').onclick = () => menuAt($('#mFile'), [
-  { label: 'Open…    Ctrl+O', action: pickFile },
-  { label: 'New window', action: () => window.open(location.href, '_blank') },
-]);
+$('#mFile').onclick = () => {
+  const items = [
+    { label: 'Open…    Ctrl+O', action: pickFile },
+    { label: 'New window', action: () => window.open(location.href, '_blank') },
+  ];
+  if (_remember && _recents.length) {
+    items.push({ sep: true });
+    for (const e of _recents.slice(0, 10)) items.push({ label: (e.handle ? '' : '↻ ') + e.name, action: () => openRecent(e) });
+    items.push({ label: 'Clear recents', action: clearRecents });
+  }
+  items.push({ sep: true }, { label: (_remember ? '✓ ' : '') + 'Remember recent files', action: () => setRemember(!_remember) });
+  menuAt($('#mFile'), items);
+};
 $('#mData').onclick = () => menuAt($('#mData'), [
   { label: 'Export…', action: () => { if (hasFile()) openExportDialog(); } },
   { sep: true },
@@ -2016,7 +2088,7 @@ window.addEventListener('drop', async (e) => {
   e.preventDefault();
   document.body.classList.remove('dragging');
   const f = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) openFile(f);
+  if (f) { addRecent(f, null); openFile(f); }            // no FSAA handle from a drop → name-only recent
 });
 
 // ── filter box ──
@@ -2045,7 +2117,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, toggleRecordPanel, renderRecordCard, updateSelStats, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, toggleRecordPanel, renderRecordCard, updateSelStats, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;
@@ -2067,9 +2139,11 @@ applyTheme();                                          // sync data-theme + meta
 if ('launchQueue' in window && 'LaunchParams' in window) {
   window.launchQueue.setConsumer(async (params) => {
     if (!params || !params.files || !params.files.length) return;
-    try { openFile(await params.files[0].getFile()); } catch { /* permission / not a file */ }
+    try { const h = params.files[0]; const f = await h.getFile(); addRecent(f, h); openFile(f); } catch { /* permission / not a file */ }
   });
 }
+
+refreshRecents();   // load the recents list (empty-state + File menu) on boot
 
 // Jump-list "Open file…" shortcut (manifest shortcuts → ./?open=1): pop the
 // picker on launch. Best-effort — the launch may not carry a user gesture, in

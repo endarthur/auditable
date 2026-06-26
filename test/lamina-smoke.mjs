@@ -875,6 +875,23 @@ try {
     ? ok('column-profile: stats popup renders a histogram canvas + log toggle + quantiles')
     : fail(`column-profile failed: ${JSON.stringify(prof)}`);
 
+  // ── recents: local, remembers a file, shows a chip, clears (FSAA reopen needs a real handle) ──
+  const rc = await page.evaluate(async () => {
+    const L = window._lamina;
+    await L.clearRecents();
+    await L.addRecent({ name: 'assays_q2.csv', size: 12345, lastModified: 0 }, null);
+    await new Promise((r) => setTimeout(r, 30));
+    const inList = L.recents.some((e) => e.name === 'assays_q2.csv');
+    const chip = document.querySelector('#emptyRecents .er-chip');
+    const chipText = chip && chip.textContent;
+    await L.clearRecents();
+    await new Promise((r) => setTimeout(r, 20));
+    return { inList, chipText, cleared: L.recents.length === 0, chipGone: !document.querySelector('#emptyRecents .er-chip') };
+  });
+  (rc.inList && rc.chipText === 'assays_q2.csv' && rc.cleared && rc.chipGone)
+    ? ok(`recents: remembers a file → chip, clears (${rc.chipText})`)
+    : fail(`recents failed: ${JSON.stringify(rc)}`);
+
   // ── security wing link: banner link is clickable + footer build-stamp links out ──
   const sec = await page.evaluate(() => {
     const a = document.querySelector('#empty .empty-sec a'), b = document.getElementById('build');
