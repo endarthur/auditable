@@ -756,6 +756,23 @@ try {
     ? ok(`theme: light/dark/auto flips chrome (--bg ${th.lightBg} ≠ ${th.darkBg}) + re-skins the grid`)
     : fail(`theme failed: ${JSON.stringify(th)}`);
 
+  // ── cell color-scale (heatmap): toggle on a numeric column → cells get a viridis
+  //    bg + readable fg, low vs high distinct ──
+  const heat = await page.evaluate(async () => {
+    window._lamina.open('heat.csv', new TextEncoder().encode('id,grade\n' + Array.from({ length: 50 }, (_, i) => `${i},${(i * 0.2).toFixed(1)}`).join('\n') + '\n'));
+    await new Promise((r) => setTimeout(r, 120));         // gutter (min/max) ready
+    window._lamina.toggleColorScale(1);                   // grade column
+    const prov = window._lamina.grid.provider;
+    await window._laminaVS.ensureRow(0); await window._laminaVS.ensureRow(49);
+    const lo = prov.cellAt(0, 1), hi = prov.cellAt(49, 1);   // low grade vs high grade
+    window._lamina.toggleColorScale(1);
+    const off = prov.cellAt(49, 1);
+    return { loBg: lo && lo.style && lo.style.bg, hiBg: hi && hi.style && hi.style.bg, hasFg: !!(hi && hi.style && hi.style.fg), offBg: off && off.style && off.style.bg };
+  });
+  (heat.loBg && heat.hiBg && heat.loBg !== heat.hiBg && heat.hasFg && !heat.offBg)
+    ? ok(`color scale: cells heat-mapped (low ${heat.loBg} ≠ high ${heat.hiBg}, readable fg); toggles off`)
+    : fail(`color scale failed: ${JSON.stringify(heat)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

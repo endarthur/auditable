@@ -168,12 +168,15 @@ function mountView(vs, info = {}) {
     cellAt(r, dc) {
       const uc = vis[dc];
       const cell = base.cellAt(r, uc);
+      if (!cell || typeof cell !== 'object') return cell;     // PENDING / null / blank
+      let style = cell.style;
       const fmt = c.colFormats[uc];
-      if (fmt && cell && typeof cell === 'object' && cell.type === 'number') {
-        const num = parseNum(cell.value, c.d.decimal);
-        if (!Number.isNaN(num)) { const t = fmtNumber(num, fmt); if (t != null) return { ...cell, style: { ...cell.style, text: t } }; }
+      if (fmt && cell.type === 'number') { const num = parseNum(cell.value, c.d.decimal); if (!Number.isNaN(num)) { const t = fmtNumber(num, fmt); if (t != null) style = { ...style, text: t }; } }
+      if (c.colScale && c.colScale.has(uc) && cell.type === 'number') {
+        const g = c.gutter && c.gutter[uc];
+        if (g && g.min != null && g.max > g.min) { const num = parseNum(cell.value, c.d.decimal); if (!Number.isNaN(num)) { const sc = scaleColor((num - g.min) / (g.max - g.min)); style = { ...style, bg: sc.bg, fg: sc.fg }; } }
       }
-      return cell;
+      return style === cell.style ? cell : { ...cell, style };
     },
     header(dc) { const uc = vis[dc]; const h = base.header(uc); const sk = c.sort && c.sort.find((s) => s.col === uc); if (sk) h.sort = sk.dir; return h; },
     headerGutter(dc) {
@@ -224,6 +227,23 @@ function setColType(uc, type) {
   if (!current || !current.schema[uc]) return;
   current.schema[uc].type = type;
   recompute();
+}
+
+// Cell color-scale (heatmap): viridis (perceptual, colour-blind-safe — switchboard
+// CVD lineage). t∈[0,1] → a cell bg + a luminance-picked readable text colour. The
+// fully-filled cell is theme-independent.
+const VIRIDIS = [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]];
+function scaleColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const n = VIRIDIS.length - 1, i = Math.min(n - 1, Math.floor(t * n)), f = t * n - i, a = VIRIDIS[i], b = VIRIDIS[i + 1];
+  const r = Math.round(a[0] + (b[0] - a[0]) * f), g = Math.round(a[1] + (b[1] - a[1]) * f), bl = Math.round(a[2] + (b[2] - a[2]) * f);
+  return { bg: `rgb(${r},${g},${bl})`, fg: (0.299 * r + 0.587 * g + 0.114 * bl) / 255 > 0.6 ? '#111' : '#f5f5f5' };
+}
+function toggleColorScale(uc) {
+  const c = current; if (!c) return;
+  c.colScale = c.colScale || new Set();
+  if (c.colScale.has(uc)) c.colScale.delete(uc); else c.colScale.add(uc);
+  rerender();
 }
 
 // Per-column number display format (null = auto/raw). Applied in the cellAt wrap.
@@ -361,6 +381,7 @@ function showColumnMenu(uc, x, y) {
     { label: 'Scientific', action: () => setColFormat(uc, { mode: 'sci', digits: 3 }) },
     { label: 'Thousands (1,234)', action: () => setColFormat(uc, { mode: 'group' }) },
   ] });
+  if (isNum && !c.dm) items.push({ label: ((c.colScale && c.colScale.has(uc)) ? '✓ ' : '') + 'Color scale', action: () => toggleColorScale(uc) });   // heatmap the cells by value
   items.push({ sep: true }, { label: `Hide ${name}`, action: () => hideColumn(uc) });
   for (let i = 0; i < c.baseVs.cols; i++) {
     if (c.hidden.has(i)) items.push({ label: `Show ${c.baseVs.header(i).label}`, action: () => showColumn(i) });
@@ -1568,7 +1589,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

@@ -59,6 +59,12 @@ function drawCell(ctx, cell, x, y, w, h, g) {
   const isNum = cell.type === CellType.NUMBER;
   const pending = cell === PENDING || cell.state === CellState.PENDING;
 
+  // Per-cell background fill (e.g. a value color-scale / heatmap). Drawn first, so
+  // the highlight/invalid washes layer over it.
+  if (!pending && cell.style && cell.style.bg) {
+    ctx.fillStyle = cell.style.bg;
+    ctx.fillRect(x + 1, y, w - 1, h);
+  }
   // Brushing/linking highlight — a soft fill behind the cell. A row of these =
   // a tinted row: the visible response to an incoming selection from another
   // surface (strata-spec §7; distinct colour from the local amber selection).
@@ -86,6 +92,7 @@ function drawCell(ctx, cell, x, y, w, h, g) {
   else if (cell.state === CellState.DERIVED) { fill = c.cellDerived; italic = true; }
   else if (cell.state === CellState.OUT_OF_ORDER) fill = c.cellOutOfOrder;
   else if (isNum) fill = c.cellNum;
+  if (!pending && cell.style && cell.style.fg) fill = cell.style.fg;   // explicit text colour (e.g. readable over a color-scale fill)
 
   ctx.font = (italic ? 'italic ' : '') + g.fontPx + 'px ' + g.mono;
   ctx.fillStyle = fill;
