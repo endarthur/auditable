@@ -1,0 +1,37 @@
+{
+  "tool": "lamina",
+  "summary": "Open any file — even multi-gigabyte — and scroll / filter / derive / export it. Windowed, read-only over the source, offline.",
+  "profile": "Sealed",
+  "flags": [],
+  "version": "0.1.0",
+  "sha256": "<emitted by @gcu/seal at build>",
+  "doi": "<zenodo — on first frozen release>",
+  "executes": {
+    "runtime_codegen": false,
+    "wasm": false,
+    "remote_import": false
+  },
+  "reach": {
+    "network": "none",
+    "telemetry": false
+  },
+  "filesystem": {
+    "reads": "user-opened files only (picker / drag-drop)",
+    "writes": "user-initiated export only, to a user-chosen path (OS Save dialog)",
+    "silent_or_arbitrary_io": false
+  },
+  "host_needs": {
+    "secure_origin": true,
+    "admin": false,
+    "install": false,
+    "csp": "<emitted by @gcu/seal from the artifact's own <meta>>"
+  },
+  "third_party": [
+    { "name": "fflate", "license": "MIT", "copyright": "© Arjun Barrett", "use": "zip/gz decode (via @gcu/archive)" },
+    { "name": "fzstd", "license": "MIT", "copyright": "© Arjun Barrett", "use": "zstd decode" },
+    { "name": "seek-bzip", "license": "MIT", "copyright": "© C. Scott Ananian", "use": "bzip2 decode" },
+    { "name": "xz-decompress", "license": "MIT", "use": "xz decode" }
+  ],
+  "source": "https://github.com/gentropic/auditable (ext/lamina + tools/lamina)",
+  "license": "MIT"
+}

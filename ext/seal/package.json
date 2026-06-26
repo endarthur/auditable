@@ -1,0 +1,9 @@
+{
+  "name": "@gcu/seal",
+  "version": "0.1.0",
+  "description": "Build-emit + build-verify of security artifacts (hash · capability.json · csp.txt · CycloneDX SBOM) so a tool's capability declaration is build-enforced, not asserted.",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "author": "Arthur Endlein Correia (Geoscientific Chaos Union)"
+}
