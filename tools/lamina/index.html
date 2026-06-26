@@ -205,6 +205,27 @@
   #help .help-body b { color: var(--text-hi); font-weight: 600; }
 
   #grid { position: absolute; left: 0; right: var(--cp, 0); top: var(--tb); bottom: var(--ft); }
+  /* record card — right-docked slide-out: the selected row's fields as name:value */
+  #recordPanel {
+    position: absolute; top: var(--tb); right: 0; bottom: var(--ft); width: 300px; z-index: 15;
+    display: flex; flex-direction: column; background: var(--bg-panel); border-left: 1px solid var(--bd2);
+    font-family: var(--mono); font-size: 12px; transform: translateX(100%); transition: transform .16s ease;
+  }
+  #recordPanel.show { transform: translateX(0); }
+  #recordPanel .rp-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  #recordPanel .rp-title { font-weight: 600; color: var(--text-hi); }
+  #recordPanel .rp-rownum { color: var(--dim); font-size: 11px; flex: 1; }
+  #recordPanel .rp-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 17px; line-height: 1; padding: 0 2px; }
+  #recordPanel .rp-close:hover { color: var(--text-hi); }
+  #recordPanel .rp-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+  #recordPanel .rp-field { display: flex; gap: 10px; padding: 3px 12px; cursor: pointer; align-items: baseline; }
+  #recordPanel .rp-field:hover { background: var(--bg-hover); }
+  #recordPanel .rp-field.off { opacity: .5; }
+  #recordPanel .rp-k { flex: 0 0 42%; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #recordPanel .rp-calc { color: var(--accent); }
+  #recordPanel .rp-v { flex: 1; color: var(--text); word-break: break-word; }
+  #recordPanel .rp-v.num { color: var(--num); text-align: right; font-variant-numeric: tabular-nums; }
+  #recordPanel .rp-v.rp-null { color: var(--dim); }
   /* columns panel — right-docked slide-out: visibility toggles + per-column config */
   #colPanel {
     position: absolute; top: var(--tb); right: 0; bottom: var(--ft); width: 266px; z-index: 15;
@@ -382,6 +403,11 @@
   <div id="binary"><b>binary file</b><span id="binaryMsg">use the hex viewer for this one</span></div>
   <div id="drop-hint">drop to open</div>
   <div id="picker"><div class="pk-box"><div class="pk-title">choose a file from the archive</div><div class="pk-list" id="pickerList"></div></div></div>
+
+  <div id="recordPanel">
+    <div class="rp-head"><span class="rp-title">Record</span><span class="rp-rownum" id="rpRow"></span><button class="rp-close" id="rpClose" title="close">×</button></div>
+    <div class="rp-list" id="rpList"></div>
+  </div>
 
   <div id="colPanel">
     <div class="cp-head"><span class="cp-title">Columns</span><button class="cp-close" id="cpClose" title="close">×</button></div>

@@ -810,6 +810,27 @@ try {
     ? ok(`lens: round-trips filter + sort + calc by name (${lensRT.afterRows} of ${N} rows after apply)`)
     : fail(`lens round-trip failed: ${JSON.stringify(lensRT)}`);
 
+  // ── record card: a row → name:value fields, follows selection, click-to-filter ──
+  const rec = await page.evaluate(async (text) => {
+    const L = window._lamina;
+    L.open('block.csv', new TextEncoder().encode(text));  // fresh (clear prior filter/calc/sort)
+    await new Promise((r) => setTimeout(r, 40));
+    L.toggleRecordPanel(true);
+    await L.renderRecordCard(3);                          // inspect row #3 (0-based)
+    await new Promise((r) => setTimeout(r, 40));
+    const fields = [...document.querySelectorAll('#recordPanel .rp-field')].map((f) => ({
+      k: f.querySelector('.rp-k') && f.querySelector('.rp-k').textContent,
+      v: f.querySelector('.rp-v') && f.querySelector('.rp-v').textContent,
+    })).filter((x) => x.k);
+    const rownum = document.getElementById('rpRow').textContent;
+    const grade = fields.find((x) => x.k === 'grade');
+    L.toggleRecordPanel(false);
+    return { count: fields.length, cols: L.current.schema.length, rownum, grade };
+  }, csv);
+  (rec.count === rec.cols && /row 4 of/.test(rec.rownum) && rec.grade && rec.grade.v === '0.03')
+    ? ok(`record card: ${rec.count} fields for ${rec.rownum} (grade=${rec.grade.v})`)
+    : fail(`record card failed: ${JSON.stringify(rec)}`);
+
   // ── column pin/freeze: pins to the front, drives loom's frozen band, round-trips ──
   const pinT = await page.evaluate(async () => {
     const L = window._lamina; L.showAllColumns(); L.current.pinned = null; L.current.colOrder = null;

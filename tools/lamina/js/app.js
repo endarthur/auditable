@@ -217,8 +217,10 @@ function mountView(vs, info = {}) {
   const kindLabel = c.d.dm ? 'dm' : c.d.kind;
   c._meta = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${kindLabel}${skipped}`;   // remembered so a copy-flash can restore it
   $('#meta').textContent = c._meta;
+  if (c.d.kind === 'delimited') grid.onSelect((s) => { if (_recPanelOpen && s) renderRecordCard(s.r0); });   // record card follows the selection
   window._laminaVS = vs;                                // automation hook
   if (_colPanelOpen) renderColPanel();                  // keep the columns panel in sync (gutter-ready, menu-hide, new file)
+  if (_recPanelOpen) renderRecordCard(_recRow);         // re-resolve the record after a sort/filter/new file
 }
 
 // Cheap re-render of the current view (after a column hide/show — the data view
@@ -346,11 +348,54 @@ function togglePin(uc) {
 // A searchable list of every column with a visibility checkbox + type + null-rate +
 // a ⋯ menu (the existing per-column actions). Pure consolidation of existing state
 // (c.hidden / colFormats / colScale / gutter + showColumnMenu); reorder + pin = v2.
+// ── record card (row inspector) ─────────────────────────────────────────────────
+// A right-dock panel showing the selected row's fields as name:value — read one
+// record without scrolling 50 columns horizontally. Follows the selection. Shares the
+// right-dock slot with the columns panel (mutually exclusive). Click a field → filter
+// by that value (inspect → narrow). Pure inspection; read-only.
+let _recPanelOpen = false, _recRow = 0;
+function toggleRecordPanel(force) {
+  _recPanelOpen = force != null ? force : !_recPanelOpen;
+  if (_recPanelOpen && !current) { _recPanelOpen = false; return; }
+  closeMenu();
+  if (_recPanelOpen && _colPanelOpen) toggleColPanel(false);   // one right-dock panel at a time
+  const p = $('#recordPanel');
+  p.classList.toggle('show', _recPanelOpen);
+  document.documentElement.style.setProperty('--cp', _recPanelOpen ? p.offsetWidth + 'px' : '0px');
+  if (_recPanelOpen) { const s = grid && grid.getSelection(); renderRecordCard(s ? s.r0 : _recRow); }
+}
+async function renderRecordCard(row) {
+  const c = current; if (!c || !_recPanelOpen) return;
+  const vs = c.view || window._laminaVS; if (!vs) return;
+  row = Math.max(0, Math.min(vs.rowCount() - 1, row | 0));
+  _recRow = row;
+  $('#rpRow').textContent = `row ${(row + 1).toLocaleString()} of ${vs.rowCount().toLocaleString()}`;
+  const fields = await vs.ensureRow(row);
+  if (current !== c || !_recPanelOpen || _recRow !== row) return;   // selection moved / file changed mid-load
+  const list = $('#rpList'); list.textContent = '';
+  if (!fields) { const e = document.createElement('div'); e.className = 'rp-field'; e.textContent = '(no data)'; list.appendChild(e); return; }
+  for (const uc of pinnedFirstOrder(c)) {
+    const s = c.schema[uc], raw = fields[uc];
+    const f = document.createElement('div'); f.className = 'rp-field' + (c.hidden.has(uc) ? ' off' : '');
+    const k = document.createElement('span'); k.className = 'rp-k'; k.textContent = s.name; k.title = s.name;
+    if (s.calc) { const cf = document.createElement('span'); cf.className = 'rp-calc'; cf.textContent = 'ƒ '; k.prepend(cf); }
+    const v = document.createElement('span'); v.className = 'rp-v' + (s.type === 'number' ? ' num' : '');
+    let disp = (raw == null || raw === '') ? '' : String(raw);
+    if (s.type === 'number' && c.colFormats[uc] && disp !== '') { const num = parseNum(raw, c.d.decimal); if (!Number.isNaN(num)) { const t = fmtNumber(num, c.colFormats[uc]); if (t != null) disp = t; } }
+    if (disp === '') { v.textContent = '∅'; v.classList.add('rp-null'); } else v.textContent = disp;
+    f.append(k, v);
+    if (raw != null && raw !== '') { f.title = 'filter by this value'; f.onclick = () => filterByValue(uc, String(raw)); }
+    list.appendChild(f);
+  }
+}
+$('#rpClose').onclick = () => toggleRecordPanel(false);
+
 let _colPanelOpen = false;
 function toggleColPanel(force) {
   _colPanelOpen = force != null ? force : !_colPanelOpen;
   if (_colPanelOpen && !current) { _colPanelOpen = false; return; }
   closeMenu();
+  if (_colPanelOpen && _recPanelOpen) toggleRecordPanel(false);   // one right-dock panel at a time
   const p = $('#colPanel');
   p.classList.toggle('show', _colPanelOpen);
   // loom's own ResizeObserver repaints the grid when #grid's right inset changes.
@@ -423,6 +468,8 @@ function showCellMenu(row, col, sel, x, y) {
     { sep: true },
     { label: `Filter ${name} = ${shownVal || '(empty)'}`, action: () => filterByValue(uc, val) },
     { label: `Statistics — ${name}…`, action: () => showColumnStats(uc) },
+    { sep: true },
+    { label: 'Inspect this row…', action: () => { toggleRecordPanel(true); renderRecordCard(row); } },
   ];
   showMenu(x, y, items);
 }
@@ -1638,6 +1685,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
     { label: (theme === 'light' ? '✓ ' : '') + 'Light', action: () => setTheme('light') },
   ] },
   { label: 'Columns…', action: () => toggleColPanel() },
+  { label: 'Record inspector…', action: () => toggleRecordPanel() },
   { label: 'Go to row…', action: () => $('#goto').focus() },
   { sep: true },
   { label: 'Autofit all columns', action: () => autofitAll() },
@@ -1954,7 +2002,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, toggleRecordPanel, renderRecordCard, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;
