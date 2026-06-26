@@ -90,6 +90,24 @@ those two invariants hold from a memory-sized CSV up to a tens-of-GB block model
 - **provider** (`provider.js`) — adapts a view to `@gcu/loom`'s cell-provider;
   `LOADING` → loom's injected `PENDING`.
 
+### Lens (the saved view) — host-side
+
+A **lens** is a saved *view*, not data: filter · sort · calc-column definitions ·
+per-column number format / color-scale / hidden / width · the forced
+interpretation (only the bits that differ from auto-detect). It's a small JSON
+file with a `{ kind: 'lamina-lens', version, source, … }` marker, saved as
+`.lamina` — lamina's only native artifact (it views *other* files), so the
+deploy PWA's `.lam`/`.lamina` `file_handlers` carry it. Columns are referenced
+**by name** (case-insensitive, as the filter language is), so a lens made on one
+export applies to the next with the same schema; names that resolve are applied,
+names that don't are **skipped and reported** (no silent mis-apply; an explicit
+column-mapping dialog for the rename case is a roadmap item). Color-scale `lo/hi`
+are *not* stored (they're data-specific) — recomputed against the new file's
+range on apply. Lives in the harness (`tools/lamina/js/app.js`:
+`buildLens`/`applyLens`/`applyLensView`/`sniffLens`), not the engine — it's a
+composition of the existing view state. Open a `.lamina` with no file loaded →
+held pending until a data file mounts.
+
 ## Architecture — the scaling ladder
 
 | Backing | When | Cost |
@@ -157,10 +175,10 @@ matches) and are selectivity-bounded (capped, "filter first" rather than OOM).
   the `name:size:mtime` cache key already in place.
 - **Multiple windows** — independent tables in their own windows/tabs (each its
   own `current` + cache scope).
-- **File-type association** — a marker extension (`.lam` / `.lamina`, following
-  the GCU `.gcu` double-extension convention — see `design_gcu_extension_
-  convention`) registered via the deploy PWA manifest's `file_handlers`, so a
-  double-clicked `data.csv.lam` opens in the installed lamina PWA.
+- **File-type association** — `.lam` / `.lamina` are registered via the deploy
+  PWA manifest's `file_handlers`; they now carry the **lens** (above), so a
+  double-clicked `.lamina` opens lamina and applies the saved view. (Remaining:
+  a column-**mapping** dialog for the rename case — today by-name + a skip report.)
 - **numen (MCP) integration** — drive lamina as an agent surface (open a file,
   filter, read a column's stats / a windowed slice), with affordances for
   contrived/headless scenarios.

@@ -115,6 +115,7 @@ function mount(name, d, src, totalBytes) {
   initCalcState();
   recompute();
   refreshGutter();
+  if (_pendingLens || _pendingLensView) Promise.resolve().then(applyPendingLens);   // after openFile sets current.file
 }
 
 // Derive the active view from base + filter + sort and render it. Filter and sort
@@ -529,8 +530,9 @@ function filterErr(e) { $('#filter').classList.add('err'); $('#meta').textConten
 // Open raw bytes — memory source (the test hook + small files). `force` overrides
 // auto-detection (the interpretation popover re-opens with it).
 function open(name, bytes, force) {
-  if (!force) {                                                        // Datamine .dm?
-    const dmFmt = detectDM(bytes.subarray(0, Math.min(4096, bytes.length)));
+  if (!force) {
+    const lens = sniffLens(bytes); if (lens) return applyLens(lens);   // a .lamina lens, not data
+    const dmFmt = detectDM(bytes.subarray(0, Math.min(4096, bytes.length)));   // Datamine .dm?
     if (dmFmt) {
       try {
         const h = parseHeader(bytes, dmFmt);
@@ -668,13 +670,15 @@ function mountDm(name, reader, h, totalBytes) {
   initCalcState();
   recompute();
   refreshGutter();
+  if (_pendingLens || _pendingLensView) Promise.resolve().then(applyPendingLens);
 }
 
 // ── calculated columns (read-time derived columns; @gcu/expr) ──────────────────
 // Each is { name, expr, type }. They're NEVER materialized — applyCalcs rebuilds
 // the cursor + browse view as calc-decorated wrappers over the pristine originals
 // (kept as _src0 / _vs0 / _schema0), so filter / sort / stats / browse all see the
-// derived columns. Session-only (lost on reload); a saved "lens" is a future step.
+// derived columns. Session-only (lost on reload) — but a "lens" (Data → Save lens…)
+// captures them along with the filter / sort / formats to re-apply later.
 
 // Capture the pristine (undecorated) source/view/schema + an empty calc list. Called
 // right after a file mounts (mount / mountDm), before any calc is added.
@@ -716,6 +720,142 @@ async function addCalc(name, expr) {
   return applyCalcs();
 }
 function removeCalc(idx) { const c = current; if (!c) return; c.calcs.splice(idx, 1); return applyCalcs(); }
+
+// ── lens: save / apply a VIEW (filter · sort · calc columns · per-column number
+// format / color-scale / hidden / width) as a small .lamina JSON. The data stays
+// put — a lens is config that REapplies to the current (or a similar) file. Columns
+// are referenced BY NAME (case-insensitive, like the filter language), so a lens
+// made on one export applies to the next: names that resolve are applied, names that
+// don't are skipped + reported. No data, no theme (theme is a global pref).
+const LENS_VERSION = 1;
+let _pendingLens = null;        // a lens opened with no file yet → apply when one mounts
+let _pendingLensView = null;    // a lens mid-apply across an interpretation re-read
+
+function buildLens() {
+  const c = current; if (!c) return null;
+  const nameOf = (uc) => (c.schema[uc] && c.schema[uc].name);
+  const lens = { kind: 'lamina-lens', version: LENS_VERSION, source: c.label || null };
+  const f = c.force || {};                                  // interpretation — only the bits the user forced (auto handles the rest)
+  const interp = {};
+  for (const k of ['kind', 'delimiter', 'hasHeader', 'decimal', 'skip', 'comment', 'quote']) if (f[k] != null && f[k] !== '') interp[k] = f[k];
+  if (Object.keys(interp).length) lens.interpretation = interp;
+  const box = $('#filter').value.trim(); if (box) lens.filter = box;
+  if (c.sort && c.sort.length) lens.sort = c.sort.map((s) => ({ col: nameOf(s.col), dir: s.dir })).filter((s) => s.col);
+  if (c.calcs && c.calcs.length) lens.calcs = c.calcs.map((x) => ({ name: x.name, expr: x.expr, type: x.type }));
+  const cols = {};
+  for (let uc = 0; uc < c.schema.length; uc++) {
+    const nm = nameOf(uc); if (!nm) continue;
+    const o = {};
+    if (c.colFormats[uc]) o.format = c.colFormats[uc];
+    const cs = c.colScale && c.colScale.get(uc);
+    if (cs) o.colorScale = { scale: cs.scale, palette: cs.palette, reverse: cs.reverse, clip: cs.clip };   // lo/hi are data-specific → recomputed on apply
+    if (c.hidden.has(uc)) o.hidden = true;
+    if (c.colWidths[uc] != null) o.width = c.colWidths[uc];
+    if (Object.keys(o).length) cols[nm] = o;
+  }
+  if (Object.keys(cols).length) lens.columns = cols;
+  return lens;
+}
+
+async function saveLens() {
+  const lens = buildLens(); if (!lens) return;
+  closeMenu();
+  const text = JSON.stringify(lens, null, 2);
+  const fname = ((current.label || 'view').replace(/\.[^.]*$/, '')) + '.lamina';
+  if (window.showSaveFilePicker) {
+    try {
+      const h = await window.showSaveFilePicker({ suggestedName: fname, types: [{ description: 'lamina lens', accept: { 'application/json': ['.lamina', '.lam'] } }] });
+      const w = await h.createWritable(); await w.write(text); await w.close();
+      $('#meta').textContent = `✓ lens saved → ${h.name || fname}`;
+    } catch { /* cancelled */ }
+  } else { downloadText(text, fname); $('#meta').textContent = `✓ lens → ${fname}`; }
+}
+
+// Sniff bytes → a lens object if it carries the marker, else null. Cheap head check
+// before the full parse; must run BEFORE CSV/dm detection so a .lamina isn't read as
+// data. (downloadText uses text/csv; a lens download fallback gets the right ext.)
+function sniffLens(bytes) {
+  let head; try { head = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, 256)); } catch { return null; }
+  if (!/^\s*\{/.test(head) || !head.includes('lamina-lens')) return null;
+  try { const o = JSON.parse(new TextDecoder().decode(bytes)); return (o && o.kind === 'lamina-lens') ? o : null; } catch { return null; }
+}
+
+// Apply a lens to the current file (or hold it if none open yet). Re-reads first
+// when the lens's interpretation differs, then applies the view by name.
+function applyLens(lens) {
+  if (!current) { _pendingLens = lens; $('#empty').style.display = ''; $('#meta').textContent = 'lens loaded — open a data file to apply it to'; return; }
+  const c = current, want = lens.interpretation, cur = c.force || {};
+  const differs = want && ['kind', 'delimiter', 'hasHeader', 'decimal', 'skip', 'comment'].some((k) => want[k] != null && want[k] !== '' && want[k] !== cur[k]);
+  if (differs && (c.file || c.bytes)) { _pendingLensView = lens; reopen(want); }   // mount() applies the view after the re-read
+  else return applyLensView(lens);
+}
+
+async function applyLensView(lens) {
+  const c = current; if (!c) return;
+  const skip = [];
+  const hasBase = (name) => c._schema0.some((s) => s.name.toLowerCase() === String(name).toLowerCase());
+  if (Array.isArray(lens.calcs)) for (const cc of lens.calcs) {           // 1) calc columns (whose name is free)
+    if (!cc.name || !cc.expr) continue;
+    if (hasBase(cc.name) || c.calcs.some((x) => x.name.toLowerCase() === cc.name.toLowerCase())) { skip.push(`calc "${cc.name}" (name taken)`); continue; }
+    c.calcs.push({ name: cc.name, expr: cc.expr, type: cc.type || 'number' });
+  }
+  if (lens.filter) { $('#filter').value = lens.filter; } else { $('#filter').value = ''; }   // 2) filter — applyCalcs runs it vs the rebuilt schema
+  syncFilterClear();
+  await applyCalcs();                                                     // rebuilds c.schema (base+calcs) + runs the filter
+  if (current !== c) return;
+  if (lens.filter && !validate(lens.filter, c.schema).ok) skip.push('filter (a referenced column is missing)');
+  const idx = (name) => c.schema.findIndex((s) => s.name.toLowerCase() === String(name).toLowerCase());   // 3) names → indices (extended schema)
+  if (Array.isArray(lens.sort)) {
+    const keys = [];
+    for (const s of lens.sort) { const i = idx(s.col); if (i >= 0) keys.push({ col: i, dir: s.dir === 'desc' ? 'desc' : 'asc' }); else skip.push(`sort "${s.col}" (missing)`); }
+    c.sort = keys.length ? keys : null;
+  }
+  if (lens.columns) for (const [name, cfg] of Object.entries(lens.columns)) {
+    const i = idx(name); if (i < 0) { skip.push(`column "${name}" (missing)`); continue; }
+    if (cfg.format) c.colFormats[i] = cfg.format;
+    if (cfg.hidden) c.hidden.add(i);
+    if (cfg.width != null) c.colWidths[i] = cfg.width;
+  }
+  await recompute();                                                      // sort + render with formats/hidden
+  if (current !== c) return;
+  if (lens.columns && Object.values(lens.columns).some((cfg) => cfg.colorScale)) {   // color-scale needs the gutter (min/max)
+    await refreshGutter();
+    if (current !== c) return;
+    c.colScale = c.colScale || new Map();
+    for (const [name, cfg] of Object.entries(lens.columns)) {
+      if (!cfg.colorScale) continue;
+      const i = idx(name); if (i < 0) continue;
+      c.colScale.set(i, { ...colScaleDefault(i), scale: cfg.colorScale.scale || 'linear', palette: cfg.colorScale.palette || 'viridis', reverse: !!cfg.colorScale.reverse });
+      if (cfg.colorScale.clip) await setColScaleOpt(i, { clip: true });   // recomputes robust bounds for THIS file
+    }
+    rerender();
+  }
+  const where = lens.source && lens.source !== c.label ? ` (from ${lens.source})` : '';
+  $('#meta').textContent = skip.length ? `lens applied${where} — skipped: ${skip.join('; ')}` : `lens applied${where}`;
+  if (!skip.length) setTimeout(() => { if (current === c && c._meta) $('#meta').textContent = c._meta; }, 3500);
+}
+
+// Mount-time hook: a lens waiting for data, or one mid-apply across a re-read.
+function applyPendingLens() {
+  if (_pendingLensView) { const v = _pendingLensView; _pendingLensView = null; applyLensView(v); }
+  else if (_pendingLens) { const v = _pendingLens; _pendingLens = null; applyLens(v); }
+}
+
+// Pick a .lamina file and apply it to the current view.
+async function applyLensFromFile() {
+  closeMenu();
+  let bytes = null;
+  if (window.showOpenFilePicker) {
+    try { const [h] = await window.showOpenFilePicker({ types: [{ description: 'lamina lens', accept: { 'application/json': ['.lamina', '.lam'] } }] }); const f = await h.getFile(); bytes = new Uint8Array(await f.arrayBuffer()); } catch { return; }
+  } else {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.lamina,.lam,application/json';
+    bytes = await new Promise((res) => { inp.onchange = async () => res(inp.files[0] ? new Uint8Array(await inp.files[0].arrayBuffer()) : null); inp.click(); });
+    if (!bytes) return;
+  }
+  const lens = sniffLens(bytes);
+  if (!lens) { $('#meta').textContent = 'not a lamina lens file'; return; }
+  applyLens(lens);
+}
 
 // Sample the first visible rows to guess number-vs-text (display alignment + numeric
 // sort/stats); the column menu's "treat as text/number" stays the manual override.
@@ -1225,6 +1365,8 @@ async function openFile(file, force) {
   // magic at offset 257). Forcing kind/delimiter skips the archive route.
   if (!forced) {
     const head = new Uint8Array(await file.slice(0, 512).arrayBuffer());
+    // A .lamina lens (small JSON with the marker)? Apply it, don't read it as data.
+    if (file.size < (1 << 20)) { const t = new TextDecoder('utf-8', { fatal: false }).decode(head); if (/^\s*\{/.test(t) && t.includes('lamina-lens')) { const lens = sniffLens(new Uint8Array(await file.arrayBuffer())); if (lens) return applyLens(lens); } }
     const fmt = detectFormat(head);
     if (fmt === 'zip' || fmt === 'gz' || fmt === 'tar' || fmt === 'zst' || fmt === 'xz' || fmt === 'bz2') return openArchive(file, fmt);
 
@@ -1353,6 +1495,9 @@ $('#mFile').onclick = () => menuAt($('#mFile'), [
 $('#mData').onclick = () => menuAt($('#mData'), [
   { label: 'Export…', action: () => { if (hasFile()) openExportDialog(); } },
   { sep: true },
+  { label: 'Save lens…', action: () => { if (hasFile()) saveLens(); } },
+  { label: 'Apply lens…', action: applyLensFromFile },
+  { sep: true },
   { label: 'Calculated columns…', action: () => { if (hasFile()) openCalcManager(); } },
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
   { sep: true },
@@ -1398,6 +1543,7 @@ const HELP = {
     + `• <b>Right-click a cell or selection</b> — copy (with header / row #) · filter by this value · column statistics.<br><br>`
     + `<b>Filter</b> in the box (Enter) — e.g. <code>grade > 1 && lito == "OXIDE"</code> (see Filter syntax). <b>Sort</b> by clicking a header. <b>Jump</b> with the row # box. In a column's Statistics, click values to build a set filter.<br><br>`
     + `<b>Export</b> — <b>Data → Export…</b> writes the current view (filtered · sorted · calc columns · chosen columns) to CSV/TSV, streamed straight to a file you pick — never uploaded, never fully held in memory.<br><br>`
+    + `<b>Lenses</b> — <b>Data → Save lens…</b> saves your <i>view</i> (filter · sort · calc columns · number formats · color scales · hidden columns) as a small <code>.lamina</code> file — not the data. <b>Apply lens…</b> (or open a <code>.lamina</code>) re-applies it to the current file, matching columns <b>by name</b>; anything that doesn't match is skipped and noted. Reuse one setup across every export with the same schema.<br><br>`
     + `<b>Calculated columns</b> (marked <code>ƒ</code> in the header) — add with the <b>ƒ+ col</b> button (next to the filter) or a header's right-click; see and manage them all under <b>Data → Calculated columns…</b>. A derived column from a formula in the same language as the filter (<code>grade * density</code>, <code>if(au > 1, "ore", "waste")</code>); it's computed on the fly (never written), and you can filter, sort, and stat it like any column.`],
   filter: ['Filter syntax',
     `The filter is a <b>SQL <code>WHERE</code></b>-style expression — <b>Enter</b> applies, <b>Esc</b> clears. A condition is <code>column OP value</code>, e.g. <code>grade > 1</code>.<br><br>`
@@ -1686,7 +1832,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

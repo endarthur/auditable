@@ -780,6 +780,36 @@ try {
     ? ok(`color scale: viridis low ${heat.loBg} ≠ high ${heat.hiBg}; log + palette remap the mid; readable fg; toggles off`)
     : fail(`color scale failed: ${JSON.stringify(heat)}`);
 
+  // ── lens: build a view config, re-open the file fresh, apply the lens back ──
+  const lensRT = await page.evaluate(async (text) => {
+    const L = window._lamina;
+    L.open('block.csv', new TextEncoder().encode(text));        // a fresh view
+    await new Promise((r) => setTimeout(r, 40));
+    await L.addCalc('gx', 'grade * 2');
+    document.getElementById('filter').value = 'grade > 10 and lito = "ox"';   // the box is the expr's source of truth
+    await L.applyFilter('grade > 10 and lito = "ox"');
+    L.toggleSort(1);                                            // grade ↑
+    await new Promise((r) => setTimeout(r, 40));
+    const lens = L.buildLens();
+    L.open('block.csv', new TextEncoder().encode(text));        // re-open fresh → resets calc/filter/sort
+    await new Promise((r) => setTimeout(r, 40));
+    const beforeRows = window._laminaVS.rowCount();
+    await L.applyLens(lens);                                    // …then re-apply the lens
+    await new Promise((r) => setTimeout(r, 120));
+    const c = L.current;
+    return {
+      kind: lens.kind, filter: lens.filter, lensHasCalc: !!(lens.calcs && lens.calcs.length), lensSort: lens.sort && lens.sort[0] && lens.sort[0].col,
+      beforeRows, appliedFilter: document.getElementById('filter').value,
+      appliedCalc: !!(c.calcs && c.calcs.find((x) => x.name === 'gx')), appliedSort: !!(c.sort && c.sort.length),
+      afterRows: window._laminaVS.rowCount(),
+    };
+  }, csv);
+  (lensRT.kind === 'lamina-lens' && lensRT.lensHasCalc && lensRT.lensSort === 'grade'
+    && lensRT.appliedFilter === lensRT.filter && lensRT.appliedCalc && lensRT.appliedSort
+    && lensRT.beforeRows === N && lensRT.afterRows < N)
+    ? ok(`lens: round-trips filter + sort + calc by name (${lensRT.afterRows} of ${N} rows after apply)`)
+    : fail(`lens round-trip failed: ${JSON.stringify(lensRT)}`);
+
   // ── column-profile popup: the stats popup shows a histogram + a log toggle ──
   const prof = await page.evaluate(async () => {
     await window._lamina.showColumnStats(1);              // grade (numeric) on the open file
