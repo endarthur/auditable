@@ -164,6 +164,16 @@
   #exportDialog #exRun { font-family: var(--mono); font-size: 12px; color: var(--derived); background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 3px; padding: 5px 14px; cursor: pointer; }
   #exportDialog #exRun:hover { background: var(--bg-hover); }
 
+  /* in-grid find bar (Ctrl+F) — top-right under the toolbar */
+  #findBar { position: absolute; top: calc(var(--tb) + 6px); right: 14px; z-index: 40; display: none; align-items: center; gap: 4px; padding: 5px 6px; background: var(--bg-panel); border: 1px solid var(--bd2); border-radius: 6px; box-shadow: var(--shadow); font-family: var(--mono); font-size: 12px; }
+  #findBar.show { display: flex; }
+  #findBar #findInput { width: 200px; padding: 3px 7px; background: var(--bg-field); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font: inherit; }
+  #findBar #findInput.err { border-color: var(--fault); color: var(--fault); }
+  #findBar .find-tog, #findBar .find-btn { background: none; border: 1px solid transparent; border-radius: 4px; color: var(--muted); cursor: pointer; font: inherit; padding: 2px 6px; min-width: 24px; }
+  #findBar .find-tog:hover, #findBar .find-btn:hover { color: var(--text-hi); background: var(--bg-hover); }
+  #findBar .find-tog.on { color: var(--accent); border-color: var(--accent); }
+  #findBar .find-sep { width: 1px; height: 16px; background: var(--bd2); margin: 0 2px; }
+  #findBar .find-status { color: var(--dim); margin: 0 4px; min-width: 78px; white-space: nowrap; }
   #acPopup {
     position: fixed; z-index: 50; display: none; flex-direction: column; max-height: 240px; overflow-y: auto;
     background: var(--bg-panel); border: 1px solid var(--bd2); border-radius: 4px; box-shadow: var(--shadow);
@@ -424,6 +434,19 @@
   </div>
 
   <footer><span id="meta">—</span><span id="selStats" class="selstats"></span><span class="spacer"></span><a id="build" href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer" title="verify this build">dev</a></footer>
+  <div id="findBar">
+    <input id="findInput" type="text" placeholder="find in table…" spellcheck="false">
+    <button id="findCase" class="find-tog" title="match case">Aa</button>
+    <button id="findWhole" class="find-tog" title="whole cell">⊏⊐</button>
+    <button id="findRe" class="find-tog" title="regular expression">.*</button>
+    <button id="findScope" class="find-tog" title="search only the selected column">col</button>
+    <span class="find-sep"></span>
+    <button id="findPrev" class="find-btn" title="previous (Shift+Enter)">↑</button>
+    <button id="findNext" class="find-btn" title="next (Enter)">↓</button>
+    <button id="findCount" class="find-btn" title="count all matching rows (scans)">#</button>
+    <span id="findStatus" class="find-status"></span>
+    <button id="findClose" class="find-btn" title="close (Esc)">×</button>
+  </div>
   <div id="acPopup"></div>
 
   <script type="module" src="./js/app.js"></script>

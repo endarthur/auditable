@@ -179,6 +179,7 @@ function mountView(vs, info = {}) {
         const num = parseNum(cell.value, c.d.decimal);
         if (!Number.isNaN(num)) { const sc = scaleColor(scaleT(num, cs), cs.palette); style = { ...style, bg: sc.bg, fg: sc.fg }; }
       }
+      if (_findActive && (_findScopeCol == null || _findScopeCol === uc) && cell.value != null && cell.value !== '' && _findMatch(String(cell.value))) style = { ...style, highlight: true };   // tint visible find matches (free — viewport only)
       return style === cell.style ? cell : { ...cell, style };
     },
     header(dc) { const uc = vis[dc]; const h = base.header(uc); const sk = c.sort && c.sort.find((s) => s.col === uc); if (sk) h.sort = sk.dir; return h; },
@@ -1680,6 +1681,75 @@ const PICK_TYPES = [
   { description: 'Tables', accept: { 'text/csv': ['.csv', '.tsv', '.tab', '.txt'], 'application/octet-stream': ['.dm', '.lam', '.lamina'] } },
   { description: 'Archives', accept: { 'application/octet-stream': ['.zip', '.tar', '.gz', '.zst', '.bz2'] } },
 ];
+// ── in-grid find (Ctrl+F) ───────────────────────────────────────────────────────
+// Locate-and-jump, distinct from the filter (which subsets). Free-text substring by
+// default; optional case / whole-cell / regex toggles + a selected-column scope.
+// Find-next scans the active view forward/back from the selection to the next matching
+// cell, jumps + highlights it (loom selection), wraps with an honest note, cancelable.
+// Visible matches tint live (cellAt → style.highlight). Count-all is opt-in (a scan).
+let _findOpen = false, _findActive = false, _findScopeCol = null, _findSignal = null;
+let _findMatch = () => false;
+
+function buildFindMatch() {
+  const q = $('#findInput').value;
+  const cs = $('#findCase').classList.contains('on'), whole = $('#findWhole').classList.contains('on'), re = $('#findRe').classList.contains('on');
+  const sel = grid && grid.getSelection();
+  _findScopeCol = ($('#findScope').classList.contains('on') && current && current._vis && sel) ? current._vis[sel.c0] : null;
+  _findActive = _findOpen && !!q;
+  $('#findInput').classList.remove('err');
+  if (!q) { _findMatch = () => false; return; }
+  if (re) {
+    try { const r = new RegExp(q, cs ? '' : 'i'); _findMatch = (v) => r.test(v); }
+    catch { _findMatch = () => false; _findActive = false; $('#findInput').classList.add('err'); }
+    return;
+  }
+  const needle = cs ? q : q.toLowerCase();
+  _findMatch = whole ? (v) => (cs ? v : v.toLowerCase()) === needle : (v) => (cs ? v : v.toLowerCase()).includes(needle);
+}
+function syncFind() { buildFindMatch(); if (grid) grid.refresh(); }   // re-tint visible matches (cheap repaint, keeps scroll/selection)
+function openFind() { if (!current) return; _findOpen = true; $('#findBar').classList.add('show'); const i = $('#findInput'); i.focus(); i.select(); syncFind(); }
+function closeFind() { _findOpen = false; _findActive = false; $('#findBar').classList.remove('show'); if (_findSignal) _findSignal.cancel = true; if (grid) { grid.refresh(); grid.focus(); } }
+
+async function findScan(dir, countOnly) {
+  const c = current; if (!c || !_findActive) return;
+  const vs = c.view || window._laminaVS; const total = vs.rowCount(); if (!total) return;
+  const cols = _findScopeCol != null ? [_findScopeCol] : (c._vis || []).slice();
+  const status = $('#findStatus');
+  if (_findSignal) _findSignal.cancel = true;
+  const signal = { cancel: false }; _findSignal = signal;
+  const sel = grid && grid.getSelection();
+  const start = sel ? sel.r0 : (dir > 0 ? -1 : 0);
+  let n = 0;
+  const upto = countOnly ? total : total;
+  for (let i = countOnly ? 0 : 1; countOnly ? i < total : i <= total; i++) {
+    if (signal.cancel) return;
+    let r = countOnly ? i : (start + dir * i) % total; if (r < 0) r += total;
+    let fields = vs.rowAt(r);
+    if (fields === LOADING) fields = await vs.ensureRow(r);
+    if (current !== c || signal.cancel) return;
+    if (!fields || fields === LOADING) continue;
+    let hit = false;
+    for (const uc of cols) { const raw = fields[uc]; if (raw != null && raw !== '' && _findMatch(String(raw))) { hit = true; if (!countOnly) { const dc = (c._vis || []).indexOf(uc); grid.setSelection({ r0: r, c0: dc >= 0 ? dc : 0, r1: r, c1: dc >= 0 ? dc : 0 }); grid.focus(); const wrapped = dir > 0 ? r <= start : (start >= 0 && r >= start); status.textContent = `row ${(r + 1).toLocaleString()}${wrapped ? ' · wrapped' : ''}`; return; } break; } }
+    if (hit) n++;
+    if (i % 8192 === 0) { status.textContent = `${countOnly ? 'counting' : 'searching'}… ${Math.round(100 * i / upto)}%`; await new Promise((res) => setTimeout(res)); }
+  }
+  if (signal.cancel) return;
+  status.textContent = countOnly ? `${n.toLocaleString()} row${n === 1 ? '' : 's'} match` : 'no match';
+}
+const findNext = (dir) => findScan(dir, false);
+const findCountAll = () => findScan(1, true);
+
+$('#findInput').addEventListener('input', syncFind);
+$('#findInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+});
+for (const id of ['findCase', 'findWhole', 'findRe', 'findScope']) $('#' + id).onclick = () => { $('#' + id).classList.toggle('on'); syncFind(); $('#findInput').focus(); };
+$('#findNext').onclick = () => findNext(1);
+$('#findPrev').onclick = () => findNext(-1);
+$('#findCount').onclick = findCountAll;
+$('#findClose').onclick = closeFind;
+
 // ── recents (local · opt-in · clearable) ────────────────────────────────────────
 // Remember opened files so they reopen fast. LOCAL only — stored in IndexedDB (under a
 // reserved key in the index cache), never transmitted; doesn't touch the
@@ -1837,7 +1907,7 @@ const HELP = {
     + `<b>Quote text values</b> (like SQL) — a bare word is a <i>column</i> (so <code>fe &gt; cu</code> compares two columns), a quoted word is text: <code>lito = "OXIDE"</code>. Columns are case-insensitive; bracket awkward names: <code>["Cu (ppm)"] &gt; 30</code>. Blanks behave sanely — <code>blank = blank</code> is true, no SQL <code>NULL</code> trap.<br>`
     + `<span style="color:#666">(C-style <code>==</code> <code>&amp;&amp;</code> <code>~</code> also work, if that's your habit.)</span> Right-click a column header for <b>Filter by &lt;col&gt;…</b>.`],
   keys: ['Keyboard & mouse',
-    `<b>Ctrl+O</b> — open a file<br><b>Enter</b> / <b>Esc</b> in the filter box — apply / clear<br>`
+    `<b>Ctrl+O</b> — open a file<br><b>Ctrl+F</b> — find in the table (locate & jump; <code>Aa</code> case · <code>⊏⊐</code> whole-cell · <code>.*</code> regex · <code>col</code> scope · <code>#</code> count) — <b>Enter</b>/<b>Shift+Enter</b> next/prev, <b>Esc</b> closes<br><b>Enter</b> / <b>Esc</b> in the filter box — apply / clear<br>`
     + `<b>Click a column header</b> — sort (cycles ascending → descending → off)<br>`
     + `<b>Right-click a column header</b> — statistics · sort · filter by · number format · treat as text/number · hide / show<br>`
     + `<b>Click the kind badge</b> (top right) — change how the file is read (delimiter, header, skip rows, comment)<br>`
@@ -2114,10 +2184,11 @@ $('#filterGo').onclick = () => applyFilter($('#filter').value);
 // ── global keys: Ctrl+O open, Esc closes the help overlay ──
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'o') { e.preventDefault(); pickFile(); }
+  else if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); openFind(); }
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, toggleRecordPanel, renderRecordCard, updateSelStats, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

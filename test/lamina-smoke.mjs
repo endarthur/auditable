@@ -875,6 +875,27 @@ try {
     ? ok('column-profile: stats popup renders a histogram canvas + log toggle + quantiles')
     : fail(`column-profile failed: ${JSON.stringify(prof)}`);
 
+  // ── in-grid find (Ctrl+F): locate-and-jump, substring + regex + whole-cell + count ──
+  const fnd = await page.evaluate(async (text) => {
+    const L = window._lamina;
+    L.open('find.csv', new TextEncoder().encode(text));   // id,grade,lito (5000 rows)
+    await new Promise((r) => setTimeout(r, 40));
+    document.getElementById('findInput').value = 'sulf';   // lito ∈ ox/sulf/trans; sulf at i%3===1 → rows 1,4,7,…
+    L.openFind();
+    await new Promise((r) => setTimeout(r, 20));
+    await L.findNext(1);                                    // from -1 → first match at display row 1
+    const after1 = L.grid.getSelection();
+    await L.findNext(1);                                    // next → row 4
+    const after2 = L.grid.getSelection();
+    await L.findCountAll();                                 // total sulf rows ≈ 1666
+    const countMsg = document.getElementById('findStatus').textContent;
+    L.closeFind();
+    return { r1: after1 && after1.r0, r2: after2 && after2.r0, countMsg };
+  }, csv);
+  (fnd.r1 === 1 && fnd.r2 === 4 && /1,66\d rows? match/.test(fnd.countMsg))
+    ? ok(`in-grid find: jumps to matches (rows ${fnd.r1}, ${fnd.r2}) + counts (${fnd.countMsg})`)
+    : fail(`find failed: ${JSON.stringify(fnd)}`);
+
   // ── recents: local, remembers a file, shows a chip, clears (FSAA reopen needs a real handle) ──
   const rc = await page.evaluate(async () => {
     const L = window._lamina;
