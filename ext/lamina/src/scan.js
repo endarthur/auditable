@@ -146,8 +146,13 @@ export function splitRecords(bytes, opts) {
  * quoting + the doubled-"" escape. Plain (unquoted) fields are taken verbatim.
  * @returns {string[]}
  */
-export function parseFields(recordBytes, { delimiter = ',', quote = '"' } = {}) {
-  const s = new TextDecoder().decode(recordBytes);
+// Cached TextDecoders by label — structure (delimiter/quote/newline) is ASCII and so
+// encoding-invariant; only field CONTENT decodes per the chosen encoding. Default utf-8.
+const _decoders = {};
+export function decoderFor(encoding) { const k = encoding || 'utf-8'; return _decoders[k] || (_decoders[k] = new TextDecoder(k)); }
+
+export function parseFields(recordBytes, { delimiter = ',', quote = '"', encoding } = {}) {
+  const s = decoderFor(encoding).decode(recordBytes);
   if (delimiter === ' ') {                          // whitespace mode: split on runs (GSLIB / scientific dumps)
     const t = s.trim();
     return t === '' ? [''] : t.split(/\s+/);

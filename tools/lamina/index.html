@@ -301,6 +301,7 @@
   footer .spacer { flex: 1; }
   footer #build { color: var(--faint); cursor: pointer; }      /* build stamp — far right, muted; links to /security to verify */
   footer .selstats { color: var(--text-hi); margin-left: 18px; }   /* live selection stats (count·sum·mean·min·max) */
+  footer .enchint { color: var(--accent); margin-left: 16px; cursor: pointer; }   /* mojibake hint → opens interpretation */
   #drop-hint {
     position: absolute; inset: var(--tb) 6px calc(var(--ft) + 6px) 6px; border: 2px dashed var(--accent); border-radius: 6px;
     background: var(--accent-faint); display: none; align-items: center; justify-content: center;
@@ -384,6 +385,7 @@
     <label>Delimiter <select id="optDelim"><option value="">auto</option><option value=",">comma</option><option value=";">semicolon</option><option value="&#9;">tab</option><option value="|">pipe</option><option value=" ">whitespace</option></select></label>
     <label>Header <select id="optHeader"><option value="">auto</option><option value="yes">yes</option><option value="no">no</option></select></label>
     <label>Decimal <select id="optDecimal"><option value="">point (1.5)</option><option value=",">comma (1,5)</option></select></label>
+    <label>Encoding <select id="optEncoding"><option value="">UTF-8 (default)</option><option value="windows-1252">Western (Windows-1252)</option><option value="iso-8859-1">Latin-1 (ISO-8859-1)</option><option value="utf-16le">UTF-16 LE</option><option value="utf-16be">UTF-16 BE</option></select></label>
     <label>Skip rows <input id="optSkip" type="number" min="0" placeholder="auto"></label>
     <label>Comment <input id="optComment" type="text" maxlength="2" placeholder="#"></label>
   </div>
@@ -435,7 +437,7 @@
     <div class="cp-list" id="cpList"></div>
   </div>
 
-  <footer><span id="meta">—</span><span id="selStats" class="selstats"></span><span class="spacer"></span><a id="build" href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer" title="verify this build">dev</a></footer>
+  <footer><span id="meta">—</span><span id="encHint" class="enchint" style="display:none"></span><span id="selStats" class="selstats"></span><span class="spacer"></span><a id="build" href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer" title="verify this build">dev</a></footer>
   <div id="findBar">
     <input id="findInput" type="text" placeholder="find in table…" spellcheck="false">
     <button id="findCase" class="find-tog" title="match case">Aa</button>

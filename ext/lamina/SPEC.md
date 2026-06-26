@@ -62,7 +62,16 @@ those two invariants hold from a memory-sized CSV up to a tens-of-GB block model
   kicked) \| null; blocks fetched on demand into an LRU; `onReady` repaints.
 - **detect** (`detect.js`) — `detectKind(sample, {sniff?, force?})` → binary /
   delimited / text + delimiter + header + typed schema. `@gcu/recon` `sniff`
-  injectable for richer schema; `force` overrides a wrong guess.
+  injectable for richer schema; `force` overrides a wrong guess (incl.
+  `force.encoding`). 
+- **encoding** — the byte→string decode is a configurable `TextDecoder` label
+  threaded on the `source` (`source.encoding`, default `'utf-8'`) through
+  `parseFields`/cursor/viewsource via `decoderFor(label)` (cached). Structure
+  (delimiter/quote/newline) is ASCII and so encoding-invariant — only field CONTENT
+  decodes per the label, so the block index + splitting are unchanged. The harness
+  exposes it in the interpretation popover (UTF-8 / Windows-1252 / ISO-8859-1 /
+  UTF-16) + a footer **mojibake hint** (a `�` in the sample while on UTF-8 → "try
+  Western/Latin-1"; guidance, not auto-detection).
 - **filter** (`filter.js`) — `parseFilter(str, columns)` compiles `col OP value`
   terms (`== != > >= < <= ~ !~`, `&&`) to a field-array predicate; `scanFilter`
   iterates via `source.eachRecord` → a **result** `{ offsets, lengths, nums }`

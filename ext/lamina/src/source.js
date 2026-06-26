@@ -14,10 +14,10 @@ import { installRecordCursor } from './cursor.js';
  * @param {object} opts  { kind?, delimiter?, quote?, blockSize? } — quote/delimiter are CHARS
  * @returns a source: { kind, delimiter, quote, blockSize, blockOffsets, rowCount, totalBytes, readRange }
  */
-export function buildMemorySource(bytes, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096 } = {}) {
+export function buildMemorySource(bytes, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, encoding } = {}) {
   const idx = scanRecords(bytes, { kind, quote: quote.charCodeAt(0), blockSize });
   return installRecordCursor({
-    kind, delimiter, quote, blockSize,
+    kind, delimiter, quote, blockSize, encoding,
     blockOffsets: idx.blockOffsets,
     rowCount: idx.rowCount,
     totalBytes: idx.totalBytes,
@@ -42,20 +42,20 @@ export function buildMemorySource(bytes, { kind = 'delimited', delimiter = ',', 
  * @param {object} opts  { kind, delimiter, quote, blockSize?, onProgress?(read,total), scan? }
  * @returns {Promise<source>}  same shape as buildMemorySource
  */
-export async function buildFileSource(file, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, onProgress, scan } = {}) {
+export async function buildFileSource(file, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, encoding, onProgress, scan } = {}) {
   const scanOpts = { kind, quote: quote.charCodeAt(0), blockSize };
   const idx = scan
     ? await scan(file, scanOpts)                          // off-thread (worker): no onProgress (functions don't clone)
     : await scanFileToIndex(file, { ...scanOpts, onProgress });
-  return fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize });
+  return fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize, encoding });
 }
 
 // Build the source object (block index + a lazy File.slice readRange) — shared by
 // buildFileSource (fresh scan) and buildSourceFromIndex (cached). readRange always
 // stays main-thread: it captures the live File, which can't cross a realm.
-function fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize }) {
+function fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize, encoding }) {
   return installRecordCursor({
-    kind, delimiter, quote, blockSize,
+    kind, delimiter, quote, blockSize, encoding,
     blockOffsets: idx.blockOffsets,
     rowCount: idx.rowCount,
     totalBytes: idx.totalBytes,

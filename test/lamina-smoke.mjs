@@ -928,6 +928,28 @@ try {
     ? ok(`in-grid find: jumps to matches (rows ${fnd.r1}, ${fnd.r2}) + counts (${fnd.countMsg})`)
     : fail(`find failed: ${JSON.stringify(fnd)}`);
 
+  // ── encoding: Latin-1 file → mojibake hint on UTF-8, decodes right + hint clears ──
+  const encT = await page.evaluate(async (text) => {
+    const L = window._lamina;
+    const asc = (s) => [...s].map((c) => c.charCodeAt(0));
+    const b = asc('id,note\n');                               // 0xE9 = é in Latin-1, invalid as a lone UTF-8 byte
+    for (let i = 0; i < 30; i++) b.push(...asc(i + ',caf'), 0xE9, 0x0A);   // numeric id → header detects; rows to spare
+    L.open('latin.csv', new Uint8Array(b));                   // default UTF-8 → mojibake
+    await new Promise((r) => setTimeout(r, 50));
+    const hintShown = getComputedStyle(document.getElementById('encHint')).display !== 'none';
+    const utf8note = (await window._laminaVS.ensureRow(0))[1];
+    L.reopen({ encoding: 'iso-8859-1' });                     // re-decode as Latin-1
+    await new Promise((r) => setTimeout(r, 60));
+    const hintAfter = getComputedStyle(document.getElementById('encHint')).display !== 'none';
+    const latinNote = (await window._laminaVS.ensureRow(0))[1];
+    L.open('block.csv', new TextEncoder().encode(text));      // restore (don't pollute downstream tests)
+    await new Promise((r) => setTimeout(r, 30));
+    return { hintShown, hintAfter, utf8note, latinNote };
+  }, csv);
+  (encT.hintShown && !encT.hintAfter && encT.utf8note.includes('�') && encT.latinNote === 'café')
+    ? ok(`encoding: UTF-8 mojibake hint → Latin-1 decodes "café", hint clears`)
+    : fail(`encoding failed: ${JSON.stringify(encT)}`);
+
   // ── recents: local, remembers a file, shows a chip, clears (FSAA reopen needs a real handle) ──
   const rc = await page.evaluate(async () => {
     const L = window._lamina;

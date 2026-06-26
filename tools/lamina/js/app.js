@@ -223,6 +223,7 @@ function mountView(vs, info = {}) {
   window._laminaVS = vs;                                // automation hook
   if (_colPanelOpen) renderColPanel();                  // keep the columns panel in sync (gutter-ready, menu-hide, new file)
   if (_recPanelOpen) renderRecordCard(_recRow);         // re-resolve the record after a sort/filter/new file
+  updateEncHint();
 }
 
 // Cheap re-render of the current view (after a column hide/show — the data view
@@ -748,10 +749,14 @@ function open(name, bytes, force) {
       } catch { /* fall through */ }
     }
   }
-  const d = detectKind(bytes.subarray(0, 65536), { force, name });
+  const enc = force && force.encoding;
+  const sample = bytes.subarray(0, 65536);
+  const d = detectKind(sample, { force, name });
   if (d.kind === 'binary') return showBinary(name, bytes.length);
-  mount(name, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' }), bytes.length);
+  d.encoding = enc;
+  mount(name, d, buildMemorySource(bytes, { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"', encoding: enc }), bytes.length);
   current.bytes = bytes; current.force = force || {};                 // remember for re-open with new force
+  current.encSuspect = encodingSuspect(sample, enc); updateEncHint();
 }
 
 // Render in-memory bytes (a small file, or a decompressed archive entry) through
@@ -1624,10 +1629,12 @@ async function openFile(file, force) {
 
   // 2. Miss (or forced) → detect off the head, scan (off-thread when we can), then cache.
   const sample = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
+  const enc = force && force.encoding;
   const d = detectKind(sample, { force, name: file.name });
   if (d.kind === 'binary') { if (!forced) idbCache.set(key, { v: CACHE_VERSION, detect: d, index: null }); return showBinary(file.name, file.size); }
+  d.encoding = enc;
   $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
-  const opts = { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"' };
+  const opts = { kind: d.kind, delimiter: d.delimiter || ',', quote: d.quote || '"', encoding: enc };
   const onProgress = (r, t) => { $('#meta').textContent = `indexing… ${t ? Math.round((100 * r) / t) : 0}%`; };
   let src;
   if (canWorker) {
@@ -1640,6 +1647,23 @@ async function openFile(file, force) {
   if (!forced) idbCache.set(key, { v: CACHE_VERSION, detect: d, index: indexOf(src) });   // cache only the auto interpretation
   mount(file.name, d, src, file.size);
   current.file = file; current.force = force || {};                 // remember for re-open with new force
+  current.encSuspect = encodingSuspect(sample, enc); updateEncHint();
+}
+
+// ── encoding: mojibake hint ──────────────────────────────────────────────────────
+// Not auto-detection — guidance. Decoding Latin-1/Windows-1252 bytes as UTF-8 yields
+// U+FFFD (�); their presence in the sample is a strong "wrong encoding" signal. Only
+// flagged while on the default UTF-8 (once the user picks an encoding, no nag); clears
+// naturally when the right one is chosen (Latin-1 decodes every byte).
+function encodingSuspect(sampleBytes, enc) {
+  if (enc && enc !== 'utf-8') return false;
+  try { return /�/.test(new TextDecoder('utf-8', { fatal: false }).decode(sampleBytes.subarray(0, 65536))); } catch { return false; }
+}
+function updateEncHint() {
+  const el = $('#encHint'); if (!el) return;
+  const show = !!(current && current.encSuspect);
+  el.style.display = show ? '' : 'none';
+  if (show) { el.textContent = '⚠ encoding?'; el.title = "some bytes didn't decode as UTF-8 — try Western / Latin-1 (click, or Data → Interpretation)"; }
 }
 
 // ── interpretation override (delimiter / header / kind) + go-to-row ──
@@ -1668,6 +1692,7 @@ function openOpts() {
   $('#optSkip').value = f.skip != null ? f.skip : '';
   $('#optComment').value = f.comment != null ? f.comment : '';
   $('#optDecimal').value = f.decimal === ',' ? ',' : '';
+  $('#optEncoding').value = f.encoding || '';
   opts.classList.add('show');
   setTimeout(() => document.addEventListener('mousedown', onOptsDown), 0);
 }
@@ -1680,6 +1705,8 @@ $('#optHeader').onchange = (e) => reopen({ hasHeader: e.target.value === 'yes' ?
 $('#optSkip').onchange = (e) => reopen({ skip: e.target.value === '' ? '' : Math.max(0, e.target.value | 0) });   // '' = auto
 $('#optComment').onchange = (e) => reopen({ comment: e.target.value });                                           // '' = none/auto
 $('#optDecimal').onchange = (e) => reopen({ decimal: e.target.value });                                           // '' = point, ',' = comma
+$('#optEncoding').onchange = (e) => reopen({ encoding: e.target.value });                                         // '' = utf-8 (auto)
+$('#encHint').onclick = () => openOpts();                                                                          // footer mojibake hint → interpretation popover
 
 // Go to a 1-based row: select it (loom scrolls the selection into view).
 function gotoRow(n) {
@@ -1905,7 +1932,7 @@ const HELP = {
   start: ['Getting started',
     `<b>lamina</b> opens any file — even a multi-gigabyte one — and lets you scroll, filter, and sort it. It never loads the whole file, so size isn't the problem.<br><br>`
     + `<b>Open</b> — File → Open (<code>Ctrl+O</code>) or drag a file in. CSV/TSV → table · Datamine <code>.dm</code> → table · text → lines · binary → hex · <code>.zip</code>/<code>.tar</code>/<code>.gz</code>/<code>.zst</code>/<code>.bz2</code> → peek inside.<br><br>`
-    + `<b>If a file reads wrong</b> — click the <b>kind badge</b> (top-right) or <b>Data → Interpretation</b> to force the delimiter, header on/off, skip comment lines, or switch the decimal point/comma.<br><br>`
+    + `<b>If a file reads wrong</b> — click the <b>kind badge</b> (top-right) or <b>Data → Interpretation</b> to force the delimiter, header on/off, skip comment lines, switch the decimal point/comma, or pick the <b>character encoding</b> (UTF-8 · Windows-1252 · Latin-1 · UTF-16). A <code>⚠ encoding?</code> hint appears in the footer if bytes don't decode as UTF-8.<br><br>`
     + `<b>Column distributions</b> — each header shows a mini distribution + null-rate bar (a histogram for numbers, a top-values bar for categories; <code>≈</code> = sampled). Click a glyph for full statistics. Toggle under <b>View → Column distributions</b>.<br><br>`
     + `<b>Most actions live in right-click menus:</b><br>`
     + `• <b>Right-click a column header</b> — Statistics · sort · filter by · number format · treat as text/number · hide/show · autofit · <b>add a calculated column</b>.<br>`

@@ -151,8 +151,13 @@ function splitRecords(bytes, opts) {
  * quoting + the doubled-"" escape. Plain (unquoted) fields are taken verbatim.
  * @returns {string[]}
  */
-function parseFields(recordBytes, { delimiter = ',', quote = '"' } = {}) {
-  const s = new TextDecoder().decode(recordBytes);
+// Cached TextDecoders by label — structure (delimiter/quote/newline) is ASCII and so
+// encoding-invariant; only field CONTENT decodes per the chosen encoding. Default utf-8.
+const _decoders = {};
+function decoderFor(encoding) { const k = encoding || 'utf-8'; return _decoders[k] || (_decoders[k] = new TextDecoder(k)); }
+
+function parseFields(recordBytes, { delimiter = ',', quote = '"', encoding } = {}) {
+  const s = decoderFor(encoding).decode(recordBytes);
   if (delimiter === ' ') {                          // whitespace mode: split on runs (GSLIB / scientific dumps)
     const t = s.trim();
     return t === '' ? [''] : t.split(/\s+/);
@@ -200,8 +205,6 @@ function parseFields(recordBytes, { delimiter = ',', quote = '"' } = {}) {
 // record index. The scans never interpret it — that's the whole point.
 
 
-const DEC = new TextDecoder();
-
 /**
  * Attach `eachRecord` + `readByLoc` to a CSV/text block source (source.js shape:
  * blockOffsets + readRange + kind/delimiter/quote/blockSize/rowCount/totalBytes).
@@ -212,7 +215,7 @@ function installRecordCursor(source) {
   const K = source.blockSize;
   const qByte = (source.quote || '"').charCodeAt(0);
   const delimited = source.kind === 'delimited';
-  const fieldsOf = (bytes) => (delimited ? parseFields(bytes, { delimiter: source.delimiter, quote: source.quote }) : [DEC.decode(bytes)]);
+  const fieldsOf = (bytes) => (delimited ? parseFields(bytes, { delimiter: source.delimiter, quote: source.quote, encoding: source.encoding }) : [decoderFor(source.encoding).decode(bytes)]);
 
   source.eachRecord = async ({ dataStart = 0, rows = null, onProgress, limit = Infinity } = {}, visit) => {
     const nBlocks = source.blockOffsets.length;
@@ -260,10 +263,10 @@ function installRecordCursor(source) {
  * @param {object} opts  { kind?, delimiter?, quote?, blockSize? } — quote/delimiter are CHARS
  * @returns a source: { kind, delimiter, quote, blockSize, blockOffsets, rowCount, totalBytes, readRange }
  */
-function buildMemorySource(bytes, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096 } = {}) {
+function buildMemorySource(bytes, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, encoding } = {}) {
   const idx = scanRecords(bytes, { kind, quote: quote.charCodeAt(0), blockSize });
   return installRecordCursor({
-    kind, delimiter, quote, blockSize,
+    kind, delimiter, quote, blockSize, encoding,
     blockOffsets: idx.blockOffsets,
     rowCount: idx.rowCount,
     totalBytes: idx.totalBytes,
@@ -288,20 +291,20 @@ function buildMemorySource(bytes, { kind = 'delimited', delimiter = ',', quote =
  * @param {object} opts  { kind, delimiter, quote, blockSize?, onProgress?(read,total), scan? }
  * @returns {Promise<source>}  same shape as buildMemorySource
  */
-async function buildFileSource(file, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, onProgress, scan } = {}) {
+async function buildFileSource(file, { kind = 'delimited', delimiter = ',', quote = '"', blockSize = 4096, encoding, onProgress, scan } = {}) {
   const scanOpts = { kind, quote: quote.charCodeAt(0), blockSize };
   const idx = scan
     ? await scan(file, scanOpts)                          // off-thread (worker): no onProgress (functions don't clone)
     : await scanFileToIndex(file, { ...scanOpts, onProgress });
-  return fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize });
+  return fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize, encoding });
 }
 
 // Build the source object (block index + a lazy File.slice readRange) — shared by
 // buildFileSource (fresh scan) and buildSourceFromIndex (cached). readRange always
 // stays main-thread: it captures the live File, which can't cross a realm.
-function fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize }) {
+function fileSourceFrom(file, idx, { kind, delimiter, quote, blockSize, encoding }) {
   return installRecordCursor({
-    kind, delimiter, quote, blockSize,
+    kind, delimiter, quote, blockSize, encoding,
     blockOffsets: idx.blockOffsets,
     rowCount: idx.rowCount,
     totalBytes: idx.totalBytes,
@@ -463,8 +466,8 @@ function createRecordViewSource(source, { schema = null, cacheBlocks = 16, dataS
   function parseBlock(bytes) {
     const recs = splitRecords(bytes, { kind: source.kind, quote: qByte });
     return source.kind === 'delimited'
-      ? recs.map((rb) => parseFields(rb, { delimiter: source.delimiter, quote: source.quote }))
-      : recs.map((rb) => [new TextDecoder().decode(rb)]);
+      ? recs.map((rb) => parseFields(rb, { delimiter: source.delimiter, quote: source.quote, encoding: source.encoding }))
+      : recs.map((rb) => [decoderFor(source.encoding).decode(rb)]);
   }
 
   function loadBlock(b) {
@@ -999,7 +1002,7 @@ function detectKind(sample, { sniff, force, name } = {}) {
   if (!f.kind && !f.delimiter && looksBinary(sample)) return { kind: 'binary' };
 
   const decimal = f.decimal === ',' ? ',' : '.';   // decimal separator (',' = European/Brazilian)
-  const text = new TextDecoder().decode(sample);   // default decoder strips a leading BOM
+  let text; try { text = new TextDecoder(f.encoding || 'utf-8').decode(sample); } catch { text = new TextDecoder().decode(sample); }   // forced encoding → correct header names
   const all = text.split('\n').slice(0, 200).map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
 
   // GSLIB / Geo-EAS structured preamble (only when nothing is forced).

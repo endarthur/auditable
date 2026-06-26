@@ -7,7 +7,7 @@
 // screenfuls are ever resident, never the file. This is the read-only
 // indexed-original ViewSource (strata-windowing §3b); windowed strata reuses it.
 
-import { splitRecords, parseFields } from './scan.js';
+import { splitRecords, parseFields, decoderFor } from './scan.js';
 
 export const LOADING = Symbol('lamina.loading');   // a row whose block isn't loaded yet
 
@@ -30,8 +30,8 @@ export function createRecordViewSource(source, { schema = null, cacheBlocks = 16
   function parseBlock(bytes) {
     const recs = splitRecords(bytes, { kind: source.kind, quote: qByte });
     return source.kind === 'delimited'
-      ? recs.map((rb) => parseFields(rb, { delimiter: source.delimiter, quote: source.quote }))
-      : recs.map((rb) => [new TextDecoder().decode(rb)]);
+      ? recs.map((rb) => parseFields(rb, { delimiter: source.delimiter, quote: source.quote, encoding: source.encoding }))
+      : recs.map((rb) => [decoderFor(source.encoding).decode(rb)]);
   }
 
   function loadBlock(b) {

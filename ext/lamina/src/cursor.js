@@ -19,9 +19,7 @@
 // matching row directly. For CSV it's (byte offset, byte length); for .dm it's the
 // record index. The scans never interpret it — that's the whole point.
 
-import { splitRecordsPos, parseFields } from './scan.js';
-
-const DEC = new TextDecoder();
+import { splitRecordsPos, parseFields, decoderFor } from './scan.js';
 
 /**
  * Attach `eachRecord` + `readByLoc` to a CSV/text block source (source.js shape:
@@ -33,7 +31,7 @@ export function installRecordCursor(source) {
   const K = source.blockSize;
   const qByte = (source.quote || '"').charCodeAt(0);
   const delimited = source.kind === 'delimited';
-  const fieldsOf = (bytes) => (delimited ? parseFields(bytes, { delimiter: source.delimiter, quote: source.quote }) : [DEC.decode(bytes)]);
+  const fieldsOf = (bytes) => (delimited ? parseFields(bytes, { delimiter: source.delimiter, quote: source.quote, encoding: source.encoding }) : [decoderFor(source.encoding).decode(bytes)]);
 
   source.eachRecord = async ({ dataStart = 0, rows = null, onProgress, limit = Infinity } = {}, visit) => {
     const nBlocks = source.blockOffsets.length;

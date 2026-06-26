@@ -127,7 +127,7 @@ export function detectKind(sample, { sniff, force, name } = {}) {
   if (!f.kind && !f.delimiter && looksBinary(sample)) return { kind: 'binary' };
 
   const decimal = f.decimal === ',' ? ',' : '.';   // decimal separator (',' = European/Brazilian)
-  const text = new TextDecoder().decode(sample);   // default decoder strips a leading BOM
+  let text; try { text = new TextDecoder(f.encoding || 'utf-8').decode(sample); } catch { text = new TextDecoder().decode(sample); }   // forced encoding → correct header names
   const all = text.split('\n').slice(0, 200).map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
 
   // GSLIB / Geo-EAS structured preamble (only when nothing is forced).
