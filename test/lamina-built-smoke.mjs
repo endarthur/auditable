@@ -35,11 +35,17 @@ const errors = [];
 const expectedCsp = (t) => /Content Security Policy|Refused to connect/i.test(t);
 page.on('console', (m) => { if (m.type() === 'error' && !expectedCsp(m.text())) errors.push(m.text()); });
 page.on('pageerror', (e) => { if (!expectedCsp(String(e))) errors.push(String(e)); });
+// Count connect-src-governed egress (fetch/xhr/ws/sse) — the requests the Sealed
+// profile forbids. Snapshotted right after boot → seal's runtime network gate.
+const EGRESS = new Set(['fetch', 'xhr', 'websocket', 'eventsource']);
+let egressReqs = 0;
+page.on('request', (r) => { if (EGRESS.has(r.resourceType())) egressReqs++; });
 
 try {
   await page.goto(`http://127.0.0.1:${port}/lamina.html`, { waitUntil: 'networkidle' });
   await page.waitForFunction(() => window._lamina, null, { timeout: 8000 });
   ok('single-file lamina.html booted');
+  const egressOnLoad = egressReqs;   // snapshot before the deliberate egress test below
 
   const mem = await page.evaluate(() => {
     let csv = 'id,v\n'; for (let i = 0; i < 2000; i++) csv += `${i},x${i}\n`;
@@ -91,6 +97,19 @@ try {
   (/^\d+\.\d+\.\d+ · [0-9a-f]{7} · \d{4}-\d{2}-\d{2}$/.test(stamp.footer) && stamp.footer === stamp.api)
     ? ok(`build stamp present (${stamp.footer})`)
     : fail(`build stamp missing/malformed: ${JSON.stringify(stamp)}`);
+
+  // ── seal: the build-ENFORCED capability — verify the emitted declaration against
+  //    the real artifact + the observed runtime (0 egress on load = the Sealed gate). ──
+  const seal = await import('../ext/seal/index.js');
+  const template = JSON.parse(fs.readFileSync(path.join(repo, 'tools/lamina/capability.template.json'), 'utf8'));
+  const bytes = fs.readFileSync(path.join(repo, 'lamina.html'));
+  const { capability, sha256 } = seal.emitArtifacts({ bytes, template, version: '0.1.0' });
+  try {
+    const rep = await seal.verifyClaims({ bytes, capability, runSmoke: async () => ({ networkRequests: egressOnLoad, ranClean: true }) });
+    ok(`seal: ${capability.profile} verified — ${egressOnLoad} egress req on load, sha256 ${sha256.slice(0, 12)}… (${rep.checks.filter((c) => c.pass).length}/${rep.checks.length} checks pass)`);
+  } catch (e) {
+    fail(`seal verify FAILED: ${e.message}` + (e.report ? ' — ' + JSON.stringify(e.report.checks.filter((c) => !c.pass && c.gate)) : ''));
+  }
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');

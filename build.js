@@ -1721,7 +1721,35 @@ if (target === 'lamina') {
   const outPath = path.join(__dirname, 'lamina.html');
   fs.writeFileSync(outPath, html);
   console.log(`Built lamina.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB in the clear, ${modules.length} modules) — build ${lamStamp}`);
-  process.exit(0);
+
+  // ── seal: emit + verify the security artifacts (build-ENFORCED capability) ──
+  // Pure verify here (source scans) — gates a remote-import sneaking in, warns on
+  // codegen/wasm; FAST, no Playwright. The runtime network gate (0 egress under
+  // connect-src 'none') lives in test/lamina-built-smoke.mjs, which CI runs. Emits the
+  // four artifacts to dist/seal/lamina/ for the release step to stage into the wing.
+  (async () => {
+    try {
+      const seal = await import('./ext/seal/index.js');
+      const template = JSON.parse(fs.readFileSync(path.join(lamDir, 'capability.template.json'), 'utf8'));
+      const deps = (template.third_party || []).map((t) => ({ name: t.name, license: t.license, copyright: t.copyright }));
+      const bytes = fs.readFileSync(outPath);
+      const { sha256, capability, cspText, sbom } = seal.emitArtifacts({ bytes, template, deps, version: lamVersion });
+      await seal.verifyClaims({ bytes, capability });   // throws SealError on a gated failure (e.g. a remote import)
+      const outDir = path.join(__dirname, 'dist/seal/lamina');
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.writeFileSync(path.join(outDir, 'capability.json'), JSON.stringify(capability, null, 2) + '\n');
+      fs.writeFileSync(path.join(outDir, 'csp.txt'), cspText);
+      fs.writeFileSync(path.join(outDir, 'sbom.json'), JSON.stringify(sbom, null, 2) + '\n');
+      fs.writeFileSync(path.join(outDir, 'sha256.txt'), `${sha256}  lamina.html\n`);
+      console.log(`seal: ${capability.profile} verified + emitted → dist/seal/lamina/ (sha256 ${sha256.slice(0, 12)}…)`);
+      process.exit(0);
+    } catch (e) {
+      if (e.name === 'SealError') { console.error('\nseal: VERIFY FAILED —', e.message); console.error(JSON.stringify(e.report, null, 2)); }
+      else console.error('\nseal: emit/verify error —', e.stack || e.message);
+      process.exit(1);
+    }
+  })();
+  return;   // the async IIFE owns process.exit; don't fall through
 }
 
 // ══════════════════════════════════════════════════

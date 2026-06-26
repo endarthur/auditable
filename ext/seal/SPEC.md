@@ -5,7 +5,7 @@ declaration is build-ENFORCED, not hand-asserted.**
 
 | | |
 |---|---|
-| Status | v0.1 — core (emit + verify) built; build-pipeline wiring pending |
+| Status | v0.1 — core + lamina build-wiring done (Sealed pilot); works (Connected) next |
 | Deps | none (node:crypto); an injected `runSmoke` for the runtime gate |
 | Runtime | Node (CI/build). Pure parts are environment-agnostic — swap the hash for Web Crypto to run over a `@gcu/vfs` adapter in-browser later |
 | Tests | `test/seal.test.mjs` (11, in `npm test`) |
@@ -88,13 +88,24 @@ API complete-first (all three profiles). Prove on **lamina** (Sealed pilot — w
 into `build.js`'s lamina target), validate the generalization on **works**
 (Connected), then ep/weir/koma fill the same per-tool template.
 
+## Build wiring (lamina — DONE)
+
+Split across two steps (the build stays Playwright-free; the runtime gate runs where
+a browser already is):
+- **`build.js` lamina target** — after writing `lamina.html`: `emitArtifacts` →
+  `verifyClaims` (PURE: gates a literal remote-import, warns codegen/wasm) → writes
+  the four artifacts to `dist/seal/lamina/` (gitignored; the release step stages them
+  into `gentropic/security/artifacts/lamina/`). A gated failure → `process.exit(1)`.
+- **`test/lamina-built-smoke.mjs`** — counts connect-src-governed egress
+  (fetch/xhr/ws/sse) on load, then runs `verifyClaims` with `runSmoke` returning that
+  count + `ranClean`. This is the build-ENFORCED runtime network gate (CI runs it):
+  0 egress on load = the Sealed claim, proven against the real artifact.
+
 ## Roadmap
 
-- Wire into `build.js` (lamina): emit → verify (runSmoke = the built-smoke) → write
-  artifacts; fail the build on a gated failure.
-- Confirm/resolve the lamina `wasm` declaration (the scan flagged WebAssembly sites —
-  `xz-decompress`?) before gating it.
-- Signing (reuse auditable's Ed25519 `sign.js`?), Zenodo DOI automation.
+- works (Connected) as the second consumer — validates the profile generalization.
+- Signing (reuse auditable's Ed25519 `sign.js`?), Zenodo DOI automation, the
+  PR-to-`gentropic/security` Action (v1 = manual copy from `dist/seal/`).
 - Browser/`@gcu/vfs` path (Web Crypto) for in-shell provisioning verification.
 
 ## Versioning
