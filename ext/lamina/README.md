@@ -85,7 +85,10 @@ go-to-row, interpretation override, the index cache) lives in
 - **Sort is in-memory + capped** (~few-M rows). A true decagigabyte sort is
   external-merge-to-OPFS (deferred); until then, filter→sort handles huge files.
 - **`zst` / `xz` / `bz2` are resident-only** — no browser streaming decoder
-  (unlike gzip/deflate), so they're size-guarded.
+  (unlike gzip/deflate), so they're size-guarded. (The shipped single-file tool is
+  built **WASM-free** for a strict CSP, which drops `xz` specifically — its decoder
+  is WebAssembly; the library + full `@gcu/archive` still do xz. See
+  `tools/lamina/SECURITY.md`.)
 - **Stored-zip-entry random windowing** and a **worker progress channel** are
   deferred (see `SPEC.md`).
 

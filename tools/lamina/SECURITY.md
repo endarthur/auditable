@@ -17,6 +17,11 @@ for environments where the data is sensitive and must not leave the machine.
   The entire runtime is inlined **in the clear** in the one file (no `eval`, no
   self-extractor) — so the CSP needs no `'unsafe-eval'`, and what runs is exactly
   what you can read.
+- **No code generation, no WebAssembly.** The CSP grants neither `'unsafe-eval'`
+  *nor* `'wasm-unsafe-eval'` — lamina runs no `eval`/`new Function` and instantiates
+  no WASM module. (One consequence, by design: `.xz` archives need a WebAssembly
+  decoder, so they aren't supported — re-compress as `.gz`, `.zst`, or `.zip`. Every
+  other format works.)
 - **No account, no server, no SaaS.** Nothing to log in to; no backend; no
   data-processing agreement. It reads only the local files you open.
 - **Read-only.** lamina never modifies the files it opens. (Export writes a *new*
@@ -30,11 +35,29 @@ for environments where the data is sensitive and must not leave the machine.
 - Installable as a PWA for offline use, but that is optional; the bare `.html`
   is fully functional on its own.
 
-## Verifying the artifact
+## Verifying the artifact — the capability declaration
 
-- The footer shows a build stamp `version · <content-hash> · date`. The hash is a
-  content hash of the runtime, so two files with the same stamp are byte-identical
-  in behaviour — a quick integrity check after copying it onto a locked-down host.
+Every release publishes a machine-readable **capability declaration** at
+**[gentropic.org/security](https://gentropic.org/security)**, and these claims are
+**enforced by lamina's build** (via `@gcu/seal`) — derived from the shipped bytes,
+not asserted by hand:
+
+- **`sha256.txt`** — the SHA-256 of the exact `lamina.html`. Reproduce it:
+  `shasum -a 256 lamina.html` must match the published value.
+- **`capability.json`** — the profile (`Sealed`) and the verified claims: no network,
+  no codegen, no WebAssembly, no remote import; read-only; user-initiated I/O only.
+- **`csp.txt`** — the exact CSP the file runs under, **extracted from the file
+  itself**, so it can't drift from what's documented.
+- **`sbom.json`** — the dependency set (a few MIT decoders; otherwise zero).
+
+The build re-derives all four from the bytes and **fails if a claim is false** — a
+stray remote import, or network egress on load (a headless test loads the file under
+the pinned CSP and records zero requests). So the declaration can't lie: a false
+"Sealed" doesn't ship.
+
+- The footer also shows a build stamp `version · <content-hash> · date` (the hash is
+  a content hash of the runtime) — a quick at-a-glance check after copying the file
+  onto a locked-down host; the SHA-256 + the wing are the full verification.
 
 ## Licensing
 

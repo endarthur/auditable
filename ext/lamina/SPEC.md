@@ -129,12 +129,31 @@ decompressed stream from 0 each call (re-openable = rewindable).
 scan; the result is a permutation array, so they compose (filter then sort the
 matches) and are selectivity-bounded (capped, "filter first" rather than OOM).
 
+## Security posture (the shipped tool)
+
+The deployed single-file tool (`tools/lamina` → `lamina.html`) is a **Sealed**
+artifact in the GCU enterprise-profile sense:
+
+- **Networkless, enforced.** CSP `connect-src 'none'` (egress impossible, not just
+  unused); runtime inlined **in the clear** (no `eval` → no `'unsafe-eval'`); and
+  **no WebAssembly** (no `'wasm-unsafe-eval'`). The last point is why the shipped
+  tool builds against `@gcu/archive`'s **`index.nowasm.js`** variant — the full
+  bundle's xz decoder is WASM, which the strict CSP forbids, so `.xz` is dropped
+  (every other archive format works). The library itself is archive-agnostic; this
+  is a deployment choice.
+- **Capability declaration, build-enforced.** The build emits + verifies
+  `capability.json` / `csp.txt` / `sbom.json` / a full-file SHA-256 via **`@gcu/seal`**
+  (`build.js` lamina target + the network gate in `test/lamina-built-smoke.mjs`),
+  failing if a claim is false. Published at `gentropic.org/security`; the empty-state
+  banner + footer build-stamp link there. See `tools/lamina/SECURITY.md` (the IT
+  one-pager) and `ext/seal/SPEC.md`.
+
 ## NOT
 
 - Not editable (that's `@gcu/strata`). Not a database / query engine. Not
   Parquet/Arrow (binary columnar — deferred; would vendor a reader). Not a true
-  external-merge sort yet. `zst`/`xz`/`bz2` are resident-only (no browser
-  streaming decoder).
+  external-merge sort yet. `zst`/`bz2` are resident-only (no browser streaming
+  decoder); `xz` is dropped from the shipped tool (WASM — see Security posture).
 
 ## Deferred
 
