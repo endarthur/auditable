@@ -1150,6 +1150,40 @@ try {
     ? ok('log-normal gutter auto-detected (flat column stays linear) + per-column toggle')
     : fail(`log gutter test failed: ${JSON.stringify(logTest)}`);
 
+  // ── horizontal scroll survives a filter (grid rebuild) ──
+  const scrollTest = await page.evaluate(async () => {
+    const L = window._lamina;
+    let header = 'r'; for (let j = 1; j < 30; j++) header += `,c${j}`;
+    let csv = header + '\n';
+    for (let i = 0; i < 500; i++) { let row = `${i}`; for (let j = 1; j < 30; j++) row += `,${i * j}`; csv += row + '\n'; }
+    L.open('wide.csv', new TextEncoder().encode(csv));
+    for (let t = 0; t < 40 && !L.grid; t++) await new Promise((r) => setTimeout(r, 25));
+    L.grid.setScroll({ left: 600 });
+    const before = L.grid.getScroll().left;
+    await L.applyFilter('r > 100');
+    await new Promise((r) => setTimeout(r, 60));
+    const after = L.grid.getScroll().left;
+    await L.applyFilter('');
+    return { before, after };
+  });
+  (scrollTest.before > 100 && Math.abs(scrollTest.after - scrollTest.before) < 2)
+    ? ok(`horizontal scroll preserved across filter (${scrollTest.after}px)`)
+    : fail(`scroll restore failed: ${JSON.stringify(scrollTest)}`);
+
+  // ── color scale: picking a palette while off enables it (no toggle-then-reopen) ──
+  const csTest = await page.evaluate(async () => {
+    const L = window._lamina;
+    L.open('cs.csv', new TextEncoder().encode('a\n1\n2\n3\n4\n'));
+    await new Promise((r) => setTimeout(r, 60));
+    const offBefore = !(L.current.colScale && L.current.colScale.get(0));
+    await L.setColScaleOpt(0, { palette: 'turbo' });
+    const cs = L.current.colScale && L.current.colScale.get(0);
+    return { offBefore, on: !!cs, palette: cs && cs.palette };
+  });
+  (csTest.offBefore && csTest.on && csTest.palette === 'turbo')
+    ? ok('color scale: picking a palette while off enables it (turbo)')
+    : fail(`color scale opt failed: ${JSON.stringify(csTest)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

@@ -163,8 +163,9 @@ function residentEstimate(c) {
 // (Re)create the grid for a view + wire header sort/context + column hide/show +
 // update the footer. The provider is wrapped to (a) remap display columns past
 // hidden ones and (b) stamp the sort arrow onto the active column.
-function mountView(vs, info = {}) {
+function mountView(vs, info = {}, keepVScroll = false) {
   captureWidths();                                       // persist the outgoing grid's column widths
+  const prevScroll = grid ? grid.getScroll() : null;     // keep horizontal scroll across the rebuild (filter/sort/hide)
   if (grid) { grid.destroy(); grid = null; }
   const c = current;
   c.view = vs; c.info = info;                           // remember for a cheap re-render (hide/show)
@@ -213,6 +214,10 @@ function mountView(vs, info = {}) {
   const dw = {};
   for (let dc = 0; dc < vis.length; dc++) { const w = c.colWidths[vis[dc]]; if (w != null) dw[dc] = w; }
   if (Object.keys(dw).length) grid.setColWidths(dw);
+  // Restore scroll: horizontal always (same columns), vertical only on a pure
+  // re-render (hide/show/pin/format) — a filter/sort changes the row set, so it
+  // starts at the top. The browser clamps if the new extent is smaller.
+  if (prevScroll) grid.setScroll({ left: prevScroll.left, top: keepVScroll ? prevScroll.top : 0 });
   if (c.d.kind === 'delimited') {
     // No sort-on-label-click — confusing for a viewer; sort lives in the header
     // right-click menu (Sort ↑/↓). The label click is inert; the gutter click → stats.
@@ -246,7 +251,7 @@ function mountView(vs, info = {}) {
 
 // Cheap re-render of the current view (after a column hide/show — the data view
 // is unchanged, only which columns show).
-function rerender() { if (current && current.view) mountView(current.view, current.info); }
+function rerender() { if (current && current.view) mountView(current.view, current.info, true); }   // row set unchanged → keep both scroll axes
 // Override a column's detected type (number ↔ text). The schema array is shared
 // live with the views, so this changes alignment + how stats/sort treat it;
 // recompute re-applies a sort on that column under the new type.
@@ -265,6 +270,11 @@ function setColType(uc, type) {
 const PALETTES = {
   viridis: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]],
   magma: [[0, 0, 4], [81, 18, 124], [183, 55, 121], [252, 137, 97], [252, 253, 191]],
+  inferno: [[0, 0, 4], [87, 16, 110], [188, 55, 84], [249, 142, 9], [252, 255, 164]],
+  plasma: [[13, 8, 135], [126, 3, 168], [204, 71, 120], [248, 149, 64], [240, 249, 33]],
+  turbo: [[48, 18, 59], [33, 144, 237], [60, 230, 113], [223, 220, 48], [209, 47, 11]],
+  cividis: [[0, 32, 76], [42, 72, 114], [110, 112, 115], [176, 166, 114], [255, 233, 69]],
+  grayscale: [[24, 24, 24], [128, 128, 128], [240, 240, 240]],
   bluered: [[33, 102, 172], [146, 197, 222], [247, 247, 247], [244, 165, 130], [178, 24, 43]],   // diverging
 };
 function scaleColor(t, palette) {
@@ -295,7 +305,9 @@ function toggleColorScale(uc) {
   rerender();
 }
 async function setColScaleOpt(uc, patch) {
-  const c = current; if (!c || !c.colScale || !c.colScale.has(uc)) return;
+  const c = current; if (!c) return;
+  c.colScale = c.colScale || new Map();
+  if (!c.colScale.has(uc)) c.colScale.set(uc, colScaleDefault(uc));   // picking a palette/scale/clip turns it on with that option
   const cs = { ...c.colScale.get(uc), ...patch };
   if ('clip' in patch) {                                 // recompute bounds: robust p5–p95 (sampled) vs the full min/max
     if (patch.clip) { const b = await computeClipBounds(uc); if (b) { cs.lo = b.lo; cs.hi = b.hi; } }
@@ -653,20 +665,23 @@ function showColumnMenu(uc, x, y) {
   ] });
   if (isNum) {                                                        // heatmap the cells by value
     const cs = c.colScale && c.colScale.get(uc);
-    const sub = [{ label: (cs ? '✓ ' : '') + 'On', action: () => toggleColorScale(uc) }];
-    if (cs) sub.push(
+    const eff = cs || colScaleDefault(uc);                            // checkmarks reflect what WOULD apply; picking any option enables it
+    const pal = (id, lbl) => ({ label: (eff.palette === id ? '✓ ' : '') + lbl, action: () => setColScaleOpt(uc, { palette: id }) });
+    const sub = [
+      { label: (cs ? '✓ ' : '') + 'On', action: () => toggleColorScale(uc) },
       { sep: true },
-      { label: 'Scale', submenu: [
-        { label: (cs.scale === 'linear' ? '✓ ' : '') + 'Linear', action: () => setColScaleOpt(uc, { scale: 'linear' }) },
-        { label: (cs.scale === 'log' ? '✓ ' : '') + 'Log', action: () => setColScaleOpt(uc, { scale: 'log' }) },
-      ] },
-      { label: (cs.clip ? '✓ ' : '') + 'Clip outliers (p5–p95)', action: () => setColScaleOpt(uc, { clip: !cs.clip }) },
       { label: 'Palette', submenu: [
-        { label: (cs.palette === 'viridis' ? '✓ ' : '') + 'Viridis', action: () => setColScaleOpt(uc, { palette: 'viridis' }) },
-        { label: (cs.palette === 'magma' ? '✓ ' : '') + 'Magma', action: () => setColScaleOpt(uc, { palette: 'magma' }) },
-        { label: (cs.palette === 'bluered' ? '✓ ' : '') + 'Blue–red (diverging)', action: () => setColScaleOpt(uc, { palette: 'bluered' }) },
+        pal('viridis', 'Viridis'), pal('magma', 'Magma'), pal('inferno', 'Inferno'),
+        pal('plasma', 'Plasma'), pal('turbo', 'Turbo'), pal('cividis', 'Cividis'),
+        pal('grayscale', 'Grayscale'), pal('bluered', 'Blue–red (diverging)'),
       ] },
-      { label: (cs.reverse ? '✓ ' : '') + 'Reverse', action: () => setColScaleOpt(uc, { reverse: !cs.reverse }) });
+      { label: 'Scale', submenu: [
+        { label: (eff.scale === 'linear' ? '✓ ' : '') + 'Linear', action: () => setColScaleOpt(uc, { scale: 'linear' }) },
+        { label: (eff.scale === 'log' ? '✓ ' : '') + 'Log', action: () => setColScaleOpt(uc, { scale: 'log' }) },
+      ] },
+      { label: (eff.clip ? '✓ ' : '') + 'Clip outliers (p5–p95)', action: () => setColScaleOpt(uc, { clip: !eff.clip }) },
+      { label: (eff.reverse ? '✓ ' : '') + 'Reverse', action: () => setColScaleOpt(uc, { reverse: !eff.reverse }) },
+    ];
     items.push({ label: 'Color scale', submenu: sub });
     const gg = c.gutter && c.gutter[uc];                              // log-distribution gutter toggle (only when a positive log glyph exists)
     if (gg && gg.kind === 'hist' && gg.logBins) {

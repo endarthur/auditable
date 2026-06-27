@@ -1431,6 +1431,8 @@ function createGrid(element, provider, options = {}) {
     // Column widths (the sparse non-default map). get returns a copy; set
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.
+    getScroll() { return { left: g.scrollEl.scrollLeft, top: g.scrollEl.scrollTop }; },
+    setScroll(s) { if (!s) return; if (s.left != null) g.scrollEl.scrollLeft = s.left; if (s.top != null) g.scrollEl.scrollTop = s.top; repaint(); },
     getColWidths() { return { ...M.colWidths }; },
     setColWidths(widths) { M.colWidths = { ...(widths || {}) }; sizeCanvases(); repaint(); },
     // Freeze the first N display columns on the left (pin/freeze). 0 = none.
