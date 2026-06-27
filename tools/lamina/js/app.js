@@ -1442,7 +1442,11 @@ $('#ceExpr').addEventListener('keydown', (e) => { if (e.key === 'Enter') commitC
 $('#ceCommit').onclick = commitCalc;
 $('#ceCancel').onclick = closeCalcEditor;
 $('#addCalc').onclick = () => openCalcEditor(null);   // toolbar entry (header right-click is the contextual one)
-$('#precomputeBtn').onclick = () => precomputeStats();
+$('#precomputeBtn').onclick = () => precomputeStats({ show: true });
+$('#precomputeCaret').onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); showMenu(r.left, r.bottom + 2, [
+  { label: 'Precompute & show summary', action: () => precomputeStats({ show: true }) },
+  { label: 'Precompute only (warm cache)', action: () => precomputeStats({ show: false }) },
+]); };
 
 // ── autocomplete (expr.complete) on the filter + calc-expr inputs ───────────────
 // The value suggestions come from the gutter sample (a column's top categories),
@@ -2110,6 +2114,7 @@ const HELP = {
 function showOverlay(title, html) {
   $('#helpTitle').textContent = title;
   $('#helpBody').innerHTML = html;
+  $('.help-box').classList.remove('wide');               // only the column summary is wide
   $('#help').classList.add('show');
 }
 function showHelp(topic) { const [title, body] = HELP[topic] || HELP.about; showOverlay(title, body); }
@@ -2607,11 +2612,77 @@ async function showColumnStats(uc) {
   await run();
 }
 
+// ── column summary table (all columns × metrics) ────────────────────────────────
+// Reads the precompute cache; one HTML table, click-to-sort, row → column detail.
+const SUM_COLS = [
+  { k: 'name', label: 'column', txt: true }, { k: 'type', label: 'type', txt: true },
+  { k: 'n', label: 'n' }, { k: 'nullPct', label: 'null%', pct: true }, { k: 'nonnum', label: 'non-num' },
+  { k: 'min', label: 'min' }, { k: 'max', label: 'max' }, { k: 'mean', label: 'mean' }, { k: 'std', label: 'std' },
+  { k: 'cv', label: 'CV' }, { k: 'skew', label: 'skew' }, { k: 'zeroPct', label: 'zero%', pct: true },
+  { k: 'p50', label: 'p50' }, { k: 'distinct', label: 'distinct' },
+];
+let _summarySort = { col: null, dir: 1 };
+function buildSummaryRows(c) {
+  const rows = [];
+  for (let uc = 0; uc < c.schema.length; uc++) {
+    const st = c._statsCache && c._statsCache.get(`${uc}|0|0`); if (!st) continue;
+    const s = c.schema[uc];
+    if (st.kind === 'number') rows.push({ uc, name: s.name, calc: !!s.calc, type: 'num', n: st.n, nullPct: st.count ? 100 * st.nulls / st.count : 0, nonnum: st.bad || 0, min: st.min, max: st.max, mean: st.mean, std: st.std, cv: st.cv, skew: st.skew, zeroPct: st.n ? 100 * st.zeros / st.n : 0, p50: st.quantiles ? st.quantiles.p50 : null, distinct: null, approx: !!st.quantilesApprox });
+    else rows.push({ uc, name: s.name, calc: !!s.calc, type: 'txt', n: st.count - st.nulls, nullPct: st.count ? 100 * st.nulls / st.count : 0, nonnum: null, min: null, max: null, mean: null, std: null, cv: null, skew: null, zeroPct: null, p50: null, distinct: st.distinct, approx: false });
+  }
+  return rows;
+}
+function renderSummary(c) {
+  let rows = buildSummaryRows(c);
+  if (!rows.length) return '<div style="color:var(--dim)">no precomputed columns</div>';
+  const srt = _summarySort;
+  if (srt.col) rows = rows.slice().sort((a, b) => { const x = a[srt.col], y = b[srt.col]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return typeof x === 'string' ? srt.dir * x.localeCompare(y) : srt.dir * (x - y); });
+  const fmtCell = (v, col) => v == null ? '' : col.pct ? (v > 0 && v < 1 ? v.toFixed(1) : Math.round(v)) + '%' : col.txt ? esc(String(v)) : fmtN(v);
+  let h = '<button id="sumCopy" class="sum-copy">copy all</button><div style="overflow:auto;max-height:62vh;margin-top:4px"><table class="sum-tbl"><thead><tr>';
+  for (const col of SUM_COLS) h += `<th data-k="${col.k}" class="${col.txt ? '' : 'num'}${srt.col === col.k ? ' sorted' : ''}">${col.label}${srt.col === col.k ? (srt.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+  h += '</tr></thead><tbody>';
+  for (const r of rows) {
+    h += `<tr data-uc="${r.uc}">`;
+    for (const col of SUM_COLS) {
+      if (col.k === 'name') { h += `<td>${r.calc ? '<span style="color:var(--accent)">ƒ </span>' : ''}${esc(String(r.name))}</td>`; continue; }
+      if (col.k === 'p50' && r.approx && r.p50 != null) { h += `<td class="num">${fmtN(r.p50)} <span style="color:var(--dim)">≈</span></td>`; continue; }
+      h += `<td class="${col.txt ? '' : 'num'}">${fmtCell(r[col.k], col)}</td>`;
+    }
+    h += '</tr>';
+  }
+  return h + '</tbody></table></div>';
+}
+function summaryTSV(c) {
+  const rows = buildSummaryRows(c), L = [SUM_COLS.map((col) => col.label).join('\t')];
+  for (const r of rows) L.push(SUM_COLS.map((col) => { const v = r[col.k]; return v == null ? '' : col.pct ? v.toFixed(1) : v; }).join('\t'));
+  return L.join('\n');
+}
+function paintSummary(c) {
+  $('#helpBody').innerHTML = renderSummary(c);
+  $('#helpBody').querySelectorAll('.sum-tbl th[data-k]').forEach((th) => th.onclick = () => {
+    const k = th.getAttribute('data-k');
+    if (_summarySort.col === k) _summarySort.dir *= -1; else _summarySort = { col: k, dir: (k === 'name' || k === 'type') ? 1 : -1 };   // numbers default desc (surface the big ones)
+    paintSummary(c);
+  });
+  $('#helpBody').querySelectorAll('.sum-tbl tbody tr').forEach((tr) => tr.onclick = () => { showColumnStats(+tr.getAttribute('data-uc')); });   // row → that column's detail (showOverlay drops .wide)
+  const cp = $('#sumCopy'); if (cp) cp.onclick = () => { copyText(summaryTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
+}
+function showSummary() {
+  const c = current; if (!c) return;
+  $('#helpTitle').textContent = `Column summary — ${c.label}${c.filterResult ? ' (filtered)' : ''}`;
+  $('.help-box').classList.add('wide');
+  $('#help').classList.add('show');
+  paintSummary(c);
+}
+
 // Precompute exact stats for EVERY column in one BMA-style two-pass scan (moments +
 // histogram; ≈ quantiles), filling the per-column cache so every popup is instant.
-// Respects the current filter. Progress in the footer; Esc cancels.
-async function precomputeStats() {
+// Respects the current filter. Progress in the footer; Esc cancels. opts.show → open
+// the column summary after (and skip the scan if every column is already cached).
+async function precomputeStats(opts = {}) {
   const c = current; if (!c || c.d.kind !== 'delimited') return;
+  const allCached = c._statsCache && c.schema.every((_, uc) => c._statsCache.has(`${uc}|0|0`));
+  if (allCached) { if (opts.show) showSummary(); return; }   // cache already warm → no rescan
   const btn = $('#precomputeBtn'); if (btn) btn.classList.add('busy');
   const ac = newFooterScan();
   $('#meta').textContent = 'precomputing stats…';
@@ -2624,8 +2695,8 @@ async function precomputeStats() {
     c._statsCache = c._statsCache || new Map();
     let nfilled = 0;
     for (let uc = 0; uc < all.length; uc++) if (all[uc]) { c._statsCache.set(`${uc}|0|0`, all[uc]); nfilled++; }
-    $('#meta').textContent = `stats precomputed for ${nfilled} columns — click any glyph`;
-    setTimeout(() => { if (current === c && $('#meta').textContent.startsWith('stats precomputed')) $('#meta').textContent = c._meta || ''; }, 2500);
+    $('#meta').textContent = c._meta || `stats precomputed for ${nfilled} columns`;
+    if (opts.show) showSummary();
   } catch (e) {
     if (e && e.name === 'AbortError') $('#meta').textContent = c._meta || 'precompute cancelled';
     else $('#meta').textContent = `precompute: ${e.message}`;
@@ -2669,7 +2740,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, precomputeStats, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, precomputeStats, showSummary, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

@@ -1405,6 +1405,32 @@ try {
     ? ok('precompute: all columns cached (exact moments + hist, ≈ quantiles); "compute exact" upgrades one column')
     : fail(`precompute failed: ${JSON.stringify(prec)}`);
 
+  // ── column summary table: precompute → all-columns table, click-to-sort, row→detail ──
+  const summary = await page.evaluate(async () => {
+    const L = window._lamina;
+    let csv = 'a,b,lito\n';
+    for (let i = 0; i < 30; i++) csv += `${i},${(i % 7) * (i % 7)},${['OX', 'SU'][i % 2]}\n`;
+    L.open('sum.csv', new TextEncoder().encode(csv));
+    await new Promise((r) => setTimeout(r, 60));
+    await L.precomputeStats({ show: true });
+    await new Promise((r) => setTimeout(r, 40));
+    const wide = document.querySelector('.help-box').classList.contains('wide');
+    const bodyRows = document.querySelectorAll('.sum-tbl tbody tr').length;
+    // sort by CV descending (click the CV header)
+    [...document.querySelectorAll('.sum-tbl th')].find((t) => t.getAttribute('data-k') === 'cv').click();
+    await new Promise((r) => setTimeout(r, 20));           // paintSummary rebuilds the table → re-query
+    const firstName = document.querySelector('.sum-tbl tbody tr td').textContent;   // top row after sort
+    const sorted = !![...document.querySelectorAll('.sum-tbl th')].find((t) => t.getAttribute('data-k') === 'cv' && t.classList.contains('sorted'));
+    // click a row → opens that column's Statistics popup (overlay no longer wide)
+    document.querySelector('.sum-tbl tbody tr').click(); await new Promise((r) => setTimeout(r, 60));
+    const wentToDetail = !document.querySelector('.help-box').classList.contains('wide') && /Statistics —/.test(document.getElementById('helpTitle').textContent);
+    document.getElementById('help').classList.remove('show');
+    return { wide, bodyRows, sorted, firstName, wentToDetail };
+  });
+  (summary.wide && summary.bodyRows === 3 && summary.sorted && summary.wentToDetail)
+    ? ok(`column summary: ${summary.bodyRows}-column table, sort by CV (top "${summary.firstName.trim()}"), row→detail`)
+    : fail(`column summary failed: ${JSON.stringify(summary)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
