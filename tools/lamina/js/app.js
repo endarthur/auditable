@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
 import { compile, compileBool, validate, deps, complete, tokenize } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
@@ -267,6 +267,7 @@ function setColType(uc, type) {
   current.schema[uc].type = type;
   current.typeOverrides = current.typeOverrides || {};
   current.typeOverrides[current.schema[uc].name] = type;   // by name → round-trips in the lens
+  if (current._statsCache) current._statsCache.clear();    // type change → stats meaning changed
   recompute();
 }
 
@@ -833,6 +834,7 @@ function toggleSort(col) {
 async function applyFilter(str) {
   const c = current;
   if (!c) return;
+  if (c._statsCache) c._statsCache.clear();              // filter changes the matched set → cached stats are stale
   if (!str.trim()) { $('#filter').classList.remove('err'); c.filterResult = null; const r = recompute(); refreshGutterFiltered(); return r; }
   const cols = c.d.kind === 'delimited' ? c.d.schema : [{ name: 'line' }];
   const v = validate(str, cols);                          // parse + unknown-column → red box, friendly message
@@ -1027,6 +1029,7 @@ function initCalcState() {
 // under add/edit/remove and lets a calc reference an earlier calc.
 function applyCalcs() {
   const c = current; if (!c) return;
+  if (c._statsCache) c._statsCache.clear();             // calc columns changed → cached stats / column indices stale
   const calcs = c.calcs;
   if (!calcs.length) {
     c.source = c._src0; c.baseVs = c._vs0; c.schema = c._schema0; c.d.schema = c._schema0;
@@ -1439,6 +1442,7 @@ $('#ceExpr').addEventListener('keydown', (e) => { if (e.key === 'Enter') commitC
 $('#ceCommit').onclick = commitCalc;
 $('#ceCancel').onclick = closeCalcEditor;
 $('#addCalc').onclick = () => openCalcEditor(null);   // toolbar entry (header right-click is the contextual one)
+$('#precomputeBtn').onclick = () => precomputeStats();
 
 // ── autocomplete (expr.complete) on the filter + calc-expr inputs ───────────────
 // The value suggestions come from the gutter sample (a column's top categories),
@@ -2517,9 +2521,11 @@ function renderStats(st, ex = {}) {
     if (st.skew != null) h += row('skew', fmtN(st.skew));
     if (st.zeros) h += row('zeros', `${st.zeros.toLocaleString()} <span style="color:var(--dim);font-size:10px">(${(100 * st.zeros / st.n).toFixed(st.zeros * 100 / st.n < 1 ? 1 : 0)}%)</span>`);
     if (st.quantiles) {
+      const lab = (k) => st.quantilesApprox ? `${k} <span style="color:var(--dim)">≈</span>` : k;
       const q = st.quantiles;
-      h += row('p5', fmtN(q.p5)) + row('p25', fmtN(q.p25)) + row('<b>median</b>', `<b>${fmtN(q.p50)}</b>`) + row('p75', fmtN(q.p75)) + row('p95', fmtN(q.p95));
+      h += row(lab('p5'), fmtN(q.p5)) + row(lab('p25'), fmtN(q.p25)) + row(st.quantilesApprox ? '<b>median ≈</b>' : '<b>median</b>', `<b>${fmtN(q.p50)}</b>`) + row(lab('p75'), fmtN(q.p75)) + row(lab('p95'), fmtN(q.p95));
     } else if (st.quantilesCapped) h += row('quantiles', '<span style="color:var(--dim)">too many values</span>');
+    if (st.precomputed) h += `<tr><td colspan="2" style="color:var(--dim);font-size:11px;padding-top:6px">≈ quantiles from precompute · <button id="statsExact" style="font:inherit;font-size:11px;color:var(--accent);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline">compute exact</button></td></tr>`;
     return copyBtn + h + "</table>";
   }
   let h = '<table style="border-collapse:collapse">';
@@ -2551,8 +2557,35 @@ async function showColumnStats(uc) {
   const numeric = (c.schema[uc] && c.schema[uc].type) === 'number';
   const suffix = c.filterResult ? ' (filtered)' : '';
   const ex = { excludeZero: false, excludeNeg: false };       // re-scan filters; toggled via the in-popup chips
-  const run = async () => {
-    if (_statsAbort) _statsAbort.abort();                      // a re-run (apply chips) supersedes the prior scan
+  // Wire the popup's live bits (chart, log toggle, exclude chips, copy, exact). Used
+  // by both the fresh-scan path and the cache-hit path.
+  const wireStats = (st) => {
+    const canvas = $('#profHist');
+    if (canvas && st.histogram) {
+      let logOn = false;
+      const draw = () => drawProfileHist(canvas, logOn && st.logHistogram ? st.logHistogram : st.histogram, st.quantiles);
+      requestAnimationFrame(draw);
+      const lg = $('#profLog');
+      if (lg) lg.onclick = () => { logOn = !logOn; lg.classList.toggle('on', logOn); draw(); };
+    }
+    const oz = $('#optNoZero'), on = $('#optNoNeg'), ap = $('#optApply');
+    if (oz && on && ap) {
+      const sync = () => { const dirty = oz.checked !== ex.excludeZero || on.checked !== ex.excludeNeg; ap.disabled = !dirty; ap.classList.toggle('dirty', dirty); };
+      oz.onchange = sync; on.onchange = sync;
+      ap.onclick = () => { if (ap.disabled) return; ex.excludeZero = oz.checked; ex.excludeNeg = on.checked; run(); };
+    }
+    const cb = $('#statsCopy');
+    if (cb) cb.onclick = () => { copyText(statsToTSV(st, name)); cb.textContent = 'copied ✓'; setTimeout(() => { cb.textContent = 'copy'; }, 1200); };
+    const xe = $('#statsExact');   // precomputed (≈) → recompute this one column exactly
+    if (xe) xe.onclick = () => run({ force: true });
+  };
+  const cacheKey = () => `${uc}|${ex.excludeZero ? 1 : 0}|${ex.excludeNeg ? 1 : 0}`;
+  const run = async (opts = {}) => {
+    if (!opts.force && c._statsCache) {                        // cache hit → instant, no scan
+      const hit = c._statsCache.get(cacheKey());
+      if (hit) { showOverlay(`Statistics — ${name}${suffix}`, renderStats(hit, ex)); wireStats(hit); return; }
+    }
+    if (_statsAbort) _statsAbort.abort();                      // a re-run (apply chips / exact) supersedes the prior scan
     const ac = new AbortController(); _statsAbort = ac;
     showOverlay(`Statistics — ${name}${suffix}`, '<div style="color:#777">computing… <span id="scanPct">0%</span> <button id="scanCancel" style="font:inherit;font-size:11px;color:var(--muted);background:var(--bg-field);border:1px solid var(--bd2);border-radius:4px;padding:1px 8px;cursor:pointer;margin-left:6px">cancel</button></div>');
     const xb = $('#scanCancel'); if (xb) xb.onclick = () => ac.abort();
@@ -2563,31 +2596,40 @@ async function showColumnStats(uc) {
         onProgress: (b, n) => { const el = $('#scanPct'); if (el) el.textContent = `${n ? Math.round((100 * b) / n) : 0}%`; },
       });
       if (ac.signal.aborted) return;
+      (c._statsCache || (c._statsCache = new Map())).set(cacheKey(), st);   // exact result → cache (overwrites a precomputed ≈ entry)
       showOverlay(`Statistics — ${name}${suffix}`, renderStats(st, ex));
-      const canvas = $('#profHist');
-      if (canvas && st.histogram) {
-        let logOn = false;
-        const draw = () => drawProfileHist(canvas, logOn && st.logHistogram ? st.logHistogram : st.histogram, st.quantiles);
-        requestAnimationFrame(draw);                              // after layout (canvas has a width)
-        const lg = $('#profLog');
-        if (lg) lg.onclick = () => { logOn = !logOn; lg.classList.toggle('on', logOn); draw(); };
-      }
-      // exclude toggles STAGE — they don't re-scan until "apply" (a full pass on a
-      // big column is expensive; ticking both shouldn't fire two scans).
-      const oz = $('#optNoZero'), on = $('#optNoNeg'), ap = $('#optApply');
-      if (oz && on && ap) {
-        const sync = () => { const dirty = oz.checked !== ex.excludeZero || on.checked !== ex.excludeNeg; ap.disabled = !dirty; ap.classList.toggle('dirty', dirty); };
-        oz.onchange = sync; on.onchange = sync;
-        ap.onclick = () => { if (ap.disabled) return; ex.excludeZero = oz.checked; ex.excludeNeg = on.checked; run(); };
-      }
-      const cb = $('#statsCopy');
-      if (cb) cb.onclick = () => { copyText(statsToTSV(st, name)); cb.textContent = 'copied ✓'; setTimeout(() => { cb.textContent = 'copy'; }, 1200); };
+      wireStats(st);
     } catch (e) {
       if (e && e.name === 'AbortError') { showOverlay(`Statistics — ${name}`, '<div style="color:var(--dim)">scan cancelled — reopen to retry</div>'); return; }
       showOverlay(`Statistics — ${name}`, `<div style="color:var(--fault)">${e.message}</div>`);
     } finally { if (_statsAbort === ac) _statsAbort = null; }
   };
   await run();
+}
+
+// Precompute exact stats for EVERY column in one BMA-style two-pass scan (moments +
+// histogram; ≈ quantiles), filling the per-column cache so every popup is instant.
+// Respects the current filter. Progress in the footer; Esc cancels.
+async function precomputeStats() {
+  const c = current; if (!c || c.d.kind !== 'delimited') return;
+  const btn = $('#precomputeBtn'); if (btn) btn.classList.add('busy');
+  const ac = newFooterScan();
+  $('#meta').textContent = 'precomputing stats…';
+  try {
+    const all = await scanAllColumnStats(c.source, {
+      schema: c.schema, dataStart: c.dataStart, decimal: c.d.decimal, rows: c.filterResult ? c.filterResult.nums : null, signal: ac.signal,
+      onProgress: (b, n) => { $('#meta').textContent = `precomputing stats… ${n ? Math.round(100 * b / n) : 0}% · Esc to cancel`; },
+    });
+    if (ac.signal.aborted) return;
+    c._statsCache = c._statsCache || new Map();
+    let nfilled = 0;
+    for (let uc = 0; uc < all.length; uc++) if (all[uc]) { c._statsCache.set(`${uc}|0|0`, all[uc]); nfilled++; }
+    $('#meta').textContent = `stats precomputed for ${nfilled} columns — click any glyph`;
+    setTimeout(() => { if (current === c && $('#meta').textContent.startsWith('stats precomputed')) $('#meta').textContent = c._meta || ''; }, 2500);
+  } catch (e) {
+    if (e && e.name === 'AbortError') $('#meta').textContent = c._meta || 'precompute cancelled';
+    else $('#meta').textContent = `precompute: ${e.message}`;
+  } finally { if (_footerScanAbort === ac) _footerScanAbort = null; if (btn) btn.classList.remove('busy'); }
 }
 
 // ── drag-drop ──
@@ -2627,7 +2669,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, precomputeStats, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

@@ -50,6 +50,7 @@
   #toolbar .mb { background: transparent; border-color: transparent; padding: 4px 9px; }
   #toolbar .mb:hover { background: var(--border); border-color: var(--bd2); }
   #toolbar .spacer { flex: 1; }
+  #toolbar #precomputeBtn.busy { color: var(--accent); border-color: var(--accent); }
   #toolbar #tbBreak { display: none; }                        /* a flex line-break; only active on narrow (below) */
   #toolbar #filterWrap { flex: 1 1 auto; min-width: 140px; max-width: 460px; position: relative; display: flex; }
   #toolbar #filter {
@@ -392,6 +393,7 @@
     <span id="filterWrap"><div id="filterHL" class="exprhl" aria-hidden="true"></div><input id="filter" type="text" spellcheck="false" placeholder="filter…  e.g.  grade > 1 and lito = &quot;OXIDE&quot;"><button id="filterClear" title="clear filter (Esc)" tabindex="-1">×</button></span>
     <button id="filterGo" title="apply filter (Enter)">Filter</button>
     <button id="addCalc" title="Add calculated column — derive a column from a formula">ƒ+ col</button>
+    <button id="precomputeBtn" title="Precompute stats for every column in one pass — makes each glyph's Statistics open instantly">Σ stats</button>
     <input id="goto" type="number" min="1" placeholder="row #" title="go to row">
     <span id="tbBreak" aria-hidden="true"></span>
     <span class="spacer"></span>

@@ -93,3 +93,80 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
   const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN).map(([value, n]) => ({ value, n }));
   return { kind: 'string', count, nulls, distinct: freq.size, cappedDistinct, top };
 }
+
+// Quantiles interpolated from a histogram's bin counts over [min,max] — used by the
+// bulk precompute (exact percentiles would need a per-column value buffer). Approximate.
+function quantilesFromHist(bins, min, max) {
+  const n = bins.length, total = bins.reduce((s, v) => s + v, 0); if (!total) return null;
+  const w = (max - min) / n;
+  const q = (p) => { const target = p * total; let cum = 0; for (let k = 0; k < n; k++) { if (cum + bins[k] >= target) return min + (k + (bins[k] ? (target - cum) / bins[k] : 0)) * w; cum += bins[k]; } return max; };
+  return { p5: q(0.05), p25: q(0.25), p50: q(0.5), p75: q(0.75), p95: q(0.95) };
+}
+
+/**
+ * BMA-style bulk stats: TWO passes over the file (not 2×columns) computing exact
+ * moments + an exact histogram for EVERY column at once, plus histogram-interpolated
+ * (≈) quantiles. No per-column value buffers → bounded memory. Pass 1 = moments +
+ * categorical freqs + bounds; pass 2 = histogram bins using pass-1 bounds. Each
+ * returned st is "lite" (precomputed:true, quantilesApprox:true) and shape-compatible
+ * with scanColumnStats so renderStats / the cache treat them the same.
+ * @returns {Promise<Array<object|null>>}  per-column st (null for an all-empty column)
+ */
+export async function scanAllColumnStats(source, { schema, dataStart = 0, decimal = '.', rows = null, onProgress, signal } = {}) {
+  const cols = schema.length;
+  const acc = schema.map((s) => s.type === 'number'
+    ? { num: true, count: 0, nulls: 0, bad: 0, zeros: 0, nNum: 0, min: Infinity, max: -Infinity, posMin: Infinity, sum: 0, mean: 0, m2: 0, m3: 0, badSamples: new Set(), lin: null, log: null }
+    : { num: false, count: 0, nulls: 0, freq: new Map(), capped: false });
+  // pass 1 — moments + bounds (+ categorical freqs)
+  await source.eachRecord({ dataStart, rows, signal, onProgress: (b, n) => onProgress && onProgress(b, n * 2) }, (disp, fields) => {
+    for (let i = 0; i < cols; i++) {
+      const a = acc[i]; a.count++;
+      const raw = fields[i];
+      if (a.num) {
+        if (raw == null || raw === '') { a.nulls++; continue; }
+        const x = parseNum(raw, decimal);
+        if (Number.isNaN(x)) { a.bad++; if (a.badSamples.size < 12) a.badSamples.add(raw); continue; }
+        a.nNum++; if (x === 0) a.zeros++;
+        if (x < a.min) a.min = x; if (x > a.max) a.max = x; if (x > 0 && x < a.posMin) a.posMin = x;
+        a.sum += x;
+        const n1 = a.nNum, delta = x - a.mean, dn = delta / n1, t1 = delta * dn * (n1 - 1);
+        a.mean += dn; a.m3 += t1 * dn * (n1 - 2) - 3 * dn * a.m2; a.m2 += t1;
+      } else {
+        if (raw == null || raw === '') { a.nulls++; continue; }
+        const cur = a.freq.get(raw);
+        if (cur !== undefined) a.freq.set(raw, cur + 1);
+        else if (a.freq.size < 200) a.freq.set(raw, 1);
+        else a.capped = true;
+      }
+    }
+  });
+  // pass 2 — histogram bins for numeric columns that have a range
+  const hcols = [];
+  for (let i = 0; i < cols; i++) { const a = acc[i]; if (a.num && a.nNum && a.max > a.min) { a.lin = new Float64Array(HIST_BINS); a.log = (a.posMin > 0 && a.posMin < a.max) ? new Float64Array(HIST_BINS) : null; hcols.push(i); } }
+  if (hcols.length) {
+    await source.eachRecord({ dataStart, rows, signal, onProgress: (b, n) => onProgress && onProgress(n + b, n * 2) }, (disp, fields) => {
+      for (let h = 0; h < hcols.length; h++) {
+        const i = hcols[h], a = acc[i], raw = fields[i];
+        if (raw == null || raw === '') continue;
+        const x = parseNum(raw, decimal); if (Number.isNaN(x)) continue;
+        const sp = (a.max - a.min) || 1; let k = Math.floor((x - a.min) / sp * HIST_BINS); if (k >= HIST_BINS) k = HIST_BINS - 1; if (k < 0) k = 0; a.lin[k]++;
+        if (a.log && x > 0) { const l0 = Math.log(a.posMin), ls = (Math.log(a.max) - l0) || 1; let kk = Math.floor((Math.log(x) - l0) / ls * HIST_BINS); if (kk >= HIST_BINS) kk = HIST_BINS - 1; if (kk < 0) kk = 0; a.log[kk]++; }
+      }
+    });
+  }
+  return acc.map((a) => {
+    if (!a.count) return null;
+    if (a.num) {
+      const std = a.nNum > 1 ? Math.sqrt(a.m2 / (a.nNum - 1)) : 0;
+      const cv = (a.nNum > 1 && a.mean !== 0) ? std / Math.abs(a.mean) : null;
+      const skew = (a.nNum > 2 && a.m2 > 0) ? (Math.sqrt(a.nNum) * a.m3) / Math.pow(a.m2, 1.5) : null;
+      const histogram = a.lin ? { bins: Array.from(a.lin), min: a.min, max: a.max, log: false } : null;
+      const logHistogram = a.log ? { bins: Array.from(a.log), min: a.posMin, max: a.max, log: true } : null;
+      const quantiles = a.lin ? quantilesFromHist(a.lin, a.min, a.max) : null;
+      return { kind: 'number', count: a.count, nulls: a.nulls, bad: a.bad, badSamples: [...a.badSamples], excluded: 0, excludeZero: false, excludeNeg: false, zeros: a.zeros, cv, skew, n: a.nNum, min: a.nNum ? a.min : null, max: a.nNum ? a.max : null, mean: a.nNum ? a.mean : null, std, sum: a.sum, quantiles, histogram, logHistogram, quantilesApprox: true, precomputed: true };
+    }
+    const tot = [...a.freq.values()].reduce((s, v) => s + v, 0) || 1;
+    const top = [...a.freq.entries()].sort((x, y) => y[1] - x[1]).slice(0, 12).map(([value, n]) => ({ value, n }));
+    return { kind: 'string', count: a.count, nulls: a.nulls, distinct: a.freq.size, cappedDistinct: a.capped, top, precomputed: true };
+  });
+}

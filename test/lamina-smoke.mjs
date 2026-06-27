@@ -1373,6 +1373,38 @@ try {
     ? ok(`panel resize: drag widened ${resize.w0}→${resize.w1}px, grid inset + width persisted`)
     : fail(`panel resize failed: ${JSON.stringify(resize)}`);
 
+  // ── precompute stats (BMA-style 2-pass) fills the cache; exact-on-demand upgrade ──
+  const prec = await page.evaluate(async () => {
+    const L = window._lamina;
+    const vals = [0, 0, 1, 2, 2, 3, 5, 8, 13, 21];
+    let csv = 'id,g,lito\n';
+    for (let i = 0; i < vals.length; i++) csv += `${i},${vals[i]},${['OX', 'SU', 'OX'][i % 3]}\n`;
+    L.open('pc.csv', new TextEncoder().encode(csv));
+    await new Promise((r) => setTimeout(r, 60));
+    const exact = await L.scanColumnStats(L.current.source, { col: 1, dataStart: L.current.dataStart });   // baseline
+    await L.precomputeStats();
+    const cache = L.current._statsCache, g = cache && cache.get('1|0|0'), lito = cache && cache.get('2|0|0');
+    const out = {
+      cached: !!g, precomputed: g && g.precomputed === true, approx: g && g.quantilesApprox === true,
+      meanMatch: g && Math.abs(g.mean - exact.mean) < 1e-9, skewMatch: g && Math.abs((g.skew || 0) - (exact.skew || 0)) < 1e-9,
+      zerosMatch: g && g.zeros === exact.zeros, hist: !!(g && g.histogram),
+      medianClose: g && Math.abs(g.quantiles.p50 - exact.quantiles.p50) < 3,
+      litoKind: lito && lito.kind, litoTop: lito && lito.top && lito.top.length,
+    };
+    // open the precomputed numeric column → exact button present → upgrade to exact
+    await L.showColumnStats(1); await new Promise((r) => setTimeout(r, 40));
+    out.exactBtn = !!document.getElementById('statsExact');
+    if (out.exactBtn) document.getElementById('statsExact').click();
+    await new Promise((r) => setTimeout(r, 100));
+    const up = L.current._statsCache.get('1|0|0');
+    out.upgraded = up && !up.precomputed && !up.quantilesApprox;
+    document.getElementById('help').classList.remove('show');
+    return out;
+  });
+  (prec.cached && prec.precomputed && prec.approx && prec.meanMatch && prec.skewMatch && prec.zerosMatch && prec.hist && prec.medianClose && prec.litoKind === 'string' && prec.litoTop >= 2 && prec.exactBtn && prec.upgraded)
+    ? ok('precompute: all columns cached (exact moments + hist, ≈ quantiles); "compute exact" upgrades one column')
+    : fail(`precompute failed: ${JSON.stringify(prec)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
