@@ -786,6 +786,7 @@ function createGrid(element, provider, options = {}) {
     gutterListeners: [],
     gutterBrushListeners: [],
     gutterBrushMoveListeners: [],
+    gutterHoverListeners: [],
     gutterBrush: null,
     contextListeners: [],
     _cleanup: [],
@@ -1254,9 +1255,24 @@ function createGrid(element, provider, options = {}) {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   }
+  const emitGutterHover = (col, frac, cx, cy) => { for (const cb of g.gutterHoverListeners) { try { cb(col, frac, cx, cy); } catch (err) { console.error('[loom] onGutterHover threw', err); } } };
   function onHeaderMove(e) {
     if (document.body.style.cursor === 'col-resize') return; // mid-drag
-    colHdr.style.cursor = colBorderAt(e.clientX) >= 0 ? 'col-resize' : '';
+    const onBorder = colBorderAt(e.clientX) >= 0;
+    const rect = colHdr.getBoundingClientRect();
+    const overGutter = M.hdrGutterH > 0 && !onBorder && (e.clientY - rect.top) > M.hdrLabelH;
+    colHdr.style.cursor = onBorder ? 'col-resize' : overGutter ? 'pointer' : '';
+    if (!g.gutterHoverListeners.length || g.gutterBrush) return;   // no listeners, or a brush owns the pointer
+    if (overGutter) {
+      const localX = e.clientX - rect.left, pw = pinnedW(), pinned = localX < pw;
+      const col = colAtX(M, pinned ? localX : localX + scroll.scrollLeft);
+      if (col >= 0 && col < M.totalCols) {
+        const colLeft = colXOf(col) - (pinned ? 0 : scroll.scrollLeft);
+        emitGutterHover(col, Math.max(0, Math.min(1, (e.clientX - rect.left - colLeft) / colWOf(col))), e.clientX, e.clientY);
+        return;
+      }
+    }
+    emitGutterHover(null);
   }
   function onHeaderDblClick(e) {
     const c = colBorderAt(e.clientX);
@@ -1290,7 +1306,7 @@ function createGrid(element, provider, options = {}) {
     const onUp = () => {
       const b = g.gutterBrush; done(); g.gutterBrush = null; repaint();
       if (!b) return;                                  // cancelled by Esc
-      if (!b.moved) { for (const cb of g.gutterListeners) { try { cb(col); } catch (err) { console.error('[loom] onGutterClick threw', err); } } return; }
+      if (!b.moved) { const frac = b.x0 / cw; for (const cb of g.gutterListeners) { try { cb(col, frac); } catch (err) { console.error('[loom] onGutterClick threw', err); } } return; }
       const lo = Math.min(b.x0, b.x1) / cw, hi = Math.max(b.x0, b.x1) / cw;
       for (const cb of g.gutterBrushListeners) { try { cb(col, lo, hi); } catch (err) { console.error('[loom] onGutterBrush threw', err); } }
     };
@@ -1319,13 +1335,16 @@ function createGrid(element, provider, options = {}) {
     if (c < 0 || c >= M.totalCols) return;
     for (const cb of g.headerContextListeners) { try { cb({ col: c, clientX: e.clientX, clientY: e.clientY }); } catch (err) { console.error('[loom] onHeaderContextMenu listener threw', err); } }
   }
+  const onHeaderLeave = () => emitGutterHover(null);
   colHdr.addEventListener('mousedown', onHeaderMouseDown);
   colHdr.addEventListener('mousemove', onHeaderMove);
+  colHdr.addEventListener('mouseleave', onHeaderLeave);
   colHdr.addEventListener('dblclick', onHeaderDblClick);
   colHdr.addEventListener('click', onHeaderClickEvt);
   colHdr.addEventListener('contextmenu', onHeaderContextMenuEvt);
   g._cleanup.push(() => colHdr.removeEventListener('mousedown', onHeaderMouseDown));
   g._cleanup.push(() => colHdr.removeEventListener('mousemove', onHeaderMove));
+  g._cleanup.push(() => colHdr.removeEventListener('mouseleave', onHeaderLeave));
   g._cleanup.push(() => colHdr.removeEventListener('dblclick', onHeaderDblClick));
   g._cleanup.push(() => colHdr.removeEventListener('click', onHeaderClickEvt));
   g._cleanup.push(() => colHdr.removeEventListener('contextmenu', onHeaderContextMenuEvt));
@@ -1429,6 +1448,8 @@ function createGrid(element, provider, options = {}) {
     // Live during a gutter brush drag: cb(col, loFrac, hiFrac, clientX, clientY) on
     // each move; cb(col, null, null) on release/cancel (host hides any tooltip).
     onGutterBrushMove(cb) { g.gutterBrushMoveListeners.push(cb); return () => { const i = g.gutterBrushMoveListeners.indexOf(cb); if (i >= 0) g.gutterBrushMoveListeners.splice(i, 1); }; },
+    // Hover over the gutter strip: cb(col, frac, clientX, clientY); cb(null) on leave.
+    onGutterHover(cb) { g.gutterHoverListeners.push(cb); return () => { const i = g.gutterHoverListeners.indexOf(cb); if (i >= 0) g.gutterHoverListeners.splice(i, 1); }; },
     // Column widths (the sparse non-default map). get returns a copy; set
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.

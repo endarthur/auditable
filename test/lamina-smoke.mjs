@@ -703,6 +703,40 @@ try {
     ? ok(`brush tooltip: live range "${tip.text}" while dragging, hides on release`)
     : fail(`brush tooltip failed: ${JSON.stringify(tip)}`);
 
+  // ── gutter hover tooltip + categorical click/drag filtering ──
+  const catGut = await page.evaluate(async () => {
+    const L = window._lamina;
+    let csv = 'grade,lito\n';
+    for (let i = 0; i < 300; i++) csv += `${(i % 30) * 0.5},${['OXIDE', 'SULF', 'TRANS'][i % 3]}\n`;
+    L.open('cg.csv', new TextEncoder().encode(csv));
+    await new Promise((r) => setTimeout(r, 150));
+    const tip = document.querySelector('.brush-tip');
+    // hover the categorical glyph (col 1) near the left → first category, with a %
+    L.showGutterTip(1, 0.05, 300, 50);
+    const catHover = tip && tip.style.display === 'block' && /OXIDE|SULF|TRANS/.test(tip.textContent) && /%/.test(tip.textContent);
+    const catHoverText = tip && tip.textContent;
+    // hover the numeric glyph (col 0) → a ≈ value
+    L.showGutterTip(0, 0.5, 300, 50);
+    const numHover = tip && /≈/.test(tip.textContent);
+    L.showGutterTip(null);                                  // leave → hide
+    const hidden = tip && tip.style.display === 'none';
+    // click the categorical glyph near the left → filter to that one category
+    L.gutterClick(1, 0.05);
+    await new Promise((r) => setTimeout(r, 80));
+    const box1 = document.getElementById('filter').value;
+    const oneCat = /^lito == "(OXIDE|SULF|TRANS)"$/.test(box1);
+    // drag across the whole categorical glyph → in (…) of the covered categories
+    L.gutterBrush(1, 0.0, 1.0);
+    await new Promise((r) => setTimeout(r, 80));
+    const box2 = document.getElementById('filter').value;
+    const manyCat = /^lito in \(.*OXIDE.*\)$/.test(box2) && (box2.match(/"/g) || []).length >= 4;
+    await L.applyFilter('');
+    return { catHover, catHoverText, numHover, hidden, oneCat, box1, manyCat, box2 };
+  });
+  (catGut.catHover && catGut.numHover && catGut.hidden && catGut.oneCat && catGut.manyCat)
+    ? ok(`gutter hover tooltip (cat "${catGut.catHoverText}" + num ≈) · cat click→${catGut.box1} · cat drag→in(…)`)
+    : fail(`cat gutter interaction failed: ${JSON.stringify(catGut)}`);
+
   // ── filter-reactive gutters: an active filter overlays the matched-rows
   //    distribution (numeric/hist) on the global one ──
   const react = await page.evaluate(async () => {

@@ -225,9 +225,10 @@ function mountView(vs, info = {}, keepVScroll = false) {
   }
   grid.onContextMenu(({ row, col, sel, clientX, clientY }) => showCellMenu(row, col, sel, clientX, clientY));
   if (c.d.kind === 'delimited') {
-    grid.onGutterClick((dc) => showColumnStats(vis[dc]));               // tap a distribution glyph → full stats
-    grid.onGutterBrush((dc, lo, hi) => brushFilter(vis[dc], lo, hi));   // drag a numeric range → a `between` filter
-    grid.onGutterBrushMove((dc, lo, hi, x, y) => showBrushTip(vis[dc], lo, hi, x, y));   // live range readout while dragging
+    grid.onGutterClick((dc, frac) => gutterClick(vis[dc], frac));       // hist tap → stats · cat tap → filter that category
+    grid.onGutterBrush((dc, lo, hi) => gutterBrush(vis[dc], lo, hi));   // hist drag → `between` · cat drag → `in (…)`
+    grid.onGutterBrushMove((dc, lo, hi, x, y) => showBrushTip(vis[dc], lo, hi, x, y));   // live readout while dragging
+    grid.onGutterHover((dc, frac, x, y) => showGutterTip(dc == null ? null : vis[dc], frac, x, y));   // hover → value / category tooltip
   }
 
   const shownRows = vs.rowCount();
@@ -2102,27 +2103,85 @@ function brushFilter(uc, lo, hi) {
   $('#filter').focus(); $('#meta').textContent = 'filter staged — press Enter to apply';   // big file → don't auto-scan
 }
 
-// Live range readout while dragging a gutter brush — a small tooltip near the
-// cursor showing the value range (log-aware, rounded the same way brushFilter
-// will write it). lo == null → hide (drag ended/cancelled).
-let _brushTip = null;
-function brushRange(g, lo, hi) {
+// A small floating tooltip near the cursor (shared by the brush-drag range readout
+// and the gutter hover value/category readout).
+let _tipEl = null;
+function tipAt(text, x, y) {
+  if (!_tipEl) { _tipEl = document.createElement('div'); _tipEl.className = 'brush-tip'; document.body.appendChild(_tipEl); }
+  _tipEl.textContent = text;
+  _tipEl.style.display = 'block';
+  const w = _tipEl.offsetWidth || 90;
+  let lx = x + 12; if (lx + w > window.innerWidth - 4) lx = x - w - 12;   // flip left near the right edge
+  _tipEl.style.left = lx + 'px';
+  _tipEl.style.top = (y + 14) + 'px';
+}
+function hideTip() { if (_tipEl) _tipEl.style.display = 'none'; }
+
+function brushRange(g, lo, hi) {   // a fraction range → a value range (log-aware)
   if (g.log && g.logMin != null) { const l0 = Math.log(g.logMin), ls = (Math.log(g.max) - l0) || 1; return [Math.exp(l0 + lo * ls), Math.exp(l0 + hi * ls)]; }
   const span = g.max - g.min; return [g.min + lo * span, g.min + hi * span];
 }
+// Categorical glyph: segments are drawn proportional to sum(segments) (fills the
+// width). Map a click/range fraction back to segment index/indices the same way.
+function catSegAt(g, frac) {
+  const total = g.segments.reduce((s, v) => s + v, 0) || 1;
+  let cum = 0;
+  for (let i = 0; i < g.segments.length; i++) { cum += g.segments[i] / total; if (frac <= cum) return i; }
+  return g.segments.length - 1;
+}
+function catSegsInRange(g, lo, hi) {
+  const total = g.segments.reduce((s, v) => s + v, 0) || 1;
+  const out = []; let cum = 0;
+  for (let i = 0; i < g.segments.length; i++) { const a = cum, b = cum + g.segments[i] / total; cum = b; if (b > lo && a < hi) out.push(i); }
+  return out;
+}
+
+// Live range readout while DRAGGING a gutter brush. lo == null → hide.
 function showBrushTip(uc, lo, hi, x, y) {
-  if (lo == null) { if (_brushTip) _brushTip.style.display = 'none'; return; }
+  if (lo == null) { hideTip(); return; }
+  const c = current; if (!c) return;
+  const g = c.gutter && c.gutter[uc]; if (!g) return;
+  if (g.kind === 'cat') { const vals = catSegsInRange(g, lo, hi).map((i) => g.values[i]).filter((v) => v != null); if (vals.length) tipAt(vals.join(', '), x, y); return; }
+  if (g.kind !== 'hist' || g.min == null || !(g.max > g.min)) return;
+  const [a, b] = brushRange(g, lo, hi);
+  tipAt(`${roundSig(a)} – ${roundSig(b)}`, x, y);
+}
+
+// Hover readout (no drag): the value (hist) or category · share (cat) under the cursor.
+function showGutterTip(uc, frac, x, y) {
+  if (uc == null) { hideTip(); return; }
+  const c = current; if (!c) { hideTip(); return; }
+  const g = c.gutter && c.gutter[uc]; if (!g) { hideTip(); return; }
+  if (g.kind === 'cat') {
+    const i = catSegAt(g, frac); if (i < 0 || g.values[i] == null) { hideTip(); return; }
+    const pct = g.segments[i] * 100;                    // segments are already share-of-sample fractions
+    tipAt(`${g.values[i]} · ${pct < 1 ? pct.toFixed(1) : Math.round(pct)}%`, x, y);
+  } else if (g.kind === 'hist' && g.min != null && g.max > g.min) {
+    tipAt(`≈ ${roundSig(brushRange(g, frac, frac)[0])}`, x, y);
+  } else hideTip();
+}
+
+// Gutter tap: hist → stats; cat → filter to the category under the cursor.
+function gutterClick(uc, frac) {
   const c = current; if (!c) return;
   const g = c.gutter && c.gutter[uc];
-  if (!g || g.kind !== 'hist' || g.min == null || g.max == null || !(g.max > g.min)) return;
-  const [a, b] = brushRange(g, lo, hi);
-  if (!_brushTip) { _brushTip = document.createElement('div'); _brushTip.className = 'brush-tip'; document.body.appendChild(_brushTip); }
-  _brushTip.textContent = `${roundSig(a)} – ${roundSig(b)}`;
-  _brushTip.style.display = 'block';
-  const w = _brushTip.offsetWidth || 90;
-  let lx = x + 12; if (lx + w > window.innerWidth - 4) lx = x - w - 12;   // flip left near the right edge
-  _brushTip.style.left = lx + 'px';
-  _brushTip.style.top = (y + 14) + 'px';
+  if (g && g.kind === 'cat') { const i = catSegAt(g, frac); if (i >= 0 && g.values[i] != null) { hideTip(); return filterByValue(uc, String(g.values[i])); } }
+  showColumnStats(uc);
+}
+// Gutter drag: hist → `between`; cat → `in (…)` over the covered segments.
+function gutterBrush(uc, lo, hi) {
+  const c = current; if (!c) return;
+  const g = c.gutter && c.gutter[uc];
+  if (g && g.kind === 'cat') {
+    hideTip();
+    const vals = catSegsInRange(g, lo, hi).map((i) => g.values[i]).filter((v) => v != null);
+    if (!vals.length) return showColumnStats(uc);
+    if (vals.length === 1) return filterByValue(uc, String(vals[0]));
+    const name = c.baseVs.header(uc).label;
+    const expr = `${colRef(name)} in (${vals.map((v) => JSON.stringify(String(v))).join(', ')})`;
+    $('#filter').value = expr; syncFilterClear(); return applyFilter(expr);
+  }
+  return brushFilter(uc, lo, hi);
 }
 
 // Filter-reactive overlay: the distribution of the current filter's matches,
@@ -2461,7 +2520,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;
