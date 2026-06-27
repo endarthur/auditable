@@ -622,11 +622,12 @@ try {
     return {
       n: g && g.length, gradeKind: g && g[0] && g[0].kind, litoKind: g && g[1] && g[1].kind,
       gradeBins: g && g[0] && g[0].bins && g[0].bins.length, litoSegs: g && g[1] && g[1].segments && g[1].segments.length,
-      approx: !!(g && g[0] && g[0].approx), provKind: prov.headerGutter(0) && prov.headerGutter(0).kind,
+      litoColors: g && g[1] && g[1].colors, approx: !!(g && g[0] && g[0].approx), provKind: prov.headerGutter(0) && prov.headerGutter(0).kind,
     };
   });
-  (gut.n === 2 && gut.gradeKind === 'hist' && gut.litoKind === 'cat' && gut.gradeBins > 0 && gut.litoSegs === 3 && gut.approx && gut.provKind === 'hist')
-    ? ok(`gutter: grade→histogram (${gut.gradeBins} bins, ≈) · lito→top-${gut.litoSegs} bar · provider feeds loom`)
+  const distinctColors = gut.litoColors && gut.litoColors.length === gut.litoSegs && new Set(gut.litoColors).size === gut.litoSegs;
+  (gut.n === 2 && gut.gradeKind === 'hist' && gut.litoKind === 'cat' && gut.gradeBins > 0 && gut.litoSegs === 3 && gut.approx && gut.provKind === 'hist' && distinctColors)
+    ? ok(`gutter: grade→histogram (${gut.gradeBins} bins, ≈) · lito→top-${gut.litoSegs} bar w/ distinct colors · provider feeds loom`)
     : fail(`gutter failed: ${JSON.stringify(gut)}`);
 
   // ── autocomplete (expr.complete) + smart-validate: values from the gutter sample,

@@ -277,6 +277,9 @@ const PALETTES = {
   grayscale: [[24, 24, 24], [128, 128, 128], [240, 240, 240]],
   bluered: [[33, 102, 172], [146, 197, 222], [247, 247, 247], [244, 165, 130], [178, 24, 43]],   // diverging
 };
+// Distinct categorical hues for the cat gutter glyph's stacked segments — mid-tone,
+// readable on both the light and dark field background (Tableau-10 ordering).
+const CAT_COLORS = ['#4e79a7', '#f28e2b', '#59a14f', '#e15759', '#b07aa1', '#76b7b2', '#edc948', '#9c755f', '#ff9da7', '#bab0ac'];
 function scaleColor(t, palette) {
   const P = PALETTES[palette] || PALETTES.viridis;
   t = Math.max(0, Math.min(1, t));
@@ -2289,7 +2292,7 @@ async function computeGutterStats(source, schema, dataStart, decimal) {
     }
     const tot = [...a.freq.values()].reduce((s, v) => s + v, 0) || 1;
     const top = [...a.freq.entries()].sort((x, y) => y[1] - x[1]).slice(0, 8);
-    return { kind: 'cat', segments: top.map(([, nn]) => nn / tot), values: top.map(([v]) => v), nullRate, approx: true };
+    return { kind: 'cat', segments: top.map(([, nn]) => nn / tot), values: top.map(([v]) => v), colors: top.map((_, i) => CAT_COLORS[i % CAT_COLORS.length]), nullRate, approx: true };
   });
 }
 

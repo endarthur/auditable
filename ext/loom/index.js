@@ -615,7 +615,8 @@ function paintColHeaders(g, c0, c1, sx, vw, P = 0, pinnedW = 0) {
 
 // Draw a column's distribution glyph in the header gutter strip. `gd` (from
 // provider.headerGutter) is { kind:'hist', bins:[0..1], nullRate, approx, log? } |
-// { kind:'cat', segments:[fractions], nullRate, approx } | null. `log:true` draws a
+// { kind:'cat', segments:[fractions], colors?:[css], nullRate, approx } | null
+// (colors = per-segment fill; without it segments fade one hue). `log:true` draws a
 // 'log' marker (the host has log-binned the bins). Runs inside the per-column
 // save/restore, so ctx state changes don't leak.
 function drawGutter(ctx, g, gd, x, top, cw, gh) {
@@ -640,8 +641,8 @@ function drawGutter(ctx, g, gd, x, top, cw, gh) {
     let cx = x0;
     for (let i = 0; i < gd.segments.length; i++) {
       const sw = (gd.segments[i] / total) * w;
-      ctx.globalAlpha = Math.max(0.3, 1 - i * 0.13);
-      ctx.fillStyle = g.colors.cellDerived;
+      if (gd.colors && gd.colors[i]) { ctx.fillStyle = gd.colors[i]; }   // per-category distinct colors (host palette)
+      else { ctx.globalAlpha = Math.max(0.3, 1 - i * 0.13); ctx.fillStyle = g.colors.cellDerived; }   // legacy single-hue fade
       ctx.fillRect(cx, plotTop, Math.max(sw - 0.5, 0.5), plotH);
       cx += sw;
     }
