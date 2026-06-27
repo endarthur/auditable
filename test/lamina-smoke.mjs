@@ -1184,6 +1184,35 @@ try {
     ? ok('color scale: picking a palette while off enables it (turbo)')
     : fail(`color scale opt failed: ${JSON.stringify(csTest)}`);
 
+  // ── context submenus flip/clamp to stay in the viewport near the right edge ──
+  const submenuFit = await page.evaluate(async () => {
+    const L = window._lamina;
+    let header = 'r'; for (let j = 1; j < 30; j++) header += `,c${j}`;
+    let csv = header + '\n3'; for (let j = 1; j < 30; j++) csv += `,${j}`; csv += '\n6'; for (let j = 1; j < 30; j++) csv += `,${j * 2}`; csv += '\n';
+    L.open('wide2.csv', new TextEncoder().encode(csv));
+    for (let t = 0; t < 40 && !L.grid; t++) await new Promise((r) => setTimeout(r, 25));
+    const hdr = [...document.querySelectorAll('#grid canvas')].find((cv) => cv.style.zIndex === '2');
+    const cy = hdr.getBoundingClientRect().top + 6, cx = window.innerWidth - 24;   // right-click a header near the right edge
+    hdr.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: cx, clientY: cy }));
+    await new Promise((r) => setTimeout(r, 30));
+    const fits = (el) => el && el.getBoundingClientRect().right <= window.innerWidth + 1 && el.getBoundingClientRect().left >= -1;
+    const root = document.querySelector('.ctxmenu');
+    const rootOk = fits(root);
+    const hover = (menu, re) => { const it = menu && [...menu.querySelectorAll('.item')].find((e) => re.test(e.textContent)); if (it) it.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true })); return it; };
+    const hasCs = !!hover(root, /Color scale/);
+    await new Promise((r) => setTimeout(r, 30));
+    const sub = [...document.querySelectorAll('.ctxmenu')][1];
+    const subOk = fits(sub);
+    hover(sub, /Palette/);
+    await new Promise((r) => setTimeout(r, 30));
+    const palOk = fits([...document.querySelectorAll('.ctxmenu')][2]);
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    return { rootOk, hasCs, subOk, palOk };
+  });
+  (submenuFit.rootOk && submenuFit.hasCs && submenuFit.subOk && submenuFit.palOk)
+    ? ok('context submenu + sub-submenu flip to stay in the viewport near the right edge')
+    : fail(`submenu fit failed: ${JSON.stringify(submenuFit)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

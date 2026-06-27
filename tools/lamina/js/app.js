@@ -707,7 +707,10 @@ function showColumnMenu(uc, x, y) {
 // {label, submenu:[items]} | {sep:true}. Hovering a submenu item opens its child
 // to the right (parent stays); hovering a leaf closes any open child.
 let _menus = [];   // open menu divs, parent → child chain
-function openLevel(items, x, y, level) {
+// x,y = preferred top-left (root menu, at the cursor). anchor = the parent item's
+// rect for a submenu — opened to its right, FLIPPED to the parent menu's left edge
+// when it would overflow (recursively safe: each level flips off its own anchor).
+function openLevel(items, x, y, level, anchor) {
   closeFrom(level);
   const m = document.createElement('div'); m.className = 'ctxmenu';
   for (const it of items) {
@@ -716,7 +719,7 @@ function openLevel(items, x, y, level) {
     const lab = document.createElement('span'); lab.textContent = it.label; el.appendChild(lab);
     if (it.submenu) {
       const arr = document.createElement('span'); arr.className = 'arr'; arr.textContent = '▸'; el.appendChild(arr);
-      const open = () => { const r = el.getBoundingClientRect(); openLevel(it.submenu, r.right - 3, r.top - 5, level + 1); };
+      const open = () => openLevel(it.submenu, 0, 0, level + 1, el.getBoundingClientRect());
       el.onmouseenter = open;
       el.onclick = (e) => { e.stopPropagation(); open(); };
     } else {
@@ -726,10 +729,20 @@ function openLevel(items, x, y, level) {
     m.appendChild(el);
   }
   document.body.appendChild(m);
-  m.style.left = x + 'px'; m.style.top = y + 'px';
-  const r = m.getBoundingClientRect();                   // keep on-screen
-  if (r.right > innerWidth) m.style.left = Math.max(0, x - r.width - (level ? 8 : 0)) + 'px';
-  if (r.bottom > innerHeight) m.style.top = Math.max(0, innerHeight - r.height) + 'px';
+  const mw = m.offsetWidth, mh = m.offsetHeight, pad = 4;
+  let left, top;
+  if (anchor) {                                          // submenu: right of the item, flip to the parent's left on overflow
+    left = anchor.right - 2;
+    if (left + mw > innerWidth - pad) left = anchor.left - mw + 2;
+    if (left < pad) left = Math.max(pad, innerWidth - mw - pad);
+    top = anchor.top - 5;
+  } else {                                               // root: at the cursor, nudge left if it overflows
+    left = x; top = y;
+    if (left + mw > innerWidth - pad) left = Math.max(pad, x - mw);
+  }
+  if (top + mh > innerHeight - pad) top = Math.max(pad, innerHeight - mh - pad);   // clamp vertically (both menus)
+  if (top < pad) top = pad;
+  m.style.left = left + 'px'; m.style.top = top + 'px';
   _menus[level] = m;
 }
 function closeFrom(level) { for (let i = _menus.length - 1; i >= level; i--) if (_menus[i]) _menus[i].remove(); _menus.length = Math.min(_menus.length, level); }
