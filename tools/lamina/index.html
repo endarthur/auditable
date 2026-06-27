@@ -224,16 +224,17 @@
 
   #grid { position: absolute; left: 0; right: var(--cp, 0); top: var(--tb); bottom: var(--ft); }
   /* record card — right-docked slide-out: the selected row's fields as name:value */
-  /* Hidden panels are display:none — NOT a translate-off-screen (that left them in
-     layout at right:0, extending the document + mispositioning the open panel). The
-     slide is a one-shot animation when .show flips them to flex. */
+  /* Hidden panels are display:none (out of layout entirely — a translate-off-screen
+     left them in flow at right:0, extending the document + mispositioning the open
+     panel). They SNAP open: the grid resizes instantly via --cp and loom repaints
+     its canvas once — a slide would desync (table jumps, panel slides into it) and
+     re-jank the canvas every frame. */
   #recordPanel {
     position: absolute; top: var(--tb); right: 0; bottom: var(--ft); width: 300px; z-index: 15;
     display: none; flex-direction: column; background: var(--bg-panel); border-left: 1px solid var(--bd2);
     font-family: var(--mono); font-size: 12px;
   }
-  #recordPanel.show { display: flex; animation: panelSlideIn .16s ease; }
-  @keyframes panelSlideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+  #recordPanel.show { display: flex; }
   #recordPanel .rp-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
   #recordPanel .rp-title { font-weight: 600; color: var(--text-hi); }
   #recordPanel .rp-rownum { color: var(--dim); font-size: 11px; flex: 1; }
@@ -254,7 +255,7 @@
     display: none; flex-direction: column; background: var(--bg-panel); border-left: 1px solid var(--bd2);
     font-family: var(--mono); font-size: 12px;
   }
-  #colPanel.show { display: flex; animation: panelSlideIn .16s ease; }
+  #colPanel.show { display: flex; }
   #colPanel .cp-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--border); }
   #colPanel .cp-title { font-weight: 600; color: var(--text-hi); }
   #colPanel .cp-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 17px; line-height: 1; padding: 0 2px; }
