@@ -1091,6 +1091,30 @@ try {
     ? ok('stats exclude zeros/negatives re-scan (n + min + excluded count track)')
     : fail(`exclude test failed: ${JSON.stringify(exTest)}`);
 
+  // ── exclude toggles STAGE — a tick doesn't re-scan; apply does ──
+  const stageTest = await page.evaluate(async () => {
+    const L = window._lamina;
+    let csv = 'id,g\n';
+    for (let i = 0; i < 20; i++) csv += `${i},${i % 3 === 0 ? 0 : i}\n`;   // ~7 zeros
+    L.open('stage.csv', new TextEncoder().encode(csv));
+    await new Promise((r) => setTimeout(r, 60));
+    await L.showColumnStats(1);
+    await new Promise((r) => setTimeout(r, 40));
+    const oz = document.getElementById('optNoZero'), ap = document.getElementById('optApply');
+    const applyDisabledBefore = ap.disabled;
+    oz.checked = true; oz.dispatchEvent(new Event('change'));
+    const applyEnabledAfterTick = !ap.disabled;
+    const noScanOnTick = !/excluded/.test(document.getElementById('helpBody').textContent);   // staged, not applied
+    ap.click();
+    await new Promise((r) => setTimeout(r, 60));
+    const appliedAfterClick = /excluded/.test(document.getElementById('helpBody').textContent);
+    document.getElementById('help').classList.remove('show');
+    return { applyDisabledBefore, applyEnabledAfterTick, noScanOnTick, appliedAfterClick };
+  });
+  (stageTest.applyDisabledBefore && stageTest.applyEnabledAfterTick && stageTest.noScanOnTick && stageTest.appliedAfterClick)
+    ? ok('exclude toggles stage until apply (no scan on tick)')
+    : fail(`stage test failed: ${JSON.stringify(stageTest)}`);
+
   // ── log-normal gutter detection + per-column toggle ──
   const logTest = await page.evaluate(async () => {
     const L = window._lamina;

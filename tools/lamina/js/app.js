@@ -2287,7 +2287,7 @@ function renderStats(st, ex = {}) {
   const row = (k, v) => `<tr><td style="color:var(--muted);padding-right:18px">${k}</td><td style="text-align:right">${v}</td></tr>`;
   const copyBtn = '<button id="statsCopy" title="copy this summary (TSV)" style="float:right;font:inherit;font-size:11px;color:var(--muted);background:var(--bg-field);border:1px solid var(--bd2);border-radius:4px;padding:2px 8px;cursor:pointer">copy</button>';
   if (st.kind === 'number') {
-    let h = `<div class="stats-opts"><label><input type="checkbox" id="optNoZero"${ex.excludeZero ? ' checked' : ''}> exclude zeros</label><label><input type="checkbox" id="optNoNeg"${ex.excludeNeg ? ' checked' : ''}> exclude negatives</label></div>`;
+    let h = `<div class="stats-opts"><label><input type="checkbox" id="optNoZero"${ex.excludeZero ? ' checked' : ''}> exclude zeros</label><label><input type="checkbox" id="optNoNeg"${ex.excludeNeg ? ' checked' : ''}> exclude negatives</label><button id="optApply" class="stats-apply" disabled>apply</button></div>`;
     if (st.histogram) {                                         // the column-profile chart
       h += `<div class="prof-wrap"><canvas id="profHist" class="prof-hist"></canvas>`;
       if (st.logHistogram) h += `<button id="profLog" class="prof-log" title="log scale (for skewed / log-normal data)">log x</button>`;
@@ -2351,8 +2351,14 @@ async function showColumnStats(uc) {
         const lg = $('#profLog');
         if (lg) lg.onclick = () => { logOn = !logOn; lg.classList.toggle('on', logOn); draw(); };
       }
-      const oz = $('#optNoZero'); if (oz) oz.onchange = () => { ex.excludeZero = oz.checked; run(); };
-      const on = $('#optNoNeg'); if (on) on.onchange = () => { ex.excludeNeg = on.checked; run(); };
+      // exclude toggles STAGE — they don't re-scan until "apply" (a full pass on a
+      // big column is expensive; ticking both shouldn't fire two scans).
+      const oz = $('#optNoZero'), on = $('#optNoNeg'), ap = $('#optApply');
+      if (oz && on && ap) {
+        const sync = () => { const dirty = oz.checked !== ex.excludeZero || on.checked !== ex.excludeNeg; ap.disabled = !dirty; ap.classList.toggle('dirty', dirty); };
+        oz.onchange = sync; on.onchange = sync;
+        ap.onclick = () => { if (ap.disabled) return; ex.excludeZero = oz.checked; ex.excludeNeg = on.checked; run(); };
+      }
       const cb = $('#statsCopy');
       if (cb) cb.onclick = () => { copyText(statsToTSV(st, name)); cb.textContent = 'copied ✓'; setTimeout(() => { cb.textContent = 'copy'; }, 1200); };
     } catch (e) { showOverlay(`Statistics — ${name}`, `<div style="color:var(--fault)">${e.message}</div>`); }
