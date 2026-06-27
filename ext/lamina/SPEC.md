@@ -215,11 +215,44 @@ artifact in the GCU enterprise-profile sense:
 
 ### Far-ahead (deliberate slices, not soon)
 
-- **Recents list** — persist FSAA `FileSystemFileHandle`s to IndexedDB; show in
-  the launcher empty-state + the File menu; re-grant permission on click →
-  `buildSourceFromIndex` from the existing index cache = instant reopen. Degrade
-  to metadata-only (re-pick) for drag/`<input>`/`file://` (no handle). Pairs with
-  the `name:size:mtime` cache key already in place.
+- **Recents list** — SHIPPED (local IndexedDB, permission-gated reopen, transparent
+  + clearable + disableable, declared in capability.json/SECURITY.md).
+- **"Data smells" panel** — the mojibake hint, generalized into a quiet-bug detector.
+  Per-column heuristics on the gutter sample (already computed): **leading zeros lost**
+  (raw string `^0\d` but parsed numeric → a sample-ID code silently broken — the
+  high-value one), all-null, constant, mixed-type, looks-like-a-date-but-text, stray
+  thousands-separators. Pure GUIDANCE (no mutation), surfaced as flags in the columns
+  panel + a summary. Extends the encoding-hint pattern; the highest-bet roadmap item
+  (catches silent, costly errors). NB leading-zeros needs the RAW field string at
+  parse (the numeric type-detection discards it) — detect during the sample scan.
+- **Folder as one virtual table** — point at a folder of same-schema exports (a year
+  of monthly block models) and window across ALL of them as one concatenated,
+  never-resident table. A multi-source cursor: an ordered source list, `rowCount` =
+  Σ, a row → (fileIndex, localRow) via a prefix-sum offset map; each file keeps its
+  own block index; schema from the first file (validate/union the rest). FSAA
+  `showDirectoryPicker` lists the files. Still pure viewing — the block model just
+  spans files. Second-highest bet (real geo workflow).
+- **Value-scrubber minimap** — a thin rail beside the scrollbar showing the sorted
+  column's distribution along its length, so you scrub a 10M-row file straight to a
+  value band. NEEDS CAREFUL DESIGN (Arthur flagged): decide what it shows (sort-key
+  value-at-position vs a vertical binned histogram; the filtered overlay too?), the
+  position↔row mapping (rows are uniform-height so scroll pos = row index), and the
+  interaction (click-to-jump vs drag-scrub). Probably a loom hook or an overlay
+  beside `#grid`. Someday, only if designed well.
+- **Diff two views** — read-only comparison ("what moved?"). The hard part is
+  ANCHORING, two modes: **positional** (row N of A vs B — zero-config, for before/after
+  the same export; fragile to inserts) and **keyed** (pick key column(s) — IJK /
+  hole+from+to / sample-id; survives reorder/insert/delete → true added/removed/
+  changed). Shape: open A, "Compare with…" opens B as a SECONDARY source (own block
+  index), pick mode + key, tint onto A's view. Never-resident tension = B's key→row
+  index (one entry/row — fine for two ~100k exports, needs a cap/hint or "diff the
+  current filter only" at 10M rows); diff is selectivity-bounded like the filter.
+  Future, needs design. Speculative.
+- **Remote windowing via HTTP Range** — point at a URL of a huge file, window it with
+  range requests, never downloading the whole thing (`readRange` → a ranged fetch).
+  The never-resident model taken to never-local — but it's network egress, so it'd be
+  a separate **Connected** lamina (seal verifies "network only for an explicitly
+  opened remote file"), NOT the Sealed build. Architecturally trivial; profile-changing.
 - **Multiple windows** — independent tables in their own windows/tabs (each its
   own `current` + cache scope).
 - **File-type association** — `.lam` / `.lamina` are registered via the deploy
