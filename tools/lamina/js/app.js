@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, scanGroupBy, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
 import { compile, compileBool, validate, deps, complete, tokenize } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
@@ -2040,6 +2040,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
   { label: 'Apply lens…', action: applyLensFromFile },
   { sep: true },
   { label: 'Calculated columns…', action: () => { if (hasFile()) openCalcManager(); } },
+  { label: 'Group by…', action: () => { if (hasFile()) openGroupBy(); } },
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
   { sep: true },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyFilter(''); } },
@@ -2675,6 +2676,101 @@ function showSummary() {
   paintSummary(c);
 }
 
+// ── group by (one group column × value column(s), optional weight) ───────────────
+let _gbConfig = null, _gbResult = null, _gbSort = { col: 'n', dir: -1 };
+function openGroupBy() {
+  const c = current; if (!c || c.d.kind !== 'delimited') return;
+  const firstCat = c.schema.findIndex((s) => s.type !== 'number'), firstNum = c.schema.findIndex((s) => s.type === 'number');
+  _gbConfig = { group: firstCat >= 0 ? firstCat : 0, values: [firstNum >= 0 ? firstNum : 0], weight: null };
+  _gbResult = null;
+  $('#helpTitle').textContent = `Group by — ${c.label}${c.filterResult ? ' (filtered)' : ''}`;
+  $('.help-box').classList.add('wide');
+  $('#help').classList.add('show');
+  paintGroupBy();
+}
+function paintGroupBy() {
+  const c = current; if (!c) return;
+  const cols = c.schema, numFilter = (s) => s.type === 'number';
+  const optsFor = (sel, filter) => cols.map((s, i) => (filter && !filter(s)) ? '' : `<option value="${i}"${i === sel ? ' selected' : ''}>${esc(s.name)}</option>`).join('');
+  let h = '<div class="gb-form">';
+  h += `<label>Group by <select id="gbGroup">${optsFor(_gbConfig.group, null)}</select></label>`;
+  h += '<span class="gb-vals">';
+  _gbConfig.values.forEach((uc, vi) => { h += `<label class="gb-val">Value <select class="gb-value" data-vi="${vi}">${optsFor(uc, numFilter)}</select>${_gbConfig.values.length > 1 ? `<button class="gb-rm" data-vi="${vi}" title="remove">✕</button>` : ''}</label>`; });
+  h += '</span>';
+  h += `<button id="gbAdd" class="gb-add">+ add variable</button>`;
+  h += `<label>Weight by <select id="gbWeight"><option value="">none</option>${optsFor(_gbConfig.weight == null ? -1 : _gbConfig.weight, numFilter)}</select></label>`;
+  h += `<button id="gbRun" class="gb-run">Group</button>`;
+  h += '</div>';
+  h += `<div id="gbResults">${_gbResult ? renderGroupResult(c) : '<div style="color:var(--dim);margin-top:8px">pick a group column + value(s), then Group</div>'}</div>`;
+  $('#helpBody').innerHTML = h;
+  wireGroupBy(c);
+}
+function groupTable(c) {
+  const res = _gbResult, cfg = res.config, schema = c.schema;
+  const groupName = schema[cfg.group] ? schema[cfg.group].name : 'group';
+  const aggs = res.weighted ? ['sum', 'mean', 'wmean', 'std', 'min', 'max'] : ['sum', 'mean', 'std', 'min', 'max'];
+  const COLS = [{ k: 'key', label: groupName, txt: true }, { k: 'n', label: 'n' }];
+  cfg.values.forEach((uc, vi) => aggs.forEach((agg) => COLS.push({ k: `${vi}.${agg}`, label: `${schema[uc] ? schema[uc].name : '?'}·${agg}` })));
+  const rowOf = (g) => { const o = { key: g.key, n: g.count }; cfg.values.forEach((uc, vi) => { const v = g.vars[vi]; aggs.forEach((agg) => { o[`${vi}.${agg}`] = v[agg]; }); }); return o; };
+  let rows = res.groups.map(rowOf);
+  const srt = _gbSort;
+  if (srt.col) rows.sort((a, b) => { const x = a[srt.col], y = b[srt.col]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return typeof x === 'string' ? srt.dir * x.localeCompare(y) : srt.dir * (x - y); });
+  return { COLS, rows, totalRow: rowOf({ key: 'Σ total', count: res.total.count, vars: res.total.vars }), truncated: res.truncated };
+}
+function renderGroupResult(c) {
+  const { COLS, rows, totalRow, truncated } = groupTable(c);
+  const fmtCell = (v, col) => v == null ? '' : col.txt ? esc(String(v)) : fmtN(v);
+  let h = '<button id="gbCopy" class="sum-copy">copy all</button>';
+  if (truncated) h += `<div style="color:var(--accent);font-size:11px;margin:4px 0">⚠ over 1000 groups — table truncated (totals still cover all rows)</div>`;
+  h += '<div style="overflow:auto;max-height:54vh;margin-top:4px"><table class="sum-tbl"><thead><tr>';
+  for (const col of COLS) h += `<th data-k="${col.k}" class="${col.txt ? '' : 'num'}${_gbSort.col === col.k ? ' sorted' : ''}">${esc(col.label)}${_gbSort.col === col.k ? (_gbSort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+  h += '</tr></thead><tbody>';
+  for (const r of rows) { h += `<tr data-key="${esc(String(r.key)).replace(/"/g, '&quot;')}">`; for (const col of COLS) h += `<td class="${col.txt ? '' : 'num'}">${fmtCell(r[col.k], col)}</td>`; h += '</tr>'; }
+  h += '<tr class="gb-total">'; for (const col of COLS) h += `<td class="${col.txt ? '' : 'num'}">${fmtCell(totalRow[col.k], col)}</td>`; h += '</tr>';
+  return h + '</tbody></table></div>';
+}
+function groupTSV(c) {
+  const { COLS, rows, totalRow } = groupTable(c);
+  const line = (r) => COLS.map((col) => { const v = r[col.k]; return v == null ? '' : v; }).join('\t');
+  return [COLS.map((col) => col.label).join('\t'), ...rows.map(line), line(totalRow)].join('\n');
+}
+async function computeGroupBy() {
+  const c = current; if (!c) return;
+  const cfg = { group: _gbConfig.group, values: _gbConfig.values.slice(), weight: _gbConfig.weight };
+  if (!cfg.values.length) return;
+  const ac = newFooterScan();
+  const rEl = $('#gbResults'); if (rEl) rEl.innerHTML = '<div style="color:#777;margin-top:8px">grouping… <span id="scanPct">0%</span></div>';
+  $('#meta').textContent = 'grouping…';
+  try {
+    const res = await scanGroupBy(c.source, {
+      groupCol: cfg.group, valueCols: cfg.values, weightCol: cfg.weight, dataStart: c.dataStart, decimal: c.d.decimal, rows: c.filterResult ? c.filterResult.nums : null, signal: ac.signal,
+      onProgress: (b, n) => { const e = $('#scanPct'); if (e) e.textContent = `${n ? Math.round(100 * b / n) : 0}%`; $('#meta').textContent = `grouping… ${n ? Math.round(100 * b / n) : 0}% · Esc to cancel`; },
+    });
+    if (ac.signal.aborted) return;
+    _gbResult = { ...res, config: cfg };
+    $('#meta').textContent = c._meta || '';
+    paintGroupBy();
+  } catch (e) {
+    if (e && e.name === 'AbortError') { $('#meta').textContent = c._meta || 'group cancelled'; const r = $('#gbResults'); if (r) r.innerHTML = '<div style="color:var(--dim);margin-top:8px">cancelled</div>'; }
+    else { const r = $('#gbResults'); if (r) r.innerHTML = `<div style="color:var(--fault);margin-top:8px">${esc(e.message)}</div>`; }
+  } finally { if (_footerScanAbort === ac) _footerScanAbort = null; }
+}
+function wireGroupBy(c) {
+  const g = $('#gbGroup'); if (g) g.onchange = () => { _gbConfig.group = +g.value; };
+  $('#helpBody').querySelectorAll('.gb-value').forEach((sel) => sel.onchange = () => { _gbConfig.values[+sel.dataset.vi] = +sel.value; });
+  $('#helpBody').querySelectorAll('.gb-rm').forEach((b) => b.onclick = () => { _gbConfig.values.splice(+b.dataset.vi, 1); paintGroupBy(); });
+  const add = $('#gbAdd'); if (add) add.onclick = () => { const fn = c.schema.findIndex((s) => s.type === 'number'); _gbConfig.values.push(fn >= 0 ? fn : 0); paintGroupBy(); };
+  const w = $('#gbWeight'); if (w) w.onchange = () => { _gbConfig.weight = w.value === '' ? null : +w.value; };
+  const run = $('#gbRun'); if (run) run.onclick = () => computeGroupBy();
+  $('#helpBody').querySelectorAll('.sum-tbl th[data-k]').forEach((th) => th.onclick = () => { const k = th.getAttribute('data-k'); if (_gbSort.col === k) _gbSort.dir *= -1; else _gbSort = { col: k, dir: k === 'key' ? 1 : -1 }; paintGroupBy(); });
+  $('#helpBody').querySelectorAll('.sum-tbl tbody tr:not(.gb-total)').forEach((tr) => tr.onclick = () => {
+    const key = tr.getAttribute('data-key'), gname = c.schema[_gbResult.config.group].name;
+    $('.help-box').classList.remove('wide'); $('#help').classList.remove('show');
+    if (key === '(blank)') applyFilter(`${colRef(gname)} is blank`); else filterByValue(_gbResult.config.group, key);
+  });
+  const cp = $('#gbCopy'); if (cp) cp.onclick = () => { copyText(groupTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
+}
+
 // Precompute exact stats for EVERY column in one BMA-style two-pass scan (moments +
 // histogram; ≈ quantiles), filling the per-column cache so every popup is instant.
 // Respects the current filter. Progress in the footer; Esc cancels. opts.show → open
@@ -2740,7 +2836,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, precomputeStats, showSummary, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, scanGroupBy, precomputeStats, showSummary, openGroupBy, computeGroupBy, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

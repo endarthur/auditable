@@ -1431,6 +1431,43 @@ try {
     ? ok(`column summary: ${summary.bodyRows}-column table, sort by CV (top "${summary.firstName.trim()}"), row→detail`)
     : fail(`column summary failed: ${JSON.stringify(summary)}`);
 
+  // ── group by: engine (multi-var + weighted) + UI (config, compute, click→filter) ──
+  const grp = await page.evaluate(async () => {
+    const L = window._lamina;
+    // lito OX/SU; cu grade; wt weight. OX rows: cu 2,4 wt 1,3 → wmean=(2*1+4*3)/(1+3)=3.5, mean=3
+    let csv = 'lito,cu,wt\nOX,2,1\nOX,4,3\nSU,10,1\nSU,10,1\n';
+    L.open('gb.csv', new TextEncoder().encode(csv));
+    await new Promise((r) => setTimeout(r, 60));
+    // engine directly
+    const res = await L.scanGroupBy(L.current.source, { groupCol: 0, valueCols: [1], weightCol: 2, dataStart: L.current.dataStart });
+    const ox = res.groups.find((g) => g.key === 'OX'), su = res.groups.find((g) => g.key === 'SU');
+    const eng = {
+      groups: res.groups.length, weighted: res.weighted,
+      oxN: ox.count, oxMean: ox.vars[0].mean, oxWmean: ox.vars[0].wmean, oxSum: ox.vars[0].sum,
+      suMean: su.vars[0].mean, totalN: res.total.count, totalMean: res.total.vars[0].mean,
+    };
+    // UI: open, add a 2nd variable, set weight, compute
+    L.openGroupBy(); await new Promise((r) => setTimeout(r, 30));
+    document.getElementById('gbGroup').value = '0'; document.getElementById('gbGroup').dispatchEvent(new Event('change'));
+    document.querySelector('.gb-value').value = '1'; document.querySelector('.gb-value').dispatchEvent(new Event('change'));
+    document.getElementById('gbWeight').value = '2'; document.getElementById('gbWeight').dispatchEvent(new Event('change'));
+    await L.computeGroupBy(); await new Promise((r) => setTimeout(r, 40));
+    const headers = [...document.querySelectorAll('.sum-tbl th')].map((t) => t.textContent.trim());
+    const hasWmean = headers.some((x) => /wmean/.test(x));
+    const bodyRows = document.querySelectorAll('.sum-tbl tbody tr:not(.gb-total)').length;
+    const hasTotal = !!document.querySelector('.sum-tbl tr.gb-total');
+    // click the OX group row → filters the grid to lito == "OX"
+    const oxRow = [...document.querySelectorAll('.sum-tbl tbody tr:not(.gb-total)')].find((tr) => tr.getAttribute('data-key') === 'OX');
+    oxRow.click(); await new Promise((r) => setTimeout(r, 80));
+    const box = document.getElementById('filter').value;
+    await L.applyFilter('');
+    return { eng, hasWmean, bodyRows, hasTotal, box };
+  });
+  (grp.eng.groups === 2 && grp.eng.weighted && grp.eng.oxN === 2 && Math.abs(grp.eng.oxMean - 3) < 1e-9 && Math.abs(grp.eng.oxWmean - 3.5) < 1e-9 && grp.eng.totalN === 4
+    && grp.hasWmean && grp.bodyRows === 2 && grp.hasTotal && /^lito == "OX"$/.test(grp.box))
+    ? ok(`group by: OX mean 3 vs wmean 3.5 (weighted) · 2 groups + total · click group → ${grp.box}`)
+    : fail(`group by failed: ${JSON.stringify(grp)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

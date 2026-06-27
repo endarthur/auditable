@@ -218,6 +218,16 @@
   #help .sum-tbl tbody tr { cursor: pointer; }
   #help .sum-tbl tbody tr:hover { background: var(--bg-hover); }
   #help .sum-copy { float: right; font: inherit; font-size: 11px; color: var(--muted); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  #help .gb-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  #help .gb-form label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+  #help .gb-form select { font: inherit; font-size: 12px; background: var(--bg-field); color: var(--text); border: 1px solid var(--bd2); border-radius: 4px; padding: 2px 6px; max-width: 180px; }
+  #help .gb-vals { display: inline-flex; flex-direction: column; gap: 4px; }
+  #help .gb-rm { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 2px; }
+  #help .gb-rm:hover { color: var(--fault); }
+  #help .gb-add, #help .gb-run { font: inherit; font-size: 11px; background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 4px; padding: 3px 10px; cursor: pointer; color: var(--text); }
+  #help .gb-run { color: var(--accent); border-color: var(--accent); }
+  #help .sum-tbl tr.gb-total td { border-top: 2px solid var(--bd2); color: var(--text-hi); font-weight: 600; cursor: default; }
+  #help .sum-tbl tr.gb-total:hover { background: none; }
   #help .help-head { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #help .help-head button { background: none; border: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
   #help .help-head button:hover { color: var(--text-hi); }

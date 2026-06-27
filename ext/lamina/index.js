@@ -883,6 +883,42 @@ async function scanColumnStats(source, { col, dataStart = 0, numeric = true, dec
   return { kind: 'string', count, nulls, distinct: freq.size, cappedDistinct, top };
 }
 
+/**
+ * Group-by: ONE windowed pass → per-group aggregates over one or more value columns
+ * (optionally weighted by a weight column → wmean). Bounded memory (distinct groups
+ * capped at maxGroups; sets truncated). Group key = the group column's value as a
+ * string ('' → '(blank)'). Each value column gets count/sum/min/max/mean/std + wmean.
+ * @returns {Promise<{groups:Array<{key,count,vars:Array}>, total:{count,vars:Array}, truncated:boolean, weighted:boolean}>}
+ */
+async function scanGroupBy(source, { groupCol, valueCols, weightCol = null, dataStart = 0, decimal = '.', rows = null, maxGroups = 1000, onProgress, signal } = {}) {
+  const nv = valueCols.length;
+  const mkVar = () => ({ n: 0, sum: 0, min: Infinity, max: -Infinity, mean: 0, m2: 0, wsum: 0, wtot: 0 });
+  const mkAcc = () => ({ count: 0, vars: Array.from({ length: nv }, mkVar) });
+  const upd = (v, x, w) => {
+    v.n++; v.sum += x; if (x < v.min) v.min = x; if (x > v.max) v.max = x;
+    const d = x - v.mean; v.mean += d / v.n; v.m2 += d * (x - v.mean);   // Welford
+    if (w != null && Number.isFinite(w)) { v.wsum += w * x; v.wtot += w; }
+  };
+  const groups = new Map(), total = mkAcc();
+  let truncated = false;
+  await source.eachRecord({ dataStart, rows, signal, onProgress }, (disp, fields) => {
+    const graw = fields[groupCol];
+    const key = (graw == null || graw === '') ? '(blank)' : String(graw);
+    let acc = groups.get(key);
+    if (!acc) { if (groups.size >= maxGroups) truncated = true; else { acc = mkAcc(); groups.set(key, acc); } }
+    const wv = weightCol != null ? (() => { const w = parseNum(fields[weightCol], decimal); return Number.isNaN(w) ? null : w; })() : 1;
+    total.count++; if (acc) acc.count++;
+    for (let i = 0; i < nv; i++) {
+      const raw = fields[valueCols[i]]; if (raw == null || raw === '') continue;
+      const x = parseNum(raw, decimal); if (Number.isNaN(x)) continue;
+      upd(total.vars[i], x, wv); if (acc) upd(acc.vars[i], x, wv);
+    }
+  });
+  const finVar = (v) => ({ n: v.n, sum: v.sum, mean: v.n ? v.mean : null, std: v.n > 1 ? Math.sqrt(v.m2 / (v.n - 1)) : 0, wmean: v.wtot ? v.wsum / v.wtot : null, min: v.n ? v.min : null, max: v.n ? v.max : null });
+  const fin = (acc) => ({ count: acc.count, vars: acc.vars.map(finVar) });
+  return { groups: [...groups.entries()].map(([key, acc]) => ({ key, ...fin(acc) })), total: fin(total), truncated, weighted: weightCol != null };
+}
+
 // Quantiles interpolated from a histogram's bin counts over [min,max] — used by the
 // bulk precompute (exact percentiles would need a per-column value buffer). Approximate.
 function quantilesFromHist(bins, min, max) {
@@ -1188,6 +1224,7 @@ export {
   scanSortKeys,
   scanColumnStats,
   scanAllColumnStats,
+  scanGroupBy,
   detectKind,
   createLaminaProvider,
 };
