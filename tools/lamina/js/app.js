@@ -222,6 +222,7 @@ function mountView(vs, info = {}) {
   if (c.d.kind === 'delimited') {
     grid.onGutterClick((dc) => showColumnStats(vis[dc]));               // tap a distribution glyph → full stats
     grid.onGutterBrush((dc, lo, hi) => brushFilter(vis[dc], lo, hi));   // drag a numeric range → a `between` filter
+    grid.onGutterBrushMove((dc, lo, hi, x, y) => showBrushTip(vis[dc], lo, hi, x, y));   // live range readout while dragging
   }
 
   const shownRows = vs.rowCount();
@@ -2070,6 +2071,29 @@ function brushFilter(uc, lo, hi) {
   $('#filter').focus(); $('#meta').textContent = 'filter staged — press Enter to apply';   // big file → don't auto-scan
 }
 
+// Live range readout while dragging a gutter brush — a small tooltip near the
+// cursor showing the value range (log-aware, rounded the same way brushFilter
+// will write it). lo == null → hide (drag ended/cancelled).
+let _brushTip = null;
+function brushRange(g, lo, hi) {
+  if (g.log && g.logMin != null) { const l0 = Math.log(g.logMin), ls = (Math.log(g.max) - l0) || 1; return [Math.exp(l0 + lo * ls), Math.exp(l0 + hi * ls)]; }
+  const span = g.max - g.min; return [g.min + lo * span, g.min + hi * span];
+}
+function showBrushTip(uc, lo, hi, x, y) {
+  if (lo == null) { if (_brushTip) _brushTip.style.display = 'none'; return; }
+  const c = current; if (!c) return;
+  const g = c.gutter && c.gutter[uc];
+  if (!g || g.kind !== 'hist' || g.min == null || g.max == null || !(g.max > g.min)) return;
+  const [a, b] = brushRange(g, lo, hi);
+  if (!_brushTip) { _brushTip = document.createElement('div'); _brushTip.className = 'brush-tip'; document.body.appendChild(_brushTip); }
+  _brushTip.textContent = `${roundSig(a)} – ${roundSig(b)}`;
+  _brushTip.style.display = 'block';
+  const w = _brushTip.offsetWidth || 90;
+  let lx = x + 12; if (lx + w > window.innerWidth - 4) lx = x - w - 12;   // flip left near the right edge
+  _brushTip.style.left = lx + 'px';
+  _brushTip.style.top = (y + 14) + 'px';
+}
+
 // Filter-reactive overlay: the distribution of the current filter's matches,
 // binned on the GLOBAL min/max so it aligns, drawn solid over the faint global.
 // Numeric (hist) only; stride-sampled across the matches so it stays cheap.
@@ -2406,7 +2430,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

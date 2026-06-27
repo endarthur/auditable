@@ -74,6 +74,7 @@ export function createGrid(element, provider, options = {}) {
     headerContextListeners: [],
     gutterListeners: [],
     gutterBrushListeners: [],
+    gutterBrushMoveListeners: [],
     gutterBrush: null,
     contextListeners: [],
     _cleanup: [],
@@ -569,8 +570,12 @@ export function createGrid(element, provider, options = {}) {
     const x0 = at(e.clientX);
     g.gutterBrush = { col, x0, x1: x0, moved: false };
     repaint();
-    const onMove = (ev) => { g.gutterBrush.x1 = at(ev.clientX); if (Math.abs(g.gutterBrush.x1 - x0) > 4) g.gutterBrush.moved = true; repaint(); };
-    const done = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); window.removeEventListener('keydown', onKey, true); };
+    const emitMove = (lo, hi, cx, cy) => { for (const cb of g.gutterBrushMoveListeners) { try { cb(col, lo, hi, cx, cy); } catch (err) { console.error('[loom] onGutterBrushMove threw', err); } } };
+    const onMove = (ev) => {
+      g.gutterBrush.x1 = at(ev.clientX); if (Math.abs(g.gutterBrush.x1 - x0) > 4) g.gutterBrush.moved = true; repaint();
+      if (g.gutterBrush.moved) emitMove(Math.min(g.gutterBrush.x0, g.gutterBrush.x1) / cw, Math.max(g.gutterBrush.x0, g.gutterBrush.x1) / cw, ev.clientX, ev.clientY);
+    };
+    const done = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); window.removeEventListener('keydown', onKey, true); emitMove(null, null); };   // null range → host hides any brush tooltip
     const onUp = () => {
       const b = g.gutterBrush; done(); g.gutterBrush = null; repaint();
       if (!b) return;                                  // cancelled by Esc
@@ -710,6 +715,9 @@ export function createGrid(element, provider, options = {}) {
     onHeaderContextMenu(cb) { g.headerContextListeners.push(cb); return () => { const i = g.headerContextListeners.indexOf(cb); if (i >= 0) g.headerContextListeners.splice(i, 1); }; },
     onGutterClick(cb) { g.gutterListeners.push(cb); return () => { const i = g.gutterListeners.indexOf(cb); if (i >= 0) g.gutterListeners.splice(i, 1); }; },
     onGutterBrush(cb) { g.gutterBrushListeners.push(cb); return () => { const i = g.gutterBrushListeners.indexOf(cb); if (i >= 0) g.gutterBrushListeners.splice(i, 1); }; },
+    // Live during a gutter brush drag: cb(col, loFrac, hiFrac, clientX, clientY) on
+    // each move; cb(col, null, null) on release/cancel (host hides any tooltip).
+    onGutterBrushMove(cb) { g.gutterBrushMoveListeners.push(cb); return () => { const i = g.gutterBrushMoveListeners.indexOf(cb); if (i >= 0) g.gutterBrushMoveListeners.splice(i, 1); }; },
     // Column widths (the sparse non-default map). get returns a copy; set
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.

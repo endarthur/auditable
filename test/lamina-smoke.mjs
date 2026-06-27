@@ -687,6 +687,21 @@ try {
     ? ok(`brush: drag → "${brush.box}" applied (${brush.rows}/300); stage mode fills box but holds (${brush.stagedRows}/300, press Enter)`)
     : fail(`brush failed: ${JSON.stringify(brush)}`);
 
+  // ── gutter brush tooltip: live range readout while dragging (ac.csv, grade 0..~30) ──
+  const tip = await page.evaluate(async () => {
+    const L = window._lamina;
+    L.showBrushTip(0, 0.0, 0.5, 200, 100);                 // mid-drag on the grade col, lower half
+    const el = document.querySelector('.brush-tip');
+    const shown = !!el && el.style.display === 'block' && /\d.*–.*\d/.test(el.textContent);
+    const text = el && el.textContent;
+    L.showBrushTip(0, null, null);                          // drag end → hide
+    const hidden = el && el.style.display === 'none';
+    return { shown, text, hidden };
+  });
+  (tip.shown && tip.hidden)
+    ? ok(`brush tooltip: live range "${tip.text}" while dragging, hides on release`)
+    : fail(`brush tooltip failed: ${JSON.stringify(tip)}`);
+
   // ── filter-reactive gutters: an active filter overlays the matched-rows
   //    distribution (numeric/hist) on the global one ──
   const react = await page.evaluate(async () => {
