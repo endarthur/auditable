@@ -1510,10 +1510,19 @@ try {
     const rows = [...document.querySelectorAll('.sum-tbl tbody tr')].map((tr) => [...tr.querySelectorAll('td')].slice(1, 3).map((td) => td.textContent.trim()));
     document.getElementById('help').classList.remove('show');
     const has = (col, issue) => rows.some((r) => r[0] === col && r[1] === issue);
-    return { rows, lead: has('code', 'leading zeros lost'), nonnum: has('au', 'non-numeric values'), sentinel: has('snt', 'possible sentinel'), blank: has('empty', 'all blank') };
+    const out = { rows, lead: has('code', 'leading zeros lost'), nonnum: has('au', 'non-numeric values'), sentinel: has('snt', 'possible sentinel'), blank: has('empty', 'all blank') };
+    // one-click fix: the leading-zeros flag → "treat as text" → re-scan, flag gone, column now text
+    const fixBtn = document.querySelector('.dq-fix');
+    out.hadFix = !!fixBtn;
+    fixBtn.click(); await new Promise((r) => setTimeout(r, 80));
+    const rows2 = [...document.querySelectorAll('.sum-tbl tbody tr')].map((tr) => [...tr.querySelectorAll('td')].slice(1, 3).map((td) => td.textContent.trim()));
+    out.leadGone = !rows2.some((r) => r[0] === 'code' && r[1] === 'leading zeros lost');
+    out.codeNowText = L.current.schema[0].type === 'string';
+    document.getElementById('help').classList.remove('show');
+    return out;
   });
-  (dq.lead && dq.nonnum && dq.sentinel && dq.blank)
-    ? ok(`data quality: leading-zeros (code) · non-numeric (au) · sentinel (snt -999) · all-blank (empty)`)
+  (dq.lead && dq.nonnum && dq.sentinel && dq.blank && dq.hadFix && dq.leadGone && dq.codeNowText)
+    ? ok(`data quality: leading-zeros/non-numeric/sentinel/all-blank flags · "fix: treat as text" clears the leading-zeros flag`)
     : fail(`data quality failed: ${JSON.stringify(dq)}`);
 
   // ── help is current: the new Analysis & quality topic covers the session's features ──
