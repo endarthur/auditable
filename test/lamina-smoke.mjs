@@ -1516,6 +1516,20 @@ try {
     ? ok(`data quality: leading-zeros (code) · non-numeric (au) · sentinel (snt -999) · all-blank (empty)`)
     : fail(`data quality failed: ${JSON.stringify(dq)}`);
 
+  // ── help is current: the new Analysis & quality topic covers the session's features ──
+  const help = await page.evaluate(() => {
+    const L = window._lamina;
+    L.showHelp('analysis');
+    const t = document.getElementById('helpTitle').textContent, b = document.getElementById('helpBody').textContent;
+    const covers = ['Σ stats', 'Group by', 'Data quality', 'weight', 'leading zeros'].filter((s) => b.includes(s));
+    L.showHelp('filter'); const fb = document.getElementById('helpBody').textContent;
+    document.getElementById('help').classList.remove('show');
+    return { title: t, covers, binDoc: /bin\(grade/.test(fb) };
+  });
+  (help.title === 'Analysis & quality' && help.covers.length === 5 && help.binDoc)
+    ? ok(`help current: Analysis & quality topic covers ${help.covers.length}/5 features + bin() documented in filter syntax`)
+    : fail(`help check failed: ${JSON.stringify(help)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
