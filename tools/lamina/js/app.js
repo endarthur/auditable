@@ -667,6 +667,11 @@ function showColumnMenu(uc, x, y) {
       ] },
       { label: (cs.reverse ? '✓ ' : '') + 'Reverse', action: () => setColScaleOpt(uc, { reverse: !cs.reverse }) });
     items.push({ label: 'Color scale', submenu: sub });
+    const gg = c.gutter && c.gutter[uc];                              // log-distribution gutter toggle (only when a positive log glyph exists)
+    if (gg && gg.kind === 'hist' && gg.logBins) {
+      const lbl = (gg.log ? '✓ ' : '') + 'Log distribution' + (gg.logSuggested && gg.log ? ' (auto)' : '');
+      items.push({ label: lbl, action: () => setGutterLog(uc, !gg.log) });
+    }
   }
   items.push({ sep: true }, { label: `Hide ${name}`, action: () => hideColumn(uc) });
   for (let i = 0; i < c.baseVs.cols; i++) {
@@ -1941,6 +1946,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
 ]);
 $('#mView').onclick = () => menuAt($('#mView'), [
   { label: (showGutter ? '✓ ' : '') + 'Column distributions', action: () => { showGutter = !showGutter; refreshGutter(); } },
+  { label: (autoLog ? '✓ ' : '') + 'Auto log-scale skewed columns', action: () => { autoLog = !autoLog; try { localStorage.setItem('lamina.autoLog', autoLog ? 'on' : 'off'); } catch { /* ignore */ } if (current) { current.gutterLog = null; refreshGutter(); } } },
   { label: 'Theme', submenu: [
     { label: (theme === 'auto' ? '✓ ' : '') + 'Auto (system)', action: () => setTheme('auto') },
     { label: (theme === 'dark' ? '✓ ' : '') + 'Dark', action: () => setTheme('dark') },
@@ -2031,6 +2037,7 @@ function applyStatFilter() {
 // columns, marked ≈); click a gutter → the full exact stats popover.
 const GUTTER_H = 26, GUTTER_SAMPLE = 8192, GUTTER_BINS = 22;
 let showGutter = true;
+let autoLog = (() => { try { return localStorage.getItem('lamina.autoLog') !== 'off'; } catch { return true; } })();   // auto-swap skewed positive columns to a log gutter
 
 // ── gutter brush → filter ──────────────────────────────────────────────────────
 // Drag a range on a numeric column's histogram → a `col between A and B` filter.
@@ -2047,8 +2054,14 @@ function brushFilter(uc, lo, hi) {
   const c = current; if (!c) return;
   const g = c.gutter && c.gutter[uc];
   if (!g || g.kind !== 'hist' || g.min == null || g.max == null || !(g.max > g.min)) return showColumnStats(uc);   // categorical / flat → stats, not a range
-  const span = g.max - g.min;
-  const a = roundSig(g.min + lo * span), b = roundSig(g.max != null ? g.min + hi * span : g.max);
+  let a, b;
+  if (g.log && g.logMin != null) {                    // log gutter → map the drag fraction through log space so the range matches the glyph
+    const l0 = Math.log(g.logMin), ls = (Math.log(g.max) - l0) || 1;
+    a = roundSig(Math.exp(l0 + lo * ls)); b = roundSig(Math.exp(l0 + hi * ls));
+  } else {
+    const span = g.max - g.min;
+    a = roundSig(g.min + lo * span); b = roundSig(g.min + hi * span);
+  }
   const name = c.baseVs.header(uc).label;
   const expr = `${colRef(name)} between ${a} and ${b}`;
   $('#filter').value = expr; syncFilterClear();
@@ -2076,14 +2089,21 @@ async function computeGutterFiltered(source, schema, dataStart, decimal, global,
   const stride = Math.max(1, Math.ceil(matchRows.length / GUTTER_SAMPLE));   // even sample across the matches
   const sub = []; for (let i = 0; i < matchRows.length; i += stride) sub.push(matchRows[i]);
   const cols = schema.length;
-  const acc = schema.map((s, i) => (s.type === 'number' && global[i] && global[i].kind === 'hist' && global[i].min != null && global[i].max > global[i].min)
-    ? { lo: global[i].min, span: global[i].max - global[i].min, bins: new Array(GUTTER_BINS).fill(0), any: false } : null);
+  const acc = schema.map((s, i) => {
+    const gi = global[i];
+    if (!(s.type === 'number' && gi && gi.kind === 'hist' && gi.min != null && gi.max > gi.min)) return null;
+    if (gi.log && gi.logMin != null) { const l0 = Math.log(gi.logMin); return { log: true, l0, ls: (Math.log(gi.max) - l0) || 1, bins: new Array(GUTTER_BINS).fill(0), any: false }; }
+    return { lo: gi.min, span: gi.max - gi.min, bins: new Array(GUTTER_BINS).fill(0), any: false };
+  });
   await source.eachRecord({ dataStart, rows: sub }, (disp, fields) => {
     for (let i = 0; i < cols; i++) {
       const a = acc[i]; if (!a) continue;
       const raw = fields[i]; if (raw == null || raw === '') continue;
       const x = parseNum(raw, decimal); if (Number.isNaN(x)) continue;
-      let k = Math.floor((x - a.lo) / a.span * GUTTER_BINS); if (k >= GUTTER_BINS) k = GUTTER_BINS - 1; if (k < 0) k = 0;
+      let k;
+      if (a.log) { if (x <= 0) continue; k = Math.floor((Math.log(x) - a.l0) / a.ls * GUTTER_BINS); }   // align with the log-binned global glyph
+      else k = Math.floor((x - a.lo) / a.span * GUTTER_BINS);
+      if (k >= GUTTER_BINS) k = GUTTER_BINS - 1; if (k < 0) k = 0;
       a.bins[k]++; a.any = true;
     }
   });
@@ -2100,10 +2120,32 @@ async function refreshGutter() {
   try {
     const g = await computeGutterStats(c.source, c.schema, c.dataStart, c.d.decimal);
     if (current !== c) return;                       // a newer file opened mid-scan
+    applyGutterLogPrefs(c, g);
     c.gutter = g;
   } catch (e) { console.warn('[lamina] gutter stats failed', e); c.gutter = null; }
   finally { clearTimeout(slow); }
   rerender();                                        // repaints with the bars + restores the footer meta (c._meta)
+}
+
+// Resolve each hist column's active log state: a per-column override (c.gutterLog)
+// wins; else the global autoLog gate × the detector's vote. Sets g.bins/g.log.
+function applyGutterLogPrefs(c, g) {
+  for (let uc = 0; uc < g.length; uc++) {
+    const col = g[uc]; if (!col || col.kind !== 'hist' || !col.logBins) continue;
+    const ov = c.gutterLog && c.gutterLog[uc];
+    const on = ov === undefined ? (autoLog && col.logSuggested) : ov;
+    col.log = on; col.bins = on ? col.logBins : col.linBins;
+  }
+}
+// Toggle log binning on one column's gutter glyph (context-menu action). Persists
+// as a per-column override so a gutter refresh keeps the choice.
+function setGutterLog(uc, on) {
+  const c = current; if (!c || !c.gutter) return;
+  const col = c.gutter[uc]; if (!col || col.kind !== 'hist' || !col.logBins) return;
+  (c.gutterLog || (c.gutterLog = {}))[uc] = on;
+  col.log = on; col.bins = on ? col.logBins : col.linBins;
+  rerender();
+  if (c.filterResult) refreshGutterFiltered();        // re-bin the filtered overlay in the new space
 }
 
 // One bounded scan → per-column { kind:'hist', bins:[0..1], nullRate, approx } |
@@ -2123,6 +2165,27 @@ function gutterSampleRows(source, dataStart) {
     for (let j = 0; j < per && start + j < N; j++) rows.push(start + j);   // a short contiguous run per spread point (1-2 blocks each)
   }
   return rows;                                            // ascending
+}
+// Bin a value array into GUTTER_BINS normalized [0..1] heights — linear over
+// [lo, lo+span], or log over [lo(>0), lo+span] when `log` (skips v≤0).
+function binVals(vals, lo, span, log) {
+  const bins = new Array(GUTTER_BINS).fill(0);
+  const l0 = log ? Math.log(lo) : lo, s = (log ? Math.log(lo + span) : lo + span) - l0 || 1;
+  for (const v of vals) {
+    if (log && v <= 0) continue;
+    let k = Math.floor(((log ? Math.log(v) : v) - l0) / s * GUTTER_BINS);
+    if (k >= GUTTER_BINS) k = GUTTER_BINS - 1; if (k < 0) k = 0; bins[k]++;
+  }
+  const mx = Math.max(...bins) || 1;
+  return bins.map((x) => x / mx);
+}
+// Fisher–Pearson sample skewness — the log-normal detector's signal.
+function skewness(vals) {
+  const n = vals.length; if (n < 3) return 0;
+  let m = 0; for (const v of vals) m += v; m /= n;
+  let s2 = 0, s3 = 0; for (const v of vals) { const d = v - m; s2 += d * d; s3 += d * d * d; }
+  const sd = Math.sqrt(s2 / n); if (sd === 0) return 0;
+  return (s3 / n) / (sd * sd * sd);
 }
 async function computeGutterStats(source, schema, dataStart, decimal) {
   const cols = schema.length;
@@ -2151,10 +2214,23 @@ async function computeGutterStats(source, schema, dataStart, decimal) {
     const nullRate = a.nulls / a.n;
     if (a.num) {
       if (!a.vals.length || !(a.max > a.min)) return { kind: 'hist', bins: [], nullRate, approx: true, min: a.vals.length ? a.min : null, max: a.vals.length ? a.max : null };
-      const lo = a.min, span = a.max - a.min, bins = new Array(GUTTER_BINS).fill(0);
-      for (const v of a.vals) { let k = Math.floor((v - lo) / span * GUTTER_BINS); if (k >= GUTTER_BINS) k = GUTTER_BINS - 1; if (k < 0) k = 0; bins[k]++; }
-      const mx = Math.max(...bins) || 1;
-      return { kind: 'hist', bins: bins.map((x) => x / mx), nullRate, approx: true, min: a.min, max: a.max };   // min/max → the brush maps a drag fraction to a value range
+      const linBins = binVals(a.vals, a.min, a.max - a.min, false);
+      // Detect an obvious log-normal column (skewed, mostly-positive — grades,
+      // assays) and pre-render the glyph in log space. logSuggested drives the
+      // auto-swap; logBins/logMin carry the alt rendering + the brush mapping. A
+      // per-column override (c.gutterLog) can force it on/off in refreshGutter.
+      const pos = a.vals.filter((v) => v > 0);
+      let logSuggested = false, logMin = null, logBins = null;
+      if (pos.length >= a.vals.length * 0.8 && pos.length >= 12) {
+        const pmin = Math.min(...pos);
+        if (a.max > pmin) {
+          const rawSkew = skewness(pos), logSkew = skewness(pos.map(Math.log));
+          if (rawSkew > 1.5 && Math.abs(logSkew) < Math.abs(rawSkew) - 0.5) {   // log transform is much more symmetric → it's log-ish
+            logSuggested = true; logMin = pmin; logBins = binVals(a.vals, pmin, a.max, true);
+          }
+        }
+      }
+      return { kind: 'hist', bins: logSuggested ? logBins : linBins, linBins, logBins, log: logSuggested, logSuggested, logMin, nullRate, approx: true, min: a.min, max: a.max };   // min/max(/logMin) → the brush maps a drag fraction to a value range
     }
     const tot = [...a.freq.values()].reduce((s, v) => s + v, 0) || 1;
     const top = [...a.freq.entries()].sort((x, y) => y[1] - x[1]).slice(0, 8);
@@ -2321,7 +2397,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

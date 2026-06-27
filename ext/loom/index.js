@@ -614,9 +614,10 @@ function paintColHeaders(g, c0, c1, sx, vw, P = 0, pinnedW = 0) {
 }
 
 // Draw a column's distribution glyph in the header gutter strip. `gd` (from
-// provider.headerGutter) is { kind:'hist', bins:[0..1], nullRate, approx } |
-// { kind:'cat', segments:[fractions], nullRate, approx } | null. Runs inside the
-// per-column save/restore, so ctx state changes don't leak.
+// provider.headerGutter) is { kind:'hist', bins:[0..1], nullRate, approx, log? } |
+// { kind:'cat', segments:[fractions], nullRate, approx } | null. `log:true` draws a
+// 'log' marker (the host has log-binned the bins). Runs inside the per-column
+// save/restore, so ctx state changes don't leak.
 function drawGutter(ctx, g, gd, x, top, cw, gh) {
   const x0 = x + 1, w = cw - 2;
   ctx.fillStyle = g.colors.hdrBorder;            // hairline under the label
@@ -654,6 +655,10 @@ function drawGutter(ctx, g, gd, x, top, cw, gh) {
   if (gd.approx) {                                // a muted ≈ marks a sampled (not exact) glyph
     ctx.fillStyle = g.colors.hdrGlyph; ctx.font = '9px ' + g.mono; ctx.textAlign = 'right'; ctx.textBaseline = 'top';
     ctx.fillText('≈', x0 + w, top + 1);
+  }
+  if (gd.log) {                                   // a muted 'log' marks a log-scaled distribution glyph
+    ctx.fillStyle = g.colors.hdrGlyph; ctx.font = '8px ' + g.mono; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText('log', x0 + 1, top + 1);
   }
 }
 

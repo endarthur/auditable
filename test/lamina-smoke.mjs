@@ -1091,6 +1091,25 @@ try {
     ? ok('stats exclude zeros/negatives re-scan (n + min + excluded count track)')
     : fail(`exclude test failed: ${JSON.stringify(exTest)}`);
 
+  // ── log-normal gutter detection + per-column toggle ──
+  const logTest = await page.evaluate(async () => {
+    const L = window._lamina;
+    // uniform-in-log values → symmetric in log, right-skewed in raw → log-suggested
+    let csv = 'id,grade,flat\n';
+    for (let i = 0; i < 3000; i++) { const v = Math.exp(((i * 7) % 100) / 18); csv += `${i},${v.toFixed(4)},${(i % 50)}\n`; }
+    L.open('logn.csv', new TextEncoder().encode(csv));
+    for (let t = 0; t < 60 && !(L.current && L.current.gutter && L.current.gutter[1]); t++) await new Promise((r) => setTimeout(r, 50));
+    const g = L.current.gutter && L.current.gutter[1];          // grade — skewed → log
+    const flat = L.current.gutter && L.current.gutter[2];        // a flat 0..49 column → NOT log
+    const detected = !!(g && g.log && g.logBins && g.logSuggested);
+    L.setGutterLog(1, false); const afterOff = L.current.gutter[1].log;
+    L.setGutterLog(1, true); const afterOn = L.current.gutter[1].log;
+    return { detected, flatNotLog: !(flat && flat.log), afterOff, afterOn };
+  });
+  (logTest.detected && logTest.flatNotLog && logTest.afterOff === false && logTest.afterOn === true)
+    ? ok('log-normal gutter auto-detected (flat column stays linear) + per-column toggle')
+    : fail(`log gutter test failed: ${JSON.stringify(logTest)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
