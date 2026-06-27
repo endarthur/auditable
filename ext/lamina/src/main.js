@@ -7,6 +7,6 @@ export { createRecordViewSource, LOADING } from './viewsource.js';
 export { withCalcCursor, withCalcView } from './calc.js';
 export { parseFilter, scanFilter, createResultView } from './filter.js';
 export { scanSortKeys } from './sort.js';
-export { scanColumnStats, scanAllColumnStats, scanGroupBy } from './stats.js';
+export { scanColumnStats, scanAllColumnStats, scanGroupBy, scanDataQuality } from './stats.js';
 export { detectKind } from './detect.js';
 export { createLaminaProvider } from './provider.js';

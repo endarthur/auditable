@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, scanGroupBy, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, scanGroupBy, scanDataQuality, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
 import { compile, compileBool, validate, deps, complete, tokenize } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
@@ -2041,6 +2041,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
   { sep: true },
   { label: 'Calculated columns…', action: () => { if (hasFile()) openCalcManager(); } },
   { label: 'Group by…', action: () => { if (hasFile()) openGroupBy(); } },
+  { label: 'Data quality…', action: () => { if (hasFile()) showDataQuality(); } },
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
   { sep: true },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyFilter(''); } },
@@ -2676,6 +2677,45 @@ function showSummary() {
   paintSummary(c);
 }
 
+// ── data quality (per-column quiet-bug flags over a sample) ─────────────────────
+let _dqFindings = null;
+async function showDataQuality() {
+  const c = current; if (!c || c.d.kind !== 'delimited') return;
+  $('#helpTitle').textContent = `Data quality — ${c.label}${c.filterResult ? ' (filtered)' : ''}`;
+  $('.help-box').classList.add('wide');
+  $('#help').classList.add('show');
+  $('#helpBody').innerHTML = '<div style="color:#777">scanning… <span id="scanPct">0%</span></div>';
+  const ac = newFooterScan();
+  let rows, limit;
+  if (c.filterResult) { rows = c.filterResult.nums; limit = Infinity; }   // the filtered subset
+  else { rows = gutterSampleRows(c.source, c.dataStart); limit = GUTTER_SAMPLE; }   // spread sample (or all if small)
+  try {
+    const findings = await scanDataQuality(c.source, {
+      schema: c.schema, dataStart: c.dataStart, decimal: c.d.decimal, rows: rows || null, limit, signal: ac.signal,
+      onProgress: (b, n) => { const e = $('#scanPct'); if (e) e.textContent = `${n ? Math.round(100 * b / n) : 0}%`; },
+    });
+    if (ac.signal.aborted) return;
+    _dqFindings = findings;
+    paintDataQuality(c);
+  } catch (e) {
+    if (e && e.name === 'AbortError') $('#helpBody').innerHTML = '<div style="color:var(--dim)">cancelled</div>';
+    else $('#helpBody').innerHTML = `<div style="color:var(--fault)">${esc(e.message)}</div>`;
+  } finally { if (_footerScanAbort === ac) _footerScanAbort = null; }
+}
+function paintDataQuality(c) {
+  const f = _dqFindings || [];
+  if (!f.length) { $('#helpBody').innerHTML = '<div style="color:var(--ok);padding:8px 2px">✓ no data-quality flags in the sample</div>'; return; }
+  const dot = { high: 'var(--fault)', warn: 'var(--accent)', info: 'var(--muted)' };
+  let h = '<button id="dqCopy" class="sum-copy">copy all</button>';
+  h += `<div style="color:var(--dim);font-size:11px;margin:2px 0 6px">${f.length} flag(s) — from a sample · click a row to inspect the column</div>`;
+  h += '<div style="overflow:auto;max-height:60vh"><table class="sum-tbl"><thead><tr><th></th><th>column</th><th>flag</th><th>detail</th></tr></thead><tbody>';
+  for (const x of f) h += `<tr data-uc="${x.col}"><td style="color:${dot[x.severity]};text-align:center">●</td><td>${esc(x.name)}</td><td>${esc(x.issue)}</td><td style="color:var(--muted);white-space:normal">${esc(x.detail)}</td></tr>`;
+  h += '</tbody></table></div>';
+  $('#helpBody').innerHTML = h;
+  $('#helpBody').querySelectorAll('.sum-tbl tbody tr').forEach((tr) => tr.onclick = () => showColumnStats(+tr.getAttribute('data-uc')));
+  const cp = $('#dqCopy'); if (cp) cp.onclick = () => { copyText(['severity\tcolumn\tflag\tdetail', ...f.map((x) => `${x.severity}\t${x.name}\t${x.issue}\t${x.detail}`)].join('\n')); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
+}
+
 // ── group by (one group column × value column(s), optional weight) ───────────────
 let _gbConfig = null, _gbResult = null, _gbSort = { col: 'n', dir: -1 };
 function openGroupBy() {
@@ -2842,7 +2882,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, scanGroupBy, precomputeStats, showSummary, openGroupBy, computeGroupBy, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, scanGroupBy, scanDataQuality, precomputeStats, showSummary, openGroupBy, computeGroupBy, showDataQuality, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

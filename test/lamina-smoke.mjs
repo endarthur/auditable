@@ -1491,6 +1491,31 @@ try {
     ? ok(`bin() group-by: numeric bins [${binGb.keys.join(', ')}] sort numerically (10 last, not after 1)`)
     : fail(`bin group-by failed: ${JSON.stringify(binGb)}`);
 
+  // ── data quality: leading-zeros / non-numeric / sentinel / all-blank detectors ──
+  const dq = await page.evaluate(async () => {
+    const L = window._lamina;
+    // code: 00N (leading zeros, numeric-detected) · au: numeric w/ ONE BLK (sparse junk, stays numeric) · snt: -999 sentinel · empty: all blank
+    let csv = 'code,au,snt,empty\n';
+    for (let i = 0; i < 12; i++) {
+      const code = String(i + 1).padStart(3, '0');
+      const au = i === 5 ? 'BLK' : (1 + i * 0.3).toFixed(1);
+      const snt = i % 4 === 0 ? '-999' : String(5 + i);
+      csv += `${code},${au},${snt},\n`;
+    }
+    L.open('dq.csv', new TextEncoder().encode(csv));
+    await new Promise((r) => setTimeout(r, 60));
+    L.setColType(1, 'number');                              // au: numeric column with sparse BLK (the Isatis case)
+    await new Promise((r) => setTimeout(r, 40));
+    await L.showDataQuality(); await new Promise((r) => setTimeout(r, 60));
+    const rows = [...document.querySelectorAll('.sum-tbl tbody tr')].map((tr) => [...tr.querySelectorAll('td')].slice(1, 3).map((td) => td.textContent.trim()));
+    document.getElementById('help').classList.remove('show');
+    const has = (col, issue) => rows.some((r) => r[0] === col && r[1] === issue);
+    return { rows, lead: has('code', 'leading zeros lost'), nonnum: has('au', 'non-numeric values'), sentinel: has('snt', 'possible sentinel'), blank: has('empty', 'all blank') };
+  });
+  (dq.lead && dq.nonnum && dq.sentinel && dq.blank)
+    ? ok(`data quality: leading-zeros (code) · non-numeric (au) · sentinel (snt -999) · all-blank (empty)`)
+    : fail(`data quality failed: ${JSON.stringify(dq)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
