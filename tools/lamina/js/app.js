@@ -209,7 +209,7 @@ function mountView(vs, info = {}, keepVScroll = false) {
     onReady(cb) { return base.onReady(cb); },
   };
 
-  grid = createGrid($('#grid'), provider, { readOnly: true, theme: effectiveTheme(), defaultColW: c.d.kind === 'text' ? 900 : 130, headerGutterH: (showGutter && c.d.kind === 'delimited') ? GUTTER_H : 0, pinnedCols: c._pinnedCount || 0 });
+  grid = createGrid($('#grid'), provider, { readOnly: true, theme: effectiveTheme(), defaultColW: c.d.kind === 'text' ? 900 : 130, headerGutterH: (showGutter && c.d.kind === 'delimited') ? GUTTER_H : 0, pinnedCols: c._pinnedCount || 0, axisLock: scrollLock });
   // reapply persisted column widths (stored by UNDERLYING col → display indices)
   const dw = {};
   for (let dc = 0; dc < vis.length; dc++) { const w = c.colWidths[vis[dc]]; if (w != null) dw[dc] = w; }
@@ -1981,6 +1981,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
 $('#mView').onclick = () => menuAt($('#mView'), [
   { label: (showGutter ? '✓ ' : '') + 'Column distributions', action: () => { showGutter = !showGutter; refreshGutter(); } },
   { label: (autoLog ? '✓ ' : '') + 'Auto log-scale skewed columns', action: () => { autoLog = !autoLog; try { localStorage.setItem('lamina.autoLog', autoLog ? 'on' : 'off'); } catch { /* ignore */ } if (current) { current.gutterLog = null; refreshGutter(); } } },
+  { label: (scrollLock ? '✓ ' : '') + 'Lock scroll to one axis', action: () => { scrollLock = !scrollLock; try { localStorage.setItem('lamina.scrollLock', scrollLock ? 'on' : 'off'); } catch { /* ignore */ } if (grid) grid.setAxisLock(scrollLock); } },
   { label: 'Theme', submenu: [
     { label: (theme === 'auto' ? '✓ ' : '') + 'Auto (system)', action: () => setTheme('auto') },
     { label: (theme === 'dark' ? '✓ ' : '') + 'Dark', action: () => setTheme('dark') },
@@ -2072,6 +2073,7 @@ function applyStatFilter() {
 const GUTTER_H = 26, GUTTER_SAMPLE = 8192, GUTTER_BINS = 22;
 let showGutter = true;
 let autoLog = (() => { try { return localStorage.getItem('lamina.autoLog') !== 'off'; } catch { return true; } })();   // auto-swap skewed positive columns to a log gutter
+let scrollLock = (() => { try { return localStorage.getItem('lamina.scrollLock') !== 'off'; } catch { return true; } })();   // lock wheel scroll to one axis (helps 2D trackball drag-scroll)
 
 // ── gutter brush → filter ──────────────────────────────────────────────────────
 // Drag a range on a numeric column's histogram → a `col between A and B` filter.

@@ -68,6 +68,7 @@ export function createGrid(element, provider, options = {}) {
     sel: null,
     selDrag: false,
     editing: null,
+    axisLock: !!options.axisLock,    // lock wheel scroll to the dominant axis per gesture (2D trackball / free-scroll devices)
     readOnly: !!options.readOnly,   // refuse edits/paste/fill/clear (a viewer, e.g. lamina)
     selectListeners: [],
     headerListeners: [],
@@ -685,6 +686,22 @@ export function createGrid(element, provider, options = {}) {
     for (const cb of g.contextListeners) { try { cb(detail); } catch (err) { console.error('[loom] onContextMenu listener threw', err); } }
   }
 
+  // Axis-locked wheel scroll (opt-in): a 2D free-scroll device (trackball drag-scroll,
+  // some trackpads) emits deltaX+deltaY together, so a vertical scroll drifts sideways.
+  // When on, each gesture (bursts within 140ms) locks to its dominant axis; the minor
+  // axis is dropped. We take over the wheel (preventDefault) only while locked.
+  let _lockAxis = null, _lockTimer = null;
+  scroll.addEventListener('wheel', (e) => {
+    if (!g.axisLock || e.ctrlKey) return;                 // ctrl+wheel = zoom; leave native
+    const ax = Math.abs(e.deltaX), ay = Math.abs(e.deltaY);
+    if (!ax && !ay) return;
+    clearTimeout(_lockTimer); _lockTimer = setTimeout(() => { _lockAxis = null; }, 140);
+    if (!_lockAxis) _lockAxis = ax > ay ? 'x' : 'y';
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroll.clientHeight : 1;   // lines / pages → px
+    e.preventDefault();
+    if (_lockAxis === 'y') scroll.scrollTop += e.deltaY * k;
+    else scroll.scrollLeft += e.deltaX * k;
+  }, { passive: false });
   scroll.addEventListener('scroll', () => { if (g.editing) cancelEdit(); hideTip(); hoverKey = null; repaint(); }, { passive: true });
   scroll.addEventListener('mousedown', onMouseDown);
   scroll.addEventListener('dblclick', onDblClick);
@@ -751,6 +768,7 @@ export function createGrid(element, provider, options = {}) {
     // Column widths (the sparse non-default map). get returns a copy; set
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.
+    setAxisLock(on) { g.axisLock = !!on; },
     getScroll() { return { left: g.scrollEl.scrollLeft, top: g.scrollEl.scrollTop }; },
     setScroll(s) { if (!s) return; if (s.left != null) g.scrollEl.scrollLeft = s.left; if (s.top != null) g.scrollEl.scrollTop = s.top; repaint(); },
     getColWidths() { return { ...M.colWidths }; },

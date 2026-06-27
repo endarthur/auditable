@@ -1285,6 +1285,29 @@ try {
     ? ok('dock panels are mutually exclusive + never cause horizontal overflow')
     : fail(`panel exclusivity failed: ${JSON.stringify(panels)}`);
 
+  // ── axis-locked scrolling: a 2D wheel (deltaX+deltaY) moves only the dominant axis ──
+  const axis = await page.evaluate(async () => {
+    const L = window._lamina;
+    let h = 'r'; for (let j = 1; j < 60; j++) h += `,c${j}`;
+    let csv = h + '\n'; for (let i = 0; i < 400; i++) { let row = `${i}`; for (let j = 1; j < 60; j++) row += `,${i * j}`; csv += row + '\n'; }
+    L.open('scroll.csv', new TextEncoder().encode(csv));
+    for (let t = 0; t < 40 && !L.grid; t++) await new Promise((r) => setTimeout(r, 25));
+    await new Promise((r) => setTimeout(r, 120));
+    const sc = [...document.querySelectorAll('#grid *')].find((e) => e.scrollHeight > e.clientHeight + 10 && e.scrollWidth > e.clientWidth + 10);
+    if (!sc) return { err: 'no scroll viewport' };
+    const fire = (dx, dy) => sc.dispatchEvent(new WheelEvent('wheel', { deltaX: dx, deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true }));
+    sc.scrollTop = 0; sc.scrollLeft = 0;
+    fire(25, 140);                                          // mostly-vertical with sideways jitter → only down
+    const afterY = { top: sc.scrollTop, left: sc.scrollLeft };
+    await new Promise((r) => setTimeout(r, 220));           // let the per-gesture lock expire
+    fire(140, 25);                                          // mostly-horizontal → only across
+    const afterX = { top: sc.scrollTop, left: sc.scrollLeft };
+    return { afterY, afterX };
+  });
+  (axis.afterY && axis.afterY.top > 0 && axis.afterY.left === 0 && axis.afterX.left > 0 && axis.afterX.top === axis.afterY.top)
+    ? ok(`axis-locked scroll: vertical gesture drops x-jitter (top ${axis.afterY.top}), then horizontal gesture moves only x (left ${axis.afterX.left})`)
+    : fail(`axis-lock failed: ${JSON.stringify(axis)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
