@@ -1468,6 +1468,29 @@ try {
     ? ok(`group by: OX mean 3 vs wmean 3.5 (weighted) · 2 groups + total · click group → ${grp.box}`)
     : fail(`group by failed: ${JSON.stringify(grp)}`);
 
+  // ── group-by numeric bins via expr bin() calc column + numeric key sort ──
+  const binGb = await page.evaluate(async () => {
+    const L = window._lamina;
+    let csv = 'id,au\n'; [0.1, 0.6, 1.2, 2.1, 10.3, 0.4, 1.8].forEach((v, i) => csv += `${i},${v}\n`);
+    L.open('bin.csv', new TextEncoder().encode(csv));
+    await new Promise((r) => setTimeout(r, 60));
+    await L.addCalc('aubin', 'bin(au, 0.5)');             // the new expr bin() helper
+    await new Promise((r) => setTimeout(r, 60));
+    const binCol = L.current.schema.findIndex((s) => s.name === 'aubin');
+    L.openGroupBy(); await new Promise((r) => setTimeout(r, 20));
+    document.getElementById('gbGroup').value = String(binCol); document.getElementById('gbGroup').dispatchEvent(new Event('change'));
+    await L.computeGroupBy(); await new Promise((r) => setTimeout(r, 40));
+    [...document.querySelectorAll('.sum-tbl th')].find((t) => t.getAttribute('data-k') === 'key').click();   // sort by key asc
+    await new Promise((r) => setTimeout(r, 20));
+    const keys = [...document.querySelectorAll('.sum-tbl tbody tr:not(.gb-total) td:first-child')].map((td) => td.textContent.trim());
+    await L.applyFilter('');
+    return { keys };
+  });
+  const bn = binGb.keys.map(Number);
+  (bn.length >= 5 && bn.every((v, i) => i === 0 || v >= bn[i - 1]) && bn.indexOf(10) === bn.length - 1)
+    ? ok(`bin() group-by: numeric bins [${binGb.keys.join(', ')}] sort numerically (10 last, not after 1)`)
+    : fail(`bin group-by failed: ${JSON.stringify(binGb)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

@@ -2714,7 +2714,13 @@ function groupTable(c) {
   const rowOf = (g) => { const o = { key: g.key, n: g.count }; cfg.values.forEach((uc, vi) => { const v = g.vars[vi]; aggs.forEach((agg) => { o[`${vi}.${agg}`] = v[agg]; }); }); return o; };
   let rows = res.groups.map(rowOf);
   const srt = _gbSort;
-  if (srt.col) rows.sort((a, b) => { const x = a[srt.col], y = b[srt.col]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return typeof x === 'string' ? srt.dir * x.localeCompare(y) : srt.dir * (x - y); });
+  const numKey = srt.col === 'key' && schema[cfg.group] && schema[cfg.group].type === 'number';   // numeric group keys (incl. bin() edges) sort numerically, not lexically
+  if (srt.col) rows.sort((a, b) => {
+    let x = a[srt.col], y = b[srt.col];
+    if (numKey) { x = Number(x); y = Number(y); if (Number.isNaN(x)) x = Infinity; if (Number.isNaN(y)) y = Infinity; }   // '(blank)' → end
+    if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1;
+    return typeof x === 'string' ? srt.dir * x.localeCompare(y) : srt.dir * (x - y);
+  });
   return { COLS, rows, totalRow: rowOf({ key: 'Σ total', count: res.total.count, vars: res.total.vars }), truncated: res.truncated };
 }
 function renderGroupResult(c) {

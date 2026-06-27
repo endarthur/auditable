@@ -38,6 +38,10 @@
     { "note": "geo: min over args", "verb": "calculate", "expr": "min(a, b, c)", "values": { "a": 5, "b": 2, "c": 9 }, "expected": 2 },
     { "note": "geo: max skips blanks", "verb": "calculate", "expr": "max(a, b)", "values": { "a": 5 }, "expected": 5 },
     { "note": "geo: clamp", "verb": "calculate", "expr": "clamp(x, 0, 10)", "values": { "x": 14 }, "expected": 10 },
+    { "note": "bin: lower edge of a width-0.5 bin", "verb": "calculate", "expr": "bin(au, 0.5)", "values": { "au": 1.7 }, "expected": 1.5 },
+    { "note": "bin: floors negatives correctly", "verb": "calculate", "expr": "bin(z, 10)", "values": { "z": -3 }, "expected": -10 },
+    { "note": "bin: with an origin", "verb": "calculate", "expr": "bin(x, 5, 2)", "values": { "x": 13 }, "expected": 12 },
+    { "note": "bin: blank/bad width → blank", "verb": "calculate", "expr": "bin(x, 0)", "values": { "x": 5 }, "expected": null },
 
     { "note": "cast: ifnum keeps a number", "verb": "calculate", "expr": "ifnum(g, 0)", "values": { "g": 1.5 }, "expected": 1.5 },
     { "note": "cast: ifnum substitutes for a blank (explicit opt-out of blank-propagation)", "verb": "calculate", "expr": "ifnum(g, 0)", "values": {}, "expected": 0 },

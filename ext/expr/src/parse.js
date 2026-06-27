@@ -23,7 +23,7 @@ const RESERVED = new Set(['and', 'or', 'not', 'between', 'contains', 'in', 'like
 export const CALLFNS = {
   if: [3, 3], round: [1, 2], int: [1, 1], abs: [1, 1],
   year: [1, 1], month: [1, 1], day: [1, 1],
-  log: [1, 1], exp: [1, 1], sqrt: [1, 1], pow: [2, 2], min: [1, Infinity], max: [1, Infinity], clamp: [3, 3],
+  log: [1, 1], exp: [1, 1], sqrt: [1, 1], pow: [2, 2], min: [1, Infinity], max: [1, Infinity], clamp: [3, 3], bin: [2, 3],
   ifnum: [2, 2], coalesce: [1, Infinity], isnum: [1, 1], isnan: [1, 1], isblank: [1, 1], isfilled: [1, 1],
 };
 
