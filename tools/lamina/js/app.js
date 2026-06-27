@@ -2219,9 +2219,12 @@ async function computeGutterStats(source, schema, dataStart, decimal) {
       // assays) and pre-render the glyph in log space. logSuggested drives the
       // auto-swap; logBins/logMin carry the alt rendering + the brush mapping. A
       // per-column override (c.gutterLog) can force it on/off in refreshGutter.
-      const pos = a.vals.filter((v) => v > 0);
+      const pos = a.vals.filter((v) => v > 0), neg = a.vals.filter((v) => v < 0).length;
       let logSuggested = false, logMin = null, logBins = null;
-      if (pos.length >= a.vals.length * 0.8 && pos.length >= 12) {
+      // Magnitude data (grades/assays): ZEROS are fine (waste/unestimated blocks — a
+      // grade column is mostly zero), only real NEGATIVES disqualify log. Skewness is
+      // measured on the positive subset (the actual grade tail), zeros set aside.
+      if (pos.length >= 12 && neg <= a.vals.length * 0.02) {
         const pmin = Math.min(...pos);
         if (a.max > pmin) {
           const rawSkew = skewness(pos), logSkew = skewness(pos.map(Math.log));

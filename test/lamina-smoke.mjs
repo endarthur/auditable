@@ -1118,9 +1118,10 @@ try {
   // ── log-normal gutter detection + per-column toggle ──
   const logTest = await page.evaluate(async () => {
     const L = window._lamina;
-    // uniform-in-log values → symmetric in log, right-skewed in raw → log-suggested
+    // grade: ~60% ZEROS (waste blocks) + a skewed positive tail (uniform-in-log →
+    // symmetric in log) — the real block-model shape; must still be log-detected.
     let csv = 'id,grade,flat\n';
-    for (let i = 0; i < 3000; i++) { const v = Math.exp(((i * 7) % 100) / 18); csv += `${i},${v.toFixed(4)},${(i % 50)}\n`; }
+    for (let i = 0; i < 3000; i++) { const v = (i % 5 < 3) ? 0 : Math.exp(((i * 7) % 100) / 18); csv += `${i},${v.toFixed(4)},${(i % 50)}\n`; }
     L.open('logn.csv', new TextEncoder().encode(csv));
     for (let t = 0; t < 60 && !(L.current && L.current.gutter && L.current.gutter[1]); t++) await new Promise((r) => setTimeout(r, 50));
     const g = L.current.gutter && L.current.gutter[1];          // grade — skewed → log
