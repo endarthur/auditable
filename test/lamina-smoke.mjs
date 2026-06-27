@@ -27,6 +27,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port;
 const browser = await chromium.launch();
 const page = await browser.newPage();
+await page.setViewportSize({ width: 1280, height: 800 });   // a desktop size so panel-width / edge-flip math is exercised
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(String(e)));
@@ -1323,6 +1324,54 @@ try {
   (axis.afterY && axis.afterY.top > 0 && axis.afterY.left === 0 && axis.afterX.left > 0 && axis.afterX.top === axis.afterY.top)
     ? ok(`axis-locked scroll: vertical gesture drops x-jitter (top ${axis.afterY.top}), then horizontal gesture moves only x (left ${axis.afterX.left})`)
     : fail(`axis-lock failed: ${JSON.stringify(axis)}`);
+
+  // ── record panel: nav + pin-to-compare (side-by-side diff) ──
+  const recPanel = await page.evaluate(async () => {
+    const L = window._lamina;
+    L.open('rec.csv', new TextEncoder().encode('id,g\n1,10\n2,20\n3,30\n'));
+    await new Promise((r) => setTimeout(r, 60));
+    L.toggleRecordPanel(true);
+    await new Promise((r) => setTimeout(r, 40));
+    L.renderRecordCard(0); await new Promise((r) => setTimeout(r, 30));
+    const row1 = document.getElementById('rpRow').textContent;
+    document.getElementById('rpPin').click(); await new Promise((r) => setTimeout(r, 40));   // pin row 1
+    const pinned = document.getElementById('rpPin').classList.contains('on');
+    document.getElementById('rpNext').click(); await new Promise((r) => setTimeout(r, 40));   // → row 2, compare
+    const cmpRows = document.querySelectorAll('#rpList .rp-field.cmp').length;
+    const diffRows = document.querySelectorAll('#rpList .rp-field.diff').length;     // id & g both differ
+    const header = document.getElementById('rpRow').textContent;                     // "row 1 ⇄ 2"
+    document.getElementById('rpPin').click(); await new Promise((r) => setTimeout(r, 40));    // unpin
+    const backToSingle = document.querySelectorAll('#rpList .rp-field.cmp').length === 0;
+    L.toggleRecordPanel(false);
+    return { row1, pinned, cmpRows, diffRows, header, backToSingle };
+  });
+  (/row 1 of 3/.test(recPanel.row1) && recPanel.pinned && recPanel.cmpRows === 2 && recPanel.diffRows === 2 && /⇄/.test(recPanel.header) && recPanel.backToSingle)
+    ? ok(`record panel: pin row 1, next→2 shows side-by-side diff (${recPanel.diffRows} changed), unpin restores`)
+    : fail(`record panel failed: ${JSON.stringify(recPanel)}`);
+
+  // ── dock panel resize: dragging the grip changes width + the grid inset, persisted ──
+  await page.setViewportSize({ width: 1280, height: 800 });   // an earlier test shrank to 360; need room to widen
+  const resize = await page.evaluate(async () => {
+    const L = window._lamina;
+    L.open('rs.csv', new TextEncoder().encode('a,b\n1,2\n3,4\n'));
+    await new Promise((r) => setTimeout(r, 50));
+    L.toggleColPanel(true); await new Promise((r) => setTimeout(r, 40));
+    const grip = document.getElementById('cpGrip'), panel = document.getElementById('colPanel');
+    const w0 = panel.getBoundingClientRect().width;
+    const targetX = window.innerWidth - 420;             // drag the left edge to make it ~420px wide
+    grip.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: window.innerWidth - w0 }));
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: targetX }));
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 30));
+    const w1 = panel.getBoundingClientRect().width;
+    const cp = getComputedStyle(document.documentElement).getPropertyValue('--cp').trim();
+    const persisted = localStorage.getItem('lamina.colPanelW');
+    L.toggleColPanel(false);
+    return { w0: Math.round(w0), w1: Math.round(w1), cp, persisted };
+  });
+  (resize.w1 > resize.w0 + 50 && resize.cp === resize.w1 + 'px' && Number(resize.persisted) === resize.w1)
+    ? ok(`panel resize: drag widened ${resize.w0}→${resize.w1}px, grid inset + width persisted`)
+    : fail(`panel resize failed: ${JSON.stringify(resize)}`);
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');

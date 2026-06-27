@@ -111,6 +111,7 @@ function mount(name, d, src, totalBytes) {
   const dataStart = d.dataStart != null ? d.dataStart : (kind === 'delimited' && d.hasHeader ? 1 : 0);
   const baseVs = createRecordViewSource(src, { schema, dataStart });
   current = { source: src, d, schema, dataStart, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), colWidths: {}, colFormats: {}, _vis: null, file: null, bytes: null, force: {} };
+  _recPinned = null; _recRow = 0;                        // fresh file → drop any pinned compare record
   $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear();   // fresh file → clear filter + sort
   initCalcState();
   recompute();
@@ -402,47 +403,101 @@ function togglePin(uc) {
 // A searchable list of every column with a visibility checkbox + type + null-rate +
 // a ⋯ menu (the existing per-column actions). Pure consolidation of existing state
 // (c.hidden / colFormats / colScale / gutter + showColumnMenu); reorder + pin = v2.
+// ── dock panel resizing (drag the left edge; width persisted) ───────────────────
+const loadPanelW = (k, d) => { try { const v = parseInt(localStorage.getItem(k), 10); return Number.isFinite(v) ? v : d; } catch { return d; } };
+let colPanelW = loadPanelW('lamina.colPanelW', 266), recPanelW = loadPanelW('lamina.recPanelW', 300);
+function clampPanelW(w) { return Math.max(200, Math.min(w | 0, Math.round(window.innerWidth * 0.6))); }
+function makePanelResizable(panelId, gripId, set) {
+  const grip = $('#' + gripId), panel = $('#' + panelId); if (!grip || !panel) return;
+  grip.addEventListener('mousedown', (e) => {
+    e.preventDefault(); grip.classList.add('dragging');
+    const onMove = (ev) => { const w = clampPanelW(window.innerWidth - ev.clientX); set(w); panel.style.width = w + 'px'; document.documentElement.style.setProperty('--cp', w + 'px'); };
+    const onUp = () => { grip.classList.remove('dragging'); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+  });
+}
+makePanelResizable('colPanel', 'cpGrip', (w) => { colPanelW = w; try { localStorage.setItem('lamina.colPanelW', w); } catch { /* ignore */ } });
+makePanelResizable('recordPanel', 'rpGrip', (w) => { recPanelW = w; try { localStorage.setItem('lamina.recPanelW', w); } catch { /* ignore */ } });
+
 // ── record card (row inspector) ─────────────────────────────────────────────────
 // A right-dock panel showing the selected row's fields as name:value — read one
 // record without scrolling 50 columns horizontally. Follows the selection. Shares the
 // right-dock slot with the columns panel (mutually exclusive). Click a field → filter
 // by that value (inspect → narrow). Pure inspection; read-only.
-let _recPanelOpen = false, _recRow = 0;
+let _recPanelOpen = false, _recRow = 0, _recPinned = null;   // _recPinned = { row, fields } snapshot for side-by-side compare
 function toggleRecordPanel(force) {
   _recPanelOpen = force != null ? force : !_recPanelOpen;
   if (_recPanelOpen && !current) { _recPanelOpen = false; return; }
   closeMenu();
   if (_recPanelOpen && _colPanelOpen) toggleColPanel(false);   // one right-dock panel at a time
   const p = $('#recordPanel');
+  if (_recPanelOpen) p.style.width = clampPanelW(recPanelW) + 'px';
   p.classList.toggle('show', _recPanelOpen);
   document.documentElement.style.setProperty('--cp', _recPanelOpen ? p.offsetWidth + 'px' : '0px');
   if (_recPanelOpen) { const s = grid && grid.getSelection(); renderRecordCard(s ? s.r0 : _recRow); }
+}
+function fmtRecVal(c, uc, raw) {              // a record field → display string (honours the column's number format)
+  let disp = (raw == null || raw === '') ? '' : String(raw);
+  const s = c.schema[uc];
+  if (s.type === 'number' && c.colFormats[uc] && disp !== '') { const num = parseNum(raw, c.d.decimal); if (!Number.isNaN(num)) { const t = fmtNumber(num, c.colFormats[uc]); if (t != null) disp = t; } }
+  return disp;
 }
 async function renderRecordCard(row) {
   const c = current; if (!c || !_recPanelOpen) return;
   const vs = c.view || window._laminaVS; if (!vs) return;
   row = Math.max(0, Math.min(vs.rowCount() - 1, row | 0));
   _recRow = row;
-  $('#rpRow').textContent = `row ${(row + 1).toLocaleString()} of ${vs.rowCount().toLocaleString()}`;
+  const pin = _recPinned;
+  $('#rpRow').textContent = pin ? `row ${(pin.row + 1).toLocaleString()} ⇄ ${(row + 1).toLocaleString()}` : `row ${(row + 1).toLocaleString()} of ${vs.rowCount().toLocaleString()}`;
+  const pinBtn = $('#rpPin'); if (pinBtn) pinBtn.classList.toggle('on', !!pin);
   const fields = await vs.ensureRow(row);
   if (current !== c || !_recPanelOpen || _recRow !== row) return;   // selection moved / file changed mid-load
   const list = $('#rpList'); list.textContent = '';
   if (!fields) { const e = document.createElement('div'); e.className = 'rp-field'; e.textContent = '(no data)'; list.appendChild(e); return; }
   for (const uc of pinnedFirstOrder(c)) {
-    const s = c.schema[uc], raw = fields[uc];
+    const s = c.schema[uc], raw = fields[uc], numCls = s.type === 'number' ? ' num' : '';
     const f = document.createElement('div'); f.className = 'rp-field' + (c.hidden.has(uc) ? ' off' : '');
     const k = document.createElement('span'); k.className = 'rp-k'; k.textContent = s.name; k.title = s.name;
     if (s.calc) { const cf = document.createElement('span'); cf.className = 'rp-calc'; cf.textContent = 'ƒ '; k.prepend(cf); }
-    const v = document.createElement('span'); v.className = 'rp-v' + (s.type === 'number' ? ' num' : '');
-    let disp = (raw == null || raw === '') ? '' : String(raw);
-    if (s.type === 'number' && c.colFormats[uc] && disp !== '') { const num = parseNum(raw, c.d.decimal); if (!Number.isNaN(num)) { const t = fmtNumber(num, c.colFormats[uc]); if (t != null) disp = t; } }
-    if (disp === '') { v.textContent = '∅'; v.classList.add('rp-null'); } else v.textContent = disp;
-    f.append(k, v);
-    if (raw != null && raw !== '') { f.title = 'filter by this value'; f.onclick = () => filterByValue(uc, String(raw)); }
+    const disp = fmtRecVal(c, uc, raw);
+    if (pin) {                                // compare: pinned value | current value, diff highlighted
+      f.classList.add('cmp');
+      const praw = pin.fields ? pin.fields[uc] : undefined, pdisp = fmtRecVal(c, uc, praw);
+      if (String(praw == null ? '' : praw) !== String(raw == null ? '' : raw)) f.classList.add('diff');
+      const vp = document.createElement('span'); vp.className = 'rp-vp' + numCls; vp.textContent = pdisp === '' ? '∅' : pdisp;
+      const v = document.createElement('span'); v.className = 'rp-v' + numCls; v.textContent = disp === '' ? '∅' : disp;
+      f.append(k, vp, v);
+    } else {
+      const v = document.createElement('span'); v.className = 'rp-v' + numCls;
+      if (disp === '') { v.textContent = '∅'; v.classList.add('rp-null'); } else v.textContent = disp;
+      f.append(k, v);
+      if (raw != null && raw !== '') { f.title = 'filter by this value'; f.onclick = () => filterByValue(uc, String(raw)); }
+    }
     list.appendChild(f);
   }
 }
 $('#rpClose').onclick = () => toggleRecordPanel(false);
+$('#rpPrev').onclick = () => renderRecordCard(_recRow - 1);
+$('#rpNext').onclick = () => renderRecordCard(_recRow + 1);
+$('#rpPin').onclick = async () => {           // pin the current record as a reference, or unpin
+  if (_recPinned) { _recPinned = null; return renderRecordCard(_recRow); }
+  const c = current, vs = c && (c.view || window._laminaVS); if (!vs) return;
+  const fields = await vs.ensureRow(_recRow);
+  _recPinned = { row: _recRow, fields: fields ? fields.slice() : [] };
+  renderRecordCard(_recRow);
+};
+$('#rpCopy').onclick = async () => {          // copy the record (TSV) — both columns when pinned
+  const c = current, vs = c && (c.view || window._laminaVS); if (!vs) return;
+  const fields = await vs.ensureRow(_recRow); if (!fields) return;
+  const pin = _recPinned, L = [];
+  if (pin) L.push(`field\trow ${pin.row + 1}\trow ${_recRow + 1}`);
+  for (const uc of pinnedFirstOrder(c)) {
+    const nm = c.schema[uc].name;
+    L.push(pin ? `${nm}\t${fmtRecVal(c, uc, pin.fields[uc])}\t${fmtRecVal(c, uc, fields[uc])}` : `${nm}\t${fmtRecVal(c, uc, fields[uc])}`);
+  }
+  copyText(L.join('\n'));
+  const b = $('#rpCopy'); b.textContent = '✓'; setTimeout(() => { b.textContent = '⧉'; }, 1000);
+};
 
 // ── selection stats (footer) ────────────────────────────────────────────────────
 // Select a range → count · sum · mean · min · max (numeric) in the footer, like a
@@ -493,6 +548,7 @@ function toggleColPanel(force) {
   closeMenu();
   if (_colPanelOpen && _recPanelOpen) toggleRecordPanel(false);   // one right-dock panel at a time
   const p = $('#colPanel');
+  if (_colPanelOpen) p.style.width = clampPanelW(colPanelW) + 'px';
   p.classList.toggle('show', _colPanelOpen);
   // loom's own ResizeObserver repaints the grid when #grid's right inset changes.
   document.documentElement.style.setProperty('--cp', _colPanelOpen ? p.offsetWidth + 'px' : '0px');
@@ -941,6 +997,7 @@ function mountDm(name, reader, h, totalBytes) {
   const source = createDmCursor(reader, h);
   const d = { kind: 'delimited', delimiter: '\t', quote: '"', hasHeader: true, schema: h.schema, dataStart: 0, decimal: '.', dm: true };
   current = { source, d, schema: h.schema, dataStart: 0, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), colWidths: {}, colFormats: {}, _vis: null, file: null, bytes: null, force: {}, dm: true };
+  _recPinned = null; _recRow = 0;                        // fresh file → drop any pinned compare record
   $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear();
   lastScan = 'dm';
   initCalcState();

@@ -235,6 +235,17 @@
     font-family: var(--mono); font-size: 12px;
   }
   #recordPanel.show { display: flex; }
+  /* left-edge drag handle to resize a right-docked panel */
+  .panel-grip { position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; z-index: 16; cursor: ew-resize; }
+  .panel-grip:hover, .panel-grip.dragging { background: var(--accent-soft); }
+  #recordPanel .rp-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 3px; }
+  #recordPanel .rp-btn:hover { color: var(--text-hi); }
+  #recordPanel .rp-btn.on { color: var(--accent); }
+  #recordPanel .rp-field.cmp .rp-k { flex: 0 0 34%; }
+  #recordPanel .rp-vp { flex: 1; color: var(--dim); word-break: break-word; }
+  #recordPanel .rp-vp.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #recordPanel .rp-field.cmp .rp-v { flex: 1; }
+  #recordPanel .rp-field.diff .rp-v, #recordPanel .rp-field.diff .rp-vp { color: var(--accent); }
   #recordPanel .rp-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
   #recordPanel .rp-title { font-weight: 600; color: var(--text-hi); }
   #recordPanel .rp-rownum { color: var(--dim); font-size: 11px; flex: 1; }
@@ -438,11 +449,13 @@
   <div id="picker"><div class="pk-box"><div class="pk-title">choose a file from the archive</div><div class="pk-list" id="pickerList"></div></div></div>
 
   <div id="recordPanel">
-    <div class="rp-head"><span class="rp-title">Record</span><span class="rp-rownum" id="rpRow"></span><button class="rp-close" id="rpClose" title="close">×</button></div>
+    <div class="panel-grip" id="rpGrip" title="drag to resize"></div>
+    <div class="rp-head"><span class="rp-title">Record</span><span class="rp-rownum" id="rpRow"></span><button class="rp-btn" id="rpPrev" title="previous row">↑</button><button class="rp-btn" id="rpNext" title="next row">↓</button><button class="rp-btn" id="rpPin" title="pin this record to compare with another">⊙</button><button class="rp-btn" id="rpCopy" title="copy record (TSV)">⧉</button><button class="rp-close" id="rpClose" title="close">×</button></div>
     <div class="rp-list" id="rpList"></div>
   </div>
 
   <div id="colPanel">
+    <div class="panel-grip" id="cpGrip" title="drag to resize"></div>
     <div class="cp-head"><span class="cp-title">Columns</span><button class="cp-close" id="cpClose" title="close">×</button></div>
     <input id="cpSearch" class="cp-search" type="text" placeholder="filter columns…" spellcheck="false">
     <div class="cp-bulk"><button data-cp="all">Show all</button><button data-cp="none">Hide all</button><button data-cp="invert">Invert</button></div>
