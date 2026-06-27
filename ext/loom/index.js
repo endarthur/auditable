@@ -1480,6 +1480,7 @@ function createGrid(element, provider, options = {}) {
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.
     setAxisLock(on) { g.axisLock = !!on; },
+    revealCell(r, c) { scrollToCell(r, c); },              // scroll (r,c) into view (selection alone doesn't)
     getScroll() { return { left: g.scrollEl.scrollLeft, top: g.scrollEl.scrollTop }; },
     setScroll(s) { if (!s) return; if (s.left != null) g.scrollEl.scrollLeft = s.left; if (s.top != null) g.scrollEl.scrollTop = s.top; repaint(); },
     getColWidths() { return { ...M.colWidths }; },

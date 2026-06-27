@@ -390,6 +390,7 @@ function scrollToColumn(uc) {
   if (dc < 0) return;                                    // hidden — not in the grid
   const sel = grid.getSelection(); const r = sel ? sel.r0 : 0;
   grid.setSelection({ r0: r, c0: dc, r1: r, c1: dc });
+  if (grid.revealCell) grid.revealCell(r, dc);           // selection alone doesn't scroll — bring it into view
   grid.focus();
 }
 // Pin/unpin a column (freeze it on the left). Pinned columns render leftmost + frozen.
@@ -2103,9 +2104,9 @@ const HELP = {
     + `<span style="color:#666">(C-style <code>==</code> <code>&amp;&amp;</code> <code>~</code> also work, if that's your habit.)</span> Right-click a column header for <b>Filter by &lt;col&gt;…</b>.`],
   analysis: ['Analysis & quality',
     `<b>Column statistics</b> — click a header's glyph (double-click), or right-click → Statistics. A histogram (log-x toggle) + quantiles, count / nulls / non-numeric (with examples), min / max / mean / std / <b>CV</b> / <b>skew</b> / <b>zeros</b>. Tick <b>exclude zeros</b> / <b>exclude negatives</b> and <b>apply</b> to re-stat grade-only. Copy as TSV. Big columns scan with a cancel (or <code>Esc</code>).<br><br>`
-    + `<b>Σ stats</b> (toolbar) — precomputes stats for <i>every</i> column in one pass, then opens the <b>Column summary</b>: a sortable table (a row per column × n · null% · non-num · min · max · mean · std · CV · skew · zero% · p50). Sort by <b>null%</b> / <b>CV</b> / <b>non-num</b> to triage the file; click a row for that column's detail; copy as TSV. The caret (▾) offers precompute-only — warm the cache so every Statistics opens instantly.<br><br>`
+    + `<b>Σ stats</b> (toolbar) — precomputes stats for <i>every</i> column in one pass, then opens the <b>Column summary</b>: a sortable table (a row per column × n · null% · non-num · min · max · mean · std · CV · skew · zero% · p50). Sort by <b>null%</b> / <b>CV</b> / <b>non-num</b> to triage the file; click a row for that column's detail, or its <b>name</b> to jump to it in the grid; copy as TSV. The caret (▾) offers precompute-only — warm the cache so every Statistics opens instantly.<br><br>`
     + `<b>Group by</b> (Data → Group by…) — per-group aggregates over one or more value columns, with an optional <b>weight</b> column → a weighted mean shown next to the plain mean (so an unweighted vs length/volume-weighted grade difference is visible). Sort any column; click a group → filter the grid to it; copy as TSV. <b>Numeric bins:</b> add a calculated column <code>bin(grade, 0.5)</code>, then group by it — grade-tonnage by cutoff, elevation bands, etc.<br><br>`
-    + `<b>Data quality</b> (Data → Data quality…) — scans a sample and flags the quiet bugs that bite an estimate: <b>leading zeros lost</b> (a code like <code>007</code> read as a number), <b>non-numeric values</b> in a numeric column, <b>missing-value sentinels</b> (<code>-999</code>…), thousands separators, whitespace padding, all-blank, constant, dates-as-text. Click a flag → that column's Statistics. <code>✓</code> when clean.<br><br>`
+    + `<b>Data quality</b> (Data → Data quality…) — scans a sample and flags the quiet bugs that bite an estimate: <b>leading zeros lost</b> (a code like <code>007</code> read as a number), <b>non-numeric values</b> in a numeric column, <b>missing-value sentinels</b> (<code>-999</code>…), thousands separators, whitespace padding, all-blank, constant, dates-as-text. Click a flag → that column's Statistics, or its <b>name</b> → jump to it in the grid. <code>✓</code> when clean.<br><br>`
     + `<b>Color scale</b> — right-click a numeric header → Color scale: heatmap the cells (8 palettes · linear/log · clip outliers · reverse). <b>Record inspector</b> (View) — a row's fields as a list, follows the selection; <code>↑</code>/<code>↓</code> step, <b>pin</b> to compare two rows. <b>Columns</b> panel (View) — search · show/hide · reorder · pin-freeze.`],
   keys: ['Keyboard & mouse',
     `<b>Ctrl+O</b> — open a file<br><b>Ctrl+F</b> — find in the table (locate & jump; <code>Aa</code> case · <code>⊏⊐</code> whole-cell · <code>.*</code> regex · <code>col</code> scope · <code>#</code> count) — <b>Enter</b>/<b>Shift+Enter</b> next/prev, <b>Esc</b> closes<br><b>Enter</b> / <b>Esc</b> in the filter box — apply / clear<br>`
@@ -2657,7 +2658,7 @@ function renderSummary(c) {
   for (const r of rows) {
     h += `<tr data-uc="${r.uc}">`;
     for (const col of SUM_COLS) {
-      if (col.k === 'name') { h += `<td>${r.calc ? '<span style="color:var(--accent)">ƒ </span>' : ''}${esc(String(r.name))}</td>`; continue; }
+      if (col.k === 'name') { h += `<td>${r.calc ? '<span style="color:var(--accent)">ƒ </span>' : ''}<span class="col-jump" title="go to this column in the grid">${esc(String(r.name))}</span></td>`; continue; }
       if (col.k === 'p50' && r.approx && r.p50 != null) { h += `<td class="num">${fmtN(r.p50)} <span style="color:var(--dim)">≈</span></td>`; continue; }
       h += `<td class="${col.txt ? '' : 'num'}">${fmtCell(r[col.k], col)}</td>`;
     }
@@ -2678,7 +2679,18 @@ function paintSummary(c) {
     paintSummary(c);
   });
   $('#helpBody').querySelectorAll('.sum-tbl tbody tr').forEach((tr) => tr.onclick = () => { showColumnStats(+tr.getAttribute('data-uc')); });   // row → that column's detail (showOverlay drops .wide)
+  wireColJump();   // the name → jump to the column in the grid
   const cp = $('#sumCopy'); if (cp) cp.onclick = () => { copyText(summaryTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
+}
+// Wire the column-name "jump" links in the summary / data-quality tables: close the
+// overlay and scroll the grid to that column (stops the row's own click = Statistics).
+function wireColJump() {
+  $('#helpBody').querySelectorAll('.col-jump').forEach((el) => el.onclick = (e) => {
+    e.stopPropagation();
+    const tr = el.closest('tr'); if (!tr) return;
+    $('#help').classList.remove('show'); $('.help-box').classList.remove('wide');
+    scrollToColumn(+tr.getAttribute('data-uc'));
+  });
 }
 function showSummary() {
   const c = current; if (!c) return;
@@ -2720,10 +2732,11 @@ function paintDataQuality(c) {
   let h = '<button id="dqCopy" class="sum-copy">copy all</button>';
   h += `<div style="color:var(--dim);font-size:11px;margin:2px 0 6px">${f.length} flag(s) — from a sample · click a row to inspect the column</div>`;
   h += '<div style="overflow:auto;max-height:60vh"><table class="sum-tbl"><thead><tr><th></th><th>column</th><th>flag</th><th>detail</th></tr></thead><tbody>';
-  for (const x of f) h += `<tr data-uc="${x.col}"><td style="color:${dot[x.severity]};text-align:center">●</td><td>${esc(x.name)}</td><td>${esc(x.issue)}</td><td style="color:var(--muted);white-space:normal">${esc(x.detail)}</td></tr>`;
+  for (const x of f) h += `<tr data-uc="${x.col}"><td style="color:${dot[x.severity]};text-align:center">●</td><td><span class="col-jump" title="go to this column in the grid">${esc(x.name)}</span></td><td>${esc(x.issue)}</td><td style="color:var(--muted);white-space:normal">${esc(x.detail)}</td></tr>`;
   h += '</tbody></table></div>';
   $('#helpBody').innerHTML = h;
   $('#helpBody').querySelectorAll('.sum-tbl tbody tr').forEach((tr) => tr.onclick = () => showColumnStats(+tr.getAttribute('data-uc')));
+  wireColJump();   // the name → jump to the column in the grid
   const cp = $('#dqCopy'); if (cp) cp.onclick = () => { copyText(['severity\tcolumn\tflag\tdetail', ...f.map((x) => `${x.severity}\t${x.name}\t${x.issue}\t${x.detail}`)].join('\n')); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
 }
 

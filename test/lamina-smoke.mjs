@@ -1530,6 +1530,28 @@ try {
     ? ok(`help current: Analysis & quality topic covers ${help.covers.length}/5 features + bin() documented in filter syntax`)
     : fail(`help check failed: ${JSON.stringify(help)}`);
 
+  // ── jump-to-column: a column name in the summary table scrolls/selects it in the grid ──
+  const jump = await page.evaluate(async () => {
+    const L = window._lamina;
+    let header = 'r'; for (let j = 1; j < 30; j++) header += `,c${j}`;
+    let csv = header + '\n'; for (let i = 0; i < 40; i++) { let row = `${i}`; for (let j = 1; j < 30; j++) row += `,${i * j}`; csv += row + '\n'; }
+    L.open('jump.csv', new TextEncoder().encode(csv));
+    for (let t = 0; t < 40 && !L.grid; t++) await new Promise((r) => setTimeout(r, 25));
+    await L.precomputeStats({ show: true }); await new Promise((r) => setTimeout(r, 50));
+    // click the name of a far-right column (c27, underlying index 27)
+    const target = [...document.querySelectorAll('.sum-tbl tbody tr')].find((tr) => +tr.getAttribute('data-uc') === 27);
+    const before = L.grid.getScroll().left;
+    target.querySelector('.col-jump').click();
+    await new Promise((r) => setTimeout(r, 60));
+    const sel = L.grid.getSelection();
+    const overlayClosed = !document.getElementById('help').classList.contains('show');
+    const scrolled = L.grid.getScroll().left > before;
+    return { overlayClosed, scrolled, selCol: sel && sel.c0, vis27: (L.current._vis || []).indexOf(27) };
+  });
+  (jump.overlayClosed && jump.scrolled && jump.selCol === jump.vis27)
+    ? ok(`jump-to-column: name click closes overlay + scrolls/selects the column (display col ${jump.selCol})`)
+    : fail(`jump-to-column failed: ${JSON.stringify(jump)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
