@@ -225,7 +225,8 @@ function mountView(vs, info = {}, keepVScroll = false) {
   }
   grid.onContextMenu(({ row, col, sel, clientX, clientY }) => showCellMenu(row, col, sel, clientX, clientY));
   if (c.d.kind === 'delimited') {
-    grid.onGutterClick((dc, frac) => gutterClick(vis[dc], frac));       // hist tap → stats · cat tap → filter that category
+    grid.onGutterClick((dc, frac) => gutterClick(vis[dc], frac));       // tap → filter (hist: the bin · cat: the category) — debounced for dbl-click
+    grid.onGutterDblClick((dc) => gutterDblClick(vis[dc]));             // double-click → Statistics popup
     grid.onGutterBrush((dc, lo, hi) => gutterBrush(vis[dc], lo, hi));   // hist drag → `between` · cat drag → `in (…)`
     grid.onGutterBrushMove((dc, lo, hi, x, y) => showBrushTip(vis[dc], lo, hi, x, y));   // live readout while dragging
     grid.onGutterHover((dc, frac, x, y) => showGutterTip(dc == null ? null : vis[dc], frac, x, y));   // hover → value / category tooltip
@@ -2161,11 +2162,28 @@ function showGutterTip(uc, frac, x, y) {
   } else hideTip();
 }
 
-// Gutter tap: hist → stats; cat → filter to the category under the cursor.
+// Gutter tap → FILTER (hist: the bin under the cursor as a narrow `between`; cat:
+// the category). Debounced ~220ms so a DOUBLE-click (→ Statistics) can cancel it —
+// the browser fires a click before every dblclick.
+let _gutterTapTimer = null;
 function gutterClick(uc, frac) {
+  clearTimeout(_gutterTapTimer);
+  _gutterTapTimer = setTimeout(() => { _gutterTapTimer = null; gutterTapFilter(uc, frac); }, 220);
+}
+function gutterDblClick(uc) {
+  clearTimeout(_gutterTapTimer); _gutterTapTimer = null;   // cancel the pending tap-filter
+  hideTip(); showColumnStats(uc);
+}
+function gutterTapFilter(uc, frac) {
   const c = current; if (!c) return;
   const g = c.gutter && c.gutter[uc];
-  if (g && g.kind === 'cat') { const i = catSegAt(g, frac); if (i >= 0 && g.values[i] != null) { hideTip(); return filterByValue(uc, String(g.values[i])); } }
+  if (!g) return showColumnStats(uc);
+  hideTip();
+  if (g.kind === 'cat') { const i = catSegAt(g, frac); if (i >= 0 && g.values[i] != null) return filterByValue(uc, String(g.values[i])); return; }
+  if (g.kind === 'hist' && g.min != null && g.max > g.min) {   // filter to the hovered bin's value range
+    const nb = (g.bins && g.bins.length) || 1, k = Math.min(nb - 1, Math.max(0, Math.floor(frac * nb)));
+    return brushFilter(uc, k / nb, (k + 1) / nb);
+  }
   showColumnStats(uc);
 }
 // Gutter drag: hist → `between`; cat → `in (…)` over the covered segments.
@@ -2520,7 +2538,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

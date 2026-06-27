@@ -76,6 +76,7 @@ export function createGrid(element, provider, options = {}) {
     gutterBrushListeners: [],
     gutterBrushMoveListeners: [],
     gutterHoverListeners: [],
+    gutterDblClickListeners: [],
     gutterBrush: null,
     contextListeners: [],
     _cleanup: [],
@@ -565,10 +566,16 @@ export function createGrid(element, provider, options = {}) {
   }
   function onHeaderDblClick(e) {
     const c = colBorderAt(e.clientX);
-    if (c < 0) return;
-    e.preventDefault();
-    g.suppressHeaderClick = true;
-    autofitCol(c);
+    if (c >= 0) { e.preventDefault(); g.suppressHeaderClick = true; autofitCol(c); return; }
+    if (!g.gutterDblClickListeners.length || M.hdrGutterH <= 0) return;
+    const rect = colHdr.getBoundingClientRect();
+    if ((e.clientY - rect.top) <= M.hdrLabelH) return;   // label strip, not the gutter
+    const localX = e.clientX - rect.left, pw = pinnedW(), pinned = localX < pw;
+    const col = colAtX(M, pinned ? localX : localX + scroll.scrollLeft);
+    if (col < 0 || col >= M.totalCols) return;
+    const colLeft = colXOf(col) - (pinned ? 0 : scroll.scrollLeft);
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left - colLeft) / colWOf(col)));
+    for (const cb of g.gutterDblClickListeners) { try { cb(col, frac); } catch (err) { console.error('[loom] onGutterDblClick threw', err); } }
   }
 
   // Gutter brush: drag a range across a column's distribution glyph. NO filtering
@@ -739,6 +746,8 @@ export function createGrid(element, provider, options = {}) {
     onGutterBrushMove(cb) { g.gutterBrushMoveListeners.push(cb); return () => { const i = g.gutterBrushMoveListeners.indexOf(cb); if (i >= 0) g.gutterBrushMoveListeners.splice(i, 1); }; },
     // Hover over the gutter strip: cb(col, frac, clientX, clientY); cb(null) on leave.
     onGutterHover(cb) { g.gutterHoverListeners.push(cb); return () => { const i = g.gutterHoverListeners.indexOf(cb); if (i >= 0) g.gutterHoverListeners.splice(i, 1); }; },
+    // Double-click a gutter glyph: cb(col, frac). (A click also fires first — the host debounces.)
+    onGutterDblClick(cb) { g.gutterDblClickListeners.push(cb); return () => { const i = g.gutterDblClickListeners.indexOf(cb); if (i >= 0) g.gutterDblClickListeners.splice(i, 1); }; },
     // Column widths (the sparse non-default map). get returns a copy; set
     // restores a saved map — the seam for persisting widths into a document's
     // view-state. autofitColumn measures the header + visible cells.

@@ -720,21 +720,35 @@ try {
     const numHover = tip && /≈/.test(tip.textContent);
     L.showGutterTip(null);                                  // leave → hide
     const hidden = tip && tip.style.display === 'none';
-    // click the categorical glyph near the left → filter to that one category
+    // tap the categorical glyph near the left → (debounced) filter to that category
+    document.getElementById('filter').value = '';
     L.gutterClick(1, 0.05);
-    await new Promise((r) => setTimeout(r, 80));
+    await new Promise((r) => setTimeout(r, 300));            // > the 220ms tap debounce
     const box1 = document.getElementById('filter').value;
     const oneCat = /^lito == "(OXIDE|SULF|TRANS)"$/.test(box1);
+    await L.applyFilter('');
+    // double-click cancels the pending tap-filter and opens stats instead
+    document.getElementById('filter').value = ''; document.getElementById('help').classList.remove('show');
+    L.gutterClick(1, 0.05); L.gutterDblClick(1);
+    await new Promise((r) => setTimeout(r, 300));
+    const dblOpensStats = document.getElementById('help').classList.contains('show') && document.getElementById('filter').value === '';
+    document.getElementById('help').classList.remove('show');
+    // numeric tap → filter to the hovered bin's range (a `between`)
+    L.gutterClick(0, 0.5);
+    await new Promise((r) => setTimeout(r, 300));
+    const box3 = document.getElementById('filter').value;
+    const numBin = /^grade between [\d.]+ and [\d.]+$/.test(box3);
+    await L.applyFilter('');
     // drag across the whole categorical glyph → in (…) of the covered categories
     L.gutterBrush(1, 0.0, 1.0);
     await new Promise((r) => setTimeout(r, 80));
     const box2 = document.getElementById('filter').value;
     const manyCat = /^lito in \(.*OXIDE.*\)$/.test(box2) && (box2.match(/"/g) || []).length >= 4;
     await L.applyFilter('');
-    return { catHover, catHoverText, numHover, hidden, oneCat, box1, manyCat, box2 };
+    return { catHover, catHoverText, numHover, hidden, oneCat, box1, dblOpensStats, numBin, box3, manyCat, box2 };
   });
-  (catGut.catHover && catGut.numHover && catGut.hidden && catGut.oneCat && catGut.manyCat)
-    ? ok(`gutter hover tooltip (cat "${catGut.catHoverText}" + num ≈) · cat click→${catGut.box1} · cat drag→in(…)`)
+  (catGut.catHover && catGut.numHover && catGut.hidden && catGut.oneCat && catGut.dblOpensStats && catGut.numBin && catGut.manyCat)
+    ? ok(`gutter: hover tip (cat "${catGut.catHoverText}" + num ≈) · tap→filter (${catGut.box1} / ${catGut.box3}) · dbl-click→stats · cat drag→in(…)`)
     : fail(`cat gutter interaction failed: ${JSON.stringify(catGut)}`);
 
   // ── filter-reactive gutters: an active filter overlays the matched-rows
