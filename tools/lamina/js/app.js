@@ -128,16 +128,20 @@ async function recompute() {
   let info = {};
   const fr = c.filterResult;                            // { offsets, lengths, nums } or null
   if (c.sort && c.sort.length) {                         // c.sort is an array of { col, dir } keys (multi-column)
+    const ac = newFooterScan();
     $('#meta').textContent = 'sorting…';
     try {
       const keys = c.sort.map((s) => ({ col: s.col, dir: s.dir, numeric: (c.schema[s.col] && c.schema[s.col].type) === 'number' }));
       const order = await scanSortKeys(c.source, {
-        keys, dataStart: c.dataStart, decimal: c.d.decimal, rows: fr ? fr.nums : null,
-        onProgress: (b, n) => { $('#meta').textContent = `sorting… ${n ? Math.round((100 * b) / n) : 0}%`; },
+        keys, dataStart: c.dataStart, decimal: c.d.decimal, rows: fr ? fr.nums : null, signal: ac.signal,
+        onProgress: (b, n) => { $('#meta').textContent = `sorting… ${n ? Math.round((100 * b) / n) : 0}% · Esc to cancel`; },
       });
       view = createResultView(c.source, order, c.schema);
       info = { filtered: !!fr, sorted: true };
-    } catch (e) { $('#meta').textContent = `sort: ${e.message}`; c.sort = null; view = fr ? createResultView(c.source, fr, c.schema) : c.baseVs; info = { filtered: !!fr }; }
+    } catch (e) {
+      c.sort = null; view = fr ? createResultView(c.source, fr, c.schema) : c.baseVs; info = { filtered: !!fr };
+      if (!(e && e.name === 'AbortError')) $('#meta').textContent = `sort: ${e.message}`;   // abort → fall back to unsorted silently
+    } finally { if (_footerScanAbort === ac) _footerScanAbort = null; }
   } else if (fr) {
     view = createResultView(c.source, fr, c.schema);
     info = { filtered: true };
@@ -781,13 +785,17 @@ async function applyFilter(str) {
   try { predicate = compileBool(str, cols, { decimal: c.d.decimal }); } catch (e) { return filterErr(e); }
   $('#filter').classList.remove('err');
   $('#meta').textContent = 'filtering…';
+  const ac = newFooterScan();
   try {
     c.filterResult = await scanFilter(c.source, {
-      predicate, dataStart: c.dataStart,
-      onProgress: (b, n) => { $('#meta').textContent = `filtering… ${n ? Math.round((100 * b) / n) : 0}%`; },
+      predicate, dataStart: c.dataStart, signal: ac.signal,
+      onProgress: (b, n) => { $('#meta').textContent = `filtering… ${n ? Math.round((100 * b) / n) : 0}% · Esc to cancel`; },
     });
     const r = recompute(); refreshGutterFiltered(); return r;   // overlay the matched-rows distribution on the gutters
-  } catch (e) { filterErr(e); }
+  } catch (e) {
+    if (e && e.name === 'AbortError') { $('#meta').textContent = c._meta || 'filter cancelled'; return; }   // keep the prior view
+    filterErr(e);
+  } finally { if (_footerScanAbort === ac) _footerScanAbort = null; }
 }
 function filterErr(e) { $('#filter').classList.add('err'); $('#meta').textContent = `filter: ${e.message}`; }
 
@@ -2411,6 +2419,9 @@ function statsToTSV(st, name) {
     if (st.excluded) r('excluded', st.excluded + (st.excludeZero && st.excludeNeg ? ' (≤0)' : st.excludeZero ? ' (zeros)' : ' (negatives)'));
     if (st.bad) r('non-numeric', st.bad);
     r('min', st.min); r('max', st.max); r('mean', st.mean); r('std', st.std); r('sum', st.sum);
+    if (st.cv != null) r('CV', st.cv);
+    if (st.skew != null) r('skew', st.skew);
+    if (st.zeros) r('zeros', `${st.zeros} (${(100 * st.zeros / st.n).toFixed(1)}%)`);
     if (st.quantiles) { const q = st.quantiles; r('p5', q.p5); r('p25', q.p25); r('median', q.p50); r('p75', q.p75); r('p95', q.p95); }
   } else {
     r('count', st.count); r('nulls', st.nulls); r('distinct', st.distinct + (st.cappedDistinct ? '+' : ''));
@@ -2445,6 +2456,9 @@ function renderStats(st, ex = {}) {
       }
     }
     h += row('min', fmtN(st.min)) + row('max', fmtN(st.max)) + row('mean', fmtN(st.mean)) + row('std', fmtN(st.std)) + row('sum', fmtN(st.sum));
+    if (st.cv != null) h += row('CV', fmtN(st.cv));
+    if (st.skew != null) h += row('skew', fmtN(st.skew));
+    if (st.zeros) h += row('zeros', `${st.zeros.toLocaleString()} <span style="color:var(--dim);font-size:10px">(${(100 * st.zeros / st.n).toFixed(st.zeros * 100 / st.n < 1 ? 1 : 0)}%)</span>`);
     if (st.quantiles) {
       const q = st.quantiles;
       h += row('p5', fmtN(q.p5)) + row('p25', fmtN(q.p25)) + row('<b>median</b>', `<b>${fmtN(q.p50)}</b>`) + row('p75', fmtN(q.p75)) + row('p95', fmtN(q.p95));
@@ -2464,6 +2478,15 @@ function renderStats(st, ex = {}) {
 
 let _statsCol = null;          // the column the open stats panel describes (for click-to-filter)
 const _statsSelected = new Set();   // categorical values toggled in the panel → an `in` filter
+let _statsAbort = null;        // AbortController for the in-progress stats scan (popup cancel)
+let _footerScanAbort = null;   // AbortController for the in-progress sort/filter scan (Esc cancel)
+function newFooterScan() { if (_footerScanAbort) _footerScanAbort.abort(); _footerScanAbort = new AbortController(); return _footerScanAbort; }
+// Esc aborts whatever heavy scan is running (stats popup / sort / filter).
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (_statsAbort) _statsAbort.abort();
+  if (_footerScanAbort) _footerScanAbort.abort();
+}, true);
 async function showColumnStats(uc) {
   const c = current; if (!c) return;
   _statsCol = uc; _statsSelected.clear();
@@ -2472,13 +2495,17 @@ async function showColumnStats(uc) {
   const suffix = c.filterResult ? ' (filtered)' : '';
   const ex = { excludeZero: false, excludeNeg: false };       // re-scan filters; toggled via the in-popup chips
   const run = async () => {
-    showOverlay(`Statistics — ${name}${suffix}`, '<div style="color:#777">computing… 0%</div>');
+    if (_statsAbort) _statsAbort.abort();                      // a re-run (apply chips) supersedes the prior scan
+    const ac = new AbortController(); _statsAbort = ac;
+    showOverlay(`Statistics — ${name}${suffix}`, '<div style="color:#777">computing… <span id="scanPct">0%</span> <button id="scanCancel" style="font:inherit;font-size:11px;color:var(--muted);background:var(--bg-field);border:1px solid var(--bd2);border-radius:4px;padding:1px 8px;cursor:pointer;margin-left:6px">cancel</button></div>');
+    const xb = $('#scanCancel'); if (xb) xb.onclick = () => ac.abort();
     try {
       const st = await scanColumnStats(c.source, {
         col: uc, dataStart: c.dataStart, numeric, decimal: c.d.decimal, rows: c.filterResult ? c.filterResult.nums : null,
-        excludeZero: ex.excludeZero, excludeNeg: ex.excludeNeg,
-        onProgress: (b, n) => { if ($('#help').classList.contains('show')) $('#helpBody').innerHTML = `<div style="color:#777">computing… ${n ? Math.round((100 * b) / n) : 0}%</div>`; },
+        excludeZero: ex.excludeZero, excludeNeg: ex.excludeNeg, signal: ac.signal,
+        onProgress: (b, n) => { const el = $('#scanPct'); if (el) el.textContent = `${n ? Math.round((100 * b) / n) : 0}%`; },
       });
+      if (ac.signal.aborted) return;
       showOverlay(`Statistics — ${name}${suffix}`, renderStats(st, ex));
       const canvas = $('#profHist');
       if (canvas && st.histogram) {
@@ -2498,7 +2525,10 @@ async function showColumnStats(uc) {
       }
       const cb = $('#statsCopy');
       if (cb) cb.onclick = () => { copyText(statsToTSV(st, name)); cb.textContent = 'copied ✓'; setTimeout(() => { cb.textContent = 'copy'; }, 1200); };
-    } catch (e) { showOverlay(`Statistics — ${name}`, `<div style="color:var(--fault)">${e.message}</div>`); }
+    } catch (e) {
+      if (e && e.name === 'AbortError') { showOverlay(`Statistics — ${name}`, '<div style="color:var(--dim)">scan cancelled — reopen to retry</div>'); return; }
+      showOverlay(`Statistics — ${name}`, `<div style="color:var(--fault)">${e.message}</div>`);
+    } finally { if (_statsAbort === ac) _statsAbort = null; }
   };
   await run();
 }

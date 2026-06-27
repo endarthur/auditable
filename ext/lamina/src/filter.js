@@ -87,9 +87,9 @@ function grower() {
  * works on any backing (CSV byte-blocks, a windowed .dm, …) unchanged.
  * @param {object} opts  { predicate, dataStart?, onProgress?, max? }
  */
-export async function scanFilter(source, { predicate, dataStart = 0, onProgress, max = 16 * 1024 * 1024 } = {}) {
+export async function scanFilter(source, { predicate, dataStart = 0, onProgress, max = 16 * 1024 * 1024, signal } = {}) {
   const offsets = grower(), lengths = grower(), nums = grower();
-  await source.eachRecord({ dataStart, onProgress }, (disp, fields, loc0, loc1) => {
+  await source.eachRecord({ dataStart, onProgress, signal }, (disp, fields, loc0, loc1) => {
     if (predicate(fields)) {
       offsets.push(loc0); lengths.push(loc1); nums.push(disp);
       if (offsets.n > max) throw new Error('too many matches — refine the filter');

@@ -32,17 +32,17 @@ function histify(vals, nv, lo, hi, nbins, log) {
  *   rows = ascending DISPLAY rows to restrict to (a filter's matches), or null = all
  * @returns {Promise<object>}  numeric or categorical summary (see fields below)
  */
-export async function scanColumnStats(source, { col, dataStart = 0, numeric = true, decimal = '.', rows = null, max = 5 * 1024 * 1024, topN = 12, maxDistinct = 100000, excludeZero = false, excludeNeg = false, onProgress } = {}) {
+export async function scanColumnStats(source, { col, dataStart = 0, numeric = true, decimal = '.', rows = null, max = 5 * 1024 * 1024, topN = 12, maxDistinct = 100000, excludeZero = false, excludeNeg = false, onProgress, signal } = {}) {
   let count = 0, nulls = 0, bad = 0, excluded = 0;   // nulls = empty/missing; bad = present but not a number; excluded = a valid number dropped by excludeZero/excludeNeg
   const badSamples = numeric ? new Set() : null;   // first few DISTINCT non-numeric raw values (diagnostic: "what's not a number?")
-  // numeric (Welford) + a capped value buffer for quantiles
-  let min = Infinity, max_ = -Infinity, sum = 0, mean = 0, m2 = 0, nNum = 0;
+  // numeric (online mean + M2 + M3 → std/CV/skew) + a capped value buffer for quantiles
+  let min = Infinity, max_ = -Infinity, sum = 0, mean = 0, m2 = 0, m3 = 0, nNum = 0, zeros = 0;
   let vals = numeric ? new Float64Array(1024) : null, nv = 0, collecting = numeric;
   // categorical
   const freq = numeric ? null : new Map();
   let cappedDistinct = false;
 
-  await source.eachRecord({ dataStart, rows, onProgress }, (disp, fields) => {
+  await source.eachRecord({ dataStart, rows, onProgress, signal }, (disp, fields) => {
     const raw = fields[col];
     count++;
     if (numeric) {
@@ -51,10 +51,12 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
       if (Number.isNaN(x)) { bad++; if (badSamples.size < 12) badSamples.add(raw); return; }   // present but not a number → "non-numeric" (keep a few examples)
       if ((excludeZero && x === 0) || (excludeNeg && x < 0)) { excluded++; return; }   // a valid number, deliberately dropped (waste/sentinel) — counted, not silent
       nNum++;
+      if (x === 0) zeros++;
       if (x < min) min = x;
       if (x > max_) max_ = x;
       sum += x;
-      const d = x - mean; mean += d / nNum; m2 += d * (x - mean);   // Welford
+      const n1 = nNum, delta = x - mean, dn = delta / n1, t1 = delta * dn * (n1 - 1);   // online M2 + M3 (Welford)
+      mean += dn; m3 += t1 * dn * (n1 - 2) - 3 * dn * m2; m2 += t1;
       if (collecting) {
         if (nv === vals.length) {
           if (nv >= max) collecting = false;
@@ -73,6 +75,8 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
 
   if (numeric) {
     const std = nNum > 1 ? Math.sqrt(m2 / (nNum - 1)) : 0;
+    const cv = (nNum > 1 && mean !== 0) ? std / Math.abs(mean) : null;          // coefficient of variation
+    const skew = (nNum > 2 && m2 > 0) ? (Math.sqrt(nNum) * m3) / Math.pow(m2, 1.5) : null;   // population skewness
     let quantiles = null, histogram = null, logHistogram = null;
     if (collecting && nv > 0) {
       const sl = vals.slice(0, nv).sort((a, b) => a - b);
@@ -84,7 +88,7 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
       const posMin = sl.find((v) => v > 0);
       if (posMin != null && max_ > posMin) logHistogram = histify(vals, nv, posMin, max_, HIST_BINS, true);
     }
-    return { kind: 'number', count, nulls, bad, badSamples: [...badSamples], excluded, excludeZero, excludeNeg, n: nNum, min: nNum ? min : null, max: nNum ? max_ : null, mean: nNum ? mean : null, std, sum, quantiles, histogram, logHistogram, quantilesCapped: !collecting };
+    return { kind: 'number', count, nulls, bad, badSamples: [...badSamples], excluded, excludeZero, excludeNeg, zeros, cv, skew, n: nNum, min: nNum ? min : null, max: nNum ? max_ : null, mean: nNum ? mean : null, std, sum, quantiles, histogram, logHistogram, quantilesCapped: !collecting };
   }
   const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN).map(([value, n]) => ({ value, n }));
   return { kind: 'string', count, nulls, distinct: freq.size, cappedDistinct, top };

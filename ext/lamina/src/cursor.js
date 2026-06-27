@@ -33,10 +33,11 @@ export function installRecordCursor(source) {
   const delimited = source.kind === 'delimited';
   const fieldsOf = (bytes) => (delimited ? parseFields(bytes, { delimiter: source.delimiter, quote: source.quote, encoding: source.encoding }) : [decoderFor(source.encoding).decode(bytes)]);
 
-  source.eachRecord = async ({ dataStart = 0, rows = null, onProgress, limit = Infinity } = {}, visit) => {
+  source.eachRecord = async ({ dataStart = 0, rows = null, onProgress, limit = Infinity, signal } = {}, visit) => {
     const nBlocks = source.blockOffsets.length;
     let sp = 0, seen = 0;                                  // sp = cursor into `rows`; seen = visited count (for `limit`)
     for (let b = 0; b < nBlocks; b++) {
+      if (signal && signal.aborted) throw new DOMException('Scan aborted', 'AbortError');   // user-cancelled a long scan
       if (rows) {                                          // subset: skip blocks that hold none of the requested rows
         if (sp >= rows.length) break;                      // (block b = source records [b*K, (b+1)*K)) → no readRange, no decode
         if (Math.floor((rows[sp] + dataStart) / K) > b) continue;

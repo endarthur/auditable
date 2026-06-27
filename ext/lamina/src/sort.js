@@ -30,10 +30,10 @@ function keyCmp(ka, kb, dir, numeric) {
  *   rows = ascending DISPLAY rows to restrict to (a filter's matches), or null = all
  * @returns {Promise<{offsets,lengths,nums}>}  ordered by the keys (nulls/empty last, stable)
  */
-export async function scanSortKeys(source, { keys, col, dir = 'asc', numeric = true, dataStart = 0, decimal = '.', rows = null, onProgress, max = 5 * 1024 * 1024 } = {}) {
+export async function scanSortKeys(source, { keys, col, dir = 'asc', numeric = true, dataStart = 0, decimal = '.', rows = null, onProgress, max = 5 * 1024 * 1024, signal } = {}) {
   const K = (keys && keys.length ? keys : [{ col, dir, numeric }]).map((k) => ({ col: k.col, dir: k.dir === 'desc' ? -1 : 1, numeric: k.numeric !== false }));
   const recs = [];   // { off, len, num, keys: [...] }
-  await source.eachRecord({ dataStart, rows, onProgress }, (disp, fields, loc0, loc1) => {
+  await source.eachRecord({ dataStart, rows, onProgress, signal }, (disp, fields, loc0, loc1) => {
     const ks = K.map((k) => { const raw = fields[k.col]; return k.numeric ? (raw == null || raw === '' ? NaN : parseNum(raw, decimal)) : (raw == null ? '' : String(raw)); });
     recs.push({ off: loc0, len: loc1, num: disp, keys: ks });
     if (recs.length > max) throw new Error('too many rows to sort — filter first');

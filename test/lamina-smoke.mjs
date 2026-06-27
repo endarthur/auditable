@@ -1128,6 +1128,22 @@ try {
     ? ok(`non-numeric examples shown (BDL…) + gutter sweep spreads across the file (${diag.bigLen} rows sampled)`)
     : fail(`diag failed: ${JSON.stringify(diag)}`);
 
+  // ── stats: CV / skewness / zeros + a cancellable scan (pre-aborted signal throws) ──
+  const moreStats = await page.evaluate(async () => {
+    const L = window._lamina;
+    L.open('s.csv', new TextEncoder().encode('g\n0\n0\n1\n2\n9\n'));   // 2 zeros, right-skewed
+    await new Promise((r) => setTimeout(r, 40));
+    const S = L.scanColumnStats, src = L.current.source, ds = L.current.dataStart;
+    const st = await S(src, { col: 0, dataStart: ds });
+    let aborted = false;
+    try { const ac = new AbortController(); ac.abort(); await S(src, { col: 0, dataStart: ds, signal: ac.signal }); }
+    catch (e) { aborted = e && e.name === 'AbortError'; }
+    return { zeros: st.zeros, cv: st.cv, skew: st.skew, n: st.n, aborted };
+  });
+  (moreStats.zeros === 2 && moreStats.cv > 0 && Number.isFinite(moreStats.skew) && moreStats.skew > 0 && moreStats.aborted)
+    ? ok(`stats: zeros=${moreStats.zeros} · CV=${moreStats.cv.toFixed(2)} · skew=${moreStats.skew.toFixed(2)} · pre-aborted scan throws AbortError`)
+    : fail(`stats extras/cancel failed: ${JSON.stringify(moreStats)}`);
+
   // ── exclude-zeros / exclude-negatives re-scan (grade-data stats) ──
   const exTest = await page.evaluate(async () => {
     const L = window._lamina;
