@@ -210,8 +210,12 @@
   #help .help-body code { color: var(--accent); }
   #help .prof-wrap { position: relative; margin-bottom: 12px; }
   #help .prof-hist { width: 100%; height: 120px; display: block; background: var(--bg-field); border: 1px solid var(--border); border-radius: 3px; }
-  #help .prof-log { position: absolute; top: 5px; right: 5px; font-family: var(--mono); font-size: 10px; color: var(--dim); background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 3px; padding: 1px 6px; cursor: pointer; }
+  #help .prof-log { position: absolute; top: 5px; right: 5px; font-family: var(--mono); font-size: 10px; color: var(--dim); background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 3px; padding: 1px 6px; cursor: pointer; outline: none; }
+  #help .prof-log:focus-visible { border-color: var(--accent); }
   #help .prof-log.on { color: var(--accent); border-color: var(--accent); }
+  #help .stats-opts { display: flex; gap: 14px; margin: 0 0 10px; font-size: 11px; color: var(--muted); }
+  #help .stats-opts label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+  #help .stats-opts input { margin: 0; cursor: pointer; }
   #help .help-body b { color: var(--text-hi); font-weight: 600; }
 
   #grid { position: absolute; left: 0; right: var(--cp, 0); top: var(--tb); bottom: var(--ft); }

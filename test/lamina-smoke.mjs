@@ -1064,6 +1064,33 @@ try {
     ? ok(`non-numeric examples shown (BDL…) + gutter sweep spreads across the file (${diag.bigLen} rows sampled)`)
     : fail(`diag failed: ${JSON.stringify(diag)}`);
 
+  // ── exclude-zeros / exclude-negatives re-scan (grade-data stats) ──
+  const exTest = await page.evaluate(async () => {
+    const L = window._lamina;
+    // grades: zeros (waste), a negative sentinel, and real grades
+    const csv = 'id,g\n1,0\n2,0\n3,-99\n4,1.0\n5,3.0\n6,5.0\n';
+    L.open('grades.csv', new TextEncoder().encode(csv));
+    await new Promise((r) => setTimeout(r, 40));
+    const S = L.scanColumnStats;
+    const src = L.current.source, ds = L.current.dataStart;
+    const all = await S(src, { col: 1, dataStart: ds });
+    const noZero = await S(src, { col: 1, dataStart: ds, excludeZero: true });
+    const noNeg = await S(src, { col: 1, dataStart: ds, excludeNeg: true });
+    const pos = await S(src, { col: 1, dataStart: ds, excludeZero: true, excludeNeg: true });
+    return {
+      all: { n: all.n, min: all.min, excluded: all.excluded || 0 },
+      noZero: { n: noZero.n, excluded: noZero.excluded },     // drops 2 zeros → n 4
+      noNeg: { min: noNeg.min, excluded: noNeg.excluded },    // drops -99 → min 0
+      pos: { n: pos.n, min: pos.min, excluded: pos.excluded },// only 1,3,5 → n 3, min 1
+    };
+  });
+  (exTest.all.n === 6 && exTest.all.min === -99 && exTest.all.excluded === 0
+    && exTest.noZero.n === 4 && exTest.noZero.excluded === 2
+    && exTest.noNeg.min === 0 && exTest.noNeg.excluded === 1
+    && exTest.pos.n === 3 && exTest.pos.min === 1 && exTest.pos.excluded === 3)
+    ? ok('stats exclude zeros/negatives re-scan (n + min + excluded count track)')
+    : fail(`exclude test failed: ${JSON.stringify(exTest)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {

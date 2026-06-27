@@ -2195,6 +2195,7 @@ function statsToTSV(st, name) {
   r('column', name);
   if (st.kind === 'number') {
     r('count', st.count); r('non-null', st.n); r('nulls', st.nulls);
+    if (st.excluded) r('excluded', st.excluded + (st.excludeZero && st.excludeNeg ? ' (≤0)' : st.excludeZero ? ' (zeros)' : ' (negatives)'));
     if (st.bad) r('non-numeric', st.bad);
     r('min', st.min); r('max', st.max); r('mean', st.mean); r('std', st.std); r('sum', st.sum);
     if (st.quantiles) { const q = st.quantiles; r('p5', q.p5); r('p25', q.p25); r('median', q.p50); r('p75', q.p75); r('p95', q.p95); }
@@ -2206,11 +2207,11 @@ function statsToTSV(st, name) {
   return L.join('\n');
 }
 
-function renderStats(st) {
+function renderStats(st, ex = {}) {
   const row = (k, v) => `<tr><td style="color:var(--muted);padding-right:18px">${k}</td><td style="text-align:right">${v}</td></tr>`;
   const copyBtn = '<button id="statsCopy" title="copy this summary (TSV)" style="float:right;font:inherit;font-size:11px;color:var(--muted);background:var(--bg-field);border:1px solid var(--bd2);border-radius:4px;padding:2px 8px;cursor:pointer">copy</button>';
   if (st.kind === 'number') {
-    let h = '';
+    let h = `<div class="stats-opts"><label><input type="checkbox" id="optNoZero"${ex.excludeZero ? ' checked' : ''}> exclude zeros</label><label><input type="checkbox" id="optNoNeg"${ex.excludeNeg ? ' checked' : ''}> exclude negatives</label></div>`;
     if (st.histogram) {                                         // the column-profile chart
       h += `<div class="prof-wrap"><canvas id="profHist" class="prof-hist"></canvas>`;
       if (st.logHistogram) h += `<button id="profLog" class="prof-log" title="log scale (for skewed / log-normal data)">log x</button>`;
@@ -2219,6 +2220,10 @@ function renderStats(st) {
     }
     h += '<table style="border-collapse:collapse">';
     h += row('count', st.count.toLocaleString()) + row('non-null', st.n.toLocaleString()) + row('nulls', st.nulls.toLocaleString());
+    if (st.excluded) {
+      const lbl = st.excludeZero && st.excludeNeg ? '≤ 0' : st.excludeZero ? 'zeros' : 'negatives';
+      h += row('<span style="color:var(--dim)">excluded</span>', `<span style="color:var(--dim)">${st.excluded.toLocaleString()} <span style="font-size:10px">(${lbl})</span></span>`);
+    }
     if (st.bad) {
       h += row('<span style="color:var(--accent)">non-numeric</span>', `<span style="color:var(--accent)">${st.bad.toLocaleString()}</span>`);
       if (st.badSamples && st.badSamples.length) {        // show what's actually not-a-number (the diagnostic)
@@ -2252,24 +2257,31 @@ async function showColumnStats(uc) {
   const name = c.baseVs.header(uc).label;
   const numeric = (c.schema[uc] && c.schema[uc].type) === 'number';
   const suffix = c.filterResult ? ' (filtered)' : '';
-  showOverlay(`Statistics — ${name}${suffix}`, '<div style="color:#777">computing… 0%</div>');
-  try {
-    const st = await scanColumnStats(c.source, {
-      col: uc, dataStart: c.dataStart, numeric, decimal: c.d.decimal, rows: c.filterResult ? c.filterResult.nums : null,
-      onProgress: (b, n) => { if ($('#help').classList.contains('show')) $('#helpBody').innerHTML = `<div style="color:#777">computing… ${n ? Math.round((100 * b) / n) : 0}%</div>`; },
-    });
-    showOverlay(`Statistics — ${name}${suffix}`, renderStats(st));
-    const canvas = $('#profHist');
-    if (canvas && st.histogram) {
-      let logOn = false;
-      const draw = () => drawProfileHist(canvas, logOn && st.logHistogram ? st.logHistogram : st.histogram, st.quantiles);
-      requestAnimationFrame(draw);                              // after layout (canvas has a width)
-      const lg = $('#profLog');
-      if (lg) lg.onclick = () => { logOn = !logOn; lg.classList.toggle('on', logOn); draw(); };
-    }
-    const cb = $('#statsCopy');
-    if (cb) cb.onclick = () => { copyText(statsToTSV(st, name)); cb.textContent = 'copied ✓'; setTimeout(() => { cb.textContent = 'copy'; }, 1200); };
-  } catch (e) { showOverlay(`Statistics — ${name}`, `<div style="color:var(--fault)">${e.message}</div>`); }
+  const ex = { excludeZero: false, excludeNeg: false };       // re-scan filters; toggled via the in-popup chips
+  const run = async () => {
+    showOverlay(`Statistics — ${name}${suffix}`, '<div style="color:#777">computing… 0%</div>');
+    try {
+      const st = await scanColumnStats(c.source, {
+        col: uc, dataStart: c.dataStart, numeric, decimal: c.d.decimal, rows: c.filterResult ? c.filterResult.nums : null,
+        excludeZero: ex.excludeZero, excludeNeg: ex.excludeNeg,
+        onProgress: (b, n) => { if ($('#help').classList.contains('show')) $('#helpBody').innerHTML = `<div style="color:#777">computing… ${n ? Math.round((100 * b) / n) : 0}%</div>`; },
+      });
+      showOverlay(`Statistics — ${name}${suffix}`, renderStats(st, ex));
+      const canvas = $('#profHist');
+      if (canvas && st.histogram) {
+        let logOn = false;
+        const draw = () => drawProfileHist(canvas, logOn && st.logHistogram ? st.logHistogram : st.histogram, st.quantiles);
+        requestAnimationFrame(draw);                              // after layout (canvas has a width)
+        const lg = $('#profLog');
+        if (lg) lg.onclick = () => { logOn = !logOn; lg.classList.toggle('on', logOn); draw(); };
+      }
+      const oz = $('#optNoZero'); if (oz) oz.onchange = () => { ex.excludeZero = oz.checked; run(); };
+      const on = $('#optNoNeg'); if (on) on.onchange = () => { ex.excludeNeg = on.checked; run(); };
+      const cb = $('#statsCopy');
+      if (cb) cb.onclick = () => { copyText(statsToTSV(st, name)); cb.textContent = 'copied ✓'; setTimeout(() => { cb.textContent = 'copy'; }, 1200); };
+    } catch (e) { showOverlay(`Statistics — ${name}`, `<div style="color:var(--fault)">${e.message}</div>`); }
+  };
+  await run();
 }
 
 // ── drag-drop ──
@@ -2309,7 +2321,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;
