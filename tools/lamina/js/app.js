@@ -145,6 +145,21 @@ async function recompute() {
   mountView(view, info);
 }
 
+// Estimate resident memory for the never-resident headline: the coarse block index
+// (the structure that scales with the file) + a bound on the cached windows (the LRU).
+// null when the whole file is in RAM (memory source) or the backing has no block index
+// (.dm) — i.e. only the genuinely-windowed case, where resident << file, gets the badge.
+function residentEstimate(c) {
+  const s = c && c.source;
+  if (!s || c.bytes) return null;                        // memory source = whole file resident; no magic to show
+  const blocks = s.blockOffsets && s.blockOffsets.length;
+  if (!blocks) return null;                              // .dm / unknown backing
+  const idx = blocks * 8;                                // Float64 byte-offset per block
+  const avgRow = c.totalBytes / Math.max(1, s.rowCount || 1);
+  const windows = Math.min(16, blocks) * (s.blockSize || 4096) * avgRow;   // LRU cap × block records × avg row bytes
+  return idx + windows;
+}
+
 // (Re)create the grid for a view + wire header sort/context + column hide/show +
 // update the footer. The provider is wrapped to (a) remap display columns past
 // hidden ones and (b) stamp the sort arrow onto the active column.
@@ -216,7 +231,9 @@ function mountView(vs, info = {}) {
   const cols = c.hidden.size ? `${vis.length} of ${total} cols` : `${vis.length} cols`;
   const skipped = c.d.skip ? ` · ${c.d.skip} ${c.d.comment ? c.d.comment + '-' : ''}comment lines skipped` : '';
   const kindLabel = c.d.dm ? 'dm' : c.d.kind;
-  c._meta = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)} · ${kindLabel}${skipped}`;   // remembered so a copy-flash can restore it
+  const resident = residentEstimate(c);                  // the never-resident superpower, made visible
+  const resTerm = (resident != null && resident < c.totalBytes * 0.6) ? ` · ~${fmtBytes(resident)} resident` : '';
+  c._meta = `${rows} × ${cols} · ${fmtBytes(c.totalBytes)}${resTerm} · ${kindLabel}${skipped}`;   // remembered so a copy-flash can restore it
   $('#meta').textContent = c._meta;
   grid.onSelect(onSelectionChanged);                    // drives the record card + footer selection stats
   $('#selStats').textContent = '';                      // fresh grid → no selection yet
@@ -2136,8 +2153,27 @@ function drawProfileHist(canvas, hist, q) {
   }
 }
 
+// Clean TSV of a column summary → clipboard (paste into a report). Raw values (full
+// precision) so Excel reads them as numbers, not the display-formatted strings.
+function statsToTSV(st, name) {
+  const L = [], r = (k, v) => L.push(k + '\t' + v);
+  r('column', name);
+  if (st.kind === 'number') {
+    r('count', st.count); r('non-null', st.n); r('nulls', st.nulls);
+    if (st.bad) r('non-numeric', st.bad);
+    r('min', st.min); r('max', st.max); r('mean', st.mean); r('std', st.std); r('sum', st.sum);
+    if (st.quantiles) { const q = st.quantiles; r('p5', q.p5); r('p25', q.p25); r('median', q.p50); r('p75', q.p75); r('p95', q.p95); }
+  } else {
+    r('count', st.count); r('nulls', st.nulls); r('distinct', st.distinct + (st.cappedDistinct ? '+' : ''));
+    L.push(''); L.push('value\tcount\tpct');
+    for (const t of st.top) L.push(`${t.value}\t${t.n}\t${st.count ? (100 * t.n / st.count).toFixed(1) : '0'}`);
+  }
+  return L.join('\n');
+}
+
 function renderStats(st) {
   const row = (k, v) => `<tr><td style="color:var(--muted);padding-right:18px">${k}</td><td style="text-align:right">${v}</td></tr>`;
+  const copyBtn = '<button id="statsCopy" title="copy this summary (TSV)" style="float:right;font:inherit;font-size:11px;color:var(--muted);background:var(--bg-field);border:1px solid var(--bd2);border-radius:4px;padding:2px 8px;cursor:pointer">copy</button>';
   if (st.kind === 'number') {
     let h = '';
     if (st.histogram) {                                         // the column-profile chart
@@ -2154,7 +2190,7 @@ function renderStats(st) {
       const q = st.quantiles;
       h += row('p5', fmtN(q.p5)) + row('p25', fmtN(q.p25)) + row('<b>median</b>', `<b>${fmtN(q.p50)}</b>`) + row('p75', fmtN(q.p75)) + row('p95', fmtN(q.p95));
     } else if (st.quantilesCapped) h += row('quantiles', '<span style="color:var(--dim)">too many values</span>');
-    return h + '</table>';
+    return copyBtn + h + "</table>";
   }
   let h = '<table style="border-collapse:collapse">';
   h += row('count', st.count.toLocaleString()) + row('nulls', st.nulls.toLocaleString()) + row('distinct', st.distinct.toLocaleString() + (st.cappedDistinct ? '+' : ''));
@@ -2164,7 +2200,7 @@ function renderStats(st) {
     const v = esc(t.value).replace(/"/g, '&quot;');
     h += `<tr><td style="padding:1px 18px 1px 0;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:linear-gradient(90deg, var(--accent-soft) ${pct}%, transparent ${pct}%)"><span class="sfilter" data-v="${v}">${esc(t.value)}</span></td><td style="text-align:right;color:var(--text)">${t.n.toLocaleString()} <span style="color:var(--dim)">(${pct}%)</span></td></tr>`;
   }
-  return h + '</table>';
+  return copyBtn + h + "</table>";
 }
 
 let _statsCol = null;          // the column the open stats panel describes (for click-to-filter)
@@ -2190,6 +2226,8 @@ async function showColumnStats(uc) {
       const lg = $('#profLog');
       if (lg) lg.onclick = () => { logOn = !logOn; lg.classList.toggle('on', logOn); draw(); };
     }
+    const cb = $('#statsCopy');
+    if (cb) cb.onclick = () => { copyText(statsToTSV(st, name)); cb.textContent = 'copied ✓'; setTimeout(() => { cb.textContent = 'copy'; }, 1200); };
   } catch (e) { showOverlay(`Statistics — ${name}`, `<div style="color:var(--fault)">${e.message}</div>`); }
 }
 
@@ -2230,7 +2268,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

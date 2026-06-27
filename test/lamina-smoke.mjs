@@ -875,6 +875,21 @@ try {
     ? ok('column-profile: stats popup renders a histogram canvas + log toggle + quantiles')
     : fail(`column-profile failed: ${JSON.stringify(prof)}`);
 
+  // ── copy-stats + resident indicator ──
+  const extras = await page.evaluate(async () => {
+    const L = window._lamina;
+    await L.showColumnStats(1);                           // grade
+    const hasCopy = !!document.getElementById('statsCopy');
+    const tsv = L.statsToTSV({ kind: 'number', count: 10, n: 10, nulls: 0, min: 0, max: 9, mean: 4.5, std: 3, sum: 45, quantiles: { p5: 0, p25: 2, p50: 4.5, p75: 7, p95: 9 } }, 'grade');
+    document.getElementById('help').classList.remove('show');
+    const residMem = L.residentEstimate(L.current);      // memory source → null (no badge)
+    const residSynth = L.residentEstimate({ totalBytes: 14e9, bytes: null, source: { blockOffsets: { length: 850000 }, blockSize: 4096, rowCount: 3.5e9 } });
+    return { hasCopy, tsvOk: /^column\tgrade\n/.test(tsv) && tsv.includes('median\t4.5'), residMem, residSynthMB: residSynth ? Math.round(residSynth / 1e6) : null };
+  });
+  (extras.hasCopy && extras.tsvOk && extras.residMem === null && extras.residSynthMB < 200)
+    ? ok(`copy-stats button + TSV; resident est: memory→null, 14 GB file → ~${extras.residSynthMB} MB resident`)
+    : fail(`extras failed: ${JSON.stringify(extras)}`);
+
   // ── type override round-trips through a lens (treat-as) ──
   const tov = await page.evaluate(async (text) => {
     const L = window._lamina;
