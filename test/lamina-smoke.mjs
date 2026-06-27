@@ -1213,6 +1213,29 @@ try {
     ? ok('context submenu + sub-submenu flip to stay in the viewport near the right edge')
     : fail(`submenu fit failed: ${JSON.stringify(submenuFit)}`);
 
+  // ── dock panels: mutually exclusive, never extend the page horizontally ──
+  const panels = await page.evaluate(async () => {
+    const L = window._lamina;
+    let h = 'r'; for (let j = 1; j < 40; j++) h += `,c${j}`;
+    let csv = h + '\n'; for (let i = 0; i < 50; i++) { let row = `${i}`; for (let j = 1; j < 40; j++) row += `,${i * j}`; csv += row + '\n'; }
+    L.open('panels.csv', new TextEncoder().encode(csv));
+    await new Promise((r) => setTimeout(r, 120));
+    const vis = (id) => { const e = document.getElementById(id); const b = e.getBoundingClientRect(); return b.right > 2 && b.left < window.innerWidth - 2; };
+    const overflow = () => document.documentElement.scrollWidth > document.documentElement.clientWidth;
+    const snap = () => ({ col: vis('colPanel'), rec: vis('recordPanel'), of: overflow() });
+    const seq = [];
+    L.toggleColPanel(); await new Promise((r) => setTimeout(r, 200)); seq.push(snap());          // col only
+    L.toggleRecordPanel(); await new Promise((r) => setTimeout(r, 200)); seq.push(snap());        // rec replaces col
+    L.toggleColPanel(); await new Promise((r) => setTimeout(r, 200)); seq.push(snap());           // col replaces rec
+    L.toggleColPanel(); await new Promise((r) => setTimeout(r, 200)); seq.push(snap());           // both closed
+    return seq;
+  });
+  const exclusive = panels.every((s) => !(s.col && s.rec) && !s.of);
+  const expected = panels[0].col && !panels[0].rec && panels[1].rec && !panels[1].col && panels[2].col && !panels[2].rec && !panels[3].col && !panels[3].rec;
+  (exclusive && expected)
+    ? ok('dock panels are mutually exclusive + never cause horizontal overflow')
+    : fail(`panel exclusivity failed: ${JSON.stringify(panels)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
