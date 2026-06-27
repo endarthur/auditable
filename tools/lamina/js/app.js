@@ -1123,18 +1123,36 @@ function csvField(v, delim, q) {
 // serialize, and push batches to a sink ({ write, close }). Cancellable via signal.
 async function runExport({ delimiter = ',', header = true, allRows = false, colIdx, sink, onProgress, signal }) {
   const c = current; if (!c) return 0;
-  const view = allRows ? c.baseVs : (c.view || c.baseVs);     // current view (filtered/sorted) vs the whole table
-  const n = view.rowCount(), q = '"';
+  const q = '"';
   const idx = colIdx && colIdx.length ? colIdx : c.schema.map((_, i) => i);
   let buf = header ? idx.map((i) => csvField(c.schema[i].name, delimiter, q)).join(delimiter) + '\n' : '';
   let written = 0;
-  for (let r = 0; r < n; r++) {
-    if (signal && signal.cancelled) break;
-    const row = await view.ensureRow(r);
-    buf += (row ? idx.map((i) => csvField(row[i], delimiter, q)).join(delimiter) : '') + '\n';
-    written++;
-    if (buf.length > 65536) { await sink.write(buf); buf = ''; }
-    if (onProgress && (r & 2047) === 0) onProgress(r, n);
+  const emit = (row) => { buf += (row ? idx.map((i) => csvField(row[i], delimiter, q)).join(delimiter) : '') + '\n'; written++; };
+
+  const filtered = !allRows && c.filterResult;
+  const sorted = !allRows && c.sort && c.sort.length;
+  if (filtered && !sorted) {
+    // Block-ordered scan over the matched rows: sequential reads, skipping
+    // match-free blocks (eachRecord), vastly faster than the result view's scattered
+    // per-row File.slice reads. Same source order as the unsorted filtered view.
+    const rows = c.filterResult.nums, total = rows.length, CANCEL = {};
+    try {
+      await c.source.eachRecord({ dataStart: c.dataStart, rows }, (disp, fields) => {
+        if (signal && signal.cancelled) throw CANCEL;
+        emit(fields);
+        if (onProgress && (written & 4095) === 0) onProgress(written, total);
+        if (buf.length > 65536) { const w = sink.write(buf); buf = ''; return w; }   // async visit → eachRecord awaits the stream-flush
+      });
+    } catch (e) { if (e !== CANCEL) throw e; }
+  } else {
+    const view = allRows ? c.baseVs : (c.view || c.baseVs);   // whole table, or a SORTED result view (order ≠ disk, so per-row)
+    const n = view.rowCount();
+    for (let r = 0; r < n; r++) {
+      if (signal && signal.cancelled) break;
+      emit(await view.ensureRow(r));
+      if (buf.length > 65536) { await sink.write(buf); buf = ''; }
+      if (onProgress && (r & 2047) === 0) onProgress(r, n);
+    }
   }
   await sink.write(buf);
   await sink.close();
@@ -2090,12 +2108,29 @@ async function refreshGutter() {
 
 // One bounded scan → per-column { kind:'hist', bins:[0..1], nullRate, approx } |
 // { kind:'cat', segments:[fractions], nullRate, approx } | null.
+// Spread the gutter sweep across the WHOLE file (a few clustered runs from blocks
+// evenly spaced through it), not the first N rows — otherwise a spatially-ordered
+// model (block models, drillholes) makes the sweep land in one flat corner (all-zero
+// grades, near-constant coords) and every glyph reads empty. The block-skip in
+// eachRecord means this still reads only ~GUTTER_SPREAD blocks (cheap, never-resident).
+const GUTTER_SPREAD = 48;
+function gutterSampleRows(source, dataStart) {
+  const N = Math.max(0, (source.rowCount || 0) - dataStart);
+  if (N <= GUTTER_SAMPLE) return null;                   // small file → just sample all (limit)
+  const per = Math.ceil(GUTTER_SAMPLE / GUTTER_SPREAD), rows = [];
+  for (let i = 0; i < GUTTER_SPREAD; i++) {
+    const start = Math.floor((i * N) / GUTTER_SPREAD);
+    for (let j = 0; j < per && start + j < N; j++) rows.push(start + j);   // a short contiguous run per spread point (1-2 blocks each)
+  }
+  return rows;                                            // ascending
+}
 async function computeGutterStats(source, schema, dataStart, decimal) {
   const cols = schema.length;
   const acc = schema.map((s) => (s.type === 'number'
     ? { num: true, vals: [], n: 0, nulls: 0, min: Infinity, max: -Infinity }
     : { num: false, n: 0, nulls: 0, freq: new Map() }));
-  await source.eachRecord({ dataStart, limit: GUTTER_SAMPLE }, (disp, fields) => {
+  const rows = gutterSampleRows(source, dataStart);
+  await source.eachRecord(rows ? { dataStart, rows } : { dataStart, limit: GUTTER_SAMPLE }, (disp, fields) => {
     for (let i = 0; i < cols; i++) {
       const a = acc[i]; if (!a) continue; a.n++;
       const raw = fields[i];
@@ -2184,7 +2219,13 @@ function renderStats(st) {
     }
     h += '<table style="border-collapse:collapse">';
     h += row('count', st.count.toLocaleString()) + row('non-null', st.n.toLocaleString()) + row('nulls', st.nulls.toLocaleString());
-    if (st.bad) h += row('<span style="color:var(--accent)">non-numeric</span>', `<span style="color:var(--accent)">${st.bad.toLocaleString()}</span>`);
+    if (st.bad) {
+      h += row('<span style="color:var(--accent)">non-numeric</span>', `<span style="color:var(--accent)">${st.bad.toLocaleString()}</span>`);
+      if (st.badSamples && st.badSamples.length) {        // show what's actually not-a-number (the diagnostic)
+        const ex = st.badSamples.map((v) => `<code style="color:var(--accent)">${esc(v === '' ? '∅' : v)}</code>`).join(' ');
+        h += `<tr><td colspan="2" style="color:var(--dim);padding:2px 0 6px;font-size:11px">e.g. ${ex}</td></tr>`;
+      }
+    }
     h += row('min', fmtN(st.min)) + row('max', fmtN(st.max)) + row('mean', fmtN(st.mean)) + row('std', fmtN(st.std)) + row('sum', fmtN(st.sum));
     if (st.quantiles) {
       const q = st.quantiles;
@@ -2268,7 +2309,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

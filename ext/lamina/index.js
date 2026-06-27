@@ -221,6 +221,10 @@ function installRecordCursor(source) {
     const nBlocks = source.blockOffsets.length;
     let sp = 0, seen = 0;                                  // sp = cursor into `rows`; seen = visited count (for `limit`)
     for (let b = 0; b < nBlocks; b++) {
+      if (rows) {                                          // subset: skip blocks that hold none of the requested rows
+        if (sp >= rows.length) break;                      // (block b = source records [b*K, (b+1)*K)) → no readRange, no decode
+        if (Math.floor((rows[sp] + dataStart) / K) > b) continue;
+      }
       const s = source.blockOffsets[b];
       const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
       const bytes = await source.readRange(s, e - s);
@@ -235,7 +239,8 @@ function installRecordCursor(source) {
           if (sp >= rows.length || rows[sp] !== disp) continue;
           sp++;
         }
-        visit(disp, fieldsOf(bytes.subarray(pos[i].start, pos[i].end)), s + pos[i].start, pos[i].end - pos[i].start);
+        const rv = visit(disp, fieldsOf(bytes.subarray(pos[i].start, pos[i].end)), s + pos[i].start, pos[i].end - pos[i].start);
+        if (rv && rv.then) await rv;                       // async visit (e.g. export's stream-flush); sync visits pay nothing
         if (++seen >= limit) return;                       // sample cap (gutter stats)
       }
       if (onProgress) onProgress(b + 1, nBlocks);
@@ -817,6 +822,7 @@ function histify(vals, nv, lo, hi, nbins, log) {
  */
 async function scanColumnStats(source, { col, dataStart = 0, numeric = true, decimal = '.', rows = null, max = 5 * 1024 * 1024, topN = 12, maxDistinct = 100000, onProgress } = {}) {
   let count = 0, nulls = 0, bad = 0;   // nulls = empty/missing; bad = present but not a number
+  const badSamples = numeric ? new Set() : null;   // first few DISTINCT non-numeric raw values (diagnostic: "what's not a number?")
   // numeric (Welford) + a capped value buffer for quantiles
   let min = Infinity, max_ = -Infinity, sum = 0, mean = 0, m2 = 0, nNum = 0;
   let vals = numeric ? new Float64Array(1024) : null, nv = 0, collecting = numeric;
@@ -830,7 +836,7 @@ async function scanColumnStats(source, { col, dataStart = 0, numeric = true, dec
     if (numeric) {
       if (raw == null || raw === '') { nulls++; return; }
       const x = parseNum(raw, decimal);
-      if (Number.isNaN(x)) { bad++; return; }       // present but not a number → "non-numeric"
+      if (Number.isNaN(x)) { bad++; if (badSamples.size < 12) badSamples.add(raw); return; }   // present but not a number → "non-numeric" (keep a few examples)
       nNum++;
       if (x < min) min = x;
       if (x > max_) max_ = x;
@@ -865,7 +871,7 @@ async function scanColumnStats(source, { col, dataStart = 0, numeric = true, dec
       const posMin = sl.find((v) => v > 0);
       if (posMin != null && max_ > posMin) logHistogram = histify(vals, nv, posMin, max_, HIST_BINS, true);
     }
-    return { kind: 'number', count, nulls, bad, n: nNum, min: nNum ? min : null, max: nNum ? max_ : null, mean: nNum ? mean : null, std, sum, quantiles, histogram, logHistogram, quantilesCapped: !collecting };
+    return { kind: 'number', count, nulls, bad, badSamples: [...badSamples], n: nNum, min: nNum ? min : null, max: nNum ? max_ : null, mean: nNum ? mean : null, std, sum, quantiles, histogram, logHistogram, quantilesCapped: !collecting };
   }
   const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN).map(([value, n]) => ({ value, n }));
   return { kind: 'string', count, nulls, distinct: freq.size, cappedDistinct, top };

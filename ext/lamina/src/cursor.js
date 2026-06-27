@@ -37,6 +37,10 @@ export function installRecordCursor(source) {
     const nBlocks = source.blockOffsets.length;
     let sp = 0, seen = 0;                                  // sp = cursor into `rows`; seen = visited count (for `limit`)
     for (let b = 0; b < nBlocks; b++) {
+      if (rows) {                                          // subset: skip blocks that hold none of the requested rows
+        if (sp >= rows.length) break;                      // (block b = source records [b*K, (b+1)*K)) → no readRange, no decode
+        if (Math.floor((rows[sp] + dataStart) / K) > b) continue;
+      }
       const s = source.blockOffsets[b];
       const e = b + 1 < nBlocks ? source.blockOffsets[b + 1] : source.totalBytes;
       const bytes = await source.readRange(s, e - s);
@@ -51,7 +55,8 @@ export function installRecordCursor(source) {
           if (sp >= rows.length || rows[sp] !== disp) continue;
           sp++;
         }
-        visit(disp, fieldsOf(bytes.subarray(pos[i].start, pos[i].end)), s + pos[i].start, pos[i].end - pos[i].start);
+        const rv = visit(disp, fieldsOf(bytes.subarray(pos[i].start, pos[i].end)), s + pos[i].start, pos[i].end - pos[i].start);
+        if (rv && rv.then) await rv;                       // async visit (e.g. export's stream-flush); sync visits pay nothing
         if (++seen >= limit) return;                       // sample cap (gutter stats)
       }
       if (onProgress) onProgress(b + 1, nBlocks);

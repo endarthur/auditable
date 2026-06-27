@@ -34,6 +34,7 @@ function histify(vals, nv, lo, hi, nbins, log) {
  */
 export async function scanColumnStats(source, { col, dataStart = 0, numeric = true, decimal = '.', rows = null, max = 5 * 1024 * 1024, topN = 12, maxDistinct = 100000, onProgress } = {}) {
   let count = 0, nulls = 0, bad = 0;   // nulls = empty/missing; bad = present but not a number
+  const badSamples = numeric ? new Set() : null;   // first few DISTINCT non-numeric raw values (diagnostic: "what's not a number?")
   // numeric (Welford) + a capped value buffer for quantiles
   let min = Infinity, max_ = -Infinity, sum = 0, mean = 0, m2 = 0, nNum = 0;
   let vals = numeric ? new Float64Array(1024) : null, nv = 0, collecting = numeric;
@@ -47,7 +48,7 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
     if (numeric) {
       if (raw == null || raw === '') { nulls++; return; }
       const x = parseNum(raw, decimal);
-      if (Number.isNaN(x)) { bad++; return; }       // present but not a number → "non-numeric"
+      if (Number.isNaN(x)) { bad++; if (badSamples.size < 12) badSamples.add(raw); return; }   // present but not a number → "non-numeric" (keep a few examples)
       nNum++;
       if (x < min) min = x;
       if (x > max_) max_ = x;
@@ -82,7 +83,7 @@ export async function scanColumnStats(source, { col, dataStart = 0, numeric = tr
       const posMin = sl.find((v) => v > 0);
       if (posMin != null && max_ > posMin) logHistogram = histify(vals, nv, posMin, max_, HIST_BINS, true);
     }
-    return { kind: 'number', count, nulls, bad, n: nNum, min: nNum ? min : null, max: nNum ? max_ : null, mean: nNum ? mean : null, std, sum, quantiles, histogram, logHistogram, quantilesCapped: !collecting };
+    return { kind: 'number', count, nulls, bad, badSamples: [...badSamples], n: nNum, min: nNum ? min : null, max: nNum ? max_ : null, mean: nNum ? mean : null, std, sum, quantiles, histogram, logHistogram, quantilesCapped: !collecting };
   }
   const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN).map(([value, n]) => ({ value, n }));
   return { kind: 'string', count, nulls, distinct: freq.size, cappedDistinct, top };

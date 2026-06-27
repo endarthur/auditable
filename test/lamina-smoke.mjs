@@ -1040,6 +1040,30 @@ try {
     ? ok(`column reorder: moves display order + round-trips through a lens (${ro.after.join(',')})`)
     : fail(`column reorder failed: ${JSON.stringify(ro)}`);
 
+  // ── non-numeric examples in stats (the diagnostic) + gutter spread sampling ──
+  const diag = await page.evaluate(async (text) => {
+    const L = window._lamina;
+    // a mostly-numeric column with a couple non-numeric values → detected numeric, bad surfaced
+    let csv = 'id,grade\n';
+    for (let i = 0; i < 60; i++) csv += `${i},${(i * 0.1).toFixed(2)}\n`;
+    csv += '60,BDL\n61,1.2.3\n';                          // BDL (below detection) + a double-dot
+    L.open('mix.csv', new TextEncoder().encode(csv));
+    await new Promise((r) => setTimeout(r, 40));
+    await L.showColumnStats(1);                           // grade
+    await new Promise((r) => setTimeout(r, 30));
+    const body = document.getElementById('helpBody').textContent;
+    document.getElementById('help').classList.remove('show');
+    // gutter spread: small file → null (limit); synthetic large → a spread ascending list
+    const small = L.gutterSampleRows({ rowCount: 5000 }, 1);
+    const big = L.gutterSampleRows({ rowCount: 2_000_000 }, 0);
+    const ascending = big && big.every((v, i) => i === 0 || v >= big[i - 1]);
+    const spread = big && (big[big.length - 1] - big[0]) > 1_000_000;   // covers the whole file, not the first rows
+    return { hasEg: /e\.g\./.test(body) && body.includes('BDL'), small, bigLen: big && big.length, ascending, spread };
+  }, csv);
+  (diag.hasEg && diag.small === null && diag.ascending && diag.spread)
+    ? ok(`non-numeric examples shown (BDL…) + gutter sweep spreads across the file (${diag.bigLen} rows sampled)`)
+    : fail(`diag failed: ${JSON.stringify(diag)}`);
+
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
 } catch (e) {
