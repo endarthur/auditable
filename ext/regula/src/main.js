@@ -13,3 +13,4 @@ export * from './tolerance.js';
 export * from './arc.js';
 export * from './intersect.js';
 export * from './nearest.js';
+export * from './trim.js';

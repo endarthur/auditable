@@ -150,3 +150,47 @@ test('arc: angleInSweep respects CCW vs CW and admits endpoints', () => {
   assert.equal(angleInSweep(0, -Math.PI, -Math.PI / 2), true);    // CW sweep covers the bottom
   assert.ok(ptClose(arcPointAt(arc([0, 0], 5, 0, Math.PI), 0.5), [0, 5]));
 });
+
+// ── trim (E2.2): interval removal, splitting, closed→open, arc bulge recompute ─────
+import { trim } from '../ext/regula/src/main.js';
+
+const P = (points, bulges = null, closed = false) => ({ points, bulges, closed });
+
+test('trim: a line cut once drops the picked side', () => {
+  const t = trim(P([[0, 0], [10, 0]]), [segment([5, -5], [5, 5])], [2, 0], 1e-9);   // pick the left
+  assert.equal(t.removed, true); assert.equal(t.kept.length, 1);
+  assert.ok(ptClose(t.kept[0].points[0], [5, 0]) && ptClose(t.kept[0].points[1], [10, 0]));   // left gone
+  const r = trim(P([[0, 0], [10, 0]]), [segment([5, -5], [5, 5])], [8, 0], 1e-9);   // pick the right
+  assert.ok(ptClose(r.kept[0].points[0], [0, 0]) && ptClose(r.kept[0].points[1], [5, 0]));
+});
+
+test('trim: a middle cut splits an open polyline in two', () => {
+  const t = trim(P([[0, 0], [10, 0], [10, 10]]), [segment([5, -5], [5, 5]), segment([5, 5], [15, 5])], [10, 0], 1e-9);
+  assert.equal(t.kept.length, 2);
+  assert.ok(ptClose(t.kept[0].points[0], [0, 0]) && ptClose(t.kept[0].points[1], [5, 0]));     // before
+  assert.ok(ptClose(t.kept[1].points[0], [10, 5]) && ptClose(t.kept[1].points[1], [10, 10]));  // after
+});
+
+test('trim: trimming a closed ring opens it (complement kept)', () => {
+  const sq = P([[0, 0], [10, 0], [10, 10], [0, 10]], null, true);
+  const t = trim(sq, [segment([5, -5], [5, 15])], [10, 5], 1e-9);   // vertical cut, pick the right half
+  assert.equal(t.removed, true); assert.equal(t.kept.length, 1);
+  assert.equal(t.kept[0].closed, false);
+  const pts = t.kept[0].points;                                     // the LEFT half remains: (5,10)→(0,10)→(0,0)→(5,0)
+  assert.ok(ptClose(pts[0], [5, 10]) && ptClose(pts[pts.length - 1], [5, 0]));
+  assert.ok(pts.some((p) => ptClose(p, [0, 0])) && pts.some((p) => ptClose(p, [0, 10])));
+});
+
+test('trim: a trimmed arc span keeps a TRUE arc (recomputed bulge, not a chord)', () => {
+  // semicircle (bulge 1) from (0,0) over (5,-5) to (10,0); cut at the bottom (5,-5), keep the right quarter
+  const t = trim(P([[0, 0], [10, 0]], [1]), [segment([5, -10], [5, 10])], [3, -4], 1e-9);
+  assert.equal(t.kept.length, 1);
+  const k = t.kept[0];
+  assert.ok(ptClose(k.points[0], [5, -5]) && ptClose(k.points[1], [10, 0]));
+  assert.ok(close(k.bulges[0], Math.tan(Math.PI / 8)));            // quarter of a CCW semicircle
+});
+
+test('trim: no crossing cutter → unchanged', () => {
+  const t = trim(P([[0, 0], [10, 0]]), [segment([20, -5], [20, 5])], [5, 0], 1e-9);
+  assert.equal(t.removed, false); assert.equal(t.kept.length, 1);
+});
