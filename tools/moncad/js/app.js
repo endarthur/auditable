@@ -20,7 +20,7 @@ import { makeEditTool } from './edit-ops.js';
 
 import { makeFrame, toWorld } from '@gcu/frame';
 import { read, write, explode } from '@gcu/dxf';
-import { translate, rotate, mirror, circle as rCircle, spanCurve, trim, extend, makeTolerance } from '@gcu/regula';
+import { translate, rotate, mirror, circle as rCircle, spanCurve, trim, extend, fillet, chamfer, makeTolerance } from '@gcu/regula';
 
 // ── geometry bridge: @gcu/dxf feature geometry (flat WORLD vertices) ↔ @gcu/regula ──
 const geomToPath = (g) => {
@@ -33,6 +33,14 @@ const pathToGeom = (path, z = 0) => {
   path.points.forEach((p, i) => { vertices[i * 3] = p[0]; vertices[i * 3 + 1] = p[1]; vertices[i * 3 + 2] = z; });
   const bulges = path.bulges && path.bulges.some((b) => b) ? Float64Array.from(path.bulges) : null;
   return { kind: 'polyline', vertices, bulges, closed: path.closed };
+};
+// Build an edited feature from a path, keeping the proto's properties but setting `type`
+// to MATCH the geometry — the DXF writer dispatches on type, so a multi-vertex/bulge
+// result must be 'polyline', not a leftover 'line' (which would emit only 2 points).
+const featureFromPath = (proto, path, z = 0) => {
+  const geometry = pathToGeom(path, z);
+  const type = path.points.length === 2 && !geometry.bulges && !geometry.closed ? 'line' : 'polyline';
+  return { ...proto, type, geometry };
 };
 // A feature's geometry → kernel curves, for use as trim/extend cutters.
 const featureCurves = (g) => {
@@ -95,6 +103,7 @@ function boot() {
   const snap = loadSnap();   // the SnapState: master + running types + aperture + one-shot
   const selection = new Set();   // selected feature indices (the edit target)
   const SELECT_PX = 8;       // pick aperture, CSS px
+  const corner = { fillet: 10, chamfer: 10 };   // current fillet radius / chamfer distance
 
   let pending = false;
   const render = () => {
@@ -317,9 +326,44 @@ function boot() {
     if (c.bad) { setStatus('extend: ' + c.bad); return; }
     const res = extend(geomToPath(c.target.geometry), c.cutters, world, c.tol);
     if (!res.extended) { setStatus('extend: no boundary ahead'); return; }
-    model.applyEdit([{ i: c.i, feature: { ...c.target, geometry: pathToGeom(res.path, c.target.geometry.vertices[2] || 0) } }]);
+    model.applyEdit([{ i: c.i, feature: featureFromPath(c.target, res.path, c.target.geometry.vertices[2] || 0) }]);
     selection.clear(); derive(false); setStatus('extended');
   }
+  // ── fillet / chamfer: pick two straight lines, round / bevel their corner ─────────
+  const lineSeg = (g) => ({ a: [g.vertices[0], g.vertices[1]], b: [g.vertices[3], g.vertices[4]] });
+  const isStraightLine = (g) => g && g.kind === 'polyline' && g.vertices.length === 6 && !(g.bulges && g.bulges[0]);
+  function startCorner(kind) {
+    cancelTool();
+    const picks = [], unit = kind === 'fillet' ? 'radius' : 'distance';
+    activeTool = {
+      name: kind, rawPick: true,
+      get prompt() { return picks.length === 0 ? `${kind[0].toUpperCase() + kind.slice(1)} (${unit} ${corner[kind]}) — first line, or type ${unit}:` : 'second line:'; },
+      point: (world) => {
+        const i = pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale);
+        if (i < 0) { setStatus(`${kind}: nothing there`); return; }
+        if (!isStraightLine(model.features[i].geometry)) { setStatus(`${kind}: pick straight lines`); return; }
+        picks.push({ i, world });
+        if (picks.length === 2) applyCorner(kind, picks);
+      },
+      text: (raw) => { const n = Number(String(raw).trim()); if (n > 0) { corner[kind] = n; refreshPrompt(); render(); return true; } return false; },
+      preview: () => ({ lines: [], points: [] }), keyword: () => false,
+      finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
+    };
+    refreshPrompt(); cmdline.focus(); render();
+  }
+  function applyCorner(kind, picks) {
+    const [a, b] = picks;
+    if (a.i === b.i) { setStatus(`${kind}: pick two different lines`); endTool(); return; }
+    const extent = Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1]) || 1;
+    const op = kind === 'fillet' ? fillet : chamfer;
+    const res = op(lineSeg(model.features[a.i].geometry), lineSeg(model.features[b.i].geometry), corner[kind], a.world, b.world, makeTolerance(extent));
+    if (!res.ok) { setStatus(`${kind}: ${res.reason || 'no corner'}`); endTool(); return; }
+    const z = model.features[a.i].geometry.vertices[2] || 0;
+    model.applyEdit([{ i: a.i, feature: featureFromPath(model.features[a.i], res.path, z) }]);
+    model.remove([b.i]);     // the two lines merge into one filleted polyline (2 undo steps in v0)
+    selection.clear(); derive(false); endTool(); setStatus(`${kind}ed`);
+  }
+
   function trimAt(world) {
     const c = pickTargetAndCutters(world);
     if (!c) { setStatus('trim: nothing there'); return; }
@@ -330,8 +374,8 @@ function boot() {
     const kept = res.kept.filter((k) => k.points.length >= 2);
     if (!kept.length) model.remove([c.i]);
     else {
-      model.applyEdit([{ i: c.i, feature: { ...c.target, geometry: pathToGeom(kept[0], z) } }]);
-      if (kept.length > 1) model.addMany(kept.slice(1).map((k) => ({ ...c.target, geometry: pathToGeom(k, z) })));
+      model.applyEdit([{ i: c.i, feature: featureFromPath(c.target, kept[0], z) }]);
+      if (kept.length > 1) model.addMany(kept.slice(1).map((k) => featureFromPath(c.target, k, z)));
     }
     selection.clear(); derive(false); setStatus('trimmed');
   }
@@ -359,6 +403,8 @@ function boot() {
     { id: 'edit.delete', title: 'Delete', category: 'Modify', keys: 'delete', alias: ['del', 'erase'], when: () => selection.size > 0, run: () => doDelete() },
     { id: 'edit.trim', title: 'Trim', category: 'Modify', icon: 'Trim', keys: 't', alias: ['tr', 'trim'], run: () => startTrim() },
     { id: 'edit.extend', title: 'Extend', category: 'Modify', icon: 'Extend', keys: 'x', alias: ['ex', 'extend'], run: () => startExtend() },
+    { id: 'edit.fillet', title: 'Fillet', category: 'Modify', icon: 'Fillet', keys: 'f', alias: ['f', 'fillet'], run: () => startCorner('fillet') },
+    { id: 'edit.chamfer', title: 'Chamfer', category: 'Modify', icon: 'Chamfer', alias: ['cha', 'chamfer'], run: () => startCorner('chamfer') },
     { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => { view.fit(bounds); render(); } },
     { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); render(); } },
     { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
@@ -376,7 +422,7 @@ function boot() {
   const cmdline = makeCommandLine({ input: $('#cmdInput'), prompt: $('#cmdPrompt') }, { onSubmit: cmdSubmit, onCancel: cmdCancel, onKey: commandLineKey });
   const snapChips = makeSnapChips(cmds, ctx, $('#snapchips'), snap, SNAP_TYPES, SNAP_LABELS);
   const toolbar = makeToolbar(cmds, ctx, $('#toolbar'),
-    ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'edit.move', 'edit.copy', 'edit.rotate', 'edit.trim', 'edit.extend', 'edit.delete', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
+    ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'edit.move', 'edit.copy', 'edit.rotate', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.delete', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
 
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;       // the palette owns its own keys

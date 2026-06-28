@@ -15,3 +15,4 @@ export * from './intersect.js';
 export * from './nearest.js';
 export * from './trim.js';
 export * from './extend.js';
+export * from './fillet.js';

@@ -210,3 +210,33 @@ test('extend: no forward boundary → unchanged (a backward crossing does not co
   const e = extend(P([[0, 0], [10, 0]]), [segment([-5, -5], [-5, 5])], [9, 0], 1e-9);     // boundary is behind the picked end
   assert.equal(e.extended, false);
 });
+
+// ── fillet / chamfer (E2.4): the corner constructions ─────────────────────────────
+import { fillet, chamfer } from '../ext/regula/src/main.js';
+
+test('fillet: a true tangent arc rounds the corner (kept ends, recomputed bulge)', () => {
+  const s1 = { a: [0, 0], b: [10, 0] }, s2 = { a: [0, 0], b: [0, 10] };   // an L at the origin
+  const f = fillet(s1, s2, 2, [8, 0], [0, 8], 1e-9);                       // pick the far ends
+  assert.equal(f.ok, true);
+  assert.deepEqual(f.path.points[0], [10, 0]);                            // far ends kept
+  assert.deepEqual(f.path.points[3], [0, 10]);
+  assert.ok(ptClose(f.path.points[1], [2, 0]) && ptClose(f.path.points[2], [0, 2]));   // tangent points
+  assert.ok(close(f.path.bulges[1], -Math.tan(Math.PI / 8)));             // quarter arc bulging toward the corner
+  assert.ok(ptClose(f.center, [2, 2]));
+});
+
+test('fillet: radius too large for the segments → ok:false', () => {
+  const f = fillet({ a: [0, 0], b: [5, 0] }, { a: [0, 0], b: [0, 5] }, 20, [4, 0], [0, 4], 1e-9);
+  assert.equal(f.ok, false);
+});
+
+test('chamfer: a straight bevel at the given distance', () => {
+  const c = chamfer({ a: [0, 0], b: [10, 0] }, { a: [0, 0], b: [0, 10] }, 3, [8, 0], [0, 8], 1e-9);
+  assert.equal(c.ok, true);
+  assert.deepEqual(c.path.points, [[10, 0], [3, 0], [0, 3], [0, 10]]);
+  assert.deepEqual([...c.path.bulges], [0, 0, 0]);
+});
+
+test('fillet: parallel segments have no corner → ok:false', () => {
+  assert.equal(fillet({ a: [0, 0], b: [10, 0] }, { a: [0, 5], b: [10, 5] }, 2, [5, 0], [5, 5], 1e-9).ok, false);
+});
