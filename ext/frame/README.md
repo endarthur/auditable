@@ -40,7 +40,8 @@ working offset is a translation for numerical convenience, not a reprojection.
 
 Frame is **pure translation**: rotation/scale are out of scope. A block model's own
 dip/rake orientation is intrinsic model geometry — a separate concern, never conflated
-with the working frame.
+with the local frame. (We say **local frame** for the origin-shifted working coordinates,
+to avoid clashing with a reprojection layer's *working CRS* — a different axis entirely.)
 
 ## API
 
@@ -54,6 +55,7 @@ with the working frame.
 | `frameFromBounds(bounds, opts)` | a Frame straight from bounds |
 | `extentTolerance(f, extent, {rel})` | frame-relative ε for constructed-geometry tests |
 | `delta(from, to)` | translation between two frames (throws on CRS/units mismatch) |
+| `canonCrs(code)` | normalise a CRS code for identity (`EPSG:31983` ≡ `31983` ≡ `epsg:31983`) |
 | `withFrame(artifact, f)` | stamp `.frame` without moving coordinates |
 | `rebaseCoords(buf, from, to, {stride})` | re-express a buffer between frames → `{coords, record}` |
 | `sameProjection(a, b)` / `frameEq(a, b)` | comparisons |

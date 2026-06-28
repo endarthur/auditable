@@ -224,7 +224,7 @@ function aciToRgb(index) { return ACI_RGB[index] || null; }
 // (dee.origin, grid.origin, flat Float64/Float32 vertex buffers), not the {x,y,z}
 // objects the prose spec sketches. The frame is pure translation: rotation/scale are
 // deliberately out of scope (a block model's own dip/rake orientation is intrinsic
-// model geometry, a separate concern from the working frame — never conflated).
+// model geometry, a separate concern from the local frame — never conflated).
 
 // A Frame value. `origin` is the WORLD coordinate of the local origin, so
 // `local = world − origin`. `crs` is an optional projection descriptor (e.g. an EPSG
@@ -240,17 +240,27 @@ function makeFrame({ origin, crs = null, units = 'm' } = {}) {
 // as the "already in world coordinates" marker.
 const WORLD = makeFrame({ origin: [0, 0, 0] });
 
-// Two frames describe the same projection iff their CRS agree (a null CRS on either
-// side is a wildcard — you can't assert a mismatch you never declared) and their units
+// Normalise a CRS code for IDENTITY comparison: uppercase + strip a leading `EPSG:`, so
+// `'EPSG:31983'`, `'epsg:31983'`, and `'31983'` all compare equal. It lives HERE, not in a
+// geo/reprojection layer: frame is zero-dep and sits *under* any such layer, so importing a
+// helper from geo would invert the dependency. A reprojection layer's richer code resolution
+// is a superset built on this. Comparison only — the stored `crs` keeps its original spelling.
+function canonCrs(code) {
+  return code == null ? null : String(code).trim().toUpperCase().replace(/^EPSG:/, '');
+}
+
+// Two frames describe the same projection iff their (canonicalised) CRS agree (a null CRS on
+// either side is a wildcard — you can't assert a mismatch you never declared) and their units
 // match. This is the gate that keeps a frame shift from masquerading as a reprojection.
 function sameProjection(a, b) {
-  if (a.crs != null && b.crs != null && a.crs !== b.crs) return false;
+  const ca = canonCrs(a.crs), cb = canonCrs(b.crs);
+  if (ca != null && cb != null && ca !== cb) return false;
   return (a.units ?? 'm') === (b.units ?? 'm');
 }
 
-// Full structural equality: same origin, CRS, and units.
+// Full structural equality: same origin, (canonicalised) CRS, and units.
 function frameEq(a, b) {
-  return a.crs === b.crs && (a.units ?? 'm') === (b.units ?? 'm') &&
+  return canonCrs(a.crs) === canonCrs(b.crs) && (a.units ?? 'm') === (b.units ?? 'm') &&
     a.origin[0] === b.origin[0] && a.origin[1] === b.origin[1] && a.origin[2] === b.origin[2];
 }
 
@@ -276,7 +286,7 @@ function toWorld(localPt, frame) {
 // These consolidate the hand-rolled F64-recentre loops currently duplicated in the
 // dee importers (lfm/msh adapters): subtract the origin at full f64 precision and hand
 // the small local magnitudes to the F32/GPU downcast. The one hard rule of §5 —
-// anything bound for a Float32Array passes through the working frame FIRST — is this
+// anything bound for a Float32Array passes through the local frame FIRST — is this
 // call. Returns a NEW Float64Array; input is never mutated.
 
 function toLocalCoords(coords, frame, { stride = 3 } = {}) {
@@ -355,7 +365,7 @@ function delta(from, to) {
 }
 
 // Declare an artifact's frame WITHOUT moving its coordinates (invariant 2: a coordinate
-// expressed in a working frame always carries an inspectable origin). Shallow, pure —
+// expressed in a local frame always carries an inspectable origin). Shallow, pure —
 // returns a copy with `.frame` stamped. Re-EXPRESSING coordinates into a different
 // frame is `rebaseCoords`, a separate and logged transform.
 function withFrame(artifact, frame) {

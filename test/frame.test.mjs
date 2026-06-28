@@ -5,7 +5,7 @@ import {
   makeFrame, WORLD, sameProjection, frameEq,
   toLocal, toWorld, toLocalCoords, toWorldCoords,
   originFromBounds, frameFromBounds, extentTolerance,
-  delta, withFrame, rebaseCoords,
+  delta, withFrame, rebaseCoords, canonCrs,
 } from '../ext/frame/src/frame.js';
 
 test('makeFrame: normalises origin to [x,y,z], defaults crs/units', () => {
@@ -139,4 +139,19 @@ test('frameEq: full structural equality', () => {
   assert.equal(frameEq(a, makeFrame({ origin: [1, 2, 3], crs: 'EPSG:31983' })), true);
   assert.equal(frameEq(a, makeFrame({ origin: [1, 2, 4], crs: 'EPSG:31983' })), false);
   assert.equal(frameEq(a, makeFrame({ origin: [1, 2, 3], crs: 'EPSG:32723' })), false);
+});
+
+test('canonCrs / sameProjection: EPSG codes compare by identity, not spelling', () => {
+  assert.equal(canonCrs('EPSG:31983'), '31983');
+  assert.equal(canonCrs('epsg:31983'), '31983');
+  assert.equal(canonCrs('  31983 '), '31983');
+  assert.equal(canonCrs(null), null);
+  // the bug this fixes: differently-spelled codes must NOT spuriously read as a reprojection
+  const a = makeFrame({ origin: [6e5, 7.7e6, 0], crs: 'EPSG:31983' });
+  const b = makeFrame({ origin: [6e5 + 100, 7.7e6, 0], crs: '31983' });
+  const c = makeFrame({ origin: [6e5, 7.7e6, 0], crs: 'epsg:31983' });
+  assert.equal(sameProjection(a, b), true);
+  assert.deepEqual(delta(a, b), [-100, 0, 0]);            // does NOT throw on the spelling difference
+  assert.equal(frameEq(a, c), true);                      // same projection + origin + units
+  assert.equal(sameProjection(a, makeFrame({ origin: [0, 0, 0], crs: 'EPSG:32723' })), false);  // genuinely different still blocks
 });
