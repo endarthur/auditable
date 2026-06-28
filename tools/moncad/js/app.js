@@ -288,6 +288,7 @@ function boot() {
     else setStatus(`unknown command: ${t}`);
   }
   function cmdCancel() { if (activeTool) cancelTool(); else cmdline.blur(); }
+  function toggleHelp(force) { $('#help').classList.toggle('show', force != null ? force : !$('#help').classList.contains('show')); }
   // refresh the rubber-band + render after a typed point (no mouse move to trigger it)
   function afterTypedPoint() { if (activeTool) { updateRubber(lastMouse); cmdline.focus(); } render(); }
 
@@ -848,8 +849,8 @@ function boot() {
     { id: 'view.grid', title: 'Reference Grid', category: 'View', keys: 'g', alias: ['grid'], run: () => { gridOn = !gridOn; setStatus(gridOn ? 'grid on' : 'grid off'); render(); } },
     { id: 'view.layers', title: 'Layers Panel', category: 'View', keys: 'shift+l', alias: ['layers'], run: () => toggleLayers() },
     { id: 'layer.new', title: 'New Layer', category: 'Layer', alias: ['newlayer'], run: () => { if (!layersOpen) toggleLayers(); newLayer(); } },
+    { id: 'help.docs', title: 'Documentation', category: 'Help', keys: 'f1', alias: ['help', 'docs', 'manual', '?'], run: () => toggleHelp() },
     { id: 'help.about', title: 'About moncad', category: 'Help', run: () => setStatus('moncad — a small 2D CAD instrument · gentropic.org/moncad') },
-    { id: 'help.keys', title: 'Keys: L line · P pline · C circle · M move · T trim · O offset · F fillet · ⌘P palette', category: 'Help', run: () => setStatus('right-click for the context menu · type coords like @10<45 · F3 snap') },
     { id: 'snap.toggle', title: 'Snapping (master)', category: 'Snap', keys: 'f3', run: () => toggleMaster() },
     { id: 'snap.ortho', title: 'Ortho (H/V lock)', category: 'Snap', keys: 'f8', alias: ['ortho'], run: () => { snap.toggleOrtho(); afterSnapChange(); setStatus(`ortho ${snap.ortho ? 'on' : 'off'}`); } },
     { id: 'snap.end', title: 'Snap: Endpoint', category: 'Snap', alias: ['end', 'endp'], run: () => toggleType('end') },
@@ -878,11 +879,17 @@ function boot() {
     { label: 'File', items: ['file.new', 'file.open', 'file.save', null, 'file.demo'] },
     { label: 'Edit', items: ['edit.undo', 'edit.redo', null, 'edit.selectAll', 'edit.deselect'] },
     { label: 'View', items: ['view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.grid', 'snap.grid', 'view.layers', null, 'view.palette'] },
-    { label: 'Help', items: ['help.about', 'help.keys'] },
+    { label: 'Help', items: ['help.docs', 'help.about'] },
   ], $('#menudrop'));
+
+  $('#helpClose').addEventListener('click', () => toggleHelp(false));
+  $('#help').addEventListener('mousedown', (e) => { if (e.target.id === 'help') toggleHelp(false); });   // backdrop closes
+  $('#helpVer').textContent = $('#build').textContent;
 
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;       // the palette owns its own keys
+    if ($('#help').classList.contains('show')) { if (e.key === 'Escape' || e.key === 'F1') { e.preventDefault(); toggleHelp(false); } return; }   // help open → Esc/F1 close it, swallow the rest
+    if (e.key === '?') { e.preventDefault(); toggleHelp(true); return; }
     // an active tool claims Esc / Enter / Close / Undo; everything else (zoom, …) still fires
     if (activeTool) {
       if (e.key === 'Escape') { e.preventDefault(); cancelTool(); return; }
@@ -957,7 +964,7 @@ function boot() {
   document.body.classList.toggle('layers-open', layersOpen);   // size the board for the docked panel before the first resize
   resize();
   loadModel(demoModel());
-  setStatus('demo model · L to draw a polyline · Open or drag in a DXF');
+  setStatus('demo model · L to draw a polyline · Open or drag in a DXF · F1 for help');
 }
 
 boot();

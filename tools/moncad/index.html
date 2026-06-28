@@ -123,6 +123,28 @@
   .pal-t { flex: 1; color: var(--text-hi); font-family: var(--mono); font-size: 13px; }
   .pal-cat { color: var(--dim); font-family: var(--mono); font-size: 11px; }
   .pal-k { color: var(--action); font-family: var(--mono); font-size: 11px; min-width: 52px; text-align: right; }
+  /* help / documentation overlay */
+  .help { position: absolute; inset: var(--tb) 0 calc(var(--ft) + var(--cl)) 0; z-index: 45; display: none; align-items: flex-start; justify-content: center; background: rgba(10,10,10,0.55); }
+  .help.show { display: flex; }
+  .help-box { margin: 4vh 0; width: min(820px, 92vw); max-height: 92%; display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--bd2); border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); overflow: hidden; }
+  .help-head { display: flex; align-items: baseline; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+  .help-head b { font-family: var(--sans); font-size: 16px; color: var(--text-hi); }
+  .help-head .v { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  .help-head .x { margin-left: auto; cursor: pointer; color: var(--dim); font-size: 18px; line-height: 1; padding: 0 4px; }
+  .help-head .x:hover { color: var(--text-hi); }
+  .help-content { overflow-y: auto; padding: 8px 22px 24px; color: var(--text); font-family: var(--sans); font-size: 13.5px; line-height: 1.55; }
+  .help-content h3 { font-family: var(--sans); font-size: 14px; color: var(--action); margin: 22px 0 6px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  .help-content h3:first-child { margin-top: 8px; }
+  .help-content p { margin: 6px 0; }
+  .help-content ul { margin: 6px 0; padding-left: 20px; }
+  .help-content li { margin: 3px 0; }
+  .help-content b { color: var(--text-hi); }
+  .help-content .lead { color: var(--dim); }
+  .help-content kbd { font-family: var(--mono); font-size: 11px; color: var(--action); background: var(--bg-field); border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; white-space: nowrap; }
+  .help-content code { font-family: var(--mono); font-size: 12px; color: var(--info); background: var(--bg-field); border-radius: 3px; padding: 1px 4px; }
+  .help-content table { border-collapse: collapse; margin: 6px 0; font-size: 12.5px; }
+  .help-content td { padding: 2px 14px 2px 0; vertical-align: top; }
+  .help-content td:first-child { white-space: nowrap; }
   /* context menu — right-click, contextual commands over the same registry */
   .ctx { position: fixed; z-index: 50; display: none; min-width: 168px; background: var(--bg-panel); border: 1px solid var(--bd2); border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,0.55); padding: 4px 0; }
   .ctx.show { display: block; }
@@ -182,6 +204,107 @@
   <div id="palette" class="pal"><div class="pal-box"><input id="palInput" class="pal-input" placeholder="run a command…" spellcheck="false"><div id="palList" class="pal-list"></div></div></div>
   <div id="ctxmenu" class="ctx"></div>
   <div id="menudrop" class="ctx"></div>
+  <div id="help" class="help">
+    <div class="help-box">
+      <div class="help-head"><b>moncad</b><span class="v" id="helpVer">documentation</span><span class="x" id="helpClose" title="Close (Esc)">×</span></div>
+      <div class="help-content">
+        <p class="lead">A small 2D CAD instrument — a precision board you operate by command and read by panel. Draw and edit with snapped clicks or typed coordinates; everything round-trips to DXF. Press <kbd>F1</kbd> or <kbd>?</kbd> any time to open this; <kbd>Esc</kbd> to close.</p>
+
+        <h3>Getting around</h3>
+        <ul>
+          <li><b>Pan</b> — drag with the <b>middle mouse button</b>.</li>
+          <li><b>Zoom</b> — <b>mouse wheel</b> (zooms toward the cursor). <kbd>=</kbd> / <kbd>-</kbd> zoom in/out.</li>
+          <li><b>Zoom to fit</b> — <kbd>E</kbd> (zoom extents).</li>
+          <li>The <b>footer</b> reads the live cursor position in world coordinates, the snap, the active layer, and the scale.</li>
+        </ul>
+
+        <h3>How you give commands</h3>
+        <p>Every tool lives in one registry, reachable five ways — use whichever suits you:</p>
+        <ul>
+          <li><b>Tool palette</b> (left) — click a tool.</li>
+          <li><b>Menubar</b> (top) — File / Edit / View / Help.</li>
+          <li><b>Command line</b> (bottom) — type a command name (<code>line</code>), an alias (<code>pl</code>), or a coordinate.</li>
+          <li><b>Command palette</b> — <kbd>Ctrl+P</kbd>, fuzzy search (matches names and aliases).</li>
+          <li><b>Right-click</b> — a context menu of what's relevant (selection verbs, or board verbs); right-click also <b>finishes</b> the current tool.</li>
+        </ul>
+
+        <h3>Drawing</h3>
+        <table>
+          <tr><td><kbd>L</kbd> <b>Line</b></td><td>Chains segments — click a start, then each click commits a segment. <kbd>Enter</kbd>/<kbd>Esc</kbd> ends. (Each segment is its own entity.)</td></tr>
+          <tr><td><kbd>P</kbd> <b>Polyline</b></td><td>One connected entity. While drawing, type <code>a</code> for <b>arc</b> mode (spans curve tangent to the previous one) and <code>l</code> back to line; <code>c</code> closes, <code>u</code> undoes a vertex.</td></tr>
+          <tr><td><kbd>A</kbd> <b>Arc</b></td><td>Three points: start, a point on the arc, end.</td></tr>
+          <tr><td><kbd>C</kbd> <b>Circle</b></td><td>Centre, then a radius point — or type the radius.</td></tr>
+          <tr><td><b>Point</b></td><td>Places node markers.</td></tr>
+          <tr><td><b>Text</b></td><td>Place a point, then type the text (type a number first to set the height).</td></tr>
+          <tr><td><kbd>I</kbd> <b>Insert</b></td><td>Place instances of a block (see <b>Blocks</b>).</td></tr>
+        </table>
+
+        <h3>Precision input</h3>
+        <p>While a draw tool is active, type a coordinate into the command line instead of clicking:</p>
+        <table>
+          <tr><td><code>x,y</code></td><td>Absolute world coordinate (matches the footer readout).</td></tr>
+          <tr><td><code>@dx,dy</code></td><td>Relative to the last point.</td></tr>
+          <tr><td><code>d&lt;a</code> · <code>@d&lt;a</code></td><td>Polar — distance <code>d</code> at angle <code>a</code>° (absolute / relative).</td></tr>
+        </table>
+
+        <h3>Snapping &amp; ortho</h3>
+        <ul>
+          <li><b>Running snaps</b> — end / mid / centre / node, shown as chips in the footer; click a chip to toggle it. <kbd>F3</kbd> toggles snapping overall.</li>
+          <li><b>One-shot override</b> — type a snap word (<code>cen</code>, <code>end</code>, <code>mid</code>, <code>nod</code>, <code>non</code>) to force just the next pick.</li>
+          <li><b>Cycle</b> — <kbd>Tab</kbd> steps through candidates when several coincide (a <code>⇥</code> hint shows). Aperture: <kbd>[</kbd> / <kbd>]</kbd>.</li>
+          <li><b>Grid snap</b> — the <b>GRID</b> chip (object snaps still win). <kbd>G</kbd> toggles the reference grid.</li>
+          <li><b>Ortho</b> — <kbd>F8</kbd> locks the cursor to horizontal/vertical from the last point (snaps still win).</li>
+        </ul>
+
+        <h3>Selecting &amp; editing</h3>
+        <p>Click an entity to select it; drag a box to select many; with nothing active, hovering <b>outlines</b> what a click would pick. Block instances select as one unit. The affine tools need a selection first; the click-on-geometry tools act on whatever you click.</p>
+        <table>
+          <tr><td><kbd>M</kbd> Move · <kbd>⇧C</kbd> Copy · <kbd>R</kbd> Rotate</td><td>Pick a base/pivot, then a destination point or a typed value (angle in degrees).</td></tr>
+          <tr><td>Mirror · Scale</td><td>Mirror across an axis (two points); Scale by a base point + a typed factor.</td></tr>
+          <tr><td>Array (grid / polar)</td><td>Grid: columns × rows × spacing. Polar: a centre, a count, a fill angle.</td></tr>
+          <tr><td><kbd>T</kbd> Trim · <kbd>X</kbd> Extend</td><td>Click the part to remove / an end to lengthen. The hover preview shows it (red = removed, green = added).</td></tr>
+          <tr><td><kbd>F</kbd> Fillet · Chamfer</td><td>Round / bevel a corner — two lines, or a polyline corner. Type the radius/distance first.</td></tr>
+          <tr><td><kbd>O</kbd> Offset</td><td>Click a polyline on the side you want the parallel copy; type the distance.</td></tr>
+          <tr><td><kbd>Del</kbd> Delete</td><td>Removes the selection. <kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd> undo / redo.</td></tr>
+        </table>
+
+        <h3>Layers</h3>
+        <p>The panel (<kbd>Shift+L</kbd>) is your inspector. New geometry lands on the <b>active layer</b> (click a name to set it). Per layer: a visibility eye, a colour swatch (click cycles), an opacity slider, and a lock. Right-click a layer for <b>Isolate / Show All / Lock / Rename / Delete</b>; drag the <b>⠿</b> grip to reorder the draw z-order. Deleting a layer moves its geometry to layer <code>0</code> (nothing is lost).</p>
+
+        <h3>Blocks — reusable symbols</h3>
+        <ul>
+          <li><b>Make Block</b> — select geometry → name it → pick a base point. It becomes a reusable definition, and the selection turns into an instance in place.</li>
+          <li><b>Insert</b> (<kbd>I</kbd>) — place as many instances as you like.</li>
+          <li>Instances are <b>live</b>: edit the definition and every instance updates (define once, place many). They move / rotate / scale / array / delete as one unit and round-trip to DXF.</li>
+        </ul>
+
+        <h3>Attributes — data on your symbols</h3>
+        <p>Attributes turn a symbol into a data record (a drillhole collar that carries its hole-ID).</p>
+        <ul>
+          <li><b>Define Attribute</b> — place a tag (e.g. <code>HOLEID</code>); include it when you Make Block.</li>
+          <li><b>Insert</b> then prompts for each value; the value renders as a label that follows the instance.</li>
+          <li><b>Double-click</b> an instance to edit its values (empty <kbd>Enter</kbd> keeps the current one).</li>
+        </ul>
+
+        <h3>Measure</h3>
+        <p>The Measure tool reads <b>distance</b>, <b>azimuth</b> (0° = North, clockwise — geological), and Δx/Δy between snapped points; chains point-to-point.</p>
+
+        <h3>Files &amp; data</h3>
+        <ul>
+          <li><b>Open / Save DXF</b> — <kbd>Ctrl+O</kbd> / <kbd>Ctrl+S</kbd> (or drag a <code>.dxf</code> onto the board). True arcs, blocks, attributes and layers all round-trip.</li>
+          <li><b>Export Features (WKT/CSV)</b> — writes the selection (or whole drawing) as a feature table: a <code>wkt</code> geometry column + attribute columns. Block instances export as points carrying their attributes — drops straight into QGIS / GeoPandas / PostGIS. The CRS rides along as an EWKT <code>SRID</code>.</li>
+        </ul>
+
+        <h3>Keyboard reference</h3>
+        <table>
+          <tr><td><kbd>L</kbd> Line · <kbd>P</kbd> Polyline · <kbd>A</kbd> Arc · <kbd>C</kbd> Circle · <kbd>I</kbd> Insert</td><td></td></tr>
+          <tr><td><kbd>M</kbd> Move · <kbd>⇧C</kbd> Copy · <kbd>R</kbd> Rotate</td><td><kbd>T</kbd> Trim · <kbd>X</kbd> Extend · <kbd>F</kbd> Fillet · <kbd>O</kbd> Offset · <kbd>Del</kbd> Delete</td></tr>
+          <tr><td><kbd>E</kbd> Zoom fit · <kbd>=</kbd>/<kbd>-</kbd> Zoom · <kbd>G</kbd> Grid · <kbd>Shift+L</kbd> Layers</td><td><kbd>F3</kbd> Snap · <kbd>F8</kbd> Ortho · <kbd>Tab</kbd> Cycle snap · <kbd>[</kbd>/<kbd>]</kbd> Aperture</td></tr>
+          <tr><td><kbd>Ctrl+P</kbd> Palette · <kbd>Ctrl+A</kbd> Select all · <kbd>Ctrl+Z</kbd>/<kbd>Ctrl+Y</kbd> Undo/Redo</td><td><kbd>Ctrl+O</kbd>/<kbd>Ctrl+S</kbd> Open/Save · <kbd>Esc</kbd> Cancel · <kbd>F1</kbd> Help</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
   <input type="file" id="fileInput" accept=".dxf" style="display:none">
 
   <script type="module" src="./js/app.js"></script>
