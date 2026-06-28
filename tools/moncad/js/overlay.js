@@ -45,7 +45,8 @@ export class Overlay {
       for (const [a, b] of segs) { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
       ctx.stroke();
     };
-    stroke(g.dim, 'rgba(150,150,160,0.55)');     // candidate
+    stroke(g.dim, 'rgba(150,150,160,0.55)');     // candidate (fillet/chamfer line under cursor)
+    stroke(g.pre, 'rgba(120,180,235,0.9)');      // blue = what a click would select (idle hover)
     stroke(g.ok, 'rgba(120,200,120,0.95)');      // green = will be added (extend / offset copy)
     stroke(g.warn, 'rgba(232,90,78,0.95)');      // red = will be removed (trim)
   }

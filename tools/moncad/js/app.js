@@ -425,6 +425,14 @@ function boot() {
     const proj = (segs) => (segs || []).map(([a, b]) => [view.toScreen(a), view.toScreen(b)]);
     overlay.setHighlight({ warn: proj(hl.warn), ok: proj(hl.ok), dim: proj(hl.dim) });
   }
+  // idle (no tool): outline the entity a click would select
+  function updateSelectHover(s) {
+    if (!s) { overlay.setHighlight(null); return; }
+    const i = pickAt(pickWorld(s));
+    if (i < 0 || selection.has(i)) { overlay.setHighlight(null); return; }   // already-selected is already violet
+    const segs = localSegments(model.features[i].geometry, frame.origin, tessEps);
+    overlay.setHighlight(segs.length ? { pre: segs.map(([a, b]) => [view.toScreen(a), view.toScreen(b)]) } : null);
+  }
 
   // the polyline + the other features' kernel curves at a world pick, or null.
   function pickTargetAndCutters(world) {
@@ -640,7 +648,9 @@ function boot() {
     if (panning) { view.panBy(s[0] - last[0], s[1] - last[1]); last = s; }
     if (selecting) overlay.setSelectBox([selStart, s]);
     overlay.setCursor(s); readout(s, !panning);
-    if (activeTool && !panning) { updateRubber(s); updateHover(s); }
+    if (panning || selecting) overlay.setHighlight(null);
+    else if (activeTool) { updateRubber(s); updateHover(s); }
+    else updateSelectHover(s);                                   // idle → preview what a click selects
     render();
   });
   olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); overlay.setSnap(null); overlay.setHighlight(null); render(); });
