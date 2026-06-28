@@ -105,7 +105,35 @@ valid/go, red = fault, violet = selected.
 
 ---
 
-## 6. Integration with the cluster
+## 6. Renderer — WebGL2 geometry + Canvas2D overlay
+
+The board renders at mining scale (a pit wireframe, a dense survey, a 100k–1M-segment
+DXF), so the renderer is **WebGL2 from the start** — Canvas2D's immediate-mode redraw
+stutters on pan/zoom over a big drawing, and the renderer is too foundational to swap
+later. The hard graphics problems are *sidestepped* by a **hybrid split**, not solved:
+
+- **Geometry → WebGL2.** Batched/instanced line-quads (segments expanded to screen-width
+  in the vertex shader), instanced point markers, arcs tessellated from bulge at a
+  screen-space tolerance (reuses `@gcu/dxf`'s `arc.js`). **Pan/zoom is a single transform
+  uniform — not a redraw.** That is the win.
+- **Text / glyphs / UI / snap-markers / rubber-band → a Canvas2D overlay** stacked on top
+  (two canvases, one transform). Text is the hard GPU problem (SDF atlases) — so it isn't
+  on the GPU; labels are few and cheap in 2D. Bonus: dragging a rubber-band or moving the
+  crosshair redraws only the light overlay while the heavy geometry sits still on the GPU
+  — *better* interaction feel than pure Canvas2D.
+- **Picking → a CPU spatial index** (uniform grid) → candidates → precise hit-test via
+  groma/regula predicates. The same index **is** the snapping index (snapping is a
+  spatial-query problem), so picking rides it for free — no GPU picking.
+
+**WebGL2, not WebGPU:** WebGL2 runs everywhere offline (the networkless north star).
+WebGPU is a *future backend* behind a thin renderer seam (it ties into the roadmapped
+`@gcu/wgpu`). The renderer is **moncad-internal**, factored cleanly so it could extract to
+an `@gcu/<renderer>` later if plot/plate/strata want it — owned and small, not a vendored
+2D engine (single-file / auditable / no-frameworks).
+
+---
+
+## 7. Integration with the cluster
 
 | Need | Package |
 |---|---|
@@ -120,14 +148,14 @@ designed against moncad as their real consumer.
 
 ---
 
-## 7. Staged arc
+## 8. Staged arc
 
 - **v0 — the dumb-but-lovely board.** A LibreCAD-class drafter done right: real DXF
   round-trip, frame-correct world readout, real edit geometry (regula), snapping, the
   command spine, the Switchboard instrument skin. **No constraint solver** (a dumb board
   has none — this sidesteps the entire GPL ghost). Genuinely useful, shippable.
 - **v1 — parametric.** A from-scratch constraint solver (written from the academic
-  literature only — see §9) bolts on → parametric sketching.
+  literature only — see §10) bolts on → parametric sketching.
 - **v2 — geological (the real soul).** cota / elevation-as-data, the descriptive-geometry
   mode (`@gcu/libella`): three-point, structure contours, sections, outcrop prediction.
   This is what makes it unmistakably *ours* and is why the name is Monge. v0's bones know
@@ -135,22 +163,24 @@ designed against moncad as their real consumer.
 
 ---
 
-## 8. Build order within moncad (the vertical slice)
+## 9. Build order within moncad (the vertical slice)
 
-Start from the prototype's genuinely good mechanical parts (Canvas2D pan/zoom render loop,
-snapping math) but on the **right bones** — the command registry first, not a button
-soup. Order:
+Take the prototype's genuinely good mechanical parts (the pan/zoom feel, the snapping
+math) but rebuild them on the **right bones** — the command registry first, the WebGL2
+renderer next, not a button soup. Order:
 
 1. command registry + the surfaces' wiring (the spine);
-2. Canvas2D viewport (pan/zoom, frame-aware), the instrument panel readouts;
-3. snapping (spatial query: endpoint/mid/center/intersection/perp/nearest/grid);
+2. the WebGL2 geometry renderer + Canvas2D overlay (frame-aware pan/zoom) + the
+   instrument-panel readouts (§6);
+3. the CPU spatial index → snapping (endpoint/mid/center/intersection/perp/nearest/grid),
+   which also serves picking;
 4. the command/coordinate-input loop (guided prompts, `@10<45`);
 5. draw commands (line/polyline/circle/arc) → DXF round-trip via `@gcu/dxf`;
 6. the edit long-tail (move/copy/rotate/trim/offset/fillet) → pulls in `@gcu/regula`.
 
 ---
 
-## 9. Hard rules & non-goals
+## 10. Hard rules & non-goals
 
 - **Solver licensing hygiene (standing).** Any constraint solver is written **from the
   academic literature only** — never LLM-washed from SolveSpace/slvs, PlaneGCS, JSketcher
