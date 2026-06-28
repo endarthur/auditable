@@ -9,7 +9,7 @@ import { Renderer } from './renderer.js';
 import { Overlay } from './overlay.js';
 import { CommandRegistry } from './commands.js';
 import { sceneFromDxf, localSegments } from './scene.js';
-import { makeToolbar, makePalette, makeCommandLine, makeSnapChips, makeContextMenu } from './surfaces.js';
+import { makeToolbar, makePalette, makeCommandLine, makeSnapChips, makeContextMenu, makeMenubar } from './surfaces.js';
 import { SnapIndex } from './snap.js';
 import { Model } from './model.js';
 import { TOOLS } from './tools.js';
@@ -158,7 +158,7 @@ function boot() {
       if (!doc.features.length) { setStatus('no geometry in that DXF'); return; }
       const m = new Model(doc); m.name = file.name.replace(/\.dxf$/i, '');
       loadModel(m);
-      ctx.hasDoc = true; toolbar.refresh();
+      ctx.hasDoc = true; tools.refresh();
       setStatus(`${file.name} · ${doc.features.length} features · ${doc.warnings.length} warnings`);
     } catch (e) { setStatus('DXF read failed: ' + e.message); }
   }
@@ -263,7 +263,7 @@ function boot() {
   }
 
   // ── selection (rides the pick hit-test) + the affine edit tools ──────────────────
-  function afterSelect() { ctx.hasSelection = selection.size > 0; toolbar.refresh(); setStatus(selection.size ? `${selection.size} selected` : ''); derive(false); }
+  function afterSelect() { ctx.hasSelection = selection.size > 0; tools.refresh(); setStatus(selection.size ? `${selection.size} selected` : ''); derive(false); }
   const pickWorld = (s) => toWorld(view.toWorld(s), frame);   // screen px → world point
   function doPick(s, additive) {
     const i = pickFeature(model.features, pickWorld(s), SELECT_PX * view.dpr / view.scale);
@@ -426,10 +426,10 @@ function boot() {
   let palette;
   const ctx = { hasDoc: true, hasSelection: false };
   const cmds = new CommandRegistry().registerAll([
-    { id: 'file.new', title: 'New Drawing', category: 'File', icon: 'New', run: () => { const m = new Model(); m.name = 'drawing'; loadModel(m); ctx.hasDoc = false; toolbar.refresh(); setStatus('new drawing'); } },
+    { id: 'file.new', title: 'New Drawing', category: 'File', icon: 'New', run: () => { const m = new Model(); m.name = 'drawing'; loadModel(m); ctx.hasDoc = false; tools.refresh(); setStatus('new drawing'); } },
     { id: 'file.open', title: 'Open DXF…', category: 'File', icon: 'Open', keys: 'ctrl+o', run: () => fileInput.click() },
     { id: 'file.save', title: 'Save DXF…', category: 'File', icon: 'Save', keys: 'ctrl+s', run: () => saveDxf() },
-    { id: 'file.demo', title: 'Load Demo', category: 'File', run: () => { loadModel(demoModel()); ctx.hasDoc = true; toolbar.refresh(); setStatus('demo model'); } },
+    { id: 'file.demo', title: 'Load Demo', category: 'File', run: () => { loadModel(demoModel()); ctx.hasDoc = true; tools.refresh(); setStatus('demo model'); } },
     { id: 'draw.line', title: 'Line', category: 'Draw', icon: 'Line', keys: 'l', alias: ['l', 'line'], run: () => startTool('line') },
     { id: 'draw.polyline', title: 'Polyline', category: 'Draw', icon: 'Pline', keys: 'p', alias: ['p', 'pl', 'pline', 'polyline'], run: () => startTool('polyline') },
     { id: 'draw.circle', title: 'Circle', category: 'Draw', icon: 'Circle', keys: 'c', alias: ['c', 'ci', 'circle'], run: () => startTool('circle') },
@@ -453,6 +453,8 @@ function boot() {
     { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
     { id: 'view.palette', title: 'Command Palette', category: 'View', icon: '⌘', keys: 'ctrl+p', run: () => palette.toggle() },
     { id: 'view.grid', title: 'Reference Grid', category: 'View', keys: 'g', alias: ['grid'], run: () => { gridOn = !gridOn; setStatus(gridOn ? 'grid on' : 'grid off'); render(); } },
+    { id: 'help.about', title: 'About moncad', category: 'Help', run: () => setStatus('moncad — a small 2D CAD instrument · gentropic.org/moncad') },
+    { id: 'help.keys', title: 'Keys: L line · P pline · C circle · M move · T trim · O offset · F fillet · ⌘P palette', category: 'Help', run: () => setStatus('right-click for the context menu · type coords like @10<45 · F3 snap') },
     { id: 'snap.toggle', title: 'Snapping (master)', category: 'Snap', keys: 'f3', run: () => toggleMaster() },
     { id: 'snap.end', title: 'Snap: Endpoint', category: 'Snap', alias: ['end', 'endp'], run: () => toggleType('end') },
     { id: 'snap.mid', title: 'Snap: Midpoint', category: 'Snap', alias: ['mid'], run: () => toggleType('mid') },
@@ -470,8 +472,17 @@ function boot() {
   // contextual command sets — verbs come to the selection (SPEC §3, noun-first)
   const SEL_MENU = ['edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', null, 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', null, 'edit.delete', 'edit.deselect'];
   const EMPTY_MENU = ['edit.selectAll', null, 'view.zoomExtents', 'view.grid', null, 'file.new', 'file.open', 'file.save'];
-  const toolbar = makeToolbar(cmds, ctx, $('#toolbar'),
-    ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'edit.move', 'edit.copy', 'edit.rotate', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.offset', 'edit.delete', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
+  // left tool palette: the frequent draw + modify verbs (the long tail is in the menus / palette / context)
+  const tools = makeToolbar(cmds, ctx, $('#tools'),
+    ['draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null,
+      'edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', 'edit.delete']);
+  // menubar: GLOBAL only
+  makeMenubar(cmds, ctx, $('#menubar'), [
+    { label: 'File', items: ['file.new', 'file.open', 'file.save', null, 'file.demo'] },
+    { label: 'Edit', items: ['edit.undo', 'edit.redo', null, 'edit.selectAll', 'edit.deselect'] },
+    { label: 'View', items: ['view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.grid', 'snap.grid', null, 'view.palette'] },
+    { label: 'Help', items: ['help.about', 'help.keys'] },
+  ], $('#menudrop'));
 
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;       // the palette owns its own keys

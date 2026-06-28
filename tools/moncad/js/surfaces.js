@@ -117,6 +117,47 @@ export function makeContextMenu(reg, ctx, root) {
   return { show, hide, isOpen: () => open };
 }
 
+// The menubar (SPEC §3, GCU model) — GLOBAL commands only (File / Edit / View / Help); the
+// draw/modify verbs live in the tool palette + context menu + palette, not here (no verb
+// catalog → no Vulcan-land). Top labels open a shared dropdown (the .ctx styling); hover
+// switches between open menus; disabled items grey out (when(ctx)). Same registry.
+export function makeMenubar(reg, ctx, mount, menus, drop) {
+  mount.innerHTML = ''; drop.classList.remove('show');
+  const labels = [];
+  let openIdx = -1;
+  const close = () => { openIdx = -1; drop.classList.remove('show'); labels.forEach((l) => l.classList.remove('open')); };
+  function openAt(i) {
+    drop.innerHTML = '';
+    let pendingSep = false, any = false;
+    for (const id of menus[i].items) {
+      if (id === null) { pendingSep = any; continue; }
+      const cmd = reg.get(id); if (!cmd) continue;
+      const disabled = cmd.when && !cmd.when(ctx);
+      if (pendingSep) { const s = document.createElement('div'); s.className = 'ctx-sep'; drop.appendChild(s); pendingSep = false; }
+      const row = document.createElement('div'); row.className = 'ctx-item' + (disabled ? ' disabled' : '');
+      const key = reg.keyFor(id);
+      row.innerHTML = '<span class="ctx-t"></span><span class="ctx-k"></span>';
+      row.children[0].textContent = cmd.title; row.children[1].textContent = key ? key.toUpperCase() : '';
+      if (!disabled) row.addEventListener('mousedown', (ev) => { ev.preventDefault(); close(); reg.execute(id, ctx); });
+      drop.appendChild(row); any = true;
+    }
+    openIdx = i;
+    labels.forEach((l, j) => l.classList.toggle('open', j === i));
+    const r = labels[i].getBoundingClientRect();
+    drop.style.left = r.left + 'px'; drop.style.top = r.bottom + 'px';
+    drop.classList.add('show');
+  }
+  menus.forEach((m, i) => {
+    const el = document.createElement('span'); el.className = 'mb-label'; el.textContent = m.label;
+    el.addEventListener('mousedown', (ev) => { ev.preventDefault(); openIdx === i ? close() : openAt(i); });
+    el.addEventListener('mouseenter', () => { if (openIdx >= 0 && openIdx !== i) openAt(i); });
+    mount.appendChild(el); labels.push(el);
+  });
+  window.addEventListener('mousedown', (e) => { if (openIdx >= 0 && !drop.contains(e.target) && !mount.contains(e.target)) close(); });
+  window.addEventListener('keydown', (e) => { if (openIdx >= 0 && e.key === 'Escape') close(); });
+  return { close };
+}
+
 export function makePalette(reg, ctx, els) {
   const { root, input, list } = els;
   let items = [], sel = 0, open = false;
