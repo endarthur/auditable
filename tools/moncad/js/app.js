@@ -342,6 +342,7 @@ function boot() {
 
   // ── selection (rides the pick hit-test) + the affine edit tools ──────────────────
   function afterSelect() { ctx.hasSelection = selection.size > 0; tools.refresh(); setStatus(selection.size ? `${selection.size} selected` : ''); derive(false); }
+  const clearSel = () => { selection.clear(); ctx.hasSelection = false; tools.refresh(); };   // selection consumed by an edit → un-grey the selection-gated tools
   const pickWorld = (s) => toWorld(view.toWorld(s), frame);   // screen px → world point
   function doPick(s, additive) {
     const i = pickAt(pickWorld(s));
@@ -456,7 +457,7 @@ function boot() {
     const res = extend(geomToPath(c.target.geometry), c.cutters, world, c.tol);
     if (!res.extended) { setStatus('extend: no boundary ahead'); return; }
     model.applyEdit([{ i: c.i, feature: featureFromPath(c.target, res.path, c.target.geometry.vertices[2] || 0) }]);
-    selection.clear(); derive(false); setStatus('extended');
+    clearSel(); derive(false); setStatus('extended');
   }
   // ── offset: pick a polyline on the side you want the parallel copy ────────────────
   // Which side did the click land on? Sign of the click against the nearest span's left
@@ -489,7 +490,7 @@ function boot() {
     const res = offset(geomToPath(g), offsetSign(g, world) * offsetDist, makeTolerance(extent));
     if (!res.ok) { setStatus('offset: ' + (res.reason || 'failed')); return; }
     model.addMany([featureFromPath(model.features[i], res.path, g.vertices[2] || 0)]);
-    selection.clear(); derive(false); setStatus('offset');
+    clearSel(); derive(false); setStatus('offset');
   }
 
   // ── fillet / chamfer: pick two straight lines, round / bevel their corner ─────────
@@ -528,7 +529,7 @@ function boot() {
     const res = op(geomToPath(g), nearestVertex(g, world), corner[kind], makeTolerance(extent));
     if (!res.ok) { setStatus(`${kind}: ${res.reason || "can't fillet that corner"}`); endTool(); return; }
     model.applyEdit([{ i, feature: featureFromPath(model.features[i], res.path, g.vertices[2] || 0) }]);
-    selection.clear(); derive(false); endTool(); setStatus(`${kind}ed corner`);
+    clearSel(); derive(false); endTool(); setStatus(`${kind}ed corner`);
   }
   function applyCorner(kind, picks) {
     const [a, b] = picks;
@@ -540,7 +541,7 @@ function boot() {
     const z = model.features[a.i].geometry.vertices[2] || 0;
     model.applyEdit([{ i: a.i, feature: featureFromPath(model.features[a.i], res.path, z) }]);
     model.remove([b.i]);     // the two lines merge into one filleted polyline (2 undo steps in v0)
-    selection.clear(); derive(false); endTool(); setStatus(`${kind}ed`);
+    clearSel(); derive(false); endTool(); setStatus(`${kind}ed`);
   }
 
   function trimAt(world) {
@@ -556,7 +557,40 @@ function boot() {
       model.applyEdit([{ i: c.i, feature: featureFromPath(c.target, kept[0], z) }]);
       if (kept.length > 1) model.addMany(kept.slice(1).map((k) => featureFromPath(c.target, k, z)));
     }
-    selection.clear(); derive(false); setStatus('trimmed');
+    clearSel(); derive(false); setStatus('trimmed');
+  }
+
+  // ── array: replicate the selection in a grid (columns × rows, typed spacing) ──────
+  function startArrayRect() {
+    if (!selection.size) { setStatus('select objects first'); return; }
+    cancelTool();
+    const sel = [...selection].map((i) => model.features[i]);
+    const steps = [['cols', 'Columns:'], ['rows', 'Rows:'], ['dx', 'Column spacing (X):'], ['dy', 'Row spacing (Y):']];
+    const params = {}; let step = 0;
+    activeTool = {
+      name: 'array', textMode: () => true,
+      get prompt() { return steps[step] ? `Array — ${steps[step][1]}` : ''; },
+      point: () => {},
+      text: (raw) => {
+        const v = Number(String(raw).trim());
+        if (Number.isFinite(v)) { params[steps[step][0]] = v; step++; if (step >= steps.length) { applyArrayRect(sel, params); endTool(); } else { refreshPrompt(); render(); } }
+        return true;
+      },
+      preview: () => ({ lines: [], points: [] }), keyword: () => false,
+      finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
+    };
+    refreshPrompt(); cmdline.focus(); render();
+  }
+  function applyArrayRect(sel, { cols, rows, dx, dy }) {
+    cols = Math.max(1, Math.round(cols)); rows = Math.max(1, Math.round(rows));
+    const copies = [];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      if (r === 0 && c === 0) continue;
+      for (const f of sel) copies.push({ ...f, geometry: translate(f.geometry, [c * dx, r * dy]) });
+    }
+    if (copies.length) model.addMany(copies);
+    selection.clear(); ctx.hasSelection = false; tools.refresh();   // selection consumed → un-grey nothing
+    derive(false); setStatus(copies.length ? `array: +${copies.length}` : 'array: nothing to do');
   }
 
   // ── measure: a query tool (distance + azimuth between snapped points), no entity ──
@@ -627,6 +661,7 @@ function boot() {
     { id: 'edit.copy', title: 'Copy', category: 'Modify', icon: 'Copy', keys: 'shift+c', alias: ['co', 'copy'], when: () => selection.size > 0, run: () => startEdit('copy') },
     { id: 'edit.rotate', title: 'Rotate', category: 'Modify', icon: 'Rotate', keys: 'r', alias: ['ro', 'rotate'], when: () => selection.size > 0, run: () => startEdit('rotate') },
     { id: 'edit.mirror', title: 'Mirror', category: 'Modify', icon: 'Mirror', alias: ['mi', 'mirror'], when: () => selection.size > 0, run: () => startEdit('mirror') },
+    { id: 'edit.array', title: 'Array (grid)', category: 'Modify', icon: 'Array', alias: ['ar', 'array'], when: () => selection.size > 0, run: () => startArrayRect() },
     { id: 'edit.delete', title: 'Delete', category: 'Modify', keys: 'delete', alias: ['del', 'erase'], when: () => selection.size > 0, run: () => doDelete() },
     { id: 'edit.trim', title: 'Trim', category: 'Modify', icon: 'Trim', keys: 't', alias: ['tr', 'trim'], run: () => startTrim() },
     { id: 'edit.extend', title: 'Extend', category: 'Modify', icon: 'Extend', keys: 'x', alias: ['ex', 'extend'], run: () => startExtend() },
@@ -659,7 +694,7 @@ function boot() {
   const ctxMenu = makeContextMenu(cmds, ctx, $('#ctxmenu'));
   const layersPanel = makeLayersPanel(() => model, $('#layers'), layerHandlers);
   // contextual command sets — verbs come to the selection (SPEC §3, noun-first)
-  const SEL_MENU = ['edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', null, 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', null, 'edit.delete', 'edit.deselect'];
+  const SEL_MENU = ['edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.array', null, 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', null, 'edit.delete', 'edit.deselect'];
   const EMPTY_MENU = ['edit.selectAll', null, 'view.zoomExtents', 'view.grid', null, 'file.new', 'file.open', 'file.save'];
   // left tool palette: the frequent draw + modify verbs (the long tail is in the menus / palette / context)
   const tools = makeToolbar(cmds, ctx, $('#tools'),
