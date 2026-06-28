@@ -44,4 +44,23 @@ export class SnapIndex {
     }
     return best;
   }
+
+  // ALL snaps within `tol`, sorted best-first (priority desc, then distance asc). The
+  // snap-control layer needs the full candidate set, not just the winner, so it can filter
+  // by the active type set and let Tab cycle the runners-up (SPEC §7). The index itself is
+  // unchanged — this is just a second read over the same grid.
+  queryAll(p, tol) {
+    const cx = Math.floor(p[0] / this.cell), cy = Math.floor(p[1] / this.cell);
+    const reach = Math.max(1, Math.ceil(tol / this.cell));
+    const out = [];
+    for (let ix = cx - reach; ix <= cx + reach; ix++) {
+      for (let iy = cy - reach; iy <= cy + reach; iy++) {
+        const a = this.grid.get(ix + ',' + iy);
+        if (!a) continue;
+        for (const s of a) { const d = Math.hypot(s.p[0] - p[0], s.p[1] - p[1]); if (d <= tol) out.push({ snap: s, d }); }
+      }
+    }
+    out.sort((a, b) => (PRIORITY[b.snap.type] || 0) - (PRIORITY[a.snap.type] || 0) || a.d - b.d);
+    return out;
+  }
 }

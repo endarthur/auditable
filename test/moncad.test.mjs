@@ -357,3 +357,68 @@ test('registry: forAlias resolves typed names to command ids', () => {
   assert.equal(reg.forAlias(' pl '), 'draw.polyline');
   assert.equal(reg.forAlias('nope'), null);
 });
+
+// ── snap-control (SPEC §7): the state + resolution layer ───────────────────────────
+import { SnapState, pickSnap, OVERRIDE_WORDS } from '../tools/moncad/js/snap-control.js';
+
+test('snap-control: master toggle short-circuits; running types gate eligibility', () => {
+  const s = new SnapState();
+  assert.equal(s.master, true);
+  assert.deepEqual([...s.types].sort(), ['center', 'end', 'mid', 'node']);
+  let r = s.resolve();
+  assert.equal(r.live, true);
+  assert.ok(r.allowed.has('end') && r.allowed.has('mid'));
+  // turn off midpoint
+  assert.equal(s.toggleType('mid'), false);
+  assert.equal(s.resolve().allowed.has('mid'), false);
+  // master off → not live
+  assert.equal(s.toggleMaster(), false);
+  assert.equal(s.resolve().live, false);
+});
+
+test('snap-control: one-shot override beats the master toggle, for one pick', () => {
+  const s = new SnapState({ master: false });
+  assert.equal(s.resolve().live, false);
+  s.setOneShot('center');
+  const r = s.resolve();
+  assert.equal(r.live, true);
+  assert.deepEqual([...r.allowed], ['center']);          // ONLY centre, even with master off
+  s.clearOneShot();
+  assert.equal(s.resolve().live, false);                 // back to master-off
+  // the NONE override suppresses snapping for the next pick
+  s.setOneShot('NONE');
+  assert.equal(s.resolve().live, false);
+});
+
+test('snap-control: pickSnap filters by allowed set and cycles with Tab', () => {
+  const cands = [
+    { snap: { p: [0, 0], type: 'end' }, d: 0.1 },
+    { snap: { p: [0, 1], type: 'mid' }, d: 0.2 },
+    { snap: { p: [1, 0], type: 'end' }, d: 0.3 },
+  ];
+  const allowed = new Set(['end']);
+  assert.equal(pickSnap(cands, allowed, 0).count, 2);                 // two 'end's eligible
+  assert.deepEqual(pickSnap(cands, allowed, 0).hit.p, [0, 0]);        // best
+  assert.deepEqual(pickSnap(cands, allowed, 1).hit.p, [1, 0]);        // Tab → next
+  assert.deepEqual(pickSnap(cands, allowed, 2).hit.p, [0, 0]);        // wraps
+  assert.equal(pickSnap(cands, new Set(['center']), 0).hit, null);   // none eligible
+  assert.equal(pickSnap([], allowed, 0).hit, null);
+});
+
+test('snap-control: override vocabulary maps osnap words to types', () => {
+  assert.equal(OVERRIDE_WORDS.cen, 'center');
+  assert.equal(OVERRIDE_WORDS.centre, 'center');
+  assert.equal(OVERRIDE_WORDS.end, 'end');
+  assert.equal(OVERRIDE_WORDS.non, 'NONE');
+  assert.equal(OVERRIDE_WORDS.banana, undefined);
+});
+
+test('snap: queryAll returns all candidates within tol, best-first', () => {
+  const idx = new SnapIndex([
+    { p: [0, 0], type: 'mid' }, { p: [0, 0], type: 'end' }, { p: [0.5, 0], type: 'node' },
+  ]);
+  const all = idx.queryAll([0, 0], 1);
+  assert.equal(all.length, 3);
+  assert.equal(all[0].snap.type, 'end');                 // higher priority than mid at same point
+  assert.equal(all[1].snap.type, 'node');                // node (pri 4) before mid (pri 2)
+});

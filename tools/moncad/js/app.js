@@ -9,13 +9,13 @@ import { Renderer } from './renderer.js';
 import { Overlay } from './overlay.js';
 import { CommandRegistry } from './commands.js';
 import { sceneFromDxf } from './scene.js';
-import { makeToolbar, makePalette, makeCommandLine } from './surfaces.js';
+import { makeToolbar, makePalette, makeCommandLine, makeSnapChips } from './surfaces.js';
 import { SnapIndex } from './snap.js';
 import { Model } from './model.js';
 import { TOOLS } from './tools.js';
 import { parsePoint } from './input.js';
+import { SnapState, pickSnap, SNAP_TYPES, SNAP_LABELS, OVERRIDE_WORDS } from './snap-control.js';
 
-const SNAP_PX = 12;   // snap pickup radius, in CSS pixels
 import { makeFrame, toWorld } from '@gcu/frame';
 import { read, write, explode } from '@gcu/dxf';
 
@@ -63,7 +63,8 @@ function boot() {
   let snapIndex = new SnapIndex([]);
   let activeTool = null;
   let lastMouse = null;  // last cursor position (device px) — anchors a typed-point's rubber-band
-  const snapOn = true;   // slice 3 makes this a real per-type snap-control state
+  let cycleIdx = 0;      // Tab-cycle index into the eligible snap candidates at the cursor
+  const snap = loadSnap();   // the SnapState: master + running types + aperture + one-shot
 
   let pending = false;
   const render = () => {
@@ -144,15 +145,20 @@ function boot() {
   function endTool() { activeTool = null; overlay.setRubber(null); refreshPrompt(); cmdline.blur(); render(); }
   function cancelTool() { if (activeTool) activeTool.cancel(); }   // → onDone → endTool
 
-  // the local point under the cursor, snapped to the nearest target within the aperture
+  // the local point under the cursor, snapped per the SnapState (master / running types /
+  // one-shot override), with Tab cycling the eligible candidates. count drives the ⇥ hint.
   function snapAt(s) {
     const local = view.toWorld(s);
-    const hit = snapOn ? snapIndex.query(local, SNAP_PX * view.dpr / view.scale) : null;
-    return { local: hit ? hit.p : local, hit };
+    const { live, allowed } = snap.resolve();
+    if (!live) return { local, hit: null, count: 0 };
+    const cands = snapIndex.queryAll(local, snap.aperture * view.dpr / view.scale);
+    const { hit, count } = pickSnap(cands, allowed, cycleIdx);
+    return { local: hit ? hit.p : local, hit, count };
   }
   function placePoint(s) {
     const { local } = snapAt(s);
     activeTool.point(local);          // may auto-finish (line/circle) → endTool nulls activeTool
+    consumeOneShot();
     refreshPrompt();
     if (activeTool) { updateRubber(s); cmdline.focus(); }
     render();
@@ -173,10 +179,12 @@ function boot() {
     const t = String(text).trim();
     if (activeTool) {
       if (t === '') { activeTool.finish(); return; }                                  // Enter on empty → finish
+      const ov = OVERRIDE_WORDS[t.toLowerCase()];                                     // one-shot snap override (cen / end / non …)
+      if (ov !== undefined) { snap.setOneShot(ov); setStatus(`snap once: ${t.toLowerCase()}`); refreshPrompt(); afterTypedPoint(); return; }
       if (activeTool.text && activeTool.text(t)) { refreshPrompt(); afterTypedPoint(); return; }   // tool scalar (circle radius)
       if (activeTool.keyword && activeTool.keyword(t.toLowerCase())) { refreshPrompt(); afterTypedPoint(); return; }
       const r = parsePoint(t, activeTool.last(), frame);                              // a coordinate
-      if (r.ok) { activeTool.point(r.local); refreshPrompt(); afterTypedPoint(); }
+      if (r.ok) { activeTool.point(r.local); consumeOneShot(); refreshPrompt(); afterTypedPoint(); }
       else setStatus(r.error);
       if (activeTool) cmdline.focus();
       return;
@@ -189,6 +197,22 @@ function boot() {
   function cmdCancel() { if (activeTool) cancelTool(); else cmdline.blur(); }
   // refresh the rubber-band + render after a typed point (no mouse move to trigger it)
   function afterTypedPoint() { if (activeTool) { updateRubber(lastMouse); cmdline.focus(); } render(); }
+
+  // ── snap-control (SPEC §7): master, per-type chips, one-shot override, cycle ──────
+  function loadSnap() { try { return new SnapState(JSON.parse(localStorage.getItem('moncad.snap')) || {}); } catch { return new SnapState(); } }
+  function persistSnap() { try { localStorage.setItem('moncad.snap', JSON.stringify(snap.serialize())); } catch { /* networkless / private mode: just don't persist */ } }
+  function afterSnapChange() { persistSnap(); snapChips.refresh(); if (lastMouse) { readout(lastMouse, true); if (activeTool) updateRubber(lastMouse); } render(); }
+  function toggleMaster() { snap.toggleMaster(); cycleIdx = 0; afterSnapChange(); }
+  function toggleType(t) { snap.toggleType(t); cycleIdx = 0; afterSnapChange(); }
+  function setAperture(px) { snap.setAperture(px); afterSnapChange(); }
+  function cycleSnap() { cycleIdx++; if (lastMouse) { readout(lastMouse, true); if (activeTool) updateRubber(lastMouse); render(); } }
+  function consumeOneShot() { if (snap.oneShot !== null) { snap.clearOneShot(); snapChips.refresh(); } }
+  // F3 / Tab routed from the command line through the same registry the chips + keys use
+  function commandLineKey(e) {
+    if (e.key === 'F3') { cmds.execute('snap.toggle', ctx); return true; }
+    if (e.key === 'Tab') { cmds.execute('snap.cycle', ctx); return true; }
+    return false;
+  }
 
   // ── the spine: commands, then the surfaces that view them ───────────────────────
   let palette;
@@ -208,9 +232,18 @@ function boot() {
     { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); render(); } },
     { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
     { id: 'view.palette', title: 'Command Palette', category: 'View', icon: '⌘', keys: 'ctrl+p', run: () => palette.toggle() },
+    { id: 'snap.toggle', title: 'Snapping (master)', category: 'Snap', keys: 'f3', run: () => toggleMaster() },
+    { id: 'snap.end', title: 'Snap: Endpoint', category: 'Snap', alias: ['end', 'endp'], run: () => toggleType('end') },
+    { id: 'snap.mid', title: 'Snap: Midpoint', category: 'Snap', alias: ['mid'], run: () => toggleType('mid') },
+    { id: 'snap.center', title: 'Snap: Centre', category: 'Snap', alias: ['cen', 'centre'], run: () => toggleType('center') },
+    { id: 'snap.node', title: 'Snap: Node', category: 'Snap', alias: ['nod'], run: () => toggleType('node') },
+    { id: 'snap.cycle', title: 'Cycle Snap Candidate', category: 'Snap', keys: 'tab', run: () => cycleSnap() },
+    { id: 'snap.apertureUp', title: 'Snap Aperture +', category: 'Snap', keys: ']', run: () => setAperture(snap.aperture + 2) },
+    { id: 'snap.apertureDown', title: 'Snap Aperture −', category: 'Snap', keys: '[', run: () => setAperture(snap.aperture - 2) },
   ]);
   palette = makePalette(cmds, ctx, { root: $('#palette'), input: $('#palInput'), list: $('#palList') });
-  const cmdline = makeCommandLine({ input: $('#cmdInput'), prompt: $('#cmdPrompt') }, { onSubmit: cmdSubmit, onCancel: cmdCancel });
+  const cmdline = makeCommandLine({ input: $('#cmdInput'), prompt: $('#cmdPrompt') }, { onSubmit: cmdSubmit, onCancel: cmdCancel, onKey: commandLineKey });
+  const snapChips = makeSnapChips(cmds, ctx, $('#snapchips'), snap, SNAP_TYPES, SNAP_LABELS);
   const toolbar = makeToolbar(cmds, ctx, $('#toolbar'),
     ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
 
@@ -239,7 +272,7 @@ function boot() {
   olCanvas.addEventListener('contextmenu', (e) => e.preventDefault());   // right-click is moncad's (the context-menu surface), not the browser's
   window.addEventListener('mouseup', () => { dragging = false; olCanvas.style.cursor = 'none'; });
   olCanvas.addEventListener('mousemove', (e) => {
-    const s = devicePt(e); lastMouse = s;
+    const s = devicePt(e); lastMouse = s; cycleIdx = 0;   // a new position restarts Tab-cycle from the best candidate
     if (dragging) { view.panBy(s[0] - last[0], s[1] - last[1]); last = s; }
     overlay.setCursor(s); readout(s, !dragging);
     if (activeTool && !dragging) updateRubber(s);
@@ -249,14 +282,14 @@ function boot() {
   olCanvas.addEventListener('wheel', (e) => { e.preventDefault(); view.zoomAt(devicePt(e), e.deltaY < 0 ? 1.1 : 1 / 1.1); readout(devicePt(e)); if (activeTool) updateRubber(devicePt(e)); render(); }, { passive: false });
 
   // the instrument panel: LOCAL math, WORLD (UTM) display — the precision point made visible.
+  // The snap glyph + type come from the SnapState-resolved pick; ⇥ flags more candidates.
   function readout(s, snapEval = true) {
-    if (!frame) return;
-    const local = view.toWorld(s);
-    const hit = (snapEval && snapOn) ? snapIndex.query(local, SNAP_PX * view.dpr / view.scale) : null;
-    overlay.setSnap(hit ? view.toScreen(hit.p) : null, hit && hit.type);
-    const world = toWorld(hit ? hit.p : local, frame);
+    if (!frame || !s) return;
+    const r = snapEval ? snapAt(s) : { local: view.toWorld(s), hit: null, count: 0 };
+    overlay.setSnap(r.hit ? view.toScreen(r.hit.p) : null, r.hit && r.hit.type);
+    const world = toWorld(r.local, frame);
     $('#coords').textContent = `${world[0].toFixed(2)}  ${world[1].toFixed(2)}`;
-    $('#snap').textContent = hit ? hit.type : '';
+    $('#snap').textContent = r.hit ? (r.hit.type + (r.count > 1 ? ' ⇥' : '')) : '';
     $('#zoom').textContent = `1 px ≈ ${(view.dpr / view.scale).toFixed(3)} ${frame.units}`;
   }
 

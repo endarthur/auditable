@@ -34,6 +34,7 @@ export function makeCommandLine(els, h) {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); const v = input.value; input.value = ''; h.onSubmit(v); }
     else if (e.key === 'Escape') { e.preventDefault(); input.value = ''; h.onCancel(); }
+    else if (h.onKey && h.onKey(e)) { e.preventDefault(); }   // F3 / Tab reach the board even while the line is focused
     e.stopPropagation();      // typed keys are the command line's, not the board's shortcuts
   });
   return {
@@ -42,6 +43,40 @@ export function makeCommandLine(els, h) {
     clear: () => { input.value = ''; },
     setPrompt: (t) => { prompt.textContent = t; },
   };
+}
+
+// The snap-control chips (SPEC §7): a row of status-bar toggles for the master switch +
+// each running snap type, right where you already read the snap state. They're a surface
+// over the same registry — clicking a chip runs `snap.toggle` / `snap.<type>`, the
+// identical command F3 / the palette fire — so the chip and the keystroke can't drift.
+// refresh() reflects the live SnapState (on = info accent, off = dim, master-off = muted).
+export function makeSnapChips(reg, ctx, mount, snap, types, labels) {
+  mount.innerHTML = '';
+  const chips = [];
+  const master = document.createElement('button');
+  master.className = 'chip chip-master'; master.textContent = 'SNAP';
+  const mk = reg.keyFor('snap.toggle');
+  master.title = 'Master snap toggle' + (mk ? ` (${mk.toUpperCase()})` : '');
+  master.addEventListener('click', () => reg.execute('snap.toggle', ctx));
+  mount.appendChild(master); chips.push({ kind: 'master', el: master });
+  for (const t of types) {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = labels[t];
+    b.title = reg.get('snap.' + t)?.title || t;
+    b.addEventListener('click', () => reg.execute('snap.' + t, ctx));
+    mount.appendChild(b); chips.push({ kind: t, el: b });
+  }
+  const refresh = () => {
+    master.classList.toggle('off', !snap.master);
+    for (const c of chips) {
+      if (c.kind === 'master') continue;
+      const on = snap.master && snap.has(c.kind);
+      c.el.classList.toggle('on', on);
+      c.el.classList.toggle('off', !on);
+    }
+  };
+  refresh();
+  return { refresh };
 }
 
 export function makePalette(reg, ctx, els) {

@@ -59,7 +59,18 @@
   #footer .sep { width: 1px; height: 14px; background: var(--bd2); }
   #footer .spacer { flex: 1; }
   #footer .dim { color: var(--faint); }
-  #footer .snap { color: var(--info); margin-left: 8px; min-width: 40px; }
+  #footer .snap { color: var(--info); margin-left: 8px; min-width: 48px; }
+  /* snap chips — status-bar toggles over the snap registry commands (SPEC §7) */
+  #snapchips { display: flex; align-items: center; gap: 3px; }
+  .chip {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.5px; color: var(--faint);
+    background: transparent; border: 1px solid var(--bd2); border-radius: 3px; padding: 1px 5px; cursor: pointer;
+  }
+  .chip:hover { border-color: var(--muted); color: var(--text); }
+  .chip.on { color: var(--info); border-color: var(--info); }
+  .chip.off { color: var(--faint); border-color: var(--bd2); }
+  .chip-master { color: var(--ok); border-color: var(--bd2); }
+  .chip-master.off { color: var(--faint); text-decoration: line-through; }
   /* toolbar — friendly buttons over the command registry; tooltips teach the key */
   #topbar .toolbar { display: flex; align-items: center; gap: 4px; }
   .tb-btn { font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 9px; cursor: pointer; }
@@ -109,6 +120,8 @@
     <span class="lbl">XY</span><span id="coords" class="ro">—</span><span id="snap" class="snap"></span>
     <span class="sep"></span>
     <span id="zoom" class="ro">—</span>
+    <span class="sep"></span>
+    <span id="snapchips"></span>
     <span class="spacer"></span>
     <span id="frameInfo" class="dim"></span>
     <span class="sep"></span>
