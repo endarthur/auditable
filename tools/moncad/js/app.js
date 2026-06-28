@@ -556,6 +556,27 @@ function boot() {
     selection.clear(); derive(false); setStatus('trimmed');
   }
 
+  // ── measure: a query tool (distance + azimuth between snapped points), no entity ──
+  function startMeasure() {
+    cancelTool();
+    let p0 = null;
+    activeTool = {
+      name: 'measure',
+      get prompt() { return p0 ? 'Measure — next point (Esc to finish):' : 'Measure — first point (Esc to finish):'; },
+      point: (local) => {
+        if (!p0) { p0 = local; refreshPrompt(); return; }
+        const dx = local[0] - p0[0], dy = local[1] - p0[1], d = Math.hypot(dx, dy);
+        const az = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;   // azimuth: 0=N, 90=E, clockwise (geological)
+        setStatus(`dist ${d.toFixed(3)} ${frame.units} · azimuth ${az.toFixed(1)}° · Δ ${dx.toFixed(2)}, ${dy.toFixed(2)}`);
+        p0 = local;                                                    // chain so you can pace along a path
+      },
+      preview: (cursor) => (p0 && cursor ? { lines: [[p0, cursor]], points: [p0] } : { lines: [], points: [] }),
+      keyword: () => false, text: () => false,
+      finish: () => endTool(), cancel: () => endTool(), last: () => p0, count: () => (p0 ? 1 : 0),
+    };
+    refreshPrompt(); cmdline.focus(); render();
+  }
+
   // ── the spine: commands, then the surfaces that view them ───────────────────────
   let palette;
   const ctx = { hasDoc: true, hasSelection: false };
@@ -583,6 +604,7 @@ function boot() {
     { id: 'edit.fillet', title: 'Fillet', category: 'Modify', icon: 'Fillet', keys: 'f', alias: ['f', 'fillet'], run: () => startCorner('fillet') },
     { id: 'edit.chamfer', title: 'Chamfer', category: 'Modify', icon: 'Chamfer', alias: ['cha', 'chamfer'], run: () => startCorner('chamfer') },
     { id: 'edit.offset', title: 'Offset', category: 'Modify', icon: 'Offset', keys: 'o', alias: ['o', 'offset'], run: () => startOffset() },
+    { id: 'tool.measure', title: 'Measure', category: 'Tools', icon: 'Measure', alias: ['measure', 'dist', 'mea'], run: () => startMeasure() },
     { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => derive(true) },
     { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); zoomed(); } },
     { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); zoomed(); } },
@@ -613,7 +635,7 @@ function boot() {
   // left tool palette: the frequent draw + modify verbs (the long tail is in the menus / palette / context)
   const tools = makeToolbar(cmds, ctx, $('#tools'),
     ['draw.line', 'draw.polyline', 'draw.arc', 'draw.circle', 'draw.point', null,
-      'edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', 'edit.delete']);
+      'edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', 'edit.delete', null, 'tool.measure']);
   // menubar: GLOBAL only
   makeMenubar(cmds, ctx, $('#menubar'), [
     { label: 'File', items: ['file.new', 'file.open', 'file.save', null, 'file.demo'] },
