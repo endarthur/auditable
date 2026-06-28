@@ -60,3 +60,46 @@ export function chamfer(s1, s2, distance, pick1, pick2, tol) {
   const t1 = add(cs.C, mul(cs.u1, distance)), t2 = add(cs.C, mul(cs.u2, distance));
   return { ok: true, path: cornerPath(cs.far1, t1, t2, cs.far2, 0), tangents: [t1, t2] };
 }
+
+// ── corner ops on a single polyline (round/bevel vertex `vi` in place) ────────────
+
+// The corner at vertex vi: its two adjacent spans must be straight; returns the rays toward
+// the neighbours (with wrap for a closed path). Null if vi is an open endpoint, a span is
+// curved, or the corner is collinear/degenerate.
+function polyCorner(path, vi) {
+  const pts = path.points, n = pts.length;
+  if (!path.closed && (vi <= 0 || vi >= n - 1)) return null;
+  const pi = ((vi - 1) % n + n) % n, C = pts[vi], pv = pts[pi], nv = pts[(vi + 1) % n];
+  const bPrev = path.bulges ? (path.bulges[pi] || 0) : 0, bNext = path.bulges ? (path.bulges[vi] || 0) : 0;
+  if (bPrev || bNext) return null;
+  const u1 = unit(sub(pv, C)), u2 = unit(sub(nv, C));
+  if (!u1 || !u2) return null;
+  const theta = Math.acos(Math.max(-1, Math.min(1, dot(u1, u2))));
+  if (theta < 1e-6 || theta > Math.PI - 1e-6) return null;
+  return { C, pv, nv, u1, u2, theta };
+}
+// Replace vertex vi with [t1, t2], the new t1→t2 span carrying `bulge` (arc) or 0 (bevel).
+function spliceCorner(path, vi, t1, t2, bulge) {
+  const points = path.points.map((p) => p.slice());
+  const bulges = path.bulges ? path.bulges.slice() : new Array(path.closed ? path.points.length : path.points.length - 1).fill(0);
+  points.splice(vi, 1, t1, t2);
+  bulges.splice(vi, 0, bulge);
+  return { ...path, points, bulges };
+}
+export function filletCorner(path, vi, radius, tol) {
+  const eps = tolEps(tol), cn = polyCorner(path, vi);
+  if (!cn) return { ok: false, reason: 'not a straight corner' };
+  const dT = radius / Math.tan(cn.theta / 2);
+  if (dT > dist(cn.C, cn.pv) + eps || dT > dist(cn.C, cn.nv) + eps) return { ok: false, reason: 'radius too large' };
+  const t1 = add(cn.C, mul(cn.u1, dT)), t2 = add(cn.C, mul(cn.u2, dT));
+  const center = add(cn.C, mul(unit(add(cn.u1, cn.u2)), radius / Math.sin(cn.theta / 2)));
+  const sA = Math.atan2(t1[1] - center[1], t1[0] - center[0]), eA = Math.atan2(t2[1] - center[1], t2[0] - center[0]);
+  const ccw = ((eA - sA) % TAU + TAU) % TAU, sweep = ccw <= Math.PI ? ccw : ccw - TAU;
+  return { ok: true, path: spliceCorner(path, vi, t1, t2, Math.tan(sweep / 4)), tangents: [t1, t2], center, radius };
+}
+export function chamferCorner(path, vi, distance, tol) {
+  const eps = tolEps(tol), cn = polyCorner(path, vi);
+  if (!cn) return { ok: false, reason: 'not a straight corner' };
+  if (distance > dist(cn.C, cn.pv) + eps || distance > dist(cn.C, cn.nv) + eps) return { ok: false, reason: 'distance too large' };
+  return { ok: true, path: spliceCorner(path, vi, add(cn.C, mul(cn.u1, distance)), add(cn.C, mul(cn.u2, distance)), 0) };
+}

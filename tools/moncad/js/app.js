@@ -21,7 +21,7 @@ import { computeGrid, snapToGrid } from './grid.js';
 
 import { makeFrame, toWorld } from '@gcu/frame';
 import { read, write, explode } from '@gcu/dxf';
-import { translate, rotate, mirror, circle as rCircle, spanCurve, trim, extend, fillet, chamfer, offset, makeTolerance } from '@gcu/regula';
+import { translate, rotate, mirror, circle as rCircle, spanCurve, trim, extend, fillet, chamfer, filletCorner, chamferCorner, offset, makeTolerance } from '@gcu/regula';
 
 // ── geometry bridge: @gcu/dxf feature geometry (flat WORLD vertices) ↔ @gcu/regula ──
 const geomToPath = (g) => {
@@ -416,7 +416,8 @@ function boot() {
   function cornerHover(world) {
     const i = pickAt(world); if (i < 0) return null;
     const g = model.features[i].geometry;
-    return isStraightLine(g) ? { dim: localSegments(g, frame.origin, tessEps) } : null;
+    const ok = isStraightLine(g) || (g.kind === 'polyline' && g.vertices.length > 6);   // a candidate line or polyline-corner
+    return ok ? { dim: localSegments(g, frame.origin, tessEps) } : null;
   }
   function updateHover(s) {
     if (!activeTool || !activeTool.hover || !s) { overlay.setHighlight(null); return; }
@@ -496,11 +497,13 @@ function boot() {
     const picks = [], unit = kind === 'fillet' ? 'radius' : 'distance';
     activeTool = {
       name: kind, rawPick: true, hover: cornerHover,
-      get prompt() { return picks.length === 0 ? `${kind[0].toUpperCase() + kind.slice(1)} (${unit} ${corner[kind]}) — first line, or type ${unit}:` : 'second line:'; },
+      get prompt() { return picks.length === 0 ? `${kind[0].toUpperCase() + kind.slice(1)} (${unit} ${corner[kind]}) — pick a corner (a polyline) or two lines, or type ${unit}:` : 'second line:'; },
       point: (world) => {
         const i = pickAt(world);
         if (i < 0) { setStatus(`${kind}: nothing there`); return; }
-        if (!isStraightLine(model.features[i].geometry)) { setStatus(`${kind}: pick straight lines`); return; }
+        const g = model.features[i].geometry;
+        if (g.kind === 'polyline' && g.vertices.length > 6) { applyCornerToPolyline(kind, i, world); return; }   // a multi-vertex polyline → round/bevel the nearest corner in place
+        if (!isStraightLine(g)) { setStatus(`${kind}: pick straight lines`); return; }
         picks.push({ i, world });
         if (picks.length === 2) applyCorner(kind, picks);
       },
@@ -509,6 +512,20 @@ function boot() {
       finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
     };
     refreshPrompt(); cmdline.focus(); render();
+  }
+  const nearestVertex = (g, world) => {
+    const v = g.vertices, n = v.length / 3; let best = 0, bd = Infinity;
+    for (let k = 0; k < n; k++) { const d = Math.hypot(world[0] - v[k * 3], world[1] - v[k * 3 + 1]); if (d < bd) { bd = d; best = k; } }
+    return best;
+  };
+  function applyCornerToPolyline(kind, i, world) {
+    const g = model.features[i].geometry;
+    const extent = Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1]) || 1;
+    const op = kind === 'fillet' ? filletCorner : chamferCorner;
+    const res = op(geomToPath(g), nearestVertex(g, world), corner[kind], makeTolerance(extent));
+    if (!res.ok) { setStatus(`${kind}: ${res.reason || "can't fillet that corner"}`); endTool(); return; }
+    model.applyEdit([{ i, feature: featureFromPath(model.features[i], res.path, g.vertices[2] || 0) }]);
+    selection.clear(); derive(false); endTool(); setStatus(`${kind}ed corner`);
   }
   function applyCorner(kind, picks) {
     const [a, b] = picks;

@@ -297,3 +297,26 @@ test('extend: a curved end span grows its sweep to reach a boundary', () => {
   assert.ok(ptClose(e.path.points[1], [-10, 0]));
   assert.ok(close(e.path.bulges[0], 1));                 // quarter → semicircle bulge = tan(π/4) = 1
 });
+
+// ── polyline-corner fillet / chamfer (round/bevel a vertex in place) ──────────────
+import { filletCorner, chamferCorner } from '../ext/regula/src/main.js';
+
+test('filletCorner: rounds a polyline vertex in place (tangent arc spliced)', () => {
+  const f = filletCorner(P([[0, 0], [10, 0], [10, 10]]), 1, 2, 1e-9);   // corner at (10,0)
+  assert.equal(f.ok, true);
+  assert.deepEqual(f.path.points.map((p) => [Math.round(p[0]), Math.round(p[1])]), [[0, 0], [8, 0], [10, 2], [10, 10]]);
+  assert.ok(close(f.path.bulges[1], Math.tan(Math.PI / 8)));            // the new t1→t2 span is the fillet arc
+  assert.deepEqual([f.path.bulges[0], f.path.bulges[2]], [0, 0]);       // neighbours stay straight
+});
+
+test('chamferCorner: bevels a polyline vertex in place', () => {
+  const c = chamferCorner(P([[0, 0], [10, 0], [10, 10]]), 1, 3, 1e-9);
+  assert.equal(c.ok, true);
+  assert.deepEqual(c.path.points, [[0, 0], [7, 0], [10, 3], [10, 10]]);
+  assert.deepEqual([...c.path.bulges], [0, 0, 0]);
+});
+
+test('filletCorner: refuses an endpoint / a curved-adjacent corner / too-large radius', () => {
+  assert.equal(filletCorner(P([[0, 0], [10, 0], [10, 10]]), 0, 2, 1e-9).ok, false);    // open endpoint
+  assert.equal(filletCorner(P([[0, 0], [10, 0], [10, 10]]), 1, 50, 1e-9).ok, false);   // radius too large
+});
