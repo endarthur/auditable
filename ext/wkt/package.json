@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/wkt",
+  "version": "0.1.0",
+  "description": "OGC Simple-Features Well-Known Text (WKT) reader/writer plus EWKT SRID, over a GeoJSON-shaped geometry. The GIS/DB-native interchange codec for the GCU geometry stack — the data-bridge serialization complementing @gcu/dxf (the CAD-native one). Zero-dependency, total-ish. Handles Point/LineString/Polygon/Multi*/GeometryCollection, Z, EMPTY, and both MULTIPOINT spellings.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["wkt", "ewkt", "ogc", "simple-features", "geojson", "gis", "geometry", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gentropic/auditable.git",
+    "directory": "ext/wkt"
+  },
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/wkt",
+  "bugs": {
+    "url": "https://github.com/gentropic/auditable/issues"
+  }
+}
