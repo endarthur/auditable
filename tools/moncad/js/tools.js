@@ -109,6 +109,49 @@ export function polylineTool({ frame, onCommit, onDone }) {
   return tool;
 }
 
+// 3-point arc: the bulge of the arc start→end that passes through `mid` (0 if collinear).
+// Circumcentre, then pick the sweep direction that contains the middle point.
+function _arc3Bulge(p0, mid, p2) {
+  const ax = p0[0], ay = p0[1], bx = mid[0], by = mid[1], cx = p2[0], cy = p2[1];
+  const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+  if (Math.abs(d) < 1e-12) return 0;
+  const a2 = ax * ax + ay * ay, b2 = bx * bx + by * by, c2 = cx * cx + cy * cy;
+  const ox = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
+  const oy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
+  const TAU = Math.PI * 2;
+  const sa = Math.atan2(ay - oy, ax - ox), ea = Math.atan2(cy - oy, cx - ox), ma = Math.atan2(by - oy, bx - ox);
+  const ccw = ((ea - sa) % TAU + TAU) % TAU, mo = ((ma - sa) % TAU + TAU) % TAU;
+  return Math.tan((mo < ccw ? ccw : ccw - TAU) / 4);   // the sweep that contains the mid point
+}
+function arcFeature(p0, p2, bulge, frame) {
+  const o = frame.origin, z = o[2] || 0;
+  const v = Float64Array.from([p0[0] + o[0], p0[1] + o[1], z, p2[0] + o[0], p2[1] + o[1], z]);
+  return { type: 'arc', geometry: { kind: 'polyline', vertices: v, bulges: Float64Array.from([bulge]), closed: false }, properties: { layer: '0' } };
+}
+
+// Standalone 3-point arc (start, a point ON the arc, end). Emits a single ARC entity.
+export function arcTool({ frame, onCommit, onDone }) {
+  const pts = [];
+  const PROMPTS = ['Specify start point:', 'Specify a point on the arc:', 'Specify end point:'];
+  const tool = {
+    name: 'arc',
+    get prompt() { return PROMPTS[pts.length] || ''; },
+    point(local) { pts.push([local[0], local[1]]); if (pts.length === 3) tool.finish(); },
+    preview(cursor) {
+      const lines = [];
+      if (pts.length === 1 && cursor) lines.push([pts[0], cursor]);
+      else if (pts.length === 2 && cursor) { let f = pts[0]; for (const q of _sampleArc(pts[0], cursor, _arc3Bulge(pts[0], pts[1], cursor))) { lines.push([f, q]); f = q; } }
+      return { lines, points: pts.slice() };
+    },
+    keyword() { return false; },
+    finish() { if (pts.length === 3) onCommit(arcFeature(pts[0], pts[2], _arc3Bulge(pts[0], pts[1], pts[2]), frame)); onDone(); },
+    cancel() { onDone(); },
+    last() { return pts.length ? pts[pts.length - 1] : null; },
+    count() { return pts.length; },
+  };
+  return tool;
+}
+
 // LOCAL endpoints → a WORLD-canonical two-vertex LINE feature.
 function lineFeature(a, b, frame) {
   const o = frame.origin, z = o[2] || 0;
@@ -212,6 +255,7 @@ export function pointTool({ frame, onCommit, onDone }) {
 export const TOOLS = {
   polyline: polylineTool,
   line: lineTool,
+  arc: arcTool,
   circle: circleTool,
   point: pointTool,
 };

@@ -566,6 +566,7 @@ function boot() {
     { id: 'file.demo', title: 'Load Demo', category: 'File', run: () => { loadModel(demoModel()); ctx.hasDoc = true; tools.refresh(); setStatus('demo model'); } },
     { id: 'draw.line', title: 'Line', category: 'Draw', icon: 'Line', keys: 'l', alias: ['l', 'line'], run: () => startTool('line') },
     { id: 'draw.polyline', title: 'Polyline', category: 'Draw', icon: 'Pline', keys: 'p', alias: ['p', 'pl', 'pline', 'polyline'], run: () => startTool('polyline') },
+    { id: 'draw.arc', title: 'Arc', category: 'Draw', icon: 'Arc', keys: 'a', alias: ['a', 'arc'], run: () => startTool('arc') },
     { id: 'draw.circle', title: 'Circle', category: 'Draw', icon: 'Circle', keys: 'c', alias: ['c', 'ci', 'circle'], run: () => startTool('circle') },
     { id: 'draw.point', title: 'Point', category: 'Draw', icon: 'Point', alias: ['po', 'point', 'node'], run: () => startTool('point') },
     { id: 'edit.undo', title: 'Undo', category: 'Edit', keys: 'ctrl+z', run: () => { if (model.undo()) { selection.clear(); afterSelect(); setStatus('undo'); } } },
@@ -611,7 +612,7 @@ function boot() {
   const EMPTY_MENU = ['edit.selectAll', null, 'view.zoomExtents', 'view.grid', null, 'file.new', 'file.open', 'file.save'];
   // left tool palette: the frequent draw + modify verbs (the long tail is in the menus / palette / context)
   const tools = makeToolbar(cmds, ctx, $('#tools'),
-    ['draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null,
+    ['draw.line', 'draw.polyline', 'draw.arc', 'draw.circle', 'draw.point', null,
       'edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', 'edit.delete']);
   // menubar: GLOBAL only
   makeMenubar(cmds, ctx, $('#menubar'), [

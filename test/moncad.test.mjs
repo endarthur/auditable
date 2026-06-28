@@ -281,7 +281,7 @@ test('tools: Undo keyword drops the last vertex', () => {
 
 // ── precision input: the AutoLISP coordinate family (SPEC §3) ──────────────────────
 import { parsePoint } from '../tools/moncad/js/input.js';
-import { lineTool, circleTool, pointTool } from '../tools/moncad/js/tools.js';
+import { lineTool, circleTool, pointTool, arcTool } from '../tools/moncad/js/tools.js';
 
 test('input: absolute x,y is WORLD → local (origin subtracted)', () => {
   const frame = { origin: [600000, 7700000, 0], units: 'm' };
@@ -659,4 +659,15 @@ test('tools: polyline arc mode draws tangent arcs (PLINE-arc gesture)', () => {
   assert.ok(b && b[0] === 0);                   // first span straight
   assert.ok(Math.abs(b[1] - Math.tan(Math.PI / 8)) < 1e-9);   // tangent-arc bulge = tan(45°/2)
   assert.equal(t.keyword('l'), true);          // and back to line mode works
+});
+
+test('tools: arc tool — 3-point arc passes through the middle point', () => {
+  const frame = { origin: [0, 0, 0], units: 'm' };
+  let committed = null;
+  const t = arcTool({ frame, onCommit: (f) => (committed = f), onDone: () => {} });
+  t.point([10, 0]); t.point([0, 10]); t.point([-10, 0]);     // top semicircle through (0,10)
+  assert.equal(committed.type, 'arc');
+  assert.ok(Math.abs(committed.geometry.bulges[0] - 1) < 1e-9);   // semicircle bulge = tan(π/4) = 1
+  const v = committed.geometry.vertices;
+  assert.deepEqual([v[0], v[1], v[3], v[4]], [10, 0, -10, 0]);    // start, end = 1st, 3rd picks
 });
