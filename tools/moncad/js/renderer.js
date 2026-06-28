@@ -97,9 +97,10 @@ export class Renderer {
     this.point = program(gl, POINT_VS, POINT_FS);
     // line instance: a_seg(vec4)@0, a_width(float)@16, a_color(vec4)@20 — stride 36
     this.lineBatch = makeBatch(gl, LINE_QUAD, 36, [[1, 4, 0], [2, 1, 16], [3, 4, 20]]);
+    this.gridBatch = makeBatch(gl, LINE_QUAD, 36, [[1, 4, 0], [2, 1, 16], [3, 4, 20]]);   // reference grid, drawn first
     // point instance: a_pos(vec2)@0, a_size(float)@8, a_color(vec4)@12 — stride 28
     this.pointBatch = makeBatch(gl, POINT_QUAD, 28, [[1, 2, 0], [2, 1, 8], [3, 4, 12]]);
-    this.nLines = 0; this.nPoints = 0;
+    this.nLines = 0; this.nPoints = 0; this.nGrid = 0;
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   }
@@ -110,6 +111,14 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBatch.inst);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
     this.nLines = (data.length / 9) | 0;
+  }
+
+  // data: Float32Array, 9 floats per segment (same as lines) — the reference grid
+  setGrid(data) {
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.gridBatch.inst);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+    this.nGrid = (data.length / 9) | 0;
   }
 
   // data: Float32Array, 7 floats per point [cx,cy, size, r,g,b,a]
@@ -131,6 +140,7 @@ export class Renderer {
       gl.uniform2f(prog.u.center, u.center[0], u.center[1]);
       gl.uniform1f(prog.u.scale, u.scale);
     };
+    if (this.nGrid) { setU(this.line); gl.bindVertexArray(this.gridBatch.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.nGrid); }   // behind geometry
     if (this.nLines) { setU(this.line); gl.bindVertexArray(this.lineBatch.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.nLines); }
     if (this.nPoints) { setU(this.point); gl.bindVertexArray(this.pointBatch.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.nPoints); }
     gl.bindVertexArray(null);

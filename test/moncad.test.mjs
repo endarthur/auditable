@@ -528,3 +528,28 @@ test('edit-ops: mirror reflects across the picked axis', () => {
   const v = result.edit[0].feature.geometry.vertices;
   assert.deepEqual([v[1], v[4]], [-2, -2]);
 });
+
+// ── reference grid + grid-snap (deferred furniture) ───────────────────────────────
+import { niceStep, computeGrid, snapToGrid } from '../tools/moncad/js/grid.js';
+
+test('grid: niceStep rounds to 1/2/5×10ⁿ', () => {
+  assert.equal(niceStep(1), 1);
+  assert.equal(niceStep(2.9), 2);
+  assert.equal(niceStep(6), 5);
+  assert.equal(niceStep(8), 10);
+  assert.equal(niceStep(73), 100);
+  assert.equal(niceStep(0.35), 0.5);
+});
+
+test('grid: computeGrid picks a screen-relative step and emits ruled lines', () => {
+  const v = new Viewport({ width: 700, height: 500, center: [0, 0], scale: 7, dpr: 1 });   // 70/7 = 10
+  const g = computeGrid(v);
+  assert.equal(g.step, 10);
+  assert.ok(g.lines.length > 0 && g.lines.length % 9 === 0);
+});
+
+test('grid: snapToGrid returns the nearest node within tolerance, else null', () => {
+  assert.deepEqual(snapToGrid([2, 3], 10, 4), [0, 0]);
+  assert.equal(snapToGrid([2, 3], 10, 2), null);
+  assert.deepEqual(snapToGrid([12, 18], 10, 3), [10, 20]);
+});

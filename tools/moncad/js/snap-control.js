@@ -26,10 +26,12 @@ export class SnapState {
     this.master = init.master !== false;                  // default on
     this.types = new Set(init.types || SNAP_TYPES);       // running set
     this.aperture = init.aperture || 12;                  // pickup radius, CSS px
+    this.gridSnap = !!init.gridSnap;                       // grid snap is a SEPARATE mode (§7), off by default
     this.oneShot = null;                                  // next-pick override (a type, 'NONE', or null); not persisted
   }
 
   toggleMaster() { this.master = !this.master; return this.master; }
+  toggleGrid() { this.gridSnap = !this.gridSnap; return this.gridSnap; }
   toggleType(t) { if (this.types.has(t)) this.types.delete(t); else this.types.add(t); return this.types.has(t); }
   has(t) { return this.types.has(t); }
   setOneShot(t) { this.oneShot = t; }
@@ -47,7 +49,7 @@ export class SnapState {
     return { live: true, allowed: new Set(this.types) };
   }
 
-  serialize() { return { master: this.master, types: [...this.types], aperture: this.aperture }; }
+  serialize() { return { master: this.master, types: [...this.types], aperture: this.aperture, gridSnap: this.gridSnap }; }
 }
 
 // Pick from snap.js queryAll() candidates: filter by the allowed type set, then take the

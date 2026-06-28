@@ -69,6 +69,7 @@ export class Overlay {
     if (t === 'mid') { ctx.moveTo(x, y - s); ctx.lineTo(x + s, y + s); ctx.lineTo(x - s, y + s); ctx.closePath(); }
     else if (t === 'center') ctx.arc(x, y, s, 0, Math.PI * 2);
     else if (t === 'node') { ctx.moveTo(x - s, y - s); ctx.lineTo(x + s, y + s); ctx.moveTo(x + s, y - s); ctx.lineTo(x - s, y + s); }
+    else if (t === 'grid') { ctx.moveTo(x - s, y); ctx.lineTo(x + s, y); ctx.moveTo(x, y - s); ctx.lineTo(x, y + s); }   // grid = +
     else ctx.rect(x - s, y - s, 2 * s, 2 * s);   // 'end' (default)
     ctx.stroke();
   }

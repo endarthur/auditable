@@ -66,11 +66,15 @@ export function makeSnapChips(reg, ctx, mount, snap, types, labels) {
     b.addEventListener('click', () => reg.execute('snap.' + t, ctx));
     mount.appendChild(b); chips.push({ kind: t, el: b });
   }
+  const gridChip = document.createElement('button');     // grid snap — a separate mode (§7), not in the running set
+  gridChip.className = 'chip'; gridChip.textContent = 'GRID'; gridChip.title = 'Grid snap';
+  gridChip.addEventListener('click', () => reg.execute('snap.grid', ctx));
+  mount.appendChild(gridChip); chips.push({ kind: 'grid', el: gridChip });
   const refresh = () => {
     master.classList.toggle('off', !snap.master);
     for (const c of chips) {
       if (c.kind === 'master') continue;
-      const on = snap.master && snap.has(c.kind);
+      const on = c.kind === 'grid' ? snap.gridSnap : (snap.master && snap.has(c.kind));
       c.el.classList.toggle('on', on);
       c.el.classList.toggle('off', !on);
     }

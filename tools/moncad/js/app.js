@@ -17,6 +17,7 @@ import { parsePoint } from './input.js';
 import { SnapState, pickSnap, SNAP_TYPES, SNAP_LABELS, OVERRIDE_WORDS } from './snap-control.js';
 import { pickFeature, pickWindow } from './pick.js';
 import { makeEditTool } from './edit-ops.js';
+import { computeGrid, snapToGrid } from './grid.js';
 
 import { makeFrame, toWorld } from '@gcu/frame';
 import { read, write, explode } from '@gcu/dxf';
@@ -105,12 +106,17 @@ function boot() {
   const SELECT_PX = 8;       // pick aperture, CSS px
   const corner = { fillet: 10, chamfer: 10 };   // current fillet radius / chamfer distance
   let offsetDist = 5;        // current offset distance (side comes from which side you click)
+  let gridOn = true, gridStep = 1;   // reference grid (View → Grid, g); gridStep feeds grid-snap
+  const EMPTY = new Float32Array(0);
+
+  // recompute the adaptive grid for the current view (zoom-dependent spacing)
+  function applyGrid() { if (gridOn) { const g = computeGrid(view); renderer.setGrid(g.lines); gridStep = g.step; } else renderer.setGrid(EMPTY); }
 
   let pending = false;
   const render = () => {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(() => { pending = false; renderer.draw(view); overlay.draw(view); });
+    requestAnimationFrame(() => { pending = false; applyGrid(); renderer.draw(view); overlay.draw(view); });
   };
 
   // Push the model's derived view (renderer buffers + snap index) — the canonical→derived
@@ -190,10 +196,11 @@ function boot() {
   // one-shot override), with Tab cycling the eligible candidates. count drives the ⇥ hint.
   function snapAt(s) {
     const local = view.toWorld(s);
+    const tol = snap.aperture * view.dpr / view.scale;
     const { live, allowed } = snap.resolve();
-    if (!live) return { local, hit: null, count: 0 };
-    const cands = snapIndex.queryAll(local, snap.aperture * view.dpr / view.scale);
-    const { hit, count } = pickSnap(cands, allowed, cycleIdx);
+    let hit = null, count = 0;
+    if (live) { const r = pickSnap(snapIndex.queryAll(local, tol), allowed, cycleIdx); hit = r.hit; count = r.count; }
+    if (!hit && snap.gridSnap) { const gp = snapToGrid(local, gridStep, tol); if (gp) hit = { p: gp, type: 'grid' }; }   // grid = a separate mode, object snaps win
     return { local: hit ? hit.p : local, hit, count };
   }
   function placePoint(s) {
@@ -445,11 +452,13 @@ function boot() {
     { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); render(); } },
     { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
     { id: 'view.palette', title: 'Command Palette', category: 'View', icon: '⌘', keys: 'ctrl+p', run: () => palette.toggle() },
+    { id: 'view.grid', title: 'Reference Grid', category: 'View', keys: 'g', alias: ['grid'], run: () => { gridOn = !gridOn; setStatus(gridOn ? 'grid on' : 'grid off'); render(); } },
     { id: 'snap.toggle', title: 'Snapping (master)', category: 'Snap', keys: 'f3', run: () => toggleMaster() },
     { id: 'snap.end', title: 'Snap: Endpoint', category: 'Snap', alias: ['end', 'endp'], run: () => toggleType('end') },
     { id: 'snap.mid', title: 'Snap: Midpoint', category: 'Snap', alias: ['mid'], run: () => toggleType('mid') },
     { id: 'snap.center', title: 'Snap: Centre', category: 'Snap', alias: ['cen', 'centre'], run: () => toggleType('center') },
     { id: 'snap.node', title: 'Snap: Node', category: 'Snap', alias: ['nod'], run: () => toggleType('node') },
+    { id: 'snap.grid', title: 'Snap: Grid', category: 'Snap', alias: ['gridsnap'], run: () => { snap.toggleGrid(); afterSnapChange(); } },
     { id: 'snap.cycle', title: 'Cycle Snap Candidate', category: 'Snap', keys: 'tab', run: () => cycleSnap() },
     { id: 'snap.apertureUp', title: 'Snap Aperture +', category: 'Snap', keys: ']', run: () => setAperture(snap.aperture + 2) },
     { id: 'snap.apertureDown', title: 'Snap Aperture −', category: 'Snap', keys: '[', run: () => setAperture(snap.aperture - 2) },
