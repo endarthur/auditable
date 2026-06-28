@@ -542,6 +542,15 @@ function parseText(rec) {
   return mkFeature('text', { kind: 'text', position: [val(p, 10, 0), val(p, 20, 0), val(p, 30, 0)], height: val(p, 40, 1), rotation: val(p, 50, 0), value: str }, readCommon(p));
 }
 
+// ATTDEF: an attribute-definition template inside a block — TEXT plus tag (2), prompt (3)
+// and a default value (1). The per-instance value is an ATTRIB on the INSERT (parseInsert).
+function parseAttdef(rec) {
+  const p = rec.pairs;
+  let value = '', tag = '', prompt = '';
+  for (const { code, value: v } of p) { if (code === 1) value = v; else if (code === 2) tag = v; else if (code === 3) prompt = v; }
+  return mkFeature('attdef', { kind: 'attdef', position: [val(p, 10, 0), val(p, 20, 0), val(p, 30, 0)], height: val(p, 40, 1), rotation: val(p, 50, 0), tag, prompt, value }, readCommon(p));
+}
+
 function parse3dface(rec) {
   const p = rec.pairs;
   const c = [[val(p, 10, 0), val(p, 20, 0), val(p, 30, 0)], [val(p, 11, 0), val(p, 21, 0), val(p, 31, 0)],
@@ -651,6 +660,7 @@ function assembleEntities(records, warnings) {
         case 'ARC': features.push(parseArc(rec)); break;
         case 'POINT': features.push(parsePoint(rec)); break;
         case 'TEXT': features.push(parseText(rec)); break;
+        case 'ATTDEF': features.push(parseAttdef(rec)); break;
         case '3DFACE': features.push(parse3dface(rec)); break;
         case 'POLYLINE': { const r = parsePolyline(rec, records, i, warnings); features.push(r.feature); i = r.next - 1; break; }
         case 'INSERT': { const r = parseInsert(rec, records, i); features.push(r.feature); i = r.next - 1; break; }
@@ -682,7 +692,7 @@ function computeBounds(features) {
     if (!g) continue;
     if (g.kind === 'polyline' || g.kind === 'face') for (let i = 0; i < g.vertices.length; i += 3) ext(g.vertices[i], g.vertices[i + 1], g.vertices[i + 2]);
     else if (g.kind === 'circle') { ext(g.center[0] - g.radius, g.center[1] - g.radius, g.center[2]); ext(g.center[0] + g.radius, g.center[1] + g.radius, g.center[2]); }
-    else if (g.kind === 'point' || g.kind === 'text') ext(...g.position);
+    else if (g.kind === 'point' || g.kind === 'text' || g.kind === 'attdef') ext(...g.position);
     else if (g.kind === 'insert') ext(...g.transform.position);
   }
   return min[0] === Infinity ? null : { min, max };
@@ -839,6 +849,14 @@ function write(doc, opts = {}) {
         push(0, 'TEXT'); emitCommon(props);
         push(10, p[0]); push(20, p[1]); push(30, p[2]); push(40, g.height || 1); push(1, g.value || '');
         if (g.rotation) push(50, g.rotation);
+        emitXdata(props); break;
+      }
+      case 'attdef': {
+        const p = tw(g.position);
+        push(0, 'ATTDEF'); emitCommon(props);
+        push(10, p[0]); push(20, p[1]); push(30, p[2]); push(40, g.height || 1);
+        push(1, g.value || ''); push(2, g.tag || ''); push(3, g.prompt || g.tag || '');
+        if (g.rotation) push(50, g.rotation); push(70, 0);
         emitXdata(props); break;
       }
       case 'face': {

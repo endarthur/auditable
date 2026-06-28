@@ -517,3 +517,22 @@ test('TEXT round-trips (value, height, rotation, layer, position)', () => {
   assert.equal(t2.geometry.value, 'DH-01');
   assert.equal(t2.geometry.height, 2.5);
 });
+
+test('ATTDEF (in a block) + ATTRIB (on an insert) round-trip', () => {
+  const dxf = ['0', 'SECTION', '2', 'BLOCKS', '0', 'BLOCK', '2', 'collar', '10', '0', '20', '0', '30', '0',
+    '0', 'CIRCLE', '8', '0', '10', '0', '20', '0', '30', '0', '40', '4',
+    '0', 'ATTDEF', '8', '0', '10', '0', '20', '6', '30', '0', '40', '2.5', '1', '', '2', 'HOLEID', '3', 'Hole ID', '70', '0',
+    '0', 'ENDBLK', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'INSERT', '66', '1', '2', 'collar', '10', '100', '20', '200', '30', '0', '41', '1', '42', '1', '43', '1', '50', '0',
+    '0', 'ATTRIB', '8', '0', '10', '100', '20', '206', '30', '0', '40', '2.5', '1', 'DH-01', '2', 'HOLEID', '70', '0',
+    '0', 'SEQEND', '0', 'ENDSEC', '0', 'EOF', ''].join('\n');
+  const doc = read(dxf);
+  const ad = doc.blocks.collar.features.find((f) => f.type === 'attdef');
+  assert.equal(ad.geometry.tag, 'HOLEID');
+  assert.equal(ad.geometry.prompt, 'Hole ID');
+  assert.equal(doc.features.find((f) => f.type === 'insert').properties.attribs[0].value, 'DH-01');
+  // round-trip
+  const doc2 = read(dxfWrite(doc));
+  assert.equal(doc2.blocks.collar.features.find((f) => f.type === 'attdef').geometry.tag, 'HOLEID');
+  assert.equal(doc2.features.find((f) => f.type === 'insert').properties.attribs[0].value, 'DH-01');
+});
