@@ -9,3 +9,7 @@
 // them — designed against moncad as the real consumer. See spec_inbox/CAD/SPEC-curves.md.
 
 export * from './transform.js';
+export * from './tolerance.js';
+export * from './arc.js';
+export * from './intersect.js';
+export * from './nearest.js';

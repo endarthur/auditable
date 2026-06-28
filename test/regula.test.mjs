@@ -70,3 +70,83 @@ test('round-trip: rotate then rotate back recovers the geometry', () => {
   xy(back).forEach((p, i) => { assert.ok(near(p[0], xy(g)[i][0]) && near(p[1], xy(g)[i][1])); });
   assert.deepEqual([...back.bulges], [0.2, -0.4]);
 });
+
+// ── the curve kernel (E2.1): arc/bulge, intersection, nearest, tolerance ───────────
+import {
+  segment, line, ray, circle, arc, spanCurve, arcFromBulge, bulgeFromArc, angleInSweep, arcPointAt,
+  intersect, closestPointOn, makeTolerance, tolEps,
+} from '../ext/regula/src/main.js';
+
+const close = (a, b, e = 1e-6) => Math.abs(a - b) < e;
+const ptClose = (p, q, e = 1e-6) => close(p[0], q[0], e) && close(p[1], q[1], e);
+const has = (pts, q) => pts.some((p) => ptClose(p, q, 1e-6));
+
+test('arc: spanCurve bridges a bulge span → arc (curved) or segment (straight)', () => {
+  assert.equal(spanCurve([0, 0], [10, 0], 0).kind, 'segment');
+  const a = spanCurve([0, 0], [10, 0], 1);          // bulge 1 → semicircle (θ=π)
+  assert.equal(a.kind, 'arc');
+  assert.ok(ptClose(a.c, [5, 0]) && close(a.r, 5));
+  // bulge ↔ arc round-trip
+  const d = arcFromBulge([0, 0], [10, 0], 0.5);
+  const back = bulgeFromArc(d.center, d.radius, d.startAngle, d.endAngle);
+  assert.ok(close(back.bulge, 0.5) && ptClose(back.start, [0, 0]) && ptClose(back.end, [10, 0]));
+});
+
+test('intersect: segment × segment — cross, miss (out of range), parallel', () => {
+  assert.ok(has(intersect(segment([0, 0], [10, 0]), segment([5, -5], [5, 5]), 1e-9), [5, 0]));
+  assert.equal(intersect(segment([0, 0], [10, 0]), segment([20, -5], [20, 5]), 1e-9).length, 0);   // x=20 off seg1
+  assert.equal(intersect(segment([0, 0], [10, 0]), segment([0, 1], [10, 1]), 1e-9).length, 0);     // parallel
+});
+
+test('intersect: a LINE is infinite where a segment is not', () => {
+  // the support line crosses x=20, but the segment does not — line yes, segment no
+  assert.equal(intersect(line([0, 0], [10, 0]), segment([20, -5], [20, 5]), 1e-9).length, 1);
+  assert.equal(intersect(segment([0, 0], [10, 0]), segment([20, -5], [20, 5]), 1e-9).length, 0);
+});
+
+test('intersect: segment × circle — two hits, and the off-segment hit is dropped', () => {
+  const two = intersect(segment([-10, 0], [10, 0]), circle([0, 0], 5), 1e-9);
+  assert.equal(two.length, 2); assert.ok(has(two, [5, 0]) && has(two, [-5, 0]));
+  const one = intersect(segment([0, 0], [10, 0]), circle([0, 0], 5), 1e-9);   // segment starts at centre
+  assert.equal(one.length, 1); assert.ok(has(one, [5, 0]));
+});
+
+test('intersect: circle × circle — two, tangent (one), separate (none)', () => {
+  const two = intersect(circle([0, 0], 5), circle([8, 0], 5), 1e-9);
+  assert.equal(two.length, 2); assert.ok(has(two, [4, 3]) && has(two, [4, -3]));
+  const tan = intersect(circle([0, 0], 5), circle([10, 0], 5), 1e-6);
+  assert.equal(tan.length, 1); assert.ok(has(tan, [5, 0]));
+  assert.equal(intersect(circle([0, 0], 5), circle([20, 0], 5), 1e-9).length, 0);
+  assert.equal(intersect(circle([0, 0], 5), circle([0, 0], 5), 1e-9).length, 0);   // concentric/identical
+});
+
+test('intersect: arc keeps only hits within its sweep', () => {
+  const top = arc([0, 0], 5, 0, Math.PI);                 // top half, (5,0) CCW to (-5,0)
+  const hits = intersect(segment([0, -10], [0, 10]), top, 1e-9);   // y-axis crosses circle at (0,±5)
+  assert.equal(hits.length, 1); assert.ok(has(hits, [0, 5]));      // (0,-5) is off the top arc
+});
+
+test('nearest: closestPointOn clamps the segment, rides the circle, falls to arc endpoints', () => {
+  const s = closestPointOn(segment([0, 0], [10, 0]), [5, 3]);
+  assert.ok(ptClose(s.point, [5, 0]) && close(s.dist, 3) && close(s.param, 0.5));
+  assert.ok(ptClose(closestPointOn(segment([0, 0], [10, 0]), [-5, 0]).point, [0, 0]));   // clamped to the start
+  assert.ok(ptClose(closestPointOn(circle([0, 0], 5), [10, 0]).point, [5, 0]));
+  const top = arc([0, 0], 5, 0, Math.PI);
+  assert.ok(ptClose(closestPointOn(top, [0, 10]).point, [0, 5]));     // within sweep
+  assert.ok(ptClose(closestPointOn(top, [0, -10]).point, [5, 0]));    // outside sweep → nearer endpoint
+});
+
+test('tolerance: coordinate-relative eps; tolEps coerces number / object / floor', () => {
+  const t = makeTolerance(1000, { rel: 1e-6 });
+  assert.ok(close(t.eps, 1e-3));
+  assert.equal(tolEps(0.05), 0.05);
+  assert.equal(tolEps(t), t.eps);
+  assert.ok(tolEps(undefined) > 0);          // documented floor, not a throw
+});
+
+test('arc: angleInSweep respects CCW vs CW and admits endpoints', () => {
+  assert.equal(angleInSweep(0, Math.PI, Math.PI / 2), true);      // mid of CCW top half
+  assert.equal(angleInSweep(0, Math.PI, -Math.PI / 2), false);    // bottom — not on top half
+  assert.equal(angleInSweep(0, -Math.PI, -Math.PI / 2), true);    // CW sweep covers the bottom
+  assert.ok(ptClose(arcPointAt(arc([0, 0], 5, 0, Math.PI), 0.5), [0, 5]));
+});

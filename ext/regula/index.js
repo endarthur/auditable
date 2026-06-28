@@ -64,6 +64,252 @@ function mirror(g, a, b) {
   return transformGeom(g, fn, { flipBulge: true });
 }
 
+// ── src/tolerance.js ──
+
+// @gcu/regula tolerance — the load-bearing decision (SPEC-curves §3): predicates are
+// exact, constructions are not. A line·arc intersection or a fillet tangent is a
+// constructed, generally irrational coordinate, so coincidence / on-curve / parallel
+// tests need ONE explicit, documented tolerance policy — not scattered epsilons.
+//
+// Tolerance is COORDINATE-RELATIVE, scaled to the working extent — never a fixed absolute
+// epsilon. At UTM magnitudes a fixed 1e-9 is meaningless (the same failure class as the
+// silent-shift bug); regula always runs in the small local frame, but the tolerance still
+// derives from the data's extent so it travels correctly. One Tolerance object threads
+// through the API.
+
+// Build a Tolerance for a working `extent` (e.g. the drawing bbox diagonal, in the working
+// frame's units). `eps` is the distance below which two coordinates are "the same".
+function makeTolerance(extent, { rel = 1e-7 } = {}) {
+  const e = Math.abs(extent) || 1;
+  return { eps: rel * e, rel, extent: e };
+}
+
+// Coerce a tolerance argument to an eps distance: a Tolerance object, a bare number (eps),
+// or — as a documented floor when a caller hasn't supplied one — a small relative default.
+function tolEps(tol) {
+  if (typeof tol === 'number') return tol;
+  if (tol && typeof tol.eps === 'number') return tol.eps;
+  return 1e-7;   // drafting floor at local magnitudes; callers SHOULD pass makeTolerance(extent)
+}
+
+// ── src/arc.js ──
+
+// @gcu/regula arc — bulge ↔ arc derived accessors + the curve constructors the kernel
+// operates on. Mirrors @gcu/dxf's arc.js verbatim (same fixed textbook formulas) so the
+// two never disagree; if they ever need to diverge, extract a shared @gcu/arc. Keeping it
+// here lets regula stay a zero-dep leaf rather than pulling the whole DXF reader for 30
+// lines of trig.
+//
+// An arc span is endpoint + bulge (`bulge = tan(θ/4)`, θ signed swept angle, + = CCW);
+// centre / radius / angles are DERIVED, never stored (SPEC-curves §1). A straight span is
+// bulge 0 → line and arc are the same primitive. Angles in RADIANS.
+
+const TAU = Math.PI * 2;
+
+// Curve constructors — the geometric primitives the intersection / nearest kernels take.
+// `sweep` is the SIGNED swept angle (+ CCW). A segment/line/ray is two points.
+const segment = (a, b) => ({ kind: 'segment', a, b });
+const line = (a, b) => ({ kind: 'line', a, b });          // infinite, through a→b
+const ray = (a, b) => ({ kind: 'ray', a, b });            // half-infinite from a through b
+const circle = (c, r) => ({ kind: 'circle', c, r });
+const arc = (c, r, startAngle, sweep) => ({ kind: 'arc', c, r, startAngle, sweep });
+
+// Endpoint + bulge → derived { center, radius, startAngle, endAngle, sweep, ccw }, or null
+// for a straight / degenerate span (callers treat those as segments).
+function arcFromBulge(p0, p1, bulge) {
+  if (!bulge) return null;
+  const dx = p1[0] - p0[0], dy = p1[1] - p0[1];
+  const c = Math.hypot(dx, dy);
+  if (c === 0) return null;
+  const theta = 4 * Math.atan(bulge);
+  const half = c / 2;
+  const r = half / Math.abs(Math.sin(theta / 2));
+  const m = half / Math.tan(theta / 2);
+  const nx = -dy / c, ny = dx / c;
+  const cx = p0[0] + dx / 2 + nx * m, cy = p0[1] + dy / 2 + ny * m;
+  return {
+    center: [cx, cy], radius: r,
+    startAngle: Math.atan2(p0[1] - cy, p0[0] - cx),
+    endAngle: Math.atan2(p1[1] - cy, p1[0] - cx),
+    sweep: theta, ccw: bulge > 0,
+  };
+}
+
+// Center-form arc (CCW start→end, radians) → endpoint + bulge { start, end, bulge }.
+function bulgeFromArc(center, radius, startAngle, endAngle) {
+  let theta = ((endAngle - startAngle) % TAU + TAU) % TAU;
+  if (theta === 0) theta = TAU;
+  const [cx, cy] = center;
+  return {
+    start: [cx + radius * Math.cos(startAngle), cy + radius * Math.sin(startAngle)],
+    end: [cx + radius * Math.cos(endAngle), cy + radius * Math.sin(endAngle)],
+    bulge: Math.tan(theta / 4),
+  };
+}
+
+// A bulge span (p0, p1, bulge) → the kernel curve: an `arc` when curved, a `segment` when
+// straight. The bridge from the stored polyline primitive to the intersection kernel.
+function spanCurve(p0, p1, bulge) {
+  const a = arcFromBulge(p0, p1, bulge);
+  return a ? arc(a.center, a.radius, a.startAngle, a.sweep) : segment(p0, p1);
+}
+
+// Is angle `theta` within the arc that starts at `startAngle` and sweeps `sweep`
+// (signed)? Slack `epsAng` (radians) admits endpoints. Used to filter circle-support
+// intersections down to the actual arc span.
+function angleInSweep(startAngle, sweep, theta, epsAng = 1e-9) {
+  if (sweep >= 0) { let d = ((theta - startAngle) % TAU + TAU) % TAU; return d <= sweep + epsAng || d >= TAU - epsAng; }
+  let d = ((theta - startAngle) % TAU - TAU) % TAU;   // into (-TAU, 0]
+  return d >= sweep - epsAng || d <= -TAU + epsAng;
+}
+
+// The point at fraction `f` (0..1) along an arc's sweep.
+function arcPointAt(cv, f) {
+  const a = cv.startAngle + cv.sweep * f;
+  return [cv.c[0] + cv.r * Math.cos(a), cv.c[1] + cv.r * Math.sin(a)];
+}
+
+// ── src/intersect.js ──
+
+// @gcu/regula intersect — Tier-1, the foundation everything else reduces to (SPEC-curves
+// §2). Pairwise intersection of the kernel curves (segment / line / ray / circle / arc).
+//
+// The trick that de-dups the whole pair-matrix: every curve has a SUPPORT (a line for
+// segment/line/ray, a circle for circle/arc) and a MEMBERSHIP test (is a support point
+// actually on this finite piece?). So we intersect the two supports (line·line,
+// line·circle, circle·circle — three cases, not nine), then keep the points that lie on
+// BOTH finite curves. Intersection coordinates are CONSTRUCTED (inexact, §3); the
+// membership/parallel tests carry the tolerance.
+//
+// Pure, zero-dep. Angles via arc.js; tolerance via tolerance.js.
+
+
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1];
+
+// Parameter of p's projection onto the infinite line a→b (0 at a, 1 at b).
+function paramOnLine(a, b, p) {
+  const d = sub(b, a), l2 = d[0] * d[0] + d[1] * d[1];
+  return l2 ? dot(sub(p, a), d) / l2 : 0;
+}
+
+function support(cv) {
+  if (cv.kind === 'circle' || cv.kind === 'arc') return { type: 'circle', c: cv.c, r: cv.r };
+  return { type: 'line', a: cv.a, b: cv.b };
+}
+
+// Is a support point actually on this finite curve? (The point is already ON the support
+// by construction, so this is purely the range/angle test, with eps slack.)
+function onCurve(cv, p, eps) {
+  if (cv.kind === 'circle') return true;
+  if (cv.kind === 'line') return true;
+  if (cv.kind === 'arc') return angleInSweep(cv.startAngle, cv.sweep, Math.atan2(p[1] - cv.c[1], p[0] - cv.c[0]), eps / Math.max(cv.r, eps));
+  const len = Math.hypot(cv.b[0] - cv.a[0], cv.b[1] - cv.a[1]) || 1;
+  const t = paramOnLine(cv.a, cv.b, p), te = eps / len;
+  if (cv.kind === 'ray') return t >= -te;
+  return t >= -te && t <= 1 + te;     // segment
+}
+
+// ── support intersections (the three real cases) ─────────────────────────────────
+
+// Two infinite lines (each through a pair) → 0 or 1 point. Parallel/collinear → [].
+function lineLine(a0, a1, b0, b1) {
+  const d1 = sub(a1, a0), d2 = sub(b1, b0);
+  const den = d1[0] * d2[1] - d1[1] * d2[0];
+  if (Math.abs(den) <= 1e-12 * Math.hypot(d1[0], d1[1]) * Math.hypot(d2[0], d2[1])) return [];   // parallel (angular tol)
+  const t = ((b0[0] - a0[0]) * d2[1] - (b0[1] - a0[1]) * d2[0]) / den;
+  return [[a0[0] + t * d1[0], a0[1] + t * d1[1]]];
+}
+
+// Infinite line (through p0,p1) ∩ circle → 0, 1 (tangent) or 2 points.
+function lineCircle(p0, p1, c, r, eps) {
+  const d = sub(p1, p0), f = sub(p0, c);
+  const A = dot(d, d), B = 2 * dot(f, d), C = dot(f, f) - r * r;
+  let disc = B * B - 4 * A * C;
+  if (disc < -eps * eps) return [];
+  if (disc < 0) disc = 0;
+  const sd = Math.sqrt(disc), t1 = (-B - sd) / (2 * A), t2 = (-B + sd) / (2 * A);
+  const out = [[p0[0] + t1 * d[0], p0[1] + t1 * d[1]]];
+  if (sd > eps) out.push([p0[0] + t2 * d[0], p0[1] + t2 * d[1]]);
+  return out;
+}
+
+// Two circles → 0, 1 (tangent) or 2 points. Concentric / separate / contained → [].
+function circleCircle(c0, r0, c1, r1, eps) {
+  const dx = c1[0] - c0[0], dy = c1[1] - c0[1], d = Math.hypot(dx, dy);
+  if (d <= eps) return [];
+  if (d > r0 + r1 + eps || d < Math.abs(r0 - r1) - eps) return [];
+  const a = (r0 * r0 - r1 * r1 + d * d) / (2 * d);
+  let h2 = r0 * r0 - a * a; if (h2 < 0) h2 = 0;
+  const h = Math.sqrt(h2);
+  const xm = c0[0] + a * dx / d, ym = c0[1] + a * dy / d;
+  if (h <= eps) return [[xm, ym]];
+  const ox = -dy / d * h, oy = dx / d * h;
+  return [[xm + ox, ym + oy], [xm - ox, ym - oy]];
+}
+
+function supportIntersect(sa, sb, eps) {
+  if (sa.type === 'line' && sb.type === 'line') return lineLine(sa.a, sa.b, sb.a, sb.b);
+  if (sa.type === 'line' && sb.type === 'circle') return lineCircle(sa.a, sa.b, sb.c, sb.r, eps);
+  if (sa.type === 'circle' && sb.type === 'line') return lineCircle(sb.a, sb.b, sa.c, sa.r, eps);
+  return circleCircle(sa.c, sa.r, sb.c, sb.r, eps);
+}
+
+// Pairwise intersection of two kernel curves → array of points (0, 1 or 2). Points are
+// filtered to lie on both finite pieces and de-duplicated within eps (tangencies).
+function intersect(A, B, tol) {
+  const eps = tolEps(tol);
+  const cands = supportIntersect(support(A), support(B), eps);
+  const out = [];
+  for (const p of cands) {
+    if (!onCurve(A, p, eps) || !onCurve(B, p, eps)) continue;
+    if (out.some((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) <= eps)) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+// ── src/nearest.js ──
+
+// @gcu/regula nearest — closest point on a curve to a query point (SPEC-curves §2). The
+// companion to intersection: trim picks the interval to keep by the param of the click,
+// snapping wants the nearest point on a curve, extend measures to a boundary. Returns
+// { point, dist, param } where param is 0..1 along the curve (the arc fraction of sweep,
+// the segment fraction; unclamped for an infinite line).
+//
+// Pure, zero-dep.
+
+
+const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+function onCircle(c, r, p) {
+  const dx = p[0] - c[0], dy = p[1] - c[1], m = Math.hypot(dx, dy) || 1;
+  return [c[0] + r * dx / m, c[1] + r * dy / m];
+}
+
+function closestPointOn(cv, p) {
+  if (cv.kind === 'circle') { const pt = onCircle(cv.c, cv.r, p); return { point: pt, dist: dist(pt, p), param: ((Math.atan2(pt[1] - cv.c[1], pt[0] - cv.c[0])) ) }; }
+  if (cv.kind === 'arc') {
+    const ang = Math.atan2(p[1] - cv.c[1], p[0] - cv.c[0]);
+    if (angleInSweep(cv.startAngle, cv.sweep, ang)) {
+      const pt = onCircle(cv.c, cv.r, p);
+      let f = (ang - cv.startAngle) / cv.sweep;            // fraction of sweep
+      f = clamp01(f);
+      return { point: pt, dist: dist(pt, p), param: f };
+    }
+    const e0 = arcPointAt(cv, 0), e1 = arcPointAt(cv, 1);   // outside the sweep → nearer endpoint
+    return dist(e0, p) <= dist(e1, p) ? { point: e0, dist: dist(e0, p), param: 0 } : { point: e1, dist: dist(e1, p), param: 1 };
+  }
+  // linear (segment / line / ray)
+  const a = cv.a, b = cv.b, d = [b[0] - a[0], b[1] - a[1]], l2 = d[0] * d[0] + d[1] * d[1];
+  let t = l2 ? ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2 : 0;
+  if (cv.kind === 'segment') t = clamp01(t);
+  else if (cv.kind === 'ray') t = t < 0 ? 0 : t;
+  const pt = [a[0] + t * d[0], a[1] + t * d[1]];
+  return { point: pt, dist: dist(pt, p), param: t };
+}
+
 // ── src/main.js ──
 
 // @gcu/regula — module manifest. The 2D drafting curve-ops layer of the GCU geometry
@@ -81,4 +327,20 @@ export {
   rotate,
   scale,
   mirror,
+  makeTolerance,
+  tolEps,
+  TAU,
+  segment,
+  line,
+  ray,
+  circle,
+  arc,
+  arcFromBulge,
+  bulgeFromArc,
+  spanCurve,
+  angleInSweep,
+  arcPointAt,
+  onCurve,
+  intersect,
+  closestPointOn,
 };
