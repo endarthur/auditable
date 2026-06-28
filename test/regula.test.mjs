@@ -288,3 +288,12 @@ test('extend: reports reach (old end → boundary, painted green)', () => {
   const e = extend(P([[0, 0], [10, 0]]), [segment([20, -5], [20, 5])], [9, 0], 1e-9);
   assert.ok(e.reach && ptClose(e.reach[0], [10, 0]) && ptClose(e.reach[1], [20, 0]));   // the added stretch
 });
+
+// ── arc-end extend: grow a curved end span's sweep to a boundary ──────────────────
+test('extend: a curved end span grows its sweep to reach a boundary', () => {
+  // quarter arc (10,0) CCW to (0,10), centre origin r10; extend the (0,10) end to x=-10 → semicircle
+  const e = extend(P([[10, 0], [0, 10]], [Math.tan(Math.PI / 8)]), [segment([-10, -20], [-10, 20])], [0, 9], 1e-9);
+  assert.equal(e.extended, true);
+  assert.ok(ptClose(e.path.points[1], [-10, 0]));
+  assert.ok(close(e.path.bulges[0], 1));                 // quarter → semicircle bulge = tan(π/4) = 1
+});
