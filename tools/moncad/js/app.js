@@ -118,7 +118,8 @@ function boot() {
   // ── input: pan (drag), zoom (wheel), readout (move) ──────────────────────────────
   const devicePt = (e) => { const r = glCanvas.getBoundingClientRect(); return [(e.clientX - r.left) * view.dpr, (e.clientY - r.top) * view.dpr]; };
   let dragging = false, last = null;
-  olCanvas.addEventListener('mousedown', (e) => { dragging = true; last = devicePt(e); olCanvas.style.cursor = 'grabbing'; });
+  olCanvas.addEventListener('mousedown', (e) => { if (e.button !== 0 && e.button !== 1) return; dragging = true; last = devicePt(e); olCanvas.style.cursor = 'grabbing'; });
+  olCanvas.addEventListener('contextmenu', (e) => e.preventDefault());   // right-click is moncad's (the context-menu surface), not the browser's
   window.addEventListener('mouseup', () => { dragging = false; olCanvas.style.cursor = 'none'; });
   olCanvas.addEventListener('mousemove', (e) => {
     const s = devicePt(e);
