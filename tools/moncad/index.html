@@ -151,6 +151,12 @@
   .help-content::-webkit-scrollbar-track, .pal-list::-webkit-scrollbar-track, #layers::-webkit-scrollbar-track { background: transparent; }
   .help-content::-webkit-scrollbar-thumb, .pal-list::-webkit-scrollbar-thumb, #layers::-webkit-scrollbar-thumb { background: var(--bd2); border: 3px solid transparent; border-radius: 8px; background-clip: content-box; }
   .help-content::-webkit-scrollbar-thumb:hover, .pal-list::-webkit-scrollbar-thumb:hover, #layers::-webkit-scrollbar-thumb:hover { background: var(--dim); background-clip: content-box; }
+  /* layer colour picker — a swatch grid + a custom native picker */
+  .ly-colors { position: fixed; z-index: 60; display: none; width: 196px; box-sizing: border-box; background: var(--bg-panel); border: 1px solid var(--bd2); border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,0.55); padding: 7px; }
+  .ly-colors.show { display: block; }
+  .ly-sw-opt { display: inline-block; width: 22px; height: 22px; margin: 2px; border-radius: 3px; cursor: pointer; border: 1px solid rgba(255,255,255,0.14); vertical-align: middle; }
+  .ly-sw-opt:hover { outline: 2px solid var(--action); outline-offset: 1px; }
+  .ly-sw-custom { width: 100%; height: 26px; margin-top: 6px; background: var(--bg-field); border: 1px solid var(--border); border-radius: 3px; cursor: pointer; padding: 1px; box-sizing: border-box; }
   /* context menu — right-click, contextual commands over the same registry */
   .ctx { position: fixed; z-index: 50; display: none; min-width: 168px; background: var(--bg-panel); border: 1px solid var(--bd2); border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,0.55); padding: 4px 0; }
   .ctx.show { display: block; }
@@ -275,7 +281,7 @@
         </table>
 
         <h3>Layers</h3>
-        <p>The panel (<kbd>Shift+L</kbd>) is your inspector. New geometry lands on the <b>active layer</b> (click a name to set it). Per layer: a visibility eye, a colour swatch (click cycles), an opacity slider, and a lock. Right-click a layer for <b>Isolate / Show All / Lock / Rename / Delete</b>; drag the <b>⠿</b> grip to reorder the draw z-order. Deleting a layer moves its geometry to layer <code>0</code> (nothing is lost).</p>
+        <p>The panel (<kbd>Shift+L</kbd>) is your inspector. New geometry lands on the <b>active layer</b> (click a name to set it). Per layer: a visibility eye, a colour swatch (click to pick from a palette or a custom colour), an opacity slider, and a lock. Right-click a layer for <b>Isolate / Show All / Lock / Rename / Delete</b>; drag the <b>⠿</b> grip to reorder the draw z-order. Deleting a layer moves its geometry to layer <code>0</code> (nothing is lost).</p>
 
         <h3>Blocks — reusable symbols</h3>
         <ul>

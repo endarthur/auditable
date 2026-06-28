@@ -311,10 +311,6 @@ function boot() {
 
   // ── layers (the inspector surface): current layer, visibility, colour, opacity ────
   function setActiveLayer(name) { activeLayer = name; $('#activeLayer').textContent = 'layer: ' + name; layersPanel.refresh(); }
-  function nextColor(c) {
-    const i = c && c.mode === 'aci' ? LAYER_PALETTE.indexOf(c.index) : -1;
-    return { mode: 'aci', index: LAYER_PALETTE[(i + 1) % LAYER_PALETTE.length] };
-  }
   function newLayer() {
     let n = 1; while (model.getLayer('Layer' + n)) n++;
     const name = 'Layer' + n;
@@ -360,7 +356,7 @@ function boot() {
       if (!L.visible) for (const i of [...selection]) if (model.features[i].properties.layer === name) selection.delete(i);
       layersPanel.refresh(); afterSelect();
     },
-    onColor: (name) => { const L = model.getLayer(name); if (L) { L.color = nextColor(L.color); layersPanel.refresh(); derive(false); } },
+    onColor: (name, color) => { const L = model.getLayer(name); if (L && color) { L.color = color; layersPanel.refresh(); derive(false); } },
     onOpacity: (name, v) => { const L = model.getLayer(name); if (L) { L.opacity = v; derive(false); } },
     onNew: () => newLayer(),
     onRename: (oldName, newName) => renameLayer(oldName, newName),
@@ -657,14 +653,14 @@ function boot() {
     activeTool = {
       name: 'measure',
       get prompt() { return p0 ? 'Measure — next point (Esc to finish):' : 'Measure — first point (Esc to finish):'; },
-      point: (local) => {
-        if (!p0) { p0 = local; refreshPrompt(); return; }
-        const dx = local[0] - p0[0], dy = local[1] - p0[1], d = Math.hypot(dx, dy);
+      point: (local) => { p0 = local; refreshPrompt(); },             // place / chain; the readout is live (preview)
+      preview: (cursor) => {
+        if (!p0 || !cursor) return { lines: [], points: p0 ? [p0] : [] };
+        const dx = cursor[0] - p0[0], dy = cursor[1] - p0[1], d = Math.hypot(dx, dy);
         const az = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;   // azimuth: 0=N, 90=E, clockwise (geological)
         setStatus(`dist ${d.toFixed(3)} ${frame.units} · azimuth ${az.toFixed(1)}° · Δ ${dx.toFixed(2)}, ${dy.toFixed(2)}`);
-        p0 = local;                                                    // chain so you can pace along a path
+        return { lines: [[p0, cursor]], points: [p0] };
       },
-      preview: (cursor) => (p0 && cursor ? { lines: [[p0, cursor]], points: [p0] } : { lines: [], points: [] }),
       keyword: () => false, text: () => false,
       finish: () => endTool(), cancel: () => endTool(), last: () => p0, count: () => (p0 ? 1 : 0),
     };

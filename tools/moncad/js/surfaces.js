@@ -100,9 +100,39 @@ function swatchCss(c) {
   if (c.mode === 'aci') return ACI7[c.index] || '#aaa';
   return '#888';
 }
+// the colour-picker palette: the 7 standard ACI swatches + a few GIS-friendly RGB extras
+const SWATCHES = [
+  { mode: 'aci', index: 1 }, { mode: 'aci', index: 2 }, { mode: 'aci', index: 3 }, { mode: 'aci', index: 4 },
+  { mode: 'aci', index: 5 }, { mode: 'aci', index: 6 }, { mode: 'aci', index: 7 },
+  { mode: 'rgb', r: 255, g: 140, b: 0 }, { mode: 'rgb', r: 255, g: 105, b: 180 }, { mode: 'rgb', r: 160, g: 82, b: 45 },
+  { mode: 'rgb', r: 120, g: 120, b: 130 }, { mode: 'rgb', r: 0, g: 150, b: 136 }, { mode: 'rgb', r: 150, g: 80, b: 200 }, { mode: 'rgb', r: 90, g: 90, b: 100 },
+];
+const toHex = (c) => { const css = swatchCss(c); if (css[0] === '#') return css.length === 4 ? '#' + [...css.slice(1)].map((x) => x + x).join('') : css; const m = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(css); return m ? '#' + m.slice(1, 4).map((n) => (+n).toString(16).padStart(2, '0')).join('') : '#888888'; };
+const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 export function makeLayersPanel(getModel, mount, h) {
   let renaming = null;     // the layer name being inline-renamed
   let dragName = null;     // the layer being drag-reordered
+  const pop = document.createElement('div'); pop.className = 'ly-colors'; document.body.appendChild(pop);
+  const closePop = () => pop.classList.remove('show');
+  document.addEventListener('mousedown', (e) => { if (pop.classList.contains('show') && !pop.contains(e.target)) closePop(); });
+  function openColorPopup(anchor, name) {
+    pop.innerHTML = '';
+    for (const c of SWATCHES) {
+      const s = document.createElement('span'); s.className = 'ly-sw-opt'; s.style.background = swatchCss(c); s.title = c.mode === 'aci' ? 'ACI ' + c.index : swatchCss(c);
+      s.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); h.onColor(name, c); closePop(); });
+      pop.appendChild(s);
+    }
+    const custom = document.createElement('input'); custom.type = 'color'; custom.className = 'ly-sw-custom'; custom.title = 'Custom colour';
+    const L = getModel().getLayer(name); custom.value = toHex(L && L.color);
+    custom.addEventListener('mousedown', (e) => e.stopPropagation());
+    custom.addEventListener('input', () => { const [r, g, b] = hexToRgb(custom.value); h.onColor(name, { mode: 'rgb', r, g, b }); });   // live as you drag
+    custom.addEventListener('change', closePop);
+    pop.appendChild(custom);
+    const r = anchor.getBoundingClientRect();
+    pop.style.left = Math.min(r.left, window.innerWidth - 206) + 'px';
+    pop.style.top = (r.bottom + 4) + 'px';
+    pop.classList.add('show');
+  }
   function row(L) {
     const r = document.createElement('div'); r.className = 'ly-row' + (L.name === h.active() ? ' active' : '') + (L.locked ? ' locked' : '');
     const grip = document.createElement('span'); grip.className = 'ly-grip'; grip.textContent = '⠿'; grip.draggable = true; grip.title = 'Drag to reorder (z-order)';
@@ -113,8 +143,8 @@ export function makeLayersPanel(getModel, mount, h) {
     r.appendChild(grip);
     const vis = document.createElement('span'); vis.className = 'ly-vis'; vis.textContent = L.visible ? '◉' : '○'; vis.title = 'Show / hide';
     vis.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); h.onVisible(L.name); });
-    const sw = document.createElement('span'); sw.className = 'ly-sw'; sw.style.background = swatchCss(L.color); sw.title = 'Colour (click to cycle)';
-    sw.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); h.onColor(L.name); });
+    const sw = document.createElement('span'); sw.className = 'ly-sw'; sw.style.background = swatchCss(L.color); sw.title = 'Colour (click to choose)';
+    sw.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); openColorPopup(sw, L.name); });
     r.append(vis, sw);
     if (L.name === renaming) {
       const inp = document.createElement('input'); inp.className = 'ly-rename'; inp.value = L.name;
