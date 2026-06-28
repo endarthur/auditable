@@ -502,3 +502,18 @@ test('explode: a rotated + translated insert composes correctly', () => {
   const p = explode(doc).features[0].geometry.position;
   assert.ok(Math.abs(p[0] - 10) < 1e-9 && Math.abs(p[1] - 21) < 1e-9 && Math.abs(p[2]) < 1e-9);
 });
+
+import { write as dxfWrite } from '../ext/dxf/src/write.js';
+test('TEXT round-trips (value, height, rotation, layer, position)', () => {
+  const dxf = ['0', 'SECTION', '2', 'ENTITIES', '0', 'TEXT', '8', 'LABELS', '10', '610', '20', '405', '30', '0', '40', '2.5', '50', '30', '1', 'DH-01', '0', 'ENDSEC', '0', 'EOF', ''].join('\n');
+  const t = read(dxf).features.find((f) => f.type === 'text');
+  assert.equal(t.geometry.kind, 'text');
+  assert.equal(t.geometry.value, 'DH-01');
+  assert.equal(t.geometry.height, 2.5);
+  assert.equal(t.geometry.rotation, 30);
+  assert.equal(t.properties.layer, 'LABELS');
+  // round-trip through the writer
+  const t2 = read(dxfWrite(read(dxf))).features.find((f) => f.type === 'text');
+  assert.equal(t2.geometry.value, 'DH-01');
+  assert.equal(t2.geometry.height, 2.5);
+});

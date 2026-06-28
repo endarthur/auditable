@@ -533,6 +533,15 @@ function parsePoint(rec) {
   return mkFeature('point', { kind: 'point', position: [val(p, 10, 0), val(p, 20, 0), val(p, 30, 0)] }, readCommon(p));
 }
 
+// TEXT: insertion point (10/20/30), height (40), the string (1), rotation degrees (50).
+// MTEXT and the alignment codes (11/21/72/73) are v0.2 — single-line left-baseline for now.
+function parseText(rec) {
+  const p = rec.pairs;
+  let str = '';
+  for (const { code, value } of p) if (code === 1) str = value;
+  return mkFeature('text', { kind: 'text', position: [val(p, 10, 0), val(p, 20, 0), val(p, 30, 0)], height: val(p, 40, 1), rotation: val(p, 50, 0), value: str }, readCommon(p));
+}
+
 function parse3dface(rec) {
   const p = rec.pairs;
   const c = [[val(p, 10, 0), val(p, 20, 0), val(p, 30, 0)], [val(p, 11, 0), val(p, 21, 0), val(p, 31, 0)],
@@ -641,6 +650,7 @@ function assembleEntities(records, warnings) {
         case 'CIRCLE': features.push(parseCircle(rec)); break;
         case 'ARC': features.push(parseArc(rec)); break;
         case 'POINT': features.push(parsePoint(rec)); break;
+        case 'TEXT': features.push(parseText(rec)); break;
         case '3DFACE': features.push(parse3dface(rec)); break;
         case 'POLYLINE': { const r = parsePolyline(rec, records, i, warnings); features.push(r.feature); i = r.next - 1; break; }
         case 'INSERT': { const r = parseInsert(rec, records, i); features.push(r.feature); i = r.next - 1; break; }
@@ -672,7 +682,7 @@ function computeBounds(features) {
     if (!g) continue;
     if (g.kind === 'polyline' || g.kind === 'face') for (let i = 0; i < g.vertices.length; i += 3) ext(g.vertices[i], g.vertices[i + 1], g.vertices[i + 2]);
     else if (g.kind === 'circle') { ext(g.center[0] - g.radius, g.center[1] - g.radius, g.center[2]); ext(g.center[0] + g.radius, g.center[1] + g.radius, g.center[2]); }
-    else if (g.kind === 'point') ext(...g.position);
+    else if (g.kind === 'point' || g.kind === 'text') ext(...g.position);
     else if (g.kind === 'insert') ext(...g.transform.position);
   }
   return min[0] === Infinity ? null : { min, max };
@@ -823,6 +833,13 @@ function write(doc, opts = {}) {
       case 'point': {
         const p = tw(g.position);
         push(0, 'POINT'); emitCommon(props); push(10, p[0]); push(20, p[1]); push(30, p[2]); emitXdata(props); break;
+      }
+      case 'text': {
+        const p = tw(g.position);
+        push(0, 'TEXT'); emitCommon(props);
+        push(10, p[0]); push(20, p[1]); push(30, p[2]); push(40, g.height || 1); push(1, g.value || '');
+        if (g.rotation) push(50, g.rotation);
+        emitXdata(props); break;
       }
       case 'face': {
         const v = g.vertices, n = v.length / 3;

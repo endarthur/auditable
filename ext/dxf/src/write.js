@@ -123,6 +123,13 @@ export function write(doc, opts = {}) {
         const p = tw(g.position);
         push(0, 'POINT'); emitCommon(props); push(10, p[0]); push(20, p[1]); push(30, p[2]); emitXdata(props); break;
       }
+      case 'text': {
+        const p = tw(g.position);
+        push(0, 'TEXT'); emitCommon(props);
+        push(10, p[0]); push(20, p[1]); push(30, p[2]); push(40, g.height || 1); push(1, g.value || '');
+        if (g.rotation) push(50, g.rotation);
+        emitXdata(props); break;
+      }
       case 'face': {
         const v = g.vertices, n = v.length / 3;
         push(0, '3DFACE'); emitCommon(props);
