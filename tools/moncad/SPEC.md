@@ -133,7 +133,44 @@ an `@gcu/<renderer>` later if plot/plate/strata want it — owned and small, not
 
 ---
 
-## 7. Integration with the cluster
+## 7. Snapping & precision input
+
+Snapping is make-or-break, and the failure mode is being too eager: always-on-all-types
+turns it into a *fight* (grabs the midpoint when you wanted the endpoint; won't let you
+place a free point). The principle: **snapping must never be a fight** — trivially toggled
+off for a free point, constrained to exactly what you want, with feedback so you always
+know what it's about to grab. Defaults sensible, full control available.
+
+**Controls** — all are **registry commands**, so they live in the palette, are bindable,
+*and* render as status-bar chips (one registry, the usual surfaces):
+
+- **Master toggle** — `F3` (+ a clear status indicator) turns all snapping on/off. A free
+  point is one keystroke away.
+- **Per-type running snaps** — endpoint / midpoint / centre / node **on by default**
+  (later: intersection / perpendicular / tangent / nearest / grid), each independently
+  toggled and persisted. Shown as a row of toggle **chips in the status bar** — the snap
+  state is readable + clickable right where you already look (the instrument panel).
+- **One-shot override** — force a single snap for the *next* pick, overriding the running
+  set. Typed at the **command line** mid-draw (`cen` → centre for the next point) — the
+  AutoLISP osnap-override heritage, a natural fit for the input loop.
+- **Cycling** — `Tab` cycles candidates under the aperture instead of letting the priority
+  auto-pick decide.
+- **Aperture** — the pickup radius (`SNAP_PX`), adjustable; too grabby vs too fussy is
+  personal.
+- **Grid snap vs object snap** are separate modes (snap-to-geometry ≠ snap-to-a-grid).
+
+**Mechanics.** The `snap.js` spatial index is unchanged by all this — the app filters its
+query results by the active type set, and the master toggle short-circuits the query. So
+control is pure app/UX wiring over a stable index. Feedback is the overlay glyph (□ end ·
+△ mid · ○ centre · ✕ node) + the snap-type name in the panel.
+
+**Sequencing.** Snap *control* earns its keep exactly when you start **drawing** (placing a
+point) — while merely hovering a viewer a wrong snap is harmless. So the toggles, master
+switch, and override land **with the draw tools**, tuned against actual drafting.
+
+---
+
+## 8. Integration with the cluster
 
 | Need | Package |
 |---|---|
@@ -148,14 +185,14 @@ designed against moncad as their real consumer.
 
 ---
 
-## 8. Staged arc
+## 9. Staged arc
 
 - **v0 — the dumb-but-lovely board.** A LibreCAD-class drafter done right: real DXF
   round-trip, frame-correct world readout, real edit geometry (regula), snapping, the
   command spine, the Switchboard instrument skin. **No constraint solver** (a dumb board
   has none — this sidesteps the entire GPL ghost). Genuinely useful, shippable.
 - **v1 — parametric.** A from-scratch constraint solver (written from the academic
-  literature only — see §10) bolts on → parametric sketching.
+  literature only — see §11) bolts on → parametric sketching.
 - **v2 — geological (the real soul).** cota / elevation-as-data, the descriptive-geometry
   mode (`@gcu/libella`): three-point, structure contours, sections, outcrop prediction.
   This is what makes it unmistakably *ours* and is why the name is Monge. v0's bones know
@@ -163,7 +200,7 @@ designed against moncad as their real consumer.
 
 ---
 
-## 9. Build order within moncad (the vertical slice)
+## 10. Build order within moncad (the vertical slice)
 
 Take the prototype's genuinely good mechanical parts (the pan/zoom feel, the snapping
 math) but rebuild them on the **right bones** — the command registry first, the WebGL2
@@ -173,14 +210,14 @@ renderer next, not a button soup. Order:
 2. the WebGL2 geometry renderer + Canvas2D overlay (frame-aware pan/zoom) + the
    instrument-panel readouts (§6);
 3. the CPU spatial index → snapping (endpoint/mid/center/intersection/perp/nearest/grid),
-   which also serves picking;
+   which also serves picking (snap-control UX in §7);
 4. the command/coordinate-input loop (guided prompts, `@10<45`);
 5. draw commands (line/polyline/circle/arc) → DXF round-trip via `@gcu/dxf`;
 6. the edit long-tail (move/copy/rotate/trim/offset/fillet) → pulls in `@gcu/regula`.
 
 ---
 
-## 10. Hard rules & non-goals
+## 11. Hard rules & non-goals
 
 - **Solver licensing hygiene (standing).** Any constraint solver is written **from the
   academic literature only** — never LLM-washed from SolveSpace/slvs, PlaneGCS, JSketcher
