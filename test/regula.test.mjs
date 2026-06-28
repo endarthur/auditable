@@ -194,3 +194,19 @@ test('trim: no crossing cutter → unchanged', () => {
   const t = trim(P([[0, 0], [10, 0]]), [segment([20, -5], [20, 5])], [5, 0], 1e-9);
   assert.equal(t.removed, false); assert.equal(t.kept.length, 1);
 });
+
+// ── extend (E2.3): a straight end reaches the nearest forward boundary ─────────────
+import { extend } from '../ext/regula/src/main.js';
+
+test('extend: the end nearest the pick reaches the boundary (both ends)', () => {
+  const e = extend(P([[0, 0], [10, 0]]), [segment([20, -5], [20, 5])], [9, 0], 1e-9);   // pick the (10,0) end
+  assert.equal(e.extended, true);
+  assert.ok(ptClose(e.path.points[1], [20, 0]) && ptClose(e.path.points[0], [0, 0]));
+  const s = extend(P([[0, 0], [10, 0]]), [segment([-10, -5], [-10, 5])], [1, 0], 1e-9);  // pick the (0,0) end
+  assert.ok(ptClose(s.path.points[0], [-10, 0]) && ptClose(s.path.points[1], [10, 0]));
+});
+
+test('extend: no forward boundary → unchanged (a backward crossing does not count)', () => {
+  const e = extend(P([[0, 0], [10, 0]]), [segment([-5, -5], [-5, 5])], [9, 0], 1e-9);     // boundary is behind the picked end
+  assert.equal(e.extended, false);
+});

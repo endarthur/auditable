@@ -184,13 +184,13 @@ function arcPointAt(cv, f) {
 // Pure, zero-dep. Angles via arc.js; tolerance via tolerance.js.
 
 
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1];
+const sub$intersect = (a, b) => [a[0] - b[0], a[1] - b[1]];
+const dot$intersect = (a, b) => a[0] * b[0] + a[1] * b[1];
 
 // Parameter of p's projection onto the infinite line a→b (0 at a, 1 at b).
 function paramOnLine(a, b, p) {
-  const d = sub(b, a), l2 = d[0] * d[0] + d[1] * d[1];
-  return l2 ? dot(sub(p, a), d) / l2 : 0;
+  const d = sub$intersect(b, a), l2 = d[0] * d[0] + d[1] * d[1];
+  return l2 ? dot$intersect(sub$intersect(p, a), d) / l2 : 0;
 }
 
 function support(cv) {
@@ -214,7 +214,7 @@ function onCurve(cv, p, eps) {
 
 // Two infinite lines (each through a pair) → 0 or 1 point. Parallel/collinear → [].
 function lineLine(a0, a1, b0, b1) {
-  const d1 = sub(a1, a0), d2 = sub(b1, b0);
+  const d1 = sub$intersect(a1, a0), d2 = sub$intersect(b1, b0);
   const den = d1[0] * d2[1] - d1[1] * d2[0];
   if (Math.abs(den) <= 1e-12 * Math.hypot(d1[0], d1[1]) * Math.hypot(d2[0], d2[1])) return [];   // parallel (angular tol)
   const t = ((b0[0] - a0[0]) * d2[1] - (b0[1] - a0[1]) * d2[0]) / den;
@@ -223,8 +223,8 @@ function lineLine(a0, a1, b0, b1) {
 
 // Infinite line (through p0,p1) ∩ circle → 0, 1 (tangent) or 2 points.
 function lineCircle(p0, p1, c, r, eps) {
-  const d = sub(p1, p0), f = sub(p0, c);
-  const A = dot(d, d), B = 2 * dot(f, d), C = dot(f, f) - r * r;
+  const d = sub$intersect(p1, p0), f = sub$intersect(p0, c);
+  const A = dot$intersect(d, d), B = 2 * dot$intersect(f, d), C = dot$intersect(f, f) - r * r;
   let disc = B * B - 4 * A * C;
   if (disc < -eps * eps) return [];
   if (disc < 0) disc = 0;
@@ -281,7 +281,7 @@ function intersect(A, B, tol) {
 
 
 const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
-const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+const dist$nearest = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
 function onCircle(c, r, p) {
   const dx = p[0] - c[0], dy = p[1] - c[1], m = Math.hypot(dx, dy) || 1;
@@ -289,17 +289,17 @@ function onCircle(c, r, p) {
 }
 
 function closestPointOn(cv, p) {
-  if (cv.kind === 'circle') { const pt = onCircle(cv.c, cv.r, p); return { point: pt, dist: dist(pt, p), param: ((Math.atan2(pt[1] - cv.c[1], pt[0] - cv.c[0])) ) }; }
+  if (cv.kind === 'circle') { const pt = onCircle(cv.c, cv.r, p); return { point: pt, dist: dist$nearest(pt, p), param: ((Math.atan2(pt[1] - cv.c[1], pt[0] - cv.c[0])) ) }; }
   if (cv.kind === 'arc') {
     const ang = Math.atan2(p[1] - cv.c[1], p[0] - cv.c[0]);
     if (angleInSweep(cv.startAngle, cv.sweep, ang)) {
       const pt = onCircle(cv.c, cv.r, p);
       let f = (ang - cv.startAngle) / cv.sweep;            // fraction of sweep
       f = clamp01(f);
-      return { point: pt, dist: dist(pt, p), param: f };
+      return { point: pt, dist: dist$nearest(pt, p), param: f };
     }
     const e0 = arcPointAt(cv, 0), e1 = arcPointAt(cv, 1);   // outside the sweep → nearer endpoint
-    return dist(e0, p) <= dist(e1, p) ? { point: e0, dist: dist(e0, p), param: 0 } : { point: e1, dist: dist(e1, p), param: 1 };
+    return dist$nearest(e0, p) <= dist$nearest(e1, p) ? { point: e0, dist: dist$nearest(e0, p), param: 0 } : { point: e1, dist: dist$nearest(e1, p), param: 1 };
   }
   // linear (segment / line / ray)
   const a = cv.a, b = cv.b, d = [b[0] - a[0], b[1] - a[1]], l2 = d[0] * d[0] + d[1] * d[1];
@@ -307,7 +307,7 @@ function closestPointOn(cv, p) {
   if (cv.kind === 'segment') t = clamp01(t);
   else if (cv.kind === 'ray') t = t < 0 ? 0 : t;
   const pt = [a[0] + t * d[0], a[1] + t * d[1]];
-  return { point: pt, dist: dist(pt, p), param: t };
+  return { point: pt, dist: dist$nearest(pt, p), param: t };
 }
 
 // ── src/trim.js ──
@@ -402,6 +402,49 @@ function trim(path, cutters, pickPoint, tol) {
   return { kept: [subPath(spans, hi, lo + nspan)], removed: true };
 }
 
+// ── src/extend.js ──
+
+// @gcu/regula extend — Tier-2's other half (SPEC-curves §2). Lengthen an open path's end
+// until it meets a boundary: take the end SPAN's support line, find where it crosses the
+// boundaries beyond the free end, and move the end vertex to the nearest such crossing.
+//
+// v0 extends a STRAIGHT end span (the common case — a line or a polyline's straight tail);
+// extending an arc end (growing its sweep) is deferred (returns unchanged). Pure; rides
+// intersect.js. Works on the bulge-native path; returns the same shape.
+
+
+const sub$extend = (a, b) => [a[0] - b[0], a[1] - b[1]];
+const dot$extend = (a, b) => a[0] * b[0] + a[1] * b[1];
+const dist$extend = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+// Extend `path` to the nearest forward crossing with any of `boundaries` (kernel curves),
+// choosing the end nearest `pickPoint`. Returns { path, extended:bool }.
+function extend(path, boundaries, pickPoint, tol) {
+  const eps = tolEps(tol);
+  const pts = path.points, n = pts.length;
+  if (path.closed || n < 2) return { path, extended: false };
+
+  const atEnd = dist$extend(pickPoint, pts[n - 1]) <= dist$extend(pickPoint, pts[0]);
+  const a = atEnd ? pts[n - 2] : pts[1];   // interior neighbour
+  const b = atEnd ? pts[n - 1] : pts[0];   // the free end being moved
+  const endBulge = path.bulges ? (atEnd ? path.bulges[n - 2] : path.bulges[0]) : 0;
+  if (endBulge) return { path, extended: false };          // arc-end extend deferred
+
+  const d = sub$extend(b, a), l2 = dot$extend(d, d);
+  if (l2 === 0) return { path, extended: false };
+  const te = eps / Math.sqrt(l2);
+  let best = null, bestT = Infinity;
+  for (const bd of boundaries) for (const ip of intersect(line(a, b), bd, eps)) {
+    const t = dot$extend(sub$extend(ip, a), d) / l2;
+    if (t > 1 + te && t < bestT) { bestT = t; best = ip; }   // strictly beyond the free end, nearest
+  }
+  if (!best) return { path, extended: false };
+
+  const points = pts.map((p) => p.slice());
+  points[atEnd ? n - 1 : 0] = [best[0], best[1]];
+  return { path: { ...path, points }, extended: true };
+}
+
 // ── src/main.js ──
 
 // @gcu/regula — module manifest. The 2D drafting curve-ops layer of the GCU geometry
@@ -436,4 +479,5 @@ export {
   intersect,
   closestPointOn,
   trim,
+  extend,
 };

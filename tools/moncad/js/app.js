@@ -20,7 +20,7 @@ import { makeEditTool } from './edit-ops.js';
 
 import { makeFrame, toWorld } from '@gcu/frame';
 import { read, write, explode } from '@gcu/dxf';
-import { translate, rotate, mirror, circle as rCircle, spanCurve, trim, makeTolerance } from '@gcu/regula';
+import { translate, rotate, mirror, circle as rCircle, spanCurve, trim, extend, makeTolerance } from '@gcu/regula';
 
 // ── geometry bridge: @gcu/dxf feature geometry (flat WORLD vertices) ↔ @gcu/regula ──
 const geomToPath = (g) => {
@@ -288,36 +288,50 @@ function boot() {
     afterSelect(); setStatus(`deleted ${n}`);
   }
 
-  // ── trim: click a portion of a polyline to cut it back to its crossings ───────────
-  function startTrim() {
-    cancelTool();
-    activeTool = {
-      name: 'trim', rawPick: true,
-      get prompt() { return 'Trim — click the part to remove (Esc to finish):'; },
-      point: (world) => trimAt(world),
-      preview: () => ({ lines: [], points: [] }),
-      keyword: () => false, text: () => false,
-      finish: () => endTool(), cancel: () => endTool(),
-      last: () => null, count: () => 0,
+  // ── trim / extend: rawPick click tools that act on the feature under the cursor ───
+  function makePickTool(name, prompt, handler) {
+    return {
+      name, rawPick: true, get prompt() { return prompt; }, point: handler,
+      preview: () => ({ lines: [], points: [] }), keyword: () => false, text: () => false,
+      finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
     };
-    refreshPrompt(); cmdline.focus(); render();
   }
-  function trimAt(world) {
+  function startPickTool(tool) { cancelTool(); activeTool = tool; refreshPrompt(); cmdline.focus(); render(); }
+  const startTrim = () => startPickTool(makePickTool('trim', 'Trim — click the part to remove (Esc to finish):', trimAt));
+  const startExtend = () => startPickTool(makePickTool('extend', 'Extend — click near an end to lengthen it (Esc to finish):', extendAt));
+
+  // the polyline + the other features' kernel curves at a world pick, or null.
+  function pickTargetAndCutters(world) {
     const i = pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale);
-    if (i < 0) { setStatus('trim: nothing there'); return; }
+    if (i < 0) return null;
     const target = model.features[i];
-    if (target.geometry.kind !== 'polyline') { setStatus('trim: lines/polylines only'); return; }
+    if (target.geometry.kind !== 'polyline') return { bad: 'lines/polylines only' };
     const cutters = [];
     for (let j = 0; j < model.features.length; j++) if (j !== i) cutters.push(...featureCurves(model.features[j].geometry));
     const extent = Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1]) || 1;
-    const res = trim(geomToPath(target.geometry), cutters, world, makeTolerance(extent));
+    return { i, target, cutters, tol: makeTolerance(extent) };
+  }
+  function extendAt(world) {
+    const c = pickTargetAndCutters(world);
+    if (!c) { setStatus('extend: nothing there'); return; }
+    if (c.bad) { setStatus('extend: ' + c.bad); return; }
+    const res = extend(geomToPath(c.target.geometry), c.cutters, world, c.tol);
+    if (!res.extended) { setStatus('extend: no boundary ahead'); return; }
+    model.applyEdit([{ i: c.i, feature: { ...c.target, geometry: pathToGeom(res.path, c.target.geometry.vertices[2] || 0) } }]);
+    selection.clear(); derive(false); setStatus('extended');
+  }
+  function trimAt(world) {
+    const c = pickTargetAndCutters(world);
+    if (!c) { setStatus('trim: nothing there'); return; }
+    if (c.bad) { setStatus('trim: ' + c.bad); return; }
+    const res = trim(geomToPath(c.target.geometry), c.cutters, world, c.tol);
     if (!res.removed) { setStatus('trim: no crossing to cut to'); return; }
-    const z = target.geometry.vertices[2] || 0;
+    const z = c.target.geometry.vertices[2] || 0;
     const kept = res.kept.filter((k) => k.points.length >= 2);
-    if (!kept.length) model.remove([i]);
+    if (!kept.length) model.remove([c.i]);
     else {
-      model.applyEdit([{ i, feature: { ...target, geometry: pathToGeom(kept[0], z) } }]);
-      if (kept.length > 1) model.addMany(kept.slice(1).map((k) => ({ ...target, geometry: pathToGeom(k, z) })));
+      model.applyEdit([{ i: c.i, feature: { ...c.target, geometry: pathToGeom(kept[0], z) } }]);
+      if (kept.length > 1) model.addMany(kept.slice(1).map((k) => ({ ...c.target, geometry: pathToGeom(k, z) })));
     }
     selection.clear(); derive(false); setStatus('trimmed');
   }
@@ -344,6 +358,7 @@ function boot() {
     { id: 'edit.mirror', title: 'Mirror', category: 'Modify', icon: 'Mirror', alias: ['mi', 'mirror'], when: () => selection.size > 0, run: () => startEdit('mirror') },
     { id: 'edit.delete', title: 'Delete', category: 'Modify', keys: 'delete', alias: ['del', 'erase'], when: () => selection.size > 0, run: () => doDelete() },
     { id: 'edit.trim', title: 'Trim', category: 'Modify', icon: 'Trim', keys: 't', alias: ['tr', 'trim'], run: () => startTrim() },
+    { id: 'edit.extend', title: 'Extend', category: 'Modify', icon: 'Extend', keys: 'x', alias: ['ex', 'extend'], run: () => startExtend() },
     { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => { view.fit(bounds); render(); } },
     { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); render(); } },
     { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
@@ -361,7 +376,7 @@ function boot() {
   const cmdline = makeCommandLine({ input: $('#cmdInput'), prompt: $('#cmdPrompt') }, { onSubmit: cmdSubmit, onCancel: cmdCancel, onKey: commandLineKey });
   const snapChips = makeSnapChips(cmds, ctx, $('#snapchips'), snap, SNAP_TYPES, SNAP_LABELS);
   const toolbar = makeToolbar(cmds, ctx, $('#toolbar'),
-    ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'edit.move', 'edit.copy', 'edit.rotate', 'edit.trim', 'edit.delete', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
+    ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'edit.move', 'edit.copy', 'edit.rotate', 'edit.trim', 'edit.extend', 'edit.delete', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
 
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;       // the palette owns its own keys
