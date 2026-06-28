@@ -90,6 +90,16 @@ export class Model {
     if (i < 0 || j < 0 || j >= asc.length) return false;
     const t = asc[i].order; asc[i].order = asc[j].order; asc[j].order = t; this.rev++; return true;
   }
+  // Drag-reorder: place `name` directly in front of (above, higher z than) `targetName`,
+  // then renumber the z-order sequentially. The panel lists front-on-top, so this matches
+  // "drop above the target row".
+  reorderLayer(name, targetName) {
+    if (name === targetName || !this.doc.layers[name] || !this.doc.layers[targetName]) return false;
+    const seq = this.layerList().map((L) => L.name).filter((n) => n !== name);
+    seq.splice(seq.indexOf(targetName) + 1, 0, name);     // after target in ascending = higher z
+    seq.forEach((n, i) => { this.doc.layers[n].order = i; });
+    this.rev++; return true;
+  }
 
   // Append a feature (already WORLD-canonical — the tool converts local→world on commit).
   add(feature) {

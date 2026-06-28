@@ -334,6 +334,7 @@ function boot() {
     onNew: () => newLayer(),
     onRename: (oldName, newName) => renameLayer(oldName, newName),
     onContext: (name, x, y) => ctxMenu.show(layerMenu(name), x, y),
+    onReorder: (name, targetName) => { if (model.reorderLayer(name, targetName)) { layersPanel.refresh(); derive(false); } },
   };
 
   // ── selection (rides the pick hit-test) + the affine edit tools ──────────────────

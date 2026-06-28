@@ -638,3 +638,11 @@ test('scene: features draw in layer z-order (low order behind)', () => {
   // BK (order 0) draws first → its segment (starting at 9,9) leads
   assert.equal(sc.lines[0], 9); assert.equal(sc.lines[1], 9);
 });
+
+test('model: reorderLayer drag-places a layer in front of a target (z-order)', () => {
+  const m = new Model();
+  m.addLayer('A'); m.addLayer('B');                       // ascending: 0, A, B
+  assert.equal(m.reorderLayer('0', 'B'), true);           // drop '0' above B → highest z
+  assert.deepEqual(m.layerList().map((l) => l.name), ['A', 'B', '0']);
+  assert.equal(m.reorderLayer('A', 'A'), false);          // no self-drop
+});

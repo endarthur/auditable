@@ -50,6 +50,9 @@
   .ly-row.locked .ly-name { color: var(--faint); }
   .ly-row.locked::after { content: '🔒'; font-size: 9px; opacity: 0.6; margin-left: 2px; }
   .ly-rename { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--text-hi); background: var(--bg-field); border: 1px solid var(--info); border-radius: 2px; padding: 0 3px; outline: none; }
+  .ly-grip { cursor: grab; color: var(--faint); font-size: 9px; width: 8px; flex: none; user-select: none; }
+  .ly-grip:active { cursor: grabbing; }
+  .ly-row.drop-into { box-shadow: inset 0 2px 0 var(--info); }
   /* left tool palette — the frequent draw + modify verbs, labelled (SPEC §2: legible, not austere) */
   #tools {
     position: absolute; left: 0; top: var(--tb); bottom: calc(var(--ft) + var(--cl)); width: var(--tp);

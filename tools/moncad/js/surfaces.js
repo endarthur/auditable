@@ -97,8 +97,15 @@ function swatchCss(c) {
 }
 export function makeLayersPanel(getModel, mount, h) {
   let renaming = null;     // the layer name being inline-renamed
+  let dragName = null;     // the layer being drag-reordered
   function row(L) {
     const r = document.createElement('div'); r.className = 'ly-row' + (L.name === h.active() ? ' active' : '') + (L.locked ? ' locked' : '');
+    const grip = document.createElement('span'); grip.className = 'ly-grip'; grip.textContent = '⠿'; grip.draggable = true; grip.title = 'Drag to reorder (z-order)';
+    grip.addEventListener('dragstart', (e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', L.name); dragName = L.name; });
+    r.addEventListener('dragover', (e) => { if (dragName && dragName !== L.name) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; r.classList.add('drop-into'); } });
+    r.addEventListener('dragleave', () => r.classList.remove('drop-into'));
+    r.addEventListener('drop', (e) => { e.preventDefault(); r.classList.remove('drop-into'); if (dragName && dragName !== L.name) h.onReorder(dragName, L.name); dragName = null; });
+    r.appendChild(grip);
     const vis = document.createElement('span'); vis.className = 'ly-vis'; vis.textContent = L.visible ? '◉' : '○'; vis.title = 'Show / hide';
     vis.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); h.onVisible(L.name); });
     const sw = document.createElement('span'); sw.className = 'ly-sw'; sw.style.background = swatchCss(L.color); sw.title = 'Colour (click to cycle)';
