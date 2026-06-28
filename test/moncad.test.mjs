@@ -738,3 +738,17 @@ test('sridFromCrs: EPSG string → number', () => {
   assert.equal(sridFromCrs({ code: 'EPSG:4326' }), 4326);
   assert.equal(sridFromCrs(null), undefined);
 });
+
+// ── pickWindow: window (enclose) vs crossing (touch), real geometry not bbox ───────
+test('pickWindow: a small box inside a big rect selects only the text (not the rect)', () => {
+  const rect = { type: 'polyline', geometry: { kind: 'polyline', vertices: Float64Array.from([0, 0, 0, 100, 0, 0, 100, 100, 0, 0, 100, 0]), bulges: null, closed: true }, properties: {} };
+  const txt = { type: 'text', geometry: { kind: 'text', position: [50, 50, 0], height: 5, value: 'foo' }, properties: {} };
+  const feats = [rect, txt];
+  const inside = [45, 45, 55, 55];                      // box in the rect interior, around the text
+  assert.deepEqual(pickWindow(feats, inside, {}, null, false), [1]);   // window: only the enclosed text
+  assert.deepEqual(pickWindow(feats, inside, {}, null, true), [1]);    // crossing: still only text — no rect edge touched
+  const onEdge = [-10, 40, 10, 60];                    // box straddling the rect's left edge
+  assert.deepEqual(pickWindow(feats, onEdge, {}, null, true), [0]);    // crossing: catches the rect (edge touched)
+  assert.deepEqual(pickWindow(feats, onEdge, {}, null, false), []);    // window: rect not enclosed → nothing
+  assert.deepEqual(pickWindow(feats, [-5, -5, 105, 105], {}, null, false).sort((a, b) => a - b), [0, 1]);   // enclose all → both
+});

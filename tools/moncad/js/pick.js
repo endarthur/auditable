@@ -66,15 +66,46 @@ export function featureBounds(f, blocks) {
   return minx === Infinity ? null : [minx, miny, maxx, maxy];
 }
 
-// Window/crossing select: feature indices whose bbox overlaps the world box
-// [minx,miny,maxx,maxy]. v0 is a crossing select (bbox touch); true window (fully
-// enclosed) vs crossing-by-drag-direction is a later refinement.
-export function pickWindow(features, box, blocks, skip) {
+// Does a segment intersect the axis-aligned box (endpoints-inside counts)? Liang-Barsky.
+function segHitsBox(x0, y0, x1, y1, box) {
+  let t0 = 0, t1 = 1; const dx = x1 - x0, dy = y1 - y0;
+  const clip = (p, q) => { if (p === 0) return q >= 0; const r = q / p; if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; } return true; };
+  return clip(-dx, x0 - box[0]) && clip(dx, box[2] - x0) && clip(-dy, y0 - box[1]) && clip(dy, box[3] - y0) && t0 <= t1;
+}
+// Does the feature's ACTUAL geometry intersect the box (for crossing select)? Distinct from
+// bbox overlap — a box sitting inside a big rectangle's interior touches no edge → false.
+function featureCrossesBox(f, box, blocks) {
+  const g = f.geometry; if (!g) return false;
+  if (g.kind === 'polyline') {
+    const v = g.vertices, n = v.length / 3, spans = g.closed ? n : n - 1;
+    for (let i = 0; i < spans; i++) { const j = (i + 1) % n; if (segHitsBox(v[i * 3], v[i * 3 + 1], v[j * 3], v[j * 3 + 1], box)) return true; }
+    return false;
+  }
+  if (g.kind === 'circle') {                                  // ring passes through the box: nearest box point ≤ r ≤ farthest box corner
+    const cx = g.center[0], cy = g.center[1], r = g.radius;
+    const nx = Math.max(box[0], Math.min(cx, box[2])), ny = Math.max(box[1], Math.min(cy, box[3]));
+    const dNear = Math.hypot(cx - nx, cy - ny);
+    const dFar = Math.max(Math.hypot(cx - box[0], cy - box[1]), Math.hypot(cx - box[2], cy - box[1]), Math.hypot(cx - box[2], cy - box[3]), Math.hypot(cx - box[0], cy - box[3]));
+    return dNear <= r && r <= dFar;
+  }
+  if (g.kind === 'point' || g.kind === 'text' || g.kind === 'attdef') { const p = g.position; return p[0] >= box[0] && p[0] <= box[2] && p[1] >= box[1] && p[1] <= box[3]; }
+  if (g.kind === 'insert') {
+    const blk = blocks && blocks[g.block]; if (!blk) { const p = g.transform.position; return p[0] >= box[0] && p[0] <= box[2] && p[1] >= box[1] && p[1] <= box[3]; }
+    for (const bf of blk.features) if (featureCrossesBox({ geometry: placeInstance(bf.geometry, g.transform, blk.base) }, box, blocks)) return true;
+    return false;
+  }
+  return false;
+}
+// Box-select over the world box [minx,miny,maxx,maxy]. `crossing` (drag right→left) selects
+// anything the box ENCLOSES or its geometry TOUCHES; otherwise (window, drag left→right) only
+// fully-enclosed features. Enclosure uses the bbox (inside the box ⇒ the whole feature is).
+export function pickWindow(features, box, blocks, skip, crossing) {
   const out = [];
   for (let i = 0; i < features.length; i++) {
     if (skip && skip(features[i])) continue;
     const bb = featureBounds(features[i], blocks); if (!bb) continue;
-    if (bb[0] <= box[2] && bb[2] >= box[0] && bb[1] <= box[3] && bb[3] >= box[1]) out.push(i);
+    const enclosed = bb[0] >= box[0] && bb[2] <= box[2] && bb[1] >= box[1] && bb[3] <= box[3];
+    if (enclosed || (crossing && featureCrossesBox(features[i], box, blocks))) out.push(i);
   }
   return out;
 }

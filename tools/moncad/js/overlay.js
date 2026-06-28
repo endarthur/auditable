@@ -22,7 +22,7 @@ export class Overlay {
   // Provisional draw geometry, already projected to screen px by the caller (the app
   // owns the tool's local coords + the viewport, so it does the projection).
   setRubber(screenGeom) { this.rubber = screenGeom; }
-  setSelectBox(box) { this.selBox = box; }
+  setSelectBox(box, crossing) { this.selBox = box; this.selCrossing = crossing; }
   // Hover preview for the click-on-geometry tools: warn (red) = will be removed, ok (green)
   // = will be added, dim (grey) = the candidate under the cursor.
   setHighlight(geom) { this.highlight = geom; }
@@ -75,13 +75,13 @@ export class Overlay {
 
   // The window-select drag rectangle: a faint info-accent fill + dashed border.
   _selectBox(view) {
-    const ctx = this.ctx, [a, b] = this.selBox;
+    const ctx = this.ctx, [a, b] = this.selBox, cross = this.selCrossing;   // crossing = green dashed, window = blue solid (CAD convention)
     const x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]), w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
-    ctx.fillStyle = 'rgba(120,180,230,0.08)';
+    ctx.fillStyle = cross ? 'rgba(120,200,120,0.10)' : 'rgba(120,180,230,0.10)';
     ctx.fillRect(x, y, w, h);
     ctx.lineWidth = Math.max(1, view.dpr);
-    ctx.strokeStyle = this.theme.sel;
-    ctx.setLineDash([4 * view.dpr, 3 * view.dpr]);
+    ctx.strokeStyle = cross ? 'rgba(120,200,120,0.95)' : this.theme.sel;
+    ctx.setLineDash(cross ? [4 * view.dpr, 3 * view.dpr] : []);
     ctx.strokeRect(x, y, w, h);
     ctx.setLineDash([]);
   }

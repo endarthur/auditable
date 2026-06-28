@@ -380,9 +380,10 @@ function boot() {
   }
   function doWindowSelect(a, b, additive) {
     const wa = pickWorld(a), wb = pickWorld(b);
+    const crossing = b[0] < a[0];   // dragged right→left = crossing (touch); left→right = window (enclose only)
     const box = [Math.min(wa[0], wb[0]), Math.min(wa[1], wb[1]), Math.max(wa[0], wb[0]), Math.max(wa[1], wb[1])];
     if (!additive) selection.clear();
-    for (const i of pickWindow(model.features, box, model.doc.blocks, layerSkip)) selection.add(i);
+    for (const i of pickWindow(model.features, box, model.doc.blocks, layerSkip, crossing)) selection.add(i);
     afterSelect();
   }
   function selectAll() { selection.clear(); for (let i = 0; i < model.features.length; i++) selection.add(i); afterSelect(); }
@@ -934,7 +935,7 @@ function boot() {
   olCanvas.addEventListener('mousemove', (e) => {
     const s = devicePt(e); lastMouse = s; cycleIdx = 0;   // a new position restarts Tab-cycle from the best candidate
     if (panning) { view.panBy(s[0] - last[0], s[1] - last[1]); last = s; }
-    if (selecting) overlay.setSelectBox([selStart, s]);
+    if (selecting) overlay.setSelectBox([selStart, s], s[0] < selStart[0]);   // right→left drag = crossing (green)
     overlay.setCursor(s); readout(s, !panning);
     if (panning || selecting) overlay.setHighlight(null);
     else if (activeTool) { updateRubber(s); updateHover(s); }
