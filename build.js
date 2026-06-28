@@ -1625,6 +1625,59 @@ if (target === 'scan') {
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: moncad — the small 2D CAD instrument, single-file
+// ══════════════════════════════════════════════════
+// A registry build (blob URLs + import map, like lamina): the app (tools/moncad/js,
+// each module registered by basename, app.js last) + its ext libs (@gcu/frame, @gcu/dxf).
+// The dev import map's bare specifiers and the './x.js' relative imports are rewritten to
+// '#'-form, resolved by the inline import map. Output: moncad.html (standalone, offline).
+if (target === 'moncad') {
+  const monDir = path.join(__dirname, 'tools/moncad');
+  const monJsDir = path.join(monDir, 'js');
+  const SPEC = { '@gcu/frame': '#frame', '@gcu/dxf': '#dxf' };
+  const libs = [['frame', 'ext/frame/index.js'], ['dxf', 'ext/dxf/index.js']];
+  const modules = [];
+  for (const [name, rel] of libs) {
+    const p = path.join(__dirname, rel);
+    if (!fs.existsSync(p)) { console.error(`Error: ${rel} not found — build the ext package first.`); process.exit(1); }
+    modules.push({ name, source: fs.readFileSync(p, 'utf8').replace(/^\n+/, '').replace(/\n+$/, '') });
+  }
+  // app modules: every .js in js/, registered by basename, app.js last (its imports
+  // resolve against an already-populated map). Relative imports './x.js' → '#x'.
+  const appFiles = fs.readdirSync(monJsDir).filter((f) => f.endsWith('.js'))
+    .sort((a, b) => (a === 'app.js' ? 1 : 0) - (b === 'app.js' ? 1 : 0) || a.localeCompare(b));
+  const relMap = {};
+  for (const f of appFiles) relMap['./' + f] = '#' + f.replace(/\.js$/, '');
+  for (const f of appFiles) {
+    let src = fs.readFileSync(path.join(monJsDir, f), 'utf8');
+    for (const [from, to] of Object.entries(SPEC)) src = src.split(`from '${from}'`).join(`from '${to}'`);
+    for (const [from, to] of Object.entries(relMap)) src = src.split(`from '${from}'`).join(`from '${to}'`);
+    modules.push({ name: f.replace(/\.js$/, ''), source: src.trim() });
+  }
+  const entries = modules.map((m) => JSON.stringify(m.name) + ': ' + JSON.stringify(m.source).replace(/<\/script>/gi, '<\\/script>'));
+  const order = JSON.stringify(modules.map((m) => m.name));
+  const boot =
+    '(async () => {\n' +
+    'const _S = {\n' + entries.join(',\n') + '\n};\n' +
+    'const _O = ' + order + ';\n' +
+    'const _U = {};\n' +
+    "for (const n of _O) _U[n] = URL.createObjectURL(new Blob([_S[n] + '\\n//# sourceURL=moncad/' + n + '.js\\n'], { type: 'application/javascript' }));\n" +
+    "const _m = document.createElement('script'); _m.type = 'importmap';\n" +
+    'const _im = {}; for (const n of _O) _im["#" + n] = _U[n];\n' +
+    "_m.textContent = JSON.stringify({ imports: _im }); document.body.appendChild(_m);\n" +
+    'for (const n of _O) await import(_U[n]);\n' +
+    '_m.remove();\n' +
+    '})();\n';
+  let html = fs.readFileSync(path.join(monDir, 'index.html'), 'utf8');
+  html = html.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
+  html = html.replace(/<script type="module" src="\.\/js\/app\.js"><\/script>/, () => `<script>\n${boot}\n</script>`);
+  const outPath = path.join(__dirname, 'moncad.html');
+  fs.writeFileSync(outPath, html);
+  console.log(`Built moncad.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB, ${modules.length} modules)`);
+  process.exit(0);
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: lamina — the windowed "open any huge file" viewer, single-file
 // ══════════════════════════════════════════════════
 // A registry build (blob URLs + import map, like auditable/works) but tiny: the

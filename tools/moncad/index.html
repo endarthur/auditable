@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<!-- moncad — a small 2D CAD instrument (standalone dev app) -->
+<!-- Part of the Auditable project — https://github.com/gentropic/auditable -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Networkless by construction: connect-src 'none' bans all egress. The inlined runtime
+     boots as blob: ES modules in the clear (no eval); nothing external loads. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' blob:; style-src 'unsafe-inline'; img-src data:; worker-src 'self' blob:; child-src 'self' blob:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>moncad</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='96' fill='%23121212'/%3E%3Cpath d='M120 392 L120 120 L392 120' fill='none' stroke='%238a9099' stroke-width='28'/%3E%3Cpath d='M150 360 A210 210 0 0 1 360 150' fill='none' stroke='%23d4773e' stroke-width='28'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#121212">
+<style>
+  :root {
+    --mono: 'Space Mono', ui-monospace, monospace; --sans: 'Barlow', system-ui, sans-serif;
+    --tb: 36px; --ft: 26px;
+    --bg:#121212; --bg-bar:#1a1a1a; --bg-foot:#161616; --board:#121212;
+    --border:#2a2a2a; --bd2:#333; --text:#bbb; --text-hi:#ddd; --muted:#888; --dim:#666; --faint:#555;
+    --action:#d4773e; --info:#6aa0cf; --ok:#8cb878; --num:#c0a36e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); overflow: hidden; }
+  #topbar {
+    position: absolute; left: 0; right: 0; top: 0; height: var(--tb); display: flex; align-items: center;
+    gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--bg-bar);
+  }
+  #topbar .title { font-family: var(--mono); font-size: 14px; color: var(--action); letter-spacing: 0.5px; }
+  #topbar .dim { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  #topbar .spacer { flex: 1; }
+  #board { position: absolute; left: 0; right: 0; top: var(--tb); bottom: var(--ft); background: var(--board); overflow: hidden; }
+  #board canvas { position: absolute; inset: 0; display: block; }
+  #gl { z-index: 1; }
+  #overlay { z-index: 2; cursor: none; }
+  #nogl {
+    position: absolute; inset: 0; z-index: 3; display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 8px; color: var(--muted); font-family: var(--mono); font-size: 13px; text-align: center;
+  }
+  #nogl b { color: var(--text-hi); }
+  #footer {
+    position: absolute; left: 0; right: 0; bottom: 0; height: var(--ft); display: flex; align-items: center;
+    gap: 10px; padding: 0 12px; border-top: 1px solid var(--border); background: var(--bg-foot);
+    font-family: var(--mono); font-size: 11px; color: var(--dim);
+  }
+  #footer .lbl { color: var(--muted); }
+  #footer .ro { color: var(--text-hi); font-variant-numeric: tabular-nums; }
+  #footer .sep { width: 1px; height: 14px; background: var(--bd2); }
+  #footer .spacer { flex: 1; }
+  #footer .dim { color: var(--faint); }
+</style>
+<!-- Standalone @gcu/* resolution (the single-file build inlines these). -->
+<script type="importmap">
+{ "imports": {
+  "@gcu/frame": "../../ext/frame/index.js",
+  "@gcu/dxf":   "../../ext/dxf/index.js"
+} }
+</script>
+</head>
+<body>
+  <div id="topbar">
+    <span class="title">moncad</span>
+    <span class="dim">drafting board · v0</span>
+    <span class="spacer"></span>
+    <span class="dim">pan: drag · zoom: wheel · E: extents</span>
+  </div>
+
+  <div id="board">
+    <canvas id="gl"></canvas>
+    <canvas id="overlay"></canvas>
+    <div id="nogl"><b>WebGL2 unavailable</b><span>moncad's renderer needs WebGL2 — try a current browser.</span></div>
+  </div>
+
+  <footer id="footer">
+    <span class="lbl">XY</span><span id="coords" class="ro">—</span>
+    <span class="sep"></span>
+    <span id="zoom" class="ro">—</span>
+    <span class="spacer"></span>
+    <span id="frameInfo" class="dim"></span>
+    <span class="sep"></span>
+    <span id="build" class="dim">moncad · dev</span>
+  </footer>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

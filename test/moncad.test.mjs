@@ -86,3 +86,42 @@ test('fuzzyScore: substring > subsequence > miss', () => {
   assert.equal(fuzzyScore('xyz', 'offset'), 0);                          // miss
   assert.ok(fuzzyScore('', 'anything') > 0);                            // empty → weak match-all
 });
+
+// ── viewport (the camera / transform: pure, frame-aware) ──────────────────────────
+
+import { Viewport } from '../tools/moncad/js/viewport.js';
+
+test('viewport: centre maps to screen centre; toScreen/toWorld round-trip', () => {
+  const v = new Viewport({ width: 800, height: 600, center: [10, 20], scale: 2 });
+  assert.deepEqual(v.toScreen([10, 20]), [400, 300]);          // centre → middle of screen
+  assert.deepEqual(v.toScreen([15, 25]), [410, 290]);          // +5 world x → +10px; +5 world y → -10px (y-up)
+  const w = v.toWorld([410, 290]);
+  assert.ok(Math.abs(w[0] - 15) < 1e-9 && Math.abs(w[1] - 25) < 1e-9);
+});
+
+test('viewport: panBy moves the centre opposite the drag (y-up)', () => {
+  const v = new Viewport({ width: 800, height: 600, center: [0, 0], scale: 2 });
+  v.panBy(20, 10);
+  assert.deepEqual(v.center, [-10, 5]);
+});
+
+test('viewport: zoomAt pins the world point under the cursor', () => {
+  const v = new Viewport({ width: 800, height: 600, center: [0, 0], scale: 2 });
+  const cursor = [600, 200], before = v.toWorld(cursor);
+  v.zoomAt(cursor, 1.5);
+  const after = v.toWorld(cursor);
+  assert.ok(Math.abs(before[0] - after[0]) < 1e-9 && Math.abs(before[1] - after[1]) < 1e-9);
+  assert.ok(Math.abs(v.scale - 3) < 1e-9);
+});
+
+test('viewport: fit centres and scales a bounds into the view', () => {
+  const v = new Viewport({ width: 800, height: 600, scale: 1 });
+  v.fit({ min: [-100, -100], max: [100, 100] }, 0);
+  assert.deepEqual(v.center, [0, 0]);
+  assert.ok(Math.abs(v.scale - 3) < 1e-9);                      // min(800/200, 600/200) = 3
+});
+
+test('viewport: uniforms expose centre/scale/res for the GPU', () => {
+  const v = new Viewport({ width: 800, height: 600, center: [5, 6], scale: 2 });
+  assert.deepEqual(v.uniforms(), { center: [5, 6], scale: 2, res: [800, 600] });
+});
