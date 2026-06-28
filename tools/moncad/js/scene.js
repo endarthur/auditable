@@ -89,7 +89,7 @@ export function placeInstance(g, t, base = [0, 0, 0]) {
   }
   if (g.kind === 'circle') { const cc = M(g.center[0], g.center[1]); return { kind: 'circle', center: [cc[0], cc[1], g.center[2] || 0], radius: g.radius * s }; }
   if (g.kind === 'point') { const p = M(g.position[0], g.position[1]); return { kind: 'point', position: [p[0], p[1], g.position[2] || 0] }; }
-  if (g.kind === 'text') { const p = M(g.position[0], g.position[1]); return { ...g, position: [p[0], p[1], g.position[2] || 0], height: (g.height || 1) * s, rotation: (g.rotation || 0) + t.rotation }; }
+  if (g.kind === 'text' || g.kind === 'attdef') { const p = M(g.position[0], g.position[1]); return { ...g, position: [p[0], p[1], g.position[2] || 0], height: (g.height || 1) * s, rotation: (g.rotation || 0) + t.rotation }; }
   return g;   // nested 'insert' deferred
 }
 
@@ -134,10 +134,21 @@ export function sceneFromDxf(doc, opts = {}) {
       const p = toL(g.position); ext(p);
       T.push({ p, height: g.height || 1, rotation: g.rotation || 0, value: g.value || '', color: isSel ? SELECTED : colorFor(f.properties, layers) });
       snap(p, 'node');
+    } else if (g.kind === 'attdef') {
+      const p = toL(g.position); ext(p);               // a loose attribute definition shows its TAG (the placeholder) while authoring
+      T.push({ p, height: g.height || 1, rotation: g.rotation || 0, value: g.tag || g.value || 'ATTR', color: isSel ? SELECTED : colorFor(f.properties, layers) });
+      snap(p, 'node');
     } else if (g.kind === 'insert') {
       const blk = doc.blocks && doc.blocks[g.block];
+      const attribs = (f.properties && f.properties.attribs) || [];
       if (blk) for (const bf of blk.features) {       // render the definition placed by this instance's transform, coloured as a unit
-        const pg = placeInstance(bf.geometry, g.transform, blk.base);
+        const bg = bf.geometry;
+        if (bg.kind === 'attdef') {                    // an attdef renders this instance's VALUE for that tag (else the default)
+          const a = attribs.find((x) => x.tag === bg.tag), val = a ? a.value : (bg.value || '');
+          if (val) { const pg = placeInstance(bg, g.transform, blk.base); T.push({ p: toL(pg.position), height: pg.height, rotation: pg.rotation, value: val, color: col }); }
+          continue;
+        }
+        const pg = placeInstance(bg, g.transform, blk.base);
         if (pg.kind === 'polyline' || pg.kind === 'circle') { for (const [a, b] of localSegments(pg, o, eps)) seg(a, b, w, col); }
         else if (pg.kind === 'point') pt(toL(pg.position), 6, col);
         else if (pg.kind === 'text') T.push({ p: toL(pg.position), height: pg.height, rotation: pg.rotation, value: pg.value, color: col });

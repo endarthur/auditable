@@ -84,7 +84,8 @@ export class CommandRegistry {
     const scored = [];
     for (const c of this._cmds.values()) {
       if (ctx && c.when && !c.when(ctx)) continue;
-      const s = fuzzyScore(query, (c.title || c.id).toLowerCase());
+      let s = fuzzyScore(query, (c.title || c.id).toLowerCase());
+      if (c.alias) for (const a of [].concat(c.alias)) s = Math.max(s, fuzzyScore(query, String(a).toLowerCase()));   // also find a command by its typed-name alias
       if (s > 0) scored.push({ c, s });
     }
     scored.sort((a, b) => b.s - a.s || (a.c.title || a.c.id).localeCompare(b.c.title || b.c.id));

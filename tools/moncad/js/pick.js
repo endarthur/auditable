@@ -38,7 +38,7 @@ export function featureDist(f, p, blocks) {
     return d;
   }
   if (g.kind === 'circle') return Math.abs(Math.hypot(p[0] - g.center[0], p[1] - g.center[1]) - g.radius);
-  if (g.kind === 'point' || g.kind === 'text') return Math.hypot(p[0] - g.position[0], p[1] - g.position[1]);
+  if (g.kind === 'point' || g.kind === 'text' || g.kind === 'attdef') return Math.hypot(p[0] - g.position[0], p[1] - g.position[1]);
   return Infinity;
 }
 
@@ -57,7 +57,7 @@ export function featureBounds(f, blocks) {
   const ext = (x, y) => { if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y; };
   if (g.kind === 'polyline') { const v = g.vertices; for (let i = 0; i < v.length; i += 3) ext(v[i], v[i + 1]); }
   else if (g.kind === 'circle') { ext(g.center[0] - g.radius, g.center[1] - g.radius); ext(g.center[0] + g.radius, g.center[1] + g.radius); }
-  else if (g.kind === 'point' || g.kind === 'text') ext(g.position[0], g.position[1]);
+  else if (g.kind === 'point' || g.kind === 'text' || g.kind === 'attdef') ext(g.position[0], g.position[1]);
   else if (g.kind === 'insert') {
     const blk = blocks && blocks[g.block]; if (!blk) { ext(g.transform.position[0], g.transform.position[1]); return [minx, miny, maxx, maxy]; }
     for (const bf of blk.features) { const bb = featureBounds({ geometry: placeInstance(bf.geometry, g.transform, blk.base) }, blocks); if (bb) { ext(bb[0], bb[1]); ext(bb[2], bb[3]); } }

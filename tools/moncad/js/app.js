@@ -256,8 +256,9 @@ function boot() {
   function cmdSubmit(text) {
     const t = String(text).trim();
     if (activeTool) {
+      const tm = activeTool.textMode && activeTool.textMode();
+      if (tm && (t !== '' || (activeTool.acceptsEmpty && activeTool.acceptsEmpty()))) { activeTool.text(t); if (activeTool) cmdline.focus(); return; }   // raw text entry (empty only if the tool opts in)
       if (t === '') { activeTool.finish(); return; }                                  // Enter on empty → finish
-      if (activeTool.textMode && activeTool.textMode()) { activeTool.text(t); if (activeTool) cmdline.focus(); return; }   // raw text entry (any string, no coord/snap parse)
       const ov = OVERRIDE_WORDS[t.toLowerCase()];                                     // one-shot snap override (cen / end / non …)
       if (ov !== undefined) { snap.setOneShot(ov); setStatus(`snap once: ${t.toLowerCase()}`); refreshPrompt(); afterTypedPoint(); return; }
       if (activeTool.text && activeTool.text(t)) { refreshPrompt(); afterTypedPoint(); return; }   // tool scalar (circle radius)
@@ -713,23 +714,79 @@ function boot() {
     const r = board.getBoundingClientRect();
     ctxMenu.show(names.map((n) => ({ label: n, run: () => startInsert(n) })), r.left + r.width / 2, r.top + 40);
   }
-  function startInsert(name) {
-    if (!model.getBlock(name)) { setStatus(`no block "${name}"`); return; }
+  // Place an attribute DEFINITION (a tag placeholder); becomes a block template when the
+  // selection (geometry + attdefs) is turned into a block.
+  function startAttdef() {
     cancelTool();
+    let tag = null;
+    activeTool = {
+      name: 'attdef', textMode: () => tag == null,
+      get prompt() { return tag == null ? 'Attribute tag (e.g. HOLEID):' : 'Pick the text position:'; },
+      text: (raw) => { if (tag != null) return false; const t = String(raw).trim(); if (t) { tag = t.toUpperCase(); refreshPrompt(); render(); } return true; },
+      point: (local) => { if (tag != null) { const o = frame.origin; model.add({ type: 'attdef', geometry: { kind: 'attdef', position: [local[0] + o[0], local[1] + o[1], 0], height: textHeight, rotation: 0, tag, prompt: tag, value: '' }, properties: { layer: activeLayer } }); derive(false); endTool(); setStatus(`attribute "${tag}" defined — select all + Make Block`); } },
+      preview: () => ({ lines: [], points: [] }), keyword: () => false,
+      finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
+    };
+    refreshPrompt(); cmdline.focus(); render();
+  }
+  function startInsert(name) {
+    const blk = model.getBlock(name); if (!blk) { setStatus(`no block "${name}"`); return; }
+    const attdefs = blk.features.filter((f) => f.geometry.kind === 'attdef');
+    cancelTool();
+    let pos = null, vals = [];      // pos: pending insertion point while prompting values
+    const place = (local) => {
+      const o = frame.origin;
+      const attribs = attdefs.map((ad, k) => ({ tag: ad.geometry.tag, value: vals[k] != null ? vals[k] : (ad.geometry.value || '') }));
+      const props = attribs.length ? { layer: activeLayer, attribs } : { layer: activeLayer };
+      model.add({ type: 'insert', geometry: { kind: 'insert', block: name, transform: { position: [local[0] + o[0], local[1] + o[1], 0], scale: [1, 1, 1], rotation: 0 } }, properties: props });
+      derive(false); setStatus(`inserted "${name}"`);
+    };
     activeTool = {
       name: 'insert',
-      get prompt() { return `Insert "${name}" — point (Esc to finish):`; },
+      textMode: () => pos != null && vals.length < attdefs.length, acceptsEmpty: () => pos != null,
+      get prompt() { return pos == null ? `Insert "${name}" — point (Esc to finish):` : `Enter ${attdefs[vals.length].geometry.tag}:`; },
       point: (local) => {
-        const o = frame.origin;
-        model.add({ type: 'insert', geometry: { kind: 'insert', block: name, transform: { position: [local[0] + o[0], local[1] + o[1], 0], scale: [1, 1, 1], rotation: 0 } }, properties: { layer: activeLayer } });
-        derive(false); setStatus(`inserted "${name}"`);   // stays active for repeated placement
+        if (pos != null) return;
+        if (!attdefs.length) { place(local); return; }      // no attributes → place immediately, stay active
+        pos = local; vals = []; refreshPrompt(); cmdline.focus(); render();   // begin the value prompts
+      },
+      text: (raw) => {
+        if (pos == null) return false;
+        vals.push(String(raw));
+        if (vals.length >= attdefs.length) { place(pos); pos = null; vals = []; }   // done → place, back to point mode
+        refreshPrompt(); return true;
       },
       preview: (cursor) => {
-        if (!cursor) return { lines: [], points: [] };
+        if (pos != null || !cursor) return { lines: [], points: pos ? [pos] : [] };
         const o = frame.origin;
         return { lines: instanceSegments({ kind: 'insert', block: name, transform: { position: [cursor[0] + o[0], cursor[1] + o[1], 0], scale: [1, 1, 1], rotation: 0 } }), points: [cursor] };
       },
       keyword: () => false,
+      finish: () => endTool(), cancel: () => endTool(), last: () => pos, count: () => (pos ? 1 : 0),
+    };
+    refreshPrompt(); cmdline.focus(); render();
+  }
+  // Double-click an instance → re-prompt its attribute values (empty Enter keeps the current).
+  function editAttribs(i) {
+    const f = model.features[i], blk = model.getBlock(f.geometry.block);
+    const attdefs = blk ? blk.features.filter((x) => x.geometry.kind === 'attdef') : [];
+    if (!attdefs.length) { setStatus('this block has no attributes'); return; }
+    cancelTool();
+    const cur = f.properties.attribs || [], vals = [];
+    activeTool = {
+      name: 'editattr', textMode: () => true, acceptsEmpty: () => true,
+      get prompt() { const ad = attdefs[vals.length].geometry, old = (cur.find((a) => a.tag === ad.tag) || {}).value || ''; return `${ad.tag} [${old}]:`; },
+      text: (raw) => {
+        const ad = attdefs[vals.length].geometry, old = (cur.find((a) => a.tag === ad.tag) || {}).value || '';
+        vals.push(raw === '' ? old : String(raw));      // empty keeps the current value
+        if (vals.length >= attdefs.length) {
+          const attribs = attdefs.map((a, k) => ({ tag: a.geometry.tag, value: vals[k] }));
+          model.applyEdit([{ i, feature: { ...f, properties: { ...f.properties, attribs } } }]);
+          derive(false); endTool(); setStatus('attributes updated');
+        } else refreshPrompt();
+        return true;
+      },
+      point: () => {}, preview: () => ({ lines: [], points: [] }), keyword: () => false,
       finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
     };
     refreshPrompt(); cmdline.focus(); render();
@@ -768,6 +825,7 @@ function boot() {
     { id: 'edit.chamfer', title: 'Chamfer', category: 'Modify', icon: 'Chamfer', alias: ['cha', 'chamfer'], run: () => startCorner('chamfer') },
     { id: 'edit.offset', title: 'Offset', category: 'Modify', icon: 'Offset', keys: 'o', alias: ['o', 'offset'], run: () => startOffset() },
     { id: 'tool.insert', title: 'Insert block', category: 'Draw', icon: 'Insert', keys: 'i', alias: ['insert', 'ins'], run: () => insertCommand() },
+    { id: 'draw.attdef', title: 'Define Attribute…', category: 'Draw', alias: ['attdef', 'attribute', 'att'], run: () => startAttdef() },
     { id: 'tool.measure', title: 'Measure', category: 'Tools', icon: 'Measure', alias: ['measure', 'dist', 'mea'], run: () => startMeasure() },
     { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => derive(true) },
     { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); zoomed(); } },
@@ -831,7 +889,11 @@ function boot() {
     if (e.button === 1) { panning = true; last = devicePt(e); olCanvas.style.cursor = 'grabbing'; return; }   // middle pans
     if (e.button === 0 && !activeTool) { selecting = true; selStart = devicePt(e); }  // left selects / window-selects
   });
-  olCanvas.addEventListener('dblclick', (e) => { if (activeTool) { e.preventDefault(); activeTool.finish(); } });
+  olCanvas.addEventListener('dblclick', (e) => {
+    if (activeTool) { e.preventDefault(); activeTool.finish(); return; }
+    const i = pickAt(pickWorld(devicePt(e)));      // double-click an instance → edit its attribute values
+    if (i >= 0 && model.features[i].geometry.kind === 'insert') { e.preventDefault(); editAttribs(i); }
+  });
   olCanvas.addEventListener('contextmenu', (e) => {                       // right-click is moncad's, not the browser's
     e.preventDefault();
     if (activeTool) { activeTool.finish(); return; }                     // ends the active tool (polyline commits; others cancel)
