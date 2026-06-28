@@ -9,7 +9,7 @@ import { Renderer } from './renderer.js';
 import { Overlay } from './overlay.js';
 import { CommandRegistry } from './commands.js';
 import { sceneFromDxf, localSegments } from './scene.js';
-import { makeToolbar, makePalette, makeCommandLine, makeSnapChips } from './surfaces.js';
+import { makeToolbar, makePalette, makeCommandLine, makeSnapChips, makeContextMenu } from './surfaces.js';
 import { SnapIndex } from './snap.js';
 import { Model } from './model.js';
 import { TOOLS } from './tools.js';
@@ -466,6 +466,10 @@ function boot() {
   palette = makePalette(cmds, ctx, { root: $('#palette'), input: $('#palInput'), list: $('#palList') });
   const cmdline = makeCommandLine({ input: $('#cmdInput'), prompt: $('#cmdPrompt') }, { onSubmit: cmdSubmit, onCancel: cmdCancel, onKey: commandLineKey });
   const snapChips = makeSnapChips(cmds, ctx, $('#snapchips'), snap, SNAP_TYPES, SNAP_LABELS);
+  const ctxMenu = makeContextMenu(cmds, ctx, $('#ctxmenu'));
+  // contextual command sets — verbs come to the selection (SPEC §3, noun-first)
+  const SEL_MENU = ['edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', null, 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', null, 'edit.delete', 'edit.deselect'];
+  const EMPTY_MENU = ['edit.selectAll', null, 'view.zoomExtents', 'view.grid', null, 'file.new', 'file.open', 'file.save'];
   const toolbar = makeToolbar(cmds, ctx, $('#toolbar'),
     ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'edit.move', 'edit.copy', 'edit.rotate', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.offset', 'edit.delete', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
 
@@ -492,7 +496,12 @@ function boot() {
     if (e.button === 0 && !activeTool) { selecting = true; selStart = devicePt(e); }  // left selects / window-selects
   });
   olCanvas.addEventListener('dblclick', (e) => { if (activeTool) { e.preventDefault(); activeTool.finish(); } });
-  olCanvas.addEventListener('contextmenu', (e) => e.preventDefault());   // right-click is moncad's (the context-menu surface), not the browser's
+  olCanvas.addEventListener('contextmenu', (e) => {                       // right-click is moncad's, not the browser's
+    e.preventDefault();
+    if (activeTool) { activeTool.finish(); return; }                     // ends the active tool (polyline commits; others cancel)
+    if (!selection.size) { const i = pickFeature(model.features, pickWorld(devicePt(e)), SELECT_PX * view.dpr / view.scale); if (i >= 0) { selection.add(i); afterSelect(); } }
+    ctxMenu.show(selection.size ? SEL_MENU : EMPTY_MENU, e.clientX, e.clientY);
+  });
   window.addEventListener('mouseup', (e) => {
     if (panning) { panning = false; olCanvas.style.cursor = 'none'; }
     if (selecting) {

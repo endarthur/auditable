@@ -77,7 +77,7 @@ export function makeEditTool(deps) {
       return { lines, points: pts.slice() };
     },
     keyword() { return false; },
-    finish() { /* edit ops complete on their picks, not on Enter */ },
+    finish() { onDone(); },   // Enter / right-click on an incomplete edit abandons it
     cancel() { onDone(); },
     last() { return pts.length ? pts[pts.length - 1] : null; },
     count() { return pts.length; },

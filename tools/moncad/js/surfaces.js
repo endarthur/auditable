@@ -83,6 +83,40 @@ export function makeSnapChips(reg, ctx, mount, snap, types, labels) {
   return { refresh };
 }
 
+// The context menu (SPEC §3) — the noun-first surface: right-click brings the verbs to the
+// selection. Bespoke over the same registry (like the toolbar/palette/command-line here),
+// so a right-click item and its keystroke can't drift and moncad keeps one styling. `items`
+// is a list of command ids (null = separator); each is `when(ctx)`-filtered, so the menu is
+// genuinely contextual. Clicking routes through reg.execute.
+export function makeContextMenu(reg, ctx, root) {
+  let open = false;
+  const hide = () => { open = false; root.classList.remove('show'); root.innerHTML = ''; };
+  function show(items, x, y) {
+    root.innerHTML = '';
+    let pendingSep = false, any = false;
+    for (const id of items) {
+      if (id === null) { pendingSep = any; continue; }
+      const cmd = reg.get(id); if (!cmd || (cmd.when && !cmd.when(ctx))) continue;
+      if (pendingSep) { const s = document.createElement('div'); s.className = 'ctx-sep'; root.appendChild(s); pendingSep = false; }
+      const row = document.createElement('div'); row.className = 'ctx-item';
+      const key = reg.keyFor(id);
+      row.innerHTML = '<span class="ctx-t"></span><span class="ctx-k"></span>';
+      row.children[0].textContent = cmd.title;
+      row.children[1].textContent = key ? key.toUpperCase() : '';
+      row.addEventListener('mousedown', (ev) => { ev.preventDefault(); hide(); reg.execute(id, ctx); });
+      root.appendChild(row); any = true;
+    }
+    if (!any) return;
+    open = true; root.classList.add('show');
+    // place at the cursor, nudged back on-screen if it would overflow
+    root.style.left = Math.min(x, window.innerWidth - root.offsetWidth - 4) + 'px';
+    root.style.top = Math.min(y, window.innerHeight - root.offsetHeight - 4) + 'px';
+  }
+  window.addEventListener('mousedown', (e) => { if (open && !root.contains(e.target)) hide(); });
+  window.addEventListener('keydown', (e) => { if (open && e.key === 'Escape') { e.stopPropagation(); hide(); } });
+  return { show, hide, isOpen: () => open };
+}
+
 export function makePalette(reg, ctx, els) {
   const { root, input, list } = els;
   let items = [], sel = 0, open = false;
