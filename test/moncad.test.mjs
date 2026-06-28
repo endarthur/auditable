@@ -189,3 +189,92 @@ test('scene: emits snap targets (endpoints, midpoints, centre, node)', () => {
   assert.ok(sc.snaps.some((s) => s.type === 'node' && Math.abs(s.p[0] - 25) < 1e-9));                                   // POINT
   assert.ok(sc.snaps.some((s) => s.type === 'end' && s.p[0] === 0 && s.p[1] === 0));                                    // LINE start
 });
+
+// ── the working model: live @gcu/dxf Document + undo/redo (SPEC §4) ────────────────
+import { Model, emptyDoc } from '../tools/moncad/js/model.js';
+import { polylineTool, TOOLS } from '../tools/moncad/js/tools.js';
+
+test('model: empty doc is dxf-shaped; add appends + bumps rev', () => {
+  const m = new Model();
+  assert.deepEqual(Object.keys(emptyDoc()).sort(), ['blocks', 'features', 'frame', 'layers', 'warnings']);
+  assert.equal(m.isEmpty(), true);
+  assert.equal(m.rev, 0);
+  const f = { type: 'point', geometry: { kind: 'point', position: [1, 2, 0] }, properties: {} };
+  m.add(f);
+  assert.equal(m.features.length, 1);
+  assert.equal(m.features[0], f);
+  assert.equal(m.rev, 1);
+  assert.equal(m.isEmpty(), false);
+});
+
+test('model: undo/redo is the same stack; rev advances; redo cleared by a new edit', () => {
+  const m = new Model();
+  const a = { type: 'point', geometry: { kind: 'point', position: [0, 0, 0] }, properties: {} };
+  const b = { type: 'point', geometry: { kind: 'point', position: [1, 1, 0] }, properties: {} };
+  m.add(a); m.add(b);
+  assert.equal(m.features.length, 2);
+  assert.equal(m.undo(), true);
+  assert.deepEqual(m.features, [a]);
+  assert.equal(m.canRedo(), true);
+  assert.equal(m.redo(), true);
+  assert.deepEqual(m.features, [a, b]);
+  // a fresh edit clears the redo stack
+  m.undo();                       // back to [a]
+  m.add(b);                       // new edit
+  assert.equal(m.canRedo(), false);
+  assert.equal(m.redo(), false);
+  // exhaust undo
+  assert.equal(m.undo(), true); assert.equal(m.undo(), true);
+  assert.equal(m.undo(), false);
+  assert.equal(m.isEmpty(), true);
+});
+
+// ── the polyline tool: collects local points, commits a WORLD-canonical feature ────
+test('tools: polyline commits ≥2 points as a world polyline (local→world via the frame)', () => {
+  const frame = { origin: [600000, 7700000, 0], crs: 'EPSG:31983', units: 'm' };
+  let committed = null, done = 0;
+  const t = polylineTool({ frame, onCommit: (f) => (committed = f), onDone: () => done++ });
+  assert.equal(t.count(), 0);
+  t.point([10, 5]); t.point([20, 5]); t.point([20, 15]);
+  assert.deepEqual(t.last(), [20, 15]);
+  t.finish();
+  assert.equal(done, 1);
+  assert.equal(committed.geometry.kind, 'polyline');
+  assert.equal(committed.geometry.closed, false);
+  // first vertex local [10,5] → world [600010, 7700005]
+  const v = committed.geometry.vertices;
+  assert.equal(v.length, 9);
+  assert.ok(Math.abs(v[0] - 600010) < 1e-6 && Math.abs(v[1] - 7700005) < 1e-6);
+});
+
+test('tools: Close rings the polyline; <2 points commits nothing; preview rubber-bands', () => {
+  const frame = { origin: [0, 0, 0], crs: null, units: 'm' };
+  let committed = null, done = 0;
+  const t = polylineTool({ frame, onCommit: (f) => (committed = f), onDone: () => done++ });
+  // preview from last placed point to the cursor
+  t.point([0, 0]); t.point([10, 0]);
+  const g = t.preview([10, 10]);
+  assert.equal(g.lines.length, 2);                 // one placed span + one to-cursor span
+  assert.deepEqual(g.lines[1], [[10, 0], [10, 10]]);
+  assert.equal(t.keyword('c'), true);              // Close
+  assert.equal(committed.geometry.closed, true);
+  assert.equal(done, 1);
+
+  // a one-point polyline commits nothing
+  committed = null; done = 0;
+  const t2 = polylineTool({ frame, onCommit: (f) => (committed = f), onDone: () => done++ });
+  t2.point([0, 0]); t2.finish();
+  assert.equal(committed, null);
+  assert.equal(done, 1);
+  assert.ok(TOOLS.polyline);
+});
+
+test('tools: Undo keyword drops the last vertex', () => {
+  const frame = { origin: [0, 0, 0], crs: null, units: 'm' };
+  const t = polylineTool({ frame, onCommit: () => {}, onDone: () => {} });
+  t.point([0, 0]); t.point([5, 0]); t.point([5, 5]);
+  assert.equal(t.count(), 3);
+  assert.equal(t.keyword('u'), true);
+  assert.equal(t.count(), 2);
+  assert.deepEqual(t.last(), [5, 0]);
+});

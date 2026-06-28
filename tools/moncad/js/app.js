@@ -1,7 +1,8 @@
 // moncad — bootstrap. Wires the WebGL2 renderer + the frame-aware viewport + the
 // Canvas2D overlay + the command-registry spine + its surfaces (toolbar, palette) into a
-// running board, and opens real DXF through @gcu/dxf. Draw tools, snapping, and the
-// menubar/command-line come next.
+// running board over a live WORKING MODEL (a @gcu/dxf-shaped Document). Opens real DXF,
+// draws polylines with snapped clicks + a rubber-band, and saves the model back to DXF.
+// Precision input, the command line, and snap-control come next (SPEC §7, §10).
 
 import { Viewport } from './viewport.js';
 import { Renderer } from './renderer.js';
@@ -10,35 +11,33 @@ import { CommandRegistry } from './commands.js';
 import { sceneFromDxf } from './scene.js';
 import { makeToolbar, makePalette } from './surfaces.js';
 import { SnapIndex } from './snap.js';
+import { Model } from './model.js';
+import { TOOLS } from './tools.js';
 
 const SNAP_PX = 12;   // snap pickup radius, in CSS pixels
 import { makeFrame, toWorld } from '@gcu/frame';
-import { read, explode } from '@gcu/dxf';
+import { read, write, explode } from '@gcu/dxf';
 
 const $ = (s) => document.querySelector(s);
 
-// ── demo scene (local coords; a UTM frame supplies the world readout) ──────────────
-function buildDemo() {
-  const L = [], P = [];
-  const seg = (a, b, w, c) => L.push(a[0], a[1], b[0], b[1], w, c[0], c[1], c[2], c[3]);
-  const pt = (p, s, c) => P.push(p[0], p[1], s, c[0], c[1], c[2], c[3]);
-  const GRID = [0.17, 0.17, 0.17, 1], AXIS = [0.40, 0.40, 0.40, 1];
-  const GEO = [0.82, 0.82, 0.84, 1], ACC = [0.84, 0.47, 0.23, 1], PT = [0.42, 0.63, 0.81, 1];
-  for (let i = -100; i <= 100; i += 10) { seg([i, -100], [i, 100], 1, GRID); seg([-100, i], [100, i], 1, GRID); }
-  seg([-100, 0], [100, 0], 1.5, AXIS); seg([0, -100], [0, 100], 1.5, AXIS);
-  const r = [[-40, -25], [40, -25], [40, 25], [-40, 25]];
-  for (let i = 0; i < 4; i++) seg(r[i], r[(i + 1) % 4], 2, GEO);
-  seg(r[0], r[2], 1.5, ACC);
-  for (const v of r) pt(v, 7, PT);
-  pt([0, 0], 5, ACC);
-  const snaps = [];
-  for (const v of r) snaps.push({ p: v, type: 'end' });
-  for (let i = 0; i < 4; i++) { const a = r[i], b = r[(i + 1) % 4]; snaps.push({ p: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], type: 'mid' }); }
-  snaps.push({ p: [0, 0], type: 'node' });
-  return {
-    frame: makeFrame({ origin: [600000, 7700000, 0], crs: 'EPSG:31983', units: 'm' }),
-    lines: new Float32Array(L), points: new Float32Array(P), bounds: { min: [-100, -100], max: [100, 100] }, snaps,
-  };
+// ── demo model: real @gcu/dxf features in a UTM frame, so there's geometry to snap to
+// and draw against (a rectangle, a diagonal, a centre node). Authored in local coords,
+// stored world-canonical — same contract a drawn or opened feature obeys. ───────────────
+function demoModel() {
+  const frame = makeFrame({ origin: [600000, 7700000, 0], crs: 'EPSG:31983', units: 'm' });
+  const o = frame.origin, W = (lx, ly) => [o[0] + lx, o[1] + ly, 0];
+  const rect = [[-40, -25], [40, -25], [40, 25], [-40, 25]];
+  const rv = new Float64Array(rect.length * 3);
+  rect.forEach((p, i) => { const w = W(p[0], p[1]); rv[i * 3] = w[0]; rv[i * 3 + 1] = w[1]; rv[i * 3 + 2] = 0; });
+  const a = W(-40, -25), b = W(40, 25), c = W(0, 0);
+  const features = [
+    { type: 'polyline', geometry: { kind: 'polyline', vertices: rv, bulges: null, closed: true }, properties: { layer: '0', color: { mode: 'aci', index: 7 } } },
+    { type: 'line', geometry: { kind: 'polyline', vertices: Float64Array.from([a[0], a[1], 0, b[0], b[1], 0]), bulges: null, closed: false }, properties: { layer: '0', color: { mode: 'aci', index: 1 } } },
+    { type: 'point', geometry: { kind: 'point', position: c }, properties: { layer: '0' } },
+  ];
+  const m = new Model({ frame, layers: {}, blocks: {}, features, warnings: [] });
+  m.name = 'demo';
+  return m;
 }
 
 // keystroke → the registry's normalized form
@@ -55,12 +54,14 @@ function boot() {
   const gl = glCanvas.getContext('webgl2', { antialias: true, alpha: false });
   if (!gl) { $('#nogl').style.display = 'flex'; return; }
 
-  let frame = null;
+  let model = null, frame = null;
   const view = new Viewport();
   const renderer = new Renderer(gl);
   const overlay = new Overlay(olCanvas.getContext('2d'));
   let bounds = { min: [-100, -100], max: [100, 100] };
   let snapIndex = new SnapIndex([]);
+  let activeTool = null;
+  const snapOn = true;   // slice 3 makes this a real per-type snap-control state
 
   let pending = false;
   const render = () => {
@@ -69,15 +70,24 @@ function boot() {
     requestAnimationFrame(() => { pending = false; renderer.draw(view); overlay.draw(view); });
   };
 
-  function setScene(sc, fit = true) {
+  // Push the model's derived view (renderer buffers + snap index) — the canonical→derived
+  // step (SPEC §4). `fit` reframes the camera (open / new); a bare edit keeps the view.
+  function derive(fit) {
+    const sc = sceneFromDxf(model.doc);
     frame = sc.frame;
-    bounds = sc.bounds;
+    bounds = (sc.lines.length || sc.points.length) ? sc.bounds : { min: [-50, -50], max: [50, 50] };
     snapIndex = new SnapIndex(sc.snaps || []);
     renderer.setLines(sc.lines);
     renderer.setPoints(sc.points);
     $('#frameInfo').textContent = `${frame.crs || '—'} · origin ${Math.round(frame.origin[0])},${Math.round(frame.origin[1])}`;
     if (fit) view.fit(bounds);
     render();
+  }
+
+  function loadModel(m, fit = true) {
+    cancelTool();
+    model = m;
+    derive(fit);
   }
 
   function resize() {
@@ -88,27 +98,83 @@ function boot() {
     render();
   }
 
-  // open a DXF file → read → explode → scene → render, adopting its frame
+  const setStatus = (t) => { $('#status').textContent = t; };
+
+  // ── open / save real DXF ─────────────────────────────────────────────────────────
   const fileInput = $('#fileInput');
   async function openDxf(file) {
     try {
       const doc = explode(read(await file.text()));
-      const sc = sceneFromDxf(doc);
-      if (!sc.lines.length && !sc.points.length) { setStatus('no drawable geometry in that DXF'); return; }
-      setScene(sc);
+      if (!doc.features.length) { setStatus('no geometry in that DXF'); return; }
+      const m = new Model(doc); m.name = file.name.replace(/\.dxf$/i, '');
+      loadModel(m);
       ctx.hasDoc = true; toolbar.refresh();
-      setStatus(`${file.name} · ${(sc.lines.length / 9) | 0} segments · ${doc.warnings.length} warnings`);
+      setStatus(`${file.name} · ${doc.features.length} features · ${doc.warnings.length} warnings`);
     } catch (e) { setStatus('DXF read failed: ' + e.message); }
   }
   fileInput.addEventListener('change', () => { if (fileInput.files[0]) openDxf(fileInput.files[0]); fileInput.value = ''; });
-  const setStatus = (t) => { $('#status').textContent = t; };
+
+  function download(name, text, mime) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: mime }));
+    a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  function saveDxf() {
+    try { download((model.name || 'drawing') + '.dxf', write(model.doc), 'application/dxf'); setStatus(`saved ${model.features.length} features`); }
+    catch (e) { setStatus('DXF save failed: ' + e.message); }
+  }
+
+  // ── tool lifecycle — one drive loop, any tool ────────────────────────────────────
+  function startTool(name) {
+    const make = TOOLS[name]; if (!make) return;
+    cancelTool();
+    activeTool = make({
+      frame,
+      onCommit: (f) => { model.add(f); derive(false); },
+      onDone: () => endTool(),
+    });
+    setStatus(activeTool.prompt);
+    render();
+  }
+  function endTool() { activeTool = null; overlay.setRubber(null); setStatus(''); render(); }
+  function cancelTool() { if (activeTool) activeTool.cancel(); }   // → onDone → endTool
+
+  // the local point under the cursor, snapped to the nearest target within the aperture
+  function snapAt(s) {
+    const local = view.toWorld(s);
+    const hit = snapOn ? snapIndex.query(local, SNAP_PX * view.dpr / view.scale) : null;
+    return { local: hit ? hit.p : local, hit };
+  }
+  function placePoint(s) {
+    const { local } = snapAt(s);
+    activeTool.point(local);
+    setStatus(activeTool.prompt);
+    updateRubber(s);
+    render();
+  }
+  // project the tool's local rubber-band geometry to screen and hand it to the overlay
+  function updateRubber(s) {
+    if (!activeTool) { overlay.setRubber(null); return; }
+    const { local } = snapAt(s);
+    const g = activeTool.preview(local);
+    overlay.setRubber({
+      lines: g.lines.map(([a, b]) => [view.toScreen(a), view.toScreen(b)]),
+      points: g.points.map((p) => view.toScreen(p)),
+    });
+  }
 
   // ── the spine: commands, then the surfaces that view them ───────────────────────
   let palette;
-  const ctx = { hasDoc: false };
+  const ctx = { hasDoc: true };
   const cmds = new CommandRegistry().registerAll([
+    { id: 'file.new', title: 'New Drawing', category: 'File', icon: 'New', run: () => { const m = new Model(); m.name = 'drawing'; loadModel(m); ctx.hasDoc = false; toolbar.refresh(); setStatus('new drawing'); } },
     { id: 'file.open', title: 'Open DXF…', category: 'File', icon: 'Open', keys: 'ctrl+o', run: () => fileInput.click() },
-    { id: 'file.demo', title: 'Load Demo Scene', category: 'File', run: () => { setScene(buildDemo()); ctx.hasDoc = false; toolbar.refresh(); setStatus('demo scene'); } },
+    { id: 'file.save', title: 'Save DXF…', category: 'File', icon: 'Save', keys: 'ctrl+s', run: () => saveDxf() },
+    { id: 'file.demo', title: 'Load Demo', category: 'File', run: () => { loadModel(demoModel()); ctx.hasDoc = true; toolbar.refresh(); setStatus('demo model'); } },
+    { id: 'draw.polyline', title: 'Polyline', category: 'Draw', icon: 'Pline', keys: 'l', run: () => startTool('polyline') },
+    { id: 'edit.undo', title: 'Undo', category: 'Edit', keys: 'ctrl+z', run: () => { if (model.undo()) { derive(false); setStatus('undo'); } } },
+    { id: 'edit.redo', title: 'Redo', category: 'Edit', keys: 'ctrl+y', run: () => { if (model.redo()) { derive(false); setStatus('redo'); } } },
     { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => { view.fit(bounds); render(); } },
     { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); render(); } },
     { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
@@ -116,34 +182,47 @@ function boot() {
   ]);
   palette = makePalette(cmds, ctx, { root: $('#palette'), input: $('#palInput'), list: $('#palList') });
   const toolbar = makeToolbar(cmds, ctx, $('#toolbar'),
-    ['file.open', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
+    ['file.new', 'file.open', 'file.save', null, 'draw.polyline', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
 
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;       // the palette owns its own keys
+    // an active tool claims Esc / Enter / Close / Undo; everything else (zoom, …) still fires
+    if (activeTool) {
+      if (e.key === 'Escape') { e.preventDefault(); cancelTool(); return; }
+      if (e.key === 'Enter') { e.preventDefault(); activeTool.finish(); return; }
+      const k = e.key.toLowerCase();
+      if (!e.ctrlKey && !e.metaKey && (k === 'c' || k === 'u') && activeTool.keyword(k)) { e.preventDefault(); setStatus(activeTool.prompt); render(); return; }
+    }
     const id = cmds.forKey(eventKey(e));
     if (id) { e.preventDefault(); cmds.execute(id, ctx); }
   });
 
-  // ── input: pan (drag), zoom (wheel), readout (move) ──────────────────────────────
+  // ── input: place points (tool) / pan (drag) / zoom (wheel) / readout (move) ───────
   const devicePt = (e) => { const r = glCanvas.getBoundingClientRect(); return [(e.clientX - r.left) * view.dpr, (e.clientY - r.top) * view.dpr]; };
   let dragging = false, last = null;
-  olCanvas.addEventListener('mousedown', (e) => { if (e.button !== 0 && e.button !== 1) return; dragging = true; last = devicePt(e); olCanvas.style.cursor = 'grabbing'; });
+  olCanvas.addEventListener('mousedown', (e) => {
+    if (activeTool && e.button === 0) { placePoint(devicePt(e)); return; }   // left-click places; no pan mid-draw
+    if (e.button !== 0 && e.button !== 1) return;
+    dragging = true; last = devicePt(e); olCanvas.style.cursor = 'grabbing';
+  });
+  olCanvas.addEventListener('dblclick', (e) => { if (activeTool) { e.preventDefault(); activeTool.finish(); } });
   olCanvas.addEventListener('contextmenu', (e) => e.preventDefault());   // right-click is moncad's (the context-menu surface), not the browser's
   window.addEventListener('mouseup', () => { dragging = false; olCanvas.style.cursor = 'none'; });
   olCanvas.addEventListener('mousemove', (e) => {
     const s = devicePt(e);
     if (dragging) { view.panBy(s[0] - last[0], s[1] - last[1]); last = s; }
-    overlay.setCursor(s); readout(s, !dragging); render();
+    overlay.setCursor(s); readout(s, !dragging);
+    if (activeTool && !dragging) updateRubber(s);
+    render();
   });
   olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); overlay.setSnap(null); render(); });
-  olCanvas.addEventListener('wheel', (e) => { e.preventDefault(); view.zoomAt(devicePt(e), e.deltaY < 0 ? 1.1 : 1 / 1.1); readout(devicePt(e)); render(); }, { passive: false });
+  olCanvas.addEventListener('wheel', (e) => { e.preventDefault(); view.zoomAt(devicePt(e), e.deltaY < 0 ? 1.1 : 1 / 1.1); readout(devicePt(e)); if (activeTool) updateRubber(devicePt(e)); render(); }, { passive: false });
 
   // the instrument panel: LOCAL math, WORLD (UTM) display — the precision point made visible.
-  // snaps to the nearest target within SNAP_PX; the readout then reads the EXACT snapped point.
-  function readout(s, snapOn = true) {
+  function readout(s, snapEval = true) {
     if (!frame) return;
     const local = view.toWorld(s);
-    const hit = snapOn ? snapIndex.query(local, SNAP_PX * view.dpr / view.scale) : null;
+    const hit = (snapEval && snapOn) ? snapIndex.query(local, SNAP_PX * view.dpr / view.scale) : null;
     overlay.setSnap(hit ? view.toScreen(hit.p) : null, hit && hit.type);
     const world = toWorld(hit ? hit.p : local, frame);
     $('#coords').textContent = `${world[0].toFixed(2)}  ${world[1].toFixed(2)}`;
@@ -157,8 +236,8 @@ function boot() {
 
   window.addEventListener('resize', resize);
   resize();
-  setScene(buildDemo());
-  setStatus('demo scene · Open a DXF, or drag one in');
+  loadModel(demoModel());
+  setStatus('demo model · L to draw a polyline · Open or drag in a DXF');
 }
 
 boot();

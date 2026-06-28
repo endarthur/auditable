@@ -10,17 +10,37 @@ export class Overlay {
     this.ctx = ctx;          // CanvasRenderingContext2D (device-pixel scaled by the caller)
     this.cursor = null;      // [screenX, screenY] in device px, or null when off-canvas
     this.snap = null;        // { screen:[x,y], type } or null
-    this.theme = { crosshair: 'rgba(140,140,140,0.45)', cross: 'rgba(200,120,80,0.9)', snap: 'rgba(120,180,230,0.95)' };
+    this.rubber = null;      // { lines:[[a,b],…], points:[p,…] } in SCREEN px, or null
+    this.theme = { crosshair: 'rgba(140,140,140,0.45)', cross: 'rgba(200,120,80,0.9)', snap: 'rgba(120,180,230,0.95)', rubber: 'rgba(216,120,59,0.95)' };
   }
 
   setCursor(screenPt) { this.cursor = screenPt; }
   setSnap(screen, type) { this.snap = screen ? { screen, type } : null; }
+  // Provisional draw geometry, already projected to screen px by the caller (the app
+  // owns the tool's local coords + the viewport, so it does the projection).
+  setRubber(screenGeom) { this.rubber = screenGeom; }
 
   draw(view) {
     const ctx = this.ctx, w = view.width, h = view.height;
     ctx.clearRect(0, 0, w, h);
+    if (this.rubber) this._rubber(view);
     if (this.cursor) this._crosshair(view);
     if (this.snap) this._snapGlyph(view);
+  }
+
+  // The rubber-band: dashed segments in the action accent + small handles at placed
+  // vertices. Redrawn every cursor move — cheap, and the heavy geometry sits still on
+  // the GPU underneath (SPEC §6, the better-than-Canvas2D interaction win).
+  _rubber(view) {
+    const ctx = this.ctx, g = this.rubber, s = 3 * view.dpr;
+    ctx.lineWidth = Math.max(1.5, 1.5 * view.dpr);
+    ctx.strokeStyle = this.theme.rubber;
+    ctx.setLineDash([6 * view.dpr, 4 * view.dpr]);
+    ctx.beginPath();
+    for (const [a, b] of g.lines || []) { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (const p of g.points || []) ctx.strokeRect(p[0] - s, p[1] - s, 2 * s, 2 * s);
   }
 
   // The snap marker, by type — drawn at the snapped point (which may differ from the
