@@ -320,3 +320,17 @@ test('filletCorner: refuses an endpoint / a curved-adjacent corner / too-large r
   assert.equal(filletCorner(P([[0, 0], [10, 0], [10, 10]]), 0, 2, 1e-9).ok, false);    // open endpoint
   assert.equal(filletCorner(P([[0, 0], [10, 0], [10, 10]]), 1, 50, 1e-9).ok, false);   // radius too large
 });
+
+// ── insert (block instance) transforms — move the unit, rotate/scale also turn/resize it ──
+import { translate as rTranslate, rotate as rRotate, scale as rScale } from '../ext/regula/src/main.js';
+const INST = { kind: 'insert', block: 'sq', transform: { position: [10, 0, 0], scale: [1, 1, 1], rotation: 0 } };
+test('transform: an insert moves as a unit; rotate/scale adjust its transform', () => {
+  const moved = rTranslate(INST, [5, 5]);
+  assert.deepEqual(moved.transform.position, [15, 5, 0]);
+  const rot = rRotate(INST, Math.PI / 2, [0, 0]);                  // 90° about origin
+  assert.ok(Math.abs(rot.transform.position[0] - 0) < 1e-9 && Math.abs(rot.transform.position[1] - 10) < 1e-9);
+  assert.ok(Math.abs(rot.transform.rotation - 90) < 1e-9);        // the symbol turns too
+  const sc = rScale(INST, 3, [0, 0]);
+  assert.deepEqual(sc.transform.position, [30, 0, 0]);
+  assert.deepEqual(sc.transform.scale, [3, 3, 3]);               // the symbol resizes too
+});

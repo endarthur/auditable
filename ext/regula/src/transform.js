@@ -16,7 +16,7 @@
 
 // Apply a 2D point map `fn(x,y)->[x,y]` to any supported geometry, with bulge/radius
 // handling, returning fresh geometry. `flipBulge` for reflections; `radiusScale` for scale.
-function transformGeom(g, fn, { flipBulge = false, radiusScale = 1 } = {}) {
+function transformGeom(g, fn, { flipBulge = false, radiusScale = 1, rotateBy = 0, scaleBy = 1 } = {}) {
   if (!g || !g.kind) return g;
   if (g.kind === 'polyline') {
     const v = g.vertices, out = new Float64Array(v.length);
@@ -27,7 +27,11 @@ function transformGeom(g, fn, { flipBulge = false, radiusScale = 1 } = {}) {
   if (g.kind === 'circle') { const c = fn(g.center[0], g.center[1]); return { kind: 'circle', center: [c[0], c[1], g.center[2] || 0], radius: g.radius * radiusScale }; }
   if (g.kind === 'point') { const p = fn(g.position[0], g.position[1]); return { kind: 'point', position: [p[0], p[1], g.position[2] || 0] }; }
   if (g.kind === 'text') { const p = fn(g.position[0], g.position[1]); return { ...g, position: [p[0], p[1], g.position[2] || 0] }; }   // moves the insertion point (stays upright in v0)
-  return g;   // face / insert etc. — untouched in v0 (no 2D-plan transform defined)
+  if (g.kind === 'insert') {   // an instance moves as a unit: the insertion point maps; rotate/scale also turn/resize it
+    const t = g.transform, p = fn(t.position[0], t.position[1]);
+    return { ...g, transform: { position: [p[0], p[1], t.position[2] || 0], scale: t.scale.map((s) => s * scaleBy), rotation: t.rotation + rotateBy * 180 / Math.PI } };
+  }
+  return g;   // face etc. — untouched in v0 (no 2D-plan transform defined)
 }
 
 // Move by a displacement [dx, dy].
@@ -38,14 +42,14 @@ export function translate(g, [dx, dy]) {
 // Rotate by `angle` (radians, CCW) about `pivot` (local). Bulge unchanged.
 export function rotate(g, angle, pivot = [0, 0]) {
   const c = Math.cos(angle), s = Math.sin(angle), px = pivot[0], py = pivot[1];
-  return transformGeom(g, (x, y) => { const dx = x - px, dy = y - py; return [px + dx * c - dy * s, py + dx * s + dy * c]; });
+  return transformGeom(g, (x, y) => { const dx = x - px, dy = y - py; return [px + dx * c - dy * s, py + dx * s + dy * c]; }, { rotateBy: angle });
 }
 
 // Uniform scale by `factor` about `pivot`. Radius scales by |factor|; a negative factor is
 // a point-reflection (= 180° rotation), which preserves orientation, so bulge is unchanged.
 export function scale(g, factor, pivot = [0, 0]) {
   const px = pivot[0], py = pivot[1];
-  return transformGeom(g, (x, y) => [px + (x - px) * factor, py + (y - py) * factor], { radiusScale: Math.abs(factor) });
+  return transformGeom(g, (x, y) => [px + (x - px) * factor, py + (y - py) * factor], { radiusScale: Math.abs(factor), scaleBy: Math.abs(factor) });
 }
 
 // Reflect across the line through points `a` and `b` (local). Bulge negated.
