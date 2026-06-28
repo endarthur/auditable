@@ -125,3 +125,37 @@ test('viewport: uniforms expose centre/scale/res for the GPU', () => {
   const v = new Viewport({ width: 800, height: 600, center: [5, 6], scale: 2 });
   assert.deepEqual(v.uniforms(), { center: [5, 6], scale: 2, res: [800, 600] });
 });
+
+// ── scene (the @gcu/dxf → renderer bridge: pure, frame-aware) ──────────────────────
+
+import { read as dxfRead } from '../ext/dxf/src/read.js';
+import { sceneFromDxf } from '../tools/moncad/js/scene.js';
+
+const SCENE_DXF = [
+  '0', 'SECTION', '2', 'ENTITIES',
+  '0', 'LINE', '8', 'W', '10', '600000', '20', '7700000', '30', '0', '11', '600100', '21', '7700050', '31', '0',
+  '0', 'CIRCLE', '8', 'H', '10', '600050', '20', '7700040', '30', '0', '40', '5',
+  '0', 'POINT', '8', 'P', '10', '600025', '20', '7700025', '30', '0',
+  '0', 'ENDSEC', '0', 'EOF', '',
+].join('\n');
+
+test('scene: dxf Document → renderer instances, WORLD geometry shifted into LOCAL', () => {
+  const sc = sceneFromDxf(dxfRead(SCENE_DXF));
+  assert.deepEqual(sc.frame.origin, [600000, 7700000, 0]);        // adopted the doc's frame (bbox floor)
+  // the LINE entered first → its segment is local (0,0)→(100,50)
+  assert.equal(sc.lines[0], 0); assert.equal(sc.lines[1], 0);
+  assert.equal(sc.lines[2], 100); assert.equal(sc.lines[3], 50);
+  assert.equal(sc.points.length, 7);                              // exactly one POINT → 7 floats
+  assert.ok(sc.bounds.max[0] >= 100 && sc.bounds.min[0] === 0);   // local bounds span the geometry
+  assert.ok(sc.lines.length / 9 > 8);                             // line + circle tessellated to many segments
+});
+
+test('scene: a bulge span tessellates into multiple chords (arc, not a chord)', () => {
+  const arcDxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'ARC', '8', 'A', '10', '600000', '20', '7700000', '30', '0', '40', '20', '50', '0', '51', '90',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\n');
+  const sc = sceneFromDxf(dxfRead(arcDxf), { eps: 0.05 });
+  assert.ok(sc.lines.length / 9 >= 3);                            // a 90° r=20 arc → several chords, not one
+});

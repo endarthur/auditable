@@ -18,6 +18,7 @@
     --bg:#121212; --bg-bar:#1a1a1a; --bg-foot:#161616; --board:#121212;
     --border:#2a2a2a; --bd2:#333; --text:#bbb; --text-hi:#ddd; --muted:#888; --dim:#666; --faint:#555;
     --action:#d4773e; --info:#6aa0cf; --ok:#8cb878; --num:#c0a36e;
+    --bg-btn:#242424; --bg-hover:#2e2e2e; --bg-panel:#1c1c1c; --bg-field:#141414;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); overflow: hidden; }
@@ -47,6 +48,23 @@
   #footer .sep { width: 1px; height: 14px; background: var(--bd2); }
   #footer .spacer { flex: 1; }
   #footer .dim { color: var(--faint); }
+  /* toolbar — friendly buttons over the command registry; tooltips teach the key */
+  #topbar .toolbar { display: flex; align-items: center; gap: 4px; }
+  .tb-btn { font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 9px; cursor: pointer; }
+  .tb-btn:hover { background: var(--bg-hover); }
+  .tb-btn:disabled { color: var(--faint); opacity: .5; cursor: default; }
+  .tb-sep { width: 1px; height: 16px; background: var(--bd2); margin: 0 4px; }
+  /* command palette — type-to-find over the same registry */
+  .pal { position: absolute; inset: var(--tb) 0 var(--ft) 0; z-index: 40; display: none; align-items: flex-start; justify-content: center; background: rgba(10,10,10,0.5); }
+  .pal.show { display: flex; }
+  .pal-box { margin-top: 12vh; width: min(520px, 88vw); background: var(--bg-panel); border: 1px solid var(--bd2); border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); overflow: hidden; }
+  .pal-input { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 14px; color: var(--text-hi); background: var(--bg-field); border: none; border-bottom: 1px solid var(--border); padding: 12px 14px; outline: none; }
+  .pal-list { max-height: 320px; overflow-y: auto; }
+  .pal-item { display: flex; align-items: baseline; gap: 12px; padding: 8px 14px; cursor: pointer; }
+  .pal-item.sel, .pal-item:hover { background: var(--bg-hover); }
+  .pal-t { flex: 1; color: var(--text-hi); font-family: var(--mono); font-size: 13px; }
+  .pal-cat { color: var(--dim); font-family: var(--mono); font-size: 11px; }
+  .pal-k { color: var(--action); font-family: var(--mono); font-size: 11px; min-width: 52px; text-align: right; }
 </style>
 <!-- Standalone @gcu/* resolution (the single-file build inlines these). -->
 <script type="importmap">
@@ -59,9 +77,9 @@
 <body>
   <div id="topbar">
     <span class="title">moncad</span>
-    <span class="dim">drafting board · v0</span>
+    <span id="toolbar" class="toolbar"></span>
     <span class="spacer"></span>
-    <span class="dim">pan: drag · zoom: wheel · E: extents</span>
+    <span id="status" class="dim"></span>
   </div>
 
   <div id="board">
@@ -79,6 +97,9 @@
     <span class="sep"></span>
     <span id="build" class="dim">moncad · dev</span>
   </footer>
+
+  <div id="palette" class="pal"><div class="pal-box"><input id="palInput" class="pal-input" placeholder="run a command…" spellcheck="false"><div id="palList" class="pal-list"></div></div></div>
+  <input type="file" id="fileInput" accept=".dxf" style="display:none">
 
   <script type="module" src="./js/app.js"></script>
 </body>

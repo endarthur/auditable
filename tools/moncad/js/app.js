@@ -1,14 +1,16 @@
 // moncad — bootstrap. Wires the WebGL2 renderer + the frame-aware viewport + the
-// Canvas2D overlay + the command-registry spine into a running board. v0: a demo scene
-// you can pan/zoom, a frame-correct world-UTM readout, and a couple of view commands
-// driven through the registry (so the spine is live, not decorative). Draw/open and the
-// surfaces (toolbar/menu/palette/command-line) come next.
+// Canvas2D overlay + the command-registry spine + its surfaces (toolbar, palette) into a
+// running board, and opens real DXF through @gcu/dxf. Draw tools, snapping, and the
+// menubar/command-line come next.
 
 import { Viewport } from './viewport.js';
 import { Renderer } from './renderer.js';
 import { Overlay } from './overlay.js';
 import { CommandRegistry } from './commands.js';
+import { sceneFromDxf } from './scene.js';
+import { makeToolbar, makePalette } from './surfaces.js';
 import { makeFrame, toWorld } from '@gcu/frame';
+import { read, explode } from '@gcu/dxf';
 
 const $ = (s) => document.querySelector(s);
 
@@ -26,7 +28,10 @@ function buildDemo() {
   seg(r[0], r[2], 1.5, ACC);
   for (const v of r) pt(v, 7, PT);
   pt([0, 0], 5, ACC);
-  return { lines: new Float32Array(L), points: new Float32Array(P), bounds: { min: [-100, -100], max: [100, 100] } };
+  return {
+    frame: makeFrame({ origin: [600000, 7700000, 0], crs: 'EPSG:31983', units: 'm' }),
+    lines: new Float32Array(L), points: new Float32Array(P), bounds: { min: [-100, -100], max: [100, 100] },
+  };
 }
 
 // keystroke → the registry's normalized form
@@ -42,23 +47,29 @@ function boot() {
   const glCanvas = $('#gl'), olCanvas = $('#overlay'), board = $('#board');
   const gl = glCanvas.getContext('webgl2', { antialias: true, alpha: false });
   if (!gl) { $('#nogl').style.display = 'flex'; return; }
-  const ctx2d = olCanvas.getContext('2d');
 
-  const frame = makeFrame({ origin: [600000, 7700000, 0], crs: 'EPSG:31983', units: 'm' });
+  let frame = null;
   const view = new Viewport();
   const renderer = new Renderer(gl);
-  const overlay = new Overlay(ctx2d);
-  const scene = buildDemo();
-  renderer.setLines(scene.lines);
-  renderer.setPoints(scene.points);
+  const overlay = new Overlay(olCanvas.getContext('2d'));
+  let bounds = { min: [-100, -100], max: [100, 100] };
 
-  // coalesced redraw — at most one draw per frame
   let pending = false;
   const render = () => {
     if (pending) return;
     pending = true;
     requestAnimationFrame(() => { pending = false; renderer.draw(view); overlay.draw(view); });
   };
+
+  function setScene(sc, fit = true) {
+    frame = sc.frame;
+    bounds = sc.bounds;
+    renderer.setLines(sc.lines);
+    renderer.setPoints(sc.points);
+    $('#frameInfo').textContent = `${frame.crs || '—'} · origin ${Math.round(frame.origin[0])},${Math.round(frame.origin[1])}`;
+    if (fit) view.fit(bounds);
+    render();
+  }
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -68,16 +79,40 @@ function boot() {
     render();
   }
 
-  // ── commands (the spine; keys resolve through the registry) ──────────────────────
+  // open a DXF file → read → explode → scene → render, adopting its frame
+  const fileInput = $('#fileInput');
+  async function openDxf(file) {
+    try {
+      const doc = explode(read(await file.text()));
+      const sc = sceneFromDxf(doc);
+      if (!sc.lines.length && !sc.points.length) { setStatus('no drawable geometry in that DXF'); return; }
+      setScene(sc);
+      ctx.hasDoc = true; toolbar.refresh();
+      setStatus(`${file.name} · ${(sc.lines.length / 9) | 0} segments · ${doc.warnings.length} warnings`);
+    } catch (e) { setStatus('DXF read failed: ' + e.message); }
+  }
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) openDxf(fileInput.files[0]); fileInput.value = ''; });
+  const setStatus = (t) => { $('#status').textContent = t; };
+
+  // ── the spine: commands, then the surfaces that view them ───────────────────────
+  let palette;
+  const ctx = { hasDoc: false };
   const cmds = new CommandRegistry().registerAll([
-    { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', keys: 'e', run: () => { view.fit(scene.bounds); render(); } },
-    { id: 'view.zoomIn', title: 'Zoom In', category: 'View', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); render(); } },
-    { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
+    { id: 'file.open', title: 'Open DXF…', category: 'File', icon: 'Open', keys: 'ctrl+o', run: () => fileInput.click() },
+    { id: 'file.demo', title: 'Load Demo Scene', category: 'File', run: () => { setScene(buildDemo()); ctx.hasDoc = false; toolbar.refresh(); setStatus('demo scene'); } },
+    { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => { view.fit(bounds); render(); } },
+    { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); render(); } },
+    { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
+    { id: 'view.palette', title: 'Command Palette', category: 'View', icon: '⌘', keys: 'ctrl+p', run: () => palette.toggle() },
   ]);
+  palette = makePalette(cmds, ctx, { root: $('#palette'), input: $('#palInput'), list: $('#palList') });
+  const toolbar = makeToolbar(cmds, ctx, $('#toolbar'),
+    ['file.open', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
+
   window.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT') return;
+    if (e.target.tagName === 'INPUT') return;       // the palette owns its own keys
     const id = cmds.forKey(eventKey(e));
-    if (id) { e.preventDefault(); cmds.execute(id, {}); }
+    if (id) { e.preventDefault(); cmds.execute(id, ctx); }
   });
 
   // ── input: pan (drag), zoom (wheel), readout (move) ──────────────────────────────
@@ -88,26 +123,27 @@ function boot() {
   olCanvas.addEventListener('mousemove', (e) => {
     const s = devicePt(e);
     if (dragging) { view.panBy(s[0] - last[0], s[1] - last[1]); last = s; }
-    overlay.setCursor(s);
-    readout(s);
-    render();
+    overlay.setCursor(s); readout(s); render();
   });
   olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); render(); });
   olCanvas.addEventListener('wheel', (e) => { e.preventDefault(); view.zoomAt(devicePt(e), e.deltaY < 0 ? 1.1 : 1 / 1.1); readout(devicePt(e)); render(); }, { passive: false });
 
   // the instrument panel: LOCAL math, WORLD (UTM) display — the precision point made visible
   function readout(s) {
-    const local = view.toWorld(s);
-    const world = toWorld(local, frame);
+    if (!frame) return;
+    const world = toWorld(view.toWorld(s), frame);
     $('#coords').textContent = `${world[0].toFixed(2)}  ${world[1].toFixed(2)}`;
-    $('#zoom').textContent = `1 px ≈ ${(1 / view.scale * view.dpr).toFixed(3)} ${frame.units}`;
+    $('#zoom').textContent = `1 px ≈ ${(view.dpr / view.scale).toFixed(3)} ${frame.units}`;
   }
-  $('#frameInfo').textContent = `${frame.crs} · origin ${frame.origin[0]},${frame.origin[1]}`;
+
+  // drag-and-drop a DXF anywhere on the board
+  board.addEventListener('dragover', (e) => { e.preventDefault(); });
+  board.addEventListener('drop', (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) openDxf(f); });
 
   window.addEventListener('resize', resize);
   resize();
-  view.fit(scene.bounds);
-  render();
+  setScene(buildDemo());
+  setStatus('demo scene · Open a DXF, or drag one in');
 }
 
 boot();
