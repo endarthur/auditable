@@ -705,3 +705,36 @@ test('scene: an INSERT renders the block body placed (live instance)', () => {
   assert.equal(sc.lines.length / 9, 4);            // the square's 4 spans, placed
   assert.equal(sc.snaps.length, 1);                // the insertion point
 });
+
+// ── feature-export: the drawing→table data bridge (WKT feature table) ──────────────
+import { featureToGeometry, featuresToTable, tableToCsv, sridFromCrs } from '../tools/moncad/js/feature-export.js';
+import { stringify as wkt } from '../ext/wkt/src/main.js';
+
+test('featureToGeometry: dxf kinds → GeoJSON (insert → its point; closed → Polygon)', () => {
+  assert.deepEqual(featureToGeometry({ type: 'point', geometry: { kind: 'point', position: [5, 6, 0] } }), { type: 'Point', coordinates: [5, 6] });
+  assert.deepEqual(featureToGeometry({ type: 'insert', geometry: { kind: 'insert', block: 'collar', transform: { position: [100, 200, 0], scale: [1, 1, 1], rotation: 0 } } }), { type: 'Point', coordinates: [100, 200] });
+  const open = featureToGeometry({ type: 'polyline', geometry: { kind: 'polyline', vertices: Float64Array.from([0, 0, 0, 10, 0, 0, 10, 10, 0]), bulges: null, closed: false } });
+  assert.equal(open.type, 'LineString'); assert.equal(open.coordinates.length, 3);
+  const closed = featureToGeometry({ type: 'polyline', geometry: { kind: 'polyline', vertices: Float64Array.from([0, 0, 0, 10, 0, 0, 10, 10, 0]), bulges: null, closed: true } });
+  assert.equal(closed.type, 'Polygon'); assert.deepEqual(closed.coordinates[0][0], closed.coordinates[0][closed.coordinates[0].length - 1]);   // ring closed
+});
+
+test('featuresToTable + tableToCsv: attributed collars → a feature table (POINT + attribute cols)', () => {
+  const feats = [
+    { type: 'insert', geometry: { kind: 'insert', block: 'collar', transform: { position: [600040, 7700025, 0], scale: [1, 1, 1], rotation: 0 } }, properties: { attribs: [{ tag: 'HOLEID', value: 'DH-01' }, { tag: 'DEPTH', value: '120' }] } },
+    { type: 'insert', geometry: { kind: 'insert', block: 'collar', transform: { position: [600090, 7700100, 0], scale: [1, 1, 1], rotation: 0 } }, properties: { attribs: [{ tag: 'HOLEID', value: 'DH-02' }] } },
+  ];
+  const table = featuresToTable(feats, { stringify: wkt, srid: 31983 });
+  assert.deepEqual(table.columns, ['wkt', 'kind', 'DEPTH', 'HOLEID']);
+  assert.equal(table.rows[0].wkt, 'SRID=31983;POINT (600040 7700025)');
+  const csv = tableToCsv(table);
+  assert.equal(csv.split('\n')[0], 'wkt,kind,DEPTH,HOLEID');
+  assert.ok(csv.includes('DH-01'));
+  assert.ok(csv.split('\n')[2].includes('DH-02') && csv.split('\n')[2].split(',').length === 4);   // DH-02 row has empty DEPTH cell
+});
+
+test('sridFromCrs: EPSG string → number', () => {
+  assert.equal(sridFromCrs('EPSG:31983'), 31983);
+  assert.equal(sridFromCrs({ code: 'EPSG:4326' }), 4326);
+  assert.equal(sridFromCrs(null), undefined);
+});

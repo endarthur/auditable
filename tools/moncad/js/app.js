@@ -18,9 +18,11 @@ import { SnapState, pickSnap, SNAP_TYPES, SNAP_LABELS, OVERRIDE_WORDS } from './
 import { pickFeature, pickWindow } from './pick.js';
 import { makeEditTool } from './edit-ops.js';
 import { computeGrid, snapToGrid } from './grid.js';
+import { featuresToTable, tableToCsv, sridFromCrs } from './feature-export.js';
 
 import { makeFrame, toWorld } from '@gcu/frame';
 import { read, write, explode } from '@gcu/dxf';
+import { stringify as wktStringify } from '@gcu/wkt';
 import { translate, rotate, mirror, scale as rScale, circle as rCircle, spanCurve, trim, extend, fillet, chamfer, filletCorner, chamferCorner, offset, makeTolerance } from '@gcu/regula';
 
 // ── geometry bridge: @gcu/dxf feature geometry (flat WORLD vertices) ↔ @gcu/regula ──
@@ -198,6 +200,17 @@ function boot() {
   function saveDxf() {
     try { download((model.name || 'drawing') + '.dxf', write(model.doc), 'application/dxf'); setStatus(`saved ${model.features.length} features`); }
     catch (e) { setStatus('DXF save failed: ' + e.message); }
+  }
+  // The drawing→table data bridge: selection (or all) → a feature table (wkt column +
+  // attribute columns) as CSV, the GeoPandas/PostGIS-friendly form. Block instances → POINT
+  // + their attributes; arcs/circles tessellated; SRID from the frame's CRS (EWKT).
+  function exportFeatureTable() {
+    const feats = selection.size ? [...selection].sort((a, b) => a - b).map((i) => model.features[i]) : model.features;
+    const srid = sridFromCrs(frame.crs);
+    const table = featuresToTable(feats, { stringify: wktStringify, ...(srid != null ? { srid } : {}) });
+    if (!table.rows.length) { setStatus('nothing to export (points / lines / areas / blocks)'); return; }
+    try { download((model.name || 'drawing') + '-features.csv', tableToCsv(table), 'text/csv'); setStatus(`exported ${table.rows.length} features → CSV (wkt${srid != null ? `, SRID ${srid}` : ''})`); }
+    catch (e) { setStatus('export failed: ' + e.message); }
   }
 
   // ── tool lifecycle — one drive loop, any tool ────────────────────────────────────
@@ -799,6 +812,7 @@ function boot() {
     { id: 'file.new', title: 'New Drawing', category: 'File', icon: 'New', run: () => { const m = new Model(); m.name = 'drawing'; loadModel(m); ctx.hasDoc = false; tools.refresh(); setStatus('new drawing'); } },
     { id: 'file.open', title: 'Open DXF…', category: 'File', icon: 'Open', keys: 'ctrl+o', run: () => fileInput.click() },
     { id: 'file.save', title: 'Save DXF…', category: 'File', icon: 'Save', keys: 'ctrl+s', run: () => saveDxf() },
+    { id: 'file.exportWkt', title: 'Export Features (WKT/CSV)…', category: 'File', alias: ['exportwkt', 'wkt', 'features', 'export'], run: () => exportFeatureTable() },
     { id: 'file.demo', title: 'Load Demo', category: 'File', run: () => { loadModel(demoModel()); ctx.hasDoc = true; tools.refresh(); setStatus('demo model'); } },
     { id: 'draw.line', title: 'Line', category: 'Draw', icon: 'Line', keys: 'l', alias: ['l', 'line'], run: () => startTool('line') },
     { id: 'draw.polyline', title: 'Polyline', category: 'Draw', icon: 'Pline', keys: 'p', alias: ['p', 'pl', 'pline', 'polyline'], run: () => startTool('polyline') },
