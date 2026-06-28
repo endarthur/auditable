@@ -247,7 +247,10 @@ function boot() {
     return { local: p, hit, count };
   }
   function placePoint(s) {
-    const local = activeTool.rawPick ? view.toWorld(s) : snapAt(s).local;   // trim picks raw (no snap jump)
+    // rawPick tools (trim/extend/fillet/chamfer/offset) hit-test + edit in WORLD coords, so
+    // give them the WORLD point (not the local one — they differ once the frame origin ≠ 0,
+    // e.g. an opened UTM drawing); draw/affine tools work in LOCAL + convert on commit.
+    const local = activeTool.rawPick ? pickWorld(s) : snapAt(s).local;
     activeTool.point(local);          // may auto-finish (line/circle) → endTool nulls activeTool
     consumeOneShot();
     refreshPrompt();
@@ -277,7 +280,7 @@ function boot() {
       if (activeTool.text && activeTool.text(t)) { refreshPrompt(); afterTypedPoint(); return; }   // tool scalar (circle radius)
       if (activeTool.keyword && activeTool.keyword(t.toLowerCase())) { refreshPrompt(); afterTypedPoint(); return; }
       const r = parsePoint(t, activeTool.last(), frame);                              // a coordinate
-      if (r.ok) { activeTool.point(r.local); consumeOneShot(); refreshPrompt(); afterTypedPoint(); }
+      if (r.ok) { activeTool.point(activeTool.rawPick ? toWorld(r.local, frame) : r.local); consumeOneShot(); refreshPrompt(); afterTypedPoint(); }   // rawPick tools work in WORLD
       else setStatus(r.error);
       if (activeTool) cmdline.focus();
       return;
@@ -449,7 +452,7 @@ function boot() {
   }
   function updateHover(s) {
     if (!activeTool || !activeTool.hover || !s) { overlay.setHighlight(null); return; }
-    const hl = activeTool.hover(view.toWorld(s));
+    const hl = activeTool.hover(pickWorld(s));   // hover lives only on rawPick tools → WORLD coords (see placePoint)
     if (!hl) { overlay.setHighlight(null); return; }
     const proj = (segs) => (segs || []).map(([a, b]) => [view.toScreen(a), view.toScreen(b)]);
     overlay.setHighlight({ warn: proj(hl.warn), ok: proj(hl.ok), dim: proj(hl.dim), pre: proj(hl.pre) });
