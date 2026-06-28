@@ -11,7 +11,8 @@ export class Overlay {
     this.cursor = null;      // [screenX, screenY] in device px, or null when off-canvas
     this.snap = null;        // { screen:[x,y], type } or null
     this.rubber = null;      // { lines:[[a,b],…], points:[p,…] } in SCREEN px, or null
-    this.theme = { crosshair: 'rgba(140,140,140,0.45)', cross: 'rgba(200,120,80,0.9)', snap: 'rgba(120,180,230,0.95)', rubber: 'rgba(216,120,59,0.95)' };
+    this.selBox = null;      // [[x0,y0],[x1,y1]] in SCREEN px (window-select drag), or null
+    this.theme = { crosshair: 'rgba(140,140,140,0.45)', cross: 'rgba(200,120,80,0.9)', snap: 'rgba(120,180,230,0.95)', rubber: 'rgba(216,120,59,0.95)', sel: 'rgba(120,180,230,0.9)' };
   }
 
   setCursor(screenPt) { this.cursor = screenPt; }
@@ -19,13 +20,28 @@ export class Overlay {
   // Provisional draw geometry, already projected to screen px by the caller (the app
   // owns the tool's local coords + the viewport, so it does the projection).
   setRubber(screenGeom) { this.rubber = screenGeom; }
+  setSelectBox(box) { this.selBox = box; }
 
   draw(view) {
     const ctx = this.ctx, w = view.width, h = view.height;
     ctx.clearRect(0, 0, w, h);
     if (this.rubber) this._rubber(view);
+    if (this.selBox) this._selectBox(view);
     if (this.cursor) this._crosshair(view);
     if (this.snap) this._snapGlyph(view);
+  }
+
+  // The window-select drag rectangle: a faint info-accent fill + dashed border.
+  _selectBox(view) {
+    const ctx = this.ctx, [a, b] = this.selBox;
+    const x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]), w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
+    ctx.fillStyle = 'rgba(120,180,230,0.08)';
+    ctx.fillRect(x, y, w, h);
+    ctx.lineWidth = Math.max(1, view.dpr);
+    ctx.strokeStyle = this.theme.sel;
+    ctx.setLineDash([4 * view.dpr, 3 * view.dpr]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
   }
 
   // The rubber-band: dashed segments in the action accent + small handles at placed

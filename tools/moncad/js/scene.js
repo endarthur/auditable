@@ -13,6 +13,7 @@
 
 const DEFAULT_GEO = [0.82, 0.82, 0.84, 1];   // bylayer/byblock → light (no layer-colour table yet)
 const POINT_COL = [0.42, 0.63, 0.81, 1];
+const SELECTED = [0.66, 0.45, 0.85, 1];      // violet = selected (SPEC §5 role mapping)
 const ACI = { 1: [255, 0, 0], 2: [255, 255, 0], 3: [0, 255, 0], 4: [0, 255, 255], 5: [0, 0, 255], 6: [255, 0, 255], 7: [255, 255, 255] };
 
 function colorFor(props) {
@@ -41,9 +42,35 @@ function arcPoints(p0, p1, bulge, eps) {
   return out;
 }
 
+// Tessellate one WORLD geometry into LOCAL line segments [[a,b],…] (arcs/circles to
+// chords at error ≤ eps). Shared by the renderer build and the edit-ghost preview, so a
+// dragged selection is faceted identically to the committed result. Pure.
+export function localSegments(geometry, origin, eps = 0.2) {
+  const g = geometry, o = origin, toL = (p) => [p[0] - o[0], p[1] - o[1]], out = [];
+  if (!g) return out;
+  if (g.kind === 'polyline') {
+    const v = g.vertices, n = v.length / 3; if (n < 2) return out;
+    const lv = []; for (let k = 0; k < n; k++) lv.push(toL([v[k * 3], v[k * 3 + 1]]));
+    const spans = g.closed ? n : n - 1;
+    for (let i = 0; i < spans; i++) {
+      const a = lv[i], b = lv[(i + 1) % n], bul = g.bulges ? g.bulges[i] : 0;
+      if (bul) { let from = a; for (const q of arcPoints(a, b, bul, eps)) { out.push([from, q]); from = q; } }
+      else out.push([a, b]);
+    }
+  } else if (g.kind === 'circle') {
+    const c = toL(g.center), r = g.radius;
+    const step = r > eps ? 2 * Math.acos(Math.max(-1, 1 - eps / r)) : Math.PI / 8;
+    const nseg = Math.max(8, Math.ceil(2 * Math.PI / step));
+    let prev = [c[0] + r, c[1]];
+    for (let i = 1; i <= nseg; i++) { const t = 2 * Math.PI * i / nseg; const q = [c[0] + r * Math.cos(t), c[1] + r * Math.sin(t)]; out.push([prev, q]); prev = q; }
+  }
+  return out;
+}
+
 export function sceneFromDxf(doc, opts = {}) {
   const frame = doc.frame, o = frame.origin;
   const eps = opts.eps != null ? opts.eps : 0.2;
+  const selected = opts.selected;                        // Set<featureIndex> | undefined
   const toL = (p) => [p[0] - o[0], p[1] - o[1]];          // world → local
   const L = [], P = [], S = [];
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
@@ -52,30 +79,25 @@ export function sceneFromDxf(doc, opts = {}) {
   const pt = (p, s, c) => { P.push(p[0], p[1], s, c[0], c[1], c[2], c[3]); ext(p); };
   const snap = (p, type) => S.push({ p, type });   // snap target (local coords)
 
-  for (const f of doc.features) {
+  for (let fi = 0; fi < doc.features.length; fi++) {
+    const f = doc.features[fi];
     const g = f.geometry; if (!g) continue;
-    const col = colorFor(f.properties);
+    const isSel = !!(selected && selected.has(fi));
+    const col = isSel ? SELECTED : colorFor(f.properties);
+    const w = isSel ? 2 : 1.5;
     if (g.kind === 'polyline') {
       const v = g.vertices, n = v.length / 3;
       if (n < 2) continue;
       const lv = [];
       for (let k = 0; k < n; k++) { const p = toL([v[k * 3], v[k * 3 + 1]]); lv.push(p); snap(p, 'end'); }
+      for (const [a, b] of localSegments(g, o, eps)) seg(a, b, w, col);
       const spans = g.closed ? n : n - 1;
-      for (let i = 0; i < spans; i++) {
-        const a = lv[i], b = lv[(i + 1) % n], bul = g.bulges ? g.bulges[i] : 0;
-        if (bul) { let from = a; for (const q of arcPoints(a, b, bul, eps)) { seg(from, q, 1.5, col); from = q; } }
-        else seg(a, b, 1.5, col);
-        snap([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], 'mid');   // chord midpoint
-      }
+      for (let i = 0; i < spans; i++) { const a = lv[i], b = lv[(i + 1) % n]; snap([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], 'mid'); }   // chord midpoint
     } else if (g.kind === 'circle') {
-      const c = toL(g.center), r = g.radius;
-      const step = r > eps ? 2 * Math.acos(Math.max(-1, 1 - eps / r)) : Math.PI / 8;
-      const n = Math.max(8, Math.ceil(2 * Math.PI / step));
-      let prev = [c[0] + r, c[1]];
-      for (let i = 1; i <= n; i++) { const t = 2 * Math.PI * i / n; const q = [c[0] + r * Math.cos(t), c[1] + r * Math.sin(t)]; seg(prev, q, 1.5, col); prev = q; }
-      snap(c, 'center');
+      for (const [a, b] of localSegments(g, o, eps)) seg(a, b, w, col);
+      snap(toL(g.center), 'center');
     } else if (g.kind === 'point') {
-      const p = toL(g.position); pt(p, 6, POINT_COL); snap(p, 'node');
+      const p = toL(g.position); pt(p, 6, isSel ? SELECTED : POINT_COL); snap(p, 'node');
     }
     // 'face' deferred (3D-ish); 'insert' should be exploded before here.
   }

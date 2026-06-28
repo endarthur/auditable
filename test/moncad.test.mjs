@@ -422,3 +422,109 @@ test('snap: queryAll returns all candidates within tol, best-first', () => {
   assert.equal(all[0].snap.type, 'end');                 // higher priority than mid at same point
   assert.equal(all[1].snap.type, 'node');                // node (pri 4) before mid (pri 2)
 });
+
+// ── model edits: replace / addMany / remove, all invertible (E1 undo) ──────────────
+test('model: applyEdit replaces in place and undo restores the prior features', () => {
+  const m = new Model();
+  const a = { type: 'point', geometry: { kind: 'point', position: [0, 0, 0] }, properties: {} };
+  const b = { type: 'point', geometry: { kind: 'point', position: [1, 1, 0] }, properties: {} };
+  m.add(a); m.add(b);
+  const a2 = { type: 'point', geometry: { kind: 'point', position: [9, 9, 0] }, properties: {} };
+  m.applyEdit([{ i: 0, feature: a2 }]);
+  assert.equal(m.features[0], a2);
+  assert.equal(m.undo(), true);
+  assert.equal(m.features[0], a);                    // prior restored
+  assert.equal(m.redo(), true);
+  assert.equal(m.features[0], a2);
+});
+
+test('model: remove deletes by index and undo re-inserts at the same spots', () => {
+  const m = new Model();
+  const fs = [0, 1, 2, 3].map((k) => ({ type: 'point', geometry: { kind: 'point', position: [k, 0, 0] }, properties: {} }));
+  m.addMany(fs);
+  assert.equal(m.features.length, 4);
+  m.remove([1, 3]);
+  assert.deepEqual(m.features.map((f) => f.geometry.position[0]), [0, 2]);
+  assert.equal(m.undo(), true);
+  assert.deepEqual(m.features.map((f) => f.geometry.position[0]), [0, 1, 2, 3]);   // back in place
+  // addMany undo removes them all in one step
+  m.undo();
+  assert.equal(m.features.length, 0);
+});
+
+// ── pick: entity hit-test + window select ─────────────────────────────────────────
+import { pickFeature, pickWindow } from '../tools/moncad/js/pick.js';
+
+test('pick: nearest feature within tolerance; circle by its rim, point by position', () => {
+  const features = [
+    { geometry: { kind: 'polyline', vertices: Float64Array.from([0, 0, 0, 10, 0, 0]), bulges: null, closed: false } },
+    { geometry: { kind: 'circle', center: [50, 0, 0], radius: 5 } },
+    { geometry: { kind: 'point', position: [0, 20, 0] } },
+  ];
+  assert.equal(pickFeature(features, [5, 0.5], 1), 0);       // on the segment
+  assert.equal(pickFeature(features, [55, 0], 1), 1);        // on the circle rim (r=5)
+  assert.equal(pickFeature(features, [50, 0], 1), -1);       // circle CENTRE is not the circle
+  assert.equal(pickFeature(features, [0, 20.3], 1), 2);      // near the node
+  assert.equal(pickFeature(features, [100, 100], 1), -1);    // nothing in range
+});
+
+test('pick: window select returns features whose bbox overlaps the box', () => {
+  const features = [
+    { geometry: { kind: 'polyline', vertices: Float64Array.from([0, 0, 0, 10, 10, 0]), bulges: null, closed: false } },
+    { geometry: { kind: 'circle', center: [100, 100, 0], radius: 2 } },
+  ];
+  assert.deepEqual(pickWindow(features, [-1, -1, 11, 11]), [0]);
+  assert.deepEqual(pickWindow(features, [-1, -1, 200, 200]), [0, 1]);
+  assert.deepEqual(pickWindow(features, [40, 40, 60, 60]), []);
+});
+
+// ── edit-ops: the affine edit tools transform the selection ───────────────────────
+import { makeEditTool } from '../tools/moncad/js/edit-ops.js';
+import { translate as T, rotate as R, mirror as Mi } from '../ext/regula/src/transform.js';
+
+function editFixture(kind) {
+  const frame = { origin: [0, 0, 0], units: 'm' };
+  const feat = { type: 'line', geometry: { kind: 'polyline', vertices: Float64Array.from([0, 0, 0, 10, 0, 0]), bulges: null, closed: false }, properties: { layer: '0' } };
+  let result = null, done = 0;
+  const t = makeEditTool({
+    kind, frame, selectedGeoms: [{ i: 0, feature: feat }],
+    xform: { translate: T, rotate: R, mirror: Mi },
+    toLocalSegments: () => [],
+    onResolve: (r) => (result = r), onDone: () => done++,
+  });
+  return { t, get result() { return result; }, get done() { return done; } };
+}
+
+test('edit-ops: move applies the base→destination delta to the selection', () => {
+  const f = editFixture('move');
+  f.t.point([2, 3]); f.t.point([12, 8]);             // delta = (10, 5)
+  assert.equal(f.done, 1);
+  const v = f.result.edit[0].feature.geometry.vertices;
+  assert.deepEqual([v[0], v[1], v[3], v[4]], [10, 5, 20, 5]);
+});
+
+test('edit-ops: copy yields NEW features (does not edit in place)', () => {
+  const f = editFixture('copy');
+  f.t.point([0, 0]); f.t.point([0, 100]);
+  assert.ok(f.result.copy && !f.result.edit);
+  assert.equal(f.result.copy[0].geometry.vertices[1], 100);
+});
+
+test('edit-ops: rotate takes a typed angle in degrees (text path)', () => {
+  const f = editFixture('rotate');
+  f.t.point([0, 0]);                                  // pivot at origin
+  assert.equal(f.t.text('90'), true);                 // 90° CCW
+  const v = f.result.edit[0].feature.geometry.vertices;
+  assert.ok(Math.abs(v[0]) < 1e-9 && Math.abs(v[1]) < 1e-9);          // (0,0) fixed
+  assert.ok(Math.abs(v[3]) < 1e-9 && Math.abs(v[4] - 10) < 1e-9);     // (10,0) → (0,10)
+});
+
+test('edit-ops: mirror reflects across the picked axis', () => {
+  const frame = { origin: [0, 0, 0], units: 'm' };
+  const feat = { type: 'line', geometry: { kind: 'polyline', vertices: Float64Array.from([0, 2, 0, 10, 2, 0]), bulges: null, closed: false }, properties: {} };
+  let result = null;
+  const t = makeEditTool({ kind: 'mirror', frame, selectedGeoms: [{ i: 0, feature: feat }], xform: { translate: T, rotate: R, mirror: Mi }, toLocalSegments: () => [], onResolve: (r) => (result = r), onDone: () => {} });
+  t.point([0, 0]); t.point([1, 0]);                   // axis = x-axis → y:2 reflects to -2
+  const v = result.edit[0].feature.geometry.vertices;
+  assert.deepEqual([v[1], v[4]], [-2, -2]);
+});

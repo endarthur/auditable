@@ -8,16 +8,19 @@ import { Viewport } from './viewport.js';
 import { Renderer } from './renderer.js';
 import { Overlay } from './overlay.js';
 import { CommandRegistry } from './commands.js';
-import { sceneFromDxf } from './scene.js';
+import { sceneFromDxf, localSegments } from './scene.js';
 import { makeToolbar, makePalette, makeCommandLine, makeSnapChips } from './surfaces.js';
 import { SnapIndex } from './snap.js';
 import { Model } from './model.js';
 import { TOOLS } from './tools.js';
 import { parsePoint } from './input.js';
 import { SnapState, pickSnap, SNAP_TYPES, SNAP_LABELS, OVERRIDE_WORDS } from './snap-control.js';
+import { pickFeature, pickWindow } from './pick.js';
+import { makeEditTool } from './edit-ops.js';
 
 import { makeFrame, toWorld } from '@gcu/frame';
 import { read, write, explode } from '@gcu/dxf';
+import { translate, rotate, mirror } from '@gcu/regula';
 
 const $ = (s) => document.querySelector(s);
 
@@ -65,6 +68,8 @@ function boot() {
   let lastMouse = null;  // last cursor position (device px) — anchors a typed-point's rubber-band
   let cycleIdx = 0;      // Tab-cycle index into the eligible snap candidates at the cursor
   const snap = loadSnap();   // the SnapState: master + running types + aperture + one-shot
+  const selection = new Set();   // selected feature indices (the edit target)
+  const SELECT_PX = 8;       // pick aperture, CSS px
 
   let pending = false;
   const render = () => {
@@ -76,7 +81,7 @@ function boot() {
   // Push the model's derived view (renderer buffers + snap index) — the canonical→derived
   // step (SPEC §4). `fit` reframes the camera (open / new); a bare edit keeps the view.
   function derive(fit) {
-    const sc = sceneFromDxf(model.doc);
+    const sc = sceneFromDxf(model.doc, { selected: selection });
     frame = sc.frame;
     bounds = (sc.lines.length || sc.points.length) ? sc.bounds : { min: [-50, -50], max: [50, 50] };
     snapIndex = new SnapIndex(sc.snaps || []);
@@ -89,6 +94,7 @@ function boot() {
 
   function loadModel(m, fit = true) {
     cancelTool();
+    selection.clear();
     model = m;
     derive(fit);
   }
@@ -214,9 +220,52 @@ function boot() {
     return false;
   }
 
+  // ── selection (rides the pick hit-test) + the affine edit tools ──────────────────
+  function afterSelect() { ctx.hasSelection = selection.size > 0; toolbar.refresh(); setStatus(selection.size ? `${selection.size} selected` : ''); derive(false); }
+  const pickWorld = (s) => toWorld(view.toWorld(s), frame);   // screen px → world point
+  function doPick(s, additive) {
+    const i = pickFeature(model.features, pickWorld(s), SELECT_PX * view.dpr / view.scale);
+    if (i < 0) { if (!additive) selection.clear(); }
+    else if (additive) { selection.has(i) ? selection.delete(i) : selection.add(i); }
+    else { selection.clear(); selection.add(i); }
+    afterSelect();
+  }
+  function doWindowSelect(a, b, additive) {
+    const wa = pickWorld(a), wb = pickWorld(b);
+    const box = [Math.min(wa[0], wb[0]), Math.min(wa[1], wb[1]), Math.max(wa[0], wb[0]), Math.max(wa[1], wb[1])];
+    if (!additive) selection.clear();
+    for (const i of pickWindow(model.features, box)) selection.add(i);
+    afterSelect();
+  }
+  function selectAll() { selection.clear(); for (let i = 0; i < model.features.length; i++) selection.add(i); afterSelect(); }
+
+  function startEdit(kind) {
+    if (!selection.size) { setStatus('select objects first'); return; }
+    cancelTool();
+    const selectedGeoms = [...selection].sort((a, b) => a - b).map((i) => ({ i, feature: model.features[i] }));
+    activeTool = makeEditTool({
+      kind, frame, selectedGeoms,
+      xform: { translate, rotate, mirror },
+      toLocalSegments: (g) => localSegments(g, frame.origin, 0.2),
+      onResolve: (res) => {
+        if (res.copy) model.addMany(res.copy);
+        else if (res.edit) model.applyEdit(res.edit);
+        derive(false); setStatus(`${kind} done`);
+      },
+      onDone: () => endTool(),
+    });
+    refreshPrompt(); cmdline.focus(); render();
+  }
+  function doDelete() {
+    if (!selection.size) return;
+    const n = selection.size;
+    model.remove([...selection]); selection.clear();
+    afterSelect(); setStatus(`deleted ${n}`);
+  }
+
   // ── the spine: commands, then the surfaces that view them ───────────────────────
   let palette;
-  const ctx = { hasDoc: true };
+  const ctx = { hasDoc: true, hasSelection: false };
   const cmds = new CommandRegistry().registerAll([
     { id: 'file.new', title: 'New Drawing', category: 'File', icon: 'New', run: () => { const m = new Model(); m.name = 'drawing'; loadModel(m); ctx.hasDoc = false; toolbar.refresh(); setStatus('new drawing'); } },
     { id: 'file.open', title: 'Open DXF…', category: 'File', icon: 'Open', keys: 'ctrl+o', run: () => fileInput.click() },
@@ -226,8 +275,15 @@ function boot() {
     { id: 'draw.polyline', title: 'Polyline', category: 'Draw', icon: 'Pline', keys: 'p', alias: ['p', 'pl', 'pline', 'polyline'], run: () => startTool('polyline') },
     { id: 'draw.circle', title: 'Circle', category: 'Draw', icon: 'Circle', keys: 'c', alias: ['c', 'ci', 'circle'], run: () => startTool('circle') },
     { id: 'draw.point', title: 'Point', category: 'Draw', icon: 'Point', alias: ['po', 'point', 'node'], run: () => startTool('point') },
-    { id: 'edit.undo', title: 'Undo', category: 'Edit', keys: 'ctrl+z', run: () => { if (model.undo()) { derive(false); setStatus('undo'); } } },
-    { id: 'edit.redo', title: 'Redo', category: 'Edit', keys: 'ctrl+y', run: () => { if (model.redo()) { derive(false); setStatus('redo'); } } },
+    { id: 'edit.undo', title: 'Undo', category: 'Edit', keys: 'ctrl+z', run: () => { if (model.undo()) { selection.clear(); afterSelect(); setStatus('undo'); } } },
+    { id: 'edit.redo', title: 'Redo', category: 'Edit', keys: 'ctrl+y', run: () => { if (model.redo()) { selection.clear(); afterSelect(); setStatus('redo'); } } },
+    { id: 'edit.selectAll', title: 'Select All', category: 'Edit', keys: 'ctrl+a', run: () => selectAll() },
+    { id: 'edit.deselect', title: 'Deselect', category: 'Edit', run: () => { selection.clear(); afterSelect(); } },
+    { id: 'edit.move', title: 'Move', category: 'Modify', icon: 'Move', keys: 'm', alias: ['m', 'move'], when: () => selection.size > 0, run: () => startEdit('move') },
+    { id: 'edit.copy', title: 'Copy', category: 'Modify', icon: 'Copy', keys: 'shift+c', alias: ['co', 'copy'], when: () => selection.size > 0, run: () => startEdit('copy') },
+    { id: 'edit.rotate', title: 'Rotate', category: 'Modify', icon: 'Rotate', keys: 'r', alias: ['ro', 'rotate'], when: () => selection.size > 0, run: () => startEdit('rotate') },
+    { id: 'edit.mirror', title: 'Mirror', category: 'Modify', icon: 'Mirror', alias: ['mi', 'mirror'], when: () => selection.size > 0, run: () => startEdit('mirror') },
+    { id: 'edit.delete', title: 'Delete', category: 'Modify', keys: 'delete', alias: ['del', 'erase'], when: () => selection.size > 0, run: () => doDelete() },
     { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => { view.fit(bounds); render(); } },
     { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); render(); } },
     { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
@@ -245,7 +301,7 @@ function boot() {
   const cmdline = makeCommandLine({ input: $('#cmdInput'), prompt: $('#cmdPrompt') }, { onSubmit: cmdSubmit, onCancel: cmdCancel, onKey: commandLineKey });
   const snapChips = makeSnapChips(cmds, ctx, $('#snapchips'), snap, SNAP_TYPES, SNAP_LABELS);
   const toolbar = makeToolbar(cmds, ctx, $('#toolbar'),
-    ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
+    ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'edit.move', 'edit.copy', 'edit.rotate', 'edit.delete', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
 
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;       // the palette owns its own keys
@@ -256,26 +312,37 @@ function boot() {
       const k = e.key.toLowerCase();
       if (!e.ctrlKey && !e.metaKey && (k === 'c' || k === 'u') && activeTool.keyword(k)) { e.preventDefault(); setStatus(activeTool.prompt); render(); return; }
     }
+    if (!activeTool && e.key === 'Escape' && selection.size) { e.preventDefault(); selection.clear(); afterSelect(); return; }
     const id = cmds.forKey(eventKey(e));
     if (id) { e.preventDefault(); cmds.execute(id, ctx); }
   });
 
   // ── input: place points (tool) / pan (drag) / zoom (wheel) / readout (move) ───────
   const devicePt = (e) => { const r = glCanvas.getBoundingClientRect(); return [(e.clientX - r.left) * view.dpr, (e.clientY - r.top) * view.dpr]; };
-  let dragging = false, last = null;
+  let panning = false, selecting = false, last = null, selStart = null;
   olCanvas.addEventListener('mousedown', (e) => {
-    if (activeTool && e.button === 0) { placePoint(devicePt(e)); return; }   // left-click places; no pan mid-draw
-    if (e.button !== 0 && e.button !== 1) return;
-    dragging = true; last = devicePt(e); olCanvas.style.cursor = 'grabbing';
+    if (activeTool && e.button === 0) { placePoint(devicePt(e)); return; }            // left places mid-tool
+    if (e.button === 1) { panning = true; last = devicePt(e); olCanvas.style.cursor = 'grabbing'; return; }   // middle pans
+    if (e.button === 0 && !activeTool) { selecting = true; selStart = devicePt(e); }  // left selects / window-selects
   });
   olCanvas.addEventListener('dblclick', (e) => { if (activeTool) { e.preventDefault(); activeTool.finish(); } });
   olCanvas.addEventListener('contextmenu', (e) => e.preventDefault());   // right-click is moncad's (the context-menu surface), not the browser's
-  window.addEventListener('mouseup', () => { dragging = false; olCanvas.style.cursor = 'none'; });
+  window.addEventListener('mouseup', (e) => {
+    if (panning) { panning = false; olCanvas.style.cursor = 'none'; }
+    if (selecting) {
+      selecting = false; overlay.setSelectBox(null);
+      const end = lastMouse || selStart;
+      const moved = Math.abs(end[0] - selStart[0]) > 3 * view.dpr || Math.abs(end[1] - selStart[1]) > 3 * view.dpr;
+      if (moved) doWindowSelect(selStart, end, e.shiftKey); else doPick(selStart, e.shiftKey);
+      render();
+    }
+  });
   olCanvas.addEventListener('mousemove', (e) => {
     const s = devicePt(e); lastMouse = s; cycleIdx = 0;   // a new position restarts Tab-cycle from the best candidate
-    if (dragging) { view.panBy(s[0] - last[0], s[1] - last[1]); last = s; }
-    overlay.setCursor(s); readout(s, !dragging);
-    if (activeTool && !dragging) updateRubber(s);
+    if (panning) { view.panBy(s[0] - last[0], s[1] - last[1]); last = s; }
+    if (selecting) overlay.setSelectBox([selStart, s]);
+    overlay.setCursor(s); readout(s, !panning);
+    if (activeTool && !panning) updateRubber(s);
     render();
   });
   olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); overlay.setSnap(null); render(); });

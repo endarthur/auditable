@@ -1634,8 +1634,8 @@ if (target === 'scan') {
 if (target === 'moncad') {
   const monDir = path.join(__dirname, 'tools/moncad');
   const monJsDir = path.join(monDir, 'js');
-  const SPEC = { '@gcu/frame': '#frame', '@gcu/dxf': '#dxf' };
-  const libs = [['frame', 'ext/frame/index.js'], ['dxf', 'ext/dxf/index.js']];
+  const SPEC = { '@gcu/frame': '#frame', '@gcu/dxf': '#dxf', '@gcu/regula': '#regula' };
+  const libs = [['frame', 'ext/frame/index.js'], ['dxf', 'ext/dxf/index.js'], ['regula', 'ext/regula/index.js']];
   const modules = [];
   for (const [name, rel] of libs) {
     const p = path.join(__dirname, rel);
