@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/dxf",
+  "version": "0.1.0",
+  "description": "A bulletproof, round-trippable DXF reader/writer (R2000 ASCII) for the GCU geometry stack. Never silently mutates coordinates — original WCS is canonical, any offset is an explicit @gcu/frame; never throws on malformed input, always logs what it tessellated or punted. Bulge-arc native (true arcs, not faceted), preserves blocks + XDATA + un-flattened colour. Defines the canonical 2D primitive @gcu/regula builds on.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["dxf", "cad", "autocad", "bulge", "arc", "coordinate-provenance", "xdata", "round-trip", "geometry", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gentropic/auditable.git",
+    "directory": "ext/dxf"
+  },
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/dxf",
+  "bugs": {
+    "url": "https://github.com/gentropic/auditable/issues"
+  }
+}
