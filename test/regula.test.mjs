@@ -240,3 +240,39 @@ test('chamfer: a straight bevel at the given distance', () => {
 test('fillet: parallel segments have no corner → ok:false', () => {
   assert.equal(fillet({ a: [0, 0], b: [10, 0] }, { a: [0, 5], b: [10, 5] }, 2, [5, 0], [5, 5], 1e-9).ok, false);
 });
+
+// ── offset (E3): parallel/concentric spans + round/miter joins, open & closed ──────
+import { offset } from '../ext/regula/src/main.js';
+
+const pclose = (path, pts) => { assert.equal(path.points.length, pts.length); path.points.forEach((p, i) => assert.ok(ptClose(p, pts[i]), `pt ${i}: ${p} vs ${pts[i]}`)); };
+
+test('offset: a single segment shifts to a parallel (left + / right −)', () => {
+  assert.ok(offset(P([[0, 0], [10, 0]]), 2, 1e-9).path.points.every((p, i) => ptClose(p, [[0, 2], [10, 2]][i])));
+  assert.ok(offset(P([[0, 0], [10, 0]]), -2, 1e-9).path.points.every((p, i) => ptClose(p, [[0, -2], [10, -2]][i])));
+});
+
+test('offset: an open L — concave side miters, convex side rounds', () => {
+  const inner = offset(P([[0, 0], [10, 0], [10, 10]]), 2, 1e-9);     // left = inside the left turn → miter
+  pclose(inner.path, [[0, 2], [8, 2], [8, 10]]);
+  assert.deepEqual([...inner.path.bulges], [0, 0]);
+  const outer = offset(P([[0, 0], [10, 0], [10, 10]]), -2, 1e-9);    // right = outside → round join arc
+  pclose(outer.path, [[0, -2], [10, -2], [12, 0], [12, 10]]);
+  assert.ok(close(outer.path.bulges[1], Math.tan(Math.PI / 8)));      // a quarter round
+});
+
+test('offset: a closed CCW square offset inward → a concentric smaller square', () => {
+  const sq = P([[0, 0], [10, 0], [10, 10], [0, 10]], null, true);
+  const o = offset(sq, 2, 1e-9);
+  assert.equal(o.path.closed, true);
+  pclose(o.path, [[2, 2], [8, 2], [8, 8], [2, 8]]);
+});
+
+test('offset: an arc offsets CONCENTRIC (radius shifts, bulge preserved)', () => {
+  const o = offset(P([[0, 0], [10, 0]], [1]), 1, 1e-9);   // semicircle r5 → concentric r4
+  pclose(o.path, [[1, 0], [9, 0]]);
+  assert.ok(close(o.path.bulges[0], 1));                  // same sweep → same bulge
+});
+
+test('offset: distance past an arc radius is refused, not garbage', () => {
+  assert.equal(offset(P([[0, 0], [10, 0]], [1]), 10, 1e-9).ok, false);   // r5 arc, |d|=10
+});

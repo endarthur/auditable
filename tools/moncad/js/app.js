@@ -20,7 +20,7 @@ import { makeEditTool } from './edit-ops.js';
 
 import { makeFrame, toWorld } from '@gcu/frame';
 import { read, write, explode } from '@gcu/dxf';
-import { translate, rotate, mirror, circle as rCircle, spanCurve, trim, extend, fillet, chamfer, makeTolerance } from '@gcu/regula';
+import { translate, rotate, mirror, circle as rCircle, spanCurve, trim, extend, fillet, chamfer, offset, makeTolerance } from '@gcu/regula';
 
 // ── geometry bridge: @gcu/dxf feature geometry (flat WORLD vertices) ↔ @gcu/regula ──
 const geomToPath = (g) => {
@@ -104,6 +104,7 @@ function boot() {
   const selection = new Set();   // selected feature indices (the edit target)
   const SELECT_PX = 8;       // pick aperture, CSS px
   const corner = { fillet: 10, chamfer: 10 };   // current fillet radius / chamfer distance
+  let offsetDist = 5;        // current offset distance (side comes from which side you click)
 
   let pending = false;
   const render = () => {
@@ -329,6 +330,40 @@ function boot() {
     model.applyEdit([{ i: c.i, feature: featureFromPath(c.target, res.path, c.target.geometry.vertices[2] || 0) }]);
     selection.clear(); derive(false); setStatus('extended');
   }
+  // ── offset: pick a polyline on the side you want the parallel copy ────────────────
+  // Which side did the click land on? Sign of the click against the nearest span's left
+  // normal → +1 (left, d>0) or −1 (right). regula's offset is left-positive.
+  function offsetSign(g, world) {
+    const v = g.vertices, n = v.length / 3, nspan = g.closed ? n : n - 1;
+    let best = Infinity, sign = 1;
+    for (let i = 0; i < nspan; i++) {
+      const j = (i + 1) % n, ax = v[i * 3], ay = v[i * 3 + 1], dx = v[j * 3] - ax, dy = v[j * 3 + 1] - ay, L2 = dx * dx + dy * dy;
+      let t = L2 ? ((world[0] - ax) * dx + (world[1] - ay) * dy) / L2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + t * dx, py = ay + t * dy, dd = Math.hypot(world[0] - px, world[1] - py);
+      if (dd < best) { best = dd; sign = ((world[0] - px) * -dy + (world[1] - py) * dx) >= 0 ? 1 : -1; }
+    }
+    return sign;
+  }
+  const startOffset = () => startPickTool({
+    name: 'offset', rawPick: true,
+    get prompt() { return `Offset (distance ${offsetDist}) — pick a polyline on the side you want, or type distance (Esc to finish):`; },
+    point: (world) => offsetAt(world),
+    text: (raw) => { const v = Number(String(raw).trim()); if (v > 0) { offsetDist = v; refreshPrompt(); render(); return true; } return false; },
+    preview: () => ({ lines: [], points: [] }), keyword: () => false,
+    finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
+  });
+  function offsetAt(world) {
+    const i = pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale);
+    if (i < 0) { setStatus('offset: nothing there'); return; }
+    const g = model.features[i].geometry;
+    if (g.kind !== 'polyline') { setStatus('offset: polylines only'); return; }
+    const extent = Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1]) || 1;
+    const res = offset(geomToPath(g), offsetSign(g, world) * offsetDist, makeTolerance(extent));
+    if (!res.ok) { setStatus('offset: ' + (res.reason || 'failed')); return; }
+    model.addMany([featureFromPath(model.features[i], res.path, g.vertices[2] || 0)]);
+    selection.clear(); derive(false); setStatus('offset');
+  }
+
   // ── fillet / chamfer: pick two straight lines, round / bevel their corner ─────────
   const lineSeg = (g) => ({ a: [g.vertices[0], g.vertices[1]], b: [g.vertices[3], g.vertices[4]] });
   const isStraightLine = (g) => g && g.kind === 'polyline' && g.vertices.length === 6 && !(g.bulges && g.bulges[0]);
@@ -405,6 +440,7 @@ function boot() {
     { id: 'edit.extend', title: 'Extend', category: 'Modify', icon: 'Extend', keys: 'x', alias: ['ex', 'extend'], run: () => startExtend() },
     { id: 'edit.fillet', title: 'Fillet', category: 'Modify', icon: 'Fillet', keys: 'f', alias: ['f', 'fillet'], run: () => startCorner('fillet') },
     { id: 'edit.chamfer', title: 'Chamfer', category: 'Modify', icon: 'Chamfer', alias: ['cha', 'chamfer'], run: () => startCorner('chamfer') },
+    { id: 'edit.offset', title: 'Offset', category: 'Modify', icon: 'Offset', keys: 'o', alias: ['o', 'offset'], run: () => startOffset() },
     { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => { view.fit(bounds); render(); } },
     { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); render(); } },
     { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
@@ -422,7 +458,7 @@ function boot() {
   const cmdline = makeCommandLine({ input: $('#cmdInput'), prompt: $('#cmdPrompt') }, { onSubmit: cmdSubmit, onCancel: cmdCancel, onKey: commandLineKey });
   const snapChips = makeSnapChips(cmds, ctx, $('#snapchips'), snap, SNAP_TYPES, SNAP_LABELS);
   const toolbar = makeToolbar(cmds, ctx, $('#toolbar'),
-    ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'edit.move', 'edit.copy', 'edit.rotate', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.delete', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
+    ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'edit.move', 'edit.copy', 'edit.rotate', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.offset', 'edit.delete', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
 
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;       // the palette owns its own keys
