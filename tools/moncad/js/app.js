@@ -445,14 +445,14 @@ function boot() {
     const i = pickAt(world); if (i < 0) return null;
     const g = model.features[i].geometry;
     const ok = isStraightLine(g) || (g.kind === 'polyline' && g.vertices.length > 6);   // a candidate line or polyline-corner
-    return ok ? { dim: localSegments(g, frame.origin, tessEps) } : null;
+    return ok ? { pre: localSegments(g, frame.origin, tessEps) } : null;   // blue = "you can pick this" (matches idle select-hover)
   }
   function updateHover(s) {
     if (!activeTool || !activeTool.hover || !s) { overlay.setHighlight(null); return; }
     const hl = activeTool.hover(view.toWorld(s));
     if (!hl) { overlay.setHighlight(null); return; }
     const proj = (segs) => (segs || []).map(([a, b]) => [view.toScreen(a), view.toScreen(b)]);
-    overlay.setHighlight({ warn: proj(hl.warn), ok: proj(hl.ok), dim: proj(hl.dim) });
+    overlay.setHighlight({ warn: proj(hl.warn), ok: proj(hl.ok), dim: proj(hl.dim), pre: proj(hl.pre) });
   }
   // idle (no tool): outline the entity a click would select
   function updateSelectHover(s) {
