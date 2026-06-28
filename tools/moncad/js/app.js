@@ -219,7 +219,12 @@ function boot() {
     let hit = null, count = 0;
     if (live) { const r = pickSnap(snapIndex.queryAll(local, tol), allowed, cycleIdx); hit = r.hit; count = r.count; }
     if (!hit && snap.gridSnap) { const gp = snapToGrid(local, gridStep, tol); if (gp) hit = { p: gp, type: 'grid' }; }   // grid = a separate mode, object snaps win
-    return { local: hit ? hit.p : local, hit, count };
+    let p = hit ? hit.p : local;
+    if (!hit && snap.ortho && activeTool && activeTool.last) {   // ortho: lock the free cursor to H/V from the anchor (snaps still win)
+      const a = activeTool.last();
+      if (a) p = Math.abs(p[0] - a[0]) >= Math.abs(p[1] - a[1]) ? [p[0], a[1]] : [a[0], p[1]];
+    }
+    return { local: p, hit, count };
   }
   function placePoint(s) {
     const local = activeTool.rawPick ? view.toWorld(s) : snapAt(s).local;   // trim picks raw (no snap jump)
@@ -277,6 +282,7 @@ function boot() {
   // F3 / Tab routed from the command line through the same registry the chips + keys use
   function commandLineKey(e) {
     if (e.key === 'F3') { cmds.execute('snap.toggle', ctx); return true; }
+    if (e.key === 'F8') { cmds.execute('snap.ortho', ctx); return true; }
     if (e.key === 'Tab') { cmds.execute('snap.cycle', ctx); return true; }
     return false;
   }
@@ -710,6 +716,7 @@ function boot() {
     { id: 'help.about', title: 'About moncad', category: 'Help', run: () => setStatus('moncad — a small 2D CAD instrument · gentropic.org/moncad') },
     { id: 'help.keys', title: 'Keys: L line · P pline · C circle · M move · T trim · O offset · F fillet · ⌘P palette', category: 'Help', run: () => setStatus('right-click for the context menu · type coords like @10<45 · F3 snap') },
     { id: 'snap.toggle', title: 'Snapping (master)', category: 'Snap', keys: 'f3', run: () => toggleMaster() },
+    { id: 'snap.ortho', title: 'Ortho (H/V lock)', category: 'Snap', keys: 'f8', alias: ['ortho'], run: () => { snap.toggleOrtho(); afterSnapChange(); setStatus(`ortho ${snap.ortho ? 'on' : 'off'}`); } },
     { id: 'snap.end', title: 'Snap: Endpoint', category: 'Snap', alias: ['end', 'endp'], run: () => toggleType('end') },
     { id: 'snap.mid', title: 'Snap: Midpoint', category: 'Snap', alias: ['mid'], run: () => toggleType('mid') },
     { id: 'snap.center', title: 'Snap: Centre', category: 'Snap', alias: ['cen', 'centre'], run: () => toggleType('center') },

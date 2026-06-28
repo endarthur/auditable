@@ -70,11 +70,16 @@ export function makeSnapChips(reg, ctx, mount, snap, types, labels) {
   gridChip.className = 'chip'; gridChip.textContent = 'GRID'; gridChip.title = 'Grid snap';
   gridChip.addEventListener('click', () => reg.execute('snap.grid', ctx));
   mount.appendChild(gridChip); chips.push({ kind: 'grid', el: gridChip });
+  const orthoChip = document.createElement('button');    // ortho: H/V lock — a drawing aid, not a snap
+  orthoChip.className = 'chip'; orthoChip.textContent = 'ORTHO';
+  orthoChip.title = 'Ortho — lock to horizontal/vertical' + (reg.keyFor('snap.ortho') ? ` (${reg.keyFor('snap.ortho').toUpperCase()})` : '');
+  orthoChip.addEventListener('click', () => reg.execute('snap.ortho', ctx));
+  mount.appendChild(orthoChip); chips.push({ kind: 'ortho', el: orthoChip });
   const refresh = () => {
     master.classList.toggle('off', !snap.master);
     for (const c of chips) {
       if (c.kind === 'master') continue;
-      const on = c.kind === 'grid' ? snap.gridSnap : (snap.master && snap.has(c.kind));
+      const on = c.kind === 'grid' ? snap.gridSnap : c.kind === 'ortho' ? snap.ortho : (snap.master && snap.has(c.kind));
       c.el.classList.toggle('on', on);
       c.el.classList.toggle('off', !on);
     }
