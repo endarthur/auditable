@@ -17,6 +17,7 @@ export function makeEditTool(deps) {
   const toW = (lp) => [lp[0] + o[0], lp[1] + o[1]];
   const pts = [];            // local points collected
   let typedAngle = null;     // rotate: a typed angle (radians) short-circuits the angle pick
+  let typedFactor = null;    // scale: a typed factor
 
   // Resolve transform params from the collected points + an optional cursor (preview).
   function paramsFor(cursor) {
@@ -34,12 +35,17 @@ export function makeEditTool(deps) {
       if (ang == null) { const c = cursor || pts[1]; if (!c) return null; ang = Math.atan2(c[1] - pivot[1], c[0] - pivot[0]); }
       return { op: 'rotate', pivot: toW(pivot), angle: ang };
     }
+    if (kind === 'scale') {
+      const pivot = pts[0]; if (!pivot || typedFactor == null) return null;   // scale needs a typed factor
+      return { op: 'scale', pivot: toW(pivot), factor: typedFactor };
+    }
     return null;
   }
   function applyTo(g, p) {
     if (p.op === 'translate') return xform.translate(g, p.delta);
     if (p.op === 'rotate') return xform.rotate(g, p.angle, p.pivot);
     if (p.op === 'mirror') return xform.mirror(g, p.a, p.b);
+    if (p.op === 'scale') return xform.scale(g, p.factor, p.pivot);
     return g;
   }
   function commit() {
@@ -54,6 +60,7 @@ export function makeEditTool(deps) {
     name: kind,
     get prompt() {
       if (kind === 'rotate') return pts.length === 0 ? 'Rotate — pivot point:' : 'Rotation angle (pick a point or type degrees):';
+      if (kind === 'scale') return pts.length === 0 ? 'Scale — base point:' : 'Scale factor (type a number):';
       if (kind === 'mirror') return pts.length === 0 ? 'Mirror axis — first point:' : 'Mirror axis — second point:';
       return pts.length === 0 ? `${kind[0].toUpperCase() + kind.slice(1)} — base point:` : 'Destination (point or @dx,dy):';
     },
@@ -61,11 +68,10 @@ export function makeEditTool(deps) {
       pts.push([local[0], local[1]]);
       if (pts.length === 2) commit();        // move/copy/mirror/rotate-by-point all complete on the 2nd point
     },
-    text(raw) {                              // rotate: a typed angle in degrees
-      if (kind === 'rotate' && pts.length === 1) {
-        const deg = Number(String(raw).trim());
-        if (Number.isFinite(deg)) { typedAngle = deg * Math.PI / 180; commit(); return true; }
-      }
+    text(raw) {                              // rotate: typed degrees · scale: typed factor
+      const n = Number(String(raw).trim());
+      if (kind === 'rotate' && pts.length === 1 && Number.isFinite(n)) { typedAngle = n * Math.PI / 180; commit(); return true; }
+      if (kind === 'scale' && pts.length === 1 && Number.isFinite(n) && n > 0) { typedFactor = n; commit(); return true; }
       return false;
     },
     preview(cursor) {

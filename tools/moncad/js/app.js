@@ -21,7 +21,7 @@ import { computeGrid, snapToGrid } from './grid.js';
 
 import { makeFrame, toWorld } from '@gcu/frame';
 import { read, write, explode } from '@gcu/dxf';
-import { translate, rotate, mirror, circle as rCircle, spanCurve, trim, extend, fillet, chamfer, filletCorner, chamferCorner, offset, makeTolerance } from '@gcu/regula';
+import { translate, rotate, mirror, scale as rScale, circle as rCircle, spanCurve, trim, extend, fillet, chamfer, filletCorner, chamferCorner, offset, makeTolerance } from '@gcu/regula';
 
 // ── geometry bridge: @gcu/dxf feature geometry (flat WORLD vertices) ↔ @gcu/regula ──
 const geomToPath = (g) => {
@@ -366,7 +366,7 @@ function boot() {
     const selectedGeoms = [...selection].sort((a, b) => a - b).map((i) => ({ i, feature: model.features[i] }));
     activeTool = makeEditTool({
       kind, frame, selectedGeoms,
-      xform: { translate, rotate, mirror },
+      xform: { translate, rotate, mirror, scale: rScale },
       toLocalSegments: (g) => localSegments(g, frame.origin, tessEps),
       onResolve: (res) => {
         if (res.copy) model.addMany(res.copy);
@@ -589,8 +589,37 @@ function boot() {
       for (const f of sel) copies.push({ ...f, geometry: translate(f.geometry, [c * dx, r * dy]) });
     }
     if (copies.length) model.addMany(copies);
-    selection.clear(); ctx.hasSelection = false; tools.refresh();   // selection consumed → un-grey nothing
-    derive(false); setStatus(copies.length ? `array: +${copies.length}` : 'array: nothing to do');
+    clearSel(); derive(false); setStatus(copies.length ? `array: +${copies.length}` : 'array: nothing to do');
+  }
+
+  // polar array: replicate the selection around a centre (count items over a fill angle)
+  function startArrayPolar() {
+    if (!selection.size) { setStatus('select objects first'); return; }
+    cancelTool();
+    const sel = [...selection].map((i) => model.features[i]);
+    let center = null, count = null;
+    activeTool = {
+      name: 'array', textMode: () => center != null,        // centre is a point; count + angle are typed
+      get prompt() { return !center ? 'Polar array — centre point:' : (count == null ? 'Number of items:' : 'Fill angle (deg, 360):'); },
+      point: (local) => { if (!center) { center = local; refreshPrompt(); render(); } },
+      text: (raw) => {
+        if (!center) return false;   // the centre is a coordinate/click, not text — let it fall through to the point path
+        const v = Number(String(raw).trim());
+        if (Number.isFinite(v)) { if (count == null) { count = Math.max(2, Math.round(v)); refreshPrompt(); render(); } else { applyArrayPolar(sel, center, count, v || 360); endTool(); } }
+        return true;
+      },
+      preview: () => ({ lines: [], points: center ? [center] : [] }), keyword: () => false,
+      finish: () => endTool(), cancel: () => endTool(), last: () => center, count: () => (center ? 1 : 0),
+    };
+    refreshPrompt(); cmdline.focus(); render();
+  }
+  function applyArrayPolar(sel, centerLocal, count, fillDeg) {
+    const o = frame.origin, c = [centerLocal[0] + o[0], centerLocal[1] + o[1]];
+    const step = (Math.abs(fillDeg - 360) < 1e-6 ? fillDeg / count : fillDeg / Math.max(1, count - 1)) * Math.PI / 180;
+    const copies = [];
+    for (let k = 1; k < count; k++) for (const f of sel) copies.push({ ...f, geometry: rotate(f.geometry, k * step, c) });
+    if (copies.length) model.addMany(copies);
+    clearSel(); derive(false); setStatus(`polar array: +${copies.length}`);
   }
 
   // ── measure: a query tool (distance + azimuth between snapped points), no entity ──
@@ -661,7 +690,9 @@ function boot() {
     { id: 'edit.copy', title: 'Copy', category: 'Modify', icon: 'Copy', keys: 'shift+c', alias: ['co', 'copy'], when: () => selection.size > 0, run: () => startEdit('copy') },
     { id: 'edit.rotate', title: 'Rotate', category: 'Modify', icon: 'Rotate', keys: 'r', alias: ['ro', 'rotate'], when: () => selection.size > 0, run: () => startEdit('rotate') },
     { id: 'edit.mirror', title: 'Mirror', category: 'Modify', icon: 'Mirror', alias: ['mi', 'mirror'], when: () => selection.size > 0, run: () => startEdit('mirror') },
+    { id: 'edit.scale', title: 'Scale', category: 'Modify', icon: 'Scale', alias: ['sc', 'scale'], when: () => selection.size > 0, run: () => startEdit('scale') },
     { id: 'edit.array', title: 'Array (grid)', category: 'Modify', icon: 'Array', alias: ['ar', 'array'], when: () => selection.size > 0, run: () => startArrayRect() },
+    { id: 'edit.arrayPolar', title: 'Array (polar)', category: 'Modify', alias: ['polar', 'arraypolar'], when: () => selection.size > 0, run: () => startArrayPolar() },
     { id: 'edit.delete', title: 'Delete', category: 'Modify', keys: 'delete', alias: ['del', 'erase'], when: () => selection.size > 0, run: () => doDelete() },
     { id: 'edit.trim', title: 'Trim', category: 'Modify', icon: 'Trim', keys: 't', alias: ['tr', 'trim'], run: () => startTrim() },
     { id: 'edit.extend', title: 'Extend', category: 'Modify', icon: 'Extend', keys: 'x', alias: ['ex', 'extend'], run: () => startExtend() },
@@ -694,7 +725,7 @@ function boot() {
   const ctxMenu = makeContextMenu(cmds, ctx, $('#ctxmenu'));
   const layersPanel = makeLayersPanel(() => model, $('#layers'), layerHandlers);
   // contextual command sets — verbs come to the selection (SPEC §3, noun-first)
-  const SEL_MENU = ['edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.array', null, 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', null, 'edit.delete', 'edit.deselect'];
+  const SEL_MENU = ['edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.scale', null, 'edit.array', 'edit.arrayPolar', null, 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', null, 'edit.delete', 'edit.deselect'];
   const EMPTY_MENU = ['edit.selectAll', null, 'view.zoomExtents', 'view.grid', null, 'file.new', 'file.open', 'file.save'];
   // left tool palette: the frequent draw + modify verbs (the long tail is in the menus / palette / context)
   const tools = makeToolbar(cmds, ctx, $('#tools'),
