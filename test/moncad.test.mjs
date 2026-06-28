@@ -129,7 +129,7 @@ test('viewport: uniforms expose centre/scale/res for the GPU', () => {
 // ── scene (the @gcu/dxf → renderer bridge: pure, frame-aware) ──────────────────────
 
 import { read as dxfRead } from '../ext/dxf/src/read.js';
-import { sceneFromDxf } from '../tools/moncad/js/scene.js';
+import { sceneFromDxf, placeInstance } from '../tools/moncad/js/scene.js';
 
 const SCENE_DXF = [
   '0', 'SECTION', '2', 'ENTITIES',
@@ -670,4 +670,38 @@ test('tools: arc tool — 3-point arc passes through the middle point', () => {
   assert.ok(Math.abs(committed.geometry.bulges[0] - 1) < 1e-9);   // semicircle bulge = tan(π/4) = 1
   const v = committed.geometry.vertices;
   assert.deepEqual([v[0], v[1], v[3], v[4]], [10, 0, -10, 0]);    // start, end = 1st, 3rd picks
+});
+
+// ── blocks: definitions + live instances ──────────────────────────────────────────
+const SQUARE = { type: 'polyline', geometry: { kind: 'polyline', vertices: Float64Array.from([0, 0, 0, 4, 0, 0, 4, 4, 0, 0, 4, 0]), bulges: null, closed: true }, properties: { layer: '0' } };
+
+test('placeInstance: transforms a block geometry by position/scale/rotation about the base', () => {
+  // scale ×2, rotate 90°, at (30,20); base origin → vertex (4,0) → (30,28)
+  const g = placeInstance(SQUARE.geometry, { position: [30, 20, 0], scale: [2, 2, 2], rotation: 90 }, [0, 0, 0]);
+  const v = g.vertices;
+  assert.ok(Math.abs(v[0] - 30) < 1e-9 && Math.abs(v[1] - 20) < 1e-9);     // (0,0) → position
+  assert.ok(Math.abs(v[3] - 30) < 1e-9 && Math.abs(v[4] - 28) < 1e-9);     // (4,0)·2 rot90 → (0,8) + pos
+});
+
+test('model: addBlock + swap (make-block is one undoable step)', () => {
+  const m = new Model();
+  m.add(SQUARE); m.add({ ...SQUARE, type: 'point', geometry: { kind: 'point', position: [1, 1, 0] } });
+  assert.equal(m.features.length, 2);
+  m.addBlock('sq', [SQUARE], [0, 0, 0]);
+  assert.deepEqual(m.blockNames(), ['sq']);
+  const insert = { type: 'insert', geometry: { kind: 'insert', block: 'sq', transform: { position: [10, 10, 0], scale: [1, 1, 1], rotation: 0 } }, properties: { layer: '0' } };
+  m.swap([0, 1], [insert]);                       // drop the two originals, add the instance
+  assert.equal(m.features.length, 1);
+  assert.equal(m.features[0].type, 'insert');
+  m.undo();                                        // restores the two originals, removes the instance
+  assert.equal(m.features.length, 2);
+  assert.equal(m.features[0].type, 'polyline');
+});
+
+test('scene: an INSERT renders the block body placed (live instance)', () => {
+  const doc = { frame: { origin: [0, 0, 0], units: 'm' }, layers: {}, blocks: { sq: { name: 'sq', base: [0, 0, 0], features: [SQUARE] } },
+    features: [{ type: 'insert', geometry: { kind: 'insert', block: 'sq', transform: { position: [10, 0, 0], scale: [1, 1, 1], rotation: 0 } }, properties: { layer: '0' } }] };
+  const sc = sceneFromDxf(doc, { eps: 0.2 });
+  assert.equal(sc.lines.length / 9, 4);            // the square's 4 spans, placed
+  assert.equal(sc.snaps.length, 1);                // the insertion point
 });

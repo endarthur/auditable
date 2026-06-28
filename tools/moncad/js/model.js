@@ -101,6 +101,29 @@ export class Model {
     this.rev++; return true;
   }
 
+  // ── blocks (reusable symbol definitions) ──────────────────────────────────────────
+  blockNames() { return Object.keys(this.doc.blocks || {}); }
+  getBlock(name) { return this.doc.blocks && this.doc.blocks[name]; }
+  // Define a block (no-op overwrite-guard off — redefining updates all instances). Block
+  // defs are document furniture (like the layer table), not on the geometry undo stack.
+  addBlock(name, features, base = [0, 0, 0]) {
+    if (!this.doc.blocks) this.doc.blocks = {};
+    this.doc.blocks[name] = { name, base, features };
+    this.rev++;
+    return this.doc.blocks[name];
+  }
+  // Atomic remove-some + add-some, as ONE undoable step (make-block: drop the selection,
+  // add its instance). `removeIndices` ascending-deduped; `addFeatures` appended.
+  swap(removeIndices, addFeatures) {
+    const sorted = [...new Set(removeIndices)].sort((a, b) => a - b);
+    const removed = sorted.map((i) => ({ i, feature: this.doc.features[i] }));
+    for (let k = sorted.length - 1; k >= 0; k--) this.doc.features.splice(sorted[k], 1);
+    for (const f of addFeatures) this.doc.features.push(f);
+    this._undo.push({ kind: 'swap', removed, added: addFeatures.slice() });
+    this._redo.length = 0;
+    this.rev++;
+  }
+
   // Append a feature (already WORLD-canonical — the tool converts local→world on commit).
   add(feature) {
     this.doc.features.push(feature);
@@ -152,6 +175,14 @@ export class Model {
     } else if (e.kind === 'remove') {
       if (redo) for (let k = e.removed.length - 1; k >= 0; k--) this.doc.features.splice(e.removed[k].i, 1);
       else for (const { i, feature } of e.removed) this.doc.features.splice(i, 0, feature);   // ascending → indices stay valid
+    } else if (e.kind === 'swap') {
+      if (redo) {
+        for (let k = e.removed.length - 1; k >= 0; k--) this.doc.features.splice(e.removed[k].i, 1);
+        for (const f of e.added) this.doc.features.push(f);
+      } else {
+        for (let k = e.added.length - 1; k >= 0; k--) { const i = this.doc.features.indexOf(e.added[k]); if (i >= 0) this.doc.features.splice(i, 1); }
+        for (const { i, feature } of e.removed) this.doc.features.splice(i, 0, feature);
+      }
     }
   }
 

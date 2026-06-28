@@ -75,6 +75,24 @@ export function localSegments(geometry, origin, eps = 0.2) {
   return out;
 }
 
+// Place a block-definition geometry into the world by an INSERT transform, about the block
+// base: P → position + R(rotation)·scale·(P − base). Uniform scale (v0); a similarity, so
+// bulge is invariant. Text height scales and its rotation adds; nested inserts are deferred.
+export function placeInstance(g, t, base = [0, 0, 0]) {
+  const s = t.scale[0], rot = t.rotation * Math.PI / 180, c = Math.cos(rot), sn = Math.sin(rot);
+  const px = t.position[0], py = t.position[1], bx = base[0] || 0, by = base[1] || 0;
+  const M = (x, y) => { const dx = (x - bx) * s, dy = (y - by) * s; return [px + dx * c - dy * sn, py + dx * sn + dy * c]; };
+  if (g.kind === 'polyline') {
+    const v = g.vertices, out = new Float64Array(v.length);
+    for (let i = 0; i < v.length; i += 3) { const p = M(v[i], v[i + 1]); out[i] = p[0]; out[i + 1] = p[1]; out[i + 2] = v[i + 2]; }
+    return { kind: 'polyline', vertices: out, bulges: g.bulges ? Float64Array.from(g.bulges) : null, closed: g.closed };
+  }
+  if (g.kind === 'circle') { const cc = M(g.center[0], g.center[1]); return { kind: 'circle', center: [cc[0], cc[1], g.center[2] || 0], radius: g.radius * s }; }
+  if (g.kind === 'point') { const p = M(g.position[0], g.position[1]); return { kind: 'point', position: [p[0], p[1], g.position[2] || 0] }; }
+  if (g.kind === 'text') { const p = M(g.position[0], g.position[1]); return { ...g, position: [p[0], p[1], g.position[2] || 0], height: (g.height || 1) * s, rotation: (g.rotation || 0) + t.rotation }; }
+  return g;   // nested 'insert' deferred
+}
+
 export function sceneFromDxf(doc, opts = {}) {
   const frame = doc.frame, o = frame.origin;
   const eps = opts.eps != null ? opts.eps : 0.2;
@@ -116,8 +134,17 @@ export function sceneFromDxf(doc, opts = {}) {
       const p = toL(g.position); ext(p);
       T.push({ p, height: g.height || 1, rotation: g.rotation || 0, value: g.value || '', color: isSel ? SELECTED : colorFor(f.properties, layers) });
       snap(p, 'node');
+    } else if (g.kind === 'insert') {
+      const blk = doc.blocks && doc.blocks[g.block];
+      if (blk) for (const bf of blk.features) {       // render the definition placed by this instance's transform, coloured as a unit
+        const pg = placeInstance(bf.geometry, g.transform, blk.base);
+        if (pg.kind === 'polyline' || pg.kind === 'circle') { for (const [a, b] of localSegments(pg, o, eps)) seg(a, b, w, col); }
+        else if (pg.kind === 'point') pt(toL(pg.position), 6, col);
+        else if (pg.kind === 'text') T.push({ p: toL(pg.position), height: pg.height, rotation: pg.rotation, value: pg.value, color: col });
+      }
+      snap(toL(g.transform.position), 'node');         // the insertion point is the snap/handle (block-internal snaps deferred)
     }
-    // 'face' deferred (3D-ish); 'insert' should be exploded before here.
+    // 'face' deferred (3D-ish).
   }
   const bounds = (minx === Infinity) ? { min: [-1, -1], max: [1, 1] } : { min: [minx, miny], max: [maxx, maxy] };
   return { frame, lines: new Float32Array(L), points: new Float32Array(P), bounds, snaps: S, texts: T };

@@ -8,7 +8,7 @@ import { Viewport } from './viewport.js';
 import { Renderer } from './renderer.js';
 import { Overlay } from './overlay.js';
 import { CommandRegistry } from './commands.js';
-import { sceneFromDxf, localSegments } from './scene.js';
+import { sceneFromDxf, localSegments, placeInstance } from './scene.js';
 import { makeToolbar, makePalette, makeCommandLine, makeSnapChips, makeContextMenu, makeMenubar, makeLayersPanel } from './surfaces.js';
 import { SnapIndex } from './snap.js';
 import { Model, LAYER_PALETTE } from './model.js';
@@ -109,7 +109,14 @@ function boot() {
   // hidden OR locked layer geometry is unpickable (hidden is also off the board; locked stays
   // visible but can't be selected/edited)
   const layerSkip = (f) => { const L = model.getLayer(f.properties && f.properties.layer); return !!(L && (!L.visible || L.locked)); };
-  const pickAt = (world) => pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale, layerSkip);
+  const pickAt = (world) => pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale, layerSkip, model.doc.blocks);
+  // Local segments of a geometry, expanding an INSERT to its placed block body (for the edit ghost).
+  const instanceSegments = (g) => {
+    if (g.kind !== 'insert') return localSegments(g, frame.origin, tessEps);
+    const blk = model.doc.blocks && model.doc.blocks[g.block]; if (!blk) return [];
+    const out = []; for (const bf of blk.features) for (const s of instanceSegments(placeInstance(bf.geometry, g.transform, blk.base))) out.push(s);
+    return out;
+  };
   const corner = { fillet: 10, chamfer: 10 };   // current fillet radius / chamfer distance
   let offsetDist = 5;        // current offset distance (side comes from which side you click)
   let textHeight = 2.5;      // current TEXT height (world units)
@@ -361,7 +368,7 @@ function boot() {
     const wa = pickWorld(a), wb = pickWorld(b);
     const box = [Math.min(wa[0], wb[0]), Math.min(wa[1], wb[1]), Math.max(wa[0], wb[0]), Math.max(wa[1], wb[1])];
     if (!additive) selection.clear();
-    for (const i of pickWindow(model.features, box, layerSkip)) selection.add(i);
+    for (const i of pickWindow(model.features, box, model.doc.blocks, layerSkip)) selection.add(i);
     afterSelect();
   }
   function selectAll() { selection.clear(); for (let i = 0; i < model.features.length; i++) selection.add(i); afterSelect(); }
@@ -373,7 +380,7 @@ function boot() {
     activeTool = makeEditTool({
       kind, frame, selectedGeoms,
       xform: { translate, rotate, mirror, scale: rScale },
-      toLocalSegments: (g) => localSegments(g, frame.origin, tessEps),
+      toLocalSegments: (g) => instanceSegments(g),
       onResolve: (res) => {
         if (res.copy) model.addMany(res.copy);
         else if (res.edit) model.applyEdit(res.edit);
@@ -674,6 +681,60 @@ function boot() {
     derive(false); setStatus('text: ' + value);
   }
 
+  // ── blocks: define a reusable symbol from the selection, place live instances ─────
+  function startMakeBlock() {
+    if (!selection.size) { setStatus('select objects to make a block'); return; }
+    cancelTool();
+    const indices = [...selection].sort((a, b) => a - b);
+    let name = null;
+    activeTool = {
+      name: 'block', textMode: () => name == null,
+      get prompt() { return name == null ? 'Block name:' : 'Pick the base point (the insertion anchor):'; },
+      text: (raw) => { if (name != null) return false; const n = String(raw).trim(); if (n) { name = n; refreshPrompt(); render(); } return true; },
+      point: (local) => { if (name != null) makeBlock(name, indices, local); },
+      preview: () => ({ lines: [], points: [] }), keyword: () => false,
+      finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
+    };
+    refreshPrompt(); cmdline.focus(); render();
+  }
+  function makeBlock(name, indices, baseLocal) {
+    const o = frame.origin, base = [baseLocal[0] + o[0], baseLocal[1] + o[1], 0];        // world base point
+    const feats = indices.map((i) => ({ ...model.features[i], geometry: translate(model.features[i].geometry, [-base[0], -base[1]]) }));   // block-local (base-relative)
+    model.addBlock(name, feats, [0, 0, 0]);
+    const insert = { type: 'insert', geometry: { kind: 'insert', block: name, transform: { position: base, scale: [1, 1, 1], rotation: 0 } }, properties: { layer: activeLayer } };
+    model.swap(indices, [insert]);            // the selection becomes its own instance, in place
+    selection.clear(); afterSelect(); endTool(); setStatus(`block "${name}" created — Insert (i) to place more`);
+  }
+  // Insert: choose a defined block (a chooser menu), then place live instances.
+  function insertCommand() {
+    const names = model.blockNames();
+    if (!names.length) { setStatus('no blocks yet — select objects and Make Block first'); return; }
+    if (names.length === 1) { startInsert(names[0]); return; }
+    const r = board.getBoundingClientRect();
+    ctxMenu.show(names.map((n) => ({ label: n, run: () => startInsert(n) })), r.left + r.width / 2, r.top + 40);
+  }
+  function startInsert(name) {
+    if (!model.getBlock(name)) { setStatus(`no block "${name}"`); return; }
+    cancelTool();
+    activeTool = {
+      name: 'insert',
+      get prompt() { return `Insert "${name}" — point (Esc to finish):`; },
+      point: (local) => {
+        const o = frame.origin;
+        model.add({ type: 'insert', geometry: { kind: 'insert', block: name, transform: { position: [local[0] + o[0], local[1] + o[1], 0], scale: [1, 1, 1], rotation: 0 } }, properties: { layer: activeLayer } });
+        derive(false); setStatus(`inserted "${name}"`);   // stays active for repeated placement
+      },
+      preview: (cursor) => {
+        if (!cursor) return { lines: [], points: [] };
+        const o = frame.origin;
+        return { lines: instanceSegments({ kind: 'insert', block: name, transform: { position: [cursor[0] + o[0], cursor[1] + o[1], 0], scale: [1, 1, 1], rotation: 0 } }), points: [cursor] };
+      },
+      keyword: () => false,
+      finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
+    };
+    refreshPrompt(); cmdline.focus(); render();
+  }
+
   // ── the spine: commands, then the surfaces that view them ───────────────────────
   let palette;
   const ctx = { hasDoc: true, hasSelection: false };
@@ -697,6 +758,7 @@ function boot() {
     { id: 'edit.rotate', title: 'Rotate', category: 'Modify', icon: 'Rotate', keys: 'r', alias: ['ro', 'rotate'], when: () => selection.size > 0, run: () => startEdit('rotate') },
     { id: 'edit.mirror', title: 'Mirror', category: 'Modify', icon: 'Mirror', alias: ['mi', 'mirror'], when: () => selection.size > 0, run: () => startEdit('mirror') },
     { id: 'edit.scale', title: 'Scale', category: 'Modify', icon: 'Scale', alias: ['sc', 'scale'], when: () => selection.size > 0, run: () => startEdit('scale') },
+    { id: 'edit.makeBlock', title: 'Make Block…', category: 'Modify', alias: ['block', 'makeblock'], when: () => selection.size > 0, run: () => startMakeBlock() },
     { id: 'edit.array', title: 'Array (grid)', category: 'Modify', icon: 'Array', alias: ['ar', 'array'], when: () => selection.size > 0, run: () => startArrayRect() },
     { id: 'edit.arrayPolar', title: 'Array (polar)', category: 'Modify', alias: ['polar', 'arraypolar'], when: () => selection.size > 0, run: () => startArrayPolar() },
     { id: 'edit.delete', title: 'Delete', category: 'Modify', keys: 'delete', alias: ['del', 'erase'], when: () => selection.size > 0, run: () => doDelete() },
@@ -705,6 +767,7 @@ function boot() {
     { id: 'edit.fillet', title: 'Fillet', category: 'Modify', icon: 'Fillet', keys: 'f', alias: ['f', 'fillet'], run: () => startCorner('fillet') },
     { id: 'edit.chamfer', title: 'Chamfer', category: 'Modify', icon: 'Chamfer', alias: ['cha', 'chamfer'], run: () => startCorner('chamfer') },
     { id: 'edit.offset', title: 'Offset', category: 'Modify', icon: 'Offset', keys: 'o', alias: ['o', 'offset'], run: () => startOffset() },
+    { id: 'tool.insert', title: 'Insert block', category: 'Draw', icon: 'Insert', keys: 'i', alias: ['insert', 'ins'], run: () => insertCommand() },
     { id: 'tool.measure', title: 'Measure', category: 'Tools', icon: 'Measure', alias: ['measure', 'dist', 'mea'], run: () => startMeasure() },
     { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => derive(true) },
     { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); zoomed(); } },
@@ -732,11 +795,11 @@ function boot() {
   const ctxMenu = makeContextMenu(cmds, ctx, $('#ctxmenu'));
   const layersPanel = makeLayersPanel(() => model, $('#layers'), layerHandlers);
   // contextual command sets — verbs come to the selection (SPEC §3, noun-first)
-  const SEL_MENU = ['edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.scale', null, 'edit.array', 'edit.arrayPolar', null, 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', null, 'edit.delete', 'edit.deselect'];
+  const SEL_MENU = ['edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.scale', null, 'edit.array', 'edit.arrayPolar', 'edit.makeBlock', null, 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', null, 'edit.delete', 'edit.deselect'];
   const EMPTY_MENU = ['edit.selectAll', null, 'view.zoomExtents', 'view.grid', null, 'file.new', 'file.open', 'file.save'];
   // left tool palette: the frequent draw + modify verbs (the long tail is in the menus / palette / context)
   const tools = makeToolbar(cmds, ctx, $('#tools'),
-    ['draw.line', 'draw.polyline', 'draw.arc', 'draw.circle', 'draw.point', 'draw.text', null,
+    ['draw.line', 'draw.polyline', 'draw.arc', 'draw.circle', 'draw.point', 'draw.text', 'tool.insert', null,
       'edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', 'edit.delete', null, 'tool.measure']);
   // menubar: GLOBAL only
   makeMenubar(cmds, ctx, $('#menubar'), [
