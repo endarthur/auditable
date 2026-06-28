@@ -13,6 +13,7 @@ export class Overlay {
     this.rubber = null;      // { lines:[[a,b],…], points:[p,…] } in SCREEN px, or null
     this.selBox = null;      // [[x0,y0],[x1,y1]] in SCREEN px (window-select drag), or null
     this.highlight = null;   // { warn, ok, dim } each [[a,b],…] SCREEN px — the pick-tool preview
+    this.texts = null;       // [{ p:local, height, rotation, value, color:[r,g,b,a] }] — TEXT entities
     this.theme = { crosshair: 'rgba(140,140,140,0.45)', cross: 'rgba(200,120,80,0.9)', snap: 'rgba(120,180,230,0.95)', rubber: 'rgba(216,120,59,0.95)', sel: 'rgba(120,180,230,0.9)' };
   }
 
@@ -25,15 +26,36 @@ export class Overlay {
   // Hover preview for the click-on-geometry tools: warn (red) = will be removed, ok (green)
   // = will be added, dim (grey) = the candidate under the cursor.
   setHighlight(geom) { this.highlight = geom; }
+  setTexts(texts) { this.texts = texts; }
 
   draw(view) {
     const ctx = this.ctx, w = view.width, h = view.height;
     ctx.clearRect(0, 0, w, h);
+    if (this.texts) this._drawTexts(view);
     if (this.highlight) this._highlight(view);
     if (this.rubber) this._rubber(view);
     if (this.selBox) this._selectBox(view);
     if (this.cursor) this._crosshair(view);
     if (this.snap) this._snapGlyph(view);
+  }
+
+  // TEXT entities — drawn on the overlay (text is the hard GPU problem, SPEC §6), projected
+  // and sized to the world height at the insertion point (DXF baseline, rotation CCW).
+  _drawTexts(view) {
+    const ctx = this.ctx;
+    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+    for (const t of this.texts) {
+      const px = t.height * view.scale;                  // world height → device px
+      if (px < 4 || !t.value) continue;                  // too small to read
+      const s = view.toScreen(t.p), c = t.color;
+      ctx.save();
+      ctx.translate(s[0], s[1]);
+      if (t.rotation) ctx.rotate(-t.rotation * Math.PI / 180);   // DXF CCW; screen y-down → negate
+      ctx.font = `${px}px Barlow, system-ui, sans-serif`;
+      ctx.fillStyle = `rgba(${c[0] * 255 | 0},${c[1] * 255 | 0},${c[2] * 255 | 0},${c[3]})`;
+      ctx.fillText(t.value, 0, 0);
+      ctx.restore();
+    }
   }
 
   // What a Trim/Extend/Offset/Fillet click would do, shown before you commit.

@@ -81,7 +81,7 @@ export function sceneFromDxf(doc, opts = {}) {
   const selected = opts.selected;                        // Set<featureIndex> | undefined
   const layers = doc.layers || {};                       // bylayer colour + visibility + opacity
   const toL = (p) => [p[0] - o[0], p[1] - o[1]];          // world → local
-  const L = [], P = [], S = [];
+  const L = [], P = [], S = [], T = [];   // lines, points, snaps, texts
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
   const ext = (p) => { if (p[0] < minx) minx = p[0]; if (p[0] > maxx) maxx = p[0]; if (p[1] < miny) miny = p[1]; if (p[1] > maxy) maxy = p[1]; };
   const seg = (a, b, w, c) => { L.push(a[0], a[1], b[0], b[1], w, c[0], c[1], c[2], c[3]); ext(a); ext(b); };
@@ -112,9 +112,13 @@ export function sceneFromDxf(doc, opts = {}) {
       snap(toL(g.center), 'center');
     } else if (g.kind === 'point') {
       const p = toL(g.position); pt(p, 6, isSel ? SELECTED : POINT_COL); snap(p, 'node');
+    } else if (g.kind === 'text') {
+      const p = toL(g.position); ext(p);
+      T.push({ p, height: g.height || 1, rotation: g.rotation || 0, value: g.value || '', color: isSel ? SELECTED : colorFor(f.properties, layers) });
+      snap(p, 'node');
     }
     // 'face' deferred (3D-ish); 'insert' should be exploded before here.
   }
   const bounds = (minx === Infinity) ? { min: [-1, -1], max: [1, 1] } : { min: [minx, miny], max: [maxx, maxy] };
-  return { frame, lines: new Float32Array(L), points: new Float32Array(P), bounds, snaps: S };
+  return { frame, lines: new Float32Array(L), points: new Float32Array(P), bounds, snaps: S, texts: T };
 }

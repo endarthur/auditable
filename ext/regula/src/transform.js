@@ -26,6 +26,7 @@ function transformGeom(g, fn, { flipBulge = false, radiusScale = 1 } = {}) {
   }
   if (g.kind === 'circle') { const c = fn(g.center[0], g.center[1]); return { kind: 'circle', center: [c[0], c[1], g.center[2] || 0], radius: g.radius * radiusScale }; }
   if (g.kind === 'point') { const p = fn(g.position[0], g.position[1]); return { kind: 'point', position: [p[0], p[1], g.position[2] || 0] }; }
+  if (g.kind === 'text') { const p = fn(g.position[0], g.position[1]); return { ...g, position: [p[0], p[1], g.position[2] || 0] }; }   // moves the insertion point (stays upright in v0)
   return g;   // face / insert etc. — untouched in v0 (no 2D-plan transform defined)
 }
 

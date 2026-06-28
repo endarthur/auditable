@@ -112,6 +112,7 @@ function boot() {
   const pickAt = (world) => pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale, layerSkip);
   const corner = { fillet: 10, chamfer: 10 };   // current fillet radius / chamfer distance
   let offsetDist = 5;        // current offset distance (side comes from which side you click)
+  let textHeight = 2.5;      // current TEXT height (world units)
   let gridOn = true, gridStep = 1;   // reference grid (View → Grid, g); gridStep feeds grid-snap
   const EMPTY = new Float32Array(0);
   const TESS_PX = 0.5;               // target arc/circle chord error, device px (screen-adaptive tessellation)
@@ -141,6 +142,7 @@ function boot() {
     snapIndex = new SnapIndex(sc.snaps || []);
     renderer.setLines(sc.lines);
     renderer.setPoints(sc.points);
+    overlay.setTexts(sc.texts || []);
     $('#frameInfo').textContent = `${frame.crs || '—'} · origin ${Math.round(frame.origin[0])},${Math.round(frame.origin[1])}`;
     tessEps = eps; lastDeriveScale = view.scale;
     render();
@@ -243,6 +245,7 @@ function boot() {
     const t = String(text).trim();
     if (activeTool) {
       if (t === '') { activeTool.finish(); return; }                                  // Enter on empty → finish
+      if (activeTool.textMode && activeTool.textMode()) { activeTool.text(t); if (activeTool) cmdline.focus(); return; }   // raw text entry (any string, no coord/snap parse)
       const ov = OVERRIDE_WORDS[t.toLowerCase()];                                     // one-shot snap override (cen / end / non …)
       if (ov !== undefined) { snap.setOneShot(ov); setStatus(`snap once: ${t.toLowerCase()}`); refreshPrompt(); afterTypedPoint(); return; }
       if (activeTool.text && activeTool.text(t)) { refreshPrompt(); afterTypedPoint(); return; }   // tool scalar (circle radius)
@@ -577,6 +580,31 @@ function boot() {
     refreshPrompt(); cmdline.focus(); render();
   }
 
+  // ── text: place an insertion point, then type the string (the next entry IS the text) ──
+  function startText() {
+    cancelTool();
+    let pos = null;
+    activeTool = {
+      name: 'text', textMode: () => !!pos,
+      get prompt() { return pos ? `Type the text (height ${textHeight}), Enter:` : `Text — insertion point (height ${textHeight}):`; },
+      point: (local) => { if (!pos) { pos = local; refreshPrompt(); cmdline.focus(); render(); } },
+      text: (raw) => {   // any typed string after the position is the text (textMode routes it here)
+        if (!pos) { const n = Number(String(raw).trim()); if (n > 0) { textHeight = n; refreshPrompt(); return true; } return false; }
+        if (raw) { commitText(pos, raw); endTool(); }
+        return true;
+      },
+      preview: (cursor) => ({ lines: [], points: pos ? [pos] : (cursor ? [cursor] : []) }),
+      keyword: () => false,
+      finish: () => endTool(), cancel: () => endTool(), last: () => pos, count: () => (pos ? 1 : 0),
+    };
+    refreshPrompt(); cmdline.focus(); render();
+  }
+  function commitText(localPos, value) {
+    const o = frame.origin;
+    model.add({ type: 'text', geometry: { kind: 'text', position: [localPos[0] + o[0], localPos[1] + o[1], o[2] || 0], height: textHeight, rotation: 0, value }, properties: { layer: activeLayer } });
+    derive(false); setStatus('text: ' + value);
+  }
+
   // ── the spine: commands, then the surfaces that view them ───────────────────────
   let palette;
   const ctx = { hasDoc: true, hasSelection: false };
@@ -590,6 +618,7 @@ function boot() {
     { id: 'draw.arc', title: 'Arc', category: 'Draw', icon: 'Arc', keys: 'a', alias: ['a', 'arc'], run: () => startTool('arc') },
     { id: 'draw.circle', title: 'Circle', category: 'Draw', icon: 'Circle', keys: 'c', alias: ['c', 'ci', 'circle'], run: () => startTool('circle') },
     { id: 'draw.point', title: 'Point', category: 'Draw', icon: 'Point', alias: ['po', 'point', 'node'], run: () => startTool('point') },
+    { id: 'draw.text', title: 'Text', category: 'Draw', icon: 'Text', alias: ['text', 'txt'], run: () => startText() },
     { id: 'edit.undo', title: 'Undo', category: 'Edit', keys: 'ctrl+z', run: () => { if (model.undo()) { selection.clear(); afterSelect(); setStatus('undo'); } } },
     { id: 'edit.redo', title: 'Redo', category: 'Edit', keys: 'ctrl+y', run: () => { if (model.redo()) { selection.clear(); afterSelect(); setStatus('redo'); } } },
     { id: 'edit.selectAll', title: 'Select All', category: 'Edit', keys: 'ctrl+a', run: () => selectAll() },
@@ -634,7 +663,7 @@ function boot() {
   const EMPTY_MENU = ['edit.selectAll', null, 'view.zoomExtents', 'view.grid', null, 'file.new', 'file.open', 'file.save'];
   // left tool palette: the frequent draw + modify verbs (the long tail is in the menus / palette / context)
   const tools = makeToolbar(cmds, ctx, $('#tools'),
-    ['draw.line', 'draw.polyline', 'draw.arc', 'draw.circle', 'draw.point', null,
+    ['draw.line', 'draw.polyline', 'draw.arc', 'draw.circle', 'draw.point', 'draw.text', null,
       'edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', 'edit.delete', null, 'tool.measure']);
   // menubar: GLOBAL only
   makeMenubar(cmds, ctx, $('#menubar'), [
