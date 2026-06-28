@@ -905,6 +905,7 @@ function boot() {
   const devicePt = (e) => { const r = glCanvas.getBoundingClientRect(); return [(e.clientX - r.left) * view.dpr, (e.clientY - r.top) * view.dpr]; };
   let panning = false, selecting = false, last = null, selStart = null;
   olCanvas.addEventListener('mousedown', (e) => {
+    if (e.button === 0 || e.button === 1) e.preventDefault();   // the canvas isn't focusable; without this the click blurs the command line, so a mid-tool cmdline.focus() (text / typed input after a click) wouldn't stick
     if (activeTool && e.button === 0) { placePoint(devicePt(e)); return; }            // left places mid-tool
     if (e.button === 1) { panning = true; last = devicePt(e); olCanvas.style.cursor = 'grabbing'; return; }   // middle pans
     if (e.button === 0 && !activeTool) { selecting = true; selStart = devicePt(e); }  // left selects / window-selects
