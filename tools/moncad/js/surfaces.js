@@ -23,6 +23,27 @@ export function makeToolbar(reg, ctx, mount, items) {
   return { refresh };
 }
 
+// The command line (SPEC §3) — the typed surface with guided prompts. Friendly because it
+// walks you through (`Specify next point or [Close/Undo]:`), and it's where the AutoLISP
+// coordinate family (`10,5`, `@10,5`, `@10<45`) is entered. Pure glue: it owns no logic,
+// just routes Enter/Escape to the app's handlers and renders the active prompt. The app
+// decides what a submitted line means (a coordinate, a keyword, or a command), keeping the
+// parse (input.js) and the tool state out of the DOM layer.
+export function makeCommandLine(els, h) {
+  const { input, prompt } = els;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); const v = input.value; input.value = ''; h.onSubmit(v); }
+    else if (e.key === 'Escape') { e.preventDefault(); input.value = ''; h.onCancel(); }
+    e.stopPropagation();      // typed keys are the command line's, not the board's shortcuts
+  });
+  return {
+    focus: () => input.focus(),
+    blur: () => input.blur(),
+    clear: () => { input.value = ''; },
+    setPrompt: (t) => { prompt.textContent = t; },
+  };
+}
+
 export function makePalette(reg, ctx, els) {
   const { root, input, list } = els;
   let items = [], sel = 0, open = false;

@@ -9,10 +9,11 @@ import { Renderer } from './renderer.js';
 import { Overlay } from './overlay.js';
 import { CommandRegistry } from './commands.js';
 import { sceneFromDxf } from './scene.js';
-import { makeToolbar, makePalette } from './surfaces.js';
+import { makeToolbar, makePalette, makeCommandLine } from './surfaces.js';
 import { SnapIndex } from './snap.js';
 import { Model } from './model.js';
 import { TOOLS } from './tools.js';
+import { parsePoint } from './input.js';
 
 const SNAP_PX = 12;   // snap pickup radius, in CSS pixels
 import { makeFrame, toWorld } from '@gcu/frame';
@@ -61,6 +62,7 @@ function boot() {
   let bounds = { min: [-100, -100], max: [100, 100] };
   let snapIndex = new SnapIndex([]);
   let activeTool = null;
+  let lastMouse = null;  // last cursor position (device px) — anchors a typed-point's rubber-band
   const snapOn = true;   // slice 3 makes this a real per-type snap-control state
 
   let pending = false;
@@ -126,6 +128,7 @@ function boot() {
   }
 
   // ── tool lifecycle — one drive loop, any tool ────────────────────────────────────
+  function refreshPrompt() { cmdline.setPrompt(activeTool ? activeTool.prompt : 'Command:'); }
   function startTool(name) {
     const make = TOOLS[name]; if (!make) return;
     cancelTool();
@@ -134,10 +137,11 @@ function boot() {
       onCommit: (f) => { model.add(f); derive(false); },
       onDone: () => endTool(),
     });
-    setStatus(activeTool.prompt);
+    refreshPrompt();
+    cmdline.focus();          // the command line is live the moment a tool starts — type or click
     render();
   }
-  function endTool() { activeTool = null; overlay.setRubber(null); setStatus(''); render(); }
+  function endTool() { activeTool = null; overlay.setRubber(null); refreshPrompt(); cmdline.blur(); render(); }
   function cancelTool() { if (activeTool) activeTool.cancel(); }   // → onDone → endTool
 
   // the local point under the cursor, snapped to the nearest target within the aperture
@@ -148,21 +152,43 @@ function boot() {
   }
   function placePoint(s) {
     const { local } = snapAt(s);
-    activeTool.point(local);
-    setStatus(activeTool.prompt);
-    updateRubber(s);
+    activeTool.point(local);          // may auto-finish (line/circle) → endTool nulls activeTool
+    refreshPrompt();
+    if (activeTool) { updateRubber(s); cmdline.focus(); }
     render();
   }
-  // project the tool's local rubber-band geometry to screen and hand it to the overlay
+  // project the tool's local rubber-band geometry (from a screen cursor) to the overlay
   function updateRubber(s) {
     if (!activeTool) { overlay.setRubber(null); return; }
-    const { local } = snapAt(s);
+    const { local } = s ? snapAt(s) : { local: null };
     const g = activeTool.preview(local);
     overlay.setRubber({
       lines: g.lines.map(([a, b]) => [view.toScreen(a), view.toScreen(b)]),
       points: g.points.map((p) => view.toScreen(p)),
     });
   }
+
+  // ── the command line: a submitted line is a coordinate, a keyword, or a command ──
+  function cmdSubmit(text) {
+    const t = String(text).trim();
+    if (activeTool) {
+      if (t === '') { activeTool.finish(); return; }                                  // Enter on empty → finish
+      if (activeTool.text && activeTool.text(t)) { refreshPrompt(); afterTypedPoint(); return; }   // tool scalar (circle radius)
+      if (activeTool.keyword && activeTool.keyword(t.toLowerCase())) { refreshPrompt(); afterTypedPoint(); return; }
+      const r = parsePoint(t, activeTool.last(), frame);                              // a coordinate
+      if (r.ok) { activeTool.point(r.local); refreshPrompt(); afterTypedPoint(); }
+      else setStatus(r.error);
+      if (activeTool) cmdline.focus();
+      return;
+    }
+    if (!t) return;                                                                   // idle: run a command by id/alias/fuzzy
+    const cmd = cmds.get(t) || (cmds.forAlias(t) && cmds.get(cmds.forAlias(t))) || cmds.search(t, ctx)[0];
+    if (cmd) cmds.execute(cmd.id, ctx);
+    else setStatus(`unknown command: ${t}`);
+  }
+  function cmdCancel() { if (activeTool) cancelTool(); else cmdline.blur(); }
+  // refresh the rubber-band + render after a typed point (no mouse move to trigger it)
+  function afterTypedPoint() { if (activeTool) { updateRubber(lastMouse); cmdline.focus(); } render(); }
 
   // ── the spine: commands, then the surfaces that view them ───────────────────────
   let palette;
@@ -172,7 +198,10 @@ function boot() {
     { id: 'file.open', title: 'Open DXF…', category: 'File', icon: 'Open', keys: 'ctrl+o', run: () => fileInput.click() },
     { id: 'file.save', title: 'Save DXF…', category: 'File', icon: 'Save', keys: 'ctrl+s', run: () => saveDxf() },
     { id: 'file.demo', title: 'Load Demo', category: 'File', run: () => { loadModel(demoModel()); ctx.hasDoc = true; toolbar.refresh(); setStatus('demo model'); } },
-    { id: 'draw.polyline', title: 'Polyline', category: 'Draw', icon: 'Pline', keys: 'l', run: () => startTool('polyline') },
+    { id: 'draw.line', title: 'Line', category: 'Draw', icon: 'Line', keys: 'l', alias: ['l', 'line'], run: () => startTool('line') },
+    { id: 'draw.polyline', title: 'Polyline', category: 'Draw', icon: 'Pline', keys: 'p', alias: ['p', 'pl', 'pline', 'polyline'], run: () => startTool('polyline') },
+    { id: 'draw.circle', title: 'Circle', category: 'Draw', icon: 'Circle', keys: 'c', alias: ['c', 'ci', 'circle'], run: () => startTool('circle') },
+    { id: 'draw.point', title: 'Point', category: 'Draw', icon: 'Point', alias: ['po', 'point', 'node'], run: () => startTool('point') },
     { id: 'edit.undo', title: 'Undo', category: 'Edit', keys: 'ctrl+z', run: () => { if (model.undo()) { derive(false); setStatus('undo'); } } },
     { id: 'edit.redo', title: 'Redo', category: 'Edit', keys: 'ctrl+y', run: () => { if (model.redo()) { derive(false); setStatus('redo'); } } },
     { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => { view.fit(bounds); render(); } },
@@ -181,8 +210,9 @@ function boot() {
     { id: 'view.palette', title: 'Command Palette', category: 'View', icon: '⌘', keys: 'ctrl+p', run: () => palette.toggle() },
   ]);
   palette = makePalette(cmds, ctx, { root: $('#palette'), input: $('#palInput'), list: $('#palList') });
+  const cmdline = makeCommandLine({ input: $('#cmdInput'), prompt: $('#cmdPrompt') }, { onSubmit: cmdSubmit, onCancel: cmdCancel });
   const toolbar = makeToolbar(cmds, ctx, $('#toolbar'),
-    ['file.new', 'file.open', 'file.save', null, 'draw.polyline', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
+    ['file.new', 'file.open', 'file.save', null, 'draw.line', 'draw.polyline', 'draw.circle', 'draw.point', null, 'view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.palette']);
 
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;       // the palette owns its own keys
@@ -209,7 +239,7 @@ function boot() {
   olCanvas.addEventListener('contextmenu', (e) => e.preventDefault());   // right-click is moncad's (the context-menu surface), not the browser's
   window.addEventListener('mouseup', () => { dragging = false; olCanvas.style.cursor = 'none'; });
   olCanvas.addEventListener('mousemove', (e) => {
-    const s = devicePt(e);
+    const s = devicePt(e); lastMouse = s;
     if (dragging) { view.panBy(s[0] - last[0], s[1] - last[1]); last = s; }
     overlay.setCursor(s); readout(s, !dragging);
     if (activeTool && !dragging) updateRubber(s);

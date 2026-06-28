@@ -14,7 +14,7 @@
 <style>
   :root {
     --mono: 'Space Mono', ui-monospace, monospace; --sans: 'Barlow', system-ui, sans-serif;
-    --tb: 36px; --ft: 26px;
+    --tb: 36px; --ft: 26px; --cl: 28px;
     --bg:#121212; --bg-bar:#1a1a1a; --bg-foot:#161616; --board:#121212;
     --border:#2a2a2a; --bd2:#333; --text:#bbb; --text-hi:#ddd; --muted:#888; --dim:#666; --faint:#555;
     --action:#d4773e; --info:#6aa0cf; --ok:#8cb878; --num:#c0a36e;
@@ -29,7 +29,7 @@
   #topbar .title { font-family: var(--mono); font-size: 14px; color: var(--action); letter-spacing: 0.5px; }
   #topbar .dim { font-family: var(--mono); font-size: 11px; color: var(--dim); }
   #topbar .spacer { flex: 1; }
-  #board { position: absolute; left: 0; right: 0; top: var(--tb); bottom: var(--ft); background: var(--board); overflow: hidden; }
+  #board { position: absolute; left: 0; right: 0; top: var(--tb); bottom: calc(var(--ft) + var(--cl)); background: var(--board); overflow: hidden; }
   #board canvas { position: absolute; inset: 0; display: block; }
   #gl { z-index: 1; }
   #overlay { z-index: 2; cursor: none; }
@@ -38,6 +38,17 @@
     flex-direction: column; gap: 8px; color: var(--muted); font-family: var(--mono); font-size: 13px; text-align: center;
   }
   #nogl b { color: var(--text-hi); }
+  /* command line — the typed surface (guided prompts + AutoLISP coordinate input) */
+  #cmdbar {
+    position: absolute; left: 0; right: 0; bottom: var(--ft); height: var(--cl); display: flex; align-items: center;
+    gap: 8px; padding: 0 12px; border-top: 1px solid var(--border); background: var(--bg-bar);
+  }
+  #cmdPrompt { font-family: var(--mono); font-size: 11px; color: var(--info); white-space: nowrap; }
+  #cmdInput {
+    flex: 1; font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: transparent;
+    border: none; outline: none; padding: 0;
+  }
+  #cmdInput::placeholder { color: var(--faint); }
   #footer {
     position: absolute; left: 0; right: 0; bottom: 0; height: var(--ft); display: flex; align-items: center;
     gap: 10px; padding: 0 12px; border-top: 1px solid var(--border); background: var(--bg-foot);
@@ -56,7 +67,7 @@
   .tb-btn:disabled { color: var(--faint); opacity: .5; cursor: default; }
   .tb-sep { width: 1px; height: 16px; background: var(--bd2); margin: 0 4px; }
   /* command palette — type-to-find over the same registry */
-  .pal { position: absolute; inset: var(--tb) 0 var(--ft) 0; z-index: 40; display: none; align-items: flex-start; justify-content: center; background: rgba(10,10,10,0.5); }
+  .pal { position: absolute; inset: var(--tb) 0 calc(var(--ft) + var(--cl)) 0; z-index: 40; display: none; align-items: flex-start; justify-content: center; background: rgba(10,10,10,0.5); }
   .pal.show { display: flex; }
   .pal-box { margin-top: 12vh; width: min(520px, 88vw); background: var(--bg-panel); border: 1px solid var(--bd2); border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); overflow: hidden; }
   .pal-input { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 14px; color: var(--text-hi); background: var(--bg-field); border: none; border-bottom: 1px solid var(--border); padding: 12px 14px; outline: none; }
@@ -87,6 +98,11 @@
     <canvas id="gl"></canvas>
     <canvas id="overlay"></canvas>
     <div id="nogl"><b>WebGL2 unavailable</b><span>moncad's renderer needs WebGL2 — try a current browser.</span></div>
+  </div>
+
+  <div id="cmdbar">
+    <span id="cmdPrompt">Command:</span>
+    <input id="cmdInput" spellcheck="false" autocomplete="off" placeholder="type a command, or a coordinate while drawing (10,5 · @10,5 · @10&lt;45)">
   </div>
 
   <footer id="footer">

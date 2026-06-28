@@ -278,3 +278,82 @@ test('tools: Undo keyword drops the last vertex', () => {
   assert.equal(t.count(), 2);
   assert.deepEqual(t.last(), [5, 0]);
 });
+
+// ── precision input: the AutoLISP coordinate family (SPEC §3) ──────────────────────
+import { parsePoint } from '../tools/moncad/js/input.js';
+import { lineTool, circleTool, pointTool } from '../tools/moncad/js/tools.js';
+
+test('input: absolute x,y is WORLD → local (origin subtracted)', () => {
+  const frame = { origin: [600000, 7700000, 0], units: 'm' };
+  const r = parsePoint('600010, 7700005', null, frame);
+  assert.ok(r.ok);
+  assert.deepEqual(r.local, [10, 5]);
+  // whitespace-separated works too
+  assert.deepEqual(parsePoint('600010 7700005', null, frame).local, [10, 5]);
+});
+
+test('input: @dx,dy is relative to the last point', () => {
+  const frame = { origin: [0, 0, 0], units: 'm' };
+  const r = parsePoint('@10,5', [3, 3], frame);
+  assert.ok(r.ok);
+  assert.deepEqual(r.local, [13, 8]);
+  assert.equal(parsePoint('@10,5', null, frame).ok, false);     // no previous point
+});
+
+test('input: polar @d<a (relative) and d<a (absolute world)', () => {
+  const frame = { origin: [0, 0, 0], units: 'm' };
+  const r = parsePoint('@10<90', [5, 5], frame);                 // up 10 from (5,5)
+  assert.ok(r.ok);
+  assert.ok(Math.abs(r.local[0] - 5) < 1e-9 && Math.abs(r.local[1] - 15) < 1e-9);
+  const abs = parsePoint('10<0', null, frame);                   // absolute world (10,0)
+  assert.ok(Math.abs(abs.local[0] - 10) < 1e-9 && Math.abs(abs.local[1]) < 1e-9);
+});
+
+test('input: garbage is rejected with an error, not a throw', () => {
+  const frame = { origin: [0, 0, 0], units: 'm' };
+  assert.equal(parsePoint('', null, frame).ok, false);
+  assert.equal(parsePoint('10', null, frame).ok, false);        // need x,y
+  assert.equal(parsePoint('a,b', null, frame).ok, false);
+  assert.equal(parsePoint('10<x', null, frame).ok, false);
+});
+
+test('tools: line is two points then auto-commits; circle = centre + radius (point or scalar)', () => {
+  const frame = { origin: [0, 0, 0], units: 'm' };
+  let lf = null, ldone = 0;
+  const lt = lineTool({ frame, onCommit: (f) => (lf = f), onDone: () => ldone++ });
+  lt.point([0, 0]); assert.equal(ldone, 0);
+  lt.point([10, 0]);                                            // second point auto-finishes
+  assert.equal(ldone, 1);
+  assert.equal(lf.type, 'line');
+  assert.equal(lf.geometry.vertices.length, 6);
+
+  let cf = null, cdone = 0;
+  const ct = circleTool({ frame, onCommit: (f) => (cf = f), onDone: () => cdone++ });
+  ct.point([5, 5]);                                             // centre
+  assert.equal(ct.text('3'), true);                            // typed radius
+  assert.equal(cf.geometry.kind, 'circle');
+  assert.equal(cf.geometry.radius, 3);
+  assert.ok(Math.abs(cf.geometry.center[0] - 5) < 1e-9);
+  assert.equal(cdone, 1);
+  // radius-by-point
+  cf = null; cdone = 0;
+  const ct2 = circleTool({ frame, onCommit: (f) => (cf = f), onDone: () => cdone++ });
+  ct2.point([0, 0]); ct2.point([3, 4]);                        // radius = 5
+  assert.equal(cf.geometry.radius, 5);
+
+  let pf = null;
+  const pt = pointTool({ frame, onCommit: (f) => (pf = f), onDone: () => {} });
+  pt.point([2, 7]);
+  assert.equal(pf.geometry.kind, 'point');
+  assert.ok(Math.abs(pf.geometry.position[0] - 2) < 1e-9 && Math.abs(pf.geometry.position[1] - 7) < 1e-9);
+});
+
+test('registry: forAlias resolves typed names to command ids', () => {
+  const reg = new CommandRegistry().registerAll([
+    { id: 'draw.line', title: 'Line', alias: ['l', 'line'], run: () => {} },
+    { id: 'draw.polyline', title: 'Polyline', alias: ['p', 'pl'], run: () => {} },
+  ]);
+  assert.equal(reg.forAlias('L'), 'draw.line');
+  assert.equal(reg.forAlias(' pl '), 'draw.polyline');
+  assert.equal(reg.forAlias('nope'), null);
+});

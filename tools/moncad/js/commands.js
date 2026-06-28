@@ -47,6 +47,7 @@ export class CommandRegistry {
   constructor() {
     this._cmds = new Map();      // id → command
     this._keys = new Map();      // normalized keystroke → id
+    this._alias = new Map();     // lowercased alias (the command line's typed names) → id
   }
 
   register(cmd) {
@@ -54,6 +55,7 @@ export class CommandRegistry {
     if (typeof cmd.run !== 'function') throw new Error(`command "${cmd.id}" needs a run()`);
     this._cmds.set(cmd.id, cmd);
     if (cmd.keys) for (const k of [].concat(cmd.keys)) this._keys.set(normalizeKey(k), cmd.id);
+    if (cmd.alias) for (const a of [].concat(cmd.alias)) this._alias.set(String(a).toLowerCase(), cmd.id);
     return this;
   }
 
@@ -93,6 +95,10 @@ export class CommandRegistry {
   // so the tooltip's key and the key that fires it are guaranteed to agree (no drift).
   forKey(key) { return this._keys.get(normalizeKey(key)) || null; }
   keyFor(id) { for (const [k, cid] of this._keys) if (cid === id) return k; return null; }
+
+  // The command line's typed-name surface: a short alias (`l`, `pl`, `ci`) → command id.
+  // Same registry, so a typed alias and a clicked button fire the identical command.
+  forAlias(name) { return this._alias.get(String(name).trim().toLowerCase()) || null; }
 
   // THE single execution path every surface routes through. Honours when(); returns a
   // small result envelope rather than throwing on a disabled command.
