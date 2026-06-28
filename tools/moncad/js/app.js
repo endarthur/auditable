@@ -114,6 +114,8 @@ function boot() {
   let offsetDist = 5;        // current offset distance (side comes from which side you click)
   let gridOn = true, gridStep = 1;   // reference grid (View → Grid, g); gridStep feeds grid-snap
   const EMPTY = new Float32Array(0);
+  const TESS_PX = 0.5;               // target arc/circle chord error, device px (screen-adaptive tessellation)
+  let lastDeriveScale = 1, tessEps = 0.2;
 
   // recompute the adaptive grid for the current view (zoom-dependent spacing)
   function applyGrid() { if (gridOn) { const g = computeGrid(view); renderer.setGrid(g.lines); gridStep = g.step; } else renderer.setGrid(EMPTY); }
@@ -128,16 +130,23 @@ function boot() {
   // Push the model's derived view (renderer buffers + snap index) — the canonical→derived
   // step (SPEC §4). `fit` reframes the camera (open / new); a bare edit keeps the view.
   function derive(fit) {
-    const sc = sceneFromDxf(model.doc, { selected: selection });
+    if (fit) {   // a coarse pass just for bounds, fit, THEN tessellate at the fit scale (below)
+      const pre = sceneFromDxf(model.doc, { eps: 1 });
+      view.fit((pre.lines.length || pre.points.length) ? pre.bounds : { min: [-50, -50], max: [50, 50] });
+    }
+    const eps = Math.max(1e-6, TESS_PX * view.dpr / view.scale);   // chord error sub-pixel at this zoom
+    const sc = sceneFromDxf(model.doc, { selected: selection, eps });
     frame = sc.frame;
     bounds = (sc.lines.length || sc.points.length) ? sc.bounds : { min: [-50, -50], max: [50, 50] };
     snapIndex = new SnapIndex(sc.snaps || []);
     renderer.setLines(sc.lines);
     renderer.setPoints(sc.points);
     $('#frameInfo').textContent = `${frame.crs || '—'} · origin ${Math.round(frame.origin[0])},${Math.round(frame.origin[1])}`;
-    if (fit) view.fit(bounds);
+    tessEps = eps; lastDeriveScale = view.scale;
     render();
   }
+  // re-tessellate (curves stay smooth) when zoom crosses a threshold; otherwise just redraw
+  function zoomed() { const r = view.scale / lastDeriveScale; if (r > 1.4 || r < 0.71) derive(false); else render(); }
 
   function loadModel(m, fit = true) {
     cancelTool();
@@ -353,7 +362,7 @@ function boot() {
     activeTool = makeEditTool({
       kind, frame, selectedGeoms,
       xform: { translate, rotate, mirror },
-      toLocalSegments: (g) => localSegments(g, frame.origin, 0.2),
+      toLocalSegments: (g) => localSegments(g, frame.origin, tessEps),
       onResolve: (res) => {
         if (res.copy) model.addMany(res.copy);
         else if (res.edit) model.applyEdit(res.edit);
@@ -513,9 +522,9 @@ function boot() {
     { id: 'edit.fillet', title: 'Fillet', category: 'Modify', icon: 'Fillet', keys: 'f', alias: ['f', 'fillet'], run: () => startCorner('fillet') },
     { id: 'edit.chamfer', title: 'Chamfer', category: 'Modify', icon: 'Chamfer', alias: ['cha', 'chamfer'], run: () => startCorner('chamfer') },
     { id: 'edit.offset', title: 'Offset', category: 'Modify', icon: 'Offset', keys: 'o', alias: ['o', 'offset'], run: () => startOffset() },
-    { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => { view.fit(bounds); render(); } },
-    { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); render(); } },
-    { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
+    { id: 'view.zoomExtents', title: 'Zoom Extents', category: 'View', icon: 'Extents', keys: 'e', run: () => derive(true) },
+    { id: 'view.zoomIn', title: 'Zoom In', category: 'View', icon: '+', keys: '=', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1.2); zoomed(); } },
+    { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); zoomed(); } },
     { id: 'view.palette', title: 'Command Palette', category: 'View', icon: '⌘', keys: 'ctrl+p', run: () => palette.toggle() },
     { id: 'view.grid', title: 'Reference Grid', category: 'View', keys: 'g', alias: ['grid'], run: () => { gridOn = !gridOn; setStatus(gridOn ? 'grid on' : 'grid off'); render(); } },
     { id: 'view.layers', title: 'Layers Panel', category: 'View', keys: 'shift+l', alias: ['layers'], run: () => toggleLayers() },
@@ -600,7 +609,7 @@ function boot() {
     render();
   });
   olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); overlay.setSnap(null); render(); });
-  olCanvas.addEventListener('wheel', (e) => { e.preventDefault(); view.zoomAt(devicePt(e), e.deltaY < 0 ? 1.1 : 1 / 1.1); readout(devicePt(e)); if (activeTool) updateRubber(devicePt(e)); render(); }, { passive: false });
+  olCanvas.addEventListener('wheel', (e) => { e.preventDefault(); view.zoomAt(devicePt(e), e.deltaY < 0 ? 1.1 : 1 / 1.1); readout(devicePt(e)); if (activeTool) updateRubber(devicePt(e)); zoomed(); }, { passive: false });
 
   // the instrument panel: LOCAL math, WORLD (UTM) display — the precision point made visible.
   // The snap glyph + type come from the SnapState-resolved pick; ⇥ flags more candidates.

@@ -79,20 +79,26 @@ function lineFeature(a, b, frame) {
   return { type: 'line', geometry: { kind: 'polyline', vertices: v, bulges: null, closed: false }, properties: { layer: '0' } };
 }
 
-// A single segment: start, then end (auto-finishes). Polyline covers chains; line is the
-// quick two-point primitive. Relative input (`@d<a`) keys off the start point.
+// A chain of connected segments (CAD LINE): pick a start, then each click commits a
+// segment from the previous point and keeps going, until Enter/Esc. Each segment is its
+// own line entity (polyline makes them one entity instead). Relative input (`@d<a`) keys
+// off the last point.
 export function lineTool({ frame, onCommit, onDone }) {
-  const pts = [];
+  let prev = null;
   const tool = {
     name: 'line',
-    get prompt() { return pts.length === 0 ? 'Specify start point:' : 'Specify end point (or @dx,dy / @d<a):'; },
-    point(local) { pts.push([local[0], local[1]]); if (pts.length === 2) tool.finish(); },
-    preview(cursor) { return { lines: pts.length && cursor ? [[pts[0], cursor]] : [], points: pts.slice() }; },
+    get prompt() { return prev ? 'Next point (Enter to finish), or @dx,dy / @d<a:' : 'Specify start point:'; },
+    point(local) {
+      const p = [local[0], local[1]];
+      if (prev) onCommit(lineFeature(prev, p, frame));   // commit prev→p as its own segment
+      prev = p;
+    },
+    preview(cursor) { return { lines: prev && cursor ? [[prev, cursor]] : [], points: prev ? [prev] : [] }; },
     keyword() { return false; },
-    finish() { if (pts.length === 2) onCommit(lineFeature(pts[0], pts[1], frame)); onDone(); },
+    finish() { onDone(); },
     cancel() { onDone(); },
-    last() { return pts.length ? pts[pts.length - 1] : null; },
-    count() { return pts.length; },
+    last() { return prev; },
+    count() { return prev ? 1 : 0; },
   };
   return tool;
 }

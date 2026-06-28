@@ -321,11 +321,11 @@ test('tools: line is two points then auto-commits; circle = centre + radius (poi
   const frame = { origin: [0, 0, 0], units: 'm' };
   let lf = null, ldone = 0;
   const lt = lineTool({ frame, onCommit: (f) => (lf = f), onDone: () => ldone++ });
-  lt.point([0, 0]); assert.equal(ldone, 0);
-  lt.point([10, 0]);                                            // second point auto-finishes
-  assert.equal(ldone, 1);
-  assert.equal(lf.type, 'line');
-  assert.equal(lf.geometry.vertices.length, 6);
+  lt.point([0, 0]); assert.equal(lf, null);                     // first point — nothing committed yet
+  lt.point([10, 0]);                                            // second point commits the segment, keeps going
+  assert.ok(lf && lf.type === 'line' && lf.geometry.vertices.length === 6);
+  assert.equal(ldone, 0);                                       // continuous — not finished
+  lt.finish(); assert.equal(ldone, 1);                          // Enter ends the chain
 
   let cf = null, cdone = 0;
   const ct = circleTool({ frame, onCommit: (f) => (cf = f), onDone: () => cdone++ });
