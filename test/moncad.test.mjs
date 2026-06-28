@@ -646,3 +646,17 @@ test('model: reorderLayer drag-places a layer in front of a target (z-order)', (
   assert.deepEqual(m.layerList().map((l) => l.name), ['A', 'B', '0']);
   assert.equal(m.reorderLayer('A', 'A'), false);          // no self-drop
 });
+
+test('tools: polyline arc mode draws tangent arcs (PLINE-arc gesture)', () => {
+  const frame = { origin: [0, 0, 0], units: 'm' };
+  let committed = null;
+  const t = polylineTool({ frame, onCommit: (f) => (committed = f), onDone: () => {} });
+  t.point([0, 0]); t.point([10, 0]);          // straight span → tangent at (10,0) is +x
+  assert.equal(t.keyword('a'), true);          // switch to arc mode
+  t.point([20, 10]);                           // arc tangent to +x, ending (20,10) → 45° chord
+  t.finish();
+  const b = committed.geometry.bulges;
+  assert.ok(b && b[0] === 0);                   // first span straight
+  assert.ok(Math.abs(b[1] - Math.tan(Math.PI / 8)) < 1e-9);   // tangent-arc bulge = tan(45°/2)
+  assert.equal(t.keyword('l'), true);          // and back to line mode works
+});

@@ -24,45 +24,82 @@
 // tools.js stays pure and node-testable. The browser bootstrap (app.js) owns the @gcu
 // imports.
 
-// LOCAL polyline points → a WORLD-canonical @gcu/dxf polyline feature: re-add the frame
-// origin (local→world) so the stored geometry is canonical. v0: straight spans (bulges
-// null); arc spans join the polyline when the Arc keyword lands.
-function polylineFeature(localPts, closed, frame) {
+// LOCAL polyline points + per-span bulges → a WORLD-canonical @gcu/dxf polyline feature.
+// bulges[i] is the span from vertex i to i+1; null when every span is straight.
+function polylineFeature(localPts, bulges, closed, frame) {
   const o = frame.origin, n = localPts.length;
   const vertices = new Float64Array(n * 3);
   for (let i = 0; i < n; i++) {
     vertices[i * 3] = localPts[i][0] + o[0]; vertices[i * 3 + 1] = localPts[i][1] + o[1]; vertices[i * 3 + 2] = o[2] || 0;
   }
-  return { type: 'polyline', geometry: { kind: 'polyline', vertices, bulges: null, closed }, properties: { layer: '0' } };
+  const bul = bulges && bulges.some((b) => b) ? Float64Array.from(bulges) : null;
+  return { type: 'polyline', geometry: { kind: 'polyline', vertices, bulges: bul, closed }, properties: { layer: '0' } };
 }
 
-// The polyline workhorse: click a start, then successive points; Close rings it, Undo
-// drops the last vertex, Enter/finish commits (≥2 points). The line+arc-as-one-primitive
-// dxf model means this same tool grows arc spans later without a separate Arc tool.
+// Small arc helpers, inlined to keep tools.js zero-import (mirrors scene.js's arc math).
+const _sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
+const _unit = (a) => { const m = Math.hypot(a[0], a[1]); return m > 1e-12 ? [a[0] / m, a[1] / m] : [1, 0]; };
+const _rot = (v, ang) => { const c = Math.cos(ang), s = Math.sin(ang); return [v[0] * c - v[1] * s, v[0] * s + v[1] * c]; };
+const _signedAngle = (a, b) => Math.atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1]);
+// Tangent direction at the END of a span (line → its direction; arc → rotated by half the sweep).
+const _spanTangent = (p0, p1, bulge) => { const ch = _unit(_sub(p1, p0)); return bulge ? _rot(ch, 4 * Math.atan(bulge) / 2) : ch; };
+// Bulge of the arc tangent to direction T at P0 and ending at P1 (the AutoLISP PLINE-arc rule:
+// the tangent makes half the swept angle with the chord, so bulge = tan(angle(T,chord)/2)).
+const _tangentBulge = (T, P0, P1) => Math.tan(_signedAngle(T, _unit(_sub(P1, P0))) / 2);
+// Sample an arc span into chord points after p0 (preview tessellation).
+function _sampleArc(p0, p1, bulge, n = 28) {
+  if (!bulge) return [p1];
+  const dx = p1[0] - p0[0], dy = p1[1] - p0[1], c = Math.hypot(dx, dy);
+  if (c === 0) return [p1];
+  const theta = 4 * Math.atan(bulge), r = c / 2 / Math.abs(Math.sin(theta / 2));
+  const m = c / 2 / Math.tan(theta / 2), nx = -dy / c, ny = dx / c;
+  const cx = p0[0] + dx / 2 + nx * m, cy = p0[1] + dy / 2 + ny * m, sa = Math.atan2(p0[1] - cy, p0[0] - cx);
+  const out = []; for (let i = 1; i <= n; i++) { const t = sa + theta * (i / n); out.push([cx + r * Math.cos(t), cy + r * Math.sin(t)]); }
+  return out;
+}
+
+// The polyline workhorse: click a start, then successive points. Arc/Line switch the mode
+// (arc spans are tangent to the previous segment — the PLINE-arc gesture); Close rings it,
+// Undo drops the last vertex, Enter commits (≥2 points). The bulge-native model means arcs
+// and lines are the same polyline, no separate entity.
 export function polylineTool({ frame, onCommit, onDone }) {
-  const pts = [];   // local points placed so far
+  const pts = [], bulges = [];   // bulges[i] = span i→i+1
+  let mode = 'line';
+  // the bulge for a span ending at `p` given the current mode (tangent-arc when in arc mode)
+  const spanBulge = (p) => {
+    if (mode !== 'arc' || pts.length < 1) return 0;
+    const k = pts.length - 1, P0 = pts[k];
+    const T = pts.length >= 2 ? _spanTangent(pts[k - 1], P0, bulges[k - 1] || 0) : _unit(_sub(p, P0));
+    return _tangentBulge(T, P0, p);
+  };
   const tool = {
     name: 'polyline',
     get prompt() {
-      return pts.length === 0
-        ? 'Specify start point:'
-        : `Specify next point or [Close/Undo] (${pts.length} pt${pts.length > 1 ? 's' : ''}), Enter to finish:`;
+      return pts.length === 0 ? 'Specify start point:'
+        : `Next point or [Arc/Line/Close/Undo] — ${mode} (${pts.length} pt${pts.length > 1 ? 's' : ''}), Enter to finish:`;
     },
-    point(local) { pts.push([local[0], local[1]]); },
+    point(local) {
+      const p = [local[0], local[1]];
+      if (pts.length > 0) bulges.push(spanBulge(p));
+      pts.push(p);
+    },
     preview(cursor) {
       const lines = [];
-      for (let i = 1; i < pts.length; i++) lines.push([pts[i - 1], pts[i]]);
-      if (pts.length && cursor) lines.push([pts[pts.length - 1], cursor]);
+      const span = (p0, p1, b) => { if (b) { let f = p0; for (const q of _sampleArc(p0, p1, b)) { lines.push([f, q]); f = q; } } else lines.push([p0, p1]); };
+      for (let i = 1; i < pts.length; i++) span(pts[i - 1], pts[i], bulges[i - 1] || 0);
+      if (pts.length && cursor) span(pts[pts.length - 1], cursor, spanBulge(cursor));   // live leg (arc bends to the cursor)
       return { lines, points: pts.slice() };
     },
     keyword(word) {
       const w = String(word || '').trim().toLowerCase();
+      if (w === 'a' || w === 'arc') { mode = 'arc'; return true; }
+      if (w === 'l' || w === 'line') { mode = 'line'; return true; }
       if (w === 'c' || w === 'close') { tool.finish(true); return true; }
-      if (w === 'u' || w === 'undo') { pts.pop(); return true; }
+      if (w === 'u' || w === 'undo') { if (pts.length) { pts.pop(); bulges.pop(); } return true; }
       return false;
     },
     finish(closed = false) {
-      if (pts.length >= 2) onCommit(polylineFeature(pts, closed, frame));
+      if (pts.length >= 2) onCommit(polylineFeature(pts, bulges, closed, frame));
       onDone();
     },
     cancel() { onDone(); },
