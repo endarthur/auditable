@@ -145,6 +145,12 @@
   .help-content table { border-collapse: collapse; margin: 6px 0; font-size: 12.5px; }
   .help-content td { padding: 2px 14px 2px 0; vertical-align: top; }
   .help-content td:first-child { white-space: nowrap; }
+  /* themed thin scrollbars for the scrollable surfaces (default chunky bars look off-theme) */
+  .help-content, .pal-list, #layers { scrollbar-width: thin; scrollbar-color: var(--bd2) transparent; }
+  .help-content::-webkit-scrollbar, .pal-list::-webkit-scrollbar, #layers::-webkit-scrollbar { width: 10px; height: 10px; }
+  .help-content::-webkit-scrollbar-track, .pal-list::-webkit-scrollbar-track, #layers::-webkit-scrollbar-track { background: transparent; }
+  .help-content::-webkit-scrollbar-thumb, .pal-list::-webkit-scrollbar-thumb, #layers::-webkit-scrollbar-thumb { background: var(--bd2); border: 3px solid transparent; border-radius: 8px; background-clip: content-box; }
+  .help-content::-webkit-scrollbar-thumb:hover, .pal-list::-webkit-scrollbar-thumb:hover, #layers::-webkit-scrollbar-thumb:hover { background: var(--dim); background-clip: content-box; }
   /* context menu — right-click, contextual commands over the same registry */
   .ctx { position: fixed; z-index: 50; display: none; min-width: 168px; background: var(--bg-panel); border: 1px solid var(--bd2); border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,0.55); padding: 4px 0; }
   .ctx.show { display: block; }
