@@ -83,6 +83,44 @@ export function makeSnapChips(reg, ctx, mount, snap, types, labels) {
   return { refresh };
 }
 
+// The layers panel — moncad's first inspector/properties surface (the deep tier of the GCU
+// command model). A GIS-flavoured panel over a CAD-faithful data model: visibility, a
+// colour swatch (click cycles), the active layer (where new geometry lands), and a per-layer
+// opacity slider (the borrowed GIS affordance). `getModel()` returns the live Model (it's
+// replaced on open/new). Handlers route every interaction back to the app.
+const ACI7 = { 1: '#e23', 2: '#dc3', 3: '#3c5', 4: '#3cc', 5: '#46e', 6: '#c4d', 7: '#ddd' };
+function swatchCss(c) {
+  if (!c) return '#888';
+  if (c.mode === 'rgb') return `rgb(${c.r},${c.g},${c.b})`;
+  if (c.mode === 'aci') return ACI7[c.index] || '#aaa';
+  return '#888';
+}
+export function makeLayersPanel(getModel, mount, h) {
+  function row(L) {
+    const r = document.createElement('div'); r.className = 'ly-row' + (L.name === h.active() ? ' active' : '');
+    const vis = document.createElement('span'); vis.className = 'ly-vis'; vis.textContent = L.visible ? '◉' : '○'; vis.title = 'Show / hide';
+    vis.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); h.onVisible(L.name); });
+    const sw = document.createElement('span'); sw.className = 'ly-sw'; sw.style.background = swatchCss(L.color); sw.title = 'Colour (click to cycle)';
+    sw.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); h.onColor(L.name); });
+    const nm = document.createElement('span'); nm.className = 'ly-name'; nm.textContent = L.name; nm.title = 'Set current layer';
+    nm.addEventListener('mousedown', (e) => { e.preventDefault(); h.onActive(L.name); });
+    const op = document.createElement('input'); op.type = 'range'; op.min = '0'; op.max = '100'; op.value = String(Math.round((L.opacity != null ? L.opacity : 1) * 100)); op.className = 'ly-op'; op.title = 'Opacity';
+    op.addEventListener('input', () => h.onOpacity(L.name, op.value / 100));
+    r.append(vis, sw, nm, op);
+    return r;
+  }
+  function refresh() {
+    mount.innerHTML = '';
+    const head = document.createElement('div'); head.className = 'ly-head';
+    const t = document.createElement('span'); t.textContent = 'Layers';
+    const add = document.createElement('button'); add.className = 'ly-add'; add.textContent = '+'; add.title = 'New layer';
+    add.addEventListener('mousedown', (e) => { e.preventDefault(); h.onNew(); });
+    head.append(t, add); mount.appendChild(head);
+    for (const L of getModel().layerList()) mount.appendChild(row(L));
+  }
+  return { refresh };
+}
+
 // The context menu (SPEC §3) — the noun-first surface: right-click brings the verbs to the
 // selection. Bespoke over the same registry (like the toolbar/palette/command-line here),
 // so a right-click item and its keystroke can't drift and moncad keeps one styling. `items`

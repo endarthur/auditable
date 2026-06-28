@@ -21,9 +21,26 @@ export function emptyDoc(frame = IDENTITY) {
   return { frame, layers: {}, blocks: {}, features: [], warnings: [] };
 }
 
+// Default palette for a new layer's colour (ACI 1..6 = red/yellow/green/cyan/blue/magenta,
+// 7 = white) — cycled when you click a layer's swatch.
+export const LAYER_PALETTE = [1, 3, 5, 4, 2, 6, 7];
+
+// Ensure the layer table is usable: '0' always exists, every feature-referenced layer has a
+// record, and each carries the moncad-local display fields (visible / opacity) the DXF table
+// doesn't store. The @gcu/dxf writer only reads { color, linetype } back out, so the extra
+// fields are harmless on round-trip. Mutates + returns doc.layers.
+export function hydrateLayers(doc) {
+  const layers = doc.layers || (doc.layers = {});
+  if (!layers['0']) layers['0'] = { name: '0', color: { mode: 'aci', index: 7 } };
+  for (const f of doc.features) { const n = f.properties && f.properties.layer; if (n && !layers[n]) layers[n] = { name: n, color: { mode: 'aci', index: 7 } }; }
+  for (const n in layers) { const L = layers[n]; L.name = n; if (L.visible === undefined) L.visible = true; if (L.opacity === undefined) L.opacity = 1; }
+  return layers;
+}
+
 export class Model {
   constructor(doc = null) {
     this.doc = doc || emptyDoc();
+    hydrateLayers(this.doc);
     this.rev = 0;          // bumped on every mutation — the scene re-derives off this
     this._undo = [];
     this._redo = [];
@@ -31,6 +48,16 @@ export class Model {
 
   get frame() { return this.doc.frame; }
   get features() { return this.doc.features; }
+  get layers() { return this.doc.layers; }
+
+  layerList() { return Object.values(this.doc.layers); }
+  getLayer(name) { return this.doc.layers[name]; }
+  // Add a layer (no-op if it exists); returns the record. Not undoable in v0 (layers are
+  // light document furniture, not geometry edits).
+  addLayer(name, color = { mode: 'aci', index: 7 }) {
+    if (!this.doc.layers[name]) { this.doc.layers[name] = { name, color, visible: true, opacity: 1 }; this.rev++; }
+    return this.doc.layers[name];
+  }
 
   // Append a feature (already WORLD-canonical — the tool converts local→world on commit).
   add(feature) {

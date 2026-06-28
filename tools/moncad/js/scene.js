@@ -16,12 +16,20 @@ const POINT_COL = [0.42, 0.63, 0.81, 1];
 const SELECTED = [0.66, 0.45, 0.85, 1];      // violet = selected (SPEC §5 role mapping)
 const ACI = { 1: [255, 0, 0], 2: [255, 255, 0], 3: [0, 255, 0], 4: [0, 255, 255], 5: [0, 0, 255], 6: [255, 0, 255], 7: [255, 255, 255] };
 
-function colorFor(props) {
+// Resolve an entity's RGBA. Explicit ACI/RGB wins; bylayer/byblock/absent falls to the
+// entity's LAYER colour (the bylayer contract). Alpha carries the layer's opacity — the
+// one GIS affordance borrowed into the data path (a dimmed reference layer).
+function colorFor(props, layers) {
   const c = props && props.color;
-  if (!c) return DEFAULT_GEO;
-  if (c.mode === 'rgb') return [c.r / 255, c.g / 255, c.b / 255, 1];
-  if (c.mode === 'aci' && ACI[c.index]) { const r = ACI[c.index]; return [r[0] / 255, r[1] / 255, r[2] / 255, 1]; }
-  return DEFAULT_GEO;
+  const L = layers && props && layers[props.layer];
+  const op = L && L.opacity != null ? L.opacity : 1;
+  const aci = (i) => (ACI[i] ? [ACI[i][0] / 255, ACI[i][1] / 255, ACI[i][2] / 255] : null);
+  let rgb = null;
+  if (c && c.mode === 'rgb') rgb = [c.r / 255, c.g / 255, c.b / 255];
+  else if (c && c.mode === 'aci') rgb = aci(c.index);
+  if (!rgb && L && L.color) { const lc = L.color; rgb = lc.mode === 'rgb' ? [lc.r / 255, lc.g / 255, lc.b / 255] : lc.mode === 'aci' ? aci(lc.index) : null; }
+  if (!rgb) rgb = DEFAULT_GEO.slice(0, 3);
+  return [rgb[0], rgb[1], rgb[2], op];
 }
 
 // Sample an arc span (local endpoints + bulge) into chord points after p0 (inclusive of
@@ -71,6 +79,7 @@ export function sceneFromDxf(doc, opts = {}) {
   const frame = doc.frame, o = frame.origin;
   const eps = opts.eps != null ? opts.eps : 0.2;
   const selected = opts.selected;                        // Set<featureIndex> | undefined
+  const layers = doc.layers || {};                       // bylayer colour + visibility + opacity
   const toL = (p) => [p[0] - o[0], p[1] - o[1]];          // world → local
   const L = [], P = [], S = [];
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
@@ -82,8 +91,10 @@ export function sceneFromDxf(doc, opts = {}) {
   for (let fi = 0; fi < doc.features.length; fi++) {
     const f = doc.features[fi];
     const g = f.geometry; if (!g) continue;
+    const lay = layers[f.properties && f.properties.layer];
+    if (lay && !lay.visible) continue;                   // hidden layer → off the board (and out of the snap index)
     const isSel = !!(selected && selected.has(fi));
-    const col = isSel ? SELECTED : colorFor(f.properties);
+    const col = isSel ? SELECTED : colorFor(f.properties, layers);
     const w = isSel ? 2 : 1.5;
     if (g.kind === 'polyline') {
       const v = g.vertices, n = v.length / 3;

@@ -31,10 +31,11 @@ export function featureDist(f, p) {
   return Infinity;
 }
 
-// Nearest feature index to world point p within tol, or -1.
-export function pickFeature(features, p, tol) {
+// Nearest feature index to world point p within tol, or -1. `skip(feature)` (optional)
+// excludes features — used to make hidden-layer geometry unpickable.
+export function pickFeature(features, p, tol, skip) {
   let best = -1, bd = tol;
-  for (let i = 0; i < features.length; i++) { const d = featureDist(features[i], p); if (d <= bd) { bd = d; best = i; } }
+  for (let i = 0; i < features.length; i++) { if (skip && skip(features[i])) continue; const d = featureDist(features[i], p); if (d <= bd) { bd = d; best = i; } }
   return best;
 }
 

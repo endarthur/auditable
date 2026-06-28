@@ -14,7 +14,7 @@
 <style>
   :root {
     --mono: 'Space Mono', ui-monospace, monospace; --sans: 'Barlow', system-ui, sans-serif;
-    --tb: 36px; --ft: 26px; --cl: 28px; --tp: 64px;
+    --tb: 36px; --ft: 26px; --cl: 28px; --tp: 64px; --rp: 188px;
     --bg:#121212; --bg-bar:#1a1a1a; --bg-foot:#161616; --board:#121212;
     --border:#2a2a2a; --bd2:#333; --text:#bbb; --text-hi:#ddd; --muted:#888; --dim:#666; --faint:#555;
     --action:#d4773e; --info:#6aa0cf; --ok:#8cb878; --num:#c0a36e;
@@ -30,6 +30,23 @@
   #topbar .dim { font-family: var(--mono); font-size: 11px; color: var(--dim); }
   #topbar .spacer { flex: 1; }
   #board { position: absolute; left: var(--tp); right: 0; top: var(--tb); bottom: calc(var(--ft) + var(--cl)); background: var(--board); overflow: hidden; }
+  body.layers-open #board { right: var(--rp); }
+  /* layers panel — moncad's inspector surface: CAD-faithful data, GIS-flavoured controls */
+  #layers {
+    position: absolute; right: 0; top: var(--tb); bottom: calc(var(--ft) + var(--cl)); width: var(--rp);
+    display: none; flex-direction: column; overflow-y: auto; border-left: 1px solid var(--border); background: var(--bg-bar);
+  }
+  body.layers-open #layers { display: flex; }
+  .ly-head { display: flex; align-items: center; justify-content: space-between; padding: 5px 8px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .ly-add { font-family: var(--mono); font-size: 13px; line-height: 1; color: var(--text); background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 3px; width: 18px; height: 18px; cursor: pointer; }
+  .ly-add:hover { background: var(--bg-hover); }
+  .ly-row { display: flex; align-items: center; gap: 6px; padding: 3px 8px; cursor: default; }
+  .ly-row:hover { background: var(--bg-hover); }
+  .ly-row.active { background: rgba(168,116,216,0.14); box-shadow: inset 2px 0 0 var(--au-selected, #a874d8); }
+  .ly-vis { font-size: 11px; color: var(--info); cursor: pointer; width: 12px; text-align: center; }
+  .ly-sw { width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--bd2); cursor: pointer; flex: none; }
+  .ly-name { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--text-hi); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ly-op { width: 44px; height: 12px; cursor: pointer; accent-color: var(--info); }
   /* left tool palette — the frequent draw + modify verbs, labelled (SPEC §2: legible, not austere) */
   #tools {
     position: absolute; left: 0; top: var(--tb); bottom: calc(var(--ft) + var(--cl)); width: var(--tp);
@@ -129,6 +146,7 @@
   </div>
 
   <div id="tools"></div>
+  <div id="layers"></div>
 
   <div id="board">
     <canvas id="gl"></canvas>
@@ -148,6 +166,8 @@
     <span class="sep"></span>
     <span id="snapchips"></span>
     <span class="spacer"></span>
+    <span id="activeLayer" class="dim"></span>
+    <span class="sep"></span>
     <span id="frameInfo" class="dim"></span>
     <span class="sep"></span>
     <span id="build" class="dim">moncad · dev</span>

@@ -9,9 +9,9 @@ import { Renderer } from './renderer.js';
 import { Overlay } from './overlay.js';
 import { CommandRegistry } from './commands.js';
 import { sceneFromDxf, localSegments } from './scene.js';
-import { makeToolbar, makePalette, makeCommandLine, makeSnapChips, makeContextMenu, makeMenubar } from './surfaces.js';
+import { makeToolbar, makePalette, makeCommandLine, makeSnapChips, makeContextMenu, makeMenubar, makeLayersPanel } from './surfaces.js';
 import { SnapIndex } from './snap.js';
-import { Model } from './model.js';
+import { Model, LAYER_PALETTE } from './model.js';
 import { TOOLS } from './tools.js';
 import { parsePoint } from './input.js';
 import { SnapState, pickSnap, SNAP_TYPES, SNAP_LABELS, OVERRIDE_WORDS } from './snap-control.js';
@@ -104,6 +104,11 @@ function boot() {
   const snap = loadSnap();   // the SnapState: master + running types + aperture + one-shot
   const selection = new Set();   // selected feature indices (the edit target)
   const SELECT_PX = 8;       // pick aperture, CSS px
+  let activeLayer = '0';     // new geometry lands on this layer
+  let layersOpen = true;     // the layers panel (right dock)
+  // hidden-layer geometry is unpickable; the same predicate the scene uses to skip it
+  const layerHidden = (f) => { const L = model.getLayer(f.properties && f.properties.layer); return !!(L && !L.visible); };
+  const pickAt = (world) => pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale, layerHidden);
   const corner = { fillet: 10, chamfer: 10 };   // current fillet radius / chamfer distance
   let offsetDist = 5;        // current offset distance (side comes from which side you click)
   let gridOn = true, gridStep = 1;   // reference grid (View → Grid, g); gridStep feeds grid-snap
@@ -137,6 +142,7 @@ function boot() {
     cancelTool();
     selection.clear();
     model = m;
+    setActiveLayer('0');
     derive(fit);
   }
 
@@ -182,7 +188,7 @@ function boot() {
     cancelTool();
     activeTool = make({
       frame,
-      onCommit: (f) => { model.add(f); derive(false); },
+      onCommit: (f) => { f.properties.layer = activeLayer; model.add(f); derive(false); },   // drawn geometry lands on the current layer
       onDone: () => endTool(),
     });
     refreshPrompt();
@@ -262,11 +268,38 @@ function boot() {
     return false;
   }
 
+  // ── layers (the inspector surface): current layer, visibility, colour, opacity ────
+  function setActiveLayer(name) { activeLayer = name; $('#activeLayer').textContent = 'layer: ' + name; layersPanel.refresh(); }
+  function nextColor(c) {
+    const i = c && c.mode === 'aci' ? LAYER_PALETTE.indexOf(c.index) : -1;
+    return { mode: 'aci', index: LAYER_PALETTE[(i + 1) % LAYER_PALETTE.length] };
+  }
+  function newLayer() {
+    let n = 1; while (model.getLayer('Layer' + n)) n++;
+    const name = 'Layer' + n;
+    model.addLayer(name, { mode: 'aci', index: LAYER_PALETTE[(model.layerList().length - 1) % LAYER_PALETTE.length] });
+    setActiveLayer(name); setStatus('new layer: ' + name);
+  }
+  function toggleLayers() { layersOpen = !layersOpen; document.body.classList.toggle('layers-open', layersOpen); resize(); }
+  const layerHandlers = {
+    active: () => activeLayer,
+    onActive: (name) => { setActiveLayer(name); setStatus('current layer: ' + name); },
+    onVisible: (name) => {
+      const L = model.getLayer(name); if (!L) return;
+      L.visible = !L.visible;
+      if (!L.visible) for (const i of [...selection]) if (model.features[i].properties.layer === name) selection.delete(i);
+      layersPanel.refresh(); afterSelect();
+    },
+    onColor: (name) => { const L = model.getLayer(name); if (L) { L.color = nextColor(L.color); layersPanel.refresh(); derive(false); } },
+    onOpacity: (name, v) => { const L = model.getLayer(name); if (L) { L.opacity = v; derive(false); } },
+    onNew: () => newLayer(),
+  };
+
   // ── selection (rides the pick hit-test) + the affine edit tools ──────────────────
   function afterSelect() { ctx.hasSelection = selection.size > 0; tools.refresh(); setStatus(selection.size ? `${selection.size} selected` : ''); derive(false); }
   const pickWorld = (s) => toWorld(view.toWorld(s), frame);   // screen px → world point
   function doPick(s, additive) {
-    const i = pickFeature(model.features, pickWorld(s), SELECT_PX * view.dpr / view.scale);
+    const i = pickAt(pickWorld(s));
     if (i < 0) { if (!additive) selection.clear(); }
     else if (additive) { selection.has(i) ? selection.delete(i) : selection.add(i); }
     else { selection.clear(); selection.add(i); }
@@ -276,7 +309,7 @@ function boot() {
     const wa = pickWorld(a), wb = pickWorld(b);
     const box = [Math.min(wa[0], wb[0]), Math.min(wa[1], wb[1]), Math.max(wa[0], wb[0]), Math.max(wa[1], wb[1])];
     if (!additive) selection.clear();
-    for (const i of pickWindow(model.features, box)) selection.add(i);
+    for (const i of pickWindow(model.features, box, layerHidden)) selection.add(i);
     afterSelect();
   }
   function selectAll() { selection.clear(); for (let i = 0; i < model.features.length; i++) selection.add(i); afterSelect(); }
@@ -319,7 +352,7 @@ function boot() {
 
   // the polyline + the other features' kernel curves at a world pick, or null.
   function pickTargetAndCutters(world) {
-    const i = pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale);
+    const i = pickAt(world);
     if (i < 0) return null;
     const target = model.features[i];
     if (target.geometry.kind !== 'polyline') return { bad: 'lines/polylines only' };
@@ -360,7 +393,7 @@ function boot() {
     finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
   });
   function offsetAt(world) {
-    const i = pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale);
+    const i = pickAt(world);
     if (i < 0) { setStatus('offset: nothing there'); return; }
     const g = model.features[i].geometry;
     if (g.kind !== 'polyline') { setStatus('offset: polylines only'); return; }
@@ -381,7 +414,7 @@ function boot() {
       name: kind, rawPick: true,
       get prompt() { return picks.length === 0 ? `${kind[0].toUpperCase() + kind.slice(1)} (${unit} ${corner[kind]}) — first line, or type ${unit}:` : 'second line:'; },
       point: (world) => {
-        const i = pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale);
+        const i = pickAt(world);
         if (i < 0) { setStatus(`${kind}: nothing there`); return; }
         if (!isStraightLine(model.features[i].geometry)) { setStatus(`${kind}: pick straight lines`); return; }
         picks.push({ i, world });
@@ -453,6 +486,8 @@ function boot() {
     { id: 'view.zoomOut', title: 'Zoom Out', category: 'View', icon: '−', keys: '-', run: () => { view.zoomAt([view.width / 2, view.height / 2], 1 / 1.2); render(); } },
     { id: 'view.palette', title: 'Command Palette', category: 'View', icon: '⌘', keys: 'ctrl+p', run: () => palette.toggle() },
     { id: 'view.grid', title: 'Reference Grid', category: 'View', keys: 'g', alias: ['grid'], run: () => { gridOn = !gridOn; setStatus(gridOn ? 'grid on' : 'grid off'); render(); } },
+    { id: 'view.layers', title: 'Layers Panel', category: 'View', keys: 'shift+l', alias: ['layers'], run: () => toggleLayers() },
+    { id: 'layer.new', title: 'New Layer', category: 'Layer', alias: ['newlayer'], run: () => { if (!layersOpen) toggleLayers(); newLayer(); } },
     { id: 'help.about', title: 'About moncad', category: 'Help', run: () => setStatus('moncad — a small 2D CAD instrument · gentropic.org/moncad') },
     { id: 'help.keys', title: 'Keys: L line · P pline · C circle · M move · T trim · O offset · F fillet · ⌘P palette', category: 'Help', run: () => setStatus('right-click for the context menu · type coords like @10<45 · F3 snap') },
     { id: 'snap.toggle', title: 'Snapping (master)', category: 'Snap', keys: 'f3', run: () => toggleMaster() },
@@ -469,6 +504,7 @@ function boot() {
   const cmdline = makeCommandLine({ input: $('#cmdInput'), prompt: $('#cmdPrompt') }, { onSubmit: cmdSubmit, onCancel: cmdCancel, onKey: commandLineKey });
   const snapChips = makeSnapChips(cmds, ctx, $('#snapchips'), snap, SNAP_TYPES, SNAP_LABELS);
   const ctxMenu = makeContextMenu(cmds, ctx, $('#ctxmenu'));
+  const layersPanel = makeLayersPanel(() => model, $('#layers'), layerHandlers);
   // contextual command sets — verbs come to the selection (SPEC §3, noun-first)
   const SEL_MENU = ['edit.move', 'edit.copy', 'edit.rotate', 'edit.mirror', null, 'edit.trim', 'edit.extend', 'edit.fillet', 'edit.chamfer', 'edit.offset', null, 'edit.delete', 'edit.deselect'];
   const EMPTY_MENU = ['edit.selectAll', null, 'view.zoomExtents', 'view.grid', null, 'file.new', 'file.open', 'file.save'];
@@ -480,7 +516,7 @@ function boot() {
   makeMenubar(cmds, ctx, $('#menubar'), [
     { label: 'File', items: ['file.new', 'file.open', 'file.save', null, 'file.demo'] },
     { label: 'Edit', items: ['edit.undo', 'edit.redo', null, 'edit.selectAll', 'edit.deselect'] },
-    { label: 'View', items: ['view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.grid', 'snap.grid', null, 'view.palette'] },
+    { label: 'View', items: ['view.zoomExtents', 'view.zoomIn', 'view.zoomOut', null, 'view.grid', 'snap.grid', 'view.layers', null, 'view.palette'] },
     { label: 'Help', items: ['help.about', 'help.keys'] },
   ], $('#menudrop'));
 
@@ -510,7 +546,7 @@ function boot() {
   olCanvas.addEventListener('contextmenu', (e) => {                       // right-click is moncad's, not the browser's
     e.preventDefault();
     if (activeTool) { activeTool.finish(); return; }                     // ends the active tool (polyline commits; others cancel)
-    if (!selection.size) { const i = pickFeature(model.features, pickWorld(devicePt(e)), SELECT_PX * view.dpr / view.scale); if (i >= 0) { selection.add(i); afterSelect(); } }
+    if (!selection.size) { const i = pickAt(pickWorld(devicePt(e))); if (i >= 0) { selection.add(i); afterSelect(); } }
     ctxMenu.show(selection.size ? SEL_MENU : EMPTY_MENU, e.clientX, e.clientY);
   });
   window.addEventListener('mouseup', (e) => {
@@ -551,6 +587,7 @@ function boot() {
   board.addEventListener('drop', (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) openDxf(f); });
 
   window.addEventListener('resize', resize);
+  document.body.classList.toggle('layers-open', layersOpen);   // size the board for the docked panel before the first resize
   resize();
   loadModel(demoModel());
   setStatus('demo model · L to draw a polyline · Open or drag in a DXF');

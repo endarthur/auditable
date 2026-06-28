@@ -553,3 +553,48 @@ test('grid: snapToGrid returns the nearest node within tolerance, else null', ()
   assert.equal(snapToGrid([2, 3], 10, 2), null);
   assert.deepEqual(snapToGrid([12, 18], 10, 3), [10, 20]);
 });
+
+// ── layers (L1): hydrate, bylayer colour, visibility, opacity ─────────────────────
+import { hydrateLayers, LAYER_PALETTE } from '../tools/moncad/js/model.js';
+
+test('layers: hydrate ensures 0 + feature layers, with visible/opacity defaults', () => {
+  const doc = { frame: { origin: [0, 0, 0] }, layers: {}, features: [{ properties: { layer: 'PIT' }, geometry: { kind: 'point', position: [0, 0, 0] } }] };
+  hydrateLayers(doc);
+  assert.ok(doc.layers['0'] && doc.layers['PIT']);
+  assert.equal(doc.layers['0'].visible, true);
+  assert.equal(doc.layers['PIT'].opacity, 1);
+  assert.ok(LAYER_PALETTE.length >= 6);
+});
+
+test('model: addLayer + layerList; new Model auto-hydrates', () => {
+  const m = new Model();
+  assert.deepEqual(m.layerList().map((l) => l.name), ['0']);
+  m.addLayer('TOPO', { mode: 'aci', index: 3 });
+  assert.deepEqual(m.layerList().map((l) => l.name), ['0', 'TOPO']);
+  assert.equal(m.getLayer('TOPO').color.index, 3);
+});
+
+function layerDoc(extra = {}) {
+  return {
+    frame: { origin: [0, 0, 0] },
+    layers: { '0': { name: '0', color: { mode: 'aci', index: 7 }, visible: true, opacity: 1 }, A: { name: 'A', color: { mode: 'aci', index: 1 }, visible: true, opacity: 1, ...extra } },
+    features: [{ type: 'line', geometry: { kind: 'polyline', vertices: Float64Array.from([0, 0, 0, 10, 0, 0]), bulges: null, closed: false }, properties: { layer: 'A', color: { mode: 'bylayer' } } }],
+  };
+}
+
+test('scene: a bylayer feature takes its layer colour (ACI 1 = red)', () => {
+  const sc = sceneFromDxf(layerDoc());
+  // line format [p0x,p0y,p1x,p1y, width, r,g,b,a]; the layer colour is red
+  assert.deepEqual([sc.lines[5], sc.lines[6], sc.lines[7]], [1, 0, 0]);
+});
+
+test('scene: a hidden layer is off the board (no segments, no snaps)', () => {
+  const sc = sceneFromDxf(layerDoc({ visible: false }));
+  assert.equal(sc.lines.length, 0);
+  assert.equal(sc.snaps.length, 0);
+});
+
+test('scene: layer opacity carries into the segment alpha', () => {
+  const sc = sceneFromDxf(layerDoc({ opacity: 0.4 }));
+  assert.ok(Math.abs(sc.lines[8] - 0.4) < 1e-6);   // the alpha channel (Float32 buffer)
+});
