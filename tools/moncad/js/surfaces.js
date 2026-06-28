@@ -96,17 +96,27 @@ function swatchCss(c) {
   return '#888';
 }
 export function makeLayersPanel(getModel, mount, h) {
+  let renaming = null;     // the layer name being inline-renamed
   function row(L) {
-    const r = document.createElement('div'); r.className = 'ly-row' + (L.name === h.active() ? ' active' : '');
+    const r = document.createElement('div'); r.className = 'ly-row' + (L.name === h.active() ? ' active' : '') + (L.locked ? ' locked' : '');
     const vis = document.createElement('span'); vis.className = 'ly-vis'; vis.textContent = L.visible ? '◉' : '○'; vis.title = 'Show / hide';
     vis.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); h.onVisible(L.name); });
     const sw = document.createElement('span'); sw.className = 'ly-sw'; sw.style.background = swatchCss(L.color); sw.title = 'Colour (click to cycle)';
     sw.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); h.onColor(L.name); });
-    const nm = document.createElement('span'); nm.className = 'ly-name'; nm.textContent = L.name; nm.title = 'Set current layer';
-    nm.addEventListener('mousedown', (e) => { e.preventDefault(); h.onActive(L.name); });
-    const op = document.createElement('input'); op.type = 'range'; op.min = '0'; op.max = '100'; op.value = String(Math.round((L.opacity != null ? L.opacity : 1) * 100)); op.className = 'ly-op'; op.title = 'Opacity';
-    op.addEventListener('input', () => h.onOpacity(L.name, op.value / 100));
-    r.append(vis, sw, nm, op);
+    r.append(vis, sw);
+    if (L.name === renaming) {
+      const inp = document.createElement('input'); inp.className = 'ly-rename'; inp.value = L.name;
+      inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { const v = inp.value; renaming = null; h.onRename(L.name, v); } else if (e.key === 'Escape') { renaming = null; refresh(); } });
+      inp.addEventListener('blur', () => { if (renaming) { renaming = null; refresh(); } });
+      r.append(inp); setTimeout(() => { inp.focus(); inp.select(); }, 0);
+    } else {
+      const nm = document.createElement('span'); nm.className = 'ly-name'; nm.textContent = L.name; nm.title = 'Set current layer';
+      nm.addEventListener('mousedown', (e) => { e.preventDefault(); h.onActive(L.name); });
+      const op = document.createElement('input'); op.type = 'range'; op.min = '0'; op.max = '100'; op.value = String(Math.round((L.opacity != null ? L.opacity : 1) * 100)); op.className = 'ly-op'; op.title = 'Opacity';
+      op.addEventListener('input', () => h.onOpacity(L.name, op.value / 100));
+      r.append(nm, op);
+    }
+    r.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); h.onContext(L.name, e.clientX, e.clientY); });
     return r;
   }
   function refresh() {
@@ -116,32 +126,38 @@ export function makeLayersPanel(getModel, mount, h) {
     const add = document.createElement('button'); add.className = 'ly-add'; add.textContent = '+'; add.title = 'New layer';
     add.addEventListener('mousedown', (e) => { e.preventDefault(); h.onNew(); });
     head.append(t, add); mount.appendChild(head);
-    for (const L of getModel().layerList()) mount.appendChild(row(L));
+    for (const L of getModel().layerList().slice().reverse()) mount.appendChild(row(L));   // front (high z) on top, GIS-style
   }
-  return { refresh };
+  return { refresh, beginRename: (name) => { renaming = name; refresh(); } };
 }
 
 // The context menu (SPEC §3) — the noun-first surface: right-click brings the verbs to the
 // selection. Bespoke over the same registry (like the toolbar/palette/command-line here),
 // so a right-click item and its keystroke can't drift and moncad keeps one styling. `items`
-// is a list of command ids (null = separator); each is `when(ctx)`-filtered, so the menu is
-// genuinely contextual. Clicking routes through reg.execute.
+// `items` is a list whose entries are either a command-id string (routes through the
+// registry) OR an inline action `{ label, run, when?, key? }` (for noun-scoped verbs the
+// registry can't carry parameter-free — e.g. a specific layer's ops). null = separator.
+// Disabled (when false) entries are skipped. Same styling, same dismissal.
 export function makeContextMenu(reg, ctx, root) {
   let open = false;
   const hide = () => { open = false; root.classList.remove('show'); root.innerHTML = ''; };
+  function norm(item) {
+    if (typeof item === 'string') { const c = reg.get(item); if (!c || (c.when && !c.when(ctx))) return null; return { title: c.title, key: reg.keyFor(item), run: () => reg.execute(item, ctx) }; }
+    if (item.when && !item.when(ctx)) return null;
+    return { title: item.label, key: item.key || null, run: item.run };
+  }
   function show(items, x, y) {
     root.innerHTML = '';
     let pendingSep = false, any = false;
-    for (const id of items) {
-      if (id === null) { pendingSep = any; continue; }
-      const cmd = reg.get(id); if (!cmd || (cmd.when && !cmd.when(ctx))) continue;
+    for (const item of items) {
+      if (item === null) { pendingSep = any; continue; }
+      const n = norm(item); if (!n) continue;
       if (pendingSep) { const s = document.createElement('div'); s.className = 'ctx-sep'; root.appendChild(s); pendingSep = false; }
       const row = document.createElement('div'); row.className = 'ctx-item';
-      const key = reg.keyFor(id);
       row.innerHTML = '<span class="ctx-t"></span><span class="ctx-k"></span>';
-      row.children[0].textContent = cmd.title;
-      row.children[1].textContent = key ? key.toUpperCase() : '';
-      row.addEventListener('mousedown', (ev) => { ev.preventDefault(); hide(); reg.execute(id, ctx); });
+      row.children[0].textContent = n.title;
+      row.children[1].textContent = n.key ? n.key.toUpperCase() : '';
+      row.addEventListener('mousedown', (ev) => { ev.preventDefault(); hide(); n.run(); });
       root.appendChild(row); any = true;
     }
     if (!any) return;

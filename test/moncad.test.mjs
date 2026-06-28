@@ -598,3 +598,43 @@ test('scene: layer opacity carries into the segment alpha', () => {
   const sc = sceneFromDxf(layerDoc({ opacity: 0.4 }));
   assert.ok(Math.abs(sc.lines[8] - 0.4) < 1e-6);   // the alpha channel (Float32 buffer)
 });
+
+// ── layers L2: rename / delete (non-destructive) / reorder + render z-order ────────
+test('model: renameLayer repoints features; refuses 0, clash, missing', () => {
+  const m = new Model({ frame: { origin: [0, 0, 0] }, layers: {}, features: [{ properties: { layer: 'A' }, geometry: { kind: 'point', position: [0, 0, 0] } }] });
+  assert.equal(m.renameLayer('A', 'PIT'), true);
+  assert.ok(m.getLayer('PIT') && !m.getLayer('A'));
+  assert.equal(m.features[0].properties.layer, 'PIT');     // feature repointed
+  assert.equal(m.renameLayer('0', 'X'), false);            // can't rename '0'
+  assert.equal(m.renameLayer('PIT', '0'), false);          // clash
+});
+
+test('model: removeLayer is non-destructive — geometry moves to 0', () => {
+  const m = new Model({ frame: { origin: [0, 0, 0] }, layers: {}, features: [{ properties: { layer: 'A' }, geometry: { kind: 'point', position: [0, 0, 0] } }] });
+  assert.equal(m.removeLayer('A'), true);
+  assert.equal(m.getLayer('A'), undefined);
+  assert.equal(m.features[0].properties.layer, '0');        // geometry preserved, on '0'
+  assert.equal(m.removeLayer('0'), false);                  // can't delete '0'
+});
+
+test('model: moveLayer swaps the render z-order', () => {
+  const m = new Model();
+  m.addLayer('A'); m.addLayer('B');
+  assert.deepEqual(m.layerList().map((l) => l.name), ['0', 'A', 'B']);   // ascending order
+  assert.equal(m.moveLayer('A', 1), true);                                // raise A above B
+  assert.deepEqual(m.layerList().map((l) => l.name), ['0', 'B', 'A']);
+});
+
+test('scene: features draw in layer z-order (low order behind)', () => {
+  const doc = {
+    frame: { origin: [0, 0, 0] },
+    layers: { '0': { name: '0', color: { mode: 'aci', index: 7 }, visible: true, opacity: 1, order: 5 }, BK: { name: 'BK', color: { mode: 'aci', index: 1 }, visible: true, opacity: 1, order: 0 } },
+    features: [
+      { type: 'line', geometry: { kind: 'polyline', vertices: Float64Array.from([0, 0, 0, 1, 0, 0]), bulges: null, closed: false }, properties: { layer: '0' } },     // front (order 5)
+      { type: 'line', geometry: { kind: 'polyline', vertices: Float64Array.from([9, 9, 0, 8, 9, 0]), bulges: null, closed: false }, properties: { layer: 'BK' } },    // back (order 0)
+    ],
+  };
+  const sc = sceneFromDxf(doc);
+  // BK (order 0) draws first → its segment (starting at 9,9) leads
+  assert.equal(sc.lines[0], 9); assert.equal(sc.lines[1], 9);
+});

@@ -106,9 +106,10 @@ function boot() {
   const SELECT_PX = 8;       // pick aperture, CSS px
   let activeLayer = '0';     // new geometry lands on this layer
   let layersOpen = true;     // the layers panel (right dock)
-  // hidden-layer geometry is unpickable; the same predicate the scene uses to skip it
-  const layerHidden = (f) => { const L = model.getLayer(f.properties && f.properties.layer); return !!(L && !L.visible); };
-  const pickAt = (world) => pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale, layerHidden);
+  // hidden OR locked layer geometry is unpickable (hidden is also off the board; locked stays
+  // visible but can't be selected/edited)
+  const layerSkip = (f) => { const L = model.getLayer(f.properties && f.properties.layer); return !!(L && (!L.visible || L.locked)); };
+  const pickAt = (world) => pickFeature(model.features, world, SELECT_PX * view.dpr / view.scale, layerSkip);
   const corner = { fillet: 10, chamfer: 10 };   // current fillet radius / chamfer distance
   let offsetDist = 5;        // current offset distance (side comes from which side you click)
   let gridOn = true, gridStep = 1;   // reference grid (View → Grid, g); gridStep feeds grid-snap
@@ -281,6 +282,35 @@ function boot() {
     setActiveLayer(name); setStatus('new layer: ' + name);
   }
   function toggleLayers() { layersOpen = !layersOpen; document.body.classList.toggle('layers-open', layersOpen); resize(); }
+  // L2 layer ops — exposed via the layer-row context menu (the noun-first move for layers).
+  function selectOnLayer(name) {
+    selection.clear();
+    for (let i = 0; i < model.features.length; i++) { const f = model.features[i]; if (f.properties && f.properties.layer === name && !layerSkip(f)) selection.add(i); }
+    afterSelect();
+  }
+  function isolateLayer(name) { for (const L of model.layerList()) L.visible = (L.name === name); layersPanel.refresh(); afterSelect(); setStatus('isolated ' + name); }
+  function showAllLayers() { for (const L of model.layerList()) L.visible = true; layersPanel.refresh(); derive(false); setStatus('all layers shown'); }
+  function toggleLock(name) { const L = model.getLayer(name); if (L) { L.locked = !L.locked; if (L.locked) for (const i of [...selection]) if (model.features[i].properties.layer === name) selection.delete(i); layersPanel.refresh(); afterSelect(); } }
+  function deleteLayer(name) { if (model.removeLayer(name)) { if (activeLayer === name) activeLayer = '0'; setActiveLayer(activeLayer); derive(false); setStatus('deleted layer ' + name); } }
+  function renameLayer(oldName, newName) { if (model.renameLayer(oldName, newName)) { if (activeLayer === oldName) activeLayer = newName; setActiveLayer(activeLayer); derive(false); } else layersPanel.refresh(); }
+  function moveLayer(name, delta) { if (model.moveLayer(name, delta)) { layersPanel.refresh(); derive(false); } }
+  function layerMenu(name) {
+    const L = model.getLayer(name);
+    return [
+      { label: 'Set Current', run: () => layerHandlers.onActive(name) },
+      { label: 'Select Objects', run: () => selectOnLayer(name) },
+      null,
+      { label: 'Isolate', run: () => isolateLayer(name) },
+      { label: 'Show All Layers', run: () => showAllLayers() },
+      null,
+      { label: L && L.locked ? 'Unlock' : 'Lock', run: () => toggleLock(name) },
+      { label: 'Move Up', run: () => moveLayer(name, 1) },
+      { label: 'Move Down', run: () => moveLayer(name, -1) },
+      null,
+      { label: 'Rename…', when: () => name !== '0', run: () => layersPanel.beginRename(name) },
+      { label: 'Delete', when: () => name !== '0', run: () => deleteLayer(name) },
+    ];
+  }
   const layerHandlers = {
     active: () => activeLayer,
     onActive: (name) => { setActiveLayer(name); setStatus('current layer: ' + name); },
@@ -293,6 +323,8 @@ function boot() {
     onColor: (name) => { const L = model.getLayer(name); if (L) { L.color = nextColor(L.color); layersPanel.refresh(); derive(false); } },
     onOpacity: (name, v) => { const L = model.getLayer(name); if (L) { L.opacity = v; derive(false); } },
     onNew: () => newLayer(),
+    onRename: (oldName, newName) => renameLayer(oldName, newName),
+    onContext: (name, x, y) => ctxMenu.show(layerMenu(name), x, y),
   };
 
   // ── selection (rides the pick hit-test) + the affine edit tools ──────────────────
@@ -309,7 +341,7 @@ function boot() {
     const wa = pickWorld(a), wb = pickWorld(b);
     const box = [Math.min(wa[0], wb[0]), Math.min(wa[1], wb[1]), Math.max(wa[0], wb[0]), Math.max(wa[1], wb[1])];
     if (!additive) selection.clear();
-    for (const i of pickWindow(model.features, box, layerHidden)) selection.add(i);
+    for (const i of pickWindow(model.features, box, layerSkip)) selection.add(i);
     afterSelect();
   }
   function selectAll() { selection.clear(); for (let i = 0; i < model.features.length; i++) selection.add(i); afterSelect(); }

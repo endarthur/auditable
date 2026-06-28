@@ -47,6 +47,9 @@
   .ly-sw { width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--bd2); cursor: pointer; flex: none; }
   .ly-name { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--text-hi); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ly-op { width: 44px; height: 12px; cursor: pointer; accent-color: var(--info); }
+  .ly-row.locked .ly-name { color: var(--faint); }
+  .ly-row.locked::after { content: '🔒'; font-size: 9px; opacity: 0.6; margin-left: 2px; }
+  .ly-rename { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--text-hi); background: var(--bg-field); border: 1px solid var(--info); border-radius: 2px; padding: 0 3px; outline: none; }
   /* left tool palette — the frequent draw + modify verbs, labelled (SPEC §2: legible, not austere) */
   #tools {
     position: absolute; left: 0; top: var(--tb); bottom: calc(var(--ft) + var(--cl)); width: var(--tp);

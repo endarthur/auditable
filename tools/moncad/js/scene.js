@@ -88,7 +88,10 @@ export function sceneFromDxf(doc, opts = {}) {
   const pt = (p, s, c) => { P.push(p[0], p[1], s, c[0], c[1], c[2], c[3]); ext(p); };
   const snap = (p, type) => S.push({ p, type });   // snap target (local coords)
 
-  for (let fi = 0; fi < doc.features.length; fi++) {
+  // draw in layer z-order (ascending = back→front); fi stays the model index (for selection)
+  const lord = (f) => { const L = layers[f.properties && f.properties.layer]; return L && L.order != null ? L.order : 0; };
+  const drawOrder = [...doc.features.keys()].sort((a, b) => lord(doc.features[a]) - lord(doc.features[b]) || a - b);
+  for (const fi of drawOrder) {
     const f = doc.features[fi];
     const g = f.geometry; if (!g) continue;
     const lay = layers[f.properties && f.properties.layer];

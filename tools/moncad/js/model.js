@@ -33,7 +33,15 @@ export function hydrateLayers(doc) {
   const layers = doc.layers || (doc.layers = {});
   if (!layers['0']) layers['0'] = { name: '0', color: { mode: 'aci', index: 7 } };
   for (const f of doc.features) { const n = f.properties && f.properties.layer; if (n && !layers[n]) layers[n] = { name: n, color: { mode: 'aci', index: 7 } }; }
-  for (const n in layers) { const L = layers[n]; L.name = n; if (L.visible === undefined) L.visible = true; if (L.opacity === undefined) L.opacity = 1; }
+  let ord = 0;
+  for (const n in layers) {
+    const L = layers[n]; L.name = n;
+    if (L.visible === undefined) L.visible = true;
+    if (L.opacity === undefined) L.opacity = 1;
+    if (L.locked === undefined) L.locked = false;
+    if (L.order === undefined) L.order = ord;     // higher order = drawn in front (z-order)
+    ord++;
+  }
   return layers;
 }
 
@@ -50,13 +58,37 @@ export class Model {
   get features() { return this.doc.features; }
   get layers() { return this.doc.layers; }
 
-  layerList() { return Object.values(this.doc.layers); }
+  layerList() { return Object.values(this.doc.layers).sort((a, b) => (a.order || 0) - (b.order || 0)); }   // ascending = back→front
   getLayer(name) { return this.doc.layers[name]; }
-  // Add a layer (no-op if it exists); returns the record. Not undoable in v0 (layers are
-  // light document furniture, not geometry edits).
+  // Add a layer (no-op if it exists); returns the record. Layer-table edits aren't on the
+  // undo stack in v0 (light document furniture, not geometry edits).
   addLayer(name, color = { mode: 'aci', index: 7 }) {
-    if (!this.doc.layers[name]) { this.doc.layers[name] = { name, color, visible: true, opacity: 1 }; this.rev++; }
+    if (!this.doc.layers[name]) {
+      const top = this.layerList().reduce((m, L) => Math.max(m, L.order || 0), -1);
+      this.doc.layers[name] = { name, color, visible: true, opacity: 1, locked: false, order: top + 1 };
+      this.rev++;
+    }
     return this.doc.layers[name];
+  }
+  // Rename a layer + repoint its features. Refuses '0', a clash, or a missing source.
+  renameLayer(oldName, newName) {
+    newName = String(newName).trim();
+    if (!newName || oldName === '0' || newName === oldName || this.doc.layers[newName] || !this.doc.layers[oldName]) return false;
+    const L = this.doc.layers[oldName]; delete this.doc.layers[oldName]; L.name = newName; this.doc.layers[newName] = L;
+    for (const f of this.doc.features) if (f.properties && f.properties.layer === oldName) f.properties.layer = newName;
+    this.rev++; return true;
+  }
+  // Delete a layer NON-destructively: its geometry moves to '0' (your lines don't vanish).
+  removeLayer(name) {
+    if (name === '0' || !this.doc.layers[name]) return false;
+    for (const f of this.doc.features) if (f.properties && f.properties.layer === name) f.properties.layer = '0';
+    delete this.doc.layers[name]; this.rev++; return true;
+  }
+  // Raise (delta +1) / lower (-1) a layer in the render z-order by swapping with its neighbour.
+  moveLayer(name, delta) {
+    const asc = this.layerList(), i = asc.findIndex((L) => L.name === name), j = i + delta;
+    if (i < 0 || j < 0 || j >= asc.length) return false;
+    const t = asc[i].order; asc[i].order = asc[j].order; asc[j].order = t; this.rev++; return true;
   }
 
   // Append a feature (already WORLD-canonical — the tool converts local→world on commit).
