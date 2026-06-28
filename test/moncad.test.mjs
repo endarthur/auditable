@@ -159,3 +159,33 @@ test('scene: a bulge span tessellates into multiple chords (arc, not a chord)', 
   const sc = sceneFromDxf(dxfRead(arcDxf), { eps: 0.05 });
   assert.ok(sc.lines.length / 9 >= 3);                            // a 90° r=20 arc → several chords, not one
 });
+
+// ── snap (the spatial index: pure) ─────────────────────────────────────────────────
+
+import { SnapIndex } from '../tools/moncad/js/snap.js';
+
+test('snap: nearest target within tolerance, type priority breaks ties', () => {
+  const idx = new SnapIndex([{ p: [0, 0], type: 'end' }, { p: [10, 0], type: 'mid' }, { p: [100, 100], type: 'center' }]);
+  assert.equal(idx.query([0.4, 0.3], 2).type, 'end');             // snaps to the near endpoint
+  assert.equal(idx.query([10.1, 0], 1).type, 'mid');
+  assert.equal(idx.query([50, 50], 5), null);                     // nothing within tolerance
+  // an 'end' and a 'mid' coincident → end (higher priority) wins
+  assert.equal(new SnapIndex([{ p: [0, 0], type: 'mid' }, { p: [0, 0], type: 'end' }]).query([0, 0], 1).type, 'end');
+});
+
+test('snap: query reaches across grid cells (auto-sized cell)', () => {
+  const pts = [];
+  for (let i = 0; i < 200; i++) pts.push({ p: [i * 5, (i % 7) * 5], type: 'end' });
+  const idx = new SnapIndex(pts);
+  const hit = idx.query([497, 10], 4);                            // near (500,10) → i=100
+  assert.ok(hit && Math.abs(hit.p[0] - 500) < 1e-9);
+});
+
+test('scene: emits snap targets (endpoints, midpoints, centre, node)', () => {
+  const sc = sceneFromDxf(dxfRead(SCENE_DXF));
+  const types = new Set(sc.snaps.map((s) => s.type));
+  assert.ok(types.has('end') && types.has('mid') && types.has('center') && types.has('node'));
+  assert.ok(sc.snaps.some((s) => s.type === 'center' && Math.abs(s.p[0] - 50) < 1e-9 && Math.abs(s.p[1] - 40) < 1e-9));  // circle centre local
+  assert.ok(sc.snaps.some((s) => s.type === 'node' && Math.abs(s.p[0] - 25) < 1e-9));                                   // POINT
+  assert.ok(sc.snaps.some((s) => s.type === 'end' && s.p[0] === 0 && s.p[1] === 0));                                    // LINE start
+});

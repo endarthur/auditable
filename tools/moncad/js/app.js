@@ -9,6 +9,9 @@ import { Overlay } from './overlay.js';
 import { CommandRegistry } from './commands.js';
 import { sceneFromDxf } from './scene.js';
 import { makeToolbar, makePalette } from './surfaces.js';
+import { SnapIndex } from './snap.js';
+
+const SNAP_PX = 12;   // snap pickup radius, in CSS pixels
 import { makeFrame, toWorld } from '@gcu/frame';
 import { read, explode } from '@gcu/dxf';
 
@@ -28,9 +31,13 @@ function buildDemo() {
   seg(r[0], r[2], 1.5, ACC);
   for (const v of r) pt(v, 7, PT);
   pt([0, 0], 5, ACC);
+  const snaps = [];
+  for (const v of r) snaps.push({ p: v, type: 'end' });
+  for (let i = 0; i < 4; i++) { const a = r[i], b = r[(i + 1) % 4]; snaps.push({ p: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], type: 'mid' }); }
+  snaps.push({ p: [0, 0], type: 'node' });
   return {
     frame: makeFrame({ origin: [600000, 7700000, 0], crs: 'EPSG:31983', units: 'm' }),
-    lines: new Float32Array(L), points: new Float32Array(P), bounds: { min: [-100, -100], max: [100, 100] },
+    lines: new Float32Array(L), points: new Float32Array(P), bounds: { min: [-100, -100], max: [100, 100] }, snaps,
   };
 }
 
@@ -53,6 +60,7 @@ function boot() {
   const renderer = new Renderer(gl);
   const overlay = new Overlay(olCanvas.getContext('2d'));
   let bounds = { min: [-100, -100], max: [100, 100] };
+  let snapIndex = new SnapIndex([]);
 
   let pending = false;
   const render = () => {
@@ -64,6 +72,7 @@ function boot() {
   function setScene(sc, fit = true) {
     frame = sc.frame;
     bounds = sc.bounds;
+    snapIndex = new SnapIndex(sc.snaps || []);
     renderer.setLines(sc.lines);
     renderer.setPoints(sc.points);
     $('#frameInfo').textContent = `${frame.crs || '—'} · origin ${Math.round(frame.origin[0])},${Math.round(frame.origin[1])}`;
@@ -124,16 +133,21 @@ function boot() {
   olCanvas.addEventListener('mousemove', (e) => {
     const s = devicePt(e);
     if (dragging) { view.panBy(s[0] - last[0], s[1] - last[1]); last = s; }
-    overlay.setCursor(s); readout(s); render();
+    overlay.setCursor(s); readout(s, !dragging); render();
   });
-  olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); render(); });
+  olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); overlay.setSnap(null); render(); });
   olCanvas.addEventListener('wheel', (e) => { e.preventDefault(); view.zoomAt(devicePt(e), e.deltaY < 0 ? 1.1 : 1 / 1.1); readout(devicePt(e)); render(); }, { passive: false });
 
-  // the instrument panel: LOCAL math, WORLD (UTM) display — the precision point made visible
-  function readout(s) {
+  // the instrument panel: LOCAL math, WORLD (UTM) display — the precision point made visible.
+  // snaps to the nearest target within SNAP_PX; the readout then reads the EXACT snapped point.
+  function readout(s, snapOn = true) {
     if (!frame) return;
-    const world = toWorld(view.toWorld(s), frame);
+    const local = view.toWorld(s);
+    const hit = snapOn ? snapIndex.query(local, SNAP_PX * view.dpr / view.scale) : null;
+    overlay.setSnap(hit ? view.toScreen(hit.p) : null, hit && hit.type);
+    const world = toWorld(hit ? hit.p : local, frame);
     $('#coords').textContent = `${world[0].toFixed(2)}  ${world[1].toFixed(2)}`;
+    $('#snap').textContent = hit ? hit.type : '';
     $('#zoom').textContent = `1 px ≈ ${(view.dpr / view.scale).toFixed(3)} ${frame.units}`;
   }
 

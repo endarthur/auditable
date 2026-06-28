@@ -45,11 +45,12 @@ export function sceneFromDxf(doc, opts = {}) {
   const frame = doc.frame, o = frame.origin;
   const eps = opts.eps != null ? opts.eps : 0.2;
   const toL = (p) => [p[0] - o[0], p[1] - o[1]];          // world → local
-  const L = [], P = [];
+  const L = [], P = [], S = [];
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
   const ext = (p) => { if (p[0] < minx) minx = p[0]; if (p[0] > maxx) maxx = p[0]; if (p[1] < miny) miny = p[1]; if (p[1] > maxy) maxy = p[1]; };
   const seg = (a, b, w, c) => { L.push(a[0], a[1], b[0], b[1], w, c[0], c[1], c[2], c[3]); ext(a); ext(b); };
   const pt = (p, s, c) => { P.push(p[0], p[1], s, c[0], c[1], c[2], c[3]); ext(p); };
+  const snap = (p, type) => S.push({ p, type });   // snap target (local coords)
 
   for (const f of doc.features) {
     const g = f.geometry; if (!g) continue;
@@ -57,15 +58,14 @@ export function sceneFromDxf(doc, opts = {}) {
     if (g.kind === 'polyline') {
       const v = g.vertices, n = v.length / 3;
       if (n < 2) continue;
-      let prev = toL([v[0], v[1]]);
+      const lv = [];
+      for (let k = 0; k < n; k++) { const p = toL([v[k * 3], v[k * 3 + 1]]); lv.push(p); snap(p, 'end'); }
       const spans = g.closed ? n : n - 1;
       for (let i = 0; i < spans; i++) {
-        const j = (i + 1) % n;
-        const cur = toL([v[j * 3], v[j * 3 + 1]]);
-        const b = g.bulges ? g.bulges[i] : 0;
-        if (b) { let from = prev; for (const q of arcPoints(prev, cur, b, eps)) { seg(from, q, 1.5, col); from = q; } }
-        else seg(prev, cur, 1.5, col);
-        prev = cur;
+        const a = lv[i], b = lv[(i + 1) % n], bul = g.bulges ? g.bulges[i] : 0;
+        if (bul) { let from = a; for (const q of arcPoints(a, b, bul, eps)) { seg(from, q, 1.5, col); from = q; } }
+        else seg(a, b, 1.5, col);
+        snap([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], 'mid');   // chord midpoint
       }
     } else if (g.kind === 'circle') {
       const c = toL(g.center), r = g.radius;
@@ -73,11 +73,12 @@ export function sceneFromDxf(doc, opts = {}) {
       const n = Math.max(8, Math.ceil(2 * Math.PI / step));
       let prev = [c[0] + r, c[1]];
       for (let i = 1; i <= n; i++) { const t = 2 * Math.PI * i / n; const q = [c[0] + r * Math.cos(t), c[1] + r * Math.sin(t)]; seg(prev, q, 1.5, col); prev = q; }
+      snap(c, 'center');
     } else if (g.kind === 'point') {
-      pt(toL(g.position), 6, POINT_COL);
+      const p = toL(g.position); pt(p, 6, POINT_COL); snap(p, 'node');
     }
     // 'face' deferred (3D-ish); 'insert' should be exploded before here.
   }
   const bounds = (minx === Infinity) ? { min: [-1, -1], max: [1, 1] } : { min: [minx, miny], max: [maxx, maxy] };
-  return { frame, lines: new Float32Array(L), points: new Float32Array(P), bounds };
+  return { frame, lines: new Float32Array(L), points: new Float32Array(P), bounds, snaps: S };
 }

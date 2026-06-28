@@ -48,6 +48,7 @@
   #footer .sep { width: 1px; height: 14px; background: var(--bd2); }
   #footer .spacer { flex: 1; }
   #footer .dim { color: var(--faint); }
+  #footer .snap { color: var(--info); margin-left: 8px; min-width: 40px; }
   /* toolbar — friendly buttons over the command registry; tooltips teach the key */
   #topbar .toolbar { display: flex; align-items: center; gap: 4px; }
   .tb-btn { font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 9px; cursor: pointer; }
@@ -89,7 +90,7 @@
   </div>
 
   <footer id="footer">
-    <span class="lbl">XY</span><span id="coords" class="ro">—</span>
+    <span class="lbl">XY</span><span id="coords" class="ro">—</span><span id="snap" class="snap"></span>
     <span class="sep"></span>
     <span id="zoom" class="ro">—</span>
     <span class="spacer"></span>
