@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/frame",
+  "version": "0.1.0",
+  "description": "The coordinate-frame contract for the GCU geometry stack: a tiny zero-dependency value type (origin offset + CRS descriptor + units) plus pure world↔local transforms. Keeps math and rendering off large projected coordinates (the float32 wall and catastrophic-cancellation failures at UTM magnitudes) by working in a small local frame with the offset held as explicit, inspectable provenance. Names a CRS; deliberately never reprojects.",
+  "type": "module",
+  "main": "./src/frame.js",
+  "exports": {
+    ".": "./src/frame.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["coordinate-frame", "local-origin", "utm", "float32", "precision", "crs", "provenance", "geometry", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gentropic/auditable.git",
+    "directory": "ext/frame"
+  },
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/frame",
+  "bugs": {
+    "url": "https://github.com/gentropic/auditable/issues"
+  }
+}
