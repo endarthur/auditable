@@ -12,6 +12,7 @@ export class Overlay {
     this.snap = null;        // { screen:[x,y], type } or null
     this.rubber = null;      // { lines:[[a,b],…], points:[p,…] } in SCREEN px, or null
     this.selBox = null;      // [[x0,y0],[x1,y1]] in SCREEN px (window-select drag), or null
+    this.highlight = null;   // { warn, ok, dim } each [[a,b],…] SCREEN px — the pick-tool preview
     this.theme = { crosshair: 'rgba(140,140,140,0.45)', cross: 'rgba(200,120,80,0.9)', snap: 'rgba(120,180,230,0.95)', rubber: 'rgba(216,120,59,0.95)', sel: 'rgba(120,180,230,0.9)' };
   }
 
@@ -21,14 +22,32 @@ export class Overlay {
   // owns the tool's local coords + the viewport, so it does the projection).
   setRubber(screenGeom) { this.rubber = screenGeom; }
   setSelectBox(box) { this.selBox = box; }
+  // Hover preview for the click-on-geometry tools: warn (red) = will be removed, ok (green)
+  // = will be added, dim (grey) = the candidate under the cursor.
+  setHighlight(geom) { this.highlight = geom; }
 
   draw(view) {
     const ctx = this.ctx, w = view.width, h = view.height;
     ctx.clearRect(0, 0, w, h);
+    if (this.highlight) this._highlight(view);
     if (this.rubber) this._rubber(view);
     if (this.selBox) this._selectBox(view);
     if (this.cursor) this._crosshair(view);
     if (this.snap) this._snapGlyph(view);
+  }
+
+  // What a Trim/Extend/Offset/Fillet click would do, shown before you commit.
+  _highlight(view) {
+    const ctx = this.ctx, g = this.highlight, lw = Math.max(2, 2.2 * view.dpr);
+    const stroke = (segs, color) => {
+      if (!segs || !segs.length) return;
+      ctx.lineWidth = lw; ctx.strokeStyle = color; ctx.beginPath();
+      for (const [a, b] of segs) { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+      ctx.stroke();
+    };
+    stroke(g.dim, 'rgba(150,150,160,0.55)');     // candidate
+    stroke(g.ok, 'rgba(120,200,120,0.95)');      // green = will be added (extend / offset copy)
+    stroke(g.warn, 'rgba(232,90,78,0.95)');      // red = will be removed (trim)
   }
 
   // The window-select drag rectangle: a faint info-accent fill + dashed border.

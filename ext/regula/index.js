@@ -387,7 +387,7 @@ function trim(path, cutters, pickPoint, tol) {
     const lo = bounds[k], hi = bounds[k + 1], kept = [];
     if (lo > 1e-9) kept.push(subPath(spans, 0, lo));
     if (hi < nspan - 1e-9) kept.push(subPath(spans, hi, nspan));
-    return { kept, removed: true };
+    return { kept, removed: true, removedPath: subPath(spans, lo, hi) };
   }
 
   // closed: the cuts divide the ring; remove the interval (lo→hi) holding the pick, keep
@@ -399,7 +399,7 @@ function trim(path, cutters, pickPoint, tol) {
     if (pk >= a - 1e-9 && pk <= b + 1e-9) { lo = a; hi = b; break; }
   }
   if (lo === undefined) return { kept: [path], removed: false };
-  return { kept: [subPath(spans, hi, lo + nspan)], removed: true };
+  return { kept: [subPath(spans, hi, lo + nspan)], removed: true, removedPath: subPath(spans, lo, hi) };
 }
 
 // ── src/extend.js ──
@@ -442,7 +442,7 @@ function extend(path, boundaries, pickPoint, tol) {
 
   const points = pts.map((p) => p.slice());
   points[atEnd ? n - 1 : 0] = [best[0], best[1]];
-  return { path: { ...path, points }, extended: true };
+  return { path: { ...path, points }, extended: true, reach: [b.slice(), [best[0], best[1]]] };   // the added stretch (old end → boundary)
 }
 
 // ── src/fillet.js ──

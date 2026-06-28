@@ -39,5 +39,5 @@ export function extend(path, boundaries, pickPoint, tol) {
 
   const points = pts.map((p) => p.slice());
   points[atEnd ? n - 1 : 0] = [best[0], best[1]];
-  return { path: { ...path, points }, extended: true };
+  return { path: { ...path, points }, extended: true, reach: [b.slice(), [best[0], best[1]]] };   // the added stretch (old end → boundary)
 }

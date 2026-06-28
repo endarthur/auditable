@@ -276,3 +276,15 @@ test('offset: an arc offsets CONCENTRIC (radius shifts, bulge preserved)', () =>
 test('offset: distance past an arc radius is refused, not garbage', () => {
   assert.equal(offset(P([[0, 0], [10, 0]], [1]), 10, 1e-9).ok, false);   // r5 arc, |d|=10
 });
+
+// ── hover-preview outputs: the affected geometry trim/extend report ────────────────
+test('trim: reports removedPath (the portion a hover-preview paints red)', () => {
+  const t = trim(P([[0, 0], [10, 0]]), [segment([5, -5], [5, 5])], [2, 0], 1e-9);   // pick the left
+  assert.ok(t.removedPath);
+  assert.ok(ptClose(t.removedPath.points[0], [0, 0]) && ptClose(t.removedPath.points[1], [5, 0]));   // the bit that goes
+});
+
+test('extend: reports reach (old end → boundary, painted green)', () => {
+  const e = extend(P([[0, 0], [10, 0]]), [segment([20, -5], [20, 5])], [9, 0], 1e-9);
+  assert.ok(e.reach && ptClose(e.reach[0], [10, 0]) && ptClose(e.reach[1], [20, 0]));   // the added stretch
+});

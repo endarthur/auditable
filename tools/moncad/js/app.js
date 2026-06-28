@@ -205,7 +205,7 @@ function boot() {
     cmdline.focus();          // the command line is live the moment a tool starts — type or click
     render();
   }
-  function endTool() { activeTool = null; overlay.setRubber(null); refreshPrompt(); cmdline.blur(); render(); }
+  function endTool() { activeTool = null; overlay.setRubber(null); overlay.setHighlight(null); refreshPrompt(); cmdline.blur(); render(); }
   function cancelTool() { if (activeTool) activeTool.cancel(); }   // → onDone → endTool
 
   // the local point under the cursor, snapped per the SnapState (master / running types /
@@ -380,16 +380,50 @@ function boot() {
   }
 
   // ── trim / extend: rawPick click tools that act on the feature under the cursor ───
-  function makePickTool(name, prompt, handler) {
+  function makePickTool(name, prompt, handler, hover) {
     return {
-      name, rawPick: true, get prompt() { return prompt; }, point: handler,
+      name, rawPick: true, get prompt() { return prompt; }, point: handler, hover,
       preview: () => ({ lines: [], points: [] }), keyword: () => false, text: () => false,
       finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
     };
   }
   function startPickTool(tool) { cancelTool(); activeTool = tool; refreshPrompt(); cmdline.focus(); render(); }
-  const startTrim = () => startPickTool(makePickTool('trim', 'Trim — click the part to remove (Esc to finish):', trimAt));
-  const startExtend = () => startPickTool(makePickTool('extend', 'Extend — click near an end to lengthen it (Esc to finish):', extendAt));
+  const startTrim = () => startPickTool(makePickTool('trim', 'Trim — click the part to remove (Esc to finish):', trimAt, trimHover));
+  const startExtend = () => startPickTool(makePickTool('extend', 'Extend — click near an end to lengthen it (Esc to finish):', extendAt, extendHover));
+
+  // ── hover preview: what a click would do, shown before you commit (local segments) ──
+  const pathLocal = (path) => localSegments(pathToGeom(path), frame.origin, tessEps);
+  function trimHover(world) {
+    const c = pickTargetAndCutters(world); if (!c || c.bad) return null;
+    const res = trim(geomToPath(c.target.geometry), c.cutters, world, c.tol);
+    return res.removed && res.removedPath ? { warn: pathLocal(res.removedPath) } : null;
+  }
+  function extendHover(world) {
+    const c = pickTargetAndCutters(world); if (!c || c.bad) return null;
+    const res = extend(geomToPath(c.target.geometry), c.cutters, world, c.tol);
+    if (!res.extended || !res.reach) return null;
+    const o = frame.origin, R = res.reach;
+    return { ok: [[[R[0][0] - o[0], R[0][1] - o[1]], [R[1][0] - o[0], R[1][1] - o[1]]]] };
+  }
+  function offsetHover(world) {
+    const i = pickAt(world); if (i < 0) return null;
+    const g = model.features[i].geometry; if (g.kind !== 'polyline') return null;
+    const extent = Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1]) || 1;
+    const res = offset(geomToPath(g), offsetSign(g, world) * offsetDist, makeTolerance(extent));
+    return res.ok ? { ok: pathLocal(res.path) } : null;
+  }
+  function cornerHover(world) {
+    const i = pickAt(world); if (i < 0) return null;
+    const g = model.features[i].geometry;
+    return isStraightLine(g) ? { dim: localSegments(g, frame.origin, tessEps) } : null;
+  }
+  function updateHover(s) {
+    if (!activeTool || !activeTool.hover || !s) { overlay.setHighlight(null); return; }
+    const hl = activeTool.hover(view.toWorld(s));
+    if (!hl) { overlay.setHighlight(null); return; }
+    const proj = (segs) => (segs || []).map(([a, b]) => [view.toScreen(a), view.toScreen(b)]);
+    overlay.setHighlight({ warn: proj(hl.warn), ok: proj(hl.ok), dim: proj(hl.dim) });
+  }
 
   // the polyline + the other features' kernel curves at a world pick, or null.
   function pickTargetAndCutters(world) {
@@ -428,7 +462,7 @@ function boot() {
   const startOffset = () => startPickTool({
     name: 'offset', rawPick: true,
     get prompt() { return `Offset (distance ${offsetDist}) — pick a polyline on the side you want, or type distance (Esc to finish):`; },
-    point: (world) => offsetAt(world),
+    point: (world) => offsetAt(world), hover: offsetHover,
     text: (raw) => { const v = Number(String(raw).trim()); if (v > 0) { offsetDist = v; refreshPrompt(); render(); return true; } return false; },
     preview: () => ({ lines: [], points: [] }), keyword: () => false,
     finish: () => endTool(), cancel: () => endTool(), last: () => null, count: () => 0,
@@ -452,7 +486,7 @@ function boot() {
     cancelTool();
     const picks = [], unit = kind === 'fillet' ? 'radius' : 'distance';
     activeTool = {
-      name: kind, rawPick: true,
+      name: kind, rawPick: true, hover: cornerHover,
       get prompt() { return picks.length === 0 ? `${kind[0].toUpperCase() + kind.slice(1)} (${unit} ${corner[kind]}) — first line, or type ${unit}:` : 'second line:'; },
       point: (world) => {
         const i = pickAt(world);
@@ -605,10 +639,10 @@ function boot() {
     if (panning) { view.panBy(s[0] - last[0], s[1] - last[1]); last = s; }
     if (selecting) overlay.setSelectBox([selStart, s]);
     overlay.setCursor(s); readout(s, !panning);
-    if (activeTool && !panning) updateRubber(s);
+    if (activeTool && !panning) { updateRubber(s); updateHover(s); }
     render();
   });
-  olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); overlay.setSnap(null); render(); });
+  olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); overlay.setSnap(null); overlay.setHighlight(null); render(); });
   olCanvas.addEventListener('wheel', (e) => { e.preventDefault(); view.zoomAt(devicePt(e), e.deltaY < 0 ? 1.1 : 1 / 1.1); readout(devicePt(e)); if (activeTool) updateRubber(devicePt(e)); zoomed(); }, { passive: false });
 
   // the instrument panel: LOCAL math, WORLD (UTM) display — the precision point made visible.
