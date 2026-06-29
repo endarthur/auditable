@@ -816,3 +816,19 @@ describe('Terminal dispose', () => {
     assert.equal(t._disposed, true);
   });
 });
+
+describe('convertEol (onlcr)', () => {
+  test('off (default): bare LF line-feeds without carriage return — content cascades', () => {
+    const t = new Terminal(40, 5);
+    t.write('ab\ncd');
+    assert.equal(rowText(t, 0).trimEnd(), 'ab');
+    assert.equal(rowText(t, 1).slice(0, 4), '  cd');   // cd lands at col 2 (no CR)
+  });
+  test('on: LF also carriage-returns (newline) — content starts at column 0', () => {
+    const t = new Terminal(40, 5, { convertEol: true });
+    t.write('ab\ncd');
+    assert.equal(rowText(t, 0).trimEnd(), 'ab');
+    assert.equal(rowText(t, 1).trimEnd(), 'cd');        // cd at col 0
+    assert.equal(t.cursor.x, 2);
+  });
+});
