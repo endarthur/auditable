@@ -179,6 +179,7 @@ function mountView(vs, info = {}, keepVScroll = false) {
   $('#empty').style.display = 'none';
   const badge = $('#kindBadge'); badge.style.display = '';
   badge.textContent = c.d.dm ? 'dm' : c.d.kind === 'delimited' ? `CSV · ${c.d.delimiter === '\t' ? 'TSV' : 'delimited'}` : c.d.kind;
+  badge.title = detectedFacts(c.d).map(([k, v]) => `${k}: ${v}`).join(' · ') + ' — click to change how the file is read';
 
   const base = createLaminaProvider(vs, { PENDING });
   const total = c.baseVs.cols;
@@ -1825,6 +1826,34 @@ function reopen(patch) {
   else if (c.bytes) open(c.label, c.bytes, force);
 }
 
+// Human name + the literal glyph for a delimiter byte (tab/whitespace get a
+// visible symbol since the real char is invisible). Matches the popover options.
+function delimName(ch) {
+  return ch === '\t' ? 'tab (⇥)' : ch === ' ' ? 'whitespace (␣)' : ch === ',' ? 'comma (,)'
+    : ch === ';' ? 'semicolon (;)' : ch === '|' ? 'pipe (|)' : ch ? `"${ch}"` : '?';
+}
+
+// What auto-detect FOUND, as [label, value] pairs (so "auto" isn't a black box).
+// Forced bits are reflected too — d carries the effective interpretation. Rendered
+// as a label/value grid in the popover; joined into a one-line badge tooltip.
+function detectedFacts(d) {
+  if (!d) return [];
+  if (d.dm) return [['format', 'Datamine .dm'], ['columns', String((d.schema || []).length)]];
+  if (d.kind === 'binary') return [['format', 'binary']];
+  if (d.kind === 'text') { const f = [['format', 'plain text']]; if (d.skip) f.push(['preamble', `${d.skip} line${d.skip > 1 ? 's' : ''}`]); return f; }
+  const f = [];
+  if (d.geoeas) f.push(['format', 'GeoEAS/GSLIB']);
+  f.push(['delimiter', delimName(d.delimiter)]);
+  f.push(['columns', String((d.schema || []).length)]);
+  f.push(['header', d.hasHeader ? 'yes' : 'no']);
+  if (d.decimal === ',') f.push(['decimal', 'comma']);
+  if (d.comment) f.push(['comment', d.comment]);
+  f.push(['encoding', d.encoding || 'utf-8']);
+  if (d.skip) f.push(['preamble', `${d.skip} line${d.skip > 1 ? 's' : ''}`]);
+  return f;
+}
+const _escHtml = (s) => String(s).replace(/[&<>]/g, (x) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[x]));
+
 // Open the interpretation popover (delimiter / header / kind / skip / comment).
 // Dismiss-on-outside is attached AFTER this click (setTimeout 0) so the very
 // click that opens it — from the kind badge OR View → Interpretation — doesn't
@@ -1833,6 +1862,10 @@ function openOpts() {
   if (!current) return;
   const opts = $('#opts');
   if (opts.classList.contains('show')) return closeOpts();
+  const facts = detectedFacts(current.d);
+  $('#optDetected').innerHTML = facts.length
+    ? '<div class="od-cap">Detected</div>' + facts.map(([k, v]) => `<div class="od-k">${k}</div><div class="od-v">${_escHtml(v)}</div>`).join('')
+    : '';
   const f = current.force || {};
   $('#optKind').value = f.kind || '';
   $('#optDelim').value = f.delimiter || '';
