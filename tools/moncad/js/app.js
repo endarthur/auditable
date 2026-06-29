@@ -126,16 +126,38 @@ function boot() {
   const EMPTY = new Float32Array(0);
   const TESS_PX = 0.5;               // target arc/circle chord error, device px (screen-adaptive tessellation)
   let lastDeriveScale = 1, tessEps = 0.2;
+  let lastDerivedModel = null, lastDerivedRev = -1;   // gate the SnapIndex rebuild: only on a real edit (new model / bumped rev), not a zoom re-derive
 
-  // recompute the adaptive grid for the current view (zoom-dependent spacing)
-  function applyGrid() { if (gridOn) { const g = computeGrid(view); renderer.setGrid(g.lines); gridStep = g.step; } else renderer.setGrid(EMPTY); }
+  // recompute the adaptive grid for the current view — but only when the view actually changed
+  // (it's keyed on scale+centre+size, so a static-view redraw, e.g. a hover, skips the rebuild
+  // + GPU upload entirely; the grid only moves on pan/zoom).
+  let gridKey = '';
+  function applyGrid() {
+    if (!gridOn) { if (gridKey !== '·off') { renderer.setGrid(EMPTY); gridKey = '·off'; } return; }
+    const key = view.scale + '|' + view.center[0] + '|' + view.center[1] + '|' + view.width + '|' + view.height;
+    if (key === gridKey) return;
+    gridKey = key;
+    const g = computeGrid(view); renderer.setGrid(g.lines); gridStep = g.step;
+  }
 
-  let pending = false;
+  let pending = false, hoverDirty = false;
   const render = () => {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(() => { pending = false; applyGrid(); renderer.draw(view); overlay.draw(view); });
+    requestAnimationFrame(() => {
+      pending = false;
+      if (hoverDirty) { hoverDirty = false; refreshHover(lastMouse); }   // the pick/hover, coalesced to ONE per frame (was per mousemove event)
+      applyGrid(); renderer.draw(view); overlay.draw(view);
+    });
   };
+  // The per-frame interactive update: the tool rubber-band + the hover highlight — i.e. the
+  // O(features) pick scan. Run from render()'s rAF (once a frame) instead of synchronously per
+  // mousemove, so rapid movement doesn't fire many brute-force scans before the next paint.
+  function refreshHover(s) {
+    if (!s || panning || selecting) { overlay.setHighlight(null); return; }
+    if (activeTool) { updateRubber(s); updateHover(s); }
+    else updateSelectHover(s);
+  }
 
   // Push the model's derived view (renderer buffers + snap index) — the canonical→derived
   // step (SPEC §4). `fit` reframes the camera (open / new); a bare edit keeps the view.
@@ -148,7 +170,9 @@ function boot() {
     const sc = sceneFromDxf(model.doc, { selected: selection, eps });
     frame = sc.frame;
     bounds = (sc.lines.length || sc.points.length) ? sc.bounds : { min: [-50, -50], max: [50, 50] };
-    snapIndex = new SnapIndex(sc.snaps || []);
+    if (model !== lastDerivedModel || model.rev !== lastDerivedRev) {   // snap points only change on a model EDIT, not on a zoom re-tessellation → skip the index rebuild then
+      snapIndex = new SnapIndex(sc.snaps || []); lastDerivedModel = model; lastDerivedRev = model.rev;
+    }
     renderer.setLines(sc.lines);
     renderer.setPoints(sc.points);
     overlay.setTexts(sc.texts || []);
@@ -938,11 +962,10 @@ function boot() {
     if (selecting) overlay.setSelectBox([selStart, s], s[0] < selStart[0]);   // right→left drag = crossing (green)
     overlay.setCursor(s); readout(s, !panning);
     if (panning || selecting) overlay.setHighlight(null);
-    else if (activeTool) { updateRubber(s); updateHover(s); }
-    else updateSelectHover(s);                                   // idle → preview what a click selects
+    hoverDirty = true;          // the pick/hover (updateRubber/updateHover/updateSelectHover) runs once per frame in render()
     render();
   });
-  olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); overlay.setSnap(null); overlay.setHighlight(null); render(); });
+  olCanvas.addEventListener('mouseleave', () => { overlay.setCursor(null); overlay.setSnap(null); overlay.setHighlight(null); hoverDirty = false; render(); });
   olCanvas.addEventListener('wheel', (e) => { e.preventDefault(); view.zoomAt(devicePt(e), e.deltaY < 0 ? 1.1 : 1 / 1.1); readout(devicePt(e)); if (activeTool) updateRubber(devicePt(e)); zoomed(); }, { passive: false });
 
   // the instrument panel: LOCAL math, WORLD (UTM) display — the precision point made visible.
