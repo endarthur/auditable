@@ -7673,6 +7673,21 @@ async function installGcupkg(parsed, opts = {}) {
       hasAdder:     !!files['adder.js'],
     },
   };
+  // Surface the package's declarative language contract (gcu.languages) onto the
+  // installed entry's meta, so the notebook's hydrateModulesFromVfs carries it
+  // and seedDeclaredLanguages can offer the language in the cell-type picker
+  // (cold) without loading the pack. The bundle still registers the real cell
+  // type on first load (cold→hot).
+  if (packageJson.gcu && Array.isArray(packageJson.gcu.languages) && packageJson.gcu.languages.length) {
+    pkgMeta.languages = packageJson.gcu.languages;
+  }
+  // adderExports — the names adder code imports the package by (e.g. @gcu/plot →
+  // `plt`). Surfaced onto the entry's meta so resolveAdderModule (exec.js)
+  // resolves `import plt` / `from sadpan import …` OFFLINE in a provisioned
+  // notebook, the same way profiles/packages.json wires it for baked editions.
+  if (packageJson.gcu && Array.isArray(packageJson.gcu.adderExports) && packageJson.gcu.adderExports.length) {
+    pkgMeta.adderExports = packageJson.gcu.adderExports;
+  }
   await vfs.writeFile(libPath + '/meta.json', _ENCODER.encode(JSON.stringify(pkgMeta, null, 2)));
   await _updateLockfile(vfs, meta.name, pkgMeta);
 
@@ -13578,6 +13593,8 @@ async function runEd(argv, ctx) {
 
 
 
+import { manCmd, opCmd } from './ops.js';   // the op doc-projection (man pages + the registry catalog)
+
 // Construct a fresh map of the default builtins. Returns a new Map per call
 // so consumers can mutate (add/override) without affecting other shells.
 function defaultBuiltins() {
@@ -13646,6 +13663,9 @@ function defaultBuiltins() {
     profile:  _profile,
     // "ed is the standard text editor." POSIX-ish, GNU-sanded defaults.
     ed:       runEd,
+    // the op doc-projection: man pages + the queryable op registry, both from GEAS_OPS.
+    man:      manCmd,
+    op:       opCmd,
   }));
 }
 

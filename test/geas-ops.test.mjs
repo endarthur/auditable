@@ -24,3 +24,21 @@ test('behaviour derives from the facets — the coreutils textbook cases', () =>
   assert.equal(cacheable(effectFacets('read')), false);
   assert.equal(undoOf(effectFacets('edit')), 'snapshot');
 });
+
+import { manCmd, opCmd, describeEffect } from '../ext/geas/src/ops.js';
+const cap = () => { let o = ''; return { ctx: { stdout: (s) => { o += s; }, stderr: (s) => { o += s; } }, out: () => o }; };
+
+test('man <cmd> renders the descriptor incl. the facet-derived EFFECT line', async () => {
+  let h = cap(); await manCmd(['rm'], h.ctx);
+  assert.match(h.out(), /NAME\n {4}rm — remove files/);
+  assert.match(h.out(), /EFFECT\n {4}custom · writes the filesystem · not undoable · agent: double-confirms/);
+  h = cap(); await manCmd(['echo'], h.ctx);
+  assert.match(h.out(), /pure · no side effects · recomputable · agent: runs freely/);
+  h = cap(); assert.equal(await manCmd(['nope'], h.ctx), 1);   // no entry → exit 1
+});
+
+test('op list is a queryable catalog (filter by facet)', async () => {
+  const h = cap(); await opCmd(['list', '--writes=fs'], h.ctx);
+  const names = h.out().trim().split('\n').map((l) => l.split(/\s+/)[0]).sort();
+  assert.deepEqual(names, ['cp', 'mkdir', 'mv', 'rm', 'tee', 'touch']);   // exactly the fs writers
+});

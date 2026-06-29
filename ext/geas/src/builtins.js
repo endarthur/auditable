@@ -16,6 +16,7 @@ import { _pkg } from './pkg-cmd.js';
 import { _profile } from './profile-cmd.js';
 import { runEd } from '../../ed/src/api.js';
 import { archiveBuiltins } from './builtins-archive.js';
+import { manCmd, opCmd } from './ops.js';   // the op doc-projection (man pages + the registry catalog)
 
 // Construct a fresh map of the default builtins. Returns a new Map per call
 // so consumers can mutate (add/override) without affecting other shells.
@@ -85,6 +86,9 @@ export function defaultBuiltins() {
     profile:  _profile,
     // "ed is the standard text editor." POSIX-ish, GNU-sanded defaults.
     ed:       runEd,
+    // the op doc-projection: man pages + the queryable op registry, both from GEAS_OPS.
+    man:      manCmd,
+    op:       opCmd,
   }));
 }
 

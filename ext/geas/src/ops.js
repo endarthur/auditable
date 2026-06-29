@@ -102,8 +102,8 @@ export const GEAS_OPS = {
   cp:    { effect: 'write', summary: 'copy files' },
   mv:    { effect: 'write', summary: 'move or rename files' },
   tee:   { effect: 'write', summary: 'copy stdin to stdout and to files' },
-  // destructive — irreversible loss
-  rm:    { effect: 'destructive', summary: 'remove files and directories' },
+  // destructive — irreversible loss (fs, not a doc → the explicit tuple, not the doc `destructive` preset)
+  rm:    { effect: { writes: 'fs', reverse: 'none' }, summary: 'remove files and directories' },
   // meta — effect is the UNION of whatever they run (dynamic); conservative default, noted
   eval:    { effect: { writes: 'doc', reverse: 'none' }, summary: 'run arguments as a command (effect = what it runs)' },
   source:  { effect: { writes: 'doc', reverse: 'none' }, summary: 'execute a script in the current shell (effect = the script)' },
@@ -113,4 +113,57 @@ export const GEAS_OPS = {
   getopts: { effect: 'read', summary: 'parse positional parameters as options' },
   exit:    { effect: 'view', summary: 'exit the shell' },
   return:  { effect: 'view', summary: 'return from a shell function' },
+  // the doc projection itself (so `man man` / `op op` work)
+  man:     { effect: 'read', summary: 'display the manual for a command' },
+  op:      { effect: 'read', summary: 'browse the op registry by effect' },
 };
+
+// ── the doc projection: render a descriptor as a man page; browse the registry as a catalog ──
+const WRITES_HUMAN = { none: 'no side effects', view: 'changes the session', doc: 'edits the document', fs: 'writes the filesystem', net: 'network / device I/O' };
+const REVERSE_HUMAN = { recompute: 'recomputable', snapshot: 'undoable', inverse: 'undoable', none: 'not undoable' };
+const GATE_HUMAN = { free: 'runs freely', confirm: 'confirms first', double: 'double-confirms', always: 'always asks' };
+
+// effect → human description (the GCU-distinctive man section: what hand-written pages can't carry)
+export function describeEffect(effect) {
+  const f = effectFacets(effect);
+  return { preset: typeof effect === 'string' ? effect : 'custom', writes: WRITES_HUMAN[f.writes], undo: REVERSE_HUMAN[f.reverse], gate: GATE_HUMAN[gateOf(f)] };
+}
+
+// `man <command>` — render the op descriptor as a man page (NAME · SYNOPSIS? · EFFECT · DESCRIPTION · …).
+export async function manCmd(argv, ctx) {
+  const name = argv[0];
+  if (!name) { await ctx.stderr('usage: man <command>\n'); return 1; }
+  const op = GEAS_OPS[name];
+  if (!op) { await ctx.stderr(`man: no manual entry for ${name}\n`); return 1; }
+  const d = describeEffect(op.effect);
+  let s = `NAME\n    ${name} — ${op.summary || ''}\n\n`;
+  if (op.synopsis) s += `SYNOPSIS\n    ${op.synopsis}\n\n`;
+  s += `EFFECT\n    ${d.preset} · ${d.writes} · ${d.undo} · agent: ${d.gate}\n\n`;
+  s += `DESCRIPTION\n    ${op.doc || op.summary || ''}\n`;
+  if (op.examples?.length) s += '\nEXAMPLES\n' + op.examples.map((e) => '    ' + e).join('\n') + '\n';
+  if (op.seeAlso?.length) s += `\nSEE ALSO\n    ${op.seeAlso.join(', ')}\n`;
+  await ctx.stdout(s);
+  return 0;
+}
+
+// `op` / `op list [--effect=|--writes=|--gate=]` — the registry as a queryable catalog; `op <name>` → man.
+export async function opCmd(argv, ctx) {
+  const head = argv[0];
+  if (head && head !== 'list' && GEAS_OPS[head]) return manCmd([head], ctx);   // `op rm` → man rm
+  const rest = head === 'list' ? argv.slice(1) : argv;
+  const filters = {};
+  for (const a of rest) { const m = /^--(effect|writes|gate)=(.+)$/.exec(a); if (m) filters[m[1]] = m[2]; }
+  const rows = [];
+  for (const [name, op] of Object.entries(GEAS_OPS)) {
+    const f = effectFacets(op.effect), preset = typeof op.effect === 'string' ? op.effect : 'custom';
+    if (filters.effect && preset !== filters.effect) continue;
+    if (filters.writes && f.writes !== filters.writes) continue;
+    if (filters.gate && gateOf(f) !== filters.gate) continue;
+    rows.push([name, preset, op.summary || '']);
+  }
+  rows.sort((a, b) => a[0].localeCompare(b[0]));
+  if (!rows.length) { await ctx.stdout('(no ops match)\n'); return 0; }
+  const nw = Math.max(4, ...rows.map((r) => r[0].length)), pw = Math.max(6, ...rows.map((r) => r[1].length));
+  await ctx.stdout(rows.map((r) => `${r[0].padEnd(nw)}  ${r[1].padEnd(pw)}  ${r[2]}`).join('\n') + '\n');
+  return 0;
+}
