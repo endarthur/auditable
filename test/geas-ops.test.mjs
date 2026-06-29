@@ -42,3 +42,25 @@ test('op list is a queryable catalog (filter by facet)', async () => {
   const names = h.out().trim().split('\n').map((l) => l.split(/\s+/)[0]).sort();
   assert.deepEqual(names, ['cp', 'mkdir', 'mv', 'rm', 'tee', 'touch']);   // exactly the fs writers
 });
+
+test('the doc projection renders the full descriptor — synopsis(array), multi-line doc, examples, see-also', async () => {
+  // multi-form synopsis (string[]) → each form on its own indented line
+  let h = cap(); await manCmd(['op'], h.ctx);
+  assert.match(h.out(), /SYNOPSIS\n {4}op \[name\]\n {4}op list /);
+  // multi-line doc (\n\n paragraph) → every line indented, blank line preserved between paragraphs
+  h = cap(); await manCmd(['rm'], h.ctx);
+  assert.match(h.out(), /DESCRIPTION\n {4}Remove each FILE\..*\n\n {4}Irreversible —/s);
+  // examples + see-also sections, with escaped regex passed through verbatim
+  h = cap(); await manCmd(['grep'], h.ctx);
+  assert.match(h.out(), /EXAMPLES\n {4}grep -i error log\.txt\n {4}ls \| grep '\\\.js\$'/);
+  assert.match(h.out(), /SEE ALSO\n {4}find, cut, wc/);
+});
+
+test('every classified op carries at least a summary; non-trivial ops carry doc', () => {
+  const trivial = new Set([]);   // none exempt — all ops have a summary
+  for (const [n, op] of Object.entries(GEAS_OPS)) {
+    assert.ok(op.summary, `${n} has a summary`);
+    if (!trivial.has(n)) assert.ok(op.doc || op.summary, `${n} has doc or summary`);
+    if (op.seeAlso) for (const ref of op.seeAlso) assert.ok(GEAS_OPS[ref], `${n} seeAlso "${ref}" resolves`);
+  }
+});

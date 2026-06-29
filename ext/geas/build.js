@@ -108,9 +108,12 @@ for (const entry of importEntries) {
   let src = fs.readFileSync(filePath, 'utf8');
   const basename = path.basename(entry.rel || entry.cross);
 
-  // Strip import lines (single-line and multi-line)
-  src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
-  src = src.replace(/^import\s*\{[\s\S]*?\}\s*from\s*['"].*['"];?\s*$/gm, '');
+  // Strip import lines (single-line and multi-line). Tolerate a trailing line
+  // comment after the `;` — otherwise a commented import survives stripping and
+  // lands as a dangling `import … from './x.js'` in the worker bundle (it can't
+  // resolve relative paths against a blob: URL → the module fails to load).
+  src = src.replace(/^import\s+.*['"].*['"];?\s*(?:\/\/.*)?$/gm, '');
+  src = src.replace(/^import\s*\{[\s\S]*?\}\s*from\s*['"].*['"];?\s*(?:\/\/.*)?$/gm, '');
 
   // Replace export function -> function, export const -> const, etc.
   src = src.replace(/^export function /gm, 'function ');

@@ -20,6 +20,7 @@ import '../../ed/src/regex.js';
 import '../../ed/src/address.js';
 import '../../ed/src/commands.js';
 import '../../ed/src/api.js';
+import './ops.js';   // op descriptors + the man/op doc-projection — must precede builtins.js (it imports manCmd/opCmd)
 import './builtins.js';
 import './adapters/headless.js';
 import './adapters/term.js';
