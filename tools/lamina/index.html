@@ -166,8 +166,19 @@
   #exportDialog .ex-row { display: flex; align-items: center; gap: 10px; }
   #exportDialog .ex-lab { width: 52px; color: var(--muted); }
   #exportDialog select { flex: 1; font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; }
-  #exportDialog .ex-colhdr { color: var(--dim); font-size: 11px; margin-top: 2px; }
+  #exportDialog .ex-colhdr { display: flex; justify-content: space-between; align-items: baseline; color: var(--dim); font-size: 11px; margin-top: 2px; }
+  #exportDialog .ex-count { color: var(--muted); }
+  #exportDialog .ex-coltools { display: flex; align-items: center; gap: 6px; }
+  #exportDialog .ex-search-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
+  #exportDialog #exColSearch { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--text-hi); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 22px 3px 7px; }
+  #exportDialog #exColSearch:focus { outline: none; border-color: var(--info); }
+  #exportDialog #exColSearchClear { position: absolute; right: 1px; top: 1px; bottom: 1px; display: none; align-items: center; background: none; border: none; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; padding: 0 6px; }
+  #exportDialog #exColSearchClear:hover { color: var(--text-hi); }
+  #exportDialog .ex-search-wrap.has-text #exColSearchClear { display: flex; }
+  #exportDialog .ex-coltools button { font-family: var(--mono); font-size: 11px; color: var(--muted); background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 9px; cursor: pointer; }
+  #exportDialog .ex-coltools button:hover { background: var(--bg-hover); color: var(--text-hi); }
   #exportDialog .ex-cols { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow-y: auto; border: 1px solid var(--border); border-radius: 3px; padding: 6px 8px; background: var(--bg-field); }
+  #exportDialog .ex-col.hide { display: none; }
   #exportDialog .ex-col { display: flex; align-items: center; gap: 8px; }
   #exportDialog .ex-foot { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--border); }
   #exportDialog .ex-prog { flex: 1; color: var(--ok); font-family: var(--mono); font-size: 11px; }
@@ -472,7 +483,16 @@
       <label class="ex-row"><span class="ex-lab">Format</span><select id="exDelim"><option value="comma">CSV (comma)</option><option value="tab">TSV (tab)</option><option value="semi">semicolon</option><option value="pipe">pipe</option></select></label>
       <label class="ex-row"><input id="exHeader" type="checkbox" checked><span>Header row</span></label>
       <label class="ex-row" id="exScopeRow"><span class="ex-lab">Rows</span><select id="exScope"><option value="view">Current view (filtered / sorted)</option><option value="all">All rows</option></select></label>
-      <div class="ex-colhdr">Columns</div>
+      <div class="ex-colhdr"><span>Columns</span><span id="exColCount" class="ex-count"></span></div>
+      <div class="ex-coltools">
+        <span class="ex-search-wrap">
+          <input id="exColSearch" type="text" placeholder="filter columns…" autocomplete="off" spellcheck="false">
+          <button id="exColSearchClear" type="button" title="clear filter" aria-label="clear filter">×</button>
+        </span>
+        <button id="exColAll" type="button">all</button>
+        <button id="exColNone" type="button">none</button>
+        <button id="exColInvert" type="button">invert</button>
+      </div>
       <div class="ex-cols" id="exCols"></div>
     </div>
     <div class="ex-foot"><span id="exProgress" class="ex-prog"></span><button id="exRun">Export</button></div>

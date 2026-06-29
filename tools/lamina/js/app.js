@@ -1295,9 +1295,34 @@ function openExportDialog() {
   const scoped = !!(c.filterResult || (c.sort && c.sort.length));     // a scope choice only matters when a filter/sort is active
   $('#exScopeRow').style.display = scoped ? '' : 'none';
   $('#exScope').value = scoped ? 'view' : 'all';
+  $('#exColSearch').value = ''; filterExCols(); updateExColCount();
   $('#exportDialog').classList.add('show');
 }
 function closeExportDialog() { if (_exSignal) _exSignal.cancelled = true; $('#exportDialog').classList.remove('show'); }
+
+// ── export column picker: search-filter + all/none/invert + live count ──
+const exColRows = () => [...$('#exCols').querySelectorAll('.ex-col')];
+const exColShown = () => exColRows().filter((r) => !r.classList.contains('hide'));   // not hidden by the search
+function updateExColCount() {
+  const rows = exColRows(), n = rows.filter((r) => r.querySelector('input').checked).length;
+  $('#exColCount').textContent = `${n} / ${rows.length}`;
+}
+function filterExCols() {
+  const inp = $('#exColSearch');
+  const q = inp.value.trim().toLowerCase();
+  inp.closest('.ex-search-wrap').classList.toggle('has-text', inp.value !== '');   // show the clear × only when typed
+  for (const r of exColRows()) r.classList.toggle('hide', !!q && !r.querySelector('span').textContent.toLowerCase().includes(q));
+}
+// All/None/Invert act on the SHOWN rows, so a search narrows their scope
+// (filter "au" → all → checks just the assay columns). Checked state persists
+// across filtering; export reads every checked box regardless of the filter.
+const _exSetShown = (val) => { exColShown().forEach((r) => { const cb = r.querySelector('input'); cb.checked = val == null ? !cb.checked : val; }); updateExColCount(); };
+$('#exColSearch').oninput = filterExCols;
+$('#exColSearchClear').onclick = () => { const i = $('#exColSearch'); i.value = ''; filterExCols(); i.focus(); };
+$('#exColAll').onclick = () => _exSetShown(true);
+$('#exColNone').onclick = () => _exSetShown(false);
+$('#exColInvert').onclick = () => _exSetShown(null);
+$('#exCols').onchange = updateExColCount;
 function gatherExportOpts() {
   const d = $('#exDelim').value;
   return {
