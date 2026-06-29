@@ -308,6 +308,12 @@ export class Terminal {
     // primary buffer feeds scrollback — apps using the alt screen (vim,
     // less, htop) own their own scrollback. Default 1000 rows.
     this.maxScrollback = opts.maxScrollback ?? 1000;
+    // onlcr: treat LF as a newline (LF+CR). VT-pure terminals leave the CR to the
+    // kernel TTY's onlcr; with no kernel TTY in the pipe (a program writing straight
+    // into the emulator, e.g. geas), a bare \n line-feeds WITHOUT returning to column 0
+    // → output cascades down-and-right (the `tree` bug). Off by default (xterm.js parity);
+    // the host opts in when it feeds cooked newlines.
+    this.convertEol = opts.convertEol ?? false;
     this.scrollback = [];
     // Charset state: G0 / G1 each hold a designator ('B' = USASCII default,
     // '0' = DEC Special Graphics). glSlot picks which is active for the
@@ -501,6 +507,7 @@ export class Terminal {
     case 0x0B: /* VT */
     case 0x0C: /* FF */
       this._lineFeed();
+      if (this.convertEol) this._carriageReturn();   // onlcr — see this.convertEol in the constructor
       this.pendingWrap = false;
       return;
     case 0x0D: /* CR */ this._carriageReturn(); return;

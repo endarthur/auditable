@@ -94,7 +94,9 @@ bootSurface({
   }
 
   const initial = gridSize();
-  const term = new Terminal(initial.cols, initial.rows);
+  // convertEol: geas pipes program output straight in with no kernel TTY, so programs that
+  // emit bare \n (tree, ls -1, …) need the emulator to do onlcr or they cascade down-right.
+  const term = new Terminal(initial.cols, initial.rows, { convertEol: true });
   const renderer = new DomRenderer(term, screenEl);
   // The Input layer reads keystrokes from the hidden textarea and handles paste, IME,
   // and selection→clipboard natively (DOM rendering gives native browser selection) —
