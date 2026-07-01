@@ -2713,7 +2713,7 @@ function renderSummary(c) {
   const srt = _summarySort;
   if (srt.col) rows = rows.slice().sort((a, b) => { const x = a[srt.col], y = b[srt.col]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return typeof x === 'string' ? srt.dir * x.localeCompare(y) : srt.dir * (x - y); });
   const fmtCell = (v, col) => v == null ? '' : col.pct ? (v > 0 && v < 1 ? v.toFixed(1) : Math.round(v)) + '%' : col.txt ? esc(String(v)) : fmtN(v);
-  let h = '<button id="sumCopy" class="sum-copy">copy all</button><div style="overflow:auto;max-height:62vh;margin-top:4px"><table class="sum-tbl"><thead><tr>';
+  let h = '<button id="sumCopy" class="sum-copy">copy all</button><div style="overflow:auto;max-height:62vh;margin-top:4px;width:fit-content;max-width:100%"><table class="sum-tbl"><thead><tr>';
   for (const col of SUM_COLS) h += `<th data-k="${col.k}" class="${col.txt ? '' : 'num'}${srt.col === col.k ? ' sorted' : ''}">${col.label}${srt.col === col.k ? (srt.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
   h += '</tr></thead><tbody>';
   for (const r of rows) {
