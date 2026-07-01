@@ -2721,7 +2721,12 @@ function renderSummary(c) {
     for (const col of SUM_COLS) {
       if (col.k === 'name') { h += `<td>${r.calc ? '<span style="color:var(--accent)">ƒ </span>' : ''}<span class="col-jump" title="go to this column in the grid">${esc(String(r.name))}</span></td>`; continue; }
       if (col.k === 'p50' && r.approx && r.p50 != null) { h += `<td class="num">${fmtN(r.p50)} <span style="color:var(--dim)">≈</span></td>`; continue; }
-      h += `<td class="${col.txt ? '' : 'num'}">${fmtCell(r[col.k], col)}</td>`;
+      const v = r[col.k];
+      let sty = '';   // visual triage: null%/zero% as data-bars, junk-in-numeric flagged amber
+      if (col.k === 'nullPct' && v > 0) sty = `background:linear-gradient(to right,rgba(206,74,74,.17) ${Math.min(100, v)}%,transparent 0)`;
+      else if (col.k === 'zeroPct' && v > 0) sty = `background:linear-gradient(to right,rgba(140,144,153,.15) ${Math.min(100, v)}%,transparent 0)`;
+      else if (col.k === 'nonnum' && v > 0) sty = 'background:rgba(214,150,54,.18);color:var(--text-hi)';
+      h += `<td class="${col.txt ? '' : 'num'}"${sty ? ` style="${sty}"` : ''}>${fmtCell(v, col)}</td>`;
     }
     h += '</tr>';
   }
