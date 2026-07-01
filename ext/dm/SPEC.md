@@ -102,6 +102,24 @@ The maximum field definition capacity per DD page:
 
 Newer `.dm` files may support up to 256 field entries total (the format's known upper limit). If `NVAR` exceeds the DD page capacity, additional DD pages may exist — but this is rare and undocumented. The safe assumption for a first implementation is single-page DD.
 
+#### 3.2.1 Extended field names (EP)
+
+The documented limit is 8 characters, but **Extended-Precision `.dm` files in the wild carry field names up to 24 characters** — Leapfrog EP exports do, and other modern exporters too — via a backward-compatible side channel. The extra characters hide in the EP high halves that a plain 8-char reader skips, so **legacy readers still get a valid (truncated) name**; the encoding is purely additive.
+
+**Flag:** the four ASCII bytes `"LONG"` (`0x4C 0x4F 0x4E 0x47`) in the **high half of the type word** (EP bytes `20–23` of the field entry). Its presence marks the entry as long-named; its absence means read the name the normal way. **EP only** — SP's 4-byte words have no high half.
+
+**Char layout** (24 chars, trailing padding stripped, *internal* spaces kept — e.g. `"Refined Geologia"`):
+
+| chars | location |
+|-------|----------|
+| 1–8 | low halves of words 0–1 (the legacy name a normal reader already sees) |
+| 9–16 | high halves of words 0–1 |
+| 17–24 | word 5 — low half then high half |
+
+A truncation like `Escavação → Escavaca` or two long names sharing their first 8 chars collapsing into one column is the correctness bug this recovers. `readLongName` (internal, tried before the legacy read) returns the full name or `null`; SP and unflagged EP entries take the normal 8-char path unchanged.
+
+*Provenance:* the extended-name encoding was reverse-engineered from actual Leapfrog EP `.dm` exports (independent observation of file bytes), not from any Datamine copyright material.
+
 ### 3.3 Reconstructing Fields from Definitions
 
 Alpha fields wider than 4 characters are split across multiple consecutive field definitions sharing the same name but with incrementing `WORDNO` values (1, 2, 3, …). To reconstruct:
@@ -284,7 +302,7 @@ interface DMFile {
 }
 
 interface DMField {
-  /** Field name (trimmed) */
+  /** Field name (trimmed). Up to 24 chars for EP long-name entries (§3.2.1). */
   name: string;
   /** 'N' for numeric, 'A' for alpha */
   type: 'N' | 'A';

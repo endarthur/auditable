@@ -2,7 +2,10 @@
 // the @gcu/dm reader can be validated without shipping a writer. Shared by
 // test/dm.test.mjs and test/lamina-smoke.mjs.
 // ── a minimal .dm writer (test-only) ──
-// fields: [{ name, type:'N'|'A', width?, constant? }]; rows: array of objects.
+// fields: [{ name, type:'N'|'A', width?, constant?, longName? }]; rows: objects.
+// `longName` (EP only, ≤24 chars) writes the extended-name encoding: legacy 8-char
+// prefix in words 0–1 low halves, chars 9–24 in the high halves + word 5, flagged
+// by "LONG" in the type word's high half (see dm-reader-long-field-names.md §7).
 export function makeDM(fields, rows, { precision = 'sp', byteOrder = 'le' } = {}) {
   const ws = precision === 'ep' ? 8 : 4;
   const ps = precision === 'ep' ? 4096 : 2048;
@@ -16,7 +19,7 @@ export function makeDM(fields, rows, { precision = 'sp', byteOrder = 'le' } = {}
     const words = f.type === 'A' ? (f.width || 4) / 4 : 1;
     for (let w = 0; w < words; w++) {
       const isConst = f.constant !== undefined;
-      entries.push({ name: f.name, type: f.type, sw: isConst ? 0 : sw + w, wordno: w + 1, def: f.constant, fieldWord: w });
+      entries.push({ name: f.name, type: f.type, sw: isConst ? 0 : sw + w, wordno: w + 1, def: f.constant, fieldWord: w, longName: w === 0 ? f.longName : undefined });
     }
     if (f.constant === undefined) sw += words;
   }
@@ -44,6 +47,12 @@ export function makeDM(fields, rows, { precision = 'sp', byteOrder = 'le' } = {}
     const o = fieldStart + i * fieldSize;
     setText(o, e.name, 2);
     setText(o + ws * 2, e.type, 1);
+    if (e.longName && precision === 'ep') {                // extended-name encoding (§7)
+      const p = e.longName.slice(0, 24).padEnd(24, ' ');
+      const put = [[0, 0], [ws, 4], [4, 8], [ws + 4, 12], [ws * 5, 16], [ws * 5 + 4, 20]];
+      for (const [pos, c] of put) for (let b = 0; b < 4; b++) dv.setUint8(o + pos + b, p.charCodeAt(c + b));
+      for (let b = 0; b < 4; b++) dv.setUint8(o + ws * 2 + 4 + b, [0x4C, 0x4F, 0x4E, 0x47][b]);  // "LONG"
+    }
     setNum(o + ws * 3, e.sw);
     setNum(o + ws * 4, e.wordno);
     let def = 0;
@@ -58,7 +67,7 @@ export function makeDM(fields, rows, { precision = 'sp', byteOrder = 'le' } = {}
     const recStart = ps * (1 + page) + recInPage * maxLen * ws;
     for (const e of stored) {
       const o = recStart + (e.sw - 1) * ws;
-      const val = row[e.name];
+      const val = e.longName !== undefined && e.longName in row ? row[e.longName] : row[e.name];
       if (e.type === 'A') { const chunk = String(val ?? '').slice(e.fieldWord * 4, e.fieldWord * 4 + 4); for (let b = 0; b < 4; b++) dv.setUint8(o + b, b < chunk.length ? chunk.charCodeAt(b) : 32); }
       else setNum(o, val == null ? -1e30 : val);
     }

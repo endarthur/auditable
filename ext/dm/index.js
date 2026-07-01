@@ -41,6 +41,32 @@ function readText(dv, off, nWords, ws) {
   return s.trim();
 }
 
+// Recover an EP extended field name (>8, up to 24 chars), or null if the entry
+// isn't flagged long. EP-only: SP's 4-byte words have no high half. Leapfrog and
+// other modern exporters hide chars 9–24 in bytes a legacy 8-char reader skips,
+// flagged by ASCII "LONG" in the high half of the type word — so old readers
+// still see a valid 8-char name (the encoding is purely additive). Chars 1–8 =
+// low halves of words 0–1; 9–16 = their high halves; 17–24 = word 5 (low then
+// high). Internal spaces kept; trailing pad stripped. Reverse-engineered from
+// real Leapfrog EP exports (independent byte observation), not from Datamine
+// copyright material. See SPEC §3.2.1.
+function readLongName(dv, o, ws) {
+  if (ws !== 8) return null;                              // EP-only mechanism
+  if (o + ws * 5 + 8 > dv.byteLength) return null;        // truncated buffer → legacy path
+  const flag = o + ws * 2 + 4;                            // high half of the type word
+  const LONG = [0x4C, 0x4F, 0x4E, 0x47];                  // "LONG"
+  for (let b = 0; b < 4; b++) if (dv.getUint8(flag + b) !== LONG[b]) return null;
+  const segs = [o, o + ws, o + 4, o + ws + 4, o + ws * 5, o + ws * 5 + 4];
+  //           low(w0) low(w1) high(w0) high(w1) low(w5)   high(w5)
+  let s = '';
+  for (const base of segs)
+    for (let b = 0; b < 4; b++) {
+      const c = dv.getUint8(base + b);
+      s += (c >= 32 && c < 127) ? String.fromCharCode(c) : ' ';
+    }
+  return s.replace(/\s+$/, '') || null;                   // strip trailing pad, keep internal spaces
+}
+
 const FMTS = [['sp', 'le'], ['sp', 'be'], ['ep', 'le'], ['ep', 'be']];
 const wordSize = (p) => (p === 'ep' ? 8 : 4);
 const pageSize = (p) => (p === 'ep' ? 4096 : 2048);
@@ -98,7 +124,7 @@ function parseHeader(bytes, fmt) {
     const o = fieldStart + i * fieldSize;
     if (o + fieldSize > ps) break;                                   // single-page DD (spec §3.2)
     raw.push({
-      name: readText(dv, o, 2, ws),
+      name: readLongName(dv, o, ws) ?? readText(dv, o, 2, ws),   // §3.2.1 EP long names, else legacy 8-char
       type: (readText(dv, o + ws * 2, 1, ws).charAt(0) || 'N').toUpperCase(),
       sw: Math.round(readNum(o + ws * 3)),
       wordno: Math.round(readNum(o + ws * 4)),
