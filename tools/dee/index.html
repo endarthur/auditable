@@ -101,9 +101,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg0); color: var(
 
 <script>
 const _grid = (function() {
-// @gcu/grid — built from src/
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/grid — Regular block-model grid utilities: geometry (index/flat conversion, centroids, rotation), selections (masks, boolean ops), compacting, operations (map, reduce, histogram, grade-tonnage), spatial queries (slices, shells, regridding).
 
-// ── geometry.js ──
+// ── src/geometry.js ──
 
 // @gcu/grid — geometry: index conversion, coordinate computation, grid properties
 
@@ -388,7 +389,7 @@ function subgrid(g, ranges) {
   return { gridDef: newGrid, parentIndices, childIndices };
 }
 
-// ── selection.js ──
+// ── src/selection.js ──
 
 // @gcu/grid — selection: masks, scatter/gather, surface helpers
 
@@ -584,7 +585,7 @@ function maskNotNaN(variable) {
   return mask;
 }
 
-// ── compact.js ──
+// ── src/compact.js ──
 
 // @gcu/grid — compact variables: alignment, reduction, domain operations
 
@@ -803,7 +804,7 @@ function domainFromCategorical(categorical, code) {
   return new Int32Array(result);
 }
 
-// ── operations.js ──
+// ── src/operations.js ──
 
 // @gcu/grid — variable operations: map, stats, histogram, grade-tonnage, swath plots
 
@@ -1039,7 +1040,7 @@ function swathPlot(variable, gridDef, opts) {
   return { positions, values, counts };
 }
 
-// ── spatial.js ──
+// ── src/spatial.js ──
 
 // @gcu/grid — spatial queries: columns, slices, shells, morphology, nearest, reblocking
 
@@ -1454,20 +1455,19 @@ function regrid(sourceG, sourceVar, targetG, opts) {
   return out;
 }
 
-// ── exports ──
+// ── src/main.js ──
 
-return { // geometry
-  ijk, flatIndex, isValid, ijkBatch, flatIndexBatch, centroid, corners, centroids, centroidsSubset, locate, locateBatch, nBlocks, blockVolume, boundingBox, isCompatible, subgrid, _rotMatrix, _applyRot, _invertRot, // selection
-  maskToIndices, indicesToMask, union, intersection, difference, invert, maskCount, equal, scatter, gather, take, reindex, maskAbove, maskBelow, maskBetween, maskFromClassification, maskWhere, maskAboveValue, maskBelowValue, maskEqualTo, maskInRange, maskNotNaN, // compact
-  align, reduce, dilute, sum, mean, min, max, countPresent, unionIndices, intersectionIndices, differenceIndices, restrict, dominantDomain, domainFromCategorical, // operations
-  map, mapMasked, combine, stats, histogram, weightedStats, gradeTonnage, swathPlot, // spatial
-  column, sliceI, sliceJ, sliceK, slicePlane, shellGrid, erodeGrid, dilateGrid, nearestPopulated, nearestPopulatedBatch, upscale, downscale, regrid };
+
+
+
+return { ijk, flatIndex, isValid, ijkBatch, flatIndexBatch, _rotMatrix, _applyRot, _invertRot, centroid, corners, centroids, centroidsSubset, locate, locateBatch, nBlocks, blockVolume, boundingBox, isCompatible, subgrid, maskToIndices, indicesToMask, union, intersection, difference, invert, maskCount, equal, scatter, gather, take, reindex, maskAbove, maskBelow, maskBetween, maskFromClassification, maskWhere, maskAboveValue, maskBelowValue, maskEqualTo, maskInRange, maskNotNaN, align, reduce, dilute, sum, mean, min, max, countPresent, unionIndices, intersectionIndices, differenceIndices, restrict, dominantDomain, domainFromCategorical, map, mapMasked, combine, stats, histogram, weightedStats, gradeTonnage, swathPlot, column, sliceI, sliceJ, sliceK, slicePlane, shell, erode, dilate, shellGrid, erodeGrid, dilateGrid, nearestPopulated, nearestPopulatedBatch, upscale, downscale, regrid };
 })();
 
 const _voxmesh = (function() {
-// @gcu/voxmesh — built from src/
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/voxmesh — Greedy voxel meshing for block models and volumetric data. Binning, bucket aggregation, chunked meshing, convenience helpers. Produces triangle meshes for rendering.
 
-// ── bin.js ──
+// ── src/bin.js ──
 
 // @gcu/voxmesh — binning: discretize continuous values into bin IDs
 
@@ -1520,7 +1520,7 @@ function discretize(values, breaks) {
   return out;
 }
 
-// ── chunk.js ──
+// ── src/chunk.js ──
 
 // @gcu/voxmesh — chunking: spatial partitioning of grid into sub-ranges
 
@@ -1563,7 +1563,7 @@ function chunkRange(chunks, chunkIndex) {
   };
 }
 
-// ── bucket.js ──
+// ── src/bucket.js ──
 
 // @gcu/voxmesh — bucketing: collect populated blocks into per-chunk buckets + ghost cells
 
@@ -1646,7 +1646,7 @@ function addGhosts(chunks, buckets) {
   }
 }
 
-// ── mesh.js ──
+// ── src/mesh.js ──
 
 // @gcu/voxmesh — greedy mesher: face culling + quad merging
 
@@ -2006,12 +2006,9 @@ function meshSection(gridDef, compactVar, binIds, plane) {
   };
 }
 
-// ── convenience.js ──
+// ── src/convenience.js ──
 
 // @gcu/voxmesh — convenience wrappers and incremental updates
-
-
-
 
 
 function prepare(gridDef, compactVar, opts) {
@@ -2098,14 +2095,12 @@ function rebin(prepared, opts) {
   return { affected: meshes, meshes, binIds: newBinIds, breaks };
 }
 
-// ── exports ──
+// ── src/main.js ──
 
-return { // binning
-  binBreaks, binQuantiles, discretize, // chunking
-  chunk, chunkId, chunkRange, // bucketing
-  bucket, addGhosts, // meshing
-  meshChunk, meshAll, meshSection, // convenience
-  prepare, diffBins, rebin };
+
+
+
+return { binBreaks, binQuantiles, discretize, chunk, chunkId, chunkRange, bucket, addGhosts, meshChunk, meshAll, meshSection, prepare, diffBins, rebin };
 })();
 
 // @gcu/dee — built from src/
@@ -2291,6 +2286,40 @@ function colorBar(cmap, opts = {}) {
   };
 
   return bar;
+}
+
+// ── render-color floor for dark stored colours ──
+//
+// File formats (Leapfrog `.lfm`, sometimes others) store some classes as
+// pure black `(0,0,0)`. Under a shaded material on a dark background
+// that disappears entirely. Keep the file's stored RGB for swatches /
+// labels / round-trip exports, but substitute a slight-tinted charcoal
+// at render time when the luminance falls below a threshold.
+//
+// `rgb` accepts {r,g,b} 0-255, [r,g,b] 0-255, or a number 0xRRGGBB.
+// Returns the same shape it received. Luminance uses Rec. 601 weights
+// (perceptually closer to human vision than a flat average).
+function floorRenderColor(rgb, opts = {}) {
+  const threshold = opts.threshold ?? 40;
+  const substitute = opts.substitute ?? [82, 82, 92]; // slight blue tint
+  let r, g, b, returnShape;
+  if (typeof rgb === 'number') {
+    r = (rgb >> 16) & 0xff; g = (rgb >> 8) & 0xff; b = rgb & 0xff;
+    returnShape = 'number';
+  } else if (Array.isArray(rgb)) {
+    [r, g, b] = rgb;
+    returnShape = 'array';
+  } else {
+    r = rgb.r; g = rgb.g; b = rgb.b;
+    returnShape = 'object';
+  }
+  const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+  if (lum < threshold) {
+    [r, g, b] = substitute;
+  }
+  if (returnShape === 'number') return ((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff);
+  if (returnShape === 'array') return [r, g, b];
+  return { r, g, b };
 }
 
 // ── layers.js ──
@@ -2702,12 +2731,35 @@ function addSurfaceLayer(dee, name, opts = {}) {
     side: opts.doubleSided !== false ? THREE.DoubleSide : THREE.FrontSide,
     wireframe: !!opts.wireframe,
     clippingPlanes: opts.clippingPlanes || dee.clippingPlanes,
+    // Polygon offset for adjacent meshes sharing contact surfaces (e.g.
+    // nested geological domains). Caller passes an integer rank; smaller
+    // rank wins at contacts, matching Leapfrog's "cutting unit owns the
+    // contact" convention. `opts.polygonOffset` of 0 still enables the
+    // mechanism, which is the right thing — explicit "I want this on"
+    // without bias relative to others at rank 0.
+    polygonOffset: opts.polygonOffset != null,
+    polygonOffsetFactor: opts.polygonOffset != null ? 1 : 0,
+    polygonOffsetUnits: opts.polygonOffset != null ? opts.polygonOffset * 2 : 0,
   });
 
   const surfGroup = new THREE.Group();
-  surfGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
+  // localCoords: caller has already subtracted dee.origin (or its own
+  // centroid) from the vertices in F64 — skipping the group transform
+  // preserves the f32 downcast precision they paid for. Without this
+  // option, addSurface assumes absolute world coordinates and recentres
+  // here via group translation; the f32 storage then quantises at the
+  // raw scale (~0.5m at 5M-northing UTM). LFM/OMF adapters set
+  // localCoords: true after recentring in F64.
+  if (!opts.localCoords) {
+    surfGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
+  }
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = name;
+  // Three.js sorts transparent renderables by renderOrder ascending —
+  // larger objects should be rendered first (negative renderOrder) so
+  // inner volumes blend on top. The caller knows the ordering criterion
+  // (e.g. mesh volume for nested geological domains); we just plumb it.
+  if (opts.renderOrder != null) mesh.renderOrder = opts.renderOrder;
   if (opts.pickable === false) mesh._noPick = true;
   surfGroup.add(mesh);
   dee.scene.add(surfGroup);
@@ -3467,8 +3519,37 @@ function create(container, opts = {}) {
     renderer.render(scene, _activeCamera);
   }
 
-  // controls change → dirty
-  controls._controls.addEventListener('change', () => markDirty());
+  // controls change → dirty + adaptive frustum recompute
+  controls._controls.addEventListener('change', () => {
+    _updateFrustum();
+    markDirty();
+  });
+
+  // Adaptive near/far based on current orbit radius. A 24-bit depth
+  // buffer at perspective projection gives precision ~ (far² / (near ·
+  // 2²⁴)) at the far plane — with a hardcoded (0.1, 100000) and a
+  // ~1km scene, you get metre-scale z-fighting at far distances.
+  // Recompute on every camera change keeps depth precision at roughly
+  // centimetre at the far end across all zoom levels.
+  //
+  // Orbit radius = distance(camera, target). Floor at 1 so a target-
+  // coincident camera doesn't collapse the frustum.
+  function _updateFrustum() {
+    const r = Math.max(1, _activeCamera.position.distanceTo(controls._controls.target));
+    const near = Math.max(0.1, r * 0.01);
+    const far = r * 100;
+    if (camera.near !== near || camera.far !== far) {
+      camera.near = near; camera.far = far;
+      camera.updateProjectionMatrix();
+    }
+    if (_orthoCamera.near !== near || _orthoCamera.far !== far) {
+      _orthoCamera.near = near; _orthoCamera.far = far;
+      _orthoCamera.updateProjectionMatrix();
+    }
+  }
+  // Initial pass after construction; fitAll() etc. will retrigger via
+  // the 'change' listener above.
+  _updateFrustum();
 
   // resize
   const _resizeObs = new ResizeObserver(() => {
@@ -3721,10 +3802,10 @@ function _addClipPlane(dee, opts) { return addClipPlane(dee, opts); }
 // ── exports ──
 
 
-// PEEL — Depth Peeling Surface Intersection Engine
-// Auto-generated from ext/peel/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/peel — Depth-peeling surface intersection engine for triangle meshes. CPU + WebGPU evaluators with BVH acceleration and optional Web Worker offload. Designed for geological section construction and similar column-query workloads.
 
-// -- bvh.js --
+// ── src/bvh.js ──
 
 // BVH (Bounding Volume Hierarchy) construction for triangle meshes
 // Flat array layout for GPU-friendly traversal
@@ -3904,7 +3985,7 @@ function partialSort(vertices, triangles, indices, lo, hi, mid, axis) {
   else if (store > mid) partialSort(vertices, triangles, indices, lo, store, mid, axis);
 }
 
-// -- cpu.js --
+// ── src/cpu.js ──
 
 // CPU depth peeling evaluation
 // Moller-Trumbore ray-triangle intersection + BVH ray traversal + interval classification
@@ -4215,7 +4296,7 @@ async function evaluateCPU(vertices, triangles, bvhNodes, triIndices, blockModel
   return { flags, overflow: overflowCount };
 }
 
-// -- gpu.js --
+// ── src/gpu.js ──
 
 // WebGPU depth peeling evaluation
 
@@ -4691,12 +4772,10 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
   return { flags, overflow };
 }
 
-// -- worker.js --
+// ── src/worker.js ──
 
 // Web Worker for off-main-thread depth peeling evaluation (CPU and GPU paths)
 // Worker blob inlines all evaluation code via Function.toString() + JSON.stringify()
-
-
 
 
 function createPeelWorker(opts = {}) {
@@ -4899,14 +4978,243 @@ function evaluateWorker(worker, meshName, blockModel, opts = {}) {
   });
 }
 
-// -- main.js --
+// ── ../frame/src/frame.js ──
+
+// @gcu/frame — the coordinate-frame contract for the whole GCU geometry stack.
+//
+// Geological work lives at projected-coordinate magnitudes (UTM easting ~5e5,
+// northing ~7.7e6, RL ~1e3). Two failures follow and share one cause — doing math
+// and rendering directly in those large numbers:
+//   • the float32 wall — at northing 7.7e6 a 32-bit float resolves to ~1 m, so any
+//     GPU/Float32Array path jitters and z-fights;
+//   • catastrophic cancellation — derived quantities (lengths, cross products,
+//     intersection params) lose relative precision, and a fixed ε like 1e-9 is
+//     meaningless against operands of magnitude 1e6.
+// The fix is to work in a small-magnitude LOCAL frame and keep the offset to WORLD
+// as explicit, inspectable metadata. This module is that contract — a tiny value
+// type plus pure functions, zero-dependency, that every coordinate-bearing package
+// can speak.
+//
+// A Frame has two faculties with different reach:
+//   1. numerical framing — the world↔local offset (`origin`), for the precision path
+//      (dee/voxmesh/groma/regula/dxf/moncad compute in it; it gates every F32 downcast);
+//   2. coordinate identity — the `crs` descriptor + `units`, universal provenance so
+//      "what do these world numbers mean" is never silent.
+//
+// HARD BOUNDARY: frame NAMES a CRS, it never CHANGES one. Reprojection (datum shifts,
+// projection changes) is a geodetic operation that lives elsewhere (spinifex/proj4
+// today, a future @gcu/proj if it ever becomes a stack primitive). Crossing CRS here
+// throws — see `delta`. A working offset is a translation for numerical convenience,
+// not a reprojection.
+//
+// Points and origins are ARRAYS — [x, y] or [x, y, z] — matching the rest of the tree
+// (dee.origin, grid.origin, flat Float64/Float32 vertex buffers), not the {x,y,z}
+// objects the prose spec sketches. The frame is pure translation: rotation/scale are
+// deliberately out of scope (a block model's own dip/rake orientation is intrinsic
+// model geometry, a separate concern from the local frame — never conflated).
+
+// A Frame value. `origin` is the WORLD coordinate of the local origin, so
+// `local = world − origin`. `crs` is an optional projection descriptor (e.g. an EPSG
+// code) — null means "unstated", which opts out of cross-frame CRS checking. `units`
+// defaults to metres.
+function makeFrame({ origin, crs = null, units = 'm' } = {}) {
+  const o = origin ? Array.from(origin, Number) : [0, 0, 0];
+  while (o.length < 3) o.push(0);
+  return { origin: o.slice(0, 3), crs, units };
+}
+
+// The identity frame: origin at world zero. World == local. Useful as a default and
+// as the "already in world coordinates" marker.
+const WORLD = makeFrame({ origin: [0, 0, 0] });
+
+// Normalise a CRS code for IDENTITY comparison: uppercase + strip a leading `EPSG:`, so
+// `'EPSG:31983'`, `'epsg:31983'`, and `'31983'` all compare equal. It lives HERE, not in a
+// geo/reprojection layer: frame is zero-dep and sits *under* any such layer, so importing a
+// helper from geo would invert the dependency. A reprojection layer's richer code resolution
+// is a superset built on this. Comparison only — the stored `crs` keeps its original spelling.
+function canonCrs(code) {
+  return code == null ? null : String(code).trim().toUpperCase().replace(/^EPSG:/, '');
+}
+
+// Two frames describe the same projection iff their (canonicalised) CRS agree (a null CRS on
+// either side is a wildcard — you can't assert a mismatch you never declared) and their units
+// match. This is the gate that keeps a frame shift from masquerading as a reprojection.
+function sameProjection(a, b) {
+  const ca = canonCrs(a.crs), cb = canonCrs(b.crs);
+  if (ca != null && cb != null && ca !== cb) return false;
+  return (a.units ?? 'm') === (b.units ?? 'm');
+}
+
+// Full structural equality: same origin, (canonicalised) CRS, and units.
+function frameEq(a, b) {
+  return canonCrs(a.crs) === canonCrs(b.crs) && (a.units ?? 'm') === (b.units ?? 'm') &&
+    a.origin[0] === b.origin[0] && a.origin[1] === b.origin[1] && a.origin[2] === b.origin[2];
+}
+
+// ── Point transforms (single [x,y] or [x,y,z]) ──────────────────────────────────
+
+// World → local: subtract the origin component-wise. Round-trips losslessly with
+// `toWorld` at f64 (invariant 3) — exact when the origin is chosen near the data, the
+// intended use.
+function toLocal(worldPt, frame) {
+  const o = frame.origin, r = new Array(worldPt.length);
+  for (let i = 0; i < worldPt.length; i++) r[i] = worldPt[i] - (o[i] || 0);
+  return r;
+}
+
+// Local → world: add the origin back. The inverse of `toLocal`.
+function toWorld(localPt, frame) {
+  const o = frame.origin, r = new Array(localPt.length);
+  for (let i = 0; i < localPt.length; i++) r[i] = localPt[i] + (o[i] || 0);
+  return r;
+}
+
+// ── Bulk buffer transforms (flat x,y,z,x,y,z,… arrays) ──────────────────────────
+// These consolidate the hand-rolled F64-recentre loops currently duplicated in the
+// dee importers (lfm/msh adapters): subtract the origin at full f64 precision and hand
+// the small local magnitudes to the F32/GPU downcast. The one hard rule of §5 —
+// anything bound for a Float32Array passes through the local frame FIRST — is this
+// call. Returns a NEW Float64Array; input is never mutated.
+
+function toLocalCoords(coords, frame, { stride = 3 } = {}) {
+  const o = frame.origin, out = new Float64Array(coords.length);
+  for (let i = 0; i < coords.length; i += stride)
+    for (let j = 0; j < stride; j++) out[i + j] = coords[i + j] - (o[j] || 0);
+  return out;
+}
+
+function toWorldCoords(coords, frame, { stride = 3 } = {}) {
+  const o = frame.origin, out = new Float64Array(coords.length);
+  for (let i = 0; i < coords.length; i += stride)
+    for (let j = 0; j < stride; j++) out[i + j] = coords[i + j] + (o[j] || 0);
+  return out;
+}
+
+// ── Choosing an origin ──────────────────────────────────────────────────────────
+
+// Pick a sticky origin from world-coordinate bounds. Default strategy 'centroid'
+// (bbox centre); 'floor' keeps locals strictly positive (handy across tiled exports).
+// The result is rounded to `round` so the anchor reads as a "nice" number in logs and
+// diffs rather than an arbitrary fractional point. bounds = { min:[…], max:[…] }.
+// The origin is chosen ONCE per document/session and is sticky — recomputing it
+// per-operation drifts the frame and invalidates cached geometry (§4).
+function originFromBounds(bounds, { round = 1, strategy = 'centroid' } = {}) {
+  const { min, max } = bounds, n = Math.min(min.length, max.length), o = [];
+  for (let i = 0; i < n; i++) {
+    const c = strategy === 'floor' ? min[i] : (min[i] + max[i]) / 2;
+    o.push(round ? Math.round(c / round) * round : c);
+  }
+  while (o.length < 3) o.push(0);
+  return o.slice(0, 3);
+}
+
+// Convenience: a Frame straight from bounds (origin via `originFromBounds`, carrying
+// the given CRS/units).
+function frameFromBounds(bounds, opts = {}) {
+  return makeFrame({
+    origin: originFromBounds(bounds, opts),
+    crs: opts.crs ?? null,
+    units: opts.units ?? 'm',
+  });
+}
+
+// ── Frame-relative tolerance ────────────────────────────────────────────────────
+
+// A tolerance scaled to the working extent, so coincidence / parallel / on-curve tests
+// stay meaningful at any magnitude — a fixed absolute 1e-9 is meaningless against UTM
+// operands, the same failure class as the original silent-shift bug. `extent` is the
+// working span (e.g. the local bbox diagonal); `rel` is the relative floor. Feeds the
+// @gcu/regula tolerance model. Note exact sign/orientation tests stay EXACT (groma
+// predicates) — this ε is only for constructed quantities.
+function extentTolerance(frame, extent, { rel = 1e-9 } = {}) {
+  const e = Math.abs(extent) || 1;
+  return { eps: rel * e, rel, extent: e, units: frame.units };
+}
+
+// ── Frame ↔ frame ───────────────────────────────────────────────────────────────
+
+// The translation to add to a point expressed local-in `from` to re-express it
+// local-in `to`:  localTo = localFrom + (fromOrigin − toOrigin). Throws if the frames
+// describe different projections — moving between those is a reprojection, which frame
+// does not perform (the hard boundary).
+function delta(from, to) {
+  if (!sameProjection(from, to)) {
+    throw new Error(
+      `frame.delta: frames differ in CRS/units (${from.crs}/${from.units} → ${to.crs}/${to.units}); ` +
+      'that is a reprojection, which @gcu/frame does not perform',
+    );
+  }
+  return [
+    from.origin[0] - to.origin[0],
+    from.origin[1] - to.origin[1],
+    from.origin[2] - to.origin[2],
+  ];
+}
+
+// Declare an artifact's frame WITHOUT moving its coordinates (invariant 2: a coordinate
+// expressed in a local frame always carries an inspectable origin). Shallow, pure —
+// returns a copy with `.frame` stamped. Re-EXPRESSING coordinates into a different
+// frame is `rebaseCoords`, a separate and logged transform.
+function withFrame(artifact, frame) {
+  return { ...artifact, frame };
+}
+
+// Re-express a flat coordinate buffer from one frame into another. Returns BOTH the new
+// Float64Array and a provenance record — rebasing is an explicit, accountable transform
+// (invariants 4/5), so you cannot get the moved coordinates without the record of what
+// moved them (the same "numbers plus an account of what I did to them" discipline as
+// the DXF contract). Throws via `delta` on a CRS/units mismatch. Pure; input untouched.
+function rebaseCoords(coords, from, to, { stride = 3 } = {}) {
+  const d = delta(from, to);
+  const out = new Float64Array(coords.length);
+  for (let i = 0; i < coords.length; i += stride)
+    for (let j = 0; j < stride; j++) out[i + j] = coords[i + j] + (d[j] || 0);
+  return { coords: out, record: rebaseRecord(from, to, d) };
+}
+
+// A provenance entry for a rebase — what the caller pushes onto its frame log.
+function rebaseRecord(from, to, d) {
+  return {
+    op: 'rebase',
+    from: { origin: [...from.origin], crs: from.crs, units: from.units },
+    to: { origin: [...to.origin], crs: to.crs, units: to.units },
+    delta: d,
+  };
+}
+
+// ── src/main.js ──
 
 // PEEL — Depth Peeling Surface Intersection Engine
 // Main API: Peel.create({ device?, worker?, gpu? }), setMesh(), evaluate()
 
 
+// ── Frame-awareness (@gcu/frame) ────────────────────────────────────────────────
+// Geological meshes live at projected magnitudes (UTM northing ~7.7e6). Handing
+// those straight to a Float32Array/WGSL f32 kernel hits the float32 wall — ~1 m
+// resolution at 7.7e6, so the BVH slab tests and ray-triangle math degrade. A frame
+// rebases world → a small-magnitude local origin at full f64 BEFORE the f32 downcast.
+// Pass an @gcu/frame to setMesh() and evaluate(); omit it for verbatim legacy behaviour.
+// Results (proportions/flags, per block index) are translation-invariant — only the
+// geometry inputs are rebased, nothing to map back.
 
+// World verts (f64-worthy) → local-frame Float32Array. The one hard rule of frame §5:
+// anything bound for a Float32Array passes through the local frame first.
+function frameLocalVerts(vertices, frame) {
+  return frame ? Float32Array.from(toLocalCoords(vertices, frame, { stride: 3 })) : vertices;
+}
 
+// Rebase a block model's world origin into the mesh's local frame, guarding that the
+// block frame and the mesh frame are the SAME frame — frame rebases, never reprojects.
+function frameBlockModel(blockModel, evalFrame, meshFrame, meshName) {
+  if (!meshFrame && !evalFrame) return blockModel;                       // legacy path, verbatim
+  if (meshFrame && !evalFrame)
+    throw new Error(`peel: mesh '${meshName}' was framed; evaluate needs the same frame`);
+  if (!meshFrame && evalFrame)
+    throw new Error(`peel: evaluate given a frame but mesh '${meshName}' is unframed`);
+  if (!frameEq(evalFrame, meshFrame))
+    throw new Error(`peel: block-model frame ≠ mesh '${meshName}' frame (frame rebases, never reprojects)`);
+  return { ...blockModel, origin: toLocal(blockModel.origin, evalFrame) };
+}
 
 class Peel {
   constructor() {
@@ -4941,10 +5249,12 @@ class Peel {
   // Load a mesh. Builds BVH on main thread, sends to worker if active.
   setMesh(vertices, triangles, opts = {}) {
     const name = opts.name || '_default';
-    const bvh = buildBVH(vertices, triangles, {
+    const frame = opts.frame || null;
+    const verts = frameLocalVerts(vertices, frame);            // world → local f32 (frame-aware)
+    const bvh = buildBVH(verts, triangles, {
       maxLeafSize: opts.maxLeafSize || 4,
     });
-    const mesh = { vertices, triangles, bvh };
+    const mesh = { vertices: verts, triangles, bvh, frame };
     this._meshes.set(name, mesh);
     if (name === '_default' || this._meshes.size === 1) {
       this._defaultMesh = mesh;
@@ -4954,7 +5264,7 @@ class Peel {
       this._worker.postMessage({
         type: 'setMesh',
         name,
-        vertices: new Float32Array(vertices),
+        vertices: new Float32Array(verts),
         triangles: new Uint32Array(triangles),
         bvhNodes: new Float32Array(bvh.nodes),
         triIndices: new Uint32Array(bvh.triIndices),
@@ -4982,19 +5292,22 @@ class Peel {
     const mesh = this._meshes.get(meshName) || this._defaultMesh;
     if (!mesh) throw new Error('No mesh loaded. Call setMesh() first.');
 
+    const { frame: evalFrame = null, ...restOpts } = opts;
+    const bm = frameBlockModel(blockModel, evalFrame, mesh.frame, meshName);
+
     if (this._worker) {
-      return evaluateWorker(this._worker, meshName, blockModel, opts);
+      return evaluateWorker(this._worker, meshName, bm, restOpts);
     }
 
     const { vertices, triangles, bvh } = mesh;
 
     if (this._gpu) {
       return evaluateGPU(this._gpu, vertices, triangles,
-        bvh.nodes, bvh.triIndices, blockModel, opts);
+        bvh.nodes, bvh.triIndices, bm, restOpts);
     }
 
     return evaluateCPU(vertices, triangles,
-      bvh.nodes, bvh.triIndices, blockModel, opts);
+      bvh.nodes, bvh.triIndices, bm, restOpts);
   }
 
   // Evaluate multiple named surfaces against the same block model
@@ -5020,6 +5333,9 @@ class Peel {
     }
   }
 }
+
+// CPU/geometry helpers — part of the curated public surface (matches the old footer).
+
 
 
 // -- state.js --

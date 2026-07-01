@@ -116,6 +116,33 @@ Low-level: build a BVH directly (used internally by `setMesh`). Returns `{ nodes
 
 ---
 
+## Frame-aware coordinates (`@gcu/frame`)
+
+Geological meshes live at projected magnitudes (UTM northing ~7.7×10⁶), where the
+`Float32Array`/WGSL `f32` path resolves to ~0.5–1 m — the BVH slab tests and solid-angle
+math degrade. Pass an [`@gcu/frame`](../frame/) to `setMesh` and `evaluate` and the engine
+rebases world → a small-magnitude local origin **at full f64, before the f32 downcast**:
+
+```js
+import { makeFrame } from '@gcu/frame';
+const frame = makeFrame({ origin: [600000, 7700000, 400], crs: 'EPSG:31983', units: 'm' });
+
+w.setMesh(worldVertsF64, tris, { name: 'lens', frame });       // verts rebased before the BVH build
+const { flags } = await w.evaluate(
+  { origin: [600000, 7700000, 400], size: [10,10,10], count: [nx,ny,nz] },
+  { frame, threshold: 0.5 },                                   // block origin rebased too
+);
+```
+
+- Results (winding numbers/`flags`, per block index) are **translation-invariant** — only the
+  geometry inputs are rebased; nothing maps back.
+- Pass world verts as `Float64Array` on the frame path (the whole point is the f64 subtract);
+  omit the frame for **verbatim legacy behaviour** (`Float32Array` world in, no rebase).
+- `evaluate`/`evaluateMultiple` **require the block model and every surface share one frame** —
+  a missing or mismatched frame throws (frame rebases, it never reprojects; CRS/units must match).
+
+---
+
 ## Architecture
 
 ```
