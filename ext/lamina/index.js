@@ -930,7 +930,8 @@ async function scanGroupBy(source, { groupCol, valueCols, weightCol = null, data
  */
 async function scanGradeTonnage(source, { groupCol = null, gradeCols = [], volume = { const: 1 }, density = { const: 1 }, proportion = { const: 1 }, dataStart = 0, decimal = '.', rows = null, maxGroups = 1000, onProgress, signal } = {}) {
   const ng = gradeCols.length;
-  const factor = (spec, fields) => (spec && spec.col != null ? parseNum(fields[spec.col], decimal) : (spec ? spec.const : 1));
+  // each factor: {fn:(fields)=>num} (a compiled expr) | {col:idx} | {const:num}
+  const factor = (spec, fields) => (spec && spec.fn ? spec.fn(fields) : (spec && spec.col != null ? parseNum(fields[spec.col], decimal) : (spec ? spec.const : 1)));
   const mkAcc = () => ({ count: 0, tonnes: 0, grades: Array.from({ length: ng }, () => ({ msum: 0, wt: 0 })) });
   const groups = new Map(), total = mkAcc();
   let truncated = false;

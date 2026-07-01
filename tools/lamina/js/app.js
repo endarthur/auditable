@@ -2913,16 +2913,15 @@ let _gtConfig = null, _gtResult = null, _gtSort = { col: 'tonnes', dir: -1 };
 function openGradeTonnage() {
   const c = current; if (!c || c.d.kind !== 'delimited') return;
   const num = c.schema.map((s, i) => ({ s, i })).filter((o) => o.s.type === 'number');
-  const byName = (re) => { const o = num.find((x) => re.test(x.s.name)); return o ? o.i : null; };
-  const dens = byName(/dens|(^|_)sg($|_)/i);
-  const prop = byName(/(^|_)ore|prop|ore.?pct|ore.?%/i);
+  const colName = (re) => { const s = c.schema.find((x) => re.test(x.name)); return s ? colRef(s.name) : null; };
+  const d3 = c.schema.filter((s) => /^d[xyz]$/i.test(s.name));   // block dims → volume = dx·dy·dz
   const firstCat = c.schema.findIndex((s) => s.type !== 'number');
   const grade = num.find((o) => !/^(id|x|y|z|dx|dy|dz|east|north|elev|rl|row)$/i.test(o.s.name));
-  _gtConfig = {
+  _gtConfig = {   // volume/density/proportion are now EXPRESSIONS (a column, a constant, or e.g. dx*dy*dz)
     group: firstCat >= 0 ? firstCat : null,
-    volume: { const: 1 },
-    density: dens != null ? { col: dens } : { const: 2.7 },
-    proportion: prop != null ? { col: prop } : { const: 1 },
+    volume: d3.length === 3 ? d3.map((s) => colRef(s.name)).join(' * ') : (colName(/vol/i) || '1'),
+    density: colName(/dens|(^|_)sg($|_)/i) || '2.7',
+    proportion: colName(/(^|_)ore|prop|ore.?pct/i) || '1',
     grades: [grade ? grade.i : (num[0] ? num[0].i : 0)],
   };
   _gtResult = null;
@@ -2931,21 +2930,15 @@ function openGradeTonnage() {
   $('#help').classList.add('show');
   paintGradeTonnage();
 }
-function gtFactor(f, cfg, cols) {   // a "column OR constant" control
-  const numOpts = cols.map((s, i) => s.type === 'number' ? `<option value="c${i}"${cfg.col === i ? ' selected' : ''}>${esc(s.name)}</option>` : '').join('');
-  const isC = cfg.col == null;
-  return `<span class="gt-factor" style="display:inline-flex;gap:5px;align-items:center">`
-    + `<select class="gt-src" data-f="${f}"><option value="const"${isC ? ' selected' : ''}>constant</option>${numOpts}</select>`
-    + `<input class="gt-const" data-f="${f}" type="number" step="any" value="${isC ? cfg.const : 1}" style="width:80px;${isC ? '' : 'display:none'}"></span>`;
-}
 function paintGradeTonnage() {
   const c = current; if (!c) return;
   const cols = c.schema;
   let h = '<div class="gb-form gt-form">';
   h += `<label>Group by <select id="gtGroup"><option value=""${_gtConfig.group == null ? ' selected' : ''}>— whole deposit —</option>${cols.map((s, i) => `<option value="${i}"${i === _gtConfig.group ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>`;
-  h += `<label>Volume ${gtFactor('volume', _gtConfig.volume, cols)}</label>`;
-  h += `<label>Density ${gtFactor('density', _gtConfig.density, cols)}</label>`;
-  h += `<label>Ore proportion ${gtFactor('proportion', _gtConfig.proportion, cols)}</label>`;
+  const exprInp = (f, ph) => `<input class="gt-expr" data-f="${f}" value="${esc(_gtConfig[f])}" placeholder="${ph}" spellcheck="false" autocomplete="off" style="width:150px;font-family:var(--mono)">`;
+  h += `<label>Volume ${exprInp('volume', 'e.g. dx*dy*dz')}</label>`;
+  h += `<label>Density ${exprInp('density', 'e.g. density or 2.7')}</label>`;
+  h += `<label>Ore proportion ${exprInp('proportion', 'e.g. ore_pct or 1')}</label>`;
   h += '<span class="gb-vals">';
   _gtConfig.grades.forEach((uc, gi) => { h += `<label class="gb-val">Grade <select class="gt-grade" data-gi="${gi}">${cols.map((s, i) => s.type === 'number' ? `<option value="${i}"${i === uc ? ' selected' : ''}>${esc(s.name)}</option>` : '').join('')}</select>${_gtConfig.grades.length > 1 ? `<button class="gt-rm" data-gi="${gi}" title="remove">✕</button>` : ''}</label>`; });
   h += '</span>';
@@ -2977,7 +2970,8 @@ function renderGTResult(c) {
   const fmtCell = (v, col) => v == null ? '' : col.txt ? esc(String(v)) : (col.k === 'tonnes' || col.k === 'blocks' || col.k[0] === 'm' ? fmtInt(v) : fmtN(v));
   let h = '<button id="gtCopy" class="sum-copy">copy all</button>';
   if (_gtResult.truncated) h += `<div style="color:var(--accent);font-size:11px;margin:4px 0">⚠ over 1000 groups — table truncated (total still covers all rows)</div>`;
-  h += `<div style="color:var(--dim);font-size:11px;margin:4px 0">tonnes = Σ(volume × density × ore proportion) · grade = tonnage-weighted mean · <i>name</i>·t = contained metal</div>`;
+  const cf = _gtResult.config;
+  h += `<div style="color:var(--dim);font-size:11px;margin:4px 0">tonnes = Σ(<code>${esc(cf.volExpr)}</code> × <code>${esc(cf.densExpr)}</code> × <code>${esc(cf.propExpr)}</code>) · grade = tonnage-weighted mean · <i>name</i>·t = contained metal</div>`;
   h += '<div style="overflow:auto;max-height:50vh;margin-top:4px"><table class="sum-tbl"><thead><tr>';
   for (const col of COLS) h += `<th data-k="${col.k}" class="${col.txt ? '' : 'num'}${_gtSort.col === col.k ? ' sorted' : ''}">${esc(col.label)}${_gtSort.col === col.k ? (_gtSort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
   h += '</tr></thead><tbody>';
@@ -2992,14 +2986,23 @@ function gtTSV(c) {
 }
 async function computeGradeTonnage() {
   const c = current; if (!c) return;
-  const cfg = { group: _gtConfig.group, grades: _gtConfig.grades.slice(), volume: _gtConfig.volume, density: _gtConfig.density, proportion: _gtConfig.proportion };
-  if (!cfg.grades.length) return;
+  if (!_gtConfig.grades.length) return;
+  let vol, dens, prop;
+  try {   // compile the volume/density/proportion expressions (a column, constant, or e.g. dx*dy*dz)
+    const mk = (label, s) => {
+      const v = validate(s, c.schema);
+      if (!v.ok) throw new Error(`${label}: ${friendlyError(v.errors, c.schema)}`);
+      return { fn: compile(s, c.schema, { decimal: c.d.decimal }) };
+    };
+    vol = mk('Volume', _gtConfig.volume); dens = mk('Density', _gtConfig.density); prop = mk('Ore proportion', _gtConfig.proportion);
+  } catch (e) { const r = $('#gtResults'); if (r) r.innerHTML = `<div style="color:var(--fault);margin-top:8px">${esc(e.message)}</div>`; return; }
+  const cfg = { group: _gtConfig.group, grades: _gtConfig.grades.slice(), volExpr: _gtConfig.volume, densExpr: _gtConfig.density, propExpr: _gtConfig.proportion };
   const ac = newFooterScan();
   const rEl = $('#gtResults'); if (rEl) rEl.innerHTML = '<div style="color:#777;margin-top:8px">computing… <span id="scanPct">0%</span></div>';
   $('#meta').textContent = 'grade–tonnage…';
   try {
     const res = await scanGradeTonnage(c.source, {
-      groupCol: cfg.group, gradeCols: cfg.grades, volume: cfg.volume, density: cfg.density, proportion: cfg.proportion,
+      groupCol: cfg.group, gradeCols: cfg.grades, volume: vol, density: dens, proportion: prop,
       dataStart: c.dataStart, decimal: c.d.decimal, rows: c.filterResult ? c.filterResult.nums : null, signal: ac.signal,
       onProgress: (b, n) => { const e = $('#scanPct'); if (e) e.textContent = `${n ? Math.round(100 * b / n) : 0}%`; $('#meta').textContent = `grade–tonnage… ${n ? Math.round(100 * b / n) : 0}% · Esc to cancel`; },
     });
@@ -3014,12 +3017,7 @@ async function computeGradeTonnage() {
 }
 function wireGradeTonnage(c) {
   const g = $('#gtGroup'); if (g) g.onchange = () => { _gtConfig.group = g.value === '' ? null : +g.value; };
-  $('#helpBody').querySelectorAll('.gt-src').forEach((sel) => sel.onchange = () => {
-    const f = sel.dataset.f, ci = sel.closest('.gt-factor').querySelector('.gt-const');
-    if (sel.value === 'const') { _gtConfig[f] = { const: +ci.value || 0 }; ci.style.display = ''; }
-    else { _gtConfig[f] = { col: +sel.value.slice(1) }; ci.style.display = 'none'; }
-  });
-  $('#helpBody').querySelectorAll('.gt-const').forEach((inp) => inp.oninput = () => { const f = inp.dataset.f; if (_gtConfig[f].col == null) _gtConfig[f] = { const: +inp.value || 0 }; });
+  $('#helpBody').querySelectorAll('.gt-expr').forEach((inp) => { inp.oninput = () => { _gtConfig[inp.dataset.f] = inp.value; }; attachAutocomplete(inp, calcCtx); });
   $('#helpBody').querySelectorAll('.gt-grade').forEach((sel) => sel.onchange = () => { _gtConfig.grades[+sel.dataset.gi] = +sel.value; });
   $('#helpBody').querySelectorAll('.gt-rm').forEach((b) => b.onclick = () => { _gtConfig.grades.splice(+b.dataset.gi, 1); paintGradeTonnage(); });
   const add = $('#gtAdd'); if (add) add.onclick = () => { const fn = c.schema.findIndex((s) => s.type === 'number'); _gtConfig.grades.push(fn >= 0 ? fn : 0); paintGradeTonnage(); };
