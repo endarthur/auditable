@@ -357,6 +357,10 @@
   #empty .empty-sec a, #empty .empty-cta a { color: var(--accent); pointer-events: auto; text-decoration: none; border-bottom: 1px solid var(--accent-soft); }
   #empty .empty-sec a:hover, #empty .empty-cta a:hover { border-bottom-color: var(--accent); }
   #empty .empty-dl { margin-top: 6px; }   /* sits tight under the security notice, not a new section */
+  /* installed PWA already IS the offline copy — the "download lamina.html" line is redundant there */
+  @media (display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay), (display-mode: fullscreen) {
+    #empty .empty-dl { display: none; }
+  }
   #empty .empty-recents { margin-top: 26px; max-width: 720px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; }
   #empty .empty-recents .er-label { color: var(--dim); }
   #empty .empty-recents .er-chip { pointer-events: auto; cursor: pointer; color: var(--text); background: var(--bg-field); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
