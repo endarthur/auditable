@@ -8,7 +8,7 @@
 // build inlines them later).
 
 import { createGrid, PENDING } from '@gcu/loom';
-import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, scanGroupBy, scanDataQuality, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
+import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, scanGroupBy, scanGradeTonnage, scanDataQuality, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
 import { compile, compileBool, validate, deps, complete, tokenize } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
@@ -1905,6 +1905,7 @@ function openOpts() {
 function closeOpts() { $('#opts').classList.remove('show'); document.removeEventListener('mousedown', onOptsDown); }
 function onOptsDown(e) { if (!$('#opts').contains(e.target) && e.target.id !== 'kindBadge') closeOpts(); }
 $('#kindBadge').onclick = () => openOpts();
+{ const es = $('#emptySample'); if (es) es.onclick = (e) => { e.preventDefault(); openSampleData(); }; }
 $('#optKind').onchange = (e) => reopen({ kind: e.target.value });
 $('#optDelim').onchange = (e) => reopen({ delimiter: e.target.value });
 $('#optHeader').onchange = (e) => reopen({ hasHeader: e.target.value === 'yes' ? true : e.target.value === 'no' ? false : '' });
@@ -2100,6 +2101,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
   { sep: true },
   { label: 'Calculated columns…', action: () => { if (hasFile()) openCalcManager(); } },
   { label: 'Group by…', action: () => { if (hasFile()) openGroupBy(); } },
+  { label: 'Grade–tonnage…', action: () => { if (hasFile()) openGradeTonnage(); } },
   { label: 'Data quality…', action: () => { if (hasFile()) showDataQuality(); } },
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
   { sep: true },
@@ -2523,6 +2525,7 @@ async function computeGutterStats(source, schema, dataStart, decimal) {
 
 // ── column statistics (respects the current filter) ──
 const fmtN = (x) => x == null ? '—' : (Math.abs(x) >= 1e6 || (x !== 0 && Math.abs(x) < 1e-4) ? x.toExponential(4) : (Number.isInteger(x) ? x.toLocaleString() : x.toPrecision(6).replace(/\.?0+$/, '')));
+const fmtInt = (x) => x == null ? '—' : Math.round(x).toLocaleString();   // big totals (tonnes / metal / counts) — whole, thousands-separated
 const esc = (s) => String(s).replace(/[&<>]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
 
 // Draw the column-profile histogram onto a canvas: bars + a quantile overlay
@@ -2903,6 +2906,151 @@ function wireGroupBy(c) {
   const cp = $('#gbCopy'); if (cp) cp.onclick = () => { copyText(groupTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
 }
 
+// ── Grade–tonnage: group-by with a tonnage weight (volume × density × ore proportion),
+// reporting tonnes + tonnage-weighted grade + contained metal per group. The mining
+// report that turns "CSV viewer" into "speaks my domain". Reuses the #help overlay.
+let _gtConfig = null, _gtResult = null, _gtSort = { col: 'tonnes', dir: -1 };
+function openGradeTonnage() {
+  const c = current; if (!c || c.d.kind !== 'delimited') return;
+  const num = c.schema.map((s, i) => ({ s, i })).filter((o) => o.s.type === 'number');
+  const byName = (re) => { const o = num.find((x) => re.test(x.s.name)); return o ? o.i : null; };
+  const dens = byName(/dens|(^|_)sg($|_)/i);
+  const prop = byName(/(^|_)ore|prop|ore.?pct|ore.?%/i);
+  const firstCat = c.schema.findIndex((s) => s.type !== 'number');
+  const grade = num.find((o) => !/^(id|x|y|z|dx|dy|dz|east|north|elev|rl|row)$/i.test(o.s.name));
+  _gtConfig = {
+    group: firstCat >= 0 ? firstCat : null,
+    volume: { const: 1 },
+    density: dens != null ? { col: dens } : { const: 2.7 },
+    proportion: prop != null ? { col: prop } : { const: 1 },
+    grades: [grade ? grade.i : (num[0] ? num[0].i : 0)],
+  };
+  _gtResult = null;
+  $('#helpTitle').textContent = `Grade–tonnage — ${c.label}${c.filterResult ? ' (filtered)' : ''}`;
+  $('.help-box').classList.add('wide');
+  $('#help').classList.add('show');
+  paintGradeTonnage();
+}
+function gtFactor(f, cfg, cols) {   // a "column OR constant" control
+  const numOpts = cols.map((s, i) => s.type === 'number' ? `<option value="c${i}"${cfg.col === i ? ' selected' : ''}>${esc(s.name)}</option>` : '').join('');
+  const isC = cfg.col == null;
+  return `<span class="gt-factor" style="display:inline-flex;gap:5px;align-items:center">`
+    + `<select class="gt-src" data-f="${f}"><option value="const"${isC ? ' selected' : ''}>constant</option>${numOpts}</select>`
+    + `<input class="gt-const" data-f="${f}" type="number" step="any" value="${isC ? cfg.const : 1}" style="width:80px;${isC ? '' : 'display:none'}"></span>`;
+}
+function paintGradeTonnage() {
+  const c = current; if (!c) return;
+  const cols = c.schema;
+  let h = '<div class="gb-form gt-form">';
+  h += `<label>Group by <select id="gtGroup"><option value=""${_gtConfig.group == null ? ' selected' : ''}>— whole deposit —</option>${cols.map((s, i) => `<option value="${i}"${i === _gtConfig.group ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>`;
+  h += `<label>Volume ${gtFactor('volume', _gtConfig.volume, cols)}</label>`;
+  h += `<label>Density ${gtFactor('density', _gtConfig.density, cols)}</label>`;
+  h += `<label>Ore proportion ${gtFactor('proportion', _gtConfig.proportion, cols)}</label>`;
+  h += '<span class="gb-vals">';
+  _gtConfig.grades.forEach((uc, gi) => { h += `<label class="gb-val">Grade <select class="gt-grade" data-gi="${gi}">${cols.map((s, i) => s.type === 'number' ? `<option value="${i}"${i === uc ? ' selected' : ''}>${esc(s.name)}</option>` : '').join('')}</select>${_gtConfig.grades.length > 1 ? `<button class="gt-rm" data-gi="${gi}" title="remove">✕</button>` : ''}</label>`; });
+  h += '</span>';
+  h += `<button id="gtAdd" class="gb-add">+ add grade</button>`;
+  h += `<button id="gtRun" class="gb-run">Report</button>`;
+  h += '</div>';
+  h += `<div id="gtResults">${_gtResult ? renderGTResult(c) : '<div style="color:var(--dim);margin-top:8px">set volume · density · ore proportion (a column or a constant) + grade(s), then Report</div>'}</div>`;
+  $('#helpBody').innerHTML = h;
+  wireGradeTonnage(c);
+}
+function gtTable(c) {
+  const res = _gtResult, cfg = res.config, schema = c.schema, grouped = res.grouped;
+  const groupName = grouped && schema[cfg.group] ? schema[cfg.group].name : 'deposit';
+  const COLS = [{ k: 'key', label: groupName, txt: true }, { k: 'blocks', label: 'blocks' }, { k: 'tonnes', label: 'tonnes' }];
+  cfg.grades.forEach((uc, gi) => { const gn = schema[uc] ? schema[uc].name : '?'; COLS.push({ k: `g${gi}`, label: gn }); COLS.push({ k: `m${gi}`, label: `${gn}·t` }); });
+  const rowOf = (key, g) => { const o = { key, blocks: g.count, tonnes: g.tonnes }; cfg.grades.forEach((uc, gi) => { o[`g${gi}`] = g.grades[gi].grade; o[`m${gi}`] = g.grades[gi].metal; }); return o; };
+  let rows = grouped ? res.groups.map((g) => rowOf(g.key, g)) : [];
+  const srt = _gtSort, numKey = srt.col === 'key' && grouped && schema[cfg.group] && schema[cfg.group].type === 'number';
+  if (srt.col && rows.length) rows.sort((a, b) => {
+    let x = a[srt.col], y = b[srt.col];
+    if (numKey) { x = Number(x); y = Number(y); if (Number.isNaN(x)) x = Infinity; if (Number.isNaN(y)) y = Infinity; }
+    if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1;
+    return typeof x === 'string' ? srt.dir * x.localeCompare(y) : srt.dir * (x - y);
+  });
+  return { COLS, rows, totalRow: rowOf(grouped ? 'Σ total' : 'deposit', res.total), grouped };
+}
+function renderGTResult(c) {
+  const { COLS, rows, totalRow } = gtTable(c);
+  const fmtCell = (v, col) => v == null ? '' : col.txt ? esc(String(v)) : (col.k === 'tonnes' || col.k === 'blocks' || col.k[0] === 'm' ? fmtInt(v) : fmtN(v));
+  let h = '<button id="gtCopy" class="sum-copy">copy all</button>';
+  if (_gtResult.truncated) h += `<div style="color:var(--accent);font-size:11px;margin:4px 0">⚠ over 1000 groups — table truncated (total still covers all rows)</div>`;
+  h += `<div style="color:var(--dim);font-size:11px;margin:4px 0">tonnes = Σ(volume × density × ore proportion) · grade = tonnage-weighted mean · <i>name</i>·t = contained metal</div>`;
+  h += '<div style="overflow:auto;max-height:50vh;margin-top:4px"><table class="sum-tbl"><thead><tr>';
+  for (const col of COLS) h += `<th data-k="${col.k}" class="${col.txt ? '' : 'num'}${_gtSort.col === col.k ? ' sorted' : ''}">${esc(col.label)}${_gtSort.col === col.k ? (_gtSort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+  h += '</tr></thead><tbody>';
+  for (const r of rows) { h += '<tr>'; for (const col of COLS) h += `<td class="${col.txt ? '' : 'num'}">${fmtCell(r[col.k], col)}</td>`; h += '</tr>'; }
+  h += '<tr class="gb-total">'; for (const col of COLS) h += `<td class="${col.txt ? '' : 'num'}">${fmtCell(totalRow[col.k], col)}</td>`; h += '</tr>';
+  return h + '</tbody></table></div>';
+}
+function gtTSV(c) {
+  const { COLS, rows, totalRow } = gtTable(c);
+  const line = (r) => COLS.map((col) => { const v = r[col.k]; return v == null ? '' : v; }).join('\t');
+  return [COLS.map((col) => col.label).join('\t'), ...rows.map(line), line(totalRow)].join('\n');
+}
+async function computeGradeTonnage() {
+  const c = current; if (!c) return;
+  const cfg = { group: _gtConfig.group, grades: _gtConfig.grades.slice(), volume: _gtConfig.volume, density: _gtConfig.density, proportion: _gtConfig.proportion };
+  if (!cfg.grades.length) return;
+  const ac = newFooterScan();
+  const rEl = $('#gtResults'); if (rEl) rEl.innerHTML = '<div style="color:#777;margin-top:8px">computing… <span id="scanPct">0%</span></div>';
+  $('#meta').textContent = 'grade–tonnage…';
+  try {
+    const res = await scanGradeTonnage(c.source, {
+      groupCol: cfg.group, gradeCols: cfg.grades, volume: cfg.volume, density: cfg.density, proportion: cfg.proportion,
+      dataStart: c.dataStart, decimal: c.d.decimal, rows: c.filterResult ? c.filterResult.nums : null, signal: ac.signal,
+      onProgress: (b, n) => { const e = $('#scanPct'); if (e) e.textContent = `${n ? Math.round(100 * b / n) : 0}%`; $('#meta').textContent = `grade–tonnage… ${n ? Math.round(100 * b / n) : 0}% · Esc to cancel`; },
+    });
+    if (ac.signal.aborted) return;
+    _gtResult = { ...res, config: cfg };
+    $('#meta').textContent = c._meta || '';
+    paintGradeTonnage();
+  } catch (e) {
+    if (e && e.name === 'AbortError') { $('#meta').textContent = c._meta || 'cancelled'; const r = $('#gtResults'); if (r) r.innerHTML = '<div style="color:var(--dim);margin-top:8px">cancelled</div>'; }
+    else { const r = $('#gtResults'); if (r) r.innerHTML = `<div style="color:var(--fault);margin-top:8px">${esc(e.message)}</div>`; }
+  } finally { if (_footerScanAbort === ac) _footerScanAbort = null; }
+}
+function wireGradeTonnage(c) {
+  const g = $('#gtGroup'); if (g) g.onchange = () => { _gtConfig.group = g.value === '' ? null : +g.value; };
+  $('#helpBody').querySelectorAll('.gt-src').forEach((sel) => sel.onchange = () => {
+    const f = sel.dataset.f, ci = sel.closest('.gt-factor').querySelector('.gt-const');
+    if (sel.value === 'const') { _gtConfig[f] = { const: +ci.value || 0 }; ci.style.display = ''; }
+    else { _gtConfig[f] = { col: +sel.value.slice(1) }; ci.style.display = 'none'; }
+  });
+  $('#helpBody').querySelectorAll('.gt-const').forEach((inp) => inp.oninput = () => { const f = inp.dataset.f; if (_gtConfig[f].col == null) _gtConfig[f] = { const: +inp.value || 0 }; });
+  $('#helpBody').querySelectorAll('.gt-grade').forEach((sel) => sel.onchange = () => { _gtConfig.grades[+sel.dataset.gi] = +sel.value; });
+  $('#helpBody').querySelectorAll('.gt-rm').forEach((b) => b.onclick = () => { _gtConfig.grades.splice(+b.dataset.gi, 1); paintGradeTonnage(); });
+  const add = $('#gtAdd'); if (add) add.onclick = () => { const fn = c.schema.findIndex((s) => s.type === 'number'); _gtConfig.grades.push(fn >= 0 ? fn : 0); paintGradeTonnage(); };
+  const run = $('#gtRun'); if (run) run.onclick = () => computeGradeTonnage();
+  $('#helpBody').querySelectorAll('.sum-tbl th[data-k]').forEach((th) => th.onclick = () => { const k = th.getAttribute('data-k'); if (_gtSort.col === k) _gtSort.dir *= -1; else _gtSort = { col: k, dir: k === 'key' ? 1 : -1 }; paintGradeTonnage(); });
+  const cp = $('#gtCopy'); if (cp) cp.onclick = () => { copyText(gtTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
+}
+
+// A synthetic orebody block model generated in-page (networkless — no fetch, no bundled
+// file) so a first-time visitor with nothing to open can see lamina work: coordinates,
+// grades (Au/Cu/Ag/Fe), density + ore proportion (→ grade-tonnage), lithology + zone.
+function openSampleData() {
+  let s = 987654321;
+  const rnd = () => (s = (s * 1103515245 + 12345) & 0x7fffffff, s / 0x7fffffff);
+  const randn = () => { let u = 0, v = 0; while (!u) u = rnd(); while (!v) v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  const nx = 60, ny = 50, nz = 40, x0 = 620000, y0 = 7780000, z0 = 400, cx = nx / 2, cy = ny / 2, cz = nz * 0.45;
+  const rows = ['ID,X,Y,Z,dx,dy,dz,Au_gpt,Cu_pct,Ag_gpt,Fe_pct,density,ore_pct,recovery,LITO,ZONE'];
+  let id = 1;
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const dxi = (i - cx) / nx, dyj = (j - cy) / ny, dzk = (k - cz) / nz;
+    const ore = Math.exp(-(dxi * dxi * 4 + dyj * dyj * 4 + dzk * dzk * 6) * 3);
+    const cu = Math.max(0, ore * 1.8 * Math.exp(0.5 * randn()) - 0.02), au = Math.max(0, ore * 1.2 * Math.exp(0.6 * randn()) - 0.01);
+    const ag = Math.max(0, cu * 8 * Math.exp(0.4 * randn())), fe = Math.max(1, 8 + ore * 12 + 2 * randn());
+    const dens = 2.55 + ore * 0.35 + 0.03 * randn(), rec = Math.min(98, Math.max(60, 78 + ore * 14 + 2 * randn()));
+    const orep = Math.min(1, Math.max(0, ore * 1.2)), depth = k / nz;
+    const lito = (cu < 0.05 && au < 0.05) ? 'WASTE' : depth < 0.25 ? 'OXIDE' : depth < 0.45 ? 'TRANSITION' : 'SULPHIDE';
+    rows.push([id++, x0 + i * 10, y0 + j * 10, z0 + k * 5, 10, 10, 5, au.toFixed(3), cu.toFixed(3), ag.toFixed(2), fe.toFixed(2), dens.toFixed(3), orep.toFixed(3), rec.toFixed(1), lito, 'Z' + (1 + Math.min(4, Math.floor(depth * 5)))].join(','));
+  }
+  open('sample_blockmodel.csv', new TextEncoder().encode(rows.join('\n')));
+}
+
 // Precompute exact stats for EVERY column in one BMA-style two-pass scan (moments +
 // histogram; ≈ quantiles), filling the per-column cache so every popup is instant.
 // Respects the current filter. Progress in the footer; Esc cancels. opts.show → open
@@ -2968,7 +3116,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, scanGroupBy, scanDataQuality, precomputeStats, showSummary, openGroupBy, computeGroupBy, showDataQuality, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, scanGroupBy, scanDataQuality, precomputeStats, showSummary, openGroupBy, computeGroupBy, openGradeTonnage, computeGradeTonnage, openSampleData, showDataQuality, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;

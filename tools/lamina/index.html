@@ -352,8 +352,9 @@
   #binary { display: none; color: var(--muted); }
   #empty { pointer-events: none; }
   #empty .empty-sec { margin-top: 22px; color: var(--muted); }
-  #empty .empty-sec a { color: var(--accent); pointer-events: auto; text-decoration: none; border-bottom: 1px solid var(--accent-soft); }
-  #empty .empty-sec a:hover { border-bottom-color: var(--accent); }
+  #empty .empty-cta { margin-top: 14px; color: var(--muted); }
+  #empty .empty-sec a, #empty .empty-cta a { color: var(--accent); pointer-events: auto; text-decoration: none; border-bottom: 1px solid var(--accent-soft); }
+  #empty .empty-sec a:hover, #empty .empty-cta a:hover { border-bottom-color: var(--accent); }
   #empty .empty-dl { margin-top: 6px; }   /* sits tight under the security notice, not a new section */
   #empty .empty-recents { margin-top: 26px; max-width: 720px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; }
   #empty .empty-recents .er-label { color: var(--dim); }
@@ -500,7 +501,7 @@
   </div></div>
 
   <div id="grid"></div>
-  <div id="empty"><b>open any file</b><span>Open… · or drag a file anywhere — CSV/TSV → table, Datamine .dm → table, text → lines, .zip/.tar/.gz/… → peek inside</span><span style="color:var(--faint)">new here? &nbsp;Help → Getting started · most actions are on right-click</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/lamina/lamina.html" download="lamina.html">download lamina.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div></div>
+  <div id="empty"><b>open any file</b><span>Open… · or drag a file anywhere — CSV/TSV → table, Datamine .dm → table, text → lines, .zip/.tar/.gz/… → peek inside</span><span class="empty-cta">No file handy? &nbsp;<a id="emptySample" href="#">▸ open a sample block model</a> &nbsp;— 120,000 rows to explore</span><span style="color:var(--faint)">new here? &nbsp;Help → Getting started · most actions are on right-click</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/lamina/lamina.html" download="lamina.html">download lamina.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div></div>
   <div id="binary"><b>binary file</b><span id="binaryMsg">use the hex viewer for this one</span></div>
   <div id="drop-hint">drop to open</div>
   <div id="picker"><div class="pk-box"><div class="pk-title">choose a file from the archive</div><div class="pk-list" id="pickerList"></div></div></div>

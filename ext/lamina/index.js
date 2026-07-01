@@ -919,6 +919,47 @@ async function scanGroupBy(source, { groupCol, valueCols, weightCol = null, data
   return { groups: [...groups.entries()].map(([key, acc]) => ({ key, ...fin(acc) })), total: fin(total), truncated, weighted: weightCol != null };
 }
 
+/**
+ * Grade-tonnage: ONE windowed pass → per-group tonnes + tonnage-weighted grades.
+ * The weight (tonnes) of each block = volume × density × proportion, where each factor
+ * is a column ({col:idx}) or a constant ({const:number}). Per group:
+ *   tonnes = Σ(w);  grade_i = Σ(w·g_i)/Σ(w over blocks with a valid g_i);  metal_i = Σ(w·g_i).
+ * groupCol = null → a single whole-deposit total (no per-group rows). Blocks with a
+ * non-finite/≤0 weight are skipped (no mass). Bounded memory (maxGroups → truncated).
+ * @returns {Promise<{groups:Array<{key,count,tonnes,grades:Array<{grade,metal}>}>, total, truncated:boolean, grouped:boolean}>}
+ */
+async function scanGradeTonnage(source, { groupCol = null, gradeCols = [], volume = { const: 1 }, density = { const: 1 }, proportion = { const: 1 }, dataStart = 0, decimal = '.', rows = null, maxGroups = 1000, onProgress, signal } = {}) {
+  const ng = gradeCols.length;
+  const factor = (spec, fields) => (spec && spec.col != null ? parseNum(fields[spec.col], decimal) : (spec ? spec.const : 1));
+  const mkAcc = () => ({ count: 0, tonnes: 0, grades: Array.from({ length: ng }, () => ({ msum: 0, wt: 0 })) });
+  const groups = new Map(), total = mkAcc();
+  let truncated = false;
+  await source.eachRecord({ dataStart, rows, signal, onProgress }, (disp, fields) => {
+    const w = factor(volume, fields) * factor(density, fields) * factor(proportion, fields);
+    if (!Number.isFinite(w) || w <= 0) return;                       // no mass → skip
+    let acc = null;
+    if (groupCol != null) {
+      const graw = fields[groupCol];
+      const key = (graw == null || graw === '') ? '(blank)' : String(graw);
+      acc = groups.get(key);
+      if (!acc) { if (groups.size >= maxGroups) truncated = true; else { acc = mkAcc(); groups.set(key, acc); } }
+    }
+    const bump = (a) => {
+      a.count++; a.tonnes += w;
+      for (let i = 0; i < ng; i++) {
+        const g = parseNum(fields[gradeCols[i]], decimal);
+        if (Number.isNaN(g)) continue;
+        a.grades[i].msum += w * g; a.grades[i].wt += w;
+      }
+    };
+    if (acc) bump(acc);
+    bump(total);
+  });
+  const fin = (a) => ({ count: a.count, tonnes: a.tonnes, grades: a.grades.map((g) => ({ grade: g.wt ? g.msum / g.wt : null, metal: g.msum })) });
+  const groupList = groupCol == null ? [] : [...groups.entries()].map(([key, a]) => ({ key, ...fin(a) }));
+  return { groups: groupList, total: fin(total), truncated, grouped: groupCol != null };
+}
+
 // Data-quality scan: one pass (sampled or filtered subset) inspecting RAW field
 // strings per column for quiet bugs — leading-zeros-lost, non-numeric in a numeric
 // column, missing-value sentinels (-9/-99/-999/-9999), thousands separators,
@@ -1272,6 +1313,7 @@ export {
   scanColumnStats,
   scanAllColumnStats,
   scanGroupBy,
+  scanGradeTonnage,
   scanDataQuality,
   detectKind,
   createLaminaProvider,
