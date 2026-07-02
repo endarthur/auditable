@@ -177,6 +177,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   let docBbox = null, intensityMax = 1;
   const docChan = [Infinity, -Infinity];                  // block grade range across chunks
   let maskTex = null, maskH = 0, isolateMode = false;     // filter bitmask (by record index)
+  let activeSet = 'base';                                 // 'base' | 'compact' (filter compaction)
   let pickedRec = 0xFFFFFFFF;                             // highlighted record (sentinel = none)
   const repaintSet = new Set();                           // records to repaint over a converged frame
   let lastConverged = false;
@@ -191,21 +192,27 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
 
   return {
     gl,
-    get chunkCount() { return chunks.length; },
-    get elementCount() { return chunks.reduce((s, c) => s + c.count, 0); },
-    get accumulated() { return chunks.reduce((s, c) => s + c.cursor, 0); },   // elements in the current accumulation
-    addChunk(chunk) {
+    get chunkCount() { return chunks.reduce((s, c) => s + (c._set === activeSet ? 1 : 0), 0); },
+    get elementCount() { return chunks.reduce((s, c) => s + (c._set === activeSet ? c.count : 0), 0); },
+    get accumulated() { return chunks.reduce((s, c) => s + (c._set === activeSet ? c.cursor : 0), 0); },   // elements in the current accumulation
+    addChunk(chunk, set = 'base') {
       if (chunk.kind === 'blocks') {
         if (!blocksPipe) blocksPipe = createBlocksPipeline(gl);
-        chunks.push(blocksPipe.upload(chunk));             // GPU owns it now
-        if (chunk.chanRange[0] < docChan[0]) docChan[0] = chunk.chanRange[0];
-        if (chunk.chanRange[1] > docChan[1]) docChan[1] = chunk.chanRange[1];
+        const up = blocksPipe.upload(chunk); up._set = set;
+        chunks.push(up);                                   // GPU owns it now
+        if (set === 'base') {                              // compact chunks never tighten the ramp
+          if (chunk.chanRange[0] < docChan[0]) docChan[0] = chunk.chanRange[0];
+          if (chunk.chanRange[1] > docChan[1]) docChan[1] = chunk.chanRange[1];
+        }
         return;
       }
-      chunks.push(uploadChunk(gl, chunk));                 // GPU owns it now; CPU copy dies with the caller
-      let m = 0; const a = chunk.intensity;
-      for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
-      intensityMax = Math.max(intensityMax, m);
+      const up = uploadChunk(gl, chunk); up._set = set;
+      chunks.push(up);                                     // GPU owns it now; CPU copy dies with the caller
+      if (set === 'base') {
+        let m = 0; const a = chunk.intensity;
+        for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
+        intensityMax = Math.max(intensityMax, m);
+      }
     },
     setCategories(n) {                                     // block category palette (golden-angle hues)
       if (n > 0 && !catPalette) catPalette = lutTexture(gl, categoryPalettePixels(256), 256);
@@ -237,6 +244,20 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       needClear = true;
     },
     setDocBbox(b) { docBbox = b; },
+    // Filter compaction: 'compact' chunks hold ONLY matching elements (raw record
+    // indices preserved), so the render budget runs over the matches instead of
+    // shader-discarding the rest. Base chunks stay resident — clearing is instant.
+    setActiveSet(set) { if (set !== activeSet) { activeSet = set; needClear = true; } },
+    get activeSet() { return activeSet; },
+    clearCompact() {
+      for (let i = chunks.length - 1; i >= 0; i--) {
+        const c = chunks[i];
+        if (c._set !== 'compact') continue;
+        gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b));
+        chunks.splice(i, 1);
+      }
+      if (activeSet === 'compact') { activeSet = 'base'; needClear = true; }
+    },
     invalidate() { needClear = true; },
     // Pick/unpick over a CONVERGED frame repaints just the affected elements
     // (a depth-LEQUAL pass where everything else clips out) instead of
@@ -262,7 +283,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       const dpr = window.devicePixelRatio || 1;
       const px = Math.round(cssX * dpr), py = Math.round(canvas.height - cssY * dpr - 1);
       if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return null;
-      return pickPipe.pick(px, py, chunks, cam, {
+      return pickPipe.pick(px, py, chunks.filter((c) => c._set === activeSet), cam, {
         pointPx, blocksAsPoints, maskTex, isolate: isolateMode,
         section: section && section.on ? section : null,
         viewportW: canvas.width, viewportH: canvas.height,
@@ -270,7 +291,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     },
     clearChunks() {
       for (const c of chunks) { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); }
-      chunks.length = 0; intensityMax = 1; needClear = true;
+      chunks.length = 0; intensityMax = 1; needClear = true; activeSet = 'base';
       docChan[0] = Infinity; docChan[1] = -Infinity;
     },
     resize() {
@@ -296,6 +317,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       const eye = cam.state.eye;
       const visible = [];
       for (const c of chunks) {
+        if (c._set !== activeSet) continue;
         if (!aabbInFrustum(planes, c.bboxLocal)) { if (moving) c.cursor = 0; continue; }
         const b = c.bboxLocal;
         const cx = (b[0] + b[3]) / 2 - eye[0], cy = (b[1] + b[4]) / 2 - eye[1], cz = (b[2] + b[5]) / 2 - eye[2];

@@ -446,6 +446,7 @@ async function openBlocksBlob(blob, name, opts = {}) {
   setColorLabels(header);
   if (header.grid) {
     const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
+    _blockDoc.grid = grid;
     const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });   // 128k/chunk, 16 chunks per Morton batch: tight bboxes are what give the frustum test teeth
     const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
     _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} blocks · grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
@@ -487,6 +488,7 @@ async function openDmBlob(blob, name, opts = {}) {
   renderer.setCategories(header.categories ? 1 : 0);
   setColorLabels(header);
   const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
+  _blockDoc.grid = grid;
   const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
   const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
   _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} blocks · .dm grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
@@ -534,6 +536,7 @@ $('#colorBy').addEventListener('change', () => {
 // sweep over the file → a bitmask by record index → a GPU mask texture (dim or
 // isolate). The §4 selection contract, arriving via the local UI first. ──
 let _filterExpr = '';
+let _filterEpoch = 0;                                      // guards overlapping sweeps (a newer filter aborts the older one)
 function blockSchema(header) {
   const numeric = new Set((header.numericColumns || []).map((c) => c.i));
   [header.mapping.x, header.mapping.y, header.mapping.z].forEach((i) => numeric.add(i));
@@ -543,8 +546,9 @@ async function applyBlockFilter(expr) {
   const inp = $('#filter');
   if (!_blockDoc) { $('#meta').textContent = 'filter: open a block model first'; return; }
   _filterExpr = expr;
+  const epoch = ++_filterEpoch;
   if (!expr.trim()) {
-    renderer.setFilter(null); inp.classList.remove('err'); requestRender();
+    renderer.setFilter(null); renderer.clearCompact(); inp.classList.remove('err'); requestRender();
     $('#meta').textContent = _blockDoc.metaLine; return;
   }
   const { blob, header } = _blockDoc;
@@ -554,34 +558,84 @@ async function applyBlockFilter(expr) {
   inp.classList.remove('err');
   const fn = compileBool(expr, schema, { decimal: '.' });
   $('#meta').textContent = 'filter: scanning…';
+  renderer.clearCompact();                                 // a previous compaction is stale now
   const mask = new Uint8Array(header.count);
   let rec = 0, hits = 0;
   const m = header.mapping;
+  const isolate = !$('#context').checked;
+
+  // ── compaction (isolate + regular grid): the sweep already has every matching
+  // row in hand, so tee matches into a second chunk builder — the render budget
+  // then runs over the MATCHES (12k feels like 12k, not like 1.8M shader-discards).
+  // Bounded: above the cap (half the model, ≤8M) the mask path wins on memory;
+  // context mode never compacts (it needs the non-matches by definition). Compact
+  // chunks carry RAW record indices, so pick / record panel / measure are untouched;
+  // color stays full-doc (addChunk skips the ramp update for the compact set). ──
+  const compactCap = Math.min(Math.floor(header.count / 2) || 0, 8_000_000);
+  const catCode = header.categories ? new Map(header.categories.map((v2, i2) => [v2, i2])) : null;
+  let cb2 = isolate && _blockDoc.grid && compactCap > 0
+    ? createBlockChunkBuilder({ frame, grid: _blockDoc.grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 2, onChunk: (c) => renderer.addChunk(c, 'compact') })
+    : null;
+  const CB = 1 << 18;
+  let cx, cy, czz, cch, cct, crr, cfill = 0, collected = 0;
+  const callocz = () => { cx = new Float64Array(CB); cy = new Float64Array(CB); czz = new Float64Array(CB); cch = new Float64Array(CB); cct = catCode ? new Uint8Array(CB) : null; crr = new Uint32Array(CB); cfill = 0; };
+  if (cb2) callocz();
+  const cflush = () => { if (cfill) { cb2.push({ count: cfill, x: cx, y: cy, z: czz, chan: cch, cat: cct, recIdx: crr }); callocz(); } };
+  const collect = (xv, yv, zv, cv, code, r) => {
+    if (!cb2) return;
+    if (collected >= compactCap) { renderer.clearCompact(); cb2 = null; return; }   // too many — the mask path wins
+    cx[cfill] = xv; cy[cfill] = yv; czz[cfill] = zv;
+    cch[cfill] = Number.isFinite(cv) ? cv : 0;
+    if (cct) cct[cfill] = code;
+    crr[cfill] = r;
+    cfill++; collected++;
+    if (cfill === CB) cflush();
+  };
+
   if (header.dm) {
     // .dm: decoded record batches, RAW record numbering (matches recIdx exactly)
     const { recordBatches } = await openDmModel(blob);
     for await (const { recStart, rows } of recordBatches()) {
       for (let k = 0; k < rows.length; k++) {
         const vals = rows[k].map((v) => (v == null ? '' : v));
-        if (fn(vals)) { mask[recStart + k] = 1; hits++; }
+        if (fn(vals)) {
+          mask[recStart + k] = 1; hits++;
+          const code = catCode ? (catCode.get(String(vals[m.cat] ?? '').trim()) ?? 0) : 0;
+          collect(+vals[m.x], +vals[m.y], +vals[m.z], m.chan != null ? +vals[m.chan] : 0, code, recStart + k);
+        }
       }
       rec = recStart + rows.length;
       await new Promise((r) => setTimeout(r));
+      if (epoch !== _filterEpoch) return;                  // superseded — stop before pushing more compact chunks
     }
   } else {
     for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow !== undefined ? header.hasHeaderRow : !!header.columns)) {
       for (const f of batch) {
         const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
         if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // same rows sweep 2 kept
-        if (fn(f)) { mask[rec] = 1; hits++; }
+        if (fn(f)) {
+          mask[rec] = 1; hits++;
+          const code = catCode ? (catCode.get((f[m.cat] || '').trim()) ?? 0) : 0;
+          collect(xv, yv, zv, m.chan != null ? +f[m.chan] : 0, code, rec);
+        }
         rec++;
       }
       await new Promise((r) => setTimeout(r));
+      if (epoch !== _filterEpoch) return;                  // superseded — stop before pushing more compact chunks
     }
   }
-  renderer.setFilter(mask, { isolate: !$('#context').checked });   // default = isolate; context = dim the rest
+
+  if (epoch !== _filterEpoch) return;                      // superseded mid-scan by a newer filter
+  if (cb2) {                                               // compacted: matches ARE the chunks — no mask needed
+    cflush(); cb2.flush();
+    renderer.setFilter(null);
+    renderer.setActiveSet('compact');
+  } else {
+    renderer.setActiveSet('base');
+    renderer.setFilter(mask, { isolate });                 // default = isolate; context = dim the rest
+  }
   requestRender();
-  $('#meta').textContent = `${_blockDoc.metaLine} · filter: ${hits.toLocaleString()} of ${rec.toLocaleString()} match`;
+  $('#meta').textContent = `${_blockDoc.metaLine} · filter: ${hits.toLocaleString()} of ${rec.toLocaleString()} match${cb2 ? ' · compacted' : ''}`;
 }
 // ── autocomplete (lamina's engine over @gcu/expr complete()): columns, functions,
 // keywords, and DATA VALUES (the category dictionary — picking "HEMATITE" from the
