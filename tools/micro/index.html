@@ -545,11 +545,53 @@ async function openSample(n = 2_000_000) {
   requestRender();
 }
 document.querySelectorAll('[data-sample]').forEach((a) => a.onclick = () => openSample(+a.dataset.sample));
+// view directions: keep target + radius, set azimuth/elevation. Mining reading:
+// n = LOOKING north (camera south of target), level view; d = plan (down); u = up.
+function setView(theta, phi) {
+  const st = cam.state;
+  st.theta = theta; st.phi = phi;
+  cam.update(); requestRender();
+}
+const PHI_MAX = Math.PI / 2 - 0.02;
+// face-on to the current section: look along the plane normal (minimal turn —
+// keep the side we're already on) and pivot the orbit on the section plane.
+function viewAlongSection() {
+  const sec = currentSection(); if (!sec) return;
+  const st = cam.state, n = sec.n;
+  const fwd = [st.target[0] - st.eye[0], st.target[1] - st.eye[1], st.target[2] - st.eye[2]];
+  const sign = (fwd[0] * n[0] + fwd[1] * n[1] + fwd[2] * n[2]) >= 0 ? 1 : -1;   // look dir = sign·n
+  const off = [-sign * n[0], -sign * n[1], -sign * n[2]];                        // eye offset = -lookdir
+  // re-center the pivot on the plane, then aim
+  const dd = st.target[0] * n[0] + st.target[1] * n[1] + st.target[2] * n[2] - sec.d;
+  st.target = [st.target[0] - dd * n[0], st.target[1] - dd * n[1], st.target[2] - dd * n[2]];
+  st.theta = Math.atan2(off[1], off[0]);
+  st.phi = Math.max(-PHI_MAX, Math.min(PHI_MAX, Math.asin(Math.max(-1, Math.min(1, off[2])))));
+  cam.update(); requestRender();
+}
+// scrub the section by one slab thickness (adjacent section, like flipping pages)
+function scrubSection(dir) {
+  const sec = currentSection(); if (!sec) return;
+  const [lo, hi] = secRange();
+  if (!(hi > lo)) return;
+  const step = (2 * sec.half) / (hi - lo);
+  $('#secPos').value = Math.max(0, Math.min(1, +$('#secPos').value + dir * step));
+  requestRender();
+}
 window.addEventListener('keydown', (e) => {
   if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // typing, not commanding
-  if (e.key === 'f') $('#btnFit').click();
-  else if (e.key === 'k') { $('#secMode').value = 'knife'; $('#secMode').dispatchEvent(new Event('input')); }
-  else if (e.key === 'Escape' && _knifeArm) { armKnife(false); $('#secMode').value = 'off'; $('#secMode').dispatchEvent(new Event('input')); }
+  const k = e.key;
+  if (k === 'f') $('#btnFit').click();
+  else if (k === 'k') { $('#secMode').value = 'knife'; $('#secMode').dispatchEvent(new Event('input')); }
+  else if (k === 'Escape' && _knifeArm) { armKnife(false); $('#secMode').value = 'off'; $('#secMode').dispatchEvent(new Event('input')); }
+  else if (k === 'n') setView(-Math.PI / 2, 0);           // looking north (+Y): camera south of target
+  else if (k === 's') setView(Math.PI / 2, 0);            // looking south
+  else if (k === 'e') setView(Math.PI, 0);                // looking east (+X): camera west
+  else if (k === 'w') setView(0, 0);                      // looking west
+  else if (k === 'd') setView(cam.state.theta, PHI_MAX);  // plan (looking down)
+  else if (k === 'u') setView(cam.state.theta, -PHI_MAX); // looking up
+  else if (k === 'l') viewAlongSection();                 // face-on to the section
+  else if (k === '[') scrubSection(-1);
+  else if (k === ']') scrubSection(1);
 });
 
 // Synthetic QF block model AS A CSV BLOB — exercises the full provider path
