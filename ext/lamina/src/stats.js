@@ -137,13 +137,15 @@ export async function scanGroupBy(source, { groupCol, valueCols, weightCol = nul
  *   tonnes = Σ(w);  grade_i = Σ(w·g_i)/Σ(w over blocks with a valid g_i);  metal_i = Σ(w·g_i).
  * groupCol = null → a single whole-deposit total (no per-group rows). Blocks with a
  * non-finite/≤0 weight are skipped (no mass). Bounded memory (maxGroups → truncated).
- * @returns {Promise<{groups:Array<{key,count,tonnes,grades:Array<{grade,metal}>}>, total, truncated:boolean, grouped:boolean}>}
+ * Each grade also carries its observed gmin/gmax (over blocks with mass) — the
+ * extents that seed a cutoff-curve second pass without an extra extent scan.
+ * @returns {Promise<{groups:Array<{key,count,tonnes,grades:Array<{grade,metal,gmin,gmax}>}>, total, truncated:boolean, grouped:boolean}>}
  */
 export async function scanGradeTonnage(source, { groupCol = null, gradeCols = [], volume = { const: 1 }, density = { const: 1 }, proportion = { const: 1 }, dataStart = 0, decimal = '.', rows = null, maxGroups = 1000, onProgress, signal } = {}) {
   const ng = gradeCols.length;
   // each factor: {fn:(fields)=>num} (a compiled expr) | {col:idx} | {const:num}
   const factor = (spec, fields) => (spec && spec.fn ? spec.fn(fields) : (spec && spec.col != null ? parseNum(fields[spec.col], decimal) : (spec ? spec.const : 1)));
-  const mkAcc = () => ({ count: 0, tonnes: 0, grades: Array.from({ length: ng }, () => ({ msum: 0, wt: 0 })) });
+  const mkAcc = () => ({ count: 0, tonnes: 0, grades: Array.from({ length: ng }, () => ({ msum: 0, wt: 0, gmin: Infinity, gmax: -Infinity })) });
   const groups = new Map(), total = mkAcc();
   let truncated = false;
   await source.eachRecord({ dataStart, rows, signal, onProgress }, (disp, fields) => {
@@ -161,13 +163,15 @@ export async function scanGradeTonnage(source, { groupCol = null, gradeCols = []
       for (let i = 0; i < ng; i++) {
         const g = parseNum(fields[gradeCols[i]], decimal);
         if (Number.isNaN(g)) continue;
-        a.grades[i].msum += w * g; a.grades[i].wt += w;
+        const gr = a.grades[i];
+        gr.msum += w * g; gr.wt += w;
+        if (g < gr.gmin) gr.gmin = g; if (g > gr.gmax) gr.gmax = g;   // extents (seed a cutoff-curve pass)
       }
     };
     if (acc) bump(acc);
     bump(total);
   });
-  const fin = (a) => ({ count: a.count, tonnes: a.tonnes, grades: a.grades.map((g) => ({ grade: g.wt ? g.msum / g.wt : null, metal: g.msum })) });
+  const fin = (a) => ({ count: a.count, tonnes: a.tonnes, grades: a.grades.map((g) => ({ grade: g.wt ? g.msum / g.wt : null, metal: g.msum, gmin: g.wt ? g.gmin : null, gmax: g.wt ? g.gmax : null })) });
   const groupList = groupCol == null ? [] : [...groups.entries()].map(([key, a]) => ({ key, ...fin(a) }));
   return { groups: groupList, total: fin(total), truncated, grouped: groupCol != null };
 }

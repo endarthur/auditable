@@ -1696,7 +1696,7 @@ if (target === 'lamina') {
   // is appended last so its imports resolve against an already-populated map.
   const SPEC = {
     '@gcu/loom': '#loom', '@gcu/lamina': '#lamina', '@gcu/proc': '#proc',
-    '@gcu/archive': '#archive', '@gcu/dm': '#dm', '@gcu/expr': '#expr', 'fflate': '#fflate', './idb-cache.js': '#idb-cache',
+    '@gcu/archive': '#archive', '@gcu/dm': '#dm', '@gcu/expr': '#expr', '@gcu/sluice': '#sluice', 'fflate': '#fflate', './idb-cache.js': '#idb-cache',
   };
   const libs = [
     ['loom',    'ext/loom/index.js'],
@@ -1705,6 +1705,7 @@ if (target === 'lamina') {
     ['archive', 'ext/archive/index.nowasm.js'],   // wasm-free — lamina's CSP has no 'wasm-unsafe-eval' (drops xz)
     ['dm',      'ext/dm/index.js'],
     ['expr',    'ext/expr/index.js'],
+    ['sluice',  'ext/sluice/index.js'],           // streaming accumulators — the grade-tonnage cutoff curve
     ['fflate',  'ext/archive/vendor/fflate.module.mjs'],
   ];
   const modules = [];

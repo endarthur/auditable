@@ -10,6 +10,7 @@
 import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, scanGroupBy, scanGradeTonnage, scanDataQuality, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
 import { compile, compileBool, validate, deps, complete, tokenize } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
+import { gradeTonnage } from '@gcu/sluice';   // streaming accumulators — the grade-tonnage cutoff curve (one accumulator per grade field, driven from lamina's record cursor)
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
 import { detectDM, parseHeader, recordRange, decodeRecord } from '@gcu/dm';
@@ -2953,6 +2954,7 @@ function paintGradeTonnage() {
   h += `<div id="gtResults">${_gtResult ? renderGTResult(c) : '<div style="color:var(--dim);margin-top:8px">set volume · density · ore proportion (a column or a constant) + grade(s), then Report</div>'}</div>`;
   $('#helpBody').innerHTML = h;
   wireGradeTonnage(c);
+  if (_gtResult) drawGTCurves(c);   // canvases exist only after the innerHTML lands
 }
 function gtTable(c) {
   const res = _gtResult, cfg = res.config, schema = c.schema, grouped = res.grouped;
@@ -2982,12 +2984,139 @@ function renderGTResult(c) {
   h += '</tr></thead><tbody>';
   for (const r of rows) { h += '<tr>'; for (const col of COLS) h += `<td class="${col.txt ? '' : 'num'}">${fmtCell(r[col.k], col)}</td>`; h += '</tr>'; }
   h += '<tr class="gb-total">'; for (const col of COLS) h += `<td class="${col.txt ? '' : 'num'}">${fmtCell(totalRow[col.k], col)}</td>`; h += '</tr>';
-  return h + '</tbody></table></div>';
+  return h + '</tbody></table></div>' + renderGTCurves(c);
 }
 function gtTSV(c) {
   const { COLS, rows, totalRow } = gtTable(c);
   const line = (r) => COLS.map((col) => { const v = r[col.k]; return v == null ? '' : v; }).join('\t');
   return [COLS.map((col) => col.label).join('\t'), ...rows.map(line), line(totalRow)].join('\n');
+}
+
+// ── grade–tonnage by cutoff (the curve) — sluice's gradeTonnage accumulator driven
+// from lamina's record cursor. Pass 1 (the grouped report) already yields each grade's
+// observed extents; pass 2 bins (grade, weight) into one accumulator per grade field.
+// The weight is the SAME expr-compiled volume×density×proportion as the report, fed to
+// sluice via its `weight` (precomputed tonnage) option — the accumulation math lives in
+// @gcu/sluice, only the driver is lamina's. ──
+
+// A "nice" step from {1, 2, 2.5, 5}×10^k covering `raw` — bin edges land on round cutoffs.
+function niceStep(raw) {
+  if (!(raw > 0) || !Number.isFinite(raw)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p;
+}
+
+// Pass 2: one more windowed scan → per-grade-field cumulative curves (or null where a
+// field has no range). extents come from pass 1's total.grades[gi] (gmin/gmax over
+// blocks with mass), so no extra extent pass is needed.
+async function scanGTCurves(c, cfg, factors, extents, { rows, signal, onProgress } = {}) {
+  const accs = cfg.grades.map((uc, gi) => {
+    const e = extents[gi];
+    if (!e || e.gmin == null || e.gmax == null) return null;
+    const floor = Math.min(0, e.gmin);                       // grades bin from 0 (below only if negatives exist)
+    if (!(e.gmax > floor)) return null;                      // constant/degenerate → no curve
+    const step = niceStep((e.gmax - floor) / 150);           // ~150–200 nice-edged bins
+    const bins = Math.max(20, Math.min(400, Math.ceil((e.gmax - floor) / step)));
+    const acc = gradeTonnage({ grade: 'g', weight: 'w', gradeMin: floor, gradeMax: floor + bins * step, bins });
+    return { acc, s: acc.create(), step };
+  });
+  if (!accs.some(Boolean)) return null;
+  const { volume: vol, density: dens, proportion: prop } = factors;
+  await c.source.eachRecord({ dataStart: c.dataStart, rows, signal, onProgress }, (disp, fields) => {
+    const w = vol.fn(fields) * dens.fn(fields) * prop.fn(fields);
+    if (!Number.isFinite(w) || w <= 0) return;               // no mass → skip (same rule as the report)
+    for (let gi = 0; gi < accs.length; gi++) {
+      const a = accs[gi]; if (!a) continue;
+      const g = parseNum(fields[cfg.grades[gi]], c.d.decimal);
+      if (Number.isNaN(g)) continue;
+      a.acc.push(a.s, { g, w });
+    }
+  });
+  return accs.map((a) => (a ? { ...a.acc.result(a.s), step: a.step } : null));
+}
+
+// The cutoff table rows: exact bin edges at a nice stride (~8–10 rows), trailing
+// zero-tonnage rows trimmed (the curve is cumulative-from-top → monotone falling).
+function gtCurveRows(cv) {
+  const range = cv.gradeMax - cv.gradeMin;
+  const stride = Math.max(1, Math.round(niceStep(range / 8) / cv.step));
+  const rows = [];
+  for (let i = 0; i < cv.bins; i += stride) {
+    const pt = cv.curve[i];
+    if (!(pt.tonnage > 0) && rows.length) break;             // past the last mass — stop
+    rows.push(pt);
+  }
+  return rows;
+}
+function gtCurveTSV(cv, gradeName) {
+  const t0 = cv.curve[0].tonnage || 1;
+  const L = [`cutoff\ttonnes ≥\t${gradeName}\t${gradeName}·t\t% of tonnes`];
+  for (const p of gtCurveRows(cv)) L.push(`${p.cutoff}\t${p.tonnage}\t${p.grade}\t${p.metal}\t${(100 * p.tonnage / t0).toFixed(1)}`);
+  return L.join('\n');
+}
+
+// Curve sections (per grade field with a computed curve): canvas + cutoff table.
+function renderGTCurves(c) {
+  const curves = _gtResult.curves; if (!curves) return '';
+  const cfg = _gtResult.config;
+  let h = '';
+  cfg.grades.forEach((uc, gi) => {
+    const cv = curves[gi]; if (!cv || !(cv.curve[0] && cv.curve[0].tonnage > 0)) return;
+    const gn = c.schema[uc] ? c.schema[uc].name : '?';
+    const t0 = cv.curve[0].tonnage;
+    h += `<div class="gt-curve-sec">`;
+    h += `<div class="gt-curve-head">${esc(gn)} — by cutoff <button class="gt-ccopy" data-gi="${gi}">copy</button></div>`;
+    h += `<canvas class="gt-curve" data-gi="${gi}"></canvas>`;
+    h += `<div class="gt-curve-legend"><span class="lg-t">—</span> tonnes ≥ cutoff &nbsp; <span class="lg-g">—</span> mean grade ≥ cutoff</div>`;
+    h += `<table class="sum-tbl gt-cut-tbl"><thead><tr><th class="num">cutoff</th><th class="num">tonnes ≥</th><th class="num">${esc(gn)}</th><th class="num">${esc(gn)}·t</th><th class="num">% of tonnes</th></tr></thead><tbody>`;
+    for (const p of gtCurveRows(cv)) h += `<tr><td class="num">${fmtN(p.cutoff)}</td><td class="num">${fmtInt(p.tonnage)}</td><td class="num">${fmtN(p.grade)}</td><td class="num">${fmtInt(p.metal)}</td><td class="num">${(100 * p.tonnage / t0).toFixed(1)}%</td></tr>`;
+    h += '</tbody></table></div>';
+  });
+  return h;
+}
+
+// Draw each curve canvas: tonnes (accent, falling) + mean grade (info, rising) vs
+// cutoff. Theme-aware (CSS vars), dpr-scaled — same pattern as drawProfileHist.
+function drawGTCurves(c) {
+  const curves = _gtResult && _gtResult.curves; if (!curves) return;
+  $('#helpBody').querySelectorAll('canvas.gt-curve').forEach((canvas) => {
+    const cv = curves[+canvas.dataset.gi]; if (!cv) return;
+    const W = canvas.clientWidth || 560, H = canvas.clientHeight || 140, dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    const css = getComputedStyle(document.documentElement);
+    const acc = css.getPropertyValue('--accent').trim() || '#c89b3c';
+    const info = css.getPropertyValue('--info').trim() || '#4a78b0';
+    const dim = css.getPropertyValue('--dim').trim() || '#777';
+    const bd = css.getPropertyValue('--border').trim() || '#2a2a2a';
+    const padL = 6, padR = 6, padT = 12, padB = 16, plotW = W - padL - padR, plotH = H - padT - padB;
+    const n = cv.bins, t0 = cv.curve[0].tonnage || 1;
+    let gMax = 0; for (const p of cv.curve) if (p.tonnage > 0 && p.grade > gMax) gMax = p.grade;
+    if (!(gMax > 0)) gMax = 1;
+    const X = (i) => padL + (i / (n - 1 || 1)) * plotW;
+    // axes: baseline + x tick labels at the table's stride cutoffs
+    ctx.strokeStyle = bd; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, padT + plotH + 0.5); ctx.lineTo(padL + plotW, padT + plotH + 0.5); ctx.stroke();
+    ctx.fillStyle = dim; ctx.font = '10px ' + (css.getPropertyValue('--mono').trim() || 'monospace'); ctx.textAlign = 'center';
+    const stride = Math.max(1, Math.round(niceStep((cv.gradeMax - cv.gradeMin) / 8) / cv.step));
+    for (let i = 0; i < n; i += stride) { const x = X(i); ctx.fillRect(x, padT + plotH, 1, 3); ctx.fillText(fmtN(cv.curve[i].cutoff), x, H - 3); }
+    // tonnes (falling) — accent
+    ctx.strokeStyle = acc; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (let i = 0; i < n; i++) { const y = padT + plotH * (1 - cv.curve[i].tonnage / t0); i ? ctx.lineTo(X(i), y) : ctx.moveTo(X(i), y); }
+    ctx.stroke();
+    // mean grade (rising) — info; only over bins that still have mass
+    ctx.strokeStyle = info; ctx.lineWidth = 1.5; ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < n; i++) {
+      const p = cv.curve[i]; if (!(p.tonnage > 0)) break;
+      const y = padT + plotH * (1 - p.grade / gMax);
+      started ? ctx.lineTo(X(i), y) : ctx.moveTo(X(i), y); started = true;
+    }
+    ctx.stroke();
+    // scale hints: max tonnes (left, accent) + max grade (right, info)
+    ctx.textAlign = 'left'; ctx.fillStyle = acc; ctx.fillText(fmtInt(t0) + ' t', padL + 2, padT - 2);
+    ctx.textAlign = 'right'; ctx.fillStyle = info; ctx.fillText(fmtN(gMax), W - padR - 2, padT - 2);
+  });
 }
 async function computeGradeTonnage() {
   const c = current; if (!c) return;
@@ -3006,13 +3135,20 @@ async function computeGradeTonnage() {
   const rEl = $('#gtResults'); if (rEl) rEl.innerHTML = '<div style="color:#777;margin-top:8px">computing… <span id="scanPct">0%</span></div>';
   $('#meta').textContent = 'grade–tonnage…';
   try {
+    const prog = (b, n) => { const p = n ? Math.round(100 * b / n) : 0; const e = $('#scanPct'); if (e) e.textContent = `${p}%`; $('#meta').textContent = `grade–tonnage… ${p}% · Esc to cancel`; };
+    const filterRows = c.filterResult ? c.filterResult.nums : null;
+    // pass 1 — the grouped report (also yields each grade's extents for the curve bins)
     const res = await scanGradeTonnage(c.source, {
       groupCol: cfg.group, gradeCols: cfg.grades, volume: vol, density: dens, proportion: prop,
-      dataStart: c.dataStart, decimal: c.d.decimal, rows: c.filterResult ? c.filterResult.nums : null, signal: ac.signal,
-      onProgress: (b, n) => { const e = $('#scanPct'); if (e) e.textContent = `${n ? Math.round(100 * b / n) : 0}%`; $('#meta').textContent = `grade–tonnage… ${n ? Math.round(100 * b / n) : 0}% · Esc to cancel`; },
+      dataStart: c.dataStart, decimal: c.d.decimal, rows: filterRows, signal: ac.signal,
+      onProgress: (b, n) => prog(b, n * 2),
     });
     if (ac.signal.aborted) return;
-    _gtResult = { ...res, config: cfg };
+    // pass 2 — cutoff curves via sluice's gradeTonnage accumulators (skipped when no grade has a range)
+    const curves = await scanGTCurves(c, cfg, { volume: vol, density: dens, proportion: prop }, res.total.grades,
+      { rows: filterRows, signal: ac.signal, onProgress: (b, n) => prog(n + b, n * 2) });
+    if (ac.signal.aborted) return;
+    _gtResult = { ...res, curves, config: cfg };
     $('#meta').textContent = c._meta || '';
     paintGradeTonnage();
   } catch (e) {
@@ -3029,6 +3165,11 @@ function wireGradeTonnage(c) {
   const run = $('#gtRun'); if (run) run.onclick = () => computeGradeTonnage();
   $('#helpBody').querySelectorAll('.sum-tbl th[data-k]').forEach((th) => th.onclick = () => { const k = th.getAttribute('data-k'); if (_gtSort.col === k) _gtSort.dir *= -1; else _gtSort = { col: k, dir: k === 'key' ? 1 : -1 }; paintGradeTonnage(); });
   const cp = $('#gtCopy'); if (cp) cp.onclick = () => { copyText(gtTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
+  $('#helpBody').querySelectorAll('.gt-ccopy').forEach((b) => b.onclick = () => {
+    const gi = +b.dataset.gi, cv = _gtResult && _gtResult.curves && _gtResult.curves[gi]; if (!cv) return;
+    const gn = c.schema[_gtResult.config.grades[gi]] ? c.schema[_gtResult.config.grades[gi]].name : '?';
+    copyText(gtCurveTSV(cv, gn)); b.textContent = 'copied ✓'; setTimeout(() => { b.textContent = 'copy'; }, 1200);
+  });
 }
 
 // A synthetic orebody block model generated in-page (networkless — no fetch, no bundled

@@ -249,6 +249,15 @@
   #help .gb-run { color: var(--accent); border-color: var(--accent); }
   #help .sum-tbl tr.gb-total td { border-top: 2px solid var(--bd2); color: var(--text-hi); font-weight: 600; cursor: default; }
   #help .sum-tbl tr.gb-total:hover { background: none; }
+  /* grade–tonnage cutoff curves (per grade field, under the grouped report) */
+  #help .gt-curve-sec { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--border); }
+  #help .gt-curve-head { font-family: var(--mono); font-size: 12px; color: var(--text-hi); margin-bottom: 6px; }
+  #help .gt-curve-head .gt-ccopy { float: none; margin-left: 8px; font: inherit; font-size: 10px; background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 3px; padding: 1px 8px; cursor: pointer; color: var(--muted); }
+  #help .gt-curve-head .gt-ccopy:hover { color: var(--text-hi); border-color: var(--accent); }
+  #help canvas.gt-curve { width: 100%; max-width: 640px; height: 140px; display: block; background: var(--bg-field); border: 1px solid var(--border); border-radius: 3px; }
+  #help .gt-curve-legend { font-size: 10px; color: var(--dim); margin: 3px 0 6px; }
+  #help .gt-curve-legend .lg-t { color: var(--accent); } #help .gt-curve-legend .lg-g { color: var(--info); }
+  #help .gt-cut-tbl th { cursor: default; }
   #help .help-head { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #help .help-head button { background: none; border: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
   #help .help-head button:hover { color: var(--text-hi); }
@@ -447,6 +456,7 @@
   "@gcu/archive": "../../ext/archive/index.js",
   "@gcu/dm":      "../../ext/dm/index.js",
   "@gcu/expr":    "../../ext/expr/index.js",
+  "@gcu/sluice":  "../../ext/sluice/index.js",
   "fflate":       "../../ext/archive/vendor/fflate.module.mjs"
 } }
 </script>
