@@ -11,6 +11,7 @@ import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, scanGroupBy, scanGradeTonnage, scanDataQuality, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
 import { compile, compileBool, validate, deps, complete, tokenize } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
 import { gradeTonnage } from '@gcu/sluice';   // streaming accumulators — the grade-tonnage cutoff curve (one accumulator per grade field, driven from lamina's record cursor)
+import { geometryAccumulator, inferGeometry } from '@gcu/recon';   // grid-geometry inference (harvested from BMA) — the grid summary
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
 import { detectDM, parseHeader, recordRange, decodeRecord } from '@gcu/dm';
@@ -2103,6 +2104,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
   { label: 'Calculated columns…', action: () => { if (hasFile()) openCalcManager(); } },
   { label: 'Group by…', action: () => { if (hasFile()) openGroupBy(); } },
   { label: 'Grade–tonnage…', action: () => { if (hasFile()) openGradeTonnage(); } },
+  { label: 'Grid summary…', action: () => { if (hasFile()) openGridSummary(); } },
   { label: 'Data quality…', action: () => { if (hasFile()) showDataQuality(); } },
   { label: 'Interpretation (delimiter / header / skip)…', action: () => { if (hasFile()) openOpts(); } },
   { sep: true },
@@ -2168,6 +2170,7 @@ const HELP = {
     + `<b>Σ stats</b> (toolbar) — precomputes stats for <i>every</i> column in one pass, then opens the <b>Column summary</b>: a sortable table (a row per column × n · null% · non-num · min · max · mean · std · CV · skew · zero% · p50). Sort by <b>null%</b> / <b>CV</b> / <b>non-num</b> to triage the file; click a row for that column's detail, or its <b>name</b> to jump to it in the grid; copy as TSV. The caret (▾) offers precompute-only — warm the cache so every Statistics opens instantly.<br><br>`
     + `<b>Group by</b> (Data → Group by…) — per-group aggregates over one or more value columns, with an optional <b>weight</b> column → a weighted mean shown next to the plain mean (so an unweighted vs length/volume-weighted grade difference is visible). Sort any column; click a group → filter the grid to it; copy as TSV. <b>Numeric bins:</b> add a calculated column <code>bin(rl, 10)</code>, then group by it — elevation bands, bench slices, etc.<br><br>`
     + `<b>Grade–tonnage</b> (Data → Grade–tonnage…) — the resource view. <b>Volume · density · ore proportion</b> are expressions (a column, a constant, or e.g. <code>dx * dy * dz</code> — auto-detected where the columns are obvious); tonnes = Σ(volume × density × proportion). The report gives <b>tonnes · tonnage-weighted grade · contained metal per domain</b> (+ Σ total), and each grade field gets its <b>cutoff curve</b> — tonnes ≥ cutoff falling, mean grade rising — with a cutoff table at round cutoffs (tonnes · grade · metal · % of tonnes). Respects the current filter; add more grade fields with <b>+ add grade</b>; every table copies as TSV. All computed windowed — a multi-GB model reports without loading.<br><br>`
+    + `<b>Grid summary</b> (Data → Grid summary…) — for a block model: infers the <b>grid</b> from the centroid columns (auto-detected; dx/dy/dz optional, they override spacing inference) — origin · block size · count per axis, coordinate <b>ordering</b> (fastest/slowest), <b>sub-block detection</b>, parent-cell count and <b>fill %</b>. "No regular grid" is itself an answer (scattered data, or a broken export). Copy as TSV.<br><br>`
     + `<b>Data quality</b> (Data → Data quality…) — scans a sample and flags the quiet bugs that bite an estimate: <b>leading zeros lost</b> (a code like <code>007</code> read as a number), <b>non-numeric values</b> in a numeric column, <b>missing-value sentinels</b> (<code>-999</code>…), thousands separators, whitespace padding, all-blank, constant, dates-as-text. Click a flag → that column's Statistics, or its <b>name</b> → jump to it in the grid; a leading-zeros flag offers a one-click <b>fix: treat as text</b>. <code>✓</code> when clean.<br><br>`
     + `<b>Color scale</b> — right-click a numeric header → Color scale: heatmap the cells (8 palettes · linear/log · clip outliers · reverse). <b>Record inspector</b> (View) — a row's fields as a list, follows the selection; <code>↑</code>/<code>↓</code> step, <b>pin</b> to compare two rows. <b>Columns</b> panel (View) — search · show/hide · reorder · pin-freeze.`],
   keys: ['Keyboard & mouse',
@@ -2576,7 +2579,9 @@ function statsToTSV(st, name) {
 
 function renderStats(st, ex = {}) {
   const row = (k, v) => `<tr><td style="color:var(--muted);padding-right:18px">${k}</td><td style="text-align:right">${v}</td></tr>`;
-  const copyBtn = '<button id="statsCopy" title="copy this summary (TSV)" style="float:right;font:inherit;font-size:11px;color:var(--muted);background:var(--bg-field);border:1px solid var(--bd2);border-radius:4px;padding:2px 8px;cursor:pointer">copy</button>';
+  const btnStyle = 'float:right;font:inherit;font-size:11px;color:var(--muted);background:var(--bg-field);border:1px solid var(--bd2);border-radius:4px;padding:2px 8px;cursor:pointer';
+  const copyBtn = `<button id="statsCopy" title="copy this summary (TSV)" style="${btnStyle}">copy</button>`
+    + (st.kind === 'number' && st.histogram ? `<button id="statsPng" title="save the histogram as PNG" style="${btnStyle};margin-right:6px">png</button>` : '');
   if (st.kind === 'number') {
     let h = `<div class="stats-opts"><label><input type="checkbox" id="optNoZero"${ex.excludeZero ? ' checked' : ''}> exclude zeros</label><label><input type="checkbox" id="optNoNeg"${ex.excludeNeg ? ' checked' : ''}> exclude negatives</label><button id="optApply" class="stats-apply" disabled>apply</button></div>`;
     if (st.histogram) {                                         // the column-profile chart
@@ -2658,6 +2663,8 @@ async function showColumnStats(uc) {
     }
     const cb = $('#statsCopy');
     if (cb) cb.onclick = () => { copyText(statsToTSV(st, name)); cb.textContent = 'copied ✓'; setTimeout(() => { cb.textContent = 'copy'; }, 1200); };
+    const pb = $('#statsPng');
+    if (pb) pb.onclick = () => { const cv = $('#profHist'); if (cv) saveCanvasPng(cv, `${String(name).replace(/[^\w.-]+/g, '_')}_hist.png`); };
     const xe = $('#statsExact');   // precomputed (≈) → recompute this one column exactly
     if (xe) xe.onclick = () => run({ force: true });
   };
@@ -3056,6 +3063,17 @@ function gtCurveTSV(cv, gradeName) {
   return L.join('\n');
 }
 
+// Save a chart canvas as PNG (at its dpr-scaled resolution) — blob + a[download],
+// no network involved. The memo-paste path until report export lands.
+function saveCanvasPng(canvas, filename) {
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }, 'image/png');
+}
+
 // Curve sections (per grade field with a computed curve): canvas + cutoff table.
 function renderGTCurves(c) {
   const curves = _gtResult.curves; if (!curves) return '';
@@ -3066,7 +3084,7 @@ function renderGTCurves(c) {
     const gn = c.schema[uc] ? c.schema[uc].name : '?';
     const t0 = cv.curve[0].tonnage;
     h += `<div class="gt-curve-sec">`;
-    h += `<div class="gt-curve-head">${esc(gn)} — by cutoff <button class="gt-ccopy" data-gi="${gi}">copy</button></div>`;
+    h += `<div class="gt-curve-head">${esc(gn)} — by cutoff <button class="gt-ccopy" data-gi="${gi}">copy</button><button class="gt-ccopy gt-csave" data-gi="${gi}">save png</button></div>`;
     h += `<canvas class="gt-curve" data-gi="${gi}"></canvas>`;
     h += `<div class="gt-curve-legend"><span class="lg-t">—</span> tonnes ≥ cutoff &nbsp; <span class="lg-g">—</span> mean grade ≥ cutoff</div>`;
     h += `<table class="sum-tbl gt-cut-tbl"><thead><tr><th class="num">cutoff</th><th class="num">tonnes ≥</th><th class="num">${esc(gn)}</th><th class="num">${esc(gn)}·t</th><th class="num">% of tonnes</th></tr></thead><tbody>`;
@@ -3166,12 +3184,136 @@ function wireGradeTonnage(c) {
   const run = $('#gtRun'); if (run) run.onclick = () => computeGradeTonnage();
   $('#helpBody').querySelectorAll('.sum-tbl th[data-k]').forEach((th) => th.onclick = () => { const k = th.getAttribute('data-k'); if (_gtSort.col === k) _gtSort.dir *= -1; else _gtSort = { col: k, dir: k === 'key' ? 1 : -1 }; paintGradeTonnage(); });
   const cp = $('#gtCopy'); if (cp) cp.onclick = () => { copyText(gtTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
-  $('#helpBody').querySelectorAll('.gt-ccopy').forEach((b) => b.onclick = () => {
+  $('#helpBody').querySelectorAll('.gt-ccopy:not(.gt-csave)').forEach((b) => b.onclick = () => {
     const gi = +b.dataset.gi, cv = _gtResult && _gtResult.curves && _gtResult.curves[gi]; if (!cv) return;
     const gn = c.schema[_gtResult.config.grades[gi]] ? c.schema[_gtResult.config.grades[gi]].name : '?';
     copyText(gtCurveTSV(cv, gn)); b.textContent = 'copied ✓'; setTimeout(() => { b.textContent = 'copy'; }, 1200);
   });
+  $('#helpBody').querySelectorAll('.gt-csave').forEach((b) => b.onclick = () => {
+    const gi = +b.dataset.gi;
+    const canvas = $('#helpBody').querySelector(`canvas.gt-curve[data-gi="${gi}"]`); if (!canvas) return;
+    const gn = c.schema[_gtResult.config.grades[gi]] ? c.schema[_gtResult.config.grades[gi]].name : 'grade';
+    const stem = String(c.label || 'file').replace(/\.[^.]*$/, '').replace(/[^\w.-]+/g, '_');
+    saveCanvasPng(canvas, `${stem}_gt_${gn}.png`);
+  });
 }
+
+// ── grid summary — @gcu/recon's geometry inference (harvested from BMA) driven from
+// lamina's record cursor: one windowed pass collecting per-axis coord material, then
+// inferGeometry → origin / block size / count / coordinate ordering / sub-blocks. ──
+let _gsConfig = null, _gsResult = null;
+function openGridSummary() {
+  const c = current; if (!c || c.d.kind !== 'delimited') return;
+  const num = (re) => { const i = c.schema.findIndex((s) => s.type === 'number' && re.test(s.name)); return i >= 0 ? i : null; };
+  _gsConfig = {
+    x: num(/^(x|xc|xcent(er|re)?|xmid|east(ing)?|xpt)$/i),
+    y: num(/^(y|yc|ycent(er|re)?|ymid|north(ing)?|ypt)$/i),
+    z: num(/^(z|zc|zcent(er|re)?|zmid|elev(ation)?|rl|level)$/i),
+    dx: num(/^(dx|xinc|xsize|xdim|dim_?x)$/i),
+    dy: num(/^(dy|yinc|ysize|ydim|dim_?y)$/i),
+    dz: num(/^(dz|zinc|zsize|zdim|dim_?z)$/i),
+  };
+  _gsResult = null;
+  $('#helpTitle').textContent = `Grid summary — ${c.label}${c.filterResult ? ' (filtered)' : ''}`;
+  $('.help-box').classList.add('wide');
+  $('#help').classList.add('show');
+  paintGridSummary();
+}
+function paintGridSummary() {
+  const c = current; if (!c) return;
+  const sel = (f, label) => {
+    let h = `<label>${label} <select class="gs-col" data-f="${f}"><option value=""${_gsConfig[f] == null ? ' selected' : ''}>— none —</option>`;
+    c.schema.forEach((s, i) => { if (s.type === 'number') h += `<option value="${i}"${i === _gsConfig[f] ? ' selected' : ''}>${esc(s.name)}</option>`; });
+    return h + '</select></label>';
+  };
+  let h = '<div class="gb-form">';
+  h += sel('x', 'X') + sel('y', 'Y') + sel('z', 'Z');
+  h += sel('dx', 'dx') + sel('dy', 'dy') + sel('dz', 'dz');
+  h += `<button id="gsRun" class="gb-run">Summarize</button>`;
+  h += '</div>';
+  h += `<div id="gsResults">${_gsResult ? renderGSResult(c) : '<div style="color:var(--dim);margin-top:8px">pick the centroid columns (dx/dy/dz optional — they override spacing inference), then Summarize</div>'}</div>`;
+  $('#helpBody').innerHTML = h;
+  $('#helpBody').querySelectorAll('.gs-col').forEach((s) => s.onchange = () => { _gsConfig[s.dataset.f] = s.value === '' ? null : +s.value; });
+  const run = $('#gsRun'); if (run) run.onclick = () => computeGridSummary();
+  const cp = $('#gsCopy'); if (cp) cp.onclick = () => { copyText(gsTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
+}
+async function computeGridSummary() {
+  const c = current; if (!c) return;
+  if (_gsConfig.x == null || _gsConfig.y == null) { const r = $('#gsResults'); if (r) r.innerHTML = '<div style="color:var(--fault);margin-top:8px">pick at least X and Y centroid columns</div>'; return; }
+  const cols = {};   // recon takes column KEYS on the row object — use the axis names as keys
+  for (const f of ['x', 'y', 'z', 'dx', 'dy', 'dz']) if (_gsConfig[f] != null) cols[f] = f;
+  const acc = geometryAccumulator(cols);
+  let s = acc.create(), rowsTotal = 0;
+  const ac = newFooterScan();
+  const rEl = $('#gsResults'); if (rEl) rEl.innerHTML = '<div style="color:#777;margin-top:8px">scanning… <span id="scanPct">0%</span></div>';
+  $('#meta').textContent = 'grid summary…';
+  try {
+    const dec = c.d.decimal, cfg = _gsConfig;
+    await c.source.eachRecord({
+      dataStart: c.dataStart, rows: c.filterResult ? c.filterResult.nums : null, signal: ac.signal,
+      onProgress: (b, n) => { const p = n ? Math.round(100 * b / n) : 0; const e = $('#scanPct'); if (e) e.textContent = `${p}%`; $('#meta').textContent = `grid summary… ${p}% · Esc to cancel`; },
+    }, (disp, fields) => {
+      rowsTotal++;
+      const row = {};
+      for (const f in cols) { const v = parseNum(fields[cfg[f]], dec); if (!Number.isNaN(v)) row[f] = v; }
+      acc.push(s, row);
+    });
+    if (ac.signal.aborted) return;
+    const accResult = acc.result(s);
+    _gsResult = { facet: inferGeometry(accResult), accResult, rowsTotal, config: { ..._gsConfig } };
+    $('#meta').textContent = c._meta || '';
+    paintGridSummary();
+  } catch (e) {
+    if (e && e.name === 'AbortError') { $('#meta').textContent = c._meta || 'cancelled'; if (rEl) rEl.innerHTML = '<div style="color:var(--dim);margin-top:8px">cancelled</div>'; }
+    else if (rEl) rEl.innerHTML = `<div style="color:var(--fault);margin-top:8px">${esc(e.message)}</div>`;
+  } finally { if (_footerScanAbort === ac) _footerScanAbort = null; }
+}
+// The summary rows shared by render + TSV: [key, value, note?] triples.
+// Coordinates render locale-grouped, never exponential (a northing is 7,780,000 — not 7.78e+6).
+const fmtCoord = (x) => x == null ? '—' : (Number.isInteger(x) ? x.toLocaleString() : x.toLocaleString(undefined, { maximumFractionDigits: 4 }));
+function gsLines(c) {
+  const { facet, accResult, rowsTotal, config } = _gsResult;
+  const name = (i) => (c.schema[i] ? c.schema[i].name : '?');
+  const L = [];
+  if (facet.kind === 'gridded') {
+    const [nx, ny, nz] = facet.count, cells = nx * ny * nz;
+    const o = facet.order;
+    L.push(['grid', 'regular', `ordering ${o.fastest} fastest · ${o.middle} · ${o.slowest} slowest`]);
+    ['x', 'y', 'z'].forEach((a, i) => {
+      const ax = accResult.axes[a];
+      L.push([`${a.toUpperCase()} (${name(config[a])})`, `origin ${fmtCoord(facet.origin[i])} · block ${fmtN(facet.size[i])} · count ${facet.count[i]}`, `extent ${fmtCoord(ax.min)} – ${fmtCoord(ax.max)}`]);
+    });
+    L.push(['parent cells', `${fmtInt(nx)} × ${fmtInt(ny)} × ${fmtInt(nz)} = ${fmtInt(cells)}`]);
+    L.push(['parent block volume', fmtN(facet.size[0] * facet.size[1] * facet.size[2])]);
+    L.push(['rows scanned', fmtInt(rowsTotal)]);
+    const fill = cells ? rowsTotal / cells : 0;
+    L.push(['fill', `${(100 * fill).toFixed(1)}%`, fill > 1 ? 'over 100% — sub-blocked or duplicate blocks' : '']);
+    if (facet.subBlocked) {
+      for (const a of ['x', 'y', 'z']) {
+        const subs = facet.subBlocks && facet.subBlocks[a];
+        if (subs && subs.length) L.push([`${a.toUpperCase()} sub-blocks`, subs.map((sb) => `${fmtN(sb.size)} (÷${sb.ratio})`).join(' · ')]);
+      }
+    }
+  } else {
+    L.push(['grid', 'none detected', 'coordinates don\'t sit on one consistent spacing']);
+    for (const a in accResult.axes) {
+      const ax = accResult.axes[a];
+      if (!ax.count) continue;
+      L.push([`${a.toUpperCase()} (${name(config[a])})`, `extent ${fmtCoord(ax.min)} – ${fmtCoord(ax.max)}`, `${fmtInt(ax.values.length)}${ax.overflow ? '+' : ''} distinct values`]);
+    }
+    L.push(['rows scanned', fmtInt(rowsTotal)]);
+  }
+  const overflowed = Object.values(accResult.axes).some((ax) => ax.overflow);
+  if (overflowed) L.push(['note', 'distinct-coordinate cap hit on an axis', 'inference used the capped set']);
+  return L;
+}
+function renderGSResult(c) {
+  let h = '<button id="gsCopy" class="sum-copy">copy all</button>';
+  h += '<div style="overflow:auto;max-height:60vh;margin-top:4px;width:fit-content;max-width:100%"><table class="sum-tbl"><tbody>';
+  for (const [k, v, note] of gsLines(c)) h += `<tr><td style="color:var(--muted)">${esc(k)}</td><td>${esc(v)}</td><td style="color:var(--dim)">${note ? esc(note) : ''}</td></tr>`;
+  return h + '</tbody></table></div>';
+}
+function gsTSV(c) { return gsLines(c).map(([k, v, note]) => `${k}\t${v}${note ? '\t' + note : ''}`).join('\n'); }
 
 // A synthetic orebody block model generated in-page (networkless — no fetch, no bundled
 // file) so a first-time visitor with nothing to open can see lamina work: coordinates,
@@ -3261,7 +3403,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, scanGroupBy, scanDataQuality, precomputeStats, showSummary, openGroupBy, computeGroupBy, openGradeTonnage, computeGradeTonnage, openSampleData, showDataQuality, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, scanGroupBy, scanDataQuality, precomputeStats, showSummary, openGroupBy, computeGroupBy, openGradeTonnage, computeGradeTonnage, openGridSummary, computeGridSummary, openSampleData, showDataQuality, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;
