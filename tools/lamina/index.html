@@ -361,6 +361,23 @@
   @media (display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay), (display-mode: fullscreen) {
     #empty .empty-dl { display: none; }
   }
+  /* Window Controls Overlay: in an installed PWA that opts in (manifest display_override),
+     draw the toolbar into the OS title-bar strip and make it a drag handle, dodging the
+     window buttons via env(titlebar-area-*). STRICTLY scoped to this media query — it never
+     matches in a browser tab or a plain standalone window, so the standalone rendering (and
+     the current standalone Store app) is byte-for-byte unchanged. Only horizontal geometry +
+     drag change; heights stay put so #grid alignment is preserved. */
+  @media (display-mode: window-controls-overlay) {
+    #toolbar {
+      left: env(titlebar-area-x, 0);
+      right: auto;
+      width: env(titlebar-area-width, 100%);
+      -webkit-app-region: drag; app-region: drag;
+    }
+    #toolbar button, #toolbar input, #toolbar .kind {
+      -webkit-app-region: no-drag; app-region: no-drag;
+    }
+  }
   #empty .empty-recents { margin-top: 26px; max-width: 720px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; }
   #empty .empty-recents .er-label { color: var(--dim); }
   #empty .empty-recents .er-chip { pointer-events: auto; cursor: pointer; color: var(--text); background: var(--bg-field); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
