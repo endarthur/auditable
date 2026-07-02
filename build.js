@@ -1678,6 +1678,94 @@ if (target === 'moncad') {
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: micro — the massive point-cloud / block-model viewer, single-file
+// ══════════════════════════════════════════════════
+// lamina's registry pattern, smaller still: the whole app is ONE inline module
+// script in tools/micro/index.html plus two library bundles (@gcu/condenser,
+// @gcu/expr). Their relative dev imports are rewritten to '#'-form and resolved
+// by an inline import map over blob URLs. Boot stays in the clear (no gzip
+// self-extractor → no eval → the CSP keeps no 'unsafe-eval'). Output: micro.html
+// (standalone, offline). The PWA shell (manifest/sw/icons) is added by the
+// gentropic/micro deploy repo, exactly like lamina.
+if (target === 'micro') {
+  const micDir = path.join(__dirname, 'tools/micro');
+  const SPEC = {
+    '../../ext/condenser/src/main.js': '#condenser',   // dev runs the src tree; the build ships the bundle
+    '../../ext/expr/index.js': '#expr',
+  };
+  const libs = [
+    ['condenser', 'ext/condenser/index.js'],
+    ['expr',      'ext/expr/index.js'],
+  ];
+  const modules = [];
+  for (const [name, rel] of libs) {
+    const pth = path.join(__dirname, rel);
+    if (!fs.existsSync(pth)) { console.error(`Error: ${rel} not found — build the ext package first.`); process.exit(1); }
+    modules.push({ name, source: fs.readFileSync(pth, 'utf8').replace(/^\n+/, '').replace(/\n+$/, '') });
+  }
+
+  let html = fs.readFileSync(path.join(micDir, 'index.html'), 'utf8');
+  const appMatch = html.match(/<script type="module">\n([\s\S]*?)<\/script>/);
+  if (!appMatch) { console.error('Error: tools/micro/index.html — inline module script not found.'); process.exit(1); }
+  let appSrc = appMatch[1];
+  for (const [from, to] of Object.entries(SPEC)) appSrc = appSrc.split(`from '${from}'`).join(`from '${to}'`);
+  modules.push({ name: 'app', source: appSrc.trim() });
+
+  const entries = modules.map((m) =>
+    JSON.stringify(m.name) + ': ' + JSON.stringify(m.source).replace(/<\/script>/gi, '<\\/script>'));
+  const order = JSON.stringify(modules.map((m) => m.name));
+  const boot =
+    '(async () => {\n' +
+    'const _S = {\n' + entries.join(',\n') + '\n};\n' +
+    'const _O = ' + order + ';\n' +
+    'const _U = {};\n' +
+    "for (const n of _O) _U[n] = URL.createObjectURL(new Blob([_S[n] + '\\n//# sourceURL=micro/' + n + '.js\\n'], { type: 'application/javascript' }));\n" +
+    "const _m = document.createElement('script'); _m.type = 'importmap';\n" +
+    'const _im = {}; for (const n of _O) _im["#" + n] = _U[n];\n' +
+    "_m.textContent = JSON.stringify({ imports: _im }); document.body.appendChild(_m);\n" +
+    'for (const n of _O) await import(_U[n]);\n' +
+    '_m.remove();\n' +
+    '})();\n';
+
+  // Build stamp (weir's content-hash trick — computed BEFORE substitution so the
+  // id is never part of its own hash), same shape as lamina's.
+  const micVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'ext/condenser/package.json'), 'utf8')).version || '0.0.0';
+  const micBuildId = require('crypto').createHash('sha256').update(boot).digest('hex').slice(0, 7);
+  const micStamp = `${micVersion} · ${micBuildId} · ${buildDateFromGit()}`;
+  const bootStamped = boot.replace("const __MICRO_BUILD__ = 'dev';", () => `const __MICRO_BUILD__ = '${micStamp}';`);
+
+  html = html.replace(appMatch[0], () => `<script>\n${bootStamped}</script>`);
+  const outPath = path.join(__dirname, 'micro.html');
+  fs.writeFileSync(outPath, html);
+  console.log(`Built micro.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB in the clear, ${modules.length} modules) — build ${micStamp}`);
+
+  // seal: emit + verify (pure source scans; the runtime network gate joins CI
+  // with the deploy repo). Artifacts → dist/seal/micro/ for the security wing.
+  (async () => {
+    try {
+      const seal = await import('./ext/seal/index.js');
+      const template = JSON.parse(fs.readFileSync(path.join(micDir, 'capability.template.json'), 'utf8'));
+      const bytes = fs.readFileSync(outPath);
+      const { sha256, capability, cspText, sbom } = seal.emitArtifacts({ bytes, template, deps: [], version: micVersion });
+      await seal.verifyClaims({ bytes, capability });
+      const outDir = path.join(__dirname, 'dist/seal/micro');
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.writeFileSync(path.join(outDir, 'capability.json'), JSON.stringify(capability, null, 2) + '\n');
+      fs.writeFileSync(path.join(outDir, 'csp.txt'), cspText);
+      fs.writeFileSync(path.join(outDir, 'sbom.json'), JSON.stringify(sbom, null, 2) + '\n');
+      fs.writeFileSync(path.join(outDir, 'sha256.txt'), `${sha256}  micro.html\n`);
+      console.log(`seal: ${capability.profile} verified + emitted → dist/seal/micro/ (sha256 ${sha256.slice(0, 12)}…)`);
+      process.exit(0);
+    } catch (e) {
+      if (e.name === 'SealError') { console.error('\nseal: VERIFY FAILED —', e.message); console.error(JSON.stringify(e.report, null, 2)); }
+      else console.error('\nseal: emit/verify error —', e.stack || e.message);
+      process.exit(1);
+    }
+  })();
+  return;   // the async IIFE owns process.exit; don't fall through
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: lamina — the windowed "open any huge file" viewer, single-file
 // ══════════════════════════════════════════════════
 // A registry build (blob URLs + import map, like auditable/works) but tiny: the

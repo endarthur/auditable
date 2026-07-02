@@ -6,6 +6,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' blob:; style-src 'unsafe-inline'; img-src data:; manifest-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <title>micro</title>
 <style>
   :root {
@@ -193,6 +194,7 @@
 <script type="module">
 import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
+const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
 const cv = $('#cv');
@@ -779,7 +781,8 @@ block models (.csv, Datamine .dm). Streaming, no import step — first look in a
 second at any size, densifying while you orbit. Filter, section, and pick against the
 source file. Nothing leaves your machine.<br><br>
 Engine: <code>@gcu/condenser</code>. Part of the Auditable project — Geoscientific Chaos
-Union, <code>gentropic.org</code>. MIT.`;
+Union, <code>gentropic.org</code>. MIT.<br><br>
+build <code>${__MICRO_BUILD__}</code>`;
 function showHelp(title, html) {
   $('#helpTitle').textContent = title;
   $('#helpBody').innerHTML = html;

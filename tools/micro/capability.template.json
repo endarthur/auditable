@@ -1,0 +1,33 @@
+{
+  "tool": "micro",
+  "summary": "Open massive spatial-element files — LiDAR point clouds and block models, tens of millions of elements — and orbit / filter / section / pick / measure against the source. Streaming, no import step, offline.",
+  "profile": "Sealed",
+  "flags": [],
+  "version": "0.1.0",
+  "sha256": "<emitted by @gcu/seal at build>",
+  "doi": "<zenodo — on first frozen release>",
+  "executes": {
+    "runtime_codegen": false,
+    "wasm": false,
+    "remote_import": false
+  },
+  "reach": {
+    "network": "none",
+    "telemetry": false
+  },
+  "filesystem": {
+    "reads": "user-opened files only (picker / drag-drop)",
+    "writes": "user-initiated PNG export only, to a user-chosen path (OS Save dialog)",
+    "silent_or_arbitrary_io": false,
+    "local_state": "render-budget preference in localStorage — local only, never transmitted"
+  },
+  "host_needs": {
+    "secure_origin": true,
+    "admin": false,
+    "install": false,
+    "csp": "<emitted by @gcu/seal from the artifact's own <meta>>"
+  },
+  "third_party": [],
+  "source": "https://github.com/gentropic/auditable (ext/condenser + tools/micro)",
+  "license": "MIT"
+}
