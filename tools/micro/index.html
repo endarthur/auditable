@@ -49,6 +49,19 @@
   .menu .item:hover { background: var(--bg-btn); color: var(--text-hi); }
   .menu .item .kbd { color: var(--dim); }
   .menu .sep { height: 1px; margin: 4px 0; background: var(--border); }
+  #acPopup {
+    position: fixed; z-index: 50; display: none; flex-direction: column; max-height: 240px; overflow-y: auto;
+    background: #1d1d1d; border: 1px solid var(--bd2); border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+    font-family: var(--mono); font-size: 12px;
+  }
+  #acPopup.show { display: flex; }
+  #acPopup .ac-item { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+  #acPopup .ac-item.sel, #acPopup .ac-item:hover { background: var(--bg-btn); }
+  #acPopup .ac-val { color: var(--text-hi); }
+  #acPopup .ac-val.ac-value { color: var(--ok); }
+  #acPopup .ac-val.ac-function { color: var(--accent); }
+  #acPopup .ac-val.ac-keyword, #acPopup .ac-val.ac-operator { color: var(--info); }
+  #acPopup .ac-kind { color: var(--dim); font-size: 10px; }
   #help {
     position: absolute; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center;
     background: rgba(0, 0, 0, 0.5);
@@ -158,13 +171,14 @@
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .csv anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
   <div id="drop-hint">drop to open</div>
+  <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
   <div id="recPanel"><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
   <footer><span id="meta">—</span><span id="stats"></span></footer>
 
 <script type="module">
 import { openLas, decodeLasRecords, openBlockModel, openDmModel, fetchDmRecord, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
-import { compileBool, validate } from '../../ext/expr/index.js';   // lamina's filter language, verbatim
+import { compileBool, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 
 const $ = (s) => document.querySelector(s);
 const cv = $('#cv');
@@ -516,6 +530,69 @@ async function applyBlockFilter(expr) {
   requestRender();
   $('#meta').textContent = `${_blockDoc.metaLine} · filter: ${hits.toLocaleString()} of ${rec.toLocaleString()} match`;
 }
+// ── autocomplete (lamina's engine over @gcu/expr complete()): columns, functions,
+// keywords, and DATA VALUES (the category dictionary — picking "HEMATITE" from the
+// list is how you dodge the bare-word-vs-quoted footgun). ──
+function columnValues(name) {
+  const h = _blockDoc && _blockDoc.header;
+  if (!h || !h.categories) return [];
+  const lc = String(name).toLowerCase();
+  const catName = h.mapping.cat != null ? h.columns[h.mapping.cat] : null;
+  return catName && catName.toLowerCase() === lc ? h.categories : [];
+}
+const filterCtx = () => (_blockDoc ? { columns: blockSchema(_blockDoc.header), values: columnValues } : null);
+const _ac = { input: null, res: null, sel: 0, suppress: false };
+function attachAutocomplete(input, getCtx) {
+  input.addEventListener('input', () => acRefresh(input, getCtx));
+  input.addEventListener('keydown', (e) => acKeydown(e, input), true);   // capture: beat apply-on-Enter
+  input.addEventListener('click', () => acRefresh(input, getCtx));
+  input.addEventListener('blur', () => setTimeout(acClose, 120));        // delay so a popup click lands first
+}
+function acRefresh(input, getCtx) {
+  if (_ac.suppress) return;
+  const ctx = getCtx(); if (!ctx) return acClose();
+  const res = complete(input.value, input.selectionStart, ctx);
+  if (!res.options.length) return acClose();
+  _ac.input = input; _ac.res = res; _ac.sel = 0; acRender(input);
+}
+function acRender(input) {
+  const pop = $('#acPopup'); pop.innerHTML = '';
+  _ac.res.options.forEach((o, i) => {
+    const row = document.createElement('div'); row.className = 'ac-item' + (i === _ac.sel ? ' sel' : '');
+    const v = document.createElement('span'); v.className = 'ac-val ac-' + o.kind; v.textContent = o.value;
+    const k = document.createElement('span'); k.className = 'ac-kind'; k.textContent = o.detail || o.kind;
+    row.appendChild(v); row.appendChild(k);
+    row.onmousedown = (e) => { e.preventDefault(); acAccept(i); };
+    pop.appendChild(row);
+  });
+  const r = input.getBoundingClientRect();
+  pop.style.left = Math.min(r.left, innerWidth - 300) + 'px';
+  pop.style.top = (r.bottom + 2) + 'px';
+  pop.style.minWidth = Math.min(Math.max(r.width, 180), 320) + 'px';
+  pop.classList.add('show');
+}
+function acClose() { const pop = $('#acPopup'); if (pop) pop.classList.remove('show'); _ac.res = null; }
+function acKeydown(e, input) {
+  if (!_ac.res || !$('#acPopup').classList.contains('show')) return;     // closed: Enter applies as usual
+  const n = _ac.res.options.length;
+  if (e.key === 'ArrowDown') { e.preventDefault(); e.stopImmediatePropagation(); _ac.sel = (_ac.sel + 1) % n; acRender(input); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopImmediatePropagation(); _ac.sel = (_ac.sel - 1 + n) % n; acRender(input); }
+  else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopImmediatePropagation(); acAccept(_ac.sel); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); acClose(); }
+}
+function acAccept(i) {
+  const input = _ac.input, res = _ac.res; if (!res) return;
+  const o = res.options[i]; if (!o) return;
+  const spaceAfter = (o.kind === 'operator' || o.kind === 'keyword') && !o.value.endsWith('(');
+  const ins = o.value + (spaceAfter ? ' ' : '');
+  input.value = input.value.slice(0, res.from) + ins + input.value.slice(res.to);
+  const caret = res.from + ins.length;
+  input.focus(); input.setSelectionRange(caret, caret);
+  _ac.suppress = true; input.dispatchEvent(new Event('input')); _ac.suppress = false;
+  acClose();
+}
+attachAutocomplete($('#filter'), filterCtx);
+
 $('#filter').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') applyBlockFilter($('#filter').value);
   else if (e.key === 'Escape') { $('#filter').value = ''; applyBlockFilter(''); }
@@ -593,7 +670,7 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 pick a preset (plan · N–S · E–W) or press <code>k</code> and <b>drag a line</b> — the vertical section through it (<code>Esc</code> cancels) · <code>x</code> toggles the section on/off<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
 <b>filter</b> (block models) — lamina's language over every column in the file:<br>
-<code>FE &gt; 55 and LITO = "HEMATITE"</code> · <code>between</code> · <code>in (…)</code> — Enter applies, Esc clears<br>
+<code>/</code> focuses the box · autocomplete offers columns, functions, and the category values — <code>Tab</code>/<code>Enter</code> accepts<br><code>FE &gt; 55 and LITO = "HEMATITE"</code> · <code>between</code> · <code>in (…)</code> — Enter applies, Esc clears<br>
 default hides non-matching blocks; <b>context</b> keeps them dimmed<br><br>
 <b>knobs</b><br>
 <b>min/max</b> boxes clip the color scale (outliers stop eating the ramp; empty = auto) · View menu: <b>boxes</b> = true block faces · <b>points</b> = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
@@ -737,6 +814,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'd') setView(cam.state.theta, PHI_MAX);  // plan (looking down)
   else if (k === 'u') setView(cam.state.theta, -PHI_MAX); // looking up
   else if (k === 'l') viewAlongSection();                 // face-on to the section
+  else if (k === '/') { e.preventDefault(); $('#filter').focus(); }
   else if (k === 'o') { cam.setOrtho(!cam.state.ortho); requestRender(); }
   else if (k === 'x') toggleSection();
   else if (k === '[') scrubSection(-1);
