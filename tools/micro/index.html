@@ -105,10 +105,6 @@
     <button class="mb" id="mFile">File</button>
     <button class="mb" id="mView">View</button>
     <button class="mb" id="mHelp">Help</button>
-    <label>view <select id="viewMode" title="boxes = ray-cast impostors (true block faces) · points = fixed-size splats (snappier)">
-      <option value="boxes">boxes</option>
-      <option value="points">points</option>
-    </select></label>
     <label>color <select id="colorBy">
       <option value="0">elevation</option>
       <option value="1">intensity</option>
@@ -166,12 +162,13 @@ attachOrbitInput(cv, cam, { onChange: requestRender });
 new ResizeObserver(() => { const [w, h] = renderer.resize(); cam.setAspect(w / h); requestRender(); }).observe(cv);
 
 let converged = true;
+let _viewMode = 'boxes';                                   // boxes = impostors · points = fixed splats (View menu)
 function loop(t) {
   if (dirty || !converged) {                               // keep converging while still (progressive accumulation)
     dirty = false;
     const [w, h] = renderer.resize();
     cam.setAspect(w / h);
-    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: $('#viewMode').value === 'points', section: currentSection() };
+    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', section: currentSection() };
     const t0 = performance.now();
     const r = edl.render(w, h, cam, () => renderer.draw(cam, opts), { enabled: $('#edlOn').checked, strength: +$('#edlStr').value });
     converged = r.converged;
@@ -305,7 +302,7 @@ $('#btnShot').onclick = () => {
   }, 'image/png');
 };
 
-['colorBy', 'edlOn', 'edlStr', 'ptPx', 'budget', 'viewMode'].forEach((id) => $('#' + id).addEventListener('input', requestRender));
+['colorBy', 'edlOn', 'edlStr', 'ptPx', 'budget'].forEach((id) => $('#' + id).addEventListener('input', requestRender));
 // budget survives refreshes (per-frame element budget is a machine preference)
 try { const b = localStorage.getItem('micro.budget'); if (b && [...$('#budget').options].some((o) => o.value === b)) $('#budget').value = b; } catch { /* private mode */ }
 $('#budget').addEventListener('change', () => { try { localStorage.setItem('micro.budget', $('#budget').value); } catch { /* ignore */ } });
@@ -557,6 +554,10 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Plan (down)', kbd: 'd', action: () => setView(cam.state.theta, PHI_MAX) },
   { label: 'From below', kbd: 'u', action: () => setView(cam.state.theta, -PHI_MAX) },
   { sep: true },
+  { label: (_viewMode === 'boxes' ? '✓ ' : '') + 'Blocks as boxes', action: () => { _viewMode = 'boxes'; requestRender(); } },
+  { label: (_viewMode === 'points' ? '✓ ' : '') + 'Blocks as points', action: () => { _viewMode = 'points'; requestRender(); } },
+  { sep: true },
+  { label: 'Section on/off', kbd: 'x', action: toggleSection },
   { label: 'Along the section', kbd: 'l', action: viewAlongSection },
   { label: 'Scrub section back', kbd: '[', action: () => scrubSection(-1) },
   { label: 'Scrub section forward', kbd: ']', action: () => scrubSection(1) },
@@ -568,13 +569,13 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below<br><br>
 <b>sections</b> — a slab through the data; everything hidden is neither drawn nor pickable<br>
-pick a preset (plan · N–S · E–W) or press <code>k</code> and <b>drag a line</b> — the vertical section through it (<code>Esc</code> cancels)<br>
+pick a preset (plan · N–S · E–W) or press <code>k</code> and <b>drag a line</b> — the vertical section through it (<code>Esc</code> cancels) · <code>x</code> toggles the section on/off<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
 <b>filter</b> (block models) — lamina's language over every column in the file:<br>
 <code>FE &gt; 55 and LITO = "HEMATITE"</code> · <code>between</code> · <code>in (…)</code> — Enter applies, Esc clears<br>
 default hides non-matching blocks; <b>context</b> keeps them dimmed<br><br>
 <b>knobs</b><br>
-<b>view</b> boxes = true block faces · points = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
+View menu: <b>boxes</b> = true block faces · <b>points</b> = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
 const HELP_ABOUT = `
 <b>micro</b> — a viewer for massive spatial-element files: LiDAR point clouds (.las) and
 block models (.csv, Datamine .dm). Streaming, no import step — first look in about a
@@ -675,6 +676,24 @@ function viewAlongSection() {
   st.phi = Math.max(-PHI_MAX, Math.min(PHI_MAX, Math.asin(Math.max(-1, Math.min(1, off[2])))));
   cam.update(); requestRender();
 }
+// section on/off toggle (x): remembers the last mode (knife keeps its cut plane)
+let _lastSecMode = 'plan';
+function toggleSection() {
+  const sel = $('#secMode');
+  if (sel.value === 'off') {
+    sel.value = (_lastSecMode === 'knife' && !_knife) ? 'plan' : _lastSecMode;
+    // re-entering knife with a stored cut should NOT re-arm drawing — show the cut
+    if (sel.value === 'knife' && _knife) {
+      $('#secPos').style.display = ''; $('#secHalf').style.display = '';
+      requestRender();
+      return;
+    }
+  } else {
+    _lastSecMode = sel.value;
+    sel.value = 'off';
+  }
+  sel.dispatchEvent(new Event('input'));
+}
 // scrub the section by one slab thickness (adjacent section, like flipping pages)
 function scrubSection(dir) {
   const sec = currentSection(); if (!sec) return;
@@ -697,6 +716,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'd') setView(cam.state.theta, PHI_MAX);  // plan (looking down)
   else if (k === 'u') setView(cam.state.theta, -PHI_MAX); // looking up
   else if (k === 'l') viewAlongSection();                 // face-on to the section
+  else if (k === 'x') toggleSection();
   else if (k === '[') scrubSection(-1);
   else if (k === ']') scrubSection(1);
 });
@@ -803,7 +823,7 @@ cv.addEventListener('pointerup', (e) => {
   if (!d || d.b !== 0) return;
   if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5 || performance.now() - d.t > 500) return;
   const r = cv.getBoundingClientRect();
-  const rec = renderer.pick(e.clientX - r.left, e.clientY - r.top, cam, { pointPx: +$('#ptPx').value, blocksAsPoints: $('#viewMode').value === 'points', section: currentSection() });
+  const rec = renderer.pick(e.clientX - r.left, e.clientY - r.top, cam, { pointPx: +$('#ptPx').value, blocksAsPoints: _viewMode === 'points', section: currentSection() });
   if (rec == null) { $('#recPanel').classList.remove('show'); renderer.setPicked(null); requestRender(); return; }
   renderer.setPicked(rec); requestRender();
   showRecord(rec);
