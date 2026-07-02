@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<!-- micro — a viewer for massive spatial-element files (dev page, M1).
+     The engine is @gcu/condenser; this page is the thin instrument around it.
+     Part of the Auditable project — https://github.com/gentropic/auditable -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>micro</title>
+<style>
+  :root {
+    --bg: #121212; --bg-bar: #1a1a1a; --bg-field: #141414; --bg-btn: #242424;
+    --border: #2a2a2a; --bd2: #333; --text: #bbb; --text-hi: #ddd; --muted: #888;
+    --dim: #777; --faint: #555; --accent: #c89b3c; --info: #4a78b0; --ok: #8cb878;
+    --mono: 'Space Mono', ui-monospace, monospace; --sans: 'Barlow', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); overflow: hidden; }
+  #bar {
+    position: absolute; left: 0; right: 0; top: 0; height: 38px; display: flex; align-items: center;
+    gap: 10px; padding: 0 10px; border-bottom: 1px solid var(--border); background: var(--bg-bar); z-index: 2;
+  }
+  #bar .title { font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #bar button, #bar select {
+    font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-btn);
+    border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 10px; cursor: pointer;
+  }
+  #bar button:hover { background: #2e2e2e; }
+  #bar label { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  #bar input[type="range"] { width: 90px; accent-color: var(--accent); }
+  #bar .spacer { flex: 1; }
+  #view { position: absolute; inset: 38px 0 24px 0; }
+  #cv { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  #cv:active { cursor: grabbing; }
+  footer {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 24px; display: flex; align-items: center;
+    gap: 16px; padding: 0 12px; border-top: 1px solid var(--border); background: #161616;
+    font-family: var(--mono); font-size: 11px; color: var(--dim);
+  }
+  #empty {
+    position: absolute; inset: 38px 0 24px 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 10px; color: var(--faint); font-family: var(--mono); font-size: 13px;
+    text-align: center; pointer-events: none; z-index: 1;
+  }
+  #empty b { color: var(--muted); }
+  #empty a { color: var(--accent); pointer-events: auto; cursor: pointer; text-decoration: none; border-bottom: 1px solid rgba(200,155,60,.35); }
+  #drop-hint {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center; z-index: 3;
+    background: rgba(200, 155, 60, 0.08); border: 2px dashed var(--accent); color: var(--accent);
+    font-family: var(--mono); font-size: 15px;
+  }
+  body.drag #drop-hint { display: flex; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <span class="title">micro</span>
+    <button id="btnOpen">Open…</button>
+    <label>color <select id="colorBy">
+      <option value="0">elevation</option>
+      <option value="1">intensity</option>
+      <option value="2">classification</option>
+      <option value="3">rgb</option>
+    </select></label>
+    <label><input type="checkbox" id="edlOn" checked> EDL</label>
+    <label>strength <input type="range" id="edlStr" min="0" max="3" step="0.1" value="1"></label>
+    <label>pt px <input type="range" id="ptPx" min="1" max="6" step="0.5" value="2.5"></label>
+    <label>budget <select id="budget">
+      <option value="1000000">1M</option>
+      <option value="3000000" selected>3M</option>
+      <option value="8000000">8M</option>
+      <option value="100000000">all</option>
+    </select></label>
+    <span class="spacer"></span>
+    <button id="btnFit" title="frame the data">fit</button>
+  </div>
+  <div id="view"><canvas id="cv"></canvas></div>
+  <div id="empty"><b>open a point cloud</b><span>Open… or drag a .las anywhere</span><span>nothing handy? <a id="emptySample">▸ generate a sample bench scan</a> — 2,000,000 points, made locally</span></div>
+  <div id="drop-hint">drop to open</div>
+  <footer><span id="meta">—</span><span id="stats"></span></footer>
+
+<script type="module">
+import { openLas, documentFrame, createChunkBuilder, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+
+const $ = (s) => document.querySelector(s);
+const cv = $('#cv');
+const renderer = createRenderer(cv);
+const edl = createEdl(renderer.gl);
+const cam = createOrbitCamera();
+let dirty = true, lastDrawn = 0, frame = null;
+const fpsBuf = [];
+
+function requestRender() { dirty = true; }
+attachOrbitInput(cv, cam, { onChange: requestRender });
+new ResizeObserver(() => { const [w, h] = renderer.resize(); cam.setAspect(w / h); requestRender(); }).observe(cv);
+
+function loop(t) {
+  if (dirty) {
+    dirty = false;
+    const [w, h] = renderer.resize();
+    cam.setAspect(w / h);
+    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: +$('#colorBy').value };
+    const t0 = performance.now();
+    lastDrawn = edl.render(w, h, cam, () => renderer.draw(cam, opts), { enabled: $('#edlOn').checked, strength: +$('#edlStr').value });
+    fpsBuf.push(performance.now() - t0); if (fpsBuf.length > 30) fpsBuf.shift();
+    const ms = fpsBuf.reduce((a, b) => a + b, 0) / fpsBuf.length;
+    $('#stats').textContent = `${renderer.elementCount.toLocaleString()} pts · ${renderer.chunkCount} chunks · drawn ${lastDrawn.toLocaleString()} · ${ms.toFixed(1)} ms`;
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+['colorBy', 'edlOn', 'edlStr', 'ptPx', 'budget'].forEach((id) => $('#' + id).addEventListener('input', requestRender));
+$('#btnFit').onclick = () => { if (renderer.chunkCount) { cam.fit(rendererDocBbox()); requestRender(); } };
+let _docBbox = null;
+const rendererDocBbox = () => _docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
+
+async function openBlob(blob, name) {
+  renderer.clearChunks(); _docBbox = null; requestRender();
+  $('#meta').textContent = `${name} — reading…`;
+  $('#empty').style.display = 'none';
+  try {
+    const { header, streamChunks } = await openLas(blob);
+    frame = documentFrame(header, { crs: null });
+    // fit immediately from the header bbox (frame-local) so points appear in view
+    const o = frame.origin, b = header.bbox;
+    _docBbox = Float64Array.of(b.min[0] - o[0], b.min[1] - o[1], b.min[2] - o[2], b.max[0] - o[0], b.max[1] - o[1], b.max[2] - o[2]);
+    cam.fit(_docBbox);
+    const cb = createChunkBuilder({ frame, chunkSize: 1 << 20, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+    let done = 0;
+    for await (const rc of streamChunks({ chunkPoints: 1 << 18 })) {
+      cb.push(rc); done += rc.count;
+      $('#meta').textContent = `${name} — streaming ${Math.round(100 * done / (header.count || 1))}%`;
+      await new Promise((r) => setTimeout(r));            // yield to the render loop
+    }
+    const doc = cb.flush();
+    renderer.setDocBbox(doc.bboxLocal);
+    _docBbox = doc.bboxLocal;
+    $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} points · LAS ${header.version} fmt ${header.format}${frame.origin.some((v) => v) ? ` · origin ${frame.origin.map((v) => v.toLocaleString()).join(', ')}` : ''}`;
+    requestRender();
+  } catch (e) {
+    $('#meta').textContent = `${name} — ${e.message}`;
+    $('#empty').style.display = '';
+  }
+}
+
+$('#btnOpen').onclick = async () => {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.las';
+  inp.onchange = () => { if (inp.files[0]) openBlob(inp.files[0], inp.files[0].name); };
+  inp.click();
+};
+addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('drag'); });
+addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('drag'); });
+addEventListener('drop', (e) => {
+  e.preventDefault(); document.body.classList.remove('drag');
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) openBlob(f, f.name);
+});
+
+// Synthetic sample: a bench scan generated straight into RawChunks (no LAS bytes,
+// no fetch) — 2M points over five 10 m benches with a pit-wall sinusoid.
+function makeSampleChunks(n) {
+  const rnd = mulberry32(42);
+  const per = 1 << 18, out = [];
+  const x0 = 610000, y0 = 7760000, z0 = 900, w = 400, h = 400;
+  for (let start = 0; start < n; start += per) {
+    const m = Math.min(per, n - start);
+    const x = new Float64Array(m), y = new Float64Array(m), z = new Float64Array(m);
+    const intensity = new Uint16Array(m), classification = new Uint8Array(m);
+    for (let i = 0; i < m; i++) {
+      const px = x0 + rnd() * w, py = y0 + rnd() * h;
+      const bench = Math.floor(((px - x0) / w) * 5) * 10;
+      const wall = ((px - x0) / w * 5) % 1 > 0.92 ? (rnd() * 9) : 0;   // near-vertical faces
+      x[i] = px; y[i] = py;
+      z[i] = z0 - bench - wall + Math.sin((py - y0) / 40) * 1.5 + rnd() * 0.25;
+      intensity[i] = 1000 + (rnd() * rnd() * 50000) | 0;
+      classification[i] = wall ? 6 : 2;
+    }
+    out.push({ count: m, x, y, z, intensity, classification, rgb: null, recStart: start });
+  }
+  return { header: { count: n, bbox: { min: [x0, y0, z0 - 60], max: [x0 + w, y0 + h, z0 + 2] } }, chunks: out };
+}
+async function openSample() {
+  renderer.clearChunks(); requestRender();
+  $('#empty').style.display = 'none';
+  $('#meta').textContent = 'sample — generating…';
+  await new Promise((r) => setTimeout(r));
+  const { header, chunks } = makeSampleChunks(2_000_000);
+  frame = documentFrame(header, { crs: null });
+  const o = frame.origin, b = header.bbox;
+  _docBbox = Float64Array.of(b.min[0] - o[0], b.min[1] - o[1], b.min[2] - o[2], b.max[0] - o[0], b.max[1] - o[1], b.max[2] - o[2]);
+  cam.fit(_docBbox);
+  const cb = createChunkBuilder({ frame, chunkSize: 1 << 20, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+  for (const rc of chunks) { cb.push(rc); await new Promise((r) => setTimeout(r)); }
+  const doc = cb.flush();
+  renderer.setDocBbox(doc.bboxLocal);
+  _docBbox = doc.bboxLocal;
+  $('#meta').textContent = `sample bench scan — ${doc.count.toLocaleString()} points (synthetic, generated locally)`;
+  requestRender();
+}
+$('#emptySample').onclick = openSample;
+
+window._micro = { openBlob, openSample, renderer, cam, get frame() { return frame; }, requestRender };
+</script>
+</body>
+</html>

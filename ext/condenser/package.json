@@ -1,0 +1,9 @@
+{
+  "name": "@gcu/condenser",
+  "version": "0.1.0",
+  "description": "Streaming no-preprocess renderer for massive spatial elements (point clouds, block models): stream-parse → quantize → chunk → prefix-LOD → progressive accumulation → EDL. The engine under micro.",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "author": "Arthur Endlein Correia (GCU)"
+}
