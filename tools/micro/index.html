@@ -106,6 +106,7 @@
       <option value="plan">plan</option>
       <option value="ns">N–S</option>
       <option value="ew">E–W</option>
+      <option value="knife">knife</option>
     </select></label>
     <input id="secPos" type="range" min="0" max="1" step="0.002" value="0.5" title="scrub the section" style="width:120px;display:none">
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
@@ -115,7 +116,7 @@
     <button id="btnShot" title="save the viewport as PNG">png</button>
     <button id="btnFit" title="frame the data">fit</button>
   </div>
-  <div id="view"><canvas id="cv"></canvas></div>
+  <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .csv anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
   <div id="drop-hint">drop to open</div>
   <div id="recPanel"><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
@@ -162,24 +163,105 @@ requestAnimationFrame(loop);
 // plan = horizontal (Z normal); N–S section faces east (X normal); E–W faces
 // north (Y normal). The slider spans the document extent along the normal.
 const SEC_N = { plan: [0, 0, 1], ns: [1, 0, 0], ew: [0, 1, 0] };
+let _knife = null;                                       // { n:[3] } set by the knife tool
+function secNormal() {
+  const mode = $('#secMode').value;
+  if (mode === 'knife') return _knife && _knife.n;
+  return SEC_N[mode] || null;
+}
 function secRange() {
-  const n = SEC_N[$('#secMode').value], b = rendererDocBbox();
+  const n = secNormal(), b = rendererDocBbox();
   if (!n) return null;
-  // extent of the local bbox projected on an axis-aligned normal
-  const lo = n[0] * b[0] + n[1] * b[1] + n[2] * b[2];
-  const hi = n[0] * b[3] + n[1] * b[4] + n[2] * b[5];
+  // extent of the local bbox projected on the normal (all 8 corners — n is arbitrary)
+  let lo = Infinity, hi = -Infinity;
+  for (let c = 0; c < 8; c++) {
+    const d = n[0] * b[(c & 1) ? 3 : 0] + n[1] * b[(c & 2) ? 4 : 1] + n[2] * b[(c & 4) ? 5 : 2];
+    if (d < lo) lo = d; if (d > hi) hi = d;
+  }
   return [lo, hi];
 }
 function currentSection() {
   const mode = $('#secMode').value;
   if (mode === 'off' || !renderer.chunkCount) return null;
+  const n = secNormal();
+  if (!n) return null;                                    // knife armed but no cut drawn yet
   const [lo, hi] = secRange();
-  return { on: true, n: SEC_N[mode], d: lo + (+$('#secPos').value) * (hi - lo), half: Math.max(0.01, +$('#secHalf').value) };
+  return { on: true, n, d: lo + (+$('#secPos').value) * (hi - lo), half: Math.max(0.01, +$('#secHalf').value) };
 }
+// A camera ray through a CSS pixel, intersected with the horizontal plane at the
+// document's mid-elevation → a frame-local world point (no picking needed).
+function unprojectToMidZ(cssX, cssY) {
+  const st = cam.state, r = cv.getBoundingClientRect();
+  const ndcX = (2 * cssX / r.width) - 1, ndcY = 1 - (2 * cssY / r.height);
+  const v = st.view;
+  const right = [v[0], v[4], v[8]], up = [v[1], v[5], v[9]];
+  const fwd = [st.target[0] - st.eye[0], st.target[1] - st.eye[1], st.target[2] - st.eye[2]];
+  const fl = Math.hypot(...fwd) || 1;
+  const tanF = Math.tan(st.fovY / 2);
+  const dir = [0, 1, 2].map((i) => fwd[i] / fl + right[i] * ndcX * tanF * st.aspect + up[i] * ndcY * tanF);
+  const b = rendererDocBbox();
+  const zMid = (b[2] + b[5]) / 2;
+  if (Math.abs(dir[2]) < 1e-9) return null;
+  const t = (zMid - st.eye[2]) / dir[2];
+  if (t <= 0) return null;
+  return [st.eye[0] + dir[0] * t, st.eye[1] + dir[1] * t, zMid];
+}
+// The knife cut: two world points → the VERTICAL plane containing the segment.
+function knifeCut(x1, y1, x2, y2) {
+  const p1 = unprojectToMidZ(x1, y1), p2 = unprojectToMidZ(x2, y2);
+  if (!p1 || !p2) return false;
+  const dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+  const l = Math.hypot(dx, dy);
+  if (l < 1) return false;                                // degenerate drag
+  const n = [dy / l, -dx / l, 0];                         // horizontal normal ⊥ the drawn line
+  _knife = { n };
+  const [lo, hi] = secRange();
+  const d0 = n[0] * p1[0] + n[1] * p1[1];
+  $('#secPos').value = hi > lo ? Math.max(0, Math.min(1, (d0 - lo) / (hi - lo))) : 0.5;
+  requestRender();
+  return true;
+}
+// Arming: choosing `knife` turns the next drag into a cut (capture-phase handlers
+// pre-empt orbit); the plane then locks until the mode changes or knife is re-picked.
+let _knifeArm = false, _knifeStart = null;
+function armKnife(on) {
+  _knifeArm = on;
+  cv.style.cursor = on ? 'crosshair' : '';
+  if (on) $('#meta').textContent = 'knife: drag a line across the model — the vertical section through it';
+}
+cv.addEventListener('pointerdown', (e) => {
+  if (!_knifeArm || e.button !== 0) return;
+  e.stopImmediatePropagation(); e.preventDefault();
+  _knifeStart = { x: e.clientX, y: e.clientY };
+  $('#knifeSvg').style.display = '';
+}, { capture: true });
+cv.addEventListener('pointermove', (e) => {
+  if (!_knifeArm || !_knifeStart) return;
+  e.stopImmediatePropagation();
+  const r = cv.getBoundingClientRect(), L = $('#knifeLine');
+  L.setAttribute('x1', _knifeStart.x - r.left); L.setAttribute('y1', _knifeStart.y - r.top);
+  L.setAttribute('x2', e.clientX - r.left); L.setAttribute('y2', e.clientY - r.top);
+}, { capture: true });
+cv.addEventListener('pointerup', (e) => {
+  if (!_knifeArm || !_knifeStart) return;
+  e.stopImmediatePropagation();
+  const r = cv.getBoundingClientRect(), st = _knifeStart;
+  _knifeStart = null;
+  $('#knifeSvg').style.display = 'none';
+  armKnife(false);
+  if (knifeCut(st.x - r.left, st.y - r.top, e.clientX - r.left, e.clientY - r.top)) {
+    $('#meta').textContent = _blockDoc ? _blockDoc.metaLine : $('#meta').textContent.replace(/^knife:.*/, '');
+  } else {
+    $('#secMode').value = 'off'; $('#secMode').dispatchEvent(new Event('input'));
+  }
+}, { capture: true });
 $('#secMode').addEventListener('input', () => {
-  const on = $('#secMode').value !== 'off';
+  const mode = $('#secMode').value;
+  const on = mode !== 'off';
   $('#secPos').style.display = on ? '' : 'none';
   $('#secHalf').style.display = on ? '' : 'none';
+  if (mode === 'knife') { _knife = null; armKnife(true); }
+  else armKnife(false);
   requestRender();
 });
 $('#secPos').addEventListener('input', requestRender);
@@ -573,7 +655,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
