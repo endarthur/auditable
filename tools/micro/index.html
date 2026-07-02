@@ -33,6 +33,7 @@
   #bar #filter:focus { outline: none; border-color: var(--info); }
   #bar #filter.err { border-color: #c0584a; }
   #bar #filter::placeholder { color: var(--faint); }
+  #bar input[type="number"] { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 6px; }
   #bar .spacer { flex: 1; }
   #view { position: absolute; inset: 38px 0 24px 0; }
   #cv { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
@@ -100,9 +101,18 @@
       <option value="8000000">8M</option>
       <option value="100000000">all</option>
     </select></label>
+    <label>section <select id="secMode" title="slab section: plan (horizontal) · N–S (east-facing) · E–W (north-facing)">
+      <option value="off">off</option>
+      <option value="plan">plan</option>
+      <option value="ns">N–S</option>
+      <option value="ew">E–W</option>
+    </select></label>
+    <input id="secPos" type="range" min="0" max="1" step="0.002" value="0.5" title="scrub the section" style="width:120px;display:none">
+    <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
     <input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = \"HEMATITE\"" title="lamina's filter language, over every column in the file — Enter applies, Esc clears">
     <label title="keep non-matching blocks as dimmed context instead of hiding them"><input type="checkbox" id="context"> context</label>
     <span class="spacer"></span>
+    <button id="btnShot" title="save the viewport as PNG">png</button>
     <button id="btnFit" title="frame the data">fit</button>
   </div>
   <div id="view"><canvas id="cv"></canvas></div>
@@ -133,7 +143,7 @@ function loop(t) {
     dirty = false;
     const [w, h] = renderer.resize();
     cam.setAspect(w / h);
-    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: $('#viewMode').value === 'points' };
+    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: $('#viewMode').value === 'points', section: currentSection() };
     const t0 = performance.now();
     const r = edl.render(w, h, cam, () => renderer.draw(cam, opts), { enabled: $('#edlOn').checked, strength: +$('#edlStr').value });
     converged = r.converged;
@@ -146,6 +156,45 @@ function loop(t) {
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
+
+// ── sections: a slab is four floats (normal + offset) + a half-thickness —
+// scrubbing re-prefixes and re-converges each step (§2.2: it must feel free).
+// plan = horizontal (Z normal); N–S section faces east (X normal); E–W faces
+// north (Y normal). The slider spans the document extent along the normal.
+const SEC_N = { plan: [0, 0, 1], ns: [1, 0, 0], ew: [0, 1, 0] };
+function secRange() {
+  const n = SEC_N[$('#secMode').value], b = rendererDocBbox();
+  if (!n) return null;
+  // extent of the local bbox projected on an axis-aligned normal
+  const lo = n[0] * b[0] + n[1] * b[1] + n[2] * b[2];
+  const hi = n[0] * b[3] + n[1] * b[4] + n[2] * b[5];
+  return [lo, hi];
+}
+function currentSection() {
+  const mode = $('#secMode').value;
+  if (mode === 'off' || !renderer.chunkCount) return null;
+  const [lo, hi] = secRange();
+  return { on: true, n: SEC_N[mode], d: lo + (+$('#secPos').value) * (hi - lo), half: Math.max(0.01, +$('#secHalf').value) };
+}
+$('#secMode').addEventListener('input', () => {
+  const on = $('#secMode').value !== 'off';
+  $('#secPos').style.display = on ? '' : 'none';
+  $('#secHalf').style.display = on ? '' : 'none';
+  requestRender();
+});
+$('#secPos').addEventListener('input', requestRender);
+$('#secHalf').addEventListener('input', requestRender);
+
+// screenshot: the canvas is the export surface (preserveDrawingBuffer is on)
+$('#btnShot').onclick = () => {
+  cv.toBlob((blob) => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    const stem = (_blockDoc && _blockDoc.name || _lasDoc && 'pointcloud' || 'micro').replace(/\.[^.]*$/, '').replace(/[^\w.-]+/g, '_');
+    a.href = URL.createObjectURL(blob); a.download = `micro_${stem}.png`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }, 'image/png');
+};
 
 ['colorBy', 'edlOn', 'edlStr', 'ptPx', 'budget', 'viewMode'].forEach((id) => $('#' + id).addEventListener('input', requestRender));
 // budget survives refreshes (per-frame element budget is a machine preference)
@@ -518,7 +567,7 @@ cv.addEventListener('pointerup', (e) => {
   if (!d || d.b !== 0) return;
   if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5 || performance.now() - d.t > 500) return;
   const r = cv.getBoundingClientRect();
-  const rec = renderer.pick(e.clientX - r.left, e.clientY - r.top, cam, { pointPx: +$('#ptPx').value, blocksAsPoints: $('#viewMode').value === 'points' });
+  const rec = renderer.pick(e.clientX - r.left, e.clientY - r.top, cam, { pointPx: +$('#ptPx').value, blocksAsPoints: $('#viewMode').value === 'points', section: currentSection() });
   if (rec == null) { $('#recPanel').classList.remove('show'); renderer.setPicked(null); requestRender(); return; }
   renderer.setPicked(rec); requestRender();
   showRecord(rec);

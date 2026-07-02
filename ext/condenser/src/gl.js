@@ -20,6 +20,8 @@ layout(location=2) in float aClass;     // uint8, raw (0..255)
 layout(location=3) in vec3 aRgb;        // uint8 normalized
 layout(location=4) in uint aRec;        // uint32 record index (highlight + mask lookups)
 uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
+uniform vec4 uSecPlane;                 // section plane: xyz = unit normal, w = offset (frame-local)
+uniform vec2 uSecCfg;                   // x: 0 = off, 1 = slab; y: slab half-thickness
 uniform mat4 uViewProj;
 uniform vec3 uBoxMin, uBoxSpan;
 uniform float uPointPx;
@@ -29,10 +31,12 @@ uniform float uIntensityScale;          // 1 / (p98-ish max, normalized units)
 uniform sampler2D uRamp;                // 256x1 continuous ramp
 uniform sampler2D uPalette;             // 32x1 classification palette
 out vec4 vColor;
+flat out float vCull;
 void main() {
   vec3 p = uBoxMin + aPos * uBoxSpan;
   gl_Position = uViewProj * vec4(p, 1.0);
   gl_PointSize = uPointPx;
+  vCull = (uSecCfg.x > 0.5 && abs(dot(p, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
   if (uColorMode == 0) {
     float t = clamp((p.z - uZRange.x) / max(uZRange.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
@@ -50,8 +54,10 @@ void main() {
 const FRAG = `#version 300 es
 precision highp float;
 in vec4 vColor;
+flat in float vCull;
 out vec4 outColor;
 void main() {
+  if (vCull > 0.5) discard;             // outside the section slab
   vec2 d = gl_PointCoord - 0.5;
   if (dot(d, d) > 0.25) discard;        // circular splat
   outColor = vColor;
@@ -158,6 +164,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
     pointPx: U('uPointPx'), colorMode: U('uColorMode'), zRange: U('uZRange'),
     intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'),
+    secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
@@ -231,7 +238,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     // GPU pick at CSS coordinates → record index | null. Draws each chunk's
     // current accumulated prefix into a scissored offscreen target with the
     // record index as the color (gl-pick.js) — you pick exactly what you see.
-    pick(cssX, cssY, cam, { pointPx = 2.5, blocksAsPoints = false } = {}) {
+    pick(cssX, cssY, cam, { pointPx = 2.5, blocksAsPoints = false, section = null } = {}) {
       if (!chunks.length) return null;
       if (!pickPipe) pickPipe = createPickPipeline(gl);
       const dpr = window.devicePixelRatio || 1;
@@ -239,6 +246,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return null;
       return pickPipe.pick(px, py, chunks, cam, {
         pointPx, blocksAsPoints, maskTex, isolate: isolateMode,
+        section: section && section.on ? section : null,
         viewportW: canvas.width, viewportH: canvas.height,
       });
     },
@@ -255,9 +263,11 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     },
     // Draw one frame into the CURRENT framebuffer (the EDL pass owns the target).
     // Returns { drawn, converged, visible }.
-    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false } = {}) {
+    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false, section = null } = {}) {
       const vp = cam.state.viewProj;
-      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${canvas.width}x${canvas.height}`;
+      const sec = section && section.on ? section : null;
+      const secKey = sec ? `${sec.n.join(',')}|${sec.d}|${sec.half}` : 'off';
+      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${secKey}|${canvas.width}x${canvas.height}`;
       const moving = vpChanged(vp) || key !== lastKey || needClear;
       lastKey = key; needClear = false;
 
@@ -306,6 +316,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
         gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
         gl.uniform1ui(uni.picked, pickedRec);
+        gl.uniform4f(uni.secPlane, sec ? sec.n[0] : 0, sec ? sec.n[1] : 0, sec ? sec.n[2] : 1, sec ? sec.d : 0);
+        gl.uniform2f(uni.secCfg, sec ? 1 : 0, sec ? sec.half : 0);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
         for (const c of pts) {
@@ -328,7 +340,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           pointPx, colorMode, zRange,
           chanDoc: [docChan[0] === Infinity ? 0 : docChan[0], chanSpan],
           ramp, palette: catPalette || palette, viewportH: canvas.height,
-          maskTex, isolate: isolateMode, pointsView: blocksAsPoints, picked: pickedRec,
+          maskTex, isolate: isolateMode, pointsView: blocksAsPoints, picked: pickedRec, section: sec,
         });
         const perspScale = (canvas.height / 2) / Math.tan(cam.state.fovY / 2);
         for (const c of blks) {

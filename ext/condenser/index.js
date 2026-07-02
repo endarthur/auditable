@@ -1046,6 +1046,8 @@ uniform float uFilterOn, uIsolate;
 uniform float uForceSplat;              // 1 = whole chunk demoted (cheap far-field path)
 uniform float uFixedSplat;              // 1 = points view: fixed-px splats regardless of block size
 uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
+uniform vec4 uSecPlane;                 // section plane: xyz = unit normal, w = offset (frame-local)
+uniform vec2 uSecCfg;                   // x: 0 = off, 1 = slab; y: slab half-thickness
 flat out vec3 vCenter;
 flat out vec3 vHalf;
 flat out vec4 vColor;
@@ -1066,7 +1068,8 @@ void main() {
     int rec = int(aRec);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
-  vCull = (uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0;
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;   // centroid-in-slab
+  vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float quadR = uFixedSplat > 0.5
     ? uPointPx * 0.5 * dist / uPerspScale
     : mix(r, max(uPointPx * 0.5, pxR) * dist / uPerspScale, demoted);
@@ -1178,6 +1181,7 @@ function createBlocksPipeline(gl) {
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'),
+      secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
     } };
   };
   const full = mkProg(FRAG$gl_blocks), cheap = mkProg(FRAG_CHEAP);
@@ -1234,7 +1238,7 @@ function createBlocksPipeline(gl) {
 
   // Per-frame program state (called once before the chunk loop) — set on BOTH
   // programs so drawSlice can switch freely between full and cheap.
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -1260,6 +1264,8 @@ function createBlocksPipeline(gl) {
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
       gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
       gl.uniform1ui(uni.picked, picked >>> 0);
+      gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
+      gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
       gl.uniform1f(uni.filterOn, maskTex ? 1 : 0);
       gl.uniform1f(uni.isolate, isolate ? 1 : 0);
       if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uni.mask, 4); }
@@ -1296,18 +1302,25 @@ layout(location=4) in uint aRec;
 uniform mat4 uViewProj;
 uniform vec3 uBoxMin, uBoxSpan;
 uniform float uPointPx;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 flat out uint vRec;
+flat out float vCull;
 void main() {
-  gl_Position = uViewProj * vec4(uBoxMin + aPos * uBoxSpan, 1.0);
+  vec3 p = uBoxMin + aPos * uBoxSpan;
+  gl_Position = uViewProj * vec4(p, 1.0);
   gl_PointSize = uPointPx;
   vRec = aRec;
+  vCull = (uSecCfg.x > 0.5 && abs(dot(p, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
 }`;
 const PICK_FRAG_PTS = `#version 300 es
 precision highp float;
 flat in uint vRec;
+flat in float vCull;
 out vec4 outColor;
 ${ENCODE}
 void main() {
+  if (vCull > 0.5) discard;
   vec2 d = gl_PointCoord - 0.5;
   if (dot(d, d) > 0.25) discard;
   outColor = encodeRec(vRec);
@@ -1324,6 +1337,8 @@ uniform vec3 uGridOrigin, uGridSize;
 uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat;
 uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 flat out vec3 vCenter;
 flat out vec3 vHalf;
 flat out uint vRec;
@@ -1349,7 +1364,8 @@ void main() {
     int rec = int(aRec);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
-  vCull = (uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0;         // isolated-away blocks aren't pickable
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);   // hidden (isolated or sectioned) isn't pickable
   vCenter = center; vHalf = half_; vRec = aRec; vMode = demoted; vCorner = corner; vWorldPos = wp;
 }`;
 const PICK_FRAG_BLK = `#version 300 es
@@ -1394,12 +1410,13 @@ function createPickPipeline(gl) {
   const pts = makeProgram(gl, PICK_VERT_PTS, PICK_FRAG_PTS);
   const blk = makeProgram(gl, PICK_VERT_BLK, PICK_FRAG_BLK);
   const U = (p, n) => gl.getUniformLocation(p, n);
-  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx') };
+  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg') };
   const uBlk = {
     viewProj: U(blk, 'uViewProj'), eye: U(blk, 'uEye'), right: U(blk, 'uRight'), up: U(blk, 'uUp'),
     gridOrigin: U(blk, 'uGridOrigin'), gridSize: U(blk, 'uGridSize'),
     perspScale: U(blk, 'uPerspScale'), demotePx: U(blk, 'uDemotePx'), pointPx: U(blk, 'uPointPx'), fixedSplat: U(blk, 'uFixedSplat'),
     mask: U(blk, 'uMask'), filterOn: U(blk, 'uFilterOn'), isolate: U(blk, 'uIsolate'),
+    secPlane: U(blk, 'uSecPlane'), secCfg: U(blk, 'uSecCfg'),
   };
   let fbo = null, colorTex = null, depthRb = null, w = 0, h = 0;
 
@@ -1426,7 +1443,11 @@ function createPickPipeline(gl) {
    * CURRENT accumulated prefix (you pick what you can see), scissored to the
    * pixel. Returns the record index, or null.
    */
-  function pick(px, py, chunks, cam, { pointPx, blocksAsPoints = false, maskTex = null, isolate = false, viewportW, viewportH }) {
+  function pick(px, py, chunks, cam, { pointPx, blocksAsPoints = false, maskTex = null, isolate = false, section = null, viewportW, viewportH }) {
+    const setSec = (u) => {
+      gl.uniform4f(u.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
+      gl.uniform2f(u.secCfg, section ? 1 : 0, section ? section.half : 0);
+    };
     ensure(viewportW, viewportH);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.viewport(0, 0, w, h);
@@ -1443,6 +1464,7 @@ function createPickPipeline(gl) {
       gl.useProgram(pts);
       gl.uniformMatrix4fv(uPts.viewProj, false, s.viewProj);
       gl.uniform1f(uPts.pointPx, dpp);
+      setSec(uPts);
       for (const c of ptsChunks) {
         gl.bindVertexArray(c.vao);
         // wire the recIdx buffer as attr 4 (idempotent; the visual program ignores it)
@@ -1469,6 +1491,7 @@ function createPickPipeline(gl) {
       gl.uniform1f(uBlk.fixedSplat, blocksAsPoints ? 1 : 0);
       gl.uniform1f(uBlk.filterOn, maskTex ? 1 : 0);
       gl.uniform1f(uBlk.isolate, isolate ? 1 : 0);
+      setSec(uBlk);
       if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uBlk.mask, 4); }
       for (const c of blkChunks) {
         gl.bindVertexArray(c.vao);
@@ -2072,6 +2095,8 @@ layout(location=2) in float aClass;     // uint8, raw (0..255)
 layout(location=3) in vec3 aRgb;        // uint8 normalized
 layout(location=4) in uint aRec;        // uint32 record index (highlight + mask lookups)
 uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
+uniform vec4 uSecPlane;                 // section plane: xyz = unit normal, w = offset (frame-local)
+uniform vec2 uSecCfg;                   // x: 0 = off, 1 = slab; y: slab half-thickness
 uniform mat4 uViewProj;
 uniform vec3 uBoxMin, uBoxSpan;
 uniform float uPointPx;
@@ -2081,10 +2106,12 @@ uniform float uIntensityScale;          // 1 / (p98-ish max, normalized units)
 uniform sampler2D uRamp;                // 256x1 continuous ramp
 uniform sampler2D uPalette;             // 32x1 classification palette
 out vec4 vColor;
+flat out float vCull;
 void main() {
   vec3 p = uBoxMin + aPos * uBoxSpan;
   gl_Position = uViewProj * vec4(p, 1.0);
   gl_PointSize = uPointPx;
+  vCull = (uSecCfg.x > 0.5 && abs(dot(p, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
   if (uColorMode == 0) {
     float t = clamp((p.z - uZRange.x) / max(uZRange.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
@@ -2102,8 +2129,10 @@ void main() {
 const FRAG$gl = `#version 300 es
 precision highp float;
 in vec4 vColor;
+flat in float vCull;
 out vec4 outColor;
 void main() {
+  if (vCull > 0.5) discard;             // outside the section slab
   vec2 d = gl_PointCoord - 0.5;
   if (dot(d, d) > 0.25) discard;        // circular splat
   outColor = vColor;
@@ -2208,6 +2237,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
     pointPx: U('uPointPx'), colorMode: U('uColorMode'), zRange: U('uZRange'),
     intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'),
+    secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
@@ -2281,7 +2311,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     // GPU pick at CSS coordinates → record index | null. Draws each chunk's
     // current accumulated prefix into a scissored offscreen target with the
     // record index as the color (gl-pick.js) — you pick exactly what you see.
-    pick(cssX, cssY, cam, { pointPx = 2.5, blocksAsPoints = false } = {}) {
+    pick(cssX, cssY, cam, { pointPx = 2.5, blocksAsPoints = false, section = null } = {}) {
       if (!chunks.length) return null;
       if (!pickPipe) pickPipe = createPickPipeline(gl);
       const dpr = window.devicePixelRatio || 1;
@@ -2289,6 +2319,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return null;
       return pickPipe.pick(px, py, chunks, cam, {
         pointPx, blocksAsPoints, maskTex, isolate: isolateMode,
+        section: section && section.on ? section : null,
         viewportW: canvas.width, viewportH: canvas.height,
       });
     },
@@ -2305,9 +2336,11 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     },
     // Draw one frame into the CURRENT framebuffer (the EDL pass owns the target).
     // Returns { drawn, converged, visible }.
-    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false } = {}) {
+    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false, section = null } = {}) {
       const vp = cam.state.viewProj;
-      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${canvas.width}x${canvas.height}`;
+      const sec = section && section.on ? section : null;
+      const secKey = sec ? `${sec.n.join(',')}|${sec.d}|${sec.half}` : 'off';
+      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${secKey}|${canvas.width}x${canvas.height}`;
       const moving = vpChanged(vp) || key !== lastKey || needClear;
       lastKey = key; needClear = false;
 
@@ -2356,6 +2389,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
         gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
         gl.uniform1ui(uni.picked, pickedRec);
+        gl.uniform4f(uni.secPlane, sec ? sec.n[0] : 0, sec ? sec.n[1] : 0, sec ? sec.n[2] : 1, sec ? sec.d : 0);
+        gl.uniform2f(uni.secCfg, sec ? 1 : 0, sec ? sec.half : 0);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
         for (const c of pts) {
@@ -2378,7 +2413,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           pointPx, colorMode, zRange,
           chanDoc: [docChan[0] === Infinity ? 0 : docChan[0], chanSpan],
           ramp, palette: catPalette || palette, viewportH: canvas.height,
-          maskTex, isolate: isolateMode, pointsView: blocksAsPoints, picked: pickedRec,
+          maskTex, isolate: isolateMode, pointsView: blocksAsPoints, picked: pickedRec, section: sec,
         });
         const perspScale = (canvas.height / 2) / Math.tan(cam.state.fovY / 2);
         for (const c of blks) {

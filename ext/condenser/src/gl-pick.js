@@ -22,18 +22,25 @@ layout(location=4) in uint aRec;
 uniform mat4 uViewProj;
 uniform vec3 uBoxMin, uBoxSpan;
 uniform float uPointPx;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 flat out uint vRec;
+flat out float vCull;
 void main() {
-  gl_Position = uViewProj * vec4(uBoxMin + aPos * uBoxSpan, 1.0);
+  vec3 p = uBoxMin + aPos * uBoxSpan;
+  gl_Position = uViewProj * vec4(p, 1.0);
   gl_PointSize = uPointPx;
   vRec = aRec;
+  vCull = (uSecCfg.x > 0.5 && abs(dot(p, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
 }`;
 const PICK_FRAG_PTS = `#version 300 es
 precision highp float;
 flat in uint vRec;
+flat in float vCull;
 out vec4 outColor;
 ${ENCODE}
 void main() {
+  if (vCull > 0.5) discard;
   vec2 d = gl_PointCoord - 0.5;
   if (dot(d, d) > 0.25) discard;
   outColor = encodeRec(vRec);
@@ -50,6 +57,8 @@ uniform vec3 uGridOrigin, uGridSize;
 uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat;
 uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 flat out vec3 vCenter;
 flat out vec3 vHalf;
 flat out uint vRec;
@@ -75,7 +84,8 @@ void main() {
     int rec = int(aRec);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
-  vCull = (uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0;         // isolated-away blocks aren't pickable
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);   // hidden (isolated or sectioned) isn't pickable
   vCenter = center; vHalf = half_; vRec = aRec; vMode = demoted; vCorner = corner; vWorldPos = wp;
 }`;
 const PICK_FRAG_BLK = `#version 300 es
@@ -120,12 +130,13 @@ export function createPickPipeline(gl) {
   const pts = makeProgram(gl, PICK_VERT_PTS, PICK_FRAG_PTS);
   const blk = makeProgram(gl, PICK_VERT_BLK, PICK_FRAG_BLK);
   const U = (p, n) => gl.getUniformLocation(p, n);
-  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx') };
+  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg') };
   const uBlk = {
     viewProj: U(blk, 'uViewProj'), eye: U(blk, 'uEye'), right: U(blk, 'uRight'), up: U(blk, 'uUp'),
     gridOrigin: U(blk, 'uGridOrigin'), gridSize: U(blk, 'uGridSize'),
     perspScale: U(blk, 'uPerspScale'), demotePx: U(blk, 'uDemotePx'), pointPx: U(blk, 'uPointPx'), fixedSplat: U(blk, 'uFixedSplat'),
     mask: U(blk, 'uMask'), filterOn: U(blk, 'uFilterOn'), isolate: U(blk, 'uIsolate'),
+    secPlane: U(blk, 'uSecPlane'), secCfg: U(blk, 'uSecCfg'),
   };
   let fbo = null, colorTex = null, depthRb = null, w = 0, h = 0;
 
@@ -152,7 +163,11 @@ export function createPickPipeline(gl) {
    * CURRENT accumulated prefix (you pick what you can see), scissored to the
    * pixel. Returns the record index, or null.
    */
-  function pick(px, py, chunks, cam, { pointPx, blocksAsPoints = false, maskTex = null, isolate = false, viewportW, viewportH }) {
+  function pick(px, py, chunks, cam, { pointPx, blocksAsPoints = false, maskTex = null, isolate = false, section = null, viewportW, viewportH }) {
+    const setSec = (u) => {
+      gl.uniform4f(u.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
+      gl.uniform2f(u.secCfg, section ? 1 : 0, section ? section.half : 0);
+    };
     ensure(viewportW, viewportH);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.viewport(0, 0, w, h);
@@ -169,6 +184,7 @@ export function createPickPipeline(gl) {
       gl.useProgram(pts);
       gl.uniformMatrix4fv(uPts.viewProj, false, s.viewProj);
       gl.uniform1f(uPts.pointPx, dpp);
+      setSec(uPts);
       for (const c of ptsChunks) {
         gl.bindVertexArray(c.vao);
         // wire the recIdx buffer as attr 4 (idempotent; the visual program ignores it)
@@ -195,6 +211,7 @@ export function createPickPipeline(gl) {
       gl.uniform1f(uBlk.fixedSplat, blocksAsPoints ? 1 : 0);
       gl.uniform1f(uBlk.filterOn, maskTex ? 1 : 0);
       gl.uniform1f(uBlk.isolate, isolate ? 1 : 0);
+      setSec(uBlk);
       if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uBlk.mask, 4); }
       for (const c of blkChunks) {
         gl.bindVertexArray(c.vao);
