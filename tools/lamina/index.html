@@ -439,12 +439,12 @@
     #toolbar { flex-wrap: wrap; height: auto; min-height: var(--tb); row-gap: 4px; gap: 6px; padding: 4px 8px; }
     #toolbar .title { display: none; }
     #toolbar #fileName { display: none; }                     /* the kind badge + the tab title carry it */
-    #mFile { order: 1; } #mData { order: 2; } #mView { order: 3; } #mHelp { order: 4; }
-    #toolbar .spacer { order: 5; }
-    #kindBadge { order: 6; }
-    #toolbar #tbBreak { order: 7; display: block; flex-basis: 100%; height: 0; }   /* break → filter cluster on row 2 */
-    #toolbar #filterWrap { order: 8; flex: 1 1 0; min-width: 0; max-width: none; }   /* basis 0 so the long placeholder doesn't push the buttons to a 3rd row */
-    #filterGo { order: 9; } #addCalc { order: 10; } #toolbar #goto { order: 11; width: 60px; }
+    #mFile { order: 1; } #mData { order: 2; } #mTools { order: 3; } #mView { order: 4; } #mHelp { order: 5; }
+    #toolbar .spacer { order: 6; }
+    #kindBadge { order: 7; }
+    #toolbar #tbBreak { order: 8; display: block; flex-basis: 100%; height: 0; }   /* break → filter cluster on row 2 */
+    #toolbar #filterWrap { order: 9; flex: 1 1 0; min-width: 0; max-width: none; }   /* basis 0 so the long placeholder doesn't push the buttons to a 3rd row */
+    #filterGo { order: 10; } #addCalc { order: 11; } #toolbar #goto { order: 12; width: 60px; }
     /* 16px inputs stop iOS Safari from zooming the page when one is focused */
     #toolbar #filter, #toolbar #goto, #calcEditor input, #opts input, #opts select, #filterHL, #ceExprHL { font-size: 16px; }
     /* roomier tap targets */
@@ -474,6 +474,7 @@
     <span class="title">lamina</span>
     <button class="mb" id="mFile">File</button>
     <button class="mb" id="mData">Data</button>
+    <button class="mb" id="mTools">Tools</button>
     <button class="mb" id="mView">View</button>
     <button class="mb" id="mHelp">Help</button>
     <span id="filterWrap"><div id="filterHL" class="exprhl" aria-hidden="true"></div><input id="filter" type="text" spellcheck="false" placeholder="filter…  e.g.  grade > 1 and lito = &quot;OXIDE&quot;"><button id="filterClear" title="clear filter (Esc)" tabindex="-1">×</button></span>
