@@ -185,6 +185,78 @@ test('frustum: culling accepts the fitted box, rejects boxes outside', () => {
   assert.ok(!aabbInFrustum(planes, Float64Array.of(behind[0], behind[1], behind[2], behind[0] + 1, behind[1] + 1, behind[2] + 1)), 'behind-camera box culled');
 });
 
+// ── M3: block models ──
+import { inferAxis, makeBlockGrid, buildBlockChunk, blockLocalCenter, createBlockChunkBuilder, sniffDelimited, mapColumns, openBlockModel } from '../ext/condenser/src/main.js';
+
+test('blocks: inferAxis — regular lattice in, origin/pitch/count out; junk rejected', () => {
+  const a = inferAxis([612000, 612010, 612020, 612050]);   // gaps are fine (sparse model)
+  assert.deepEqual([a.origin, a.pitch, a.count], [612000, 10, 6]);
+  assert.equal(inferAxis([1, 2, 3.4142]), null);           // off-lattice → not regular
+  assert.deepEqual(inferAxis([5]), { origin: 5, pitch: 0, count: 1 });
+});
+
+test('blocks: sniff + column mapping (XC/YC/ZC conventions)', () => {
+  const s = sniffDelimited('XC,YC,ZC,FE,SIO2,LITO\n1,2,3,55.1,4.2,BIF\n4,5,6,60,3,CANGA\n');
+  assert.equal(s.delim, ',');
+  assert.deepEqual(s.header, ['XC', 'YC', 'ZC', 'FE', 'SIO2', 'LITO']);
+  const m = mapColumns(s.header);
+  assert.deepEqual([m.x, m.y, m.z, m.chan], [0, 1, 2, 3]); // FE = first grade candidate
+  const ws = sniffDelimited('612000 7765000 400 55.1\n612010 7765000 400 60\n');
+  assert.equal(ws.delim, 'ws');
+  assert.equal(ws.header, null);                           // headerless
+});
+
+test('blocks: provider round-trip — grid inferred, categories coded, IJK exact', async () => {
+  // a 6×4×3 grid, 10×10×5 blocks, shuffled row order (worst case for inference)
+  const rows = [];
+  let rec = 0;
+  for (let k = 0; k < 3; k++) for (let j = 0; j < 4; j++) for (let i = 0; i < 6; i++) {
+    rows.push({ line: `${612000 + i * 10},${7765000 + j * 10},${400 + k * 5},${(50 + i + j + k).toFixed(1)},${k === 2 ? 'CANGA' : 'BIF'}`, i, j, k, rec: rec++ });
+  }
+  // shuffle deterministically
+  const rnd = mulberry32(3);
+  for (let i = rows.length - 1; i > 0; i--) { const j = (rnd() * (i + 1)) | 0; const t = rows[i]; rows[i] = rows[j]; rows[j] = t; }
+  const csv = 'XC,YC,ZC,FE,LITO\n' + rows.map((r) => r.line).join('\n') + '\n';
+  const { header, streamChunks } = await openBlockModel(new Blob([csv]));
+  assert.equal(header.count, 72);
+  assert.ok(header.grid, 'regular grid inferred from shuffled rows');
+  assert.deepEqual([header.grid.x.pitch, header.grid.y.pitch, header.grid.z.pitch], [10, 10, 5]);
+  assert.deepEqual([header.grid.x.count, header.grid.y.count, header.grid.z.count], [6, 4, 3]);
+  assert.deepEqual(header.categories, ['BIF', 'CANGA']);
+  // build chunks and verify IJK-exact centers against the source rows
+  const frame = documentFrame(header);
+  const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
+  const chunks = [];
+  const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 32, seed: 1, onChunk: (c) => chunks.push(c) });
+  for await (const rc of streamChunks({ chunkPoints: 16 })) cb.push(rc);
+  const doc = cb.flush();
+  assert.equal(doc.count, 72);
+  const byRec = new Map();                                 // provider record order == shuffled row order
+  rows.forEach((r, idx) => byRec.set(idx, r));
+  let checked = 0;
+  for (const c of chunks) {
+    assert.equal(c.kind, 'blocks');
+    for (let k = 0; k < c.count; k++) {
+      const src = byRec.get(c.recIdx[k]);
+      const ctr = blockLocalCenter(c, k);
+      const world = [ctr[0] + frame.origin[0], ctr[1] + frame.origin[1], ctr[2] + frame.origin[2]];
+      assert.equal(world[0], 612000 + src.i * 10, 'x EXACT');   // IJK-exact: strict equality, no epsilon
+      assert.equal(world[1], 7765000 + src.j * 10, 'y EXACT');
+      assert.equal(world[2], 400 + src.k * 5, 'z EXACT');
+      checked++;
+    }
+  }
+  assert.equal(checked, 72);
+  assert.ok(doc.chanRange[0] >= 50 && doc.chanRange[1] <= 61, `chan range ${doc.chanRange}`);
+});
+
+test('blocks: irregular coordinates → header.grid is null (points fallback signal)', async () => {
+  const csv = 'XC,YC,ZC,FE\n0,0,0,1\n10,0,0,2\n15.5,0,0,3\n25.5,10,5,4\n';
+  const { header } = await openBlockModel(new Blob([csv]));
+  assert.equal(header.grid, null);
+  assert.equal(header.count, 4);
+});
+
 test('shuffledIndices: deterministic for a seed, permutation always', () => {
   const a = shuffledIndices(100, mulberry32(3)), b = shuffledIndices(100, mulberry32(3));
   assert.deepEqual([...a], [...b]);

@@ -9,6 +9,7 @@
 // uniform subsample because chunks.js shuffled them (the §2.1.4 invariant).
 
 import { frustumPlanes, aabbInFrustum } from './camera.js';
+import { createBlocksPipeline, categoryPalettePixels } from './gl-blocks.js';
 
 const VERT = `#version 300 es
 precision highp float;
@@ -52,20 +53,8 @@ void main() {
   outColor = vColor;
 }`;
 
-function compile(gl, type, src) {
-  const s = gl.createShader(type);
-  gl.shaderSource(s, src); gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('condenser shader: ' + gl.getShaderInfoLog(s));
-  return s;
-}
-export function makeProgram(gl, vsrc, fsrc) {
-  const p = gl.createProgram();
-  gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vsrc));
-  gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fsrc));
-  gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('condenser link: ' + gl.getProgramInfoLog(p));
-  return p;
-}
+export { makeProgram } from './gl-util.js';
+import { makeProgram } from './gl-util.js';
 
 // ── LUTs ──
 // A small viridis-ish ramp (Switchboard-friendly; perceptual enough for v0.1).
@@ -165,9 +154,12 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
-  const palette = lutTexture(gl, palettePixels(), 32);
+  const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
+  let catPalette = null;                                  // category palette (blocks), lazy
+  let blocksPipe = null;                                  // impostor pipeline, lazy
   const chunks = [];
   let docBbox = null, intensityMax = 1;
+  const docChan = [Infinity, -Infinity];                  // block grade range across chunks
   // accumulation state
   const lastVP = new Float32Array(16);
   let lastKey = '', needClear = true, lastVisible = 0;
@@ -183,16 +175,27 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     get elementCount() { return chunks.reduce((s, c) => s + c.count, 0); },
     get accumulated() { return chunks.reduce((s, c) => s + c.cursor, 0); },   // elements in the current accumulation
     addChunk(chunk) {
+      if (chunk.kind === 'blocks') {
+        if (!blocksPipe) blocksPipe = createBlocksPipeline(gl);
+        chunks.push(blocksPipe.upload(chunk));             // GPU owns it now
+        if (chunk.chanRange[0] < docChan[0]) docChan[0] = chunk.chanRange[0];
+        if (chunk.chanRange[1] > docChan[1]) docChan[1] = chunk.chanRange[1];
+        return;
+      }
       chunks.push(uploadChunk(gl, chunk));                 // GPU owns it now; CPU copy dies with the caller
       let m = 0; const a = chunk.intensity;
       for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
       intensityMax = Math.max(intensityMax, m);
+    },
+    setCategories(n) {                                     // block category palette (golden-angle hues)
+      if (n > 0 && !catPalette) catPalette = lutTexture(gl, categoryPalettePixels(256), 256);
     },
     setDocBbox(b) { docBbox = b; },
     invalidate() { needClear = true; },
     clearChunks() {
       for (const c of chunks) { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); }
       chunks.length = 0; intensityMax = 1; needClear = true;
+      docChan[0] = Infinity; docChan[1] = -Infinity;
     },
     resize() {
       const dpr = window.devicePixelRatio || 1;
@@ -233,32 +236,53 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         for (const c of visible) c.cursor = 0;
       }
 
-      gl.useProgram(prog);
-      gl.uniformMatrix4fv(uni.viewProj, false, vp);
-      gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
-      gl.uniform1i(uni.colorMode, colorMode);
       const db = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
-      gl.uniform2f(uni.zRange, db[2], Math.max(db[5] - db[2], 1e-6));
-      gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
-      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
-      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
-
-      let drawn = 0, converged = true;
-      for (const c of visible) {
-        // this frame's allotment for the chunk: budget share by projected weight,
-        // floored so distant chunks keep a sparse presence (coarse prefix always on)
+      const zRange = [db[2], Math.max(db[5] - db[2], 1e-6)];
+      // this frame's allotment per chunk: budget share by projected weight, floored
+      // so distant chunks keep a sparse presence (coarse prefix always on)
+      const allot = (c) => {
         const share = Math.max(Math.min(c.count, 1000), Math.floor(budget * (c._w / sumW)));
         const first = moving ? 0 : c.cursor;
-        const k = Math.min(c.count - first, share);
-        if (k > 0) {
-          gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
-          gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
-          gl.bindVertexArray(c.vao);
-          gl.drawArrays(gl.POINTS, first, k);
-          drawn += k;
-          c.cursor = first + k;
+        return [first, Math.min(c.count - first, share)];
+      };
+      let drawn = 0, converged = true;
+
+      const pts = visible.filter((c) => c.kind !== 'blocks');
+      if (pts.length) {
+        gl.useProgram(prog);
+        gl.uniformMatrix4fv(uni.viewProj, false, vp);
+        gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
+        gl.uniform1i(uni.colorMode, colorMode);
+        gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
+        gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
+        for (const c of pts) {
+          const [first, k] = allot(c);
+          if (k > 0) {
+            gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
+            gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
+            gl.bindVertexArray(c.vao);
+            gl.drawArrays(gl.POINTS, first, k);
+            drawn += k; c.cursor = first + k;
+          }
+          if (c.cursor < c.count) converged = false;
         }
-        if (c.cursor < c.count) converged = false;
+      }
+
+      const blks = visible.filter((c) => c.kind === 'blocks');
+      if (blks.length) {
+        const chanSpan = docChan[1] > docChan[0] ? docChan[1] - docChan[0] : 1;
+        blocksPipe.begin(cam, {
+          pointPx, colorMode, zRange,
+          chanDoc: [docChan[0] === Infinity ? 0 : docChan[0], chanSpan],
+          ramp, palette: catPalette || palette, viewportH: canvas.height,
+        });
+        for (const c of blks) {
+          const [first, k] = allot(c);
+          if (k > 0) { blocksPipe.drawSlice(c, first, k); drawn += k; c.cursor = first + k; }
+          if (c.cursor < c.count) converged = false;
+        }
       }
       gl.bindVertexArray(null);
       return { drawn, converged, visible: lastVisible };

@@ -75,12 +75,12 @@
     <button id="btnFit" title="frame the data">fit</button>
   </div>
   <div id="view"><canvas id="cv"></canvas></div>
-  <div id="empty"><b>open a point cloud</b><span>Open… or drag a .las anywhere</span><span>nothing handy? generate a sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points, made locally</span></div>
+  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .csv anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
   <div id="drop-hint">drop to open</div>
   <footer><span id="meta">—</span><span id="stats"></span></footer>
 
 <script type="module">
-import { openLas, documentFrame, createChunkBuilder, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, openBlockModel, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 
 const $ = (s) => document.querySelector(s);
 const cv = $('#cv');
@@ -119,27 +119,34 @@ $('#btnFit').onclick = () => { if (renderer.chunkCount) { cam.fit(rendererDocBbo
 let _docBbox = null;
 const rendererDocBbox = () => _docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
 
+function fitFromHeader(header) {
+  frame = documentFrame(header, { crs: null });
+  const o = frame.origin, b = header.bbox;
+  _docBbox = Float64Array.of(b.min[0] - o[0], b.min[1] - o[1], b.min[2] - o[2], b.max[0] - o[0], b.max[1] - o[1], b.max[2] - o[2]);
+  cam.fit(_docBbox);
+}
+async function streamInto(cb, streamChunks, header, name, chunkPoints) {
+  let done = 0;
+  for await (const rc of streamChunks({ chunkPoints })) {
+    cb.push(rc); done += rc.count;
+    $('#meta').textContent = `${name} — streaming ${Math.round(100 * done / (header.count || 1))}%`;
+    await new Promise((r) => setTimeout(r));              // yield to the render loop
+  }
+  const doc = cb.flush();
+  renderer.setDocBbox(doc.bboxLocal);
+  _docBbox = doc.bboxLocal;
+  return doc;
+}
 async function openBlob(blob, name) {
   renderer.clearChunks(); _docBbox = null; requestRender();
   $('#meta').textContent = `${name} — reading…`;
   $('#empty').style.display = 'none';
   try {
+    if (/\.(csv|txt|dat|asc)$/i.test(name)) return await openBlocksBlob(blob, name);
     const { header, streamChunks } = await openLas(blob);
-    frame = documentFrame(header, { crs: null });
-    // fit immediately from the header bbox (frame-local) so points appear in view
-    const o = frame.origin, b = header.bbox;
-    _docBbox = Float64Array.of(b.min[0] - o[0], b.min[1] - o[1], b.min[2] - o[2], b.max[0] - o[0], b.max[1] - o[1], b.max[2] - o[2]);
-    cam.fit(_docBbox);
+    fitFromHeader(header);
     const cb = createChunkBuilder({ frame, chunkSize: 1 << 20, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
-    let done = 0;
-    for await (const rc of streamChunks({ chunkPoints: 1 << 18 })) {
-      cb.push(rc); done += rc.count;
-      $('#meta').textContent = `${name} — streaming ${Math.round(100 * done / (header.count || 1))}%`;
-      await new Promise((r) => setTimeout(r));            // yield to the render loop
-    }
-    const doc = cb.flush();
-    renderer.setDocBbox(doc.bboxLocal);
-    _docBbox = doc.bboxLocal;
+    const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
     $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} points · LAS ${header.version} fmt ${header.format}${frame.origin.some((v) => v) ? ` · origin ${frame.origin.map((v) => v.toLocaleString()).join(', ')}` : ''}`;
     requestRender();
   } catch (e) {
@@ -147,10 +154,54 @@ async function openBlob(blob, name) {
     $('#empty').style.display = '';
   }
 }
+// Block-model path (.csv etc.): two-sweep provider → regular grid → box impostors.
+// Not a regular grid → the points pipeline still shows the centroids.
+async function openBlocksBlob(blob, name) {
+  $('#meta').textContent = `${name} — discovering grid…`;
+  const { header, streamChunks } = await openBlockModel(blob);
+  fitFromHeader(header);
+  renderer.setCategories(header.categories ? header.categories.length : 0);
+  setColorLabels(header);
+  if (header.grid) {
+    const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
+    const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 20, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+    const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
+    $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} blocks · grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
+  } else {
+    // centroids as points (sub-blocked / irregular): grade → the intensity slot
+    const cb = createChunkBuilder({ frame, chunkSize: 1 << 20, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+    let done = 0;
+    for await (const rc of streamChunks({ chunkPoints: 1 << 18 })) {
+      let cMin = Infinity, cMax = -Infinity;
+      for (let i = 0; i < rc.count; i++) { const v = rc.chan[i]; if (Number.isFinite(v)) { if (v < cMin) cMin = v; if (v > cMax) cMax = v; } }
+      const s = cMax > cMin ? 65535 / (cMax - cMin) : 0;
+      const intensity = new Uint16Array(rc.count);
+      for (let i = 0; i < rc.count; i++) intensity[i] = Number.isFinite(rc.chan[i]) ? ((rc.chan[i] - cMin) * s) | 0 : 0;
+      cb.push({ count: rc.count, x: rc.x, y: rc.y, z: rc.z, intensity, classification: rc.cat || new Uint8Array(rc.count), rgb: null, recStart: rc.recStart });
+      done += rc.count;
+      $('#meta').textContent = `${name} — streaming ${Math.round(100 * done / (header.count || 1))}% (no regular grid — showing centroids)`;
+      await new Promise((r) => setTimeout(r));
+    }
+    const doc = cb.flush();
+    renderer.setDocBbox(doc.bboxLocal); _docBbox = doc.bboxLocal;
+    $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} centroids (no regular grid detected — points view)`;
+  }
+  requestRender();
+}
+// Color-by labels adapt to the document kind (grade/category for blocks).
+function setColorLabels(header) {
+  const sel = $('#colorBy');
+  const blocks = header && header.kind === 'blockmodel';
+  const labels = blocks
+    ? { 0: 'elevation', 1: header.attributes[0] || 'grade', 2: header.categories ? header.mapping && header.columns ? header.columns[header.mapping.cat] || 'category' : 'category' : 'category', 3: 'solid' }
+    : { 0: 'elevation', 1: 'intensity', 2: 'classification', 3: 'rgb' };
+  [...sel.options].forEach((o) => { o.textContent = labels[o.value] || o.textContent; });
+  if (blocks) { sel.value = header.attributes.length ? '1' : '0'; requestRender(); }
+}
 
 $('#btnOpen').onclick = async () => {
   const inp = document.createElement('input');
-  inp.type = 'file'; inp.accept = '.las';
+  inp.type = 'file'; inp.accept = '.las,.csv,.txt,.dat,.dm';
   inp.onchange = () => { if (inp.files[0]) openBlob(inp.files[0], inp.files[0].name); };
   inp.click();
 };
@@ -215,7 +266,49 @@ async function openSample(n = 2_000_000) {
 document.querySelectorAll('[data-sample]').forEach((a) => a.onclick = () => openSample(+a.dataset.sample));
 window.addEventListener('keydown', (e) => { if (e.key === 'f') { $('#btnFit').click(); } });
 
-window._micro = { openBlob, openSample, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+// Synthetic QF block model AS A CSV BLOB — exercises the full provider path
+// (sniff → discovery sweep → grid inference → impostors). A 200×100×100 grid
+// (10×10×5 m blocks, UTM-ish coords) CARVED BY A BENCHED OPEN PIT over an
+// ellipsoidal Fe lens — grade zonation outcrops in the pit bottom, benches
+// step the walls, and the model has air above it like a real export.
+function makeSampleBlockCsv() {
+  const nx = 200, ny = 100, nz = 100, dx = 10, dy = 10, dz = 5;
+  const x0 = 612000, y0 = 7765000, z0 = 400;
+  const parts = ['XC,YC,ZC,FE,LITO\n'];
+  let rows = [];
+  const rnd = mulberry32(7);
+  const benchBlocks = 2;                                   // 10 m benches (2 blocks)
+  for (let k = 0; k < nz; k++) {
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        // benched pit: depth grows toward the lens center, quantized to benches
+        const gx = (i - nx * 0.5) / (nx * 0.42), gy = (j - ny * 0.45) / (ny * 0.42);
+        const pitDepth = Math.max(0, 240 * Math.exp(-(gx * gx + gy * gy) * 1.9) - 10);
+        const kSurf = nz - 1 - Math.floor(pitDepth / dz / benchBlocks) * benchBlocks;
+        if (k > kSurf) continue;                           // air (mined out / above topo)
+        const x = x0 + i * dx, y = y0 + j * dy, z = z0 + k * dz;
+        // an ellipsoidal high-grade lens, dipping in x
+        const u = (i - nx * 0.5 - (k - nz / 2) * 0.35) / (nx * 0.22), v = (j - ny * 0.45) / (ny * 0.3), w = (k - nz * 0.55) / (nz * 0.28);
+        const d2 = u * u + v * v + w * w;
+        const fe = Math.max(8, Math.min(68, 62 - d2 * 30 + (rnd() - 0.5) * 6));
+        const lito = d2 < 0.8 ? (k > nz * 0.7 ? 'HEMATITE' : 'ITABIRITE') : (k > nz * 0.8 ? 'CANGA' : 'WASTE');
+        rows.push(`${x},${y},${z},${fe.toFixed(2)},${lito}`);
+      }
+    }
+    parts.push(rows.join('\n') + '\n'); rows = [];
+  }
+  return new Blob(parts, { type: 'text/csv' });
+}
+$('#sampleBlocks').onclick = async () => {
+  $('#empty').style.display = 'none';
+  $('#meta').textContent = 'sample block model — generating csv…';
+  await new Promise((r) => setTimeout(r));
+  const blob = makeSampleBlockCsv();
+  renderer.clearChunks(); _docBbox = null; requestRender();
+  await openBlocksBlob(blob, 'sample_blockmodel.csv');
+};
+
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

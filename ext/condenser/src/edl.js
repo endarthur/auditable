@@ -4,7 +4,7 @@
 // and darkens where neighbors are closer — unlit points read as a surface.
 // Mandatory in M1 (micro-spec §2.2): without it a point cloud reads as noise.
 
-import { makeProgram } from './gl.js';
+import { makeProgram } from './gl-util.js';
 
 const QUAD_VERT = `#version 300 es
 precision highp float;

@@ -605,6 +605,579 @@ function createChunkBuilder({ frame, chunkSize = 1 << 20, batchSize = 0, morton 
   };
 }
 
+// ── src/blocks.js ──
+
+// @gcu/condenser — block-model chunks: IJK-exact representation (micro-spec §2.5).
+//
+// For a REGULAR uniform grid, a block's centroid is fully determined by its integer
+// IJK: center = grid.originLocal + ijk · size, where originLocal is the CENTROID of
+// block (0,0,0) — the centroid convention throughout. Chunks store raw uint16 IJK
+// (not bbox-normalized lattice positions), so reconstruction is EXACT — and IJK is
+// itself useful for the grid-view join. Half-dims are a chunk-level uniform (all
+// blocks one size). Sub-blocked models don't fit this scheme; they render via the
+// points pipeline until the fine-lattice (IJK + size-code) upgrade.
+//
+// Attributes per block: one SCALAR channel (grade — f32 in, quantized u16 against
+// the chunk's min/max, range carried per chunk) + one CATEGORY channel (u8 codes
+// from the provider's dictionary, ≤255 distinct) + uint32 record index (the join).
+// The intra-chunk shuffle invariant (§2.1.4) applies unchanged.
+//
+// BlockChunk = {
+//   kind: 'blocks', count,
+//   grid: { originLocal: [x,y,z], size: [dx,dy,dz] },   — shared, frame-local
+//   ijk: Uint16Array(3N), chan: Uint16Array(N), chanRange: [min,max],
+//   cat: Uint8Array(N), recIdx: Uint32Array(N),
+//   bboxLocal: Float64Array(6)                          — outer faces, for culling
+// }
+
+
+/**
+ * Infer a regular grid from per-axis distinct centroid values (collected by a
+ * provider's discovery sweep). Returns { origin (CENTROID of block 0 — i.e. the
+ * first lattice value), pitch, count } per axis, or null when the axis isn't a
+ * consistent lattice. `values` must be sorted ascending, deduped.
+ */
+function inferAxis(values, { rel = 1e-6 } = {}) {
+  if (!values.length) return null;
+  if (values.length === 1) return { origin: values[0], pitch: 0, count: 1 };
+  let pitch = Infinity;
+  for (let i = 1; i < values.length; i++) {
+    const d = values[i] - values[i - 1];
+    if (d > 0 && d < pitch) pitch = d;
+  }
+  if (!Number.isFinite(pitch) || pitch <= 0) return null;
+  const span = values[values.length - 1] - values[0];
+  const count = Math.round(span / pitch) + 1;
+  if (count > 65535) return null;                          // beyond u16 IJK — not this path
+  const eps = Math.max(pitch * 1e-3, Math.abs(values[0]) * rel);
+  for (const v of values) {
+    const k = Math.round((v - values[0]) / pitch);
+    if (Math.abs(values[0] + k * pitch - v) > eps) return null;   // off-lattice → not regular
+  }
+  return { origin: values[0], pitch, count };
+}
+
+// Grid from three axes (world coords) + a frame → the block-chunk grid descriptor.
+// origin here is the centroid of block (0,0,0), frame-local.
+function makeBlockGrid(axes, frame) {
+  const o = frame.origin;
+  return {
+    originLocal: [axes[0].origin - o[0], axes[1].origin - o[1], axes[2].origin - o[2]],
+    size: [axes[0].pitch || 1, axes[1].pitch || 1, axes[2].pitch || 1],
+    count: [axes[0].count, axes[1].count, axes[2].count],
+  };
+}
+
+/**
+ * Build one BlockChunk from columnar world-space block centroids + attributes.
+ * `indices` = optional gather list (a Morton slice); shuffled like point chunks.
+ * IJK is computed against the grid; anything off-lattice snaps to the nearest
+ * cell (the provider validated regularity during discovery).
+ */
+function buildBlockChunk({ x, y, z, chan, cat, recIdx }, grid, frame, rnd, indices = null) {
+  const n = indices ? indices.length : x.length;
+  const o = frame.origin;
+  const [gx, gy, gz] = grid.originLocal, [sx, sy, sz] = grid.size;
+  const perm = indices ? shuffleInPlace(Uint32Array.from(indices), rnd) : shuffledIndices(n, rnd);
+  const ijk = new Uint16Array(3 * n);
+  const outChan = new Uint16Array(n), outCat = new Uint8Array(n), outR = new Uint32Array(n);
+  // chan range over this chunk (quantize against it — per-chunk min/max, §2.1.2)
+  let cMin = Infinity, cMax = -Infinity;
+  for (let k = 0; k < n; k++) { const v = chan[perm[k]]; if (Number.isFinite(v)) { if (v < cMin) cMin = v; if (v > cMax) cMax = v; } }
+  if (!Number.isFinite(cMin)) { cMin = 0; cMax = 0; }
+  const cScale = cMax > cMin ? 65535 / (cMax - cMin) : 0;
+  let minI = 65535, minJ = 65535, minK = 65535, maxI = 0, maxJ = 0, maxK = 0;
+  for (let k = 0; k < n; k++) {
+    const i = perm[k];
+    const bi = Math.max(0, Math.round((x[i] - o[0] - gx) / sx));
+    const bj = Math.max(0, Math.round((y[i] - o[1] - gy) / sy));
+    const bk = Math.max(0, Math.round((z[i] - o[2] - gz) / sz));
+    ijk[k * 3] = bi; ijk[k * 3 + 1] = bj; ijk[k * 3 + 2] = bk;
+    if (bi < minI) minI = bi; if (bi > maxI) maxI = bi;
+    if (bj < minJ) minJ = bj; if (bj > maxJ) maxJ = bj;
+    if (bk < minK) minK = bk; if (bk > maxK) maxK = bk;
+    const cv = chan[i];
+    outChan[k] = Number.isFinite(cv) ? ((cv - cMin) * cScale + 0.5) | 0 : 0;
+    outCat[k] = cat ? cat[i] : 0;
+    outR[k] = recIdx[i];
+  }
+  // culling bbox = outer faces of the extreme blocks
+  const bboxLocal = Float64Array.of(
+    gx + minI * sx - sx / 2, gy + minJ * sy - sy / 2, gz + minK * sz - sz / 2,
+    gx + maxI * sx + sx / 2, gy + maxJ * sy + sy / 2, gz + maxK * sz + sz / 2,
+  );
+  return { kind: 'blocks', count: n, grid, ijk, chan: outChan, chanRange: [cMin, cMax], cat: outCat, recIdx: outR, bboxLocal };
+}
+
+// Exact centroid of element k, frame-local (tests + picking).
+function blockLocalCenter(chunk, k) {
+  const g = chunk.grid;
+  return [
+    g.originLocal[0] + chunk.ijk[k * 3] * g.size[0],
+    g.originLocal[1] + chunk.ijk[k * 3 + 1] * g.size[1],
+    g.originLocal[2] + chunk.ijk[k * 3 + 2] * g.size[2],
+  ];
+}
+
+/**
+ * BlockChunkBuilder — same shape as createChunkBuilder but for block RawChunks
+ * ({ count, x, y, z, chan: Float32Array|Float64Array, cat: Uint8Array|null,
+ * recStart }). Batch-Morton, sliced, shuffled. Tracks the document chan range
+ * (for the color ramp) alongside the local bbox.
+ */
+function createBlockChunkBuilder({ frame, grid, chunkSize = 1 << 20, batchSize = 0, seed = 1, onChunk }) {
+  const rnd = mulberry32(seed);
+  const batchN = batchSize || chunkSize * 4;
+  let pend = [], pendCount = 0;
+  const doc = {
+    count: 0,
+    bboxLocal: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity),
+    chanRange: [Infinity, -Infinity],
+  };
+  const concat = (Type, parts, per = 1) => {
+    const out = new Type(pendCount * per);
+    let off = 0;
+    for (const p of parts) { out.set(p, off); off += p.length; }
+    return out;
+  };
+  const flushBatch = () => {
+    if (!pendCount) return;
+    const cols = {
+      x: concat(Float64Array, pend.map((p) => p.x)),
+      y: concat(Float64Array, pend.map((p) => p.y)),
+      z: concat(Float64Array, pend.map((p) => p.z)),
+      chan: concat(Float64Array, pend.map((p) => p.chan)),
+      cat: pend.every((p) => p.cat) ? concat(Uint8Array, pend.map((p) => p.cat)) : null,
+      recIdx: concat(Uint32Array, pend.map((p) => p.recIdx)),
+    };
+    const n = pendCount;
+    pend = []; pendCount = 0;
+    const order = radixSortIndices(mortonKeys(cols.x, cols.y, cols.z, n), n);
+    for (let start = 0; start < n; start += chunkSize) {
+      const slice = order.subarray(start, Math.min(start + chunkSize, n));
+      const chunk = buildBlockChunk(cols, grid, frame, rnd, slice);
+      doc.count += chunk.count;
+      const b = doc.bboxLocal, cb = chunk.bboxLocal;
+      for (let i = 0; i < 3; i++) { if (cb[i] < b[i]) b[i] = cb[i]; if (cb[i + 3] > b[i + 3]) b[i + 3] = cb[i + 3]; }
+      if (chunk.chanRange[0] < doc.chanRange[0]) doc.chanRange[0] = chunk.chanRange[0];
+      if (chunk.chanRange[1] > doc.chanRange[1]) doc.chanRange[1] = chunk.chanRange[1];
+      onChunk(chunk);
+    }
+  };
+  return {
+    push(raw) {
+      const recIdx = new Uint32Array(raw.count);
+      for (let i = 0; i < raw.count; i++) recIdx[i] = raw.recStart + i;
+      let taken = 0;
+      while (taken < raw.count) {
+        const room = batchN - pendCount;
+        const n = Math.min(room, raw.count - taken);
+        const s = (a) => (a ? a.subarray(taken, taken + n) : null);
+        pend.push({ x: s(raw.x), y: s(raw.y), z: s(raw.z), chan: s(raw.chan), cat: s(raw.cat), recIdx: recIdx.subarray(taken, taken + n) });
+        pendCount += n; taken += n;
+        if (pendCount >= batchN) flushBatch();
+      }
+    },
+    flush() { flushBatch(); return doc; },
+    get doc() { return doc; },
+  };
+}
+
+// ── src/blockmodel.js ──
+
+// @gcu/condenser — delimited block-model provider (CSV/GSLIB-ish exports).
+// Centroid columns (XC/YC/ZC by convention, overridable) + one scalar grade
+// channel + one categorical channel. A CSV carries no header bbox, so this
+// provider runs an honest TWO-SWEEP recipe (both cold-re-runnable over the
+// Blob): sweep 1 (discovery) parses coordinates only → per-axis distinct
+// values → regular-grid inference (§2.5); sweep 2 streams full RawChunks.
+// Sub-blocked / off-lattice models fail grid inference and should be routed
+// to the points pipeline by the caller (header.grid === null).
+//
+// openBlockModel(blob, { mapping? }) → { header, streamChunks }
+//   header = { kind:'blockmodel', count, bbox, grid|null, columns, mapping,
+//              categories: string[]|null (code → value, ≤255) }
+//   RawChunk = { count, x, y, z: Float64Array, chan: Float64Array,
+//                cat: Uint8Array|null, recStart }
+
+
+const X_RE = /^(x|xc|xcent(er|re)?|xmid|east(ing)?|xworld|centroid_?x)$/i;
+const Y_RE = /^(y|yc|ycent(er|re)?|ymid|north(ing)?|yworld|centroid_?y)$/i;
+const Z_RE = /^(z|zc|zcent(er|re)?|zmid|elev(ation)?|rl|level|zworld|centroid_?z)$/i;
+const DIM_RE = /^(d[xyz]|[xyz]inc|[xyz]size|[xyz]dim|dim_?[xyz])$/i;
+const NONGRADE_RE = /^(ijk|id|index|row|i|j|k|dens|density|sg|topo|pct|proportion)$/i;
+
+const WS = 'ws';                                           // whitespace-delimiter sentinel ('\s' in a string is just 's')
+const splitter = (delim) => (delim === WS ? (l) => l.trim().split(/\s+/) : (l) => l.split(delim));
+
+// Detect delimiter + header from the first text block.
+function sniffDelimited(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith('#')).slice(0, 24);
+  if (!lines.length) throw new Error('blockmodel: no data lines');
+  let best = null;
+  for (const d of [',', ';', '\t', WS]) {
+    const split = splitter(d);
+    const counts = lines.map((l) => split(l).length);
+    const n = counts[0];
+    if (n < 2) continue;
+    if (counts.every((c) => c === n) && (!best || n > best.n)) best = { delim: d, n };
+  }
+  if (!best) throw new Error('blockmodel: no consistent delimiter found');
+  const first = splitter(best.delim)(lines[0]).map((s) => s.trim());
+  const numericish = (s) => s !== '' && !Number.isNaN(Number(s));
+  const hasHeader = first.some((s) => !numericish(s));
+  return { delim: best.delim, header: hasHeader ? first : null, columns: best.n };
+}
+
+// Pick column roles from names. Returns null when centroids can't be identified.
+function mapColumns(header) {
+  if (!header) return null;
+  const find = (re) => header.findIndex((h) => re.test(h.trim()));
+  const x = find(X_RE), y = find(Y_RE), z = find(Z_RE);
+  if (x < 0 || y < 0 || z < 0) return null;
+  const taken = new Set([x, y, z]);
+  header.forEach((h, i) => { if (DIM_RE.test(h.trim())) taken.add(i); });
+  let chan = -1;
+  for (let i = 0; i < header.length; i++) {
+    if (!taken.has(i) && !NONGRADE_RE.test(header[i].trim())) { chan = i; break; }
+  }
+  return { x, y, z, chan: chan >= 0 ? chan : null, cat: null };
+}
+
+// Async generator over the blob's data lines (cold recipe — call again for the
+// next sweep). Skips blanks + '#'; yields trimmed field arrays in batches so the
+// consumer controls pacing.
+async function* lineFields(blob, delim, hasHeader, { signal, onProgress } = {}) {
+  const reader = blob.stream().pipeThrough(new TextDecoderStream()).getReader();
+  const split = splitter(delim);
+  let carry = '', first = hasHeader, bytesSeen = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      if (done) break;
+      bytesSeen += value.length;
+      const text = carry + value;
+      const lines = text.split('\n');
+      carry = lines.pop();
+      const batch = [];
+      for (let l of lines) {
+        if (l.endsWith('\r')) l = l.slice(0, -1);
+        if (!l || l[0] === '#') continue;
+        if (first) { first = false; continue; }
+        batch.push(split(l));
+      }
+      if (onProgress) onProgress(bytesSeen, blob.size);
+      if (batch.length) yield batch;
+    }
+    if (carry && carry[0] !== '#' && carry.trim() && !first) yield [split(carry)];
+  } finally { reader.releaseLock(); }
+}
+
+const CAP_DISTINCT = 300000;                               // per-axis discovery cap
+
+async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, signal, onProgress } = {}) {
+  const head = await blob.slice(0, Math.min(sample, blob.size)).text();
+  const sniff = sniffDelimited(head);
+  const map = mapping || mapColumns(sniff.header);
+  if (!map) throw new Error('blockmodel: could not identify X/Y/Z centroid columns — pass a mapping');
+
+  // auto category: first column whose head-sample values are all non-numeric
+  let catCol = map.cat;
+  if (catCol == null && sniff.header) {
+    const lines = head.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith('#')).slice(1, 40);
+    const split = splitter(sniff.delim);
+    for (let i = 0; i < sniff.columns && catCol == null; i++) {
+      if (i === map.x || i === map.y || i === map.z || i === map.chan) continue;
+      const vals = lines.map((l) => (split(l)[i] || '').trim()).filter(Boolean);
+      if (vals.length && vals.every((v) => Number.isNaN(Number(v)))) catCol = i;
+    }
+  }
+
+  // ── sweep 1: discovery — axis distincts + extents + category dictionary ──
+  const ax = [new Set(), new Set(), new Set()];
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  const catCounts = new Map();
+  const round10 = (v) => Number(v.toPrecision(10));
+  let count = 0;
+  for await (const batch of lineFields(blob, sniff.delim, !!sniff.header, { signal, onProgress })) {
+    for (const f of batch) {
+      const xv = +f[map.x], yv = +f[map.y], zv = +f[map.z];
+      if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+      count++;
+      if (xv < min[0]) min[0] = xv; if (xv > max[0]) max[0] = xv;
+      if (yv < min[1]) min[1] = yv; if (yv > max[1]) max[1] = yv;
+      if (zv < min[2]) min[2] = zv; if (zv > max[2]) max[2] = zv;
+      if (ax[0].size < CAP_DISTINCT) ax[0].add(round10(xv));
+      if (ax[1].size < CAP_DISTINCT) ax[1].add(round10(yv));
+      if (ax[2].size < CAP_DISTINCT) ax[2].add(round10(zv));
+      if (catCol != null && catCounts.size <= 256) { const v = (f[catCol] || '').trim(); if (v) catCounts.set(v, (catCounts.get(v) || 0) + 1); }
+    }
+  }
+
+  const axes = ax.map((s) => (s.size < CAP_DISTINCT ? inferAxis([...s].sort((a, b) => a - b)) : null));
+  const grid = axes.every(Boolean) ? { x: axes[0], y: axes[1], z: axes[2] } : null;
+  const categories = catCol != null && catCounts.size > 0 && catCounts.size <= 255
+    ? [...catCounts.keys()].sort() : null;
+  const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
+
+  const header = {
+    kind: 'blockmodel', count,
+    bbox: { min, max },
+    grid,                                                   // null → not a regular grid (points fallback)
+    columns: sniff.header, mapping: { ...map, cat: categories ? catCol : null },
+    categories,
+    attributes: [
+      ...(map.chan != null && sniff.header ? [sniff.header[map.chan]] : []),
+      ...(categories && sniff.header ? [sniff.header[catCol]] : []),
+    ],
+  };
+
+  // ── sweep 2 (cold recipe): full RawChunks, yielded as buffers fill ──
+  async function* streamChunks({ chunkPoints = 1 << 18, signal: s2, onProgress: op2 } = {}) {
+    const alloc = () => ({ x: new Float64Array(chunkPoints), y: new Float64Array(chunkPoints), z: new Float64Array(chunkPoints), chan: new Float64Array(chunkPoints), cat: catCode ? new Uint8Array(chunkPoints) : null });
+    let buf = alloc(), fill = 0, recStart = 0;
+    for await (const batch of lineFields(blob, sniff.delim, !!sniff.header, { signal: s2, onProgress: op2 })) {
+      for (const f of batch) {
+        const xv = +f[map.x], yv = +f[map.y], zv = +f[map.z];
+        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+        buf.x[fill] = xv; buf.y[fill] = yv; buf.z[fill] = zv;
+        buf.chan[fill] = map.chan != null ? +f[map.chan] : 0;
+        if (buf.cat) { const c = catCode.get((f[catCol] || '').trim()); buf.cat[fill] = c === undefined ? 0 : c; }
+        fill++;
+        if (fill === chunkPoints) {
+          yield { count: fill, x: buf.x, y: buf.y, z: buf.z, chan: buf.chan, cat: buf.cat, recStart };
+          recStart += fill; buf = alloc(); fill = 0;
+        }
+      }
+    }
+    if (fill) yield { count: fill, x: buf.x.subarray(0, fill), y: buf.y.subarray(0, fill), z: buf.z.subarray(0, fill), chan: buf.chan.subarray(0, fill), cat: buf.cat ? buf.cat.subarray(0, fill) : null, recStart };
+  }
+
+  return { header, streamChunks };
+}
+
+// ── src/gl-util.js ──
+
+// @gcu/condenser — shared GL scaffolding (used by the splat + impostor pipelines).
+function compile(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('condenser shader: ' + gl.getShaderInfoLog(s));
+  return s;
+}
+function makeProgram(gl, vsrc, fsrc) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vsrc));
+  gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fsrc));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('condenser link: ' + gl.getProgramInfoLog(p));
+  return p;
+}
+
+// ── src/gl-blocks.js ──
+
+// @gcu/condenser — box impostors for block models (micro-spec §2.3).
+// One screen-aligned quad per block (instanced TRIANGLE_STRIP — no point-sprite
+// size cap): the vertex shader expands a camera-basis billboard sized to the
+// block's bounding sphere; the fragment shader ray-intersects the block's ACTUAL
+// AABB analytically (slab test), discards on miss, writes correct gl_FragDepth
+// and the face normal on hit → pixel-perfect cube silhouettes and correct
+// inter-block occlusion at one quad per block. Face-normal flat shading; EDL
+// does the rest on top.
+//
+// LOD demotion: a block whose projected radius falls below ~2 px renders as a
+// plain circular splat (no ray test) — near field looks like blocks, far field
+// looks like the dense cloud it visually is (§2.3).
+//
+// WebGL2 has no baseInstance, so accumulation slices [first, first+k) work by
+// re-pointing the instance attributes at byte offsets before each draw — the
+// chunk's VAO records the new pointers (cheap: 3 pointer calls per chunk-draw).
+//
+// Positions are IJK-exact (§2.5): center = uGridOrigin + aIjk · uGridSize, with
+// uGridOrigin the frame-local centroid of block (0,0,0).
+
+
+const VERT$gl_blocks = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aIjk;        // uint16 raw (integer lattice)
+layout(location=1) in float aChan;      // uint16 normalized (per-chunk range)
+layout(location=2) in float aCat;       // uint8 raw
+uniform mat4 uViewProj;
+uniform vec3 uEye, uRight, uUp;
+uniform vec3 uGridOrigin, uGridSize;
+uniform float uPerspScale;              // px per world unit at distance 1
+uniform float uDemotePx, uPointPx;
+uniform int uColorMode;                 // 0 elevation | 1 grade | 2 category | 3 solid
+uniform vec2 uZRange;
+uniform vec2 uChanChunk;                // this chunk's [min, span] (dequantize aChan)
+uniform vec2 uChanDoc;                  // document [min, span] (ramp normalization)
+uniform sampler2D uRamp;
+uniform sampler2D uPalette;
+flat out vec3 vCenter;
+flat out vec3 vHalf;
+flat out vec4 vColor;
+flat out float vMode;                   // 0 = impostor, 1 = splat
+out vec2 vCorner;
+out vec3 vWorldPos;
+void main() {
+  vec3 center = uGridOrigin + aIjk * uGridSize;
+  vec3 half_ = uGridSize * 0.5;
+  float r = length(half_);
+  float dist = max(distance(uEye, center), 1e-3);
+  float pxR = r * uPerspScale / dist;
+  float demoted = pxR < uDemotePx ? 1.0 : 0.0;
+  float quadR = mix(r, max(uPointPx * 0.5, pxR) * dist / uPerspScale, demoted);
+  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+  vec3 wp = center + (uRight * corner.x + uUp * corner.y) * quadR;
+  gl_Position = uViewProj * vec4(wp, 1.0);
+  vCenter = center; vHalf = half_; vMode = demoted; vCorner = corner; vWorldPos = wp;
+  if (uColorMode == 0) {
+    float t = clamp((center.z - uZRange.x) / max(uZRange.y, 1e-6), 0.0, 1.0);
+    vColor = texture(uRamp, vec2(t, 0.5));
+  } else if (uColorMode == 1) {
+    float v = uChanChunk.x + aChan * uChanChunk.y;
+    float t = clamp((v - uChanDoc.x) / max(uChanDoc.y, 1e-6), 0.0, 1.0);
+    vColor = texture(uRamp, vec2(t, 0.5));
+  } else if (uColorMode == 2) {
+    vColor = texture(uPalette, vec2((aCat + 0.5) / 256.0, 0.5));
+  } else {
+    vColor = vec4(0.62, 0.63, 0.66, 1.0);
+  }
+}`;
+
+const FRAG$gl_blocks = `#version 300 es
+precision highp float;
+flat in vec3 vCenter;
+flat in vec3 vHalf;
+flat in vec4 vColor;
+flat in float vMode;
+in vec2 vCorner;
+in vec3 vWorldPos;
+uniform vec3 uEye;
+uniform vec3 uLightDir;
+uniform mat4 uViewProj;
+out vec4 outColor;
+void main() {
+  if (vMode > 0.5) {                    // demoted splat: circular mask, rasterizer depth
+    if (dot(vCorner, vCorner) > 1.0) discard;
+    gl_FragDepth = gl_FragCoord.z;
+    outColor = vColor;
+    return;
+  }
+  // ray-AABB slab test in frame-local space
+  vec3 ro = uEye;
+  vec3 rd = normalize(vWorldPos - uEye);
+  vec3 inv = 1.0 / rd;                  // IEEE inf on axis-parallel rays is fine here
+  vec3 t0 = (vCenter - vHalf - ro) * inv;
+  vec3 t1 = (vCenter + vHalf - ro) * inv;
+  vec3 tmin3 = min(t0, t1), tmax3 = max(t0, t1);
+  float tin = max(max(tmin3.x, tmin3.y), tmin3.z);
+  float tout = min(min(tmax3.x, tmax3.y), tmax3.z);
+  if (tin > tout || tout < 0.0) discard;
+  float t = tin > 0.0 ? tin : tout;     // inside the box → exit face
+  vec3 p = ro + rd * t;
+  // face normal = the slab that produced tin
+  vec3 n = vec3(0.0);
+  if (tin == tmin3.x) n = vec3(-sign(rd.x), 0.0, 0.0);
+  else if (tin == tmin3.y) n = vec3(0.0, -sign(rd.y), 0.0);
+  else n = vec3(0.0, 0.0, -sign(rd.z));
+  vec4 clip = uViewProj * vec4(p, 1.0);
+  gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
+  float shade = 0.55 + 0.45 * max(dot(n, uLightDir), 0.0);
+  outColor = vec4(vColor.rgb * shade, vColor.a);
+}`;
+
+// Golden-angle hue walk → visually distinct category colors (code → color).
+function categoryPalettePixels(n = 256) {
+  const out = new Uint8Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const h = (i * 137.508) % 360, s = 0.55, l = 0.58;
+    const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
+    const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    out[i * 4] = Math.round((r + m) * 255); out[i * 4 + 1] = Math.round((g + m) * 255); out[i * 4 + 2] = Math.round((b + m) * 255); out[i * 4 + 3] = 255;
+  }
+  return out;
+}
+
+function createBlocksPipeline(gl) {
+  const prog = makeProgram(gl, VERT$gl_blocks, FRAG$gl_blocks);
+  const U = (n) => gl.getUniformLocation(prog, n);
+  const uni = {
+    viewProj: U('uViewProj'), eye: U('uEye'), right: U('uRight'), up: U('uUp'),
+    gridOrigin: U('uGridOrigin'), gridSize: U('uGridSize'),
+    perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'),
+    colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
+    ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
+  };
+
+  // Upload one BlockChunk → buffers + a VAO whose instance pointers get re-aimed
+  // per slice. CPU arrays are free to die after this returns.
+  function upload(chunk) {
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const mk = (data) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return b; };
+    const bIjk = mk(chunk.ijk), bChan = mk(chunk.chan), bCat = mk(chunk.cat);
+    const recBuf = mk(chunk.recIdx);                       // pick-pass fodder (M5)
+    gl.bindVertexArray(null);
+    return {
+      kind: 'blocks', vao, buffers: [bIjk, bChan, bCat, recBuf],
+      bIjk, bChan, bCat,
+      count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0,
+      grid: chunk.grid, chanRange: chunk.chanRange,
+    };
+  }
+
+  // Aim the instance attributes at element `first` and draw k instances.
+  function drawSlice(c, first, k) {
+    gl.bindVertexArray(c.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bIjk);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.UNSIGNED_SHORT, false, 0, first * 6);
+    gl.vertexAttribDivisor(0, 1);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bChan);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 1, gl.UNSIGNED_SHORT, true, 0, first * 2);
+    gl.vertexAttribDivisor(1, 1);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bCat);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 1, gl.UNSIGNED_BYTE, false, 0, first);
+    gl.vertexAttribDivisor(2, 1);
+    gl.uniform3f(uni.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
+    gl.uniform3f(uni.gridSize, c.grid.size[0], c.grid.size[1], c.grid.size[2]);
+    const span = c.chanRange[1] - c.chanRange[0];
+    gl.uniform2f(uni.chanChunk, c.chanRange[0], span > 0 ? span : 0);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
+  }
+
+  // Per-frame program state (called once before the chunk loop).
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH }) {
+    gl.useProgram(prog);
+    const s = cam.state;
+    gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
+    gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
+    const v = s.view;                                      // camera basis = view-matrix rotation rows
+    gl.uniform3f(uni.right, v[0], v[4], v[8]);
+    gl.uniform3f(uni.up, v[1], v[5], v[9]);
+    // headlight, slightly above the view direction
+    let lx = s.eye[0] - s.target[0], ly = s.eye[1] - s.target[1], lz = s.eye[2] - s.target[2];
+    const ll = Math.hypot(lx, ly, lz) || 1;
+    lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
+    const l2 = Math.hypot(lx, ly, lz) || 1;
+    gl.uniform3f(uni.lightDir, lx / l2, ly / l2, lz / l2);
+    gl.uniform1f(uni.perspScale, (viewportH / 2) / Math.tan(s.fovY / 2));
+    gl.uniform1f(uni.demotePx, 2.0);
+    gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
+    gl.uniform1i(uni.colorMode, colorMode);
+    gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
+    gl.uniform2f(uni.chanDoc, chanDoc[0], chanDoc[1]);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
+  }
+
+  return { upload, drawSlice, begin };
+}
+
 // ── src/camera.js ──
 
 // @gcu/condenser — minimal mat4 math + an orbit camera. Raw WebGL2 needs ~four
@@ -773,7 +1346,7 @@ function attachOrbitInput(canvas, cam, { onChange } = {}) {
 // uniform subsample because chunks.js shuffled them (the §2.1.4 invariant).
 
 
-const VERT = `#version 300 es
+const VERT$gl = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;        // uint16 normalized -> 0..1
 layout(location=1) in float aIntensity; // uint16 normalized
@@ -805,7 +1378,7 @@ void main() {
   }
 }`;
 
-const FRAG = `#version 300 es
+const FRAG$gl = `#version 300 es
 precision highp float;
 in vec4 vColor;
 out vec4 outColor;
@@ -815,20 +1388,6 @@ void main() {
   outColor = vColor;
 }`;
 
-function compile(gl, type, src) {
-  const s = gl.createShader(type);
-  gl.shaderSource(s, src); gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('condenser shader: ' + gl.getShaderInfoLog(s));
-  return s;
-}
-function makeProgram(gl, vsrc, fsrc) {
-  const p = gl.createProgram();
-  gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vsrc));
-  gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fsrc));
-  gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('condenser link: ' + gl.getProgramInfoLog(p));
-  return p;
-}
 
 // ── LUTs ──
 // A small viridis-ish ramp (Switchboard-friendly; perceptual enough for v0.1).
@@ -920,7 +1479,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   // the cost is one buffer copy per composite — negligible next to the splat pass.
   const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: true });
   if (!gl) throw new Error('condenser: WebGL2 unavailable');
-  const prog = makeProgram(gl, VERT, FRAG);
+  const prog = makeProgram(gl, VERT$gl, FRAG$gl);
   const U = (n) => gl.getUniformLocation(prog, n);
   const uni = {
     viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
@@ -928,9 +1487,12 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
-  const palette = lutTexture(gl, palettePixels(), 32);
+  const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
+  let catPalette = null;                                  // category palette (blocks), lazy
+  let blocksPipe = null;                                  // impostor pipeline, lazy
   const chunks = [];
   let docBbox = null, intensityMax = 1;
+  const docChan = [Infinity, -Infinity];                  // block grade range across chunks
   // accumulation state
   const lastVP = new Float32Array(16);
   let lastKey = '', needClear = true, lastVisible = 0;
@@ -946,16 +1508,27 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     get elementCount() { return chunks.reduce((s, c) => s + c.count, 0); },
     get accumulated() { return chunks.reduce((s, c) => s + c.cursor, 0); },   // elements in the current accumulation
     addChunk(chunk) {
+      if (chunk.kind === 'blocks') {
+        if (!blocksPipe) blocksPipe = createBlocksPipeline(gl);
+        chunks.push(blocksPipe.upload(chunk));             // GPU owns it now
+        if (chunk.chanRange[0] < docChan[0]) docChan[0] = chunk.chanRange[0];
+        if (chunk.chanRange[1] > docChan[1]) docChan[1] = chunk.chanRange[1];
+        return;
+      }
       chunks.push(uploadChunk(gl, chunk));                 // GPU owns it now; CPU copy dies with the caller
       let m = 0; const a = chunk.intensity;
       for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
       intensityMax = Math.max(intensityMax, m);
+    },
+    setCategories(n) {                                     // block category palette (golden-angle hues)
+      if (n > 0 && !catPalette) catPalette = lutTexture(gl, categoryPalettePixels(256), 256);
     },
     setDocBbox(b) { docBbox = b; },
     invalidate() { needClear = true; },
     clearChunks() {
       for (const c of chunks) { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); }
       chunks.length = 0; intensityMax = 1; needClear = true;
+      docChan[0] = Infinity; docChan[1] = -Infinity;
     },
     resize() {
       const dpr = window.devicePixelRatio || 1;
@@ -996,32 +1569,53 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         for (const c of visible) c.cursor = 0;
       }
 
-      gl.useProgram(prog);
-      gl.uniformMatrix4fv(uni.viewProj, false, vp);
-      gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
-      gl.uniform1i(uni.colorMode, colorMode);
       const db = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
-      gl.uniform2f(uni.zRange, db[2], Math.max(db[5] - db[2], 1e-6));
-      gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
-      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
-      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
-
-      let drawn = 0, converged = true;
-      for (const c of visible) {
-        // this frame's allotment for the chunk: budget share by projected weight,
-        // floored so distant chunks keep a sparse presence (coarse prefix always on)
+      const zRange = [db[2], Math.max(db[5] - db[2], 1e-6)];
+      // this frame's allotment per chunk: budget share by projected weight, floored
+      // so distant chunks keep a sparse presence (coarse prefix always on)
+      const allot = (c) => {
         const share = Math.max(Math.min(c.count, 1000), Math.floor(budget * (c._w / sumW)));
         const first = moving ? 0 : c.cursor;
-        const k = Math.min(c.count - first, share);
-        if (k > 0) {
-          gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
-          gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
-          gl.bindVertexArray(c.vao);
-          gl.drawArrays(gl.POINTS, first, k);
-          drawn += k;
-          c.cursor = first + k;
+        return [first, Math.min(c.count - first, share)];
+      };
+      let drawn = 0, converged = true;
+
+      const pts = visible.filter((c) => c.kind !== 'blocks');
+      if (pts.length) {
+        gl.useProgram(prog);
+        gl.uniformMatrix4fv(uni.viewProj, false, vp);
+        gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
+        gl.uniform1i(uni.colorMode, colorMode);
+        gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
+        gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
+        for (const c of pts) {
+          const [first, k] = allot(c);
+          if (k > 0) {
+            gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
+            gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
+            gl.bindVertexArray(c.vao);
+            gl.drawArrays(gl.POINTS, first, k);
+            drawn += k; c.cursor = first + k;
+          }
+          if (c.cursor < c.count) converged = false;
         }
-        if (c.cursor < c.count) converged = false;
+      }
+
+      const blks = visible.filter((c) => c.kind === 'blocks');
+      if (blks.length) {
+        const chanSpan = docChan[1] > docChan[0] ? docChan[1] - docChan[0] : 1;
+        blocksPipe.begin(cam, {
+          pointPx, colorMode, zRange,
+          chanDoc: [docChan[0] === Infinity ? 0 : docChan[0], chanSpan],
+          ramp, palette: catPalette || palette, viewportH: canvas.height,
+        });
+        for (const c of blks) {
+          const [first, k] = allot(c);
+          if (k > 0) { blocksPipe.drawSlice(c, first, k); drawn += k; c.cursor = first + k; }
+          if (c.cursor < c.count) converged = false;
+        }
       }
       gl.bindVertexArray(null);
       return { drawn, converged, visible: lastVisible };
@@ -1156,6 +1750,16 @@ export {
   mortonKey,
   mortonKeys,
   radixSortIndices,
+  inferAxis,
+  makeBlockGrid,
+  buildBlockChunk,
+  blockLocalCenter,
+  createBlockChunkBuilder,
+  sniffDelimited,
+  mapColumns,
+  openBlockModel,
+  categoryPalettePixels,
+  createBlocksPipeline,
   mat4Perspective,
   mat4LookAt,
   mat4Multiply,
