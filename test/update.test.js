@@ -289,6 +289,17 @@ describe('full round-trip: build → sign → verify → update', () => {
   it('signed build verifies correctly via Node crypto', () => {
     const keys = generateTestKeypair();
 
+    // Snapshot the real build outputs — this test bakes a TEST key into them, so
+    // restore the exact bytes afterwards. (Restoring by re-running `node build.js`
+    // — the old approach — regenerated the committed auditable.html with a fresh
+    // git build date on every `npm test`, churning ~8.6k lines of compressed
+    // payload whenever HEAD had moved since the last committed build.)
+    const rootHtml = path.join(root, 'auditable.html');
+    const buildHtml = path.join(root, 'build', 'auditable.html');
+    const origRoot = fs.existsSync(rootHtml) ? fs.readFileSync(rootHtml) : null;
+    const origBuild = fs.existsSync(buildHtml) ? fs.readFileSync(buildHtml) : null;
+    try {
+
     // Build with the test public key
     execSync(`node build.js`, {
       cwd: root,
@@ -336,7 +347,10 @@ describe('full round-trip: build → sign → verify → update', () => {
     const updatedSig = extractSignature(updated);
     assert.ok(updatedSig, 'signature should survive reassembly');
 
-    // Rebuild clean (without test key) to restore auditable.html
-    execSync('node build.js', { cwd: root });
+    } finally {
+      // Restore the exact pre-test bytes (see the snapshot note above).
+      if (origRoot) fs.writeFileSync(rootHtml, origRoot);
+      if (origBuild) fs.writeFileSync(buildHtml, origBuild);
+    }
   });
 });
