@@ -113,6 +113,17 @@
   }
   #empty b { color: var(--muted); }
   #empty a { color: var(--accent); pointer-events: auto; cursor: pointer; text-decoration: none; border-bottom: 1px solid rgba(200,155,60,.35); }
+  #empty .empty-sec { margin-top: 16px; color: var(--muted); }
+  #empty .empty-dl { margin-top: -4px; }   /* sits tight under the security notice, not a new section */
+  /* installed PWA already IS the offline copy — the "download micro.html" line is redundant there */
+  @media (display-mode: standalone), (display-mode: minimal-ui), (display-mode: fullscreen) {
+    #empty .empty-dl { display: none; }
+  }
+  #empty .empty-recents { margin-top: 20px; max-width: 720px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; }
+  #empty .empty-recents .er-label { color: var(--dim); }
+  #empty .empty-recents .er-chip { pointer-events: auto; cursor: pointer; color: var(--text); background: var(--bg-field); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-bottom-style: solid; }
+  #empty .empty-recents .er-chip:hover { border-color: var(--accent); color: var(--accent); }
+  #empty .empty-recents .er-chip.nohandle { color: var(--dim); border-style: dashed; }
   #drop-hint {
     position: absolute; inset: 0; display: none; align-items: center; justify-content: center; z-index: 3;
     background: rgba(200, 155, 60, 0.08); border: 2px dashed var(--accent); color: var(--accent);
@@ -185,7 +196,7 @@
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
   </div>
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
-  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .ply / .csv / .xyz / .dm anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
+  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .ply / .csv / .xyz / .dm anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
@@ -647,12 +658,98 @@ $('#filter').addEventListener('keydown', (e) => {
 });
 $('#context').addEventListener('change', () => { if (_filterExpr.trim()) applyBlockFilter(_filterExpr); });
 
-function openFilePicker() {
-  const inp = document.createElement('input');
-  inp.type = 'file'; inp.accept = '.las,.ply,.csv,.txt,.dat,.asc,.xyz,.pts,.dm';
-  inp.onchange = () => { if (inp.files[0]) openBlob(inp.files[0], inp.files[0].name); };
-  inp.click();
+// ── recents (local · opt-in · clearable) — lamina's pattern verbatim ──
+// LOCAL only: IndexedDB, never transmitted (connect-src 'none' holds). An FSAA
+// handle persists (reopening re-grants permission via the browser — no silent
+// re-read); without one (drag / <input> fallback) we keep the name and re-pick.
+// Transparent (shown on the empty state), clearable, disableable (File menu).
+const _idb = (() => {
+  let db;
+  const open = () => (db ||= new Promise((res, rej) => {
+    const r = indexedDB.open('micro', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const tx = async (mode, fn) => {
+    const d = await open();
+    return new Promise((res, rej) => {
+      const t = d.transaction('kv', mode), req = fn(t.objectStore('kv'));
+      t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+    });
+  };
+  return {
+    async get(k) { try { return await tx('readonly', (st) => st.get(k)); } catch { return undefined; } },
+    async set(k, v) { try { await tx('readwrite', (st) => st.put(v, k)); } catch { /* best-effort */ } },
+  };
+})();
+const RECENTS_KEY = '__recents__', RECENTS_MAX = 12;
+let _recents = [];
+let _remember = (() => { try { return localStorage.getItem('micro.recents') !== 'off'; } catch { return true; } })();
+async function refreshRecents() { try { _recents = (_remember && (await _idb.get(RECENTS_KEY))) || []; } catch { _recents = []; } renderEmptyRecents(); }
+async function addRecent(file, handle) {
+  if (!_remember || !file) return;
+  try {
+    const key = file.name + ':' + file.size;
+    const list = (await _idb.get(RECENTS_KEY)) || [];
+    _recents = [{ name: file.name, size: file.size, mtime: file.lastModified || 0, handle: handle || null }]
+      .concat(list.filter((e) => e.name + ':' + e.size !== key)).slice(0, RECENTS_MAX);
+    await _idb.set(RECENTS_KEY, _recents);
+    renderEmptyRecents();
+  } catch { /* best-effort */ }
 }
+async function clearRecents() { try { await _idb.set(RECENTS_KEY, []); } catch { /* ignore */ } _recents = []; renderEmptyRecents(); }
+function setRemember(on) { _remember = on; try { localStorage.setItem('micro.recents', on ? 'on' : 'off'); } catch { /* ignore */ } if (on) refreshRecents(); else clearRecents(); }
+// Reopen a recent: with a handle → re-grant permission + getFile; without →
+// re-pick (we can't, and won't, silently re-read).
+async function openRecent(entry) {
+  closeMenu();
+  if (entry && entry.handle && entry.handle.getFile) {
+    try {
+      const h = entry.handle;
+      if (h.queryPermission) {
+        let perm = await h.queryPermission({ mode: 'read' });
+        if (perm !== 'granted' && h.requestPermission) perm = await h.requestPermission({ mode: 'read' });
+        if (perm !== 'granted') { $('#meta').textContent = 'permission denied — open it again'; return; }
+      }
+      const f = await h.getFile();
+      addRecent(f, h);
+      return openBlob(f, f.name);
+    } catch { $('#meta').textContent = `couldn't reopen “${entry.name}” — pick it again`; return openFilePicker(); }
+  }
+  $('#meta').textContent = `“${entry.name}” has no saved handle — pick it again`;
+  return openFilePicker();
+}
+// Recents on the empty state (the prime reopen moment). Chips need
+// pointer-events (the banner is otherwise click-through for drops).
+function renderEmptyRecents() {
+  const el = $('#emptyRecents'); if (!el) return;
+  el.textContent = '';
+  if (!_remember || !_recents.length) return;
+  const lab = document.createElement('span'); lab.className = 'er-label'; lab.textContent = 'recent:';
+  el.appendChild(lab);
+  for (const e of _recents.slice(0, 8)) {
+    const chip = document.createElement('a'); chip.className = 'er-chip' + (e.handle ? '' : ' nohandle');
+    chip.textContent = e.name; chip.title = e.handle ? 'reopen' : 'no saved handle — re-pick';
+    chip.onclick = () => openRecent(e);
+    el.appendChild(chip);
+  }
+}
+function openFilePicker() {
+  if (window.showOpenFilePicker) {
+    (async () => {
+      try { const [h] = await window.showOpenFilePicker(); if (h) { const f = await h.getFile(); addRecent(f, h); openBlob(f, f.name); } } catch { /* cancelled */ }
+    })();
+  } else {
+    // The <input> fallback (Firefox + mobile). NO `accept` filter: on Android the
+    // OS picker hides files whose extension has no registered MIME — which greys
+    // out a .dm (lamina's lesson).
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.onchange = () => { if (inp.files[0]) { addRecent(inp.files[0], null); openBlob(inp.files[0], inp.files[0].name); } };
+    inp.click();
+  }
+}
+refreshRecents();
 
 // ── menubar (lamina's compact menuAt pattern — commands in menus, knobs in the bar) ──
 let _menuEl = null;
@@ -728,17 +825,29 @@ function showFileInfo() {
     el.classList.add('copied'); setTimeout(() => el.classList.remove('copied'), 700);
   });
 }
-$('#mFile').onclick = () => menuAt($('#mFile'), [
-  { label: 'Open…', kbd: '', action: openFilePicker },
-  { label: 'File info…', kbd: 'i', action: showFileInfo },
-  { sep: true },
-  { label: 'Sample bench scan — 2M', action: () => openSample(2_000_000) },
-  { label: 'Sample bench scan — 10M', action: () => openSample(10_000_000) },
-  { label: 'Sample bench scan — 50M', action: () => openSample(50_000_000) },
-  { label: 'Sample block model — 2M', action: () => $('#sampleBlocks').onclick() },
-  { sep: true },
-  { label: 'Save viewport PNG', action: () => $('#btnShot').click() },
-]);
+$('#mFile').onclick = () => {
+  const items = [
+    { label: 'Open…', kbd: '', action: openFilePicker },
+    { label: 'File info…', kbd: 'i', action: showFileInfo },
+  ];
+  if (_remember && _recents.length) {
+    items.push({ sep: true });
+    for (const e of _recents.slice(0, 10)) items.push({ label: (e.handle ? '' : '↻ ') + e.name, action: () => openRecent(e) });
+    items.push({ label: 'Clear recents', action: clearRecents });
+  }
+  items.push(
+    { sep: true },
+    { label: (_remember ? '✓ ' : '') + 'Remember recent files', action: () => setRemember(!_remember) },
+    { sep: true },
+    { label: 'Sample bench scan — 2M', action: () => openSample(2_000_000) },
+    { label: 'Sample bench scan — 10M', action: () => openSample(10_000_000) },
+    { label: 'Sample bench scan — 50M', action: () => openSample(50_000_000) },
+    { label: 'Sample block model — 2M', action: () => $('#sampleBlocks').onclick() },
+    { sep: true },
+    { label: 'Save viewport PNG', action: () => $('#btnShot').click() },
+  );
+  menuAt($('#mFile'), items);
+};
 $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Fit', kbd: 'f', action: () => $('#btnFit').click() },
   { sep: true },
@@ -800,7 +909,7 @@ addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.class
 addEventListener('drop', (e) => {
   e.preventDefault(); document.body.classList.remove('drag');
   const f = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) openBlob(f, f.name);
+  if (f) { addRecent(f, null); openBlob(f, f.name); }
 });
 
 // Synthetic sample: a bench scan generated STREAMING into RawChunks (no LAS bytes,
@@ -1150,7 +1259,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
