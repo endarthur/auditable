@@ -158,7 +158,7 @@ async function openBlob(blob, name) {
     if (/\.(csv|txt|dat|asc)$/i.test(name)) return await openBlocksBlob(blob, name);
     const { header, streamChunks } = await openLas(blob);
     fitFromHeader(header);
-    const cb = createChunkBuilder({ frame, chunkSize: 1 << 19, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+    const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
     const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
     $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} points · LAS ${header.version} fmt ${header.format}${frame.origin.some((v) => v) ? ` · origin ${frame.origin.map((v) => v.toLocaleString()).join(', ')}` : ''}`;
     requestRender();
@@ -182,14 +182,14 @@ async function openBlocksBlob(blob, name, opts = {}) {
   setColorLabels(header);
   if (header.grid) {
     const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
-    const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 18, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });   // 256k/chunk: culling granularity is the close-up perf
+    const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });   // 128k/chunk, 16 chunks per Morton batch: tight bboxes are what give the frustum test teeth
     const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
     _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} blocks · grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
     $('#meta').textContent = _blockDoc.metaLine;
     if (_filterExpr.trim() && opts.keepFilter) applyBlockFilter(_filterExpr);
   } else {
     // centroids as points (sub-blocked / irregular): grade → the intensity slot
-    const cb = createChunkBuilder({ frame, chunkSize: 1 << 19, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+    const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
     let done = 0;
     for await (const rc of streamChunks({ chunkPoints: 1 << 18 })) {
       let cMin = Infinity, cMax = -Infinity;
@@ -340,7 +340,7 @@ async function openSample(n = 2_000_000) {
   const o = frame.origin, b = header.bbox;
   _docBbox = Float64Array.of(b.min[0] - o[0], b.min[1] - o[1], b.min[2] - o[2], b.max[0] - o[0], b.max[1] - o[1], b.max[2] - o[2]);
   cam.fit(_docBbox);
-  const cb = createChunkBuilder({ frame, chunkSize: 1 << 19, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+  const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
   let done = 0;
   for (const rc of sampleRawChunks(n)) {
     cb.push(rc); done += rc.count;
