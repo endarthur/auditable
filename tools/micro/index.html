@@ -77,7 +77,7 @@
       <option value="100000000">all</option>
     </select></label>
     <input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = \"HEMATITE\"" title="lamina's filter language, over every column in the file — Enter applies, Esc clears">
-    <label title="discard non-matching blocks instead of dimming them"><input type="checkbox" id="isolate"> isolate</label>
+    <label title="keep non-matching blocks as dimmed context instead of hiding them"><input type="checkbox" id="context"> context</label>
     <span class="spacer"></span>
     <button id="btnFit" title="frame the data">fit</button>
   </div>
@@ -273,7 +273,7 @@ async function applyBlockFilter(expr) {
     }
     await new Promise((r) => setTimeout(r));
   }
-  renderer.setFilter(mask, { isolate: $('#isolate').checked });
+  renderer.setFilter(mask, { isolate: !$('#context').checked });   // default = isolate; context = dim the rest
   requestRender();
   $('#meta').textContent = `${_blockDoc.metaLine} · filter: ${hits.toLocaleString()} of ${rec.toLocaleString()} match`;
 }
@@ -281,7 +281,7 @@ $('#filter').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') applyBlockFilter($('#filter').value);
   else if (e.key === 'Escape') { $('#filter').value = ''; applyBlockFilter(''); }
 });
-$('#isolate').addEventListener('change', () => { if (_filterExpr.trim()) applyBlockFilter(_filterExpr); });
+$('#context').addEventListener('change', () => { if (_filterExpr.trim()) applyBlockFilter(_filterExpr); });
 
 $('#btnOpen').onclick = async () => {
   const inp = document.createElement('input');

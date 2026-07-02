@@ -78,7 +78,7 @@ void main() {
   } else {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
   }
-  if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.12, vColor.a);   // dim non-matching
+  if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);   // context mode: dim non-matching (still legible)
 }`;
 
 const FRAG = `#version 300 es
