@@ -182,7 +182,7 @@
     <input id="secPos" type="range" min="0" max="1" step="0.002" value="0.5" title="scrub the section" style="width:140px;display:none">
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
   </div>
-  <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLine" stroke="#4a78b0" stroke-width="1.5"/><circle id="mA" r="3.5" fill="#4a78b0"/><circle id="mB" r="3.5" fill="#4a78b0"/><text id="mLabel" fill="#dfe6ee" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3"></text></svg></div>
+  <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .ply / .csv / .xyz / .dm anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
@@ -928,15 +928,16 @@ function drawMeasure() {
   if (!a) { svg.style.display = 'none'; return; }
   svg.style.display = '';
   $('#mA').setAttribute('cx', a[0]); $('#mA').setAttribute('cy', a[1]);
-  const L = $('#mLine'), B = $('#mB'), T = $('#mLabel');
+  const L = $('#mLine'), C = $('#mLineCase'), B = $('#mB'), T = $('#mLabel');
+  const seg = (x1, y1, x2, y2) => { for (const el of [C, L]) { el.setAttribute('x1', x1); el.setAttribute('y1', y1); el.setAttribute('x2', x2); el.setAttribute('y2', y2); } };
   if (!b) {                                                // A alone (mouse not moved yet)
-    L.setAttribute('x1', a[0]); L.setAttribute('y1', a[1]); L.setAttribute('x2', a[0]); L.setAttribute('y2', a[1]);
+    seg(a[0], a[1], a[0], a[1]);
     B.style.display = 'none'; T.textContent = '';
     return;
   }
-  L.setAttribute('x1', a[0]); L.setAttribute('y1', a[1]);
-  L.setAttribute('x2', b[0]); L.setAttribute('y2', b[1]);
+  seg(a[0], a[1], b[0], b[1]);
   L.setAttribute('stroke-dasharray', pending ? '5 4' : '');
+  C.setAttribute('stroke-dasharray', pending ? '5 4' : '');
   B.style.display = pending ? 'none' : '';
   if (!pending) { B.setAttribute('cx', b[0]); B.setAttribute('cy', b[1]); }
   T.setAttribute('x', (a[0] + b[0]) / 2 + 8); T.setAttribute('y', (a[1] + b[1]) / 2 - 6);
