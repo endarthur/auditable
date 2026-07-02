@@ -55,6 +55,23 @@
     font-family: var(--mono); font-size: 15px;
   }
   body.drag #drop-hint { display: flex; }
+  /* record inspector — right-docked overlay (lamina's record-panel layout) */
+  #recPanel {
+    position: absolute; top: 38px; right: 0; bottom: 24px; width: 280px; display: none;
+    flex-direction: column; background: rgba(22, 22, 22, 0.96); border-left: 1px solid var(--border); z-index: 4;
+  }
+  #recPanel.show { display: flex; }
+  #recPanel .rp-head {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 12px; color: var(--accent);
+  }
+  #recPanel .rp-head .rp-close { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 2px; }
+  #recPanel .rp-head .rp-close:hover { color: var(--text-hi); }
+  #recPanel .rp-list { overflow-y: auto; padding: 8px 12px; font-family: var(--mono); font-size: 12px; }
+  #recPanel .rp-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid rgba(127,127,127,0.07); }
+  #recPanel .rp-row .k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #recPanel .rp-row .v { color: var(--text-hi); text-align: right; white-space: nowrap; }
+  #recPanel .rp-note { color: var(--dim); font-size: 11px; padding: 6px 0; }
 </style>
 </head>
 <body>
@@ -91,10 +108,11 @@
   <div id="view"><canvas id="cv"></canvas></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .csv anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
   <div id="drop-hint">drop to open</div>
+  <div id="recPanel"><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
   <footer><span id="meta">—</span><span id="stats"></span></footer>
 
 <script type="module">
-import { openLas, openBlockModel, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openBlockModel, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate } from '../../ext/expr/index.js';   // lamina's filter language, verbatim
 
 const $ = (s) => document.querySelector(s);
@@ -162,6 +180,7 @@ async function openBlob(blob, name) {
   try {
     if (/\.(csv|txt|dat|asc)$/i.test(name)) return await openBlocksBlob(blob, name);
     const { header, streamChunks } = await openLas(blob);
+    _lasDoc = { blob, header }; _blockDoc = null;
     fitFromHeader(header);
     const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
     const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
@@ -174,8 +193,9 @@ async function openBlob(blob, name) {
 }
 // Block-model path (.csv etc.): two-sweep provider → regular grid → box impostors.
 // Not a regular grid → the points pipeline still shows the centroids.
-let _blockDoc = null;
+let _blockDoc = null, _lasDoc = null;
 async function openBlocksBlob(blob, name, opts = {}) {
+  _lasDoc = null;
   $('#meta').textContent = `${name} — discovering grid…`;
   const mapping = opts.chan != null && _blockDoc && _blockDoc.header
     ? { ..._blockDoc.header.mapping, chan: opts.chan } : null;
@@ -402,7 +422,66 @@ $('#sampleBlocks').onclick = async () => {
   await openBlocksBlob(blob, 'sample_blockmodel.csv');
 };
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+// ── pick → record inspector: a CLICK (not a drag) GPU-picks the element under
+// the cursor (record index), then fetches the full source row — O(1) for LAS
+// (fixed records), an early-exit sweep for CSV — into the right panel. ──
+function showRecPanel(title, rows, note) {
+  $('#rpTitle').textContent = title;
+  let h = rows.map(([k, v]) => `<div class="rp-row"><span class="k" title="${k}">${k}</span><span class="v">${v}</span></div>`).join('');
+  if (note) h += `<div class="rp-note">${note}</div>`;
+  $('#rpList').innerHTML = h;
+  $('#recPanel').classList.add('show');
+}
+$('#rpClose').onclick = () => $('#recPanel').classList.remove('show');
+
+async function fetchCsvRecord(rec) {
+  const { blob, header } = _blockDoc;
+  const m = header.mapping;
+  let n = 0;
+  for await (const batch of lineFields(blob, header.delim, !!header.columns)) {
+    for (const f of batch) {
+      const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
+      if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+      if (n === rec) return f;
+      n++;
+    }
+  }
+  return null;
+}
+async function showRecord(rec) {
+  if (_blockDoc) {
+    showRecPanel(`block · row ${rec.toLocaleString()}`, [], 'fetching…');
+    const f = await fetchCsvRecord(rec);
+    if (!f) { showRecPanel(`block · row ${rec.toLocaleString()}`, [], 'row not found'); return; }
+    const rows = _blockDoc.header.columns.map((name, i) => [name, f[i]]);
+    showRecPanel(`block · row ${rec.toLocaleString()}`, rows);
+  } else if (_lasDoc) {
+    const { blob, header } = _lasDoc;
+    const off = header.pointOffset + rec * header.recordLen;
+    const dv = new DataView(await blob.slice(off, off + header.recordLen).arrayBuffer());
+    const one = decodeLasRecords(dv, header, 1, rec);
+    const rows = [
+      ['X', one.x[0].toFixed(3)], ['Y', one.y[0].toFixed(3)], ['Z', one.z[0].toFixed(3)],
+      ['intensity', one.intensity[0]], ['classification', one.classification[0]],
+    ];
+    if (one.rgb) rows.push(['rgb', `${one.rgb[0]} ${one.rgb[1]} ${one.rgb[2]}`]);
+    showRecPanel(`point · #${rec.toLocaleString()}`, rows);
+  }
+}
+// click vs drag: small movement, short hold
+let _pdown = null;
+cv.addEventListener('pointerdown', (e) => { _pdown = { x: e.clientX, y: e.clientY, t: performance.now(), b: e.button }; });
+cv.addEventListener('pointerup', (e) => {
+  const d = _pdown; _pdown = null;
+  if (!d || d.b !== 0) return;
+  if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5 || performance.now() - d.t > 500) return;
+  const r = cv.getBoundingClientRect();
+  const rec = renderer.pick(e.clientX - r.left, e.clientY - r.top, cam, { pointPx: +$('#ptPx').value, blocksAsPoints: $('#viewMode').value === 'points' });
+  if (rec == null) { $('#recPanel').classList.remove('show'); return; }
+  showRecord(rec);
+});
+
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

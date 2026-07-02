@@ -10,6 +10,7 @@
 
 import { frustumPlanes, aabbInFrustum } from './camera.js';
 import { createBlocksPipeline, categoryPalettePixels } from './gl-blocks.js';
+import { createPickPipeline } from './gl-pick.js';
 
 const VERT = `#version 300 es
 precision highp float;
@@ -157,6 +158,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
   let catPalette = null;                                  // category palette (blocks), lazy
   let blocksPipe = null;                                  // impostor pipeline, lazy
+  let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
   const chunks = [];
   let docBbox = null, intensityMax = 1;
   const docChan = [Infinity, -Infinity];                  // block grade range across chunks
@@ -219,6 +221,20 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     },
     setDocBbox(b) { docBbox = b; },
     invalidate() { needClear = true; },
+    // GPU pick at CSS coordinates → record index | null. Draws each chunk's
+    // current accumulated prefix into a scissored offscreen target with the
+    // record index as the color (gl-pick.js) — you pick exactly what you see.
+    pick(cssX, cssY, cam, { pointPx = 2.5, blocksAsPoints = false } = {}) {
+      if (!chunks.length) return null;
+      if (!pickPipe) pickPipe = createPickPipeline(gl);
+      const dpr = window.devicePixelRatio || 1;
+      const px = Math.round(cssX * dpr), py = Math.round(canvas.height - cssY * dpr - 1);
+      if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return null;
+      return pickPipe.pick(px, py, chunks, cam, {
+        pointPx, blocksAsPoints, maskTex, isolate: isolateMode,
+        viewportW: canvas.width, viewportH: canvas.height,
+      });
+    },
     clearChunks() {
       for (const c of chunks) { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); }
       chunks.length = 0; intensityMax = 1; needClear = true;
