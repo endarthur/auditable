@@ -44,7 +44,7 @@ void main() {
   } else {
     vColor = vec4(aRgb, 1.0);
   }
-  if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.72, 0.25), 0.75) + 0.15, vColor.a);   // picked: accent glow
+  if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
 }`;
 
 const FRAG = `#version 300 es
