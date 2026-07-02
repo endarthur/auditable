@@ -39,6 +39,7 @@
     border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 10px; cursor: pointer;
   }
   #bar button:hover { background: #2e2e2e; }
+  #bar button.on { color: var(--accent); border-color: var(--accent); }
   #bar .mb { background: transparent; border-color: transparent; padding: 4px 9px; }
   #bar .mb:hover { background: var(--border); border-color: var(--bd2); }
   .menu {
@@ -76,6 +77,13 @@
   #help .bd { padding: 10px 16px; font-family: var(--mono); font-size: 12px; line-height: 1.75; color: var(--text); }
   #help .bd b { color: var(--text-hi); }
   #help .bd code { color: var(--accent); }
+  #help .fi { border-collapse: collapse; width: 100%; }
+  #help .fi td { padding: 3px 10px 3px 0; vertical-align: top; }
+  #help .fi .fi-k { color: var(--muted); white-space: nowrap; padding-right: 22px; }
+  #help .fi .fi-v { color: var(--text-hi); cursor: pointer; border-radius: 3px; padding: 0 4px; }
+  #help .fi .fi-v:hover { background: var(--accent-soft, rgba(200, 155, 60, 0.18)); color: var(--accent); }
+  #help .fi .fi-v.copied { background: rgba(140, 184, 120, 0.3); }
+  #help .fi .fi-x { color: var(--dim); padding: 0 2px; }
   #bar label { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
   #bar input[type="range"] { width: 90px; accent-color: var(--accent); }
   #bar #filterWrap { flex: 0 1 340px; min-width: 140px; position: relative; display: flex; }
@@ -137,6 +145,8 @@
     <span id="filterWrap"><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
     <label title="keep non-matching blocks as dimmed context instead of hiding them"><input type="checkbox" id="context"> context</label>
     <span class="spacer"></span>
+    <button id="btnMeasure" title="measure between two picked points/blocks (m)">measure</button>
+    <button id="btnSection" title="section on/off (x) — mode and scrub live on the row below">section</button>
     <button id="btnShot" title="save the viewport as PNG">png</button>
     <button id="btnFit" title="frame the data">fit</button>
   </div>
@@ -325,6 +335,10 @@ $('#secMode').addEventListener('input', () => {
   else armKnife(false);
   requestRender();
 });
+$('#btnMeasure').onclick = () => { if (_measure.arm) clearMeasure(); else armMeasure(); };
+$('#btnSection').onclick = () => toggleSection();
+function syncSectionBtn() { $('#btnSection').classList.toggle('on', $('#secMode').value !== 'off'); }
+$('#secMode').addEventListener('input', syncSectionBtn);
 $('#secPos').addEventListener('input', requestRender);
 $('#secHalf').addEventListener('input', requestRender);
 
@@ -660,33 +674,56 @@ function menuAt(anchor, items) {
     if (!m.contains(e.target)) { closeMenu(); removeEventListener('pointerdown', onDoc); }
   }), 0);
 }
-// the header panel: everything the providers learned about the open file
+// the header panel: everything the providers learned about the open file.
+// A table with click-to-copy values (lamina's grid-summary pattern): display
+// is formatted, the CLIPBOARD gets the raw value — full precision, no
+// thousands separators — ready to paste into a report or another tool.
+function copyText(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:-1000px;left:0;opacity:0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); } catch { /* ignore */ }
+  ta.remove();
+}
 function showFileInfo() {
   const doc = _blockDoc || _plyDoc || _lasDoc;
   if (!doc) { showHelp('file info', 'no file open'); return; }
   const h = doc.header;
-  const fmtC = (v) => (v == null ? '—' : Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 4 }));
-  const row = (k, v) => `<div style="display:flex;justify-content:space-between;gap:18px;padding:2px 0"><span style="color:var(--muted)">${k}</span><span style="text-align:right">${v}</span></div>`;
-  let html = '';
-  html += row('file', _blockDoc ? _blockDoc.name : _plyDoc ? _plyDoc.name : 'point cloud');
-  html += row('kind', _lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points');
-  html += row('records', fmtC(h.count));
+  const escA = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const fmtC = (v) => (Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 4 }));
+  // one copyable value: raw goes to the clipboard, shown formatted
+  const V = (raw, shown) => (raw == null ? '<span class="fi-x">—</span>' : `<span class="fi-v" data-copy="${escA(raw)}">${shown != null ? shown : escA(raw)}</span>`);
+  const num = (v) => (v == null ? V(null) : V(v, fmtC(v)));
+  const sep = (x) => `<span class="fi-x">${x}</span>`;
+  const rows = [];
+  const row = (k, v) => rows.push(`<tr><td class="fi-k">${k}</td><td>${v}</td></tr>`);
+  row('file', V(_blockDoc ? _blockDoc.name : _plyDoc ? _plyDoc.name : 'point cloud'));
+  row('kind', V(_lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
+  row('records', num(h.count));
   if (h.bbox) {
-    html += row('X', `${fmtC(h.bbox.min[0])} – ${fmtC(h.bbox.max[0])}`);
-    html += row('Y', `${fmtC(h.bbox.min[1])} – ${fmtC(h.bbox.max[1])}`);
-    html += row('Z', `${fmtC(h.bbox.min[2])} – ${fmtC(h.bbox.max[2])}`);
+    for (const [ax, i] of [['X', 0], ['Y', 1], ['Z', 2]]) {
+      row(ax, `${num(h.bbox.min[i])} ${sep('–')} ${num(h.bbox.max[i])} ${sep('(Δ')} ${num(h.bbox.max[i] - h.bbox.min[i])}${sep(')')}`);
+    }
   }
-  if (frame) html += row('frame origin', frame.origin.map(fmtC).join(', ') + (frame.crs ? ` · ${frame.crs}` : ''));
+  if (frame) row('frame origin', frame.origin.map(num).join(sep(', ')) + (frame.crs ? ` ${sep('·')} ${V(frame.crs)}` : ''));
   if (h.grid) {
-    html += row('grid', `${h.grid.x.count} × ${h.grid.y.count} × ${h.grid.z.count}`);
-    html += row('block size', `${fmtC(h.grid.x.pitch)} × ${fmtC(h.grid.y.pitch)} × ${fmtC(h.grid.z.pitch)}`);
-    html += row('block 0 centroid', [h.grid.x.origin, h.grid.y.origin, h.grid.z.origin].map(fmtC).join(', '));
+    row('grid', [h.grid.x.count, h.grid.y.count, h.grid.z.count].map(num).join(sep(' × ')));
+    row('block size', [h.grid.x.pitch, h.grid.y.pitch, h.grid.z.pitch].map(num).join(sep(' × ')));
+    row('block 0 centroid', [h.grid.x.origin, h.grid.y.origin, h.grid.z.origin].map(num).join(sep(', ')));
   }
-  if (h.scale) html += row('scale · offset', `${h.scale.join(', ')} · ${h.offset.map(fmtC).join(', ')}`);
-  if (h.columns) html += row('columns', h.columns.length <= 14 ? h.columns.join(' · ') : h.columns.length + ' columns');
-  if (h.attributes && h.attributes.length) html += row('channels', h.attributes.join(' · '));
-  if (h.categories && h.categories.length) html += row(h.columns ? h.columns[h.mapping.cat] : 'categories', h.categories.join(' · '));
-  showHelp('file info', html);
+  if (h.scale) {
+    row('scale', h.scale.map(num).join(sep(', ')));
+    row('offset', h.offset.map(num).join(sep(', ')));
+  }
+  if (h.columns) row('columns', h.columns.map((c) => V(c)).join(sep(' · ')));
+  if (h.attributes && h.attributes.length) row('channels', h.attributes.map((c) => V(c)).join(sep(' · ')));
+  if (h.categories && h.categories.length) row(h.columns && h.mapping && h.mapping.cat != null ? escA(h.columns[h.mapping.cat]) : 'categories', h.categories.map((c) => V(c)).join(sep(' · ')));
+  showHelp('file info', `<table class="fi">${rows.join('')}</table>`);
+  $('#helpBody').querySelectorAll('.fi-v').forEach((el) => el.onclick = () => {
+    const v = el.getAttribute('data-copy'); if (v == null) return;
+    copyText(v);
+    el.classList.add('copied'); setTimeout(() => el.classList.remove('copied'), 700);
+  });
 }
 $('#mFile').onclick = () => menuAt($('#mFile'), [
   { label: 'Open…', kbd: '', action: openFilePicker },
@@ -816,7 +853,7 @@ document.querySelectorAll('[data-sample]').forEach((a) => a.onclick = () => open
 // ── measure (m): two picks -> distance. Endpoints come from the SOURCE RECORDS
 // (block centroids / point coordinates) — exact, not screen unprojections. The
 // overlay re-projects each drawn frame, so it rides orbits. Esc clears. ──
-let _measure = { arm: 0, a: null, b: null };               // a/b = frame-local [x,y,z]
+let _measure = { arm: 0, a: null, b: null, mouse: null };  // a/b = frame-local [x,y,z]; mouse = css px rubber-band end
 async function recordPosition(rec) {
   const m = _blockDoc && _blockDoc.header.mapping;
   if (_blockDoc && _blockDoc.header.dm) {
@@ -843,14 +880,16 @@ async function recordPosition(rec) {
   return null;
 }
 function armMeasure() {
-  _measure = { arm: 1, a: null, b: null };
+  _measure = { arm: 1, a: null, b: null, mouse: null };
   $('#measureSvg').style.display = 'none';
+  $('#btnMeasure').classList.add('on');
   cv.style.cursor = 'crosshair';
   $('#meta').textContent = 'measure: click two points/blocks';
 }
 function clearMeasure() {
-  _measure = { arm: 0, a: null, b: null };
+  _measure = { arm: 0, a: null, b: null, mouse: null };
   $('#measureSvg').style.display = 'none';
+  $('#btnMeasure').classList.remove('on');
   cv.style.cursor = '';
   requestRender();
 }
@@ -860,10 +899,11 @@ async function measureClick(cssX, cssY) {
   const world = await recordPosition(rec);
   if (!world) return;
   const local = [world[0] - frame.origin[0], world[1] - frame.origin[1], world[2] - frame.origin[2]];
-  if (!_measure.a) { _measure.a = local; $('#meta').textContent = 'measure: click the second point'; }
+  if (!_measure.a) { _measure.a = local; $('#meta').textContent = 'measure: click the second point'; drawMeasure(); }
   else {
-    _measure.b = local; _measure.arm = 0;
+    _measure.b = local; _measure.arm = 0; _measure.mouse = null;
     cv.style.cursor = '';
+    $('#btnMeasure').classList.remove('on');
     const d = [0, 1, 2].map((i) => _measure.b[i] - _measure.a[i]);
     const d3 = Math.hypot(...d), plan = Math.hypot(d[0], d[1]);
     $('#meta').textContent = `measure: ${d3.toFixed(2)} m · plan ${plan.toFixed(2)} m · Δz ${Math.abs(d[2]).toFixed(2)} m`;
@@ -881,19 +921,34 @@ function projectToCss(local) {
 }
 function drawMeasure() {
   const svg = $('#measureSvg');
-  if (!_measure.a || !_measure.b) { svg.style.display = 'none'; return; }
-  const a = projectToCss(_measure.a), b = projectToCss(_measure.b);
-  if (!a || !b) { svg.style.display = 'none'; return; }
+  if (!_measure.a) { svg.style.display = 'none'; return; }
+  const a = projectToCss(_measure.a);
+  const pending = !_measure.b;                             // rubber-band: A picked, B follows the mouse
+  const b = pending ? _measure.mouse : projectToCss(_measure.b);
+  if (!a) { svg.style.display = 'none'; return; }
   svg.style.display = '';
-  const L = $('#mLine');
+  $('#mA').setAttribute('cx', a[0]); $('#mA').setAttribute('cy', a[1]);
+  const L = $('#mLine'), B = $('#mB'), T = $('#mLabel');
+  if (!b) {                                                // A alone (mouse not moved yet)
+    L.setAttribute('x1', a[0]); L.setAttribute('y1', a[1]); L.setAttribute('x2', a[0]); L.setAttribute('y2', a[1]);
+    B.style.display = 'none'; T.textContent = '';
+    return;
+  }
   L.setAttribute('x1', a[0]); L.setAttribute('y1', a[1]);
   L.setAttribute('x2', b[0]); L.setAttribute('y2', b[1]);
-  $('#mA').setAttribute('cx', a[0]); $('#mA').setAttribute('cy', a[1]);
-  $('#mB').setAttribute('cx', b[0]); $('#mB').setAttribute('cy', b[1]);
-  const T = $('#mLabel');
+  L.setAttribute('stroke-dasharray', pending ? '5 4' : '');
+  B.style.display = pending ? 'none' : '';
+  if (!pending) { B.setAttribute('cx', b[0]); B.setAttribute('cy', b[1]); }
   T.setAttribute('x', (a[0] + b[0]) / 2 + 8); T.setAttribute('y', (a[1] + b[1]) / 2 - 6);
-  T.textContent = _measure.label || '';
+  T.textContent = pending ? '' : (_measure.label || '');
 }
+// the rubber band follows the mouse between the two clicks
+cv.addEventListener('pointermove', (e) => {
+  if (!_measure.arm || !_measure.a || _measure.b) return;
+  const r = cv.getBoundingClientRect();
+  _measure.mouse = [e.clientX - r.left, e.clientY - r.top];
+  drawMeasure();
+});
 // measure clicks pre-empt pick/orbit while armed (capture phase, like the knife)
 cv.addEventListener('pointerdown', (e) => {
   if (!_measure.arm || e.button !== 0) return;
@@ -934,6 +989,7 @@ function toggleSection() {
     // re-entering knife with a stored cut should NOT re-arm drawing — show the cut
     if (sel.value === 'knife' && _knife) {
       $('#secPos').style.display = ''; $('#secHalf').style.display = '';
+      syncSectionBtn();
       requestRender();
       return;
     }
