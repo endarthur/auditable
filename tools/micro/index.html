@@ -545,7 +545,12 @@ async function openSample(n = 2_000_000) {
   requestRender();
 }
 document.querySelectorAll('[data-sample]').forEach((a) => a.onclick = () => openSample(+a.dataset.sample));
-window.addEventListener('keydown', (e) => { if (e.key === 'f') { $('#btnFit').click(); } });
+window.addEventListener('keydown', (e) => {
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // typing, not commanding
+  if (e.key === 'f') $('#btnFit').click();
+  else if (e.key === 'k') { $('#secMode').value = 'knife'; $('#secMode').dispatchEvent(new Event('input')); }
+  else if (e.key === 'Escape' && _knifeArm) { armKnife(false); $('#secMode').value = 'off'; $('#secMode').dispatchEvent(new Event('input')); }
+});
 
 // Synthetic QF block model AS A CSV BLOB — exercises the full provider path
 // (sniff → discovery sweep → grid inference → impostors). A 200×100×100 grid
