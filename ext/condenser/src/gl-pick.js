@@ -24,6 +24,8 @@ uniform vec3 uBoxMin, uBoxSpan;
 uniform float uPointPx;
 uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
+uniform sampler2D uMask;
+uniform float uFilterOn, uIsolate;
 flat out uint vRec;
 flat out float vCull;
 void main() {
@@ -32,6 +34,10 @@ void main() {
   gl_PointSize = uPointPx;
   vRec = aRec;
   vCull = (uSecCfg.x > 0.5 && abs(dot(p, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  if (uFilterOn > 0.5 && uIsolate > 0.5) {
+    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
+    if (texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r < 0.5) vCull = 1.0;   // isolated-away isn't pickable
+  }
 }`;
 const PICK_FRAG_PTS = `#version 300 es
 precision highp float;
@@ -82,7 +88,7 @@ void main() {
   gl_Position = uViewProj * vec4(wp, 1.0);
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec);
+    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
@@ -134,7 +140,7 @@ export function createPickPipeline(gl) {
   const pts = makeProgram(gl, PICK_VERT_PTS, PICK_FRAG_PTS);
   const blk = makeProgram(gl, PICK_VERT_BLK, PICK_FRAG_BLK);
   const U = (p, n) => gl.getUniformLocation(p, n);
-  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg') };
+  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg'), mask: U(pts, 'uMask'), filterOn: U(pts, 'uFilterOn'), isolate: U(pts, 'uIsolate') };
   const uBlk = {
     viewProj: U(blk, 'uViewProj'), eye: U(blk, 'uEye'), right: U(blk, 'uRight'), up: U(blk, 'uUp'),
     gridOrigin: U(blk, 'uGridOrigin'), gridSize: U(blk, 'uGridSize'),
@@ -168,7 +174,13 @@ export function createPickPipeline(gl) {
    * CURRENT accumulated prefix (you pick what you can see), scissored to the
    * pixel. Returns the record index, or null.
    */
-  function pick(px, py, chunks, cam, { pointPx, blocksAsPoints = false, maskTex = null, isolate = false, section = null, viewportW, viewportH }) {
+  function pick(px, py, chunks, cam, { pointPx, blocksAsPoints = false, layerStates = null, section = null, viewportW, viewportH }) {
+    const stateOf = (id) => (layerStates && layerStates.get(id)) || { maskTex: null, isolate: false };
+    const byLayer = (arr) => {
+      const m = new Map();
+      for (const c of arr) { const id = c._layer || 0; let g = m.get(id); if (!g) m.set(id, g = []); g.push(c); }
+      return m;
+    };
     const setSec = (u) => {
       gl.uniform4f(u.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
       gl.uniform2f(u.secCfg, section ? 1 : 0, section ? section.half : 0);
@@ -190,7 +202,12 @@ export function createPickPipeline(gl) {
       gl.uniformMatrix4fv(uPts.viewProj, false, s.viewProj);
       gl.uniform1f(uPts.pointPx, dpp);
       setSec(uPts);
-      for (const c of ptsChunks) {
+      for (const [id, group] of byLayer(ptsChunks)) {
+      const st = stateOf(id);
+      gl.uniform1f(uPts.filterOn, st.maskTex ? 1 : 0);
+      gl.uniform1f(uPts.isolate, st.isolate ? 1 : 0);
+      if (st.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, st.maskTex); gl.uniform1i(uPts.mask, 4); }
+      for (const c of group) {
         gl.bindVertexArray(c.vao);
         // wire the recIdx buffer as attr 4 (idempotent; the visual program ignores it)
         gl.bindBuffer(gl.ARRAY_BUFFER, c.buffers[c.buffers.length - 1]);
@@ -199,6 +216,7 @@ export function createPickPipeline(gl) {
         gl.uniform3f(uPts.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
         gl.uniform3f(uPts.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
         gl.drawArrays(gl.POINTS, 0, c.cursor);
+      }
       }
     }
 
@@ -222,11 +240,13 @@ export function createPickPipeline(gl) {
       gl.uniform1f(uBlk.demotePx, 2.0);
       gl.uniform1f(uBlk.pointPx, dpp);
       gl.uniform1f(uBlk.fixedSplat, blocksAsPoints ? 1 : 0);
-      gl.uniform1f(uBlk.filterOn, maskTex ? 1 : 0);
-      gl.uniform1f(uBlk.isolate, isolate ? 1 : 0);
       setSec(uBlk);
-      if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uBlk.mask, 4); }
-      for (const c of blkChunks) {
+      for (const [id, group] of byLayer(blkChunks)) {
+      const st = stateOf(id);
+      gl.uniform1f(uBlk.filterOn, st.maskTex ? 1 : 0);
+      gl.uniform1f(uBlk.isolate, st.isolate ? 1 : 0);
+      if (st.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, st.maskTex); gl.uniform1i(uBlk.mask, 4); }
+      for (const c of group) {
         gl.bindVertexArray(c.vao);
         gl.bindBuffer(gl.ARRAY_BUFFER, c.bIjk);
         gl.enableVertexAttribArray(0);
@@ -239,6 +259,7 @@ export function createPickPipeline(gl) {
         gl.uniform3f(uBlk.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
         gl.uniform3f(uBlk.gridSize, c.grid.size[0], c.grid.size[1], c.grid.size[2]);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.cursor);
+      }
       }
     }
 

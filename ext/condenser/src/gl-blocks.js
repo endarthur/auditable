@@ -64,7 +64,7 @@ void main() {
   // filter mask: dim (default) or cull (isolate)
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec);
+    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;   // centroid-in-slab

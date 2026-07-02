@@ -1155,7 +1155,7 @@ void main() {
   // filter mask: dim (default) or cull (isolate)
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec);
+    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;   // centroid-in-slab
@@ -1416,6 +1416,8 @@ uniform vec3 uBoxMin, uBoxSpan;
 uniform float uPointPx;
 uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
+uniform sampler2D uMask;
+uniform float uFilterOn, uIsolate;
 flat out uint vRec;
 flat out float vCull;
 void main() {
@@ -1424,6 +1426,10 @@ void main() {
   gl_PointSize = uPointPx;
   vRec = aRec;
   vCull = (uSecCfg.x > 0.5 && abs(dot(p, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  if (uFilterOn > 0.5 && uIsolate > 0.5) {
+    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
+    if (texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r < 0.5) vCull = 1.0;   // isolated-away isn't pickable
+  }
 }`;
 const PICK_FRAG_PTS = `#version 300 es
 precision highp float;
@@ -1474,7 +1480,7 @@ void main() {
   gl_Position = uViewProj * vec4(wp, 1.0);
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec);
+    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
@@ -1526,7 +1532,7 @@ function createPickPipeline(gl) {
   const pts = makeProgram(gl, PICK_VERT_PTS, PICK_FRAG_PTS);
   const blk = makeProgram(gl, PICK_VERT_BLK, PICK_FRAG_BLK);
   const U = (p, n) => gl.getUniformLocation(p, n);
-  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg') };
+  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg'), mask: U(pts, 'uMask'), filterOn: U(pts, 'uFilterOn'), isolate: U(pts, 'uIsolate') };
   const uBlk = {
     viewProj: U(blk, 'uViewProj'), eye: U(blk, 'uEye'), right: U(blk, 'uRight'), up: U(blk, 'uUp'),
     gridOrigin: U(blk, 'uGridOrigin'), gridSize: U(blk, 'uGridSize'),
@@ -1560,7 +1566,13 @@ function createPickPipeline(gl) {
    * CURRENT accumulated prefix (you pick what you can see), scissored to the
    * pixel. Returns the record index, or null.
    */
-  function pick(px, py, chunks, cam, { pointPx, blocksAsPoints = false, maskTex = null, isolate = false, section = null, viewportW, viewportH }) {
+  function pick(px, py, chunks, cam, { pointPx, blocksAsPoints = false, layerStates = null, section = null, viewportW, viewportH }) {
+    const stateOf = (id) => (layerStates && layerStates.get(id)) || { maskTex: null, isolate: false };
+    const byLayer = (arr) => {
+      const m = new Map();
+      for (const c of arr) { const id = c._layer || 0; let g = m.get(id); if (!g) m.set(id, g = []); g.push(c); }
+      return m;
+    };
     const setSec = (u) => {
       gl.uniform4f(u.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
       gl.uniform2f(u.secCfg, section ? 1 : 0, section ? section.half : 0);
@@ -1582,7 +1594,12 @@ function createPickPipeline(gl) {
       gl.uniformMatrix4fv(uPts.viewProj, false, s.viewProj);
       gl.uniform1f(uPts.pointPx, dpp);
       setSec(uPts);
-      for (const c of ptsChunks) {
+      for (const [id, group] of byLayer(ptsChunks)) {
+      const st = stateOf(id);
+      gl.uniform1f(uPts.filterOn, st.maskTex ? 1 : 0);
+      gl.uniform1f(uPts.isolate, st.isolate ? 1 : 0);
+      if (st.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, st.maskTex); gl.uniform1i(uPts.mask, 4); }
+      for (const c of group) {
         gl.bindVertexArray(c.vao);
         // wire the recIdx buffer as attr 4 (idempotent; the visual program ignores it)
         gl.bindBuffer(gl.ARRAY_BUFFER, c.buffers[c.buffers.length - 1]);
@@ -1591,6 +1608,7 @@ function createPickPipeline(gl) {
         gl.uniform3f(uPts.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
         gl.uniform3f(uPts.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
         gl.drawArrays(gl.POINTS, 0, c.cursor);
+      }
       }
     }
 
@@ -1614,11 +1632,13 @@ function createPickPipeline(gl) {
       gl.uniform1f(uBlk.demotePx, 2.0);
       gl.uniform1f(uBlk.pointPx, dpp);
       gl.uniform1f(uBlk.fixedSplat, blocksAsPoints ? 1 : 0);
-      gl.uniform1f(uBlk.filterOn, maskTex ? 1 : 0);
-      gl.uniform1f(uBlk.isolate, isolate ? 1 : 0);
       setSec(uBlk);
-      if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uBlk.mask, 4); }
-      for (const c of blkChunks) {
+      for (const [id, group] of byLayer(blkChunks)) {
+      const st = stateOf(id);
+      gl.uniform1f(uBlk.filterOn, st.maskTex ? 1 : 0);
+      gl.uniform1f(uBlk.isolate, st.isolate ? 1 : 0);
+      if (st.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, st.maskTex); gl.uniform1i(uBlk.mask, 4); }
+      for (const c of group) {
         gl.bindVertexArray(c.vao);
         gl.bindBuffer(gl.ARRAY_BUFFER, c.bIjk);
         gl.enableVertexAttribArray(0);
@@ -1631,6 +1651,7 @@ function createPickPipeline(gl) {
         gl.uniform3f(uBlk.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
         gl.uniform3f(uBlk.gridSize, c.grid.size[0], c.grid.size[1], c.grid.size[2]);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.cursor);
+      }
       }
     }
 
@@ -2457,6 +2478,8 @@ uniform vec2 uZRange;                   // document local z min/span (elevation 
 uniform float uIntensityScale;          // 1 / (p98-ish max, normalized units)
 uniform sampler2D uRamp;                // 256x1 continuous ramp
 uniform sampler2D uPalette;             // 32x1 classification palette
+uniform sampler2D uMask;                // filter bitmask by record index (8192-wide)
+uniform float uFilterOn, uIsolate;
 out vec4 vColor;
 flat out float vCull;
 void main() {
@@ -2464,6 +2487,12 @@ void main() {
   gl_Position = uViewProj * vec4(p, 1.0);
   gl_PointSize = uPointPx;
   vCull = (uSecCfg.x > 0.5 && abs(dot(p, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  float m = 1.0;
+  if (uFilterOn > 0.5) {
+    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
+    m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
+    if (uIsolate > 0.5 && m < 0.5) vCull = 1.0;
+  }
   if (uColorMode == 0) {
     float t = clamp((p.z - uZRange.x) / max(uZRange.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
@@ -2475,6 +2504,7 @@ void main() {
   } else {
     vColor = vec4(aRgb, 1.0);
   }
+  if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);   // context mode: dim non-matching
   if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
   if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);   // repaint pass: everything else clips out
 }`;
@@ -2591,6 +2621,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     pointPx: U('uPointPx'), colorMode: U('uColorMode'), zRange: U('uZRange'),
     intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'), repaint: U('uRepaint'),
     secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
+    mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
@@ -2598,13 +2629,32 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   let blocksPipe = null;                                  // impostor pipeline, lazy
   let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
   const chunks = [];
-  let docBbox = null, intensityMax = 1;
-  const docChan = [Infinity, -Infinity];                  // block grade range across chunks
-  let maskTex = null, maskH = 0, isolateMode = false;     // filter bitmask (by record index)
-  let activeSet = 'base';                                 // 'base' | 'compact' (filter compaction)
-  let pickedRec = 0xFFFFFFFF;                             // highlighted record (sentinel = none)
+  let docBbox = null;                                     // scene bbox (fit + the shared elevation ramp)
+  let pickedRec = 0xFFFFFFFF;                             // highlighted record (sentinel = none; FULL partitioned id)
   const repaintSet = new Set();                           // records to repaint over a converged frame
   let lastConverged = false;
+  // ── layers (micro-layers spec §1): each opened dataset is a layer with its own
+  // visibility, filter mask, compaction set, and color ranges. recIdx is
+  // PARTITIONED — (layerId << 29) | record — so one ID buffer serves all layers
+  // (§3). Single-layer callers never notice: layer 0 shifts by zero and every
+  // API defaults to it. ──
+  const layers = new Map();                               // id → per-layer state
+  function layerOf(id) {
+    let l = layers.get(id);
+    if (!l) {
+      l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
+            intensityMax: 1, docChan: [Infinity, -Infinity] };
+      layers.set(id, l);
+    }
+    return l;
+  }
+  const activeChunk = (c) => { const l = layers.get(c._layer); return !!l && l.visible && c._set === l.set; };
+  const freeChunk = (c) => { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); };
+  const byLayer = (arr) => {
+    const m = new Map();
+    for (const c of arr) { let g = m.get(c._layer); if (!g) m.set(c._layer, g = []); g.push(c); }
+    return m;
+  };
   // accumulation state
   const lastVP = new Float32Array(16);
   let lastKey = '', needClear = true, lastVisible = 0;
@@ -2616,49 +2666,55 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
 
   return {
     gl,
-    get chunkCount() { return chunks.reduce((s, c) => s + (c._set === activeSet ? 1 : 0), 0); },
-    get elementCount() { return chunks.reduce((s, c) => s + (c._set === activeSet ? c.count : 0), 0); },
-    get accumulated() { return chunks.reduce((s, c) => s + (c._set === activeSet ? c.cursor : 0), 0); },   // elements in the current accumulation
-    addChunk(chunk, set = 'base') {
+    get chunkCount() { return chunks.reduce((s, c) => s + (activeChunk(c) ? 1 : 0), 0); },
+    get elementCount() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.count : 0), 0); },
+    get accumulated() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.cursor : 0), 0); },   // elements in the current accumulation
+    addChunk(chunk, set = 'base', layer = 0) {
+      const ls = layerOf(layer);
+      if (layer) {                                        // partition the record ids (layer 0 shifts by zero)
+        const base = (layer << 29) >>> 0, r = chunk.recIdx;
+        for (let i = 0; i < r.length; i++) r[i] = (r[i] | base) >>> 0;
+      }
       if (chunk.kind === 'blocks') {
         if (!blocksPipe) blocksPipe = createBlocksPipeline(gl);
-        const up = blocksPipe.upload(chunk); up._set = set;
+        const up = blocksPipe.upload(chunk); up._set = set; up._layer = layer;
         chunks.push(up);                                   // GPU owns it now
         if (set === 'base') {                              // compact chunks never tighten the ramp
-          if (chunk.chanRange[0] < docChan[0]) docChan[0] = chunk.chanRange[0];
-          if (chunk.chanRange[1] > docChan[1]) docChan[1] = chunk.chanRange[1];
+          if (chunk.chanRange[0] < ls.docChan[0]) ls.docChan[0] = chunk.chanRange[0];
+          if (chunk.chanRange[1] > ls.docChan[1]) ls.docChan[1] = chunk.chanRange[1];
         }
         return;
       }
-      const up = uploadChunk(gl, chunk); up._set = set;
+      const up = uploadChunk(gl, chunk); up._set = set; up._layer = layer;
       chunks.push(up);                                     // GPU owns it now; CPU copy dies with the caller
       if (set === 'base') {
         let m = 0; const a = chunk.intensity;
         for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
-        intensityMax = Math.max(intensityMax, m);
+        ls.intensityMax = Math.max(ls.intensityMax, m);
       }
     },
     setCategories(n) {                                     // block category palette (golden-angle hues)
       if (n > 0 && !catPalette) catPalette = lutTexture(gl, categoryPalettePixels(256), 256);
     },
-    // Filter bitmask by RECORD INDEX (micro-spec section 4: arbitrary index sets → a
-    // bitmask texture). mask = Uint8Array (0|1 per source row) or null to clear;
-    // isolate: true discards non-matching, false dims them.
-    setFilter(mask, { isolate = false } = {}) {
-      isolateMode = isolate;
+    // Filter bitmask by RECORD INDEX within the layer (micro-spec section 4).
+    // mask = Uint8Array (0|1 per source row) or null to clear; isolate: true
+    // discards non-matching, false dims them.
+    setFilter(mask, { isolate = false } = {}, layer = 0) {
+      const ls = layerOf(layer);
+      ls.isolate = isolate;
       if (!mask) {
-        if (maskTex) { gl.deleteTexture(maskTex); maskTex = null; }
+        if (ls.maskTex) { gl.deleteTexture(ls.maskTex); ls.maskTex = null; }
       } else {
         const W = 8192, H = Math.max(1, Math.ceil(mask.length / W));
         const padded = new Uint8Array(W * H);
         for (let i = 0; i < mask.length; i++) padded[i] = mask[i] ? 255 : 0;
-        if (maskTex && H === maskH) {
-          gl.bindTexture(gl.TEXTURE_2D, maskTex);
+        if (ls.maskTex && H === ls.maskH) {
+          gl.bindTexture(gl.TEXTURE_2D, ls.maskTex);
           gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, padded);
         } else {
-          if (maskTex) gl.deleteTexture(maskTex);
-          maskTex = gl.createTexture(); maskH = H;
-          gl.bindTexture(gl.TEXTURE_2D, maskTex);
+          if (ls.maskTex) gl.deleteTexture(ls.maskTex);
+          ls.maskTex = gl.createTexture(); ls.maskH = H;
+          gl.bindTexture(gl.TEXTURE_2D, ls.maskTex);
           gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, W, H, 0, gl.RED, gl.UNSIGNED_BYTE, padded);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -2668,19 +2724,40 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       needClear = true;
     },
     setDocBbox(b) { docBbox = b; },
-    // Filter compaction: 'compact' chunks hold ONLY matching elements (raw record
-    // indices preserved), so the render budget runs over the matches instead of
-    // shader-discarding the rest. Base chunks stay resident — clearing is instant.
-    setActiveSet(set) { if (set !== activeSet) { activeSet = set; needClear = true; } },
-    get activeSet() { return activeSet; },
-    clearCompact() {
+    // Filter compaction (per layer): 'compact' chunks hold ONLY matching elements
+    // (record ids preserved), so the render budget runs over the matches instead
+    // of shader-discarding the rest. Base chunks stay resident — clearing is instant.
+    setActiveSet(set, layer = 0) { const ls = layerOf(layer); if (set !== ls.set) { ls.set = set; needClear = true; } },
+    get activeSet() { return layerOf(0).set; },            // legacy single-layer read
+    clearCompact(layer = 0) {
       for (let i = chunks.length - 1; i >= 0; i--) {
         const c = chunks[i];
-        if (c._set !== 'compact') continue;
-        gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b));
+        if (c._layer !== layer || c._set !== 'compact') continue;
+        freeChunk(c);
         chunks.splice(i, 1);
       }
-      if (activeSet === 'compact') { activeSet = 'base'; needClear = true; }
+      const ls = layerOf(layer);
+      if (ls.set === 'compact') { ls.set = 'base'; needClear = true; }
+    },
+    setLayerVisible(layer, on) {
+      const ls = layerOf(layer);
+      if (ls.visible !== !!on) { ls.visible = !!on; needClear = true; }
+    },
+    removeLayer(layer) {
+      for (let i = chunks.length - 1; i >= 0; i--) {
+        if (chunks[i]._layer !== layer) continue;
+        freeChunk(chunks[i]);
+        chunks.splice(i, 1);
+      }
+      const ls = layers.get(layer);
+      if (ls && ls.maskTex) gl.deleteTexture(ls.maskTex);
+      layers.delete(layer);
+      needClear = true;
+    },
+    layerElementCount(layer) {
+      const ls = layers.get(layer);
+      if (!ls) return 0;
+      return chunks.reduce((s, c) => s + (c._layer === layer && c._set === ls.set ? c.count : 0), 0);
     },
     invalidate() { needClear = true; },
     // Pick/unpick over a CONVERGED frame repaints just the affected elements
@@ -2698,25 +2775,26 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         if (repaintSet.size > 2) { repaintSet.clear(); needClear = true; }   // rapid multi-pick: one redraw is cheaper
       } else needClear = true;
     },
-    // GPU pick at CSS coordinates → record index | null. Draws each chunk's
-    // current accumulated prefix into a scissored offscreen target with the
-    // record index as the color (gl-pick.js) — you pick exactly what you see.
+    // GPU pick at CSS coordinates → PARTITIONED record id | null. Draws each
+    // visible layer's accumulated prefix into a scissored offscreen target with
+    // the record id as the color (gl-pick.js) — you pick exactly what you see.
     pick(cssX, cssY, cam, { pointPx = 2.5, blocksAsPoints = false, section = null } = {}) {
       if (!chunks.length) return null;
       if (!pickPipe) pickPipe = createPickPipeline(gl);
       const dpr = window.devicePixelRatio || 1;
       const px = Math.round(cssX * dpr), py = Math.round(canvas.height - cssY * dpr - 1);
       if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return null;
-      return pickPipe.pick(px, py, chunks.filter((c) => c._set === activeSet), cam, {
-        pointPx, blocksAsPoints, maskTex, isolate: isolateMode,
+      return pickPipe.pick(px, py, chunks.filter(activeChunk), cam, {
+        pointPx, blocksAsPoints, layerStates: layers,
         section: section && section.on ? section : null,
         viewportW: canvas.width, viewportH: canvas.height,
       });
     },
     clearChunks() {
-      for (const c of chunks) { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); }
-      chunks.length = 0; intensityMax = 1; needClear = true; activeSet = 'base';
-      docChan[0] = Infinity; docChan[1] = -Infinity;
+      for (const c of chunks) freeChunk(c);
+      chunks.length = 0; needClear = true;
+      for (const ls of layers.values()) if (ls.maskTex) gl.deleteTexture(ls.maskTex);
+      layers.clear();
     },
     resize() {
       const dpr = window.devicePixelRatio || 1;
@@ -2725,13 +2803,16 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       return [w, h];
     },
     // Draw one frame into the CURRENT framebuffer (the EDL pass owns the target).
+    // opts.layerOpts = { [id]: { colorMode, clip } } overrides the global color
+    // opts per layer (absent → the globals, so single-layer callers are unchanged).
     // Returns { drawn, converged, visible }.
-    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false, section = null, clip = null } = {}) {
+    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false, section = null, clip = null, layerOpts = null } = {}) {
       const vp = cam.state.viewProj;
       const sec = section && section.on ? section : null;
       const secKey = sec ? `${sec.n.join(',')}|${sec.d}|${sec.half}` : 'off';
       const clipKey = clip ? `${clip[0]}~${clip[1]}` : 'a';
-      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${secKey}|${clipKey}|${canvas.width}x${canvas.height}`;
+      const loKey = layerOpts ? JSON.stringify(layerOpts) : '';
+      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${secKey}|${clipKey}|${loKey}|${canvas.width}x${canvas.height}`;
       const moving = vpChanged(vp) || key !== lastKey || needClear;
       lastKey = key; needClear = false;
       if (moving) repaintSet.clear();                      // the full redraw covers any pending repaint
@@ -2741,7 +2822,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       const eye = cam.state.eye;
       const visible = [];
       for (const c of chunks) {
-        if (c._set !== activeSet) continue;
+        if (!activeChunk(c)) continue;
         if (!aabbInFrustum(planes, c.bboxLocal)) { if (moving) c.cursor = 0; continue; }
         const b = c.bboxLocal;
         const cx = (b[0] + b[3]) / 2 - eye[0], cy = (b[1] + b[4]) / 2 - eye[1], cz = (b[2] + b[5]) / 2 - eye[2];
@@ -2763,10 +2844,14 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       }
 
       const db = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
-      // color-scale clip: user min/max override the auto range (null = auto side)
-      const zLo = clip && clip[0] != null && colorMode === 0 ? clip[0] : db[2];
-      const zHi = clip && clip[1] != null && colorMode === 0 ? clip[1] : db[5];
-      const zRange = [zLo, Math.max(zHi - zLo, 1e-6)];
+      // per-layer view opts (color mode + clip); the globals when not overridden
+      const lopt = (id) => (layerOpts && layerOpts[id]) || { colorMode, clip };
+      // elevation ramp = the SCENE z range (layers share vertical space) + clip
+      const zRangeOf = (o) => {
+        const zLo = o.clip && o.clip[0] != null && o.colorMode === 0 ? o.clip[0] : db[2];
+        const zHi = o.clip && o.clip[1] != null && o.colorMode === 0 ? o.clip[1] : db[5];
+        return [zLo, Math.max(zHi - zLo, 1e-6)];
+      };
       // this frame's allotment per chunk: budget share by projected weight, floored
       // so distant chunks keep a sparse presence (coarse prefix always on)
       const allot = (c) => {
@@ -2782,37 +2867,51 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
 
       const pts = visible.filter((c) => c.kind !== 'blocks');
       if (pts.length) {
+        const ptsGroups = byLayer(pts);
         gl.useProgram(prog);
         gl.uniformMatrix4fv(uni.viewProj, false, vp);
         gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
-        gl.uniform1i(uni.colorMode, colorMode);
-        gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
-        gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
         gl.uniform1ui(uni.picked, pickedRec);
         gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
         gl.uniform4f(uni.secPlane, sec ? sec.n[0] : 0, sec ? sec.n[1] : 0, sec ? sec.n[2] : 1, sec ? sec.d : 0);
         gl.uniform2f(uni.secCfg, sec ? 1 : 0, sec ? sec.half : 0);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
-        for (const c of pts) {
-          const [first, k] = allot(c);
-          if (k > 0) {
-            gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
-            gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
-            gl.bindVertexArray(c.vao);
-            gl.drawArrays(gl.POINTS, first, k);
-            drawn += k; c.cursor = first + k;
+        // per-layer uniforms + slices (front-to-back preserved within each group)
+        const setupPtsLayer = (id) => {
+          const ls = layerOf(id), o = lopt(id), zr = zRangeOf(o);
+          gl.uniform1i(uni.colorMode, o.colorMode);
+          gl.uniform2f(uni.zRange, zr[0], zr[1]);
+          gl.uniform1f(uni.intensityScale, 65535 / (ls.intensityMax || 1));
+          gl.uniform1f(uni.filterOn, ls.maskTex ? 1 : 0);
+          gl.uniform1f(uni.isolate, ls.isolate ? 1 : 0);
+          if (ls.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, ls.maskTex); gl.uniform1i(uni.mask, 4); }
+        };
+        for (const [id, group] of ptsGroups) {
+          setupPtsLayer(id);
+          for (const c of group) {
+            const [first, k] = allot(c);
+            if (k > 0) {
+              gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
+              gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
+              gl.bindVertexArray(c.vao);
+              gl.drawArrays(gl.POINTS, first, k);
+              drawn += k; c.cursor = first + k;
+            }
+            if (c.cursor < c.count) converged = false;
           }
-          if (c.cursor < c.count) converged = false;
         }
         if (rp) {
           gl.depthFunc(gl.LEQUAL);
           gl.uniform2ui(uni.repaint, rp[0], rp[1]);
-          for (const c of pts) {
-            gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
-            gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
-            gl.bindVertexArray(c.vao);
-            gl.drawArrays(gl.POINTS, 0, c.count);
+          for (const [id, group] of ptsGroups) {
+            setupPtsLayer(id);
+            for (const c of group) {
+              gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
+              gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
+              gl.bindVertexArray(c.vao);
+              gl.drawArrays(gl.POINTS, 0, c.count);
+            }
           }
           gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
           gl.depthFunc(gl.LESS);
@@ -2821,41 +2920,45 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
 
       const blks = visible.filter((c) => c.kind === 'blocks');
       if (blks.length) {
-        const cLo = clip && clip[0] != null && colorMode === 1 ? clip[0] : (docChan[0] === Infinity ? 0 : docChan[0]);
-        const cHi = clip && clip[1] != null && colorMode === 1 ? clip[1] : docChan[1];
-        const chanSpan = cHi > cLo ? cHi - cLo : 1;
-        blocksPipe.begin(cam, {
-          pointPx, colorMode, zRange,
-          chanDoc: [cLo, chanSpan],
-          ramp, palette: catPalette || palette, viewportH: canvas.height,
-          maskTex, isolate: isolateMode, pointsView: blocksAsPoints, picked: pickedRec, section: sec,
-        });
+        const blkGroups = byLayer(blks);
         const perspScale = (canvas.height / 2) / Math.tan(cam.state.fovY / 2);
-        for (const c of blks) {
-          const [first, k] = allot(c);
-          if (k > 0) {
-            // the whole chunk below the demotion threshold → the cheap program
-            // (no gl_FragDepth → early-z stays on): the far-field perf lever
-            const b = c.bboxLocal;
-            const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
-            const rBlock = Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
-            const distNear = Math.max(cam.state.near, c._dist - bboxR);
-            const cheap = blocksAsPoints || rBlock * perspScale / distNear < 2.0;
-            blocksPipe.drawSlice(c, first, k, cheap);
-            drawn += k; c.cursor = first + k;
+        const cheapOf = (c) => {
+          // the whole chunk below the demotion threshold → the cheap program
+          // (no gl_FragDepth → early-z stays on): the far-field perf lever
+          const b = c.bboxLocal;
+          const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
+          const rBlock = Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
+          const distNear = Math.max(cam.state.near, c._dist - bboxR);
+          return blocksAsPoints || rBlock * perspScale / distNear < 2.0;
+        };
+        const beginLayer = (id) => {
+          const ls = layerOf(id), o = lopt(id);
+          const cLo = o.clip && o.clip[0] != null && o.colorMode === 1 ? o.clip[0] : (ls.docChan[0] === Infinity ? 0 : ls.docChan[0]);
+          const cHi = o.clip && o.clip[1] != null && o.colorMode === 1 ? o.clip[1] : ls.docChan[1];
+          blocksPipe.begin(cam, {
+            pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
+            chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
+            ramp, palette: catPalette || palette, viewportH: canvas.height,
+            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, section: sec,
+          });
+        };
+        for (const [id, group] of blkGroups) {
+          beginLayer(id);
+          for (const c of group) {
+            const [first, k] = allot(c);
+            if (k > 0) {
+              blocksPipe.drawSlice(c, first, k, cheapOf(c));
+              drawn += k; c.cursor = first + k;
+            }
+            if (c.cursor < c.count) converged = false;
           }
-          if (c.cursor < c.count) converged = false;
         }
         if (rp) {
           gl.depthFunc(gl.LEQUAL);
-          blocksPipe.setRepaint(rp[0], rp[1]);
-          for (const c of blks) {
-            const b = c.bboxLocal;
-            const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
-            const rBlock = Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
-            const distNear = Math.max(cam.state.near, c._dist - bboxR);
-            const cheap = blocksAsPoints || rBlock * perspScale / distNear < 2.0;
-            blocksPipe.drawSlice(c, 0, c.count, cheap);
+          for (const [id, group] of blkGroups) {
+            beginLayer(id);                                // begin resets uRepaint — set it after, per layer
+            blocksPipe.setRepaint(rp[0], rp[1]);
+            for (const c of group) blocksPipe.drawSlice(c, 0, c.count, cheapOf(c));
           }
           blocksPipe.setRepaint(0xFFFFFFFF, 0xFFFFFFFF);
           gl.depthFunc(gl.LESS);
