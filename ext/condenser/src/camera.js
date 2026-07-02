@@ -13,6 +13,14 @@ export function mat4Perspective(fovYRad, aspect, near, far) {
   return m;
 }
 
+export function mat4Ortho(halfH, aspect, near, far) {
+  const halfW = halfH * aspect, m = new Float32Array(16);
+  m[0] = 1 / halfW; m[5] = 1 / halfH;
+  m[10] = -2 / (far - near); m[14] = -(far + near) / (far - near);
+  m[15] = 1;
+  return m;
+}
+
 export function mat4LookAt(eye, target, up) {
   let zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2];
   let l = Math.hypot(zx, zy, zz) || 1; zx /= l; zy /= l; zz /= l;
@@ -74,6 +82,7 @@ export function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
   const c = {
     target: [0, 0, 0], radius: 100, theta: Math.PI / 4, phi: Math.PI / 5, fovY,
     aspect: 1, near: 0.1, far: 1e6,
+    ortho: false, halfH: 0,                                // ortho: half-height = radius·tan(fovY/2) — toggling keeps apparent size at the target
     eye: [0, 0, 0], view: null, proj: null, viewProj: null,
   };
   const EPS = 0.01;
@@ -89,7 +98,8 @@ export function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
     c.near = Math.max(c.radius / 1000, 0.01);
     c.far = c.radius * 100;
     c.view = mat4LookAt(c.eye, c.target, [0, 0, 1]);
-    c.proj = mat4Perspective(c.fovY, c.aspect, c.near, c.far);
+    c.halfH = c.radius * Math.tan(c.fovY / 2);
+    c.proj = c.ortho ? mat4Ortho(c.halfH, c.aspect, c.near, c.far) : mat4Perspective(c.fovY, c.aspect, c.near, c.far);
     c.viewProj = mat4Multiply(c.proj, c.view);
     return c;
   }
@@ -108,6 +118,7 @@ export function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
       c.target[2] += cp * (dyPx * s);
       return update();
     },
+    setOrtho(on) { c.ortho = !!on; return update(); },
     fit(bbox) {                                            // frame a local-space bbox
       c.target = [(bbox[0] + bbox[3]) / 2, (bbox[1] + bbox[4]) / 2, (bbox[2] + bbox[5]) / 2];
       const dx = bbox[3] - bbox[0], dy = bbox[4] - bbox[1], dz = bbox[5] - bbox[2];

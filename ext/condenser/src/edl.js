@@ -22,12 +22,14 @@ uniform sampler2D uColor;
 uniform sampler2D uDepth;
 uniform vec2 uTexel;                   // 1/size
 uniform vec2 uNearFar;
+uniform float uOrtho;                  // 1 = orthographic (depth is already linear)
 uniform float uStrength;               // 0 = off-look, ~1 default
 uniform float uRadius;                 // sample radius in pixels
 out vec4 outColor;
 
 float linDepth(float d) {              // depth buffer -> linear eye-space z
   float n = uNearFar.x, f = uNearFar.y;
+  if (uOrtho > 0.5) return n + d * (f - n);
   return (2.0 * n * f) / (f + n - (d * 2.0 - 1.0) * (f - n));
 }
 void main() {
@@ -50,7 +52,7 @@ void main() {
 export function createEdl(gl) {
   const prog = makeProgram(gl, QUAD_VERT, EDL_FRAG);
   const U = (n) => gl.getUniformLocation(prog, n);
-  const uni = { color: U('uColor'), depth: U('uDepth'), texel: U('uTexel'), nearFar: U('uNearFar'), strength: U('uStrength'), radius: U('uRadius') };
+  const uni = { color: U('uColor'), depth: U('uDepth'), texel: U('uTexel'), nearFar: U('uNearFar'), ortho: U('uOrtho'), strength: U('uStrength'), radius: U('uRadius') };
   let fbo = null, colorTex = null, depthTex = null, w = 0, h = 0;
 
   function ensure(width, height) {
@@ -94,6 +96,7 @@ export function createEdl(gl) {
       gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, depthTex); gl.uniform1i(uni.depth, 3);
       gl.uniform2f(uni.texel, 1 / w, 1 / h);
       gl.uniform2f(uni.nearFar, cam.state.near, cam.state.far);
+      gl.uniform1f(uni.ortho, cam.state.ortho ? 1 : 0);
       gl.uniform1f(uni.strength, enabled ? strength : 0);
       gl.uniform1f(uni.radius, radius);
       gl.drawArrays(gl.TRIANGLES, 0, 3);

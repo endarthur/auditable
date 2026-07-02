@@ -1033,7 +1033,8 @@ layout(location=3) in uint aRec;        // uint32 record index (the join key)
 uniform mat4 uViewProj;
 uniform vec3 uEye, uRight, uUp;
 uniform vec3 uGridOrigin, uGridSize;
-uniform float uPerspScale;              // px per world unit at distance 1
+uniform float uPerspScale;              // persp: px/world at distance 1; ortho: px/world flat
+uniform float uOrtho;                   // 1 = orthographic (skip the /dist)
 uniform float uDemotePx, uPointPx;
 uniform int uColorMode;                 // 0 elevation | 1 grade | 2 category | 3 solid
 uniform vec2 uZRange;
@@ -1060,7 +1061,8 @@ void main() {
   vec3 half_ = uGridSize * 0.5;
   float r = length(half_);
   float dist = max(distance(uEye, center), 1e-3);
-  float pxR = r * uPerspScale / dist;
+  float distEff = uOrtho > 0.5 ? 1.0 : dist;              // ortho: size is distance-free
+  float pxR = r * uPerspScale / distEff;
   float demoted = max(max(pxR < uDemotePx ? 1.0 : 0.0, uForceSplat), uFixedSplat);
   // filter mask: dim (default) or cull (isolate)
   float m = 1.0;
@@ -1071,8 +1073,8 @@ void main() {
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;   // centroid-in-slab
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float quadR = uFixedSplat > 0.5
-    ? uPointPx * 0.5 * dist / uPerspScale
-    : mix(r, max(uPointPx * 0.5, pxR) * dist / uPerspScale, demoted);
+    ? uPointPx * 0.5 * distEff / uPerspScale
+    : mix(r, max(uPointPx * 0.5, pxR) * distEff / uPerspScale, demoted);
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp = center + (uRight * corner.x + uUp * corner.y) * quadR;
   gl_Position = uViewProj * vec4(wp, 1.0);
@@ -1103,6 +1105,9 @@ flat in float vCull;
 in vec2 vCorner;
 in vec3 vWorldPos;
 uniform vec3 uEye;
+uniform vec3 uFwd;                      // view direction (ortho rays are parallel)
+uniform float uOrthoRay;                // 1 = ortho: origin per fragment, direction = uFwd
+uniform float uBackoff;                 // how far behind the quad the ortho ray starts
 uniform vec3 uLightDir;
 uniform mat4 uViewProj;
 out vec4 outColor;
@@ -1114,9 +1119,10 @@ void main() {
     outColor = vColor;
     return;
   }
-  // ray-AABB slab test in frame-local space
-  vec3 ro = uEye;
-  vec3 rd = normalize(vWorldPos - uEye);
+  // ray-AABB slab test in frame-local space (perspective: from the eye;
+  // orthographic: parallel rays -- origin backed off along the view direction)
+  vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
+  vec3 rd = uOrthoRay > 0.5 ? uFwd : normalize(vWorldPos - uEye);
   vec3 inv = 1.0 / rd;                  // IEEE inf on axis-parallel rays is fine here
   vec3 t0 = (vCenter - vHalf - ro) * inv;
   vec3 t1 = (vCenter + vHalf - ro) * inv;
@@ -1182,6 +1188,7 @@ function createBlocksPipeline(gl) {
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
+      ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
   };
   const full = mkProg(FRAG$gl_blocks), cheap = mkProg(FRAG_CHEAP);
@@ -1254,7 +1261,15 @@ function createBlocksPipeline(gl) {
       lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
       const l2 = Math.hypot(lx, ly, lz) || 1;
       gl.uniform3f(uni.lightDir, lx / l2, ly / l2, lz / l2);
-      gl.uniform1f(uni.perspScale, (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uni.perspScale, s.ortho ? (viewportH / 2) / s.halfH : (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uni.ortho, s.ortho ? 1 : 0);
+      gl.uniform1f(uni.orthoRay, s.ortho ? 1 : 0);
+      {
+        const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+        const fl = Math.hypot(...f) || 1;
+        gl.uniform3f(uni.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+        gl.uniform1f(uni.backoff, s.radius * 2);
+      }
       gl.uniform1f(uni.demotePx, 2.0);
       gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
       gl.uniform1i(uni.colorMode, colorMode);
@@ -1334,7 +1349,7 @@ layout(location=3) in uint aRec;
 uniform mat4 uViewProj;
 uniform vec3 uEye, uRight, uUp;
 uniform vec3 uGridOrigin, uGridSize;
-uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat;
+uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat, uOrtho;
 uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
 uniform vec4 uSecPlane;
@@ -1351,11 +1366,12 @@ void main() {
   vec3 half_ = uGridSize * 0.5;
   float r = length(half_);
   float dist = max(distance(uEye, center), 1e-3);
-  float pxR = r * uPerspScale / dist;
+  float distEff = uOrtho > 0.5 ? 1.0 : dist;
+  float pxR = r * uPerspScale / distEff;
   float demoted = max(pxR < uDemotePx ? 1.0 : 0.0, uFixedSplat);
   float quadR = uFixedSplat > 0.5
-    ? uPointPx * 0.5 * dist / uPerspScale
-    : mix(r, max(uPointPx * 0.5, pxR) * dist / uPerspScale, demoted);
+    ? uPointPx * 0.5 * distEff / uPerspScale
+    : mix(r, max(uPointPx * 0.5, pxR) * distEff / uPerspScale, demoted);
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp = center + (uRight * corner.x + uUp * corner.y) * quadR;
   gl_Position = uViewProj * vec4(wp, 1.0);
@@ -1378,6 +1394,9 @@ flat in float vCull;
 in vec2 vCorner;
 in vec3 vWorldPos;
 uniform vec3 uEye;
+uniform vec3 uFwd;
+uniform float uOrthoRay;
+uniform float uBackoff;
 uniform mat4 uViewProj;
 out vec4 outColor;
 ${ENCODE}
@@ -1389,8 +1408,8 @@ void main() {
     outColor = encodeRec(vRec);
     return;
   }
-  vec3 ro = uEye;
-  vec3 rd = normalize(vWorldPos - uEye);
+  vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
+  vec3 rd = uOrthoRay > 0.5 ? uFwd : normalize(vWorldPos - uEye);
   vec3 inv = 1.0 / rd;
   vec3 t0 = (vCenter - vHalf - ro) * inv;
   vec3 t1 = (vCenter + vHalf - ro) * inv;
@@ -1415,6 +1434,7 @@ function createPickPipeline(gl) {
     viewProj: U(blk, 'uViewProj'), eye: U(blk, 'uEye'), right: U(blk, 'uRight'), up: U(blk, 'uUp'),
     gridOrigin: U(blk, 'uGridOrigin'), gridSize: U(blk, 'uGridSize'),
     perspScale: U(blk, 'uPerspScale'), demotePx: U(blk, 'uDemotePx'), pointPx: U(blk, 'uPointPx'), fixedSplat: U(blk, 'uFixedSplat'),
+    ortho: U(blk, 'uOrtho'), fwd: U(blk, 'uFwd'), orthoRay: U(blk, 'uOrthoRay'), backoff: U(blk, 'uBackoff'),
     mask: U(blk, 'uMask'), filterOn: U(blk, 'uFilterOn'), isolate: U(blk, 'uIsolate'),
     secPlane: U(blk, 'uSecPlane'), secCfg: U(blk, 'uSecCfg'),
   };
@@ -1485,7 +1505,15 @@ function createPickPipeline(gl) {
       const v = s.view;
       gl.uniform3f(uBlk.right, v[0], v[4], v[8]);
       gl.uniform3f(uBlk.up, v[1], v[5], v[9]);
-      gl.uniform1f(uBlk.perspScale, (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uBlk.perspScale, s.ortho ? (viewportH / 2) / s.halfH : (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uBlk.ortho, s.ortho ? 1 : 0);
+      gl.uniform1f(uBlk.orthoRay, s.ortho ? 1 : 0);
+      {
+        const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+        const fl = Math.hypot(...f) || 1;
+        gl.uniform3f(uBlk.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+        gl.uniform1f(uBlk.backoff, s.radius * 2);
+      }
       gl.uniform1f(uBlk.demotePx, 2.0);
       gl.uniform1f(uBlk.pointPx, dpp);
       gl.uniform1f(uBlk.fixedSplat, blocksAsPoints ? 1 : 0);
@@ -1936,6 +1964,14 @@ function mat4Perspective(fovYRad, aspect, near, far) {
   return m;
 }
 
+function mat4Ortho(halfH, aspect, near, far) {
+  const halfW = halfH * aspect, m = new Float32Array(16);
+  m[0] = 1 / halfW; m[5] = 1 / halfH;
+  m[10] = -2 / (far - near); m[14] = -(far + near) / (far - near);
+  m[15] = 1;
+  return m;
+}
+
 function mat4LookAt(eye, target, up) {
   let zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2];
   let l = Math.hypot(zx, zy, zz) || 1; zx /= l; zy /= l; zz /= l;
@@ -1997,6 +2033,7 @@ function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
   const c = {
     target: [0, 0, 0], radius: 100, theta: Math.PI / 4, phi: Math.PI / 5, fovY,
     aspect: 1, near: 0.1, far: 1e6,
+    ortho: false, halfH: 0,                                // ortho: half-height = radius·tan(fovY/2) — toggling keeps apparent size at the target
     eye: [0, 0, 0], view: null, proj: null, viewProj: null,
   };
   const EPS = 0.01;
@@ -2012,7 +2049,8 @@ function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
     c.near = Math.max(c.radius / 1000, 0.01);
     c.far = c.radius * 100;
     c.view = mat4LookAt(c.eye, c.target, [0, 0, 1]);
-    c.proj = mat4Perspective(c.fovY, c.aspect, c.near, c.far);
+    c.halfH = c.radius * Math.tan(c.fovY / 2);
+    c.proj = c.ortho ? mat4Ortho(c.halfH, c.aspect, c.near, c.far) : mat4Perspective(c.fovY, c.aspect, c.near, c.far);
     c.viewProj = mat4Multiply(c.proj, c.view);
     return c;
   }
@@ -2031,6 +2069,7 @@ function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
       c.target[2] += cp * (dyPx * s);
       return update();
     },
+    setOrtho(on) { c.ortho = !!on; return update(); },
     fit(bbox) {                                            // frame a local-space bbox
       c.target = [(bbox[0] + bbox[3]) / 2, (bbox[1] + bbox[4]) / 2, (bbox[2] + bbox[5]) / 2];
       const dx = bbox[3] - bbox[0], dy = bbox[4] - bbox[1], dz = bbox[5] - bbox[2];
@@ -2463,12 +2502,14 @@ uniform sampler2D uColor;
 uniform sampler2D uDepth;
 uniform vec2 uTexel;                   // 1/size
 uniform vec2 uNearFar;
+uniform float uOrtho;                  // 1 = orthographic (depth is already linear)
 uniform float uStrength;               // 0 = off-look, ~1 default
 uniform float uRadius;                 // sample radius in pixels
 out vec4 outColor;
 
 float linDepth(float d) {              // depth buffer -> linear eye-space z
   float n = uNearFar.x, f = uNearFar.y;
+  if (uOrtho > 0.5) return n + d * (f - n);
   return (2.0 * n * f) / (f + n - (d * 2.0 - 1.0) * (f - n));
 }
 void main() {
@@ -2491,7 +2532,7 @@ void main() {
 function createEdl(gl) {
   const prog = makeProgram(gl, QUAD_VERT, EDL_FRAG);
   const U = (n) => gl.getUniformLocation(prog, n);
-  const uni = { color: U('uColor'), depth: U('uDepth'), texel: U('uTexel'), nearFar: U('uNearFar'), strength: U('uStrength'), radius: U('uRadius') };
+  const uni = { color: U('uColor'), depth: U('uDepth'), texel: U('uTexel'), nearFar: U('uNearFar'), ortho: U('uOrtho'), strength: U('uStrength'), radius: U('uRadius') };
   let fbo = null, colorTex = null, depthTex = null, w = 0, h = 0;
 
   function ensure(width, height) {
@@ -2535,6 +2576,7 @@ function createEdl(gl) {
       gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, depthTex); gl.uniform1i(uni.depth, 3);
       gl.uniform2f(uni.texel, 1 / w, 1 / h);
       gl.uniform2f(uni.nearFar, cam.state.near, cam.state.far);
+      gl.uniform1f(uni.ortho, cam.state.ortho ? 1 : 0);
       gl.uniform1f(uni.strength, enabled ? strength : 0);
       gl.uniform1f(uni.radius, radius);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -2580,6 +2622,7 @@ export {
   openDmModel,
   fetchDmRecord,
   mat4Perspective,
+  mat4Ortho,
   mat4LookAt,
   mat4Multiply,
   transformPoint,

@@ -8,6 +8,6 @@ export { sniffDelimited, mapColumns, openBlockModel, lineFields } from './blockm
 export { categoryPalettePixels, createBlocksPipeline } from './gl-blocks.js';
 export { createPickPipeline } from './gl-pick.js';
 export { openDmModel, fetchDmRecord } from './dm-provider.js';
-export { mat4Perspective, mat4LookAt, mat4Multiply, transformPoint, frustumPlanes, aabbInFrustum, createOrbitCamera, attachOrbitInput } from './camera.js';
+export { mat4Perspective, mat4Ortho, mat4LookAt, mat4Multiply, transformPoint, frustumPlanes, aabbInFrustum, createOrbitCamera, attachOrbitInput } from './camera.js';
 export { makeProgram, rampPixels, palettePixels, uploadChunk, createRenderer } from './gl.js';
 export { createEdl } from './edl.js';

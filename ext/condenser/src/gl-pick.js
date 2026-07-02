@@ -54,7 +54,7 @@ layout(location=3) in uint aRec;
 uniform mat4 uViewProj;
 uniform vec3 uEye, uRight, uUp;
 uniform vec3 uGridOrigin, uGridSize;
-uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat;
+uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat, uOrtho;
 uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
 uniform vec4 uSecPlane;
@@ -71,11 +71,12 @@ void main() {
   vec3 half_ = uGridSize * 0.5;
   float r = length(half_);
   float dist = max(distance(uEye, center), 1e-3);
-  float pxR = r * uPerspScale / dist;
+  float distEff = uOrtho > 0.5 ? 1.0 : dist;
+  float pxR = r * uPerspScale / distEff;
   float demoted = max(pxR < uDemotePx ? 1.0 : 0.0, uFixedSplat);
   float quadR = uFixedSplat > 0.5
-    ? uPointPx * 0.5 * dist / uPerspScale
-    : mix(r, max(uPointPx * 0.5, pxR) * dist / uPerspScale, demoted);
+    ? uPointPx * 0.5 * distEff / uPerspScale
+    : mix(r, max(uPointPx * 0.5, pxR) * distEff / uPerspScale, demoted);
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp = center + (uRight * corner.x + uUp * corner.y) * quadR;
   gl_Position = uViewProj * vec4(wp, 1.0);
@@ -98,6 +99,9 @@ flat in float vCull;
 in vec2 vCorner;
 in vec3 vWorldPos;
 uniform vec3 uEye;
+uniform vec3 uFwd;
+uniform float uOrthoRay;
+uniform float uBackoff;
 uniform mat4 uViewProj;
 out vec4 outColor;
 ${ENCODE}
@@ -109,8 +113,8 @@ void main() {
     outColor = encodeRec(vRec);
     return;
   }
-  vec3 ro = uEye;
-  vec3 rd = normalize(vWorldPos - uEye);
+  vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
+  vec3 rd = uOrthoRay > 0.5 ? uFwd : normalize(vWorldPos - uEye);
   vec3 inv = 1.0 / rd;
   vec3 t0 = (vCenter - vHalf - ro) * inv;
   vec3 t1 = (vCenter + vHalf - ro) * inv;
@@ -135,6 +139,7 @@ export function createPickPipeline(gl) {
     viewProj: U(blk, 'uViewProj'), eye: U(blk, 'uEye'), right: U(blk, 'uRight'), up: U(blk, 'uUp'),
     gridOrigin: U(blk, 'uGridOrigin'), gridSize: U(blk, 'uGridSize'),
     perspScale: U(blk, 'uPerspScale'), demotePx: U(blk, 'uDemotePx'), pointPx: U(blk, 'uPointPx'), fixedSplat: U(blk, 'uFixedSplat'),
+    ortho: U(blk, 'uOrtho'), fwd: U(blk, 'uFwd'), orthoRay: U(blk, 'uOrthoRay'), backoff: U(blk, 'uBackoff'),
     mask: U(blk, 'uMask'), filterOn: U(blk, 'uFilterOn'), isolate: U(blk, 'uIsolate'),
     secPlane: U(blk, 'uSecPlane'), secCfg: U(blk, 'uSecCfg'),
   };
@@ -205,7 +210,15 @@ export function createPickPipeline(gl) {
       const v = s.view;
       gl.uniform3f(uBlk.right, v[0], v[4], v[8]);
       gl.uniform3f(uBlk.up, v[1], v[5], v[9]);
-      gl.uniform1f(uBlk.perspScale, (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uBlk.perspScale, s.ortho ? (viewportH / 2) / s.halfH : (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uBlk.ortho, s.ortho ? 1 : 0);
+      gl.uniform1f(uBlk.orthoRay, s.ortho ? 1 : 0);
+      {
+        const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+        const fl = Math.hypot(...f) || 1;
+        gl.uniform3f(uBlk.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+        gl.uniform1f(uBlk.backoff, s.radius * 2);
+      }
       gl.uniform1f(uBlk.demotePx, 2.0);
       gl.uniform1f(uBlk.pointPx, dpp);
       gl.uniform1f(uBlk.fixedSplat, blocksAsPoints ? 1 : 0);

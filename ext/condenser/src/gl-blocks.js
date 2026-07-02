@@ -29,7 +29,8 @@ layout(location=3) in uint aRec;        // uint32 record index (the join key)
 uniform mat4 uViewProj;
 uniform vec3 uEye, uRight, uUp;
 uniform vec3 uGridOrigin, uGridSize;
-uniform float uPerspScale;              // px per world unit at distance 1
+uniform float uPerspScale;              // persp: px/world at distance 1; ortho: px/world flat
+uniform float uOrtho;                   // 1 = orthographic (skip the /dist)
 uniform float uDemotePx, uPointPx;
 uniform int uColorMode;                 // 0 elevation | 1 grade | 2 category | 3 solid
 uniform vec2 uZRange;
@@ -56,7 +57,8 @@ void main() {
   vec3 half_ = uGridSize * 0.5;
   float r = length(half_);
   float dist = max(distance(uEye, center), 1e-3);
-  float pxR = r * uPerspScale / dist;
+  float distEff = uOrtho > 0.5 ? 1.0 : dist;              // ortho: size is distance-free
+  float pxR = r * uPerspScale / distEff;
   float demoted = max(max(pxR < uDemotePx ? 1.0 : 0.0, uForceSplat), uFixedSplat);
   // filter mask: dim (default) or cull (isolate)
   float m = 1.0;
@@ -67,8 +69,8 @@ void main() {
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;   // centroid-in-slab
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float quadR = uFixedSplat > 0.5
-    ? uPointPx * 0.5 * dist / uPerspScale
-    : mix(r, max(uPointPx * 0.5, pxR) * dist / uPerspScale, demoted);
+    ? uPointPx * 0.5 * distEff / uPerspScale
+    : mix(r, max(uPointPx * 0.5, pxR) * distEff / uPerspScale, demoted);
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp = center + (uRight * corner.x + uUp * corner.y) * quadR;
   gl_Position = uViewProj * vec4(wp, 1.0);
@@ -99,6 +101,9 @@ flat in float vCull;
 in vec2 vCorner;
 in vec3 vWorldPos;
 uniform vec3 uEye;
+uniform vec3 uFwd;                      // view direction (ortho rays are parallel)
+uniform float uOrthoRay;                // 1 = ortho: origin per fragment, direction = uFwd
+uniform float uBackoff;                 // how far behind the quad the ortho ray starts
 uniform vec3 uLightDir;
 uniform mat4 uViewProj;
 out vec4 outColor;
@@ -110,9 +115,10 @@ void main() {
     outColor = vColor;
     return;
   }
-  // ray-AABB slab test in frame-local space
-  vec3 ro = uEye;
-  vec3 rd = normalize(vWorldPos - uEye);
+  // ray-AABB slab test in frame-local space (perspective: from the eye;
+  // orthographic: parallel rays -- origin backed off along the view direction)
+  vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
+  vec3 rd = uOrthoRay > 0.5 ? uFwd : normalize(vWorldPos - uEye);
   vec3 inv = 1.0 / rd;                  // IEEE inf on axis-parallel rays is fine here
   vec3 t0 = (vCenter - vHalf - ro) * inv;
   vec3 t1 = (vCenter + vHalf - ro) * inv;
@@ -178,6 +184,7 @@ export function createBlocksPipeline(gl) {
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
+      ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
   };
   const full = mkProg(FRAG), cheap = mkProg(FRAG_CHEAP);
@@ -250,7 +257,15 @@ export function createBlocksPipeline(gl) {
       lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
       const l2 = Math.hypot(lx, ly, lz) || 1;
       gl.uniform3f(uni.lightDir, lx / l2, ly / l2, lz / l2);
-      gl.uniform1f(uni.perspScale, (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uni.perspScale, s.ortho ? (viewportH / 2) / s.halfH : (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uni.ortho, s.ortho ? 1 : 0);
+      gl.uniform1f(uni.orthoRay, s.ortho ? 1 : 0);
+      {
+        const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+        const fl = Math.hypot(...f) || 1;
+        gl.uniform3f(uni.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+        gl.uniform1f(uni.backoff, s.radius * 2);
+      }
       gl.uniform1f(uni.demotePx, 2.0);
       gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
       gl.uniform1i(uni.colorMode, colorMode);
