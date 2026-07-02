@@ -1055,6 +1055,7 @@ uniform float uFilterOn, uIsolate;
 uniform float uForceSplat;              // 1 = whole chunk demoted (cheap far-field path)
 uniform float uFixedSplat;              // 1 = points view: fixed-px splats regardless of block size
 uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
+uniform uvec2 uRepaint;                 // repaint pass: draw ONLY these two records (both 0xFFFFFFFF = off)
 uniform vec4 uSecPlane;                 // section plane: xyz = unit normal, w = offset (frame-local)
 uniform vec2 uSecCfg;                   // x: 0 = off, 1 = slab; y: slab half-thickness
 flat out vec3 vCenter;
@@ -1101,6 +1102,7 @@ void main() {
   }
   if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);   // context mode: dim non-matching (still legible)
   if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
+  if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);   // repaint pass: everything else clips out
 }`;
 
 const FRAG$gl_blocks = `#version 300 es
@@ -1194,7 +1196,7 @@ function createBlocksPipeline(gl) {
       perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'),
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
-      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'),
+      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'), repaint: U('uRepaint'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
@@ -1287,6 +1289,7 @@ function createBlocksPipeline(gl) {
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
       gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
       gl.uniform1ui(uni.picked, picked >>> 0);
+      gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
       gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
       gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
       gl.uniform1f(uni.filterOn, maskTex ? 1 : 0);
@@ -1297,7 +1300,14 @@ function createBlocksPipeline(gl) {
     gl.useProgram(full.prog);
   }
 
-  return { upload, drawSlice, begin };
+  // The pick-repaint pass (gl.js): both programs get the target pair, then the
+  // lazily-tracked active program is restored so drawSlice's cache stays honest.
+  function setRepaint(a, b) {
+    for (const pp of [full, cheap]) { gl.useProgram(pp.prog); gl.uniform2ui(pp.uni.repaint, a >>> 0, b >>> 0); }
+    if (active) gl.useProgram(active.prog);
+  }
+
+  return { upload, drawSlice, begin, setRepaint };
 }
 
 // ── src/gl-pick.js ──
@@ -2357,6 +2367,7 @@ layout(location=2) in float aClass;     // uint8, raw (0..255)
 layout(location=3) in vec3 aRgb;        // uint8 normalized
 layout(location=4) in uint aRec;        // uint32 record index (highlight + mask lookups)
 uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
+uniform uvec2 uRepaint;                 // repaint pass: draw ONLY these two records (both 0xFFFFFFFF = off)
 uniform vec4 uSecPlane;                 // section plane: xyz = unit normal, w = offset (frame-local)
 uniform vec2 uSecCfg;                   // x: 0 = off, 1 = slab; y: slab half-thickness
 uniform mat4 uViewProj;
@@ -2386,6 +2397,7 @@ void main() {
     vColor = vec4(aRgb, 1.0);
   }
   if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
+  if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);   // repaint pass: everything else clips out
 }`;
 
 const FRAG$gl = `#version 300 es
@@ -2498,7 +2510,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   const uni = {
     viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
     pointPx: U('uPointPx'), colorMode: U('uColorMode'), zRange: U('uZRange'),
-    intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'),
+    intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'), repaint: U('uRepaint'),
     secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
@@ -2511,6 +2523,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   const docChan = [Infinity, -Infinity];                  // block grade range across chunks
   let maskTex = null, maskH = 0, isolateMode = false;     // filter bitmask (by record index)
   let pickedRec = 0xFFFFFFFF;                             // highlighted record (sentinel = none)
+  const repaintSet = new Set();                           // records to repaint over a converged frame
+  let lastConverged = false;
   // accumulation state
   const lastVP = new Float32Array(16);
   let lastKey = '', needClear = true, lastVisible = 0;
@@ -2569,7 +2583,21 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     },
     setDocBbox(b) { docBbox = b; },
     invalidate() { needClear = true; },
-    setPicked(rec) { pickedRec = rec == null ? 0xFFFFFFFF : rec >>> 0; needClear = true; },
+    // Pick/unpick over a CONVERGED frame repaints just the affected elements
+    // (a depth-LEQUAL pass where everything else clips out) instead of
+    // restarting the accumulation — same total vertex work, none of the
+    // de-densify blink. Mid-accumulation falls back to the clear.
+    setPicked(rec) {
+      const next = rec == null ? 0xFFFFFFFF : rec >>> 0;
+      if (next === pickedRec) return;
+      const prev = pickedRec;
+      pickedRec = next;
+      if (lastConverged && !needClear) {
+        if (prev !== 0xFFFFFFFF) repaintSet.add(prev);
+        if (next !== 0xFFFFFFFF) repaintSet.add(next);
+        if (repaintSet.size > 2) { repaintSet.clear(); needClear = true; }   // rapid multi-pick: one redraw is cheaper
+      } else needClear = true;
+    },
     // GPU pick at CSS coordinates → record index | null. Draws each chunk's
     // current accumulated prefix into a scissored offscreen target with the
     // record index as the color (gl-pick.js) — you pick exactly what you see.
@@ -2606,6 +2634,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${secKey}|${clipKey}|${canvas.width}x${canvas.height}`;
       const moving = vpChanged(vp) || key !== lastKey || needClear;
       lastKey = key; needClear = false;
+      if (moving) repaintSet.clear();                      // the full redraw covers any pending repaint
 
       // frustum-cull + front-to-back over chunk bboxes (tight, thanks to Morton)
       const planes = frustumPlanes(vp);
@@ -2645,6 +2674,10 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         return [first, Math.min(c.count - first, share)];
       };
       let drawn = 0, converged = true;
+      // pending pick repaint: one extra full-geometry pass at depth LEQUAL —
+      // lands exactly on the element's already-accumulated pixels
+      const rp = !moving && repaintSet.size
+        ? [...repaintSet, 0xFFFFFFFF, 0xFFFFFFFF].slice(0, 2).map((v) => v >>> 0) : null;
 
       const pts = visible.filter((c) => c.kind !== 'blocks');
       if (pts.length) {
@@ -2655,6 +2688,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
         gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
         gl.uniform1ui(uni.picked, pickedRec);
+        gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
         gl.uniform4f(uni.secPlane, sec ? sec.n[0] : 0, sec ? sec.n[1] : 0, sec ? sec.n[2] : 1, sec ? sec.d : 0);
         gl.uniform2f(uni.secCfg, sec ? 1 : 0, sec ? sec.half : 0);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
@@ -2669,6 +2703,18 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             drawn += k; c.cursor = first + k;
           }
           if (c.cursor < c.count) converged = false;
+        }
+        if (rp) {
+          gl.depthFunc(gl.LEQUAL);
+          gl.uniform2ui(uni.repaint, rp[0], rp[1]);
+          for (const c of pts) {
+            gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
+            gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
+            gl.bindVertexArray(c.vao);
+            gl.drawArrays(gl.POINTS, 0, c.count);
+          }
+          gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
+          gl.depthFunc(gl.LESS);
         }
       }
 
@@ -2699,7 +2745,23 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           }
           if (c.cursor < c.count) converged = false;
         }
+        if (rp) {
+          gl.depthFunc(gl.LEQUAL);
+          blocksPipe.setRepaint(rp[0], rp[1]);
+          for (const c of blks) {
+            const b = c.bboxLocal;
+            const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
+            const rBlock = Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
+            const distNear = Math.max(cam.state.near, c._dist - bboxR);
+            const cheap = blocksAsPoints || rBlock * perspScale / distNear < 2.0;
+            blocksPipe.drawSlice(c, 0, c.count, cheap);
+          }
+          blocksPipe.setRepaint(0xFFFFFFFF, 0xFFFFFFFF);
+          gl.depthFunc(gl.LESS);
+        }
       }
+      if (rp) repaintSet.clear();
+      lastConverged = converged;
       gl.bindVertexArray(null);
       return { drawn, converged, visible: lastVisible };
     },
