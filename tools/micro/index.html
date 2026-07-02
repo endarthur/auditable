@@ -135,6 +135,31 @@
     position: absolute; top: 68px; right: 0; bottom: 24px; width: 280px; display: none;
     flex-direction: column; background: rgba(22, 22, 22, 0.96); border-left: 1px solid var(--border); z-index: 4;
   }
+  /* layers panel: GIS-shaped — a tight left-docked list, eye checkbox, active
+     layer marked by an accent bar. Context menu on right-click. */
+  #layersPanel {
+    position: absolute; top: 68px; left: 0; bottom: 24px; width: 224px; display: none;
+    flex-direction: column; background: rgba(22, 22, 22, 0.96); border-right: 1px solid var(--border); z-index: 4;
+    font-family: var(--mono); font-size: 12px;
+  }
+  #layersPanel.show { display: flex; }
+  #layersPanel .lp-head {
+    display: flex; align-items: center; justify-content: space-between; padding: 6px 10px;
+    border-bottom: 1px solid var(--border); color: var(--accent);
+  }
+  #layersPanel .lp-close { background: none; border: none; color: var(--muted); font-size: 15px; cursor: pointer; padding: 0 2px; }
+  #layersPanel .lp-close:hover { color: var(--text-hi); }
+  #lpRows { overflow-y: auto; }
+  #lpRows .lp-row {
+    display: flex; align-items: center; gap: 7px; height: 26px; padding: 0 8px 0 6px;
+    border-left: 2px solid transparent; cursor: default; color: var(--text); user-select: none;
+  }
+  #lpRows .lp-row:hover { background: #242424; }
+  #lpRows .lp-row.active { border-left-color: var(--accent); background: #202020; }
+  #lpRows .lp-row input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+  #lpRows .lp-row .lp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #lpRows .lp-row.off .lp-name { color: var(--dim); }
+  #lpRows .lp-row .lp-n { color: var(--dim); font-size: 11px; }
   #recPanel.show { display: flex; }
   #recPanel .rp-head {
     display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border);
@@ -201,6 +226,7 @@
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
   <div id="recPanel"><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
+  <div id="layersPanel"><div class="lp-head"><span>layers</span><button class="lp-close" id="lpClose">×</button></div><div id="lpRows"></div></div>
   <footer><span id="meta">—</span><span id="stats"></span></footer>
 
 <script type="module">
@@ -228,7 +254,11 @@ function loop(t) {
     const [w, h] = renderer.resize();
     cam.setAspect(w / h);
     const clipV = (id) => { const v = $('#' + id).value.trim(); return v === '' ? null : +v; };
-    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')] };
+    const clipOf = (L) => { const c = [L.clip[0].trim(), L.clip[1].trim()]; return [c[0] === '' ? null : +c[0], c[1] === '' ? null : +c[1]]; };
+    const modeOf = (v) => (v === 'elev' ? 0 : v && v.startsWith('chan:') ? 1 : v === 'cat' ? 2 : v === 'solid' ? 3 : +v || 0);
+    const layerOpts = {};
+    for (const L of _layers) layerOpts[L.id] = { colorMode: L.id === _activeId ? resolveColorMode() : modeOf(L.colorSel), clip: L.id === _activeId ? [clipV('clipMin'), clipV('clipMax')] : clipOf(L) };
+    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')], layerOpts: _layers.length ? layerOpts : null };
     const t0 = performance.now();
     const r = edl.render(w, h, cam, () => renderer.draw(cam, opts), { enabled: $('#edlOn').checked, strength: +$('#edlStr').value });
     converged = r.converged;
@@ -375,13 +405,23 @@ $('#btnFit').onclick = () => { if (renderer.chunkCount) { cam.fit(rendererDocBbo
 let _docBbox = null;
 const rendererDocBbox = () => _docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
 
-function fitFromHeader(header) {
-  frame = documentFrame(header, { crs: null });
+function fitFromHeader(header, first = true) {
+  // the FIRST dataset plants the document frame; later layers REBASE into it
+  // (pure world-true translation — micro-layers spec §2). No reprojection ever.
+  if (!frame) frame = documentFrame(header, { crs: null });
   const o = frame.origin, b = header.bbox;
-  _docBbox = Float64Array.of(b.min[0] - o[0], b.min[1] - o[1], b.min[2] - o[2], b.max[0] - o[0], b.max[1] - o[1], b.max[2] - o[2]);
-  cam.fit(_docBbox);
+  const local = Float64Array.of(b.min[0] - o[0], b.min[1] - o[1], b.min[2] - o[2], b.max[0] - o[0], b.max[1] - o[1], b.max[2] - o[2]);
+  if (first) { _docBbox = local; cam.fit(local); }
+  else if (_docBbox) {
+    // adding a layer never yanks the camera — but a WILDLY disjoint bbox is a
+    // wrong-file / wrong-CRS smell worth flagging (it still loads)
+    const ext = Math.max(_docBbox[3] - _docBbox[0], _docBbox[4] - _docBbox[1]) || 1;
+    const dx = (local[0] + local[3]) / 2 - (_docBbox[0] + _docBbox[3]) / 2;
+    const dy = (local[1] + local[4]) / 2 - (_docBbox[1] + _docBbox[4]) / 2;
+    if (Math.hypot(dx, dy) > ext * 10) $('#meta').textContent = `⚠ ${Math.round(Math.hypot(dx, dy) / 1000)} km from the current data — different area or CRS?`;
+  }
 }
-async function streamInto(cb, streamChunks, header, name, chunkPoints) {
+async function streamInto(cb, streamChunks, header, name, chunkPoints, lid = _activeId) {
   let done = 0;
   for await (const rc of streamChunks({ chunkPoints })) {
     cb.push(rc); done += rc.count;
@@ -389,43 +429,125 @@ async function streamInto(cb, streamChunks, header, name, chunkPoints) {
     await new Promise((r) => setTimeout(r));              // yield to the render loop
   }
   const doc = cb.flush();
-  renderer.setDocBbox(doc.bboxLocal);
-  _docBbox = doc.bboxLocal;
+  const L = layerById(lid);
+  if (L) L.bboxLocal = doc.bboxLocal;
+  recomputeUnion();
   return doc;
 }
-async function openBlob(blob, name) {
-  renderer.clearChunks(); _docBbox = null; requestRender();
+// ── layers (micro-layers spec §1): each opened dataset is a layer — its docs,
+// bbox, view state (color/clip/filter), and visibility. The renderer partitions
+// record ids (layer << 29 | record), so picks resolve to the right source. One
+// layer open == exactly the old single-doc behavior (ids 0-shifted, panel hidden).
+let _layers = [];
+let _activeId = 0;
+const layerById = (id) => _layers.find((l) => l.id === id) || null;
+const activeLayer = () => layerById(_activeId);
+const allocLayerId = () => { for (let i = 0; i <= 6; i++) if (!layerById(i)) return i; return null; };
+function closeAllLayers() {
+  renderer.clearChunks(); renderer.setPicked(null);
+  _layers = []; _activeId = 0; frame = null; _docBbox = null;
+  _blockDoc = null; _lasDoc = null; _plyDoc = null;
+  _filterExpr = ''; _filterEpoch++;
+  $('#filter').value = ''; syncFilterClear();
+  $('#recPanel').classList.remove('show');
+  clearMeasure();
+  renderLayers();
+}
+function recomputeUnion() {
+  let u = null;
+  for (const L of _layers) {
+    const b = L.bboxLocal; if (!b) continue;
+    if (!u) u = Float64Array.from(b);
+    else for (let i = 0; i < 3; i++) { if (b[i] < u[i]) u[i] = b[i]; if (b[i + 3] > u[i + 3]) u[i + 3] = b[i + 3]; }
+  }
+  _docBbox = u;
+  if (u) renderer.setDocBbox(u);
+}
+// sync the shared controls (color/clip/filter) + doc aliases to the active layer
+function setActiveLayer(id) {
+  const L = layerById(id); if (!L) return;
+  _activeId = id;
+  _blockDoc = L.docs.blockDoc || null; _lasDoc = L.docs.lasDoc || null; _plyDoc = L.docs.plyDoc || null;
+  setColorLabels(_blockDoc ? _blockDoc.header : _lasDoc ? { kind: 'las' } : _plyDoc ? _plyDoc.header : null);
+  if (L.colorSel != null && [...$('#colorBy').options].some((o) => o.value === L.colorSel)) $('#colorBy').value = L.colorSel;
+  $('#clipMin').value = L.clip[0]; $('#clipMax').value = L.clip[1];
+  _filterExpr = L.filterExpr || '';
+  $('#filter').value = _filterExpr; syncFilterClear();
+  renderLayers();
+}
+// "add as layer or replace?" — a compact menu at the drop point (GIS instinct:
+// opening a second dataset should never silently destroy the first)
+function askOpenMode(name, x, y) {
+  return new Promise((res) => {
+    menuXY(x != null ? x : innerWidth / 2 - 110, y != null ? y : innerHeight / 3, [
+      { label: `Add “${name.length > 28 ? name.slice(0, 27) + '…' : name}” as a layer`, action: () => res('add') },
+      { label: 'Replace the view', action: () => res('replace') },
+    ], () => res(null));
+  });
+}
+async function openBlob(blob, name, mode = 'replace', at = null) {
+  if (mode === 'ask') {
+    mode = _layers.length ? await askOpenMode(name, at && at.x, at && at.y) : 'replace';
+    if (!mode) return;                                     // dismissed
+  }
+  if (mode !== 'add') closeAllLayers();
+  const lid = allocLayerId();
+  if (lid == null) { $('#meta').textContent = 'layer limit reached (7) — remove one first'; return; }
+  const first = _layers.length === 0;
+  _layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true });
+  _activeId = lid;
+  _blockDoc = null; _lasDoc = null; _plyDoc = null;
   $('#meta').textContent = `${name} — reading…`;
   $('#empty').style.display = 'none';
   try {
-    if (/\.dm$/i.test(name)) return await openDmBlob(blob, name);
+    if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
     // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
     // so grid inference must not promote them to boxes.
-    if (/\.(xyz|pts)$/i.test(name)) return await openBlocksBlob(blob, name, { forcePoints: true });
-    if (/\.(csv|txt|dat|asc)$/i.test(name)) return await openBlocksBlob(blob, name);
-    if (/\.ply$/i.test(name)) return await openPlyBlob(blob, name);
-    const { header, streamChunks } = await openLas(blob);
-    _lasDoc = { blob, header }; _blockDoc = null; _plyDoc = null;
-    fitFromHeader(header);
-    const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
-    const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
-    $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} points · LAS ${header.version} fmt ${header.format}${frame.origin.some((v) => v) ? ` · origin ${frame.origin.map((v) => v.toLocaleString()).join(', ')}` : ''}`;
-    requestRender();
+    else if (/\.(xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { forcePoints: true, layer: lid, first }); }
+    else if (/\.(csv|txt|dat|asc)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first }); }
+    else if (/\.ply$/i.test(name)) { await openPlyBlob(blob, name, { layer: lid, first }); }
+    else {
+      const { header, streamChunks } = await openLas(blob);
+      _lasDoc = { blob, header }; _blockDoc = null; _plyDoc = null;
+      registerDocs(lid, 'points');
+      fitFromHeader(header, first);
+      setColorLabels(null);
+      const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
+      const doc = await streamInto(cb, streamChunks, header, name, 1 << 18, lid);
+      $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} points · LAS ${header.version} fmt ${header.format}${frame.origin.some((v) => v) ? ` · origin ${frame.origin.map((v) => v.toLocaleString()).join(', ')}` : ''}`;
+      requestRender();
+    }
+    const L = layerById(lid);
+    if (L) L.colorSel = $('#colorBy').value;
+    renderLayers();
   } catch (e) {
     $('#meta').textContent = `${name} — ${e.message}`;
-    $('#empty').style.display = '';
+    renderer.removeLayer(lid);
+    _layers = _layers.filter((l) => l.id !== lid);
+    if (_layers.length) setActiveLayer(_layers[0].id);
+    else $('#empty').style.display = '';
+    renderLayers();
   }
+}
+// snapshot the doc aliases into the layer (the aliases always mirror the ACTIVE layer)
+function registerDocs(lid, kind) {
+  const L = layerById(lid); if (!L) return;
+  L.kind = kind;
+  L.docs = { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
 }
 // PLY path: discovery sweep (no header bbox) → the points pipeline. The
 // provider owns fetchRecord (O(1) binary / sweep ascii) for the pick join.
 let _plyDoc = null;
-async function openPlyBlob(blob, name) {
+async function openPlyBlob(blob, name, opts = {}) {
+  const lid = opts.layer != null ? opts.layer : _activeId;
   $('#meta').textContent = `${name} — reading header…`;
   const { header, streamChunks, fetchRecord } = await openPly(blob);
   _plyDoc = { blob, name, header, fetchRecord }; _lasDoc = null; _blockDoc = null;
-  fitFromHeader(header);
-  const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
-  const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
+  registerDocs(lid, 'points');
+  fitFromHeader(header, opts.first !== false);
+  setColorLabels(null);
+  const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
+  const doc = await streamInto(cb, streamChunks, header, name, 1 << 18, lid);
   $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} points · PLY ${header.format === 'ascii' ? 'ascii' : 'binary'}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
   requestRender();
 }
@@ -433,28 +555,30 @@ async function openPlyBlob(blob, name) {
 // Not a regular grid → the points pipeline still shows the centroids.
 let _blockDoc = null, _lasDoc = null;
 async function openBlocksBlob(blob, name, opts = {}) {
+  const lid = opts.layer != null ? opts.layer : _activeId;
   _lasDoc = null; _plyDoc = null;
   $('#meta').textContent = `${name} — discovering grid…`;
   const mapping = opts.chan != null && _blockDoc && _blockDoc.header
     ? { ..._blockDoc.header.mapping, chan: opts.chan } : null;
-  renderer.clearChunks(); if (!opts.keepFilter) renderer.setFilter(null);
+  renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);
   const { header, streamChunks } = await openBlockModel(blob, mapping ? { mapping } : {});
   if (opts.forcePoints) header.grid = null;
   _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints };
-  fitFromHeader(header);
+  registerDocs(lid, header.grid ? 'blocks' : 'points');
+  fitFromHeader(header, opts.first !== false && opts.chan == null);
   renderer.setCategories(header.categories ? header.categories.length : 0);
   setColorLabels(header);
   if (header.grid) {
     const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
     _blockDoc.grid = grid;
-    const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });   // 128k/chunk, 16 chunks per Morton batch: tight bboxes are what give the frustum test teeth
-    const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
+    const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });   // 128k/chunk, 16 chunks per Morton batch: tight bboxes are what give the frustum test teeth
+    const doc = await streamInto(cb, streamChunks, header, name, 1 << 18, lid);
     _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} blocks · grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
     $('#meta').textContent = _blockDoc.metaLine;
     if (_filterExpr.trim() && opts.keepFilter) applyBlockFilter(_filterExpr);
   } else {
     // centroids as points (sub-blocked / irregular): grade → the intensity slot
-    const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+    const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
     let done = 0;
     for await (const rc of streamChunks({ chunkPoints: 1 << 18 })) {
       let cMin = Infinity, cMax = -Infinity;
@@ -468,7 +592,8 @@ async function openBlocksBlob(blob, name, opts = {}) {
       await new Promise((r) => setTimeout(r));
     }
     const doc = cb.flush();
-    renderer.setDocBbox(doc.bboxLocal); _docBbox = doc.bboxLocal;
+    const L2 = layerById(lid); if (L2) L2.bboxLocal = doc.bboxLocal;
+    recomputeUnion();
     _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} centroids${_blockDoc.forcePoints ? '' : ' (no regular grid detected — points view)'}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
     $('#meta').textContent = _blockDoc.metaLine;
     if (_filterExpr.trim() && opts.keepFilter) applyBlockFilter(_filterExpr);
@@ -478,19 +603,21 @@ async function openBlocksBlob(blob, name, opts = {}) {
 // .dm path: grid, bbox, and schema come from the DD page — no discovery sweep
 // (micro-spec Addendum A.2). Record numbers are RAW, so picks fetch O(1).
 async function openDmBlob(blob, name, opts = {}) {
+  const lid = opts.layer != null ? opts.layer : _activeId;
   _lasDoc = null; _plyDoc = null;
   $('#meta').textContent = `${name} — reading DD…`;
   const mapping = opts.chan != null && _blockDoc && _blockDoc.header ? { chan: opts.chan } : null;
-  renderer.clearChunks(); if (!opts.keepFilter) renderer.setFilter(null);
+  renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);
   const { header, streamChunks } = await openDmModel(blob, mapping ? { mapping } : {});
   _blockDoc = { blob, name, header, metaLine: '' };
-  fitFromHeader(header);
+  registerDocs(lid, 'blocks');
+  fitFromHeader(header, opts.first !== false && opts.chan == null);
   renderer.setCategories(header.categories ? 1 : 0);
   setColorLabels(header);
   const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
   _blockDoc.grid = grid;
-  const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
-  const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
+  const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
+  const doc = await streamInto(cb, streamChunks, header, name, 1 << 18, lid);
   _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} blocks · .dm grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
   $('#meta').textContent = _blockDoc.metaLine;
   if (_filterExpr.trim() && opts.keepFilter) applyBlockFilter(_filterExpr);
@@ -526,10 +653,14 @@ function setColorLabels(header) {
 // switching the grade channel = re-stream sweep 2 with a new mapping (windowed ethos)
 $('#colorBy').addEventListener('change', () => {
   const v = $('#colorBy').value;
+  const L = activeLayer(); if (L) L.colorSel = v;
   if (v.startsWith('chan:') && _blockDoc && +v.slice(5) !== _blockDoc.header.mapping.chan) {
     const open = _blockDoc.header.dm ? openDmBlob : openBlocksBlob;
-    open(_blockDoc.blob, _blockDoc.name, { chan: +v.slice(5), keepFilter: true, forcePoints: _blockDoc.forcePoints });
+    open(_blockDoc.blob, _blockDoc.name, { chan: +v.slice(5), keepFilter: true, forcePoints: _blockDoc.forcePoints, layer: _activeId, first: false });
   } else requestRender();
+});
+for (const id of ['clipMin', 'clipMax']) $('#' + id).addEventListener('input', () => {
+  const L = activeLayer(); if (L) L.clip = [$('#clipMin').value, $('#clipMax').value];
 });
 
 // ── filter: lamina's expression language over EVERY column, evaluated in one
@@ -545,10 +676,12 @@ function blockSchema(header) {
 async function applyBlockFilter(expr) {
   const inp = $('#filter');
   if (!_blockDoc) { $('#meta').textContent = 'filter: open a block model first'; return; }
+  const lid = _activeId;                                   // the sweep belongs to THIS layer even if focus moves
+  const Lr = layerById(lid); if (Lr) Lr.filterExpr = expr;
   _filterExpr = expr;
   const epoch = ++_filterEpoch;
   if (!expr.trim()) {
-    renderer.setFilter(null); renderer.clearCompact(); inp.classList.remove('err'); requestRender();
+    renderer.setFilter(null, {}, lid); renderer.clearCompact(lid); inp.classList.remove('err'); requestRender();
     $('#meta').textContent = _blockDoc.metaLine; return;
   }
   const { blob, header } = _blockDoc;
@@ -558,7 +691,7 @@ async function applyBlockFilter(expr) {
   inp.classList.remove('err');
   const fn = compileBool(expr, schema, { decimal: '.' });
   $('#meta').textContent = 'filter: scanning…';
-  renderer.clearCompact();                                 // a previous compaction is stale now
+  renderer.clearCompact(lid);                              // a previous compaction is stale now
   const mask = new Uint8Array(header.count);
   let rec = 0, hits = 0;
   const m = header.mapping;
@@ -574,7 +707,7 @@ async function applyBlockFilter(expr) {
   const compactCap = Math.min(Math.floor(header.count / 2) || 0, 8_000_000);
   const catCode = header.categories ? new Map(header.categories.map((v2, i2) => [v2, i2])) : null;
   let cb2 = isolate && _blockDoc.grid && compactCap > 0
-    ? createBlockChunkBuilder({ frame, grid: _blockDoc.grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 2, onChunk: (c) => renderer.addChunk(c, 'compact') })
+    ? createBlockChunkBuilder({ frame, grid: _blockDoc.grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 2, onChunk: (c) => renderer.addChunk(c, 'compact', lid) })
     : null;
   const CB = 1 << 18;
   let cx, cy, czz, cch, cct, crr, cfill = 0, collected = 0;
@@ -583,7 +716,7 @@ async function applyBlockFilter(expr) {
   const cflush = () => { if (cfill) { cb2.push({ count: cfill, x: cx, y: cy, z: czz, chan: cch, cat: cct, recIdx: crr }); callocz(); } };
   const collect = (xv, yv, zv, cv, code, r) => {
     if (!cb2) return;
-    if (collected >= compactCap) { renderer.clearCompact(); cb2 = null; return; }   // too many — the mask path wins
+    if (collected >= compactCap) { renderer.clearCompact(lid); cb2 = null; return; }   // too many — the mask path wins
     cx[cfill] = xv; cy[cfill] = yv; czz[cfill] = zv;
     cch[cfill] = Number.isFinite(cv) ? cv : 0;
     if (cct) cct[cfill] = code;
@@ -628,11 +761,11 @@ async function applyBlockFilter(expr) {
   if (epoch !== _filterEpoch) return;                      // superseded mid-scan by a newer filter
   if (cb2) {                                               // compacted: matches ARE the chunks — no mask needed
     cflush(); cb2.flush();
-    renderer.setFilter(null);
-    renderer.setActiveSet('compact');
+    renderer.setFilter(null, {}, lid);
+    renderer.setActiveSet('compact', lid);
   } else {
-    renderer.setActiveSet('base');
-    renderer.setFilter(mask, { isolate });                 // default = isolate; context = dim the rest
+    renderer.setActiveSet('base', lid);
+    renderer.setFilter(mask, { isolate }, lid);            // default = isolate; context = dim the rest
   }
   requestRender();
   $('#meta').textContent = `${_blockDoc.metaLine} · filter: ${hits.toLocaleString()} of ${rec.toLocaleString()} match${cb2 ? ' · compacted' : ''}`;
@@ -767,7 +900,7 @@ async function openRecent(entry) {
       }
       const f = await h.getFile();
       addRecent(f, h);
-      return openBlob(f, f.name);
+      return openBlob(f, f.name, 'ask');
     } catch { $('#meta').textContent = `couldn't reopen “${entry.name}” — pick it again`; return openFilePicker(); }
   }
   $('#meta').textContent = `“${entry.name}” has no saved handle — pick it again`;
@@ -791,7 +924,7 @@ function renderEmptyRecents() {
 function openFilePicker() {
   if (window.showOpenFilePicker) {
     (async () => {
-      try { const [h] = await window.showOpenFilePicker(); if (h) { const f = await h.getFile(); addRecent(f, h); openBlob(f, f.name); } } catch { /* cancelled */ }
+      try { const [h] = await window.showOpenFilePicker(); if (h) { const f = await h.getFile(); addRecent(f, h); openBlob(f, f.name, 'ask'); } } catch { /* cancelled */ }
     })();
   } else {
     // The <input> fallback (Firefox + mobile). NO `accept` filter: on Android the
@@ -799,7 +932,7 @@ function openFilePicker() {
     // out a .dm (lamina's lesson).
     const inp = document.createElement('input');
     inp.type = 'file';
-    inp.onchange = () => { if (inp.files[0]) { addRecent(inp.files[0], null); openBlob(inp.files[0], inp.files[0].name); } };
+    inp.onchange = () => { if (inp.files[0]) { addRecent(inp.files[0], null); openBlob(inp.files[0], inp.files[0].name, 'ask'); } };
     inp.click();
   }
 }
@@ -808,7 +941,7 @@ refreshRecents();
 // ── menubar (lamina's compact menuAt pattern — commands in menus, knobs in the bar) ──
 let _menuEl = null;
 function closeMenu() { if (_menuEl) { _menuEl.remove(); _menuEl = null; } }
-function menuAt(anchor, items) {
+function menuXY(x, y, items, onCancel) {
   closeMenu();
   const m = document.createElement('div');
   m.className = 'menu';
@@ -816,17 +949,23 @@ function menuAt(anchor, items) {
     if (it.sep) { const d = document.createElement('div'); d.className = 'sep'; m.appendChild(d); continue; }
     const d = document.createElement('div');
     d.className = 'item';
-    d.innerHTML = `<span>${it.label}</span>${it.kbd ? `<span class="kbd">${it.kbd}</span>` : ''}`;
+    const lab = document.createElement('span'); lab.textContent = it.label; d.appendChild(lab);
+    if (it.kbd) { const kb = document.createElement('span'); kb.className = 'kbd'; kb.textContent = it.kbd; d.appendChild(kb); }
     d.onclick = () => { closeMenu(); it.action && it.action(); };
     m.appendChild(d);
   }
-  const r = anchor.getBoundingClientRect();
-  m.style.left = r.left + 'px'; m.style.top = (r.bottom + 2) + 'px';
   document.body.appendChild(m);
+  const mw = m.offsetWidth || 180, mh = m.offsetHeight || 40;
+  m.style.left = Math.min(x, innerWidth - mw - 4) + 'px';
+  m.style.top = Math.min(y, innerHeight - mh - 4) + 'px';
   _menuEl = m;
   setTimeout(() => addEventListener('pointerdown', function onDoc(e) {
-    if (!m.contains(e.target)) { closeMenu(); removeEventListener('pointerdown', onDoc); }
+    if (!m.contains(e.target)) { closeMenu(); removeEventListener('pointerdown', onDoc); if (onCancel) onCancel(); }
   }), 0);
+}
+function menuAt(anchor, items) {
+  const r = anchor.getBoundingClientRect();
+  menuXY(r.left, r.bottom + 2, items);
 }
 // the header panel: everything the providers learned about the open file.
 // A table with click-to-copy values (lamina's grid-summary pattern): display
@@ -918,6 +1057,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: (_viewMode === 'boxes' ? '✓ ' : '') + 'Blocks as boxes', action: () => { _viewMode = 'boxes'; requestRender(); } },
   { label: (_viewMode === 'points' ? '✓ ' : '') + 'Blocks as points', action: () => { _viewMode = 'points'; requestRender(); } },
   { sep: true },
+  { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
   { label: 'Measure…', kbd: 'm', action: armMeasure },
   { label: 'Section on/off', kbd: 'x', action: toggleSection },
   { label: 'Along the section', kbd: 'l', action: viewAlongSection },
@@ -928,7 +1068,8 @@ const HELP_KEYS = `
 <b>mouse</b><br>
 drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
-<code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br><br>
+<code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br>
+<code>p</code> — <b>layers panel</b>: open several datasets together (Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
 <b>sections</b> — a slab through the data; everything hidden is neither drawn nor pickable<br>
@@ -963,7 +1104,7 @@ addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.class
 addEventListener('drop', (e) => {
   e.preventDefault(); document.body.classList.remove('drag');
   const f = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) { addRecent(f, null); openBlob(f, f.name); }
+  if (f) { addRecent(f, null); openBlob(f, f.name, 'ask', { x: e.clientX, y: e.clientY }); }
 });
 
 // Synthetic sample: a bench scan generated STREAMING into RawChunks (no LAS bytes,
@@ -993,26 +1134,29 @@ function* sampleRawChunks(n) {
   }
 }
 async function openSample(n = 2_000_000) {
-  renderer.clearChunks(); requestRender();
+  closeAllLayers(); requestRender();
+  const lid = allocLayerId();
+  _layers.push({ id: lid, name: 'sample bench scan', kind: 'points', docs: {}, bboxLocal: null, colorSel: '0', clip: ['', ''], filterExpr: '', visible: true });
+  _activeId = lid;
+  _blockDoc = null; _lasDoc = null; _plyDoc = null;
+  setColorLabels(null);
   $('#empty').style.display = 'none';
   $('#meta').textContent = 'sample — generating…';
   await new Promise((r) => setTimeout(r));
   const scale = Math.sqrt(n / 2_000_000);
   const x0 = 610000, y0 = 7760000, z0 = 900, w = 400 * scale, h = 400 * scale;
   const header = { count: n, bbox: { min: [x0, y0, z0 - 12 * 5 * scale], max: [x0 + w, y0 + h, z0 + 2] } };
-  frame = documentFrame(header, { crs: null });
-  const o = frame.origin, b = header.bbox;
-  _docBbox = Float64Array.of(b.min[0] - o[0], b.min[1] - o[1], b.min[2] - o[2], b.max[0] - o[0], b.max[1] - o[1], b.max[2] - o[2]);
-  cam.fit(_docBbox);
-  const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+  fitFromHeader(header, true);
+  const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
   let done = 0;
   for (const rc of sampleRawChunks(n)) {
     cb.push(rc); done += rc.count;
     if ((done & 0xfffff) < (1 << 18)) { $('#meta').textContent = `sample — generating ${Math.round(100 * done / n)}%`; await new Promise((r) => setTimeout(r)); }
   }
   const doc = cb.flush();
-  renderer.setDocBbox(doc.bboxLocal);
-  _docBbox = doc.bboxLocal;
+  const Ls = layerById(lid); if (Ls) Ls.bboxLocal = doc.bboxLocal;
+  recomputeUnion();
+  renderLayers();
   $('#meta').textContent = `sample bench scan — ${doc.count.toLocaleString()} points (synthetic, generated locally)`;
   requestRender();
 }
@@ -1021,24 +1165,28 @@ document.querySelectorAll('[data-sample]').forEach((a) => a.onclick = () => open
 // (block centroids / point coordinates) — exact, not screen unprojections. The
 // overlay re-projects each drawn frame, so it rides orbits. Esc clears. ──
 let _measure = { arm: 0, a: null, b: null, mouse: null };  // a/b = frame-local [x,y,z]; mouse = css px rubber-band end
-async function recordPosition(rec) {
-  const m = _blockDoc && _blockDoc.header.mapping;
-  if (_blockDoc && _blockDoc.header.dm) {
-    const vals = await fetchDmRecord(_blockDoc.blob, _blockDoc.header.dm, rec);
+async function recordPosition(fullId) {
+  const lid = fullId >>> 29, rec = fullId & 0x1FFFFFFF;    // measure works ACROSS layers
+  const L = layerById(lid);
+  const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
+  const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc;
+  const m = bd && bd.header.mapping;
+  if (bd && bd.header.dm) {
+    const vals = await fetchDmRecord(bd.blob, bd.header.dm, rec);
     return [vals[m.x], vals[m.y], vals[m.z]];
   }
-  if (_blockDoc) {
-    const f = await fetchCsvRecord(rec);
+  if (bd) {
+    const f = await fetchCsvRecord(rec, bd);
     return f ? [+f[m.x], +f[m.y], +f[m.z]] : null;
   }
-  if (_plyDoc) {
-    const vals = await _plyDoc.fetchRecord(rec);
+  if (pd) {
+    const vals = await pd.fetchRecord(rec);
     if (!vals) return null;
-    const h = _plyDoc.header, cols = h.columns.map((c) => c.toLowerCase());
+    const h = pd.header, cols = h.columns.map((c) => c.toLowerCase());
     return [vals[cols.indexOf('x')], vals[cols.indexOf('y')], vals[cols.indexOf('z')]];
   }
-  if (_lasDoc) {
-    const { blob, header } = _lasDoc;
+  if (ld) {
+    const { blob, header } = ld;
     const off = header.pointOffset + rec * header.recordLen;
     const dv = new DataView(await blob.slice(off, off + header.recordLen).arrayBuffer());
     const one = decodeLasRecords(dv, header, 1, rec);
@@ -1192,6 +1340,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === '/') { e.preventDefault(); $('#filter').focus(); }
   else if (k === 'i') showFileInfo();
   else if (k === 'm') armMeasure();
+  else if (k === 'p') toggleLayersPanel();
   else if (k === 'Escape' && (_measure.arm || _measure.b)) clearMeasure();
   else if (k === 'o') { cam.setOrtho(!cam.state.ortho); requestRender(); }
   else if (k === 'x') toggleSection();
@@ -1236,10 +1385,60 @@ $('#sampleBlocks').onclick = async () => {
   $('#empty').style.display = 'none';
   $('#meta').textContent = 'sample block model — generating csv…';
   await new Promise((r) => setTimeout(r));
-  const blob = makeSampleBlockCsv();
-  renderer.clearChunks(); _docBbox = null; requestRender();
-  await openBlocksBlob(blob, 'sample_blockmodel.csv');
+  await openBlob(makeSampleBlockCsv(), 'sample_blockmodel.csv', 'replace');
 };
+
+// ── the layers panel: visibility eyes, active-layer routing, and the layer
+// context menu (zoom/info/filter/remove). Auto-shows at two layers; 'p' or
+// View → Layers toggles it any time. ──
+let _lpUserHidden = false;
+function toggleLayersPanel(force) {
+  const el = $('#layersPanel');
+  const show = force != null ? force : !el.classList.contains('show');
+  el.classList.toggle('show', show);
+  if (force == null) _lpUserHidden = !show;
+}
+$('#lpClose').onclick = () => toggleLayersPanel(false);
+function fitLayer(L) { if (L.bboxLocal) { cam.fit(L.bboxLocal); requestRender(); } }
+function removeLayerUI(id) {
+  renderer.removeLayer(id);
+  _layers = _layers.filter((l) => l.id !== id);
+  recomputeUnion();
+  if (!_layers.length) { closeAllLayers(); $('#empty').style.display = ''; $('#meta').textContent = ''; return; }
+  if (_activeId === id) setActiveLayer(_layers[0].id);
+  renderLayers(); requestRender();
+}
+function layerMenu(L, x, y) {
+  menuXY(x, y, [
+    { label: 'Zoom to layer', action: () => fitLayer(L) },
+    { label: 'File info…', action: () => { setActiveLayer(L.id); showFileInfo(); } },
+    { label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } },
+    { sep: true },
+    { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); } },
+    { label: 'Remove layer', action: () => removeLayerUI(L.id) },
+  ]);
+}
+function renderLayers() {
+  const rows = $('#lpRows'); if (!rows) return;
+  rows.textContent = '';
+  for (const L of _layers) {
+    const row = document.createElement('div');
+    row.className = 'lp-row' + (L.id === _activeId ? ' active' : '') + (L.visible ? '' : ' off');
+    const eye = document.createElement('input');
+    eye.type = 'checkbox'; eye.checked = L.visible; eye.title = 'visible';
+    eye.onclick = (e) => { e.stopPropagation(); L.visible = eye.checked; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); };
+    const name = document.createElement('span'); name.className = 'lp-name'; name.textContent = L.name; name.title = L.name;
+    const n = document.createElement('span'); n.className = 'lp-n';
+    n.textContent = (renderer.layerElementCount(L.id) || 0).toLocaleString();
+    row.append(eye, name, n);
+    row.onclick = () => setActiveLayer(L.id);
+    row.ondblclick = () => fitLayer(L);
+    row.oncontextmenu = (e) => { e.preventDefault(); layerMenu(L, e.clientX, e.clientY); };
+    rows.appendChild(row);
+  }
+  if (_layers.length >= 2 && !_lpUserHidden) toggleLayersPanel(true);
+  if (_layers.length === 0) toggleLayersPanel(false);
+}
 
 // ── pick → record inspector: a CLICK (not a drag) GPU-picks the element under
 // the cursor (record index), then fetches the full source row — O(1) for LAS
@@ -1253,8 +1452,8 @@ function showRecPanel(title, rows, note) {
 }
 $('#rpClose').onclick = () => { $('#recPanel').classList.remove('show'); renderer.setPicked(null); requestRender(); };
 
-async function fetchCsvRecord(rec) {
-  const { blob, header } = _blockDoc;
+async function fetchCsvRecord(rec, doc = _blockDoc) {
+  const { blob, header } = doc;
   // sparse line-offset index (built during discovery): jump to the nearest
   // anchor + walk ≤k lines, instead of sweeping the file from byte 0
   if (header.index) return await fetchDelimitedRecord(blob, header, rec);
@@ -1270,27 +1469,34 @@ async function fetchCsvRecord(rec) {
   }
   return null;
 }
-async function showRecord(rec) {
-  if (_blockDoc && _blockDoc.header.dm) {
-    const vals = await fetchDmRecord(_blockDoc.blob, _blockDoc.header.dm, rec);
-    const rows = _blockDoc.header.columns.map((name, i) => [name, vals[i] == null ? '—' : vals[i]]);
-    showRecPanel(`block · record ${rec.toLocaleString()}`, rows);
+async function showRecord(fullId) {
+  // the pick id is PARTITIONED (layer << 29 | record) — resolve the layer's own
+  // docs, not the active aliases: any visible layer is pickable
+  const lid = fullId >>> 29, rec = fullId & 0x1FFFFFFF;
+  const L = layerById(lid);
+  const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
+  const tag = _layers.length > 1 && L ? `${L.name} · ` : '';
+  const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc;
+  if (bd && bd.header.dm) {
+    const vals = await fetchDmRecord(bd.blob, bd.header.dm, rec);
+    const rows = bd.header.columns.map((name, i) => [name, vals[i] == null ? '—' : vals[i]]);
+    showRecPanel(`${tag}block · record ${rec.toLocaleString()}`, rows);
     return;
   }
-  if (_blockDoc) {
-    showRecPanel(`block · row ${rec.toLocaleString()}`, [], 'fetching…');
-    const f = await fetchCsvRecord(rec);
-    if (!f) { showRecPanel(`block · row ${rec.toLocaleString()}`, [], 'row not found'); return; }
-    const rows = _blockDoc.header.columns.map((name, i) => [name, f[i]]);
-    showRecPanel(`block · row ${rec.toLocaleString()}`, rows);
-  } else if (_plyDoc) {
-    showRecPanel(`point · #${rec.toLocaleString()}`, [], 'fetching…');
-    const vals = await _plyDoc.fetchRecord(rec);
-    if (!vals) { showRecPanel(`point · #${rec.toLocaleString()}`, [], 'record not found'); return; }
-    const rows = _plyDoc.header.columns.map((name, i) => [name, Number.isInteger(vals[i]) ? vals[i] : +vals[i].toFixed(4)]);
-    showRecPanel(`point · #${rec.toLocaleString()}`, rows);
-  } else if (_lasDoc) {
-    const { blob, header } = _lasDoc;
+  if (bd) {
+    showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, [], 'fetching…');
+    const f = await fetchCsvRecord(rec, bd);
+    if (!f) { showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, [], 'row not found'); return; }
+    const rows = bd.header.columns.map((name, i) => [name, f[i]]);
+    showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, rows);
+  } else if (pd) {
+    showRecPanel(`${tag}point · #${rec.toLocaleString()}`, [], 'fetching…');
+    const vals = await pd.fetchRecord(rec);
+    if (!vals) { showRecPanel(`${tag}point · #${rec.toLocaleString()}`, [], 'record not found'); return; }
+    const rows = pd.header.columns.map((name, i) => [name, Number.isInteger(vals[i]) ? vals[i] : +vals[i].toFixed(4)]);
+    showRecPanel(`${tag}point · #${rec.toLocaleString()}`, rows);
+  } else if (ld) {
+    const { blob, header } = ld;
     const off = header.pointOffset + rec * header.recordLen;
     const dv = new DataView(await blob.slice(off, off + header.recordLen).arrayBuffer());
     const one = decodeLasRecords(dv, header, 1, rec);
@@ -1299,7 +1505,7 @@ async function showRecord(rec) {
       ['intensity', one.intensity[0]], ['classification', one.classification[0]],
     ];
     if (one.rgb) rows.push(['rgb', `${one.rgb[0]} ${one.rgb[1]} ${one.rgb[2]}`]);
-    showRecPanel(`point · #${rec.toLocaleString()}`, rows);
+    showRecPanel(`${tag}point · #${rec.toLocaleString()}`, rows);
   }
 }
 // click vs drag: small movement, short hold
@@ -1316,7 +1522,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, blockDoc: () => _blockDoc, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
