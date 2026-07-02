@@ -40,6 +40,7 @@ uniform sampler2D uPalette;
 uniform sampler2D uMask;                // filter bitmask by record index (8192-wide)
 uniform float uFilterOn, uIsolate;
 uniform float uForceSplat;              // 1 = whole chunk demoted (cheap far-field path)
+uniform float uFixedSplat;              // 1 = points view: fixed-px splats regardless of block size
 flat out vec3 vCenter;
 flat out vec3 vHalf;
 flat out vec4 vColor;
@@ -53,7 +54,7 @@ void main() {
   float r = length(half_);
   float dist = max(distance(uEye, center), 1e-3);
   float pxR = r * uPerspScale / dist;
-  float demoted = max(pxR < uDemotePx ? 1.0 : 0.0, uForceSplat);
+  float demoted = max(max(pxR < uDemotePx ? 1.0 : 0.0, uForceSplat), uFixedSplat);
   // filter mask: dim (default) or cull (isolate)
   float m = 1.0;
   if (uFilterOn > 0.5) {
@@ -61,7 +62,9 @@ void main() {
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
   vCull = (uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0;
-  float quadR = mix(r, max(uPointPx * 0.5, pxR) * dist / uPerspScale, demoted);
+  float quadR = uFixedSplat > 0.5
+    ? uPointPx * 0.5 * dist / uPerspScale
+    : mix(r, max(uPointPx * 0.5, pxR) * dist / uPerspScale, demoted);
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp = center + (uRight * corner.x + uUp * corner.y) * quadR;
   gl_Position = uViewProj * vec4(wp, 1.0);
@@ -168,7 +171,7 @@ export function createBlocksPipeline(gl) {
       perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'),
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
-      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'),
+      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'),
     } };
   };
   const full = mkProg(FRAG), cheap = mkProg(FRAG_CHEAP);
@@ -225,7 +228,7 @@ export function createBlocksPipeline(gl) {
 
   // Per-frame program state (called once before the chunk loop) — set on BOTH
   // programs so drawSlice can switch freely between full and cheap.
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -249,6 +252,7 @@ export function createBlocksPipeline(gl) {
       gl.uniform2f(uni.chanDoc, chanDoc[0], chanDoc[1]);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
+      gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
       gl.uniform1f(uni.filterOn, maskTex ? 1 : 0);
       gl.uniform1f(uni.isolate, isolate ? 1 : 0);
       if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uni.mask, 4); }

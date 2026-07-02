@@ -232,9 +232,9 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     },
     // Draw one frame into the CURRENT framebuffer (the EDL pass owns the target).
     // Returns { drawn, converged, visible }.
-    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0 } = {}) {
+    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false } = {}) {
       const vp = cam.state.viewProj;
-      const key = `${pointPx}|${colorMode}|${canvas.width}x${canvas.height}`;
+      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${canvas.width}x${canvas.height}`;
       const moving = vpChanged(vp) || key !== lastKey || needClear;
       lastKey = key; needClear = false;
 
@@ -304,7 +304,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           pointPx, colorMode, zRange,
           chanDoc: [docChan[0] === Infinity ? 0 : docChan[0], chanSpan],
           ramp, palette: catPalette || palette, viewportH: canvas.height,
-          maskTex, isolate: isolateMode,
+          maskTex, isolate: isolateMode, pointsView: blocksAsPoints,
         });
         const perspScale = (canvas.height / 2) / Math.tan(cam.state.fovY / 2);
         for (const c of blks) {
@@ -316,7 +316,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
             const rBlock = Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
             const distNear = Math.max(cam.state.near, c._dist - bboxR);
-            const cheap = rBlock * perspScale / distNear < 2.0;
+            const cheap = blocksAsPoints || rBlock * perspScale / distNear < 2.0;
             blocksPipe.drawSlice(c, first, k, cheap);
             drawn += k; c.cursor = first + k;
           }

@@ -61,6 +61,10 @@
   <div id="bar">
     <span class="title">micro</span>
     <button id="btnOpen">Open…</button>
+    <label>view <select id="viewMode" title="boxes = ray-cast impostors (true block faces) · points = fixed-size splats (snappier)">
+      <option value="boxes">boxes</option>
+      <option value="points">points</option>
+    </select></label>
     <label>color <select id="colorBy">
       <option value="0">elevation</option>
       <option value="1">intensity</option>
@@ -109,7 +113,7 @@ function loop(t) {
     dirty = false;
     const [w, h] = renderer.resize();
     cam.setAspect(w / h);
-    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode() };
+    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: $('#viewMode').value === 'points' };
     const t0 = performance.now();
     const r = edl.render(w, h, cam, () => renderer.draw(cam, opts), { enabled: $('#edlOn').checked, strength: +$('#edlStr').value });
     converged = r.converged;
@@ -123,7 +127,7 @@ function loop(t) {
 }
 requestAnimationFrame(loop);
 
-['colorBy', 'edlOn', 'edlStr', 'ptPx', 'budget'].forEach((id) => $('#' + id).addEventListener('input', requestRender));
+['colorBy', 'edlOn', 'edlStr', 'ptPx', 'budget', 'viewMode'].forEach((id) => $('#' + id).addEventListener('input', requestRender));
 $('#btnFit').onclick = () => { if (renderer.chunkCount) { cam.fit(rendererDocBbox()); requestRender(); } };
 let _docBbox = null;
 const rendererDocBbox = () => _docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
