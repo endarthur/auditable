@@ -27,6 +27,30 @@
     border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 10px; cursor: pointer;
   }
   #bar button:hover { background: #2e2e2e; }
+  #bar .mb { background: transparent; border-color: transparent; padding: 4px 9px; }
+  #bar .mb:hover { background: var(--border); border-color: var(--bd2); }
+  .menu {
+    position: absolute; z-index: 20; min-width: 180px; background: #1d1d1d; border: 1px solid var(--bd2);
+    border-radius: 4px; padding: 4px 0; font-family: var(--mono); font-size: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+  }
+  .menu .item { padding: 5px 14px; cursor: pointer; color: var(--text); display: flex; justify-content: space-between; gap: 18px; }
+  .menu .item:hover { background: var(--bg-btn); color: var(--text-hi); }
+  .menu .item .kbd { color: var(--dim); }
+  .menu .sep { height: 1px; margin: 4px 0; background: var(--border); }
+  #help {
+    position: absolute; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  #help.show { display: flex; }
+  #help .box {
+    width: min(560px, 92vw); max-height: 80vh; overflow-y: auto; background: #191919;
+    border: 1px solid var(--bd2); border-radius: 6px; padding: 0 0 12px;
+  }
+  #help .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #help .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #help .bd { padding: 10px 16px; font-family: var(--mono); font-size: 12px; line-height: 1.75; color: var(--text); }
+  #help .bd b { color: var(--text-hi); }
+  #help .bd code { color: var(--accent); }
   #bar label { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
   #bar input[type="range"] { width: 90px; accent-color: var(--accent); }
   #bar #filter { flex: 0 1 340px; min-width: 140px; font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 8px; }
@@ -78,7 +102,9 @@
 <body>
   <div id="bar">
     <span class="title">micro</span>
-    <button id="btnOpen">Open…</button>
+    <button class="mb" id="mFile">File</button>
+    <button class="mb" id="mView">View</button>
+    <button class="mb" id="mHelp">Help</button>
     <label>view <select id="viewMode" title="boxes = ray-cast impostors (true block faces) · points = fixed-size splats (snappier)">
       <option value="boxes">boxes</option>
       <option value="points">points</option>
@@ -119,6 +145,7 @@
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .csv anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
   <div id="drop-hint">drop to open</div>
+  <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
   <div id="recPanel"><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
   <footer><span id="meta">—</span><span id="stats"></span></footer>
 
@@ -480,12 +507,92 @@ $('#filter').addEventListener('keydown', (e) => {
 });
 $('#context').addEventListener('change', () => { if (_filterExpr.trim()) applyBlockFilter(_filterExpr); });
 
-$('#btnOpen').onclick = async () => {
+function openFilePicker() {
   const inp = document.createElement('input');
   inp.type = 'file'; inp.accept = '.las,.csv,.txt,.dat,.dm';
   inp.onchange = () => { if (inp.files[0]) openBlob(inp.files[0], inp.files[0].name); };
   inp.click();
-};
+}
+
+// ── menubar (lamina's compact menuAt pattern — commands in menus, knobs in the bar) ──
+let _menuEl = null;
+function closeMenu() { if (_menuEl) { _menuEl.remove(); _menuEl = null; } }
+function menuAt(anchor, items) {
+  closeMenu();
+  const m = document.createElement('div');
+  m.className = 'menu';
+  for (const it of items) {
+    if (it.sep) { const d = document.createElement('div'); d.className = 'sep'; m.appendChild(d); continue; }
+    const d = document.createElement('div');
+    d.className = 'item';
+    d.innerHTML = `<span>${it.label}</span>${it.kbd ? `<span class="kbd">${it.kbd}</span>` : ''}`;
+    d.onclick = () => { closeMenu(); it.action && it.action(); };
+    m.appendChild(d);
+  }
+  const r = anchor.getBoundingClientRect();
+  m.style.left = r.left + 'px'; m.style.top = (r.bottom + 2) + 'px';
+  document.body.appendChild(m);
+  _menuEl = m;
+  setTimeout(() => addEventListener('pointerdown', function onDoc(e) {
+    if (!m.contains(e.target)) { closeMenu(); removeEventListener('pointerdown', onDoc); }
+  }), 0);
+}
+$('#mFile').onclick = () => menuAt($('#mFile'), [
+  { label: 'Open…', kbd: '', action: openFilePicker },
+  { sep: true },
+  { label: 'Sample bench scan — 2M', action: () => openSample(2_000_000) },
+  { label: 'Sample bench scan — 10M', action: () => openSample(10_000_000) },
+  { label: 'Sample bench scan — 50M', action: () => openSample(50_000_000) },
+  { label: 'Sample block model — 2M', action: () => $('#sampleBlocks').onclick() },
+  { sep: true },
+  { label: 'Save viewport PNG', action: () => $('#btnShot').click() },
+]);
+$('#mView').onclick = () => menuAt($('#mView'), [
+  { label: 'Fit', kbd: 'f', action: () => $('#btnFit').click() },
+  { sep: true },
+  { label: 'Look north', kbd: 'n', action: () => setView(-Math.PI / 2, 0) },
+  { label: 'Look south', kbd: 's', action: () => setView(Math.PI / 2, 0) },
+  { label: 'Look east', kbd: 'e', action: () => setView(Math.PI, 0) },
+  { label: 'Look west', kbd: 'w', action: () => setView(0, 0) },
+  { label: 'Plan (down)', kbd: 'd', action: () => setView(cam.state.theta, PHI_MAX) },
+  { label: 'From below', kbd: 'u', action: () => setView(cam.state.theta, -PHI_MAX) },
+  { sep: true },
+  { label: 'Along the section', kbd: 'l', action: viewAlongSection },
+  { label: 'Scrub section back', kbd: '[', action: () => scrubSection(-1) },
+  { label: 'Scrub section forward', kbd: ']', action: () => scrubSection(1) },
+]);
+const HELP_KEYS = `
+<b>mouse</b><br>
+drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
+<b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br><br>
+<b>view</b><br>
+<code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below<br><br>
+<b>sections</b> — a slab through the data; everything hidden is neither drawn nor pickable<br>
+pick a preset (plan · N–S · E–W) or press <code>k</code> and <b>drag a line</b> — the vertical section through it (<code>Esc</code> cancels)<br>
+<code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
+<b>filter</b> (block models) — lamina's language over every column in the file:<br>
+<code>FE &gt; 55 and LITO = "HEMATITE"</code> · <code>between</code> · <code>in (…)</code> — Enter applies, Esc clears<br>
+default hides non-matching blocks; <b>context</b> keeps them dimmed<br><br>
+<b>knobs</b><br>
+<b>view</b> boxes = true block faces · points = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
+const HELP_ABOUT = `
+<b>micro</b> — a viewer for massive spatial-element files: LiDAR point clouds (.las) and
+block models (.csv, Datamine .dm). Streaming, no import step — first look in about a
+second at any size, densifying while you orbit. Filter, section, and pick against the
+source file. Nothing leaves your machine.<br><br>
+Engine: <code>@gcu/condenser</code>. Part of the Auditable project — Geoscientific Chaos
+Union, <code>gentropic.org</code>. MIT.`;
+function showHelp(title, html) {
+  $('#helpTitle').textContent = title;
+  $('#helpBody').innerHTML = html;
+  $('#help').classList.add('show');
+}
+$('#mHelp').onclick = () => menuAt($('#mHelp'), [
+  { label: 'Keyboard & mouse…', action: () => showHelp('keyboard & mouse', HELP_KEYS) },
+  { label: 'About micro', action: () => showHelp('about micro', HELP_ABOUT) },
+]);
+$('#helpClose').onclick = () => $('#help').classList.remove('show');
+$('#help').addEventListener('click', (e) => { if (e.target.id === 'help') $('#help').classList.remove('show'); });
 addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('drag'); });
 addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('drag'); });
 addEventListener('drop', (e) => {
