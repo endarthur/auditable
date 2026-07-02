@@ -35,6 +35,26 @@ export function mat4Multiply(a, b) {                       // a·b (both column-
   return m;
 }
 
+// Frustum planes from a viewProj matrix (Gribb–Hartmann, column-major): six
+// [a,b,c,d] rows — a point is inside when a·x+b·y+c·z+d ≥ 0 for all six.
+export function frustumPlanes(m) {
+  const row = (r) => [m[r], m[4 + r], m[8 + r], m[12 + r]];
+  const r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+  const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]];
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]];
+  return [add(r3, r0), sub(r3, r0), add(r3, r1), sub(r3, r1), add(r3, r2), sub(r3, r2)];
+}
+
+// Conservative AABB-vs-frustum: positive-vertex test — the box is out only when
+// its most-positive corner for some plane is still behind that plane.
+export function aabbInFrustum(planes, b) {                 // b = [minX,minY,minZ,maxX,maxY,maxZ]
+  for (const [a, bb, c, d] of planes) {
+    const px = a > 0 ? b[3] : b[0], py = bb > 0 ? b[4] : b[1], pz = c > 0 ? b[5] : b[2];
+    if (a * px + bb * py + c * pz + d < 0) return false;
+  }
+  return true;
+}
+
 export function transformPoint(m, p) {                     // m · [p,1] → perspective divide
   const x = p[0], y = p[1], z = p[2];
   const w = m[3] * x + m[7] * y + m[11] * z + m[15] || 1;

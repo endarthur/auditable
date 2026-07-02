@@ -13,9 +13,10 @@
 // and budget-capped drawing all read prefixes and inherit their correctness from
 // this shuffle. Seeded PRNG (mulberry32) → deterministic for tests.
 //
-// M1 chunking is SEQUENTIAL (arrival order — flight lines are spatially coherent
-// enough for per-chunk bboxes to be useful); Morton-order spatial chunking is M2
-// and replaces only the bucketing, not this contract.
+// Chunking is BATCH-MORTON (§2.1.3): accumulate ~batchSize elements, Morton-radix-
+// sort the batch, slice the sorted order into chunks → spatially tight chunk AABBs
+// (frustum culling + front-to-back fall out) while peak CPU memory stays bounded
+// by batchSize × constant — never proportional to the file (§3 heap bound).
 //
 // Chunk = {
 //   count, bboxLocal: Float64Array(6) [minX,minY,minZ,maxX,maxY,maxZ],
@@ -24,7 +25,8 @@
 //   recIdx: Uint32Array   — row number in the source file: THE join key (§4).
 // }
 
-import { makeFrame, frameFromBounds, toLocal } from '../../frame/src/frame.js';
+import { makeFrame, frameFromBounds } from '../../frame/src/frame.js';
+import { mortonKeys, radixSortIndices } from './morton.js';
 
 // mulberry32 — tiny seeded PRNG; good enough for a decorrelating shuffle.
 export function mulberry32(seed) {
@@ -48,6 +50,15 @@ export function shuffledIndices(n, rnd) {
   return idx;
 }
 
+// In-place Fisher–Yates over an existing index array (a gather list).
+export function shuffleInPlace(idx, rnd) {
+  for (let i = idx.length - 1; i > 0; i--) {
+    const j = (rnd() * (i + 1)) | 0;
+    const t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+  }
+  return idx;
+}
+
 // Pick the document frame from a provider header (bbox in world coords). CRS is
 // identity metadata only — condenser never reprojects.
 export function documentFrame(header, { crs = null } = {}) {
@@ -59,18 +70,19 @@ export function documentFrame(header, { crs = null } = {}) {
 }
 
 /**
- * Build one render Chunk from a set of RawChunk slices (already concatenated by
- * the caller — see ChunkBuilder). All arrays are same-length columnar views.
+ * Build one render Chunk from columnar source arrays. `indices` is an optional
+ * gather list (element ids into the columns — e.g. one Morton-ordered slice of a
+ * batch); omitted → all elements. The gather list is SHUFFLED (in a copy) before
+ * the single gather-quantize pass — gather and shuffle cost one pass together.
  */
-export function buildChunk({ x, y, z, intensity, classification, rgb, recIdx }, frame, rnd) {
-  const n = x.length;
-  // frame-local bbox (f64 subtract BEFORE any narrowing — the one hard rule)
+export function buildChunk({ x, y, z, intensity, classification, rgb, recIdx }, frame, rnd, indices = null) {
+  const n = indices ? indices.length : x.length;
   const o = frame.origin;
+  // pass 1 — frame-local bbox (f64 subtract BEFORE any narrowing — the one hard rule)
   let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  const lx = new Float64Array(n), ly = new Float64Array(n), lz = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
+  for (let k = 0; k < n; k++) {
+    const i = indices ? indices[k] : k;
     const px = x[i] - o[0], py = y[i] - o[1], pz = z[i] - o[2];
-    lx[i] = px; ly[i] = py; lz[i] = pz;
     if (px < minX) minX = px; if (px > maxX) maxX = px;
     if (py < minY) minY = py; if (py > maxY) maxY = py;
     if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
@@ -78,15 +90,16 @@ export function buildChunk({ x, y, z, intensity, classification, rgb, recIdx }, 
   const sx = maxX > minX ? 65535 / (maxX - minX) : 0;
   const sy = maxY > minY ? 65535 / (maxY - minY) : 0;
   const sz = maxZ > minZ ? 65535 / (maxZ - minZ) : 0;
-  const perm = shuffledIndices(n, rnd);
+  // pass 2 — shuffle the gather order, then gather + quantize in one sweep
+  const perm = indices ? shuffleInPlace(Uint32Array.from(indices), rnd) : shuffledIndices(n, rnd);
   const pos = new Uint16Array(3 * n);
   const outI = new Uint16Array(n), outC = new Uint8Array(n), outR = new Uint32Array(n);
   const outRgb = rgb ? new Uint8Array(3 * n) : null;
   for (let k = 0; k < n; k++) {
     const i = perm[k];
-    pos[k * 3] = ((lx[i] - minX) * sx + 0.5) | 0;
-    pos[k * 3 + 1] = ((ly[i] - minY) * sy + 0.5) | 0;
-    pos[k * 3 + 2] = ((lz[i] - minZ) * sz + 0.5) | 0;
+    pos[k * 3] = ((x[i] - o[0] - minX) * sx + 0.5) | 0;
+    pos[k * 3 + 1] = ((y[i] - o[1] - minY) * sy + 0.5) | 0;
+    pos[k * 3 + 2] = ((z[i] - o[2] - minZ) * sz + 0.5) | 0;
     outI[k] = intensity[i];
     outC[k] = classification[i];
     outR[k] = recIdx[i];
@@ -111,13 +124,16 @@ export function chunkLocalPosition(chunk, k) {
 }
 
 /**
- * ChunkBuilder — feed RawChunks as they stream in; emits finished Chunks of
- * ~chunkSize elements via onChunk. flush() emits the remainder. Also tracks the
- * document-wide local bbox + counts for camera fitting.
+ * ChunkBuilder — feed RawChunks as they stream in; emits finished Chunks via
+ * onChunk. Batch-Morton by default: elements accumulate to ~batchSize, the batch
+ * is Morton-sorted and sliced into chunkSize chunks (each internally shuffled).
+ * `morton: false` slices in arrival order instead (still shuffled). flush()
+ * emits the remainder and returns the document summary.
  */
-export function createChunkBuilder({ frame, chunkSize = 1 << 20, seed = 1, onChunk }) {
+export function createChunkBuilder({ frame, chunkSize = 1 << 20, batchSize = 0, morton = true, seed = 1, onChunk }) {
   const rnd = mulberry32(seed);
-  let pend = [];                                           // pending RawChunk slices
+  const batchN = batchSize || chunkSize * 4;               // default: 4 chunks per spatial batch
+  let pend = [];                                           // pending RawChunk column slices
   let pendCount = 0;
   const doc = { count: 0, bboxLocal: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity), hasRgb: false };
 
@@ -127,7 +143,14 @@ export function createChunkBuilder({ frame, chunkSize = 1 << 20, seed = 1, onChu
     for (const p of parts) { out.set(p, off); off += p.length; }
     return out;
   };
-  const emit = () => {
+  const emitChunk = (chunk) => {
+    doc.count += chunk.count;
+    doc.hasRgb = doc.hasRgb || !!chunk.rgb;
+    const b = doc.bboxLocal, cb = chunk.bboxLocal;
+    for (let i = 0; i < 3; i++) { if (cb[i] < b[i]) b[i] = cb[i]; if (cb[i + 3] > b[i + 3]) b[i + 3] = cb[i + 3]; }
+    onChunk(chunk);
+  };
+  const flushBatch = () => {
     if (!pendCount) return;
     const cols = {
       x: concat(Float64Array, pend.map((p) => p.x), 1),
@@ -138,13 +161,15 @@ export function createChunkBuilder({ frame, chunkSize = 1 << 20, seed = 1, onChu
       rgb: pend.every((p) => p.rgb) ? concat(Uint8Array, pend.map((p) => p.rgb), 3) : null,
       recIdx: concat(Uint32Array, pend.map((p) => p.recIdx), 1),
     };
+    const n = pendCount;
     pend = []; pendCount = 0;
-    const chunk = buildChunk(cols, frame, rnd);
-    doc.count += chunk.count;
-    doc.hasRgb = doc.hasRgb || !!chunk.rgb;
-    const b = doc.bboxLocal, cb = chunk.bboxLocal;
-    for (let i = 0; i < 3; i++) { if (cb[i] < b[i]) b[i] = cb[i]; if (cb[i + 3] > b[i + 3]) b[i + 3] = cb[i + 3]; }
-    onChunk(chunk);
+    const order = morton ? radixSortIndices(mortonKeys(cols.x, cols.y, cols.z, n), n) : null;
+    for (let start = 0; start < n; start += chunkSize) {
+      const end = Math.min(start + chunkSize, n);
+      const slice = order ? order.subarray(start, end)
+        : Uint32Array.from({ length: end - start }, (_, i) => start + i);
+      emitChunk(buildChunk(cols, frame, rnd, slice));
+    }
   };
 
   return {
@@ -154,15 +179,15 @@ export function createChunkBuilder({ frame, chunkSize = 1 << 20, seed = 1, onChu
       for (let i = 0; i < raw.count; i++) recIdx[i] = raw.recStart + i;
       let taken = 0;
       while (taken < raw.count) {
-        const room = chunkSize - pendCount;
+        const room = batchN - pendCount;
         const n = Math.min(room, raw.count - taken);
         const slice = (a, per = 1) => (a ? a.subarray(taken * per, (taken + n) * per) : null);
         pend.push({ x: slice(raw.x), y: slice(raw.y), z: slice(raw.z), intensity: slice(raw.intensity), classification: slice(raw.classification), rgb: slice(raw.rgb, 3), recIdx: recIdx.subarray(taken, taken + n) });
         pendCount += n; taken += n;
-        if (pendCount >= chunkSize) emit();
+        if (pendCount >= batchN) flushBatch();
       }
     },
-    flush() { emit(); return doc; },
+    flush() { flushBatch(); return doc; },
     get doc() { return doc; },
   };
 }

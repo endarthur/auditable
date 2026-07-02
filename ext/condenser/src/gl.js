@@ -8,6 +8,8 @@
 // chunks proportionally; each chunk draws its FIRST k elements — correct as a
 // uniform subsample because chunks.js shuffled them (the §2.1.4 invariant).
 
+import { frustumPlanes, aabbInFrustum } from './camera.js';
+
 const VERT = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;        // uint16 normalized -> 0..1
@@ -104,11 +106,14 @@ function lutTexture(gl, pixels, n) {
   return t;
 }
 
-// Upload one chunk's buffers → a VAO. CPU copies are the caller's to release.
+// Upload one chunk's buffers → a VAO. CPU copies are the caller's to release —
+// after this returns, the GPU owns the data (§2.1.5 CPU-release). recIdx goes up
+// too (an unattached buffer, wired by the M5 pick pass) so nothing per-element
+// has to stay resident in JS.
 export function uploadChunk(gl, chunk) {
   const vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
-  const buf = (data, loc, size, type, normalized, isInt = false) => {
+  const buf = (data, loc, size, type, normalized) => {
     const b = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, b);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
@@ -123,14 +128,28 @@ export function uploadChunk(gl, chunk) {
   ];
   if (chunk.rgb) buffers.push(buf(chunk.rgb, 3, 3, gl.UNSIGNED_BYTE, true));
   else { gl.disableVertexAttribArray(3); gl.vertexAttrib3f(3, 0.7, 0.7, 0.7); }
+  const recBuf = gl.createBuffer();                        // pick-pass fodder (M5), GPU-resident
+  gl.bindBuffer(gl.ARRAY_BUFFER, recBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, chunk.recIdx, gl.STATIC_DRAW);
+  buffers.push(recBuf);
   gl.bindVertexArray(null);
-  return { vao, buffers, count: chunk.count, bboxLocal: chunk.bboxLocal };
+  return { vao, buffers, count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0 };
 }
 
 /**
  * createRenderer(canvas) — owns the GL context, program, LUTs, and the chunk
  * list; draw(cam, opts) renders one frame (into the current framebuffer — the
  * EDL pass wraps it). Chunks arrive via addChunk() as the stream lands.
+ *
+ * M2 state machine (§2.2): each frame classifies as MOVING (camera/viewport/
+ * uniform changed since last frame) or STILL.
+ *   moving → clear + draw a per-chunk PREFIX: k_i = budget · w_i/Σw where w_i is
+ *   the chunk's projected screen weight ((radius/dist)², floored so the coarse
+ *   global prefix never disappears), front-to-back over the frustum-culled set.
+ *   still  → no clear; draw the NEXT SLICE of each unfinished visible chunk
+ *   (progressive accumulation into the persistent FBO) until converged.
+ * New chunks stream INTO the accumulation (no clear — they just draw behind).
+ * All of it is correct because chunk prefixes are uniform subsamples (§2.1.4).
  */
 export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   // preserveDrawingBuffer: the viewport is also the screenshot-export surface
@@ -149,52 +168,100 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   const palette = lutTexture(gl, palettePixels(), 32);
   const chunks = [];
   let docBbox = null, intensityMax = 1;
+  // accumulation state
+  const lastVP = new Float32Array(16);
+  let lastKey = '', needClear = true, lastVisible = 0;
+
+  const vpChanged = (vp) => {
+    for (let i = 0; i < 16; i++) if (vp[i] !== lastVP[i]) { lastVP.set(vp); return true; }
+    return false;
+  };
 
   return {
     gl,
     get chunkCount() { return chunks.length; },
     get elementCount() { return chunks.reduce((s, c) => s + c.count, 0); },
+    get accumulated() { return chunks.reduce((s, c) => s + c.cursor, 0); },   // elements in the current accumulation
     addChunk(chunk) {
-      chunks.push(uploadChunk(gl, chunk));
+      chunks.push(uploadChunk(gl, chunk));                 // GPU owns it now; CPU copy dies with the caller
       let m = 0; const a = chunk.intensity;
       for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
       intensityMax = Math.max(intensityMax, m);
     },
     setDocBbox(b) { docBbox = b; },
-    clearChunks() { for (const c of chunks) { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); } chunks.length = 0; intensityMax = 1; },
+    invalidate() { needClear = true; },
+    clearChunks() {
+      for (const c of chunks) { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); }
+      chunks.length = 0; intensityMax = 1; needClear = true;
+    },
     resize() {
       const dpr = window.devicePixelRatio || 1;
       const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
-      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; needClear = true; }
       return [w, h];
     },
-    // Draw one frame into the CURRENT framebuffer (caller sets viewport target).
+    // Draw one frame into the CURRENT framebuffer (the EDL pass owns the target).
+    // Returns { drawn, converged, visible }.
     draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0 } = {}) {
-      const total = chunks.reduce((s, c) => s + c.count, 0) || 1;
-      const frac = Math.min(1, budget / total);            // M1 prefix-LOD: uniform fraction per chunk
+      const vp = cam.state.viewProj;
+      const key = `${pointPx}|${colorMode}|${canvas.width}x${canvas.height}`;
+      const moving = vpChanged(vp) || key !== lastKey || needClear;
+      lastKey = key; needClear = false;
+
+      // frustum-cull + front-to-back over chunk bboxes (tight, thanks to Morton)
+      const planes = frustumPlanes(vp);
+      const eye = cam.state.eye;
+      const visible = [];
+      for (const c of chunks) {
+        if (!aabbInFrustum(planes, c.bboxLocal)) { if (moving) c.cursor = 0; continue; }
+        const b = c.bboxLocal;
+        const cx = (b[0] + b[3]) / 2 - eye[0], cy = (b[1] + b[4]) / 2 - eye[1], cz = (b[2] + b[5]) / 2 - eye[2];
+        const dist = Math.max(Math.hypot(cx, cy, cz), cam.state.near);
+        const r = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2 || 1;
+        c._dist = dist;
+        c._w = Math.min(1, (r / dist) * (r / dist));       // projected-area weight
+        visible.push(c);
+      }
+      visible.sort((a, b) => a._dist - b._dist);           // front-to-back
+      lastVisible = visible.length;
+      const sumW = visible.reduce((s, c) => s + c._w, 0) || 1;
+
       gl.enable(gl.DEPTH_TEST);
-      gl.clearColor(background[0], background[1], background[2], background[3]);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      if (moving) {
+        gl.clearColor(background[0], background[1], background[2], background[3]);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        for (const c of visible) c.cursor = 0;
+      }
+
       gl.useProgram(prog);
-      gl.uniformMatrix4fv(uni.viewProj, false, cam.state.viewProj);
+      gl.uniformMatrix4fv(uni.viewProj, false, vp);
       gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
       gl.uniform1i(uni.colorMode, colorMode);
-      const b = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
-      gl.uniform2f(uni.zRange, b[2], Math.max(b[5] - b[2], 1e-6));
+      const db = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
+      gl.uniform2f(uni.zRange, db[2], Math.max(db[5] - db[2], 1e-6));
       gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
-      let drawn = 0;
-      for (const c of chunks) {
-        const k = Math.max(1, Math.floor(c.count * frac));
-        gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
-        gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
-        gl.bindVertexArray(c.vao);
-        gl.drawArrays(gl.POINTS, 0, k);
-        drawn += k;
+
+      let drawn = 0, converged = true;
+      for (const c of visible) {
+        // this frame's allotment for the chunk: budget share by projected weight,
+        // floored so distant chunks keep a sparse presence (coarse prefix always on)
+        const share = Math.max(Math.min(c.count, 1000), Math.floor(budget * (c._w / sumW)));
+        const first = moving ? 0 : c.cursor;
+        const k = Math.min(c.count - first, share);
+        if (k > 0) {
+          gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
+          gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
+          gl.bindVertexArray(c.vao);
+          gl.drawArrays(gl.POINTS, first, k);
+          drawn += k;
+          c.cursor = first + k;
+        }
+        if (c.cursor < c.count) converged = false;
       }
       gl.bindVertexArray(null);
-      return drawn;
+      return { drawn, converged, visible: lastVisible };
     },
   };
 }

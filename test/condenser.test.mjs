@@ -3,7 +3,7 @@
 // synthetic LAS buffers built by test/las-make.mjs (no real data, no writer shipped).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLasHeader, openLas, documentFrame, createChunkBuilder, buildChunk, chunkLocalPosition, mulberry32, shuffledIndices, createOrbitCamera, transformPoint } from '../ext/condenser/src/main.js';
+import { parseLasHeader, openLas, documentFrame, createChunkBuilder, buildChunk, chunkLocalPosition, mulberry32, shuffledIndices, createOrbitCamera, transformPoint, mortonKey, mortonKeys, radixSortIndices, frustumPlanes, aabbInFrustum } from '../ext/condenser/src/main.js';
 import { makeLas, makeTerrainPoints } from './las-make.mjs';
 
 const PTS = [
@@ -115,6 +115,74 @@ test('chunks: the shuffle invariant — a prefix is a uniform spatial subsample'
   const seen = new Uint8Array(n);
   for (let k = 0; k < n; k++) seen[chunk.recIdx[k]] = 1;
   assert.ok(seen.every((v) => v === 1), 'record indices form a complete permutation');
+});
+
+test('morton: bit interleave + key ordering', () => {
+  assert.equal(mortonKey(1, 0, 0), 1);
+  assert.equal(mortonKey(0, 1, 0), 2);
+  assert.equal(mortonKey(0, 0, 1), 4);
+  assert.equal(mortonKey(3, 0, 0), 0b1001);                // x bits at positions 0,3
+  assert.equal(mortonKey(1023, 1023, 1023), (1 << 30) - 1); // all 30 bits
+  // nearby lattice points get nearby keys more often than far ones (sanity, not proof)
+  const kA = mortonKey(100, 100, 100), kB = mortonKey(101, 100, 100), kC = mortonKey(900, 900, 900);
+  assert.ok(Math.abs(kA - kB) < Math.abs(kA - kC));
+});
+
+test('morton: radix sort orders keys ascending (stable, complete)', () => {
+  const n = 5000, rnd = mulberry32(11);
+  const keys = new Uint32Array(n);
+  for (let i = 0; i < n; i++) keys[i] = (rnd() * (1 << 30)) | 0;
+  const order = radixSortIndices(keys, n);
+  const seen = new Uint8Array(n);
+  for (let k = 1; k < n; k++) assert.ok(keys[order[k - 1]] <= keys[order[k]], 'ascending');
+  for (let k = 0; k < n; k++) seen[order[k]] = 1;
+  assert.ok(seen.every((v) => v === 1), 'a complete permutation');
+});
+
+test('chunks: Morton batching yields far tighter bboxes than arrival order', () => {
+  // 64k points over a 1000×1000×50 region in RANDOM arrival order (worst case for
+  // sequential chunking). Compare Σ bbox volume: morton must crush sequential.
+  const n = 1 << 16, rnd = mulberry32(5);
+  const mkRaw = () => {
+    const x = new Float64Array(n), y = new Float64Array(n), z = new Float64Array(n);
+    for (let i = 0; i < n; i++) { x[i] = rnd() * 1000; y[i] = rnd() * 1000; z[i] = rnd() * 50; }
+    return { count: n, x, y, z, intensity: new Uint16Array(n), classification: new Uint8Array(n), rgb: null, recStart: 0 };
+  };
+  const frame = { origin: [0, 0, 0] };
+  const vol = (c) => { const b = c.bboxLocal; return (b[3] - b[0]) * (b[4] - b[1]) * (b[5] - b[2]); };
+  const run = (morton) => {
+    const out = [];
+    const cb = createChunkBuilder({ frame, chunkSize: 4096, morton, seed: 1, onChunk: (c) => out.push(c) });
+    cb.push(mkRaw()); cb.flush();
+    return out;
+  };
+  const seq = run(false), mor = run(true);
+  assert.equal(seq.reduce((s, c) => s + c.count, 0), n);
+  assert.equal(mor.reduce((s, c) => s + c.count, 0), n);
+  const volSeq = seq.reduce((s, c) => s + vol(c), 0), volMor = mor.reduce((s, c) => s + vol(c), 0);
+  // ~2.5× tighter on a FLAT region (z is 20× thinner but gets equal Morton bits, so
+  // slices span full z quickly — the realistic aerial-scan shape). Assert ≥2×; the
+  // x/y separation is what buys frustum culling either way.
+  assert.ok(volMor < volSeq * 0.5, `morton Σvol ${volMor.toExponential(2)} ≪ sequential ${volSeq.toExponential(2)}`);
+  // record indices still form the full set across chunks
+  const seen = new Uint8Array(n);
+  for (const c of mor) for (let k = 0; k < c.count; k++) seen[c.recIdx[k]] = 1;
+  assert.ok(seen.every((v) => v === 1), 'no element lost or duplicated by the sort');
+});
+
+test('frustum: culling accepts the fitted box, rejects boxes outside', () => {
+  const cam = createOrbitCamera();
+  cam.setAspect(1.5);
+  const bbox = Float64Array.of(0, 0, 0, 100, 100, 20);
+  cam.fit(bbox);
+  const planes = frustumPlanes(cam.state.viewProj);
+  assert.ok(aabbInFrustum(planes, bbox), 'the fitted box is visible');
+  assert.ok(aabbInFrustum(planes, Float64Array.of(40, 40, 5, 60, 60, 10)), 'an interior box is visible');
+  // a box far off to the side / far behind the camera is culled
+  assert.ok(!aabbInFrustum(planes, Float64Array.of(100000, 100000, 0, 100010, 100010, 5)), 'far-off box culled');
+  const eye = cam.state.eye, t = cam.state.target;
+  const behind = [eye[0] + (eye[0] - t[0]) * 10, eye[1] + (eye[1] - t[1]) * 10, eye[2] + (eye[2] - t[2]) * 10];
+  assert.ok(!aabbInFrustum(planes, Float64Array.of(behind[0], behind[1], behind[2], behind[0] + 1, behind[1] + 1, behind[2] + 1)), 'behind-camera box culled');
 });
 
 test('shuffledIndices: deterministic for a seed, permutation always', () => {

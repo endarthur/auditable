@@ -78,12 +78,14 @@ export function createEdl(gl) {
 
   return {
     // Render `sceneDraw()` through the EDL pipeline onto the default framebuffer.
+    // ALWAYS goes via the FBO — progressive accumulation (§2.2) needs a persistent
+    // depth buffer, which the default framebuffer doesn't guarantee; EDL-disabled
+    // is strength 0 (exp(0) ≡ passthrough), so there's exactly one path.
     render(width, height, cam, sceneDraw, { enabled = true, strength = 1.0, radius = 1.4 } = {}) {
-      if (!enabled) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, width, height); return sceneDraw(); }
       ensure(width, height);
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
       gl.viewport(0, 0, w, h);
-      const drawn = sceneDraw();                           // the splat pass, into the FBO
+      const result = sceneDraw();                          // the splat pass, into the FBO (may draw 0 when converged)
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, width, height);
       gl.disable(gl.DEPTH_TEST);
@@ -92,11 +94,11 @@ export function createEdl(gl) {
       gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, depthTex); gl.uniform1i(uni.depth, 3);
       gl.uniform2f(uni.texel, 1 / w, 1 / h);
       gl.uniform2f(uni.nearFar, cam.state.near, cam.state.far);
-      gl.uniform1f(uni.strength, strength);
+      gl.uniform1f(uni.strength, enabled ? strength : 0);
       gl.uniform1f(uni.radius, radius);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.enable(gl.DEPTH_TEST);
-      return drawn;
+      return result;
     },
   };
 }

@@ -349,6 +349,68 @@ function rebaseRecord(from, to, d) {
   };
 }
 
+// ── src/morton.js ──
+
+// @gcu/condenser — Morton (Z-order) keys + a radix sort over indices.
+// Batch-wise spatial chunking (micro-spec §2.1.3): quantize each point to a
+// 10-bit lattice per axis against the batch bbox, interleave to a 30-bit key,
+// radix-sort an index array by key (three 10-bit passes, ping-pong — sorting
+// indices, not elements, avoids the 2× transient), then slice the sorted order
+// into chunks. Points that are near in space land in the same chunk → tight
+// chunk AABBs → frustum culling and front-to-back order fall out.
+
+// Spread the low 10 bits of v so there are two zero bits between each.
+function part1by2(v) {
+  v &= 0x3ff;
+  v = (v | (v << 16)) & 0x30000ff;
+  v = (v | (v << 8)) & 0x300f00f;
+  v = (v | (v << 4)) & 0x30c30c3;
+  v = (v | (v << 2)) & 0x9249249;
+  return v;
+}
+
+// 30-bit Morton key from 10-bit lattice coordinates.
+function mortonKey(ix, iy, iz) {
+  return (part1by2(iz) << 2) | (part1by2(iy) << 1) | part1by2(ix);
+}
+
+// Keys for a batch: quantize x/y/z (f64, any space — only intra-batch
+// consistency matters) to 10 bits against the batch extent.
+function mortonKeys(x, y, z, n) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i < n; i++) {
+    if (x[i] < minX) minX = x[i]; if (x[i] > maxX) maxX = x[i];
+    if (y[i] < minY) minY = y[i]; if (y[i] > maxY) maxY = y[i];
+    if (z[i] < minZ) minZ = z[i]; if (z[i] > maxZ) maxZ = z[i];
+  }
+  const sx = maxX > minX ? 1023 / (maxX - minX) : 0;
+  const sy = maxY > minY ? 1023 / (maxY - minY) : 0;
+  const sz = maxZ > minZ ? 1023 / (maxZ - minZ) : 0;
+  const keys = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    keys[i] = mortonKey(((x[i] - minX) * sx) | 0, ((y[i] - minY) * sy) | 0, ((z[i] - minZ) * sz) | 0);
+  }
+  return keys;
+}
+
+// Radix sort 0..n-1 by keys[] — three 10-bit passes, counting sort each,
+// ping-pong index buffers. Stable; returns the sorted index array.
+function radixSortIndices(keys, n) {
+  let src = new Uint32Array(n), dst = new Uint32Array(n);
+  for (let i = 0; i < n; i++) src[i] = i;
+  const counts = new Uint32Array(1024);
+  for (let pass = 0; pass < 3; pass++) {
+    const shift = pass * 10;
+    counts.fill(0);
+    for (let i = 0; i < n; i++) counts[(keys[src[i]] >>> shift) & 0x3ff]++;
+    let sum = 0;
+    for (let b = 0; b < 1024; b++) { const c = counts[b]; counts[b] = sum; sum += c; }
+    for (let i = 0; i < n; i++) dst[counts[(keys[src[i]] >>> shift) & 0x3ff]++] = src[i];
+    const t = src; src = dst; dst = t;
+  }
+  return src;
+}
+
 // ── src/chunks.js ──
 
 // @gcu/condenser — the chunk store: RawChunks (world f64, from a provider) →
@@ -366,9 +428,10 @@ function rebaseRecord(from, to, d) {
 // and budget-capped drawing all read prefixes and inherit their correctness from
 // this shuffle. Seeded PRNG (mulberry32) → deterministic for tests.
 //
-// M1 chunking is SEQUENTIAL (arrival order — flight lines are spatially coherent
-// enough for per-chunk bboxes to be useful); Morton-order spatial chunking is M2
-// and replaces only the bucketing, not this contract.
+// Chunking is BATCH-MORTON (§2.1.3): accumulate ~batchSize elements, Morton-radix-
+// sort the batch, slice the sorted order into chunks → spatially tight chunk AABBs
+// (frustum culling + front-to-back fall out) while peak CPU memory stays bounded
+// by batchSize × constant — never proportional to the file (§3 heap bound).
 //
 // Chunk = {
 //   count, bboxLocal: Float64Array(6) [minX,minY,minZ,maxX,maxY,maxZ],
@@ -400,6 +463,15 @@ function shuffledIndices(n, rnd) {
   return idx;
 }
 
+// In-place Fisher–Yates over an existing index array (a gather list).
+function shuffleInPlace(idx, rnd) {
+  for (let i = idx.length - 1; i > 0; i--) {
+    const j = (rnd() * (i + 1)) | 0;
+    const t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+  }
+  return idx;
+}
+
 // Pick the document frame from a provider header (bbox in world coords). CRS is
 // identity metadata only — condenser never reprojects.
 function documentFrame(header, { crs = null } = {}) {
@@ -411,18 +483,19 @@ function documentFrame(header, { crs = null } = {}) {
 }
 
 /**
- * Build one render Chunk from a set of RawChunk slices (already concatenated by
- * the caller — see ChunkBuilder). All arrays are same-length columnar views.
+ * Build one render Chunk from columnar source arrays. `indices` is an optional
+ * gather list (element ids into the columns — e.g. one Morton-ordered slice of a
+ * batch); omitted → all elements. The gather list is SHUFFLED (in a copy) before
+ * the single gather-quantize pass — gather and shuffle cost one pass together.
  */
-function buildChunk({ x, y, z, intensity, classification, rgb, recIdx }, frame, rnd) {
-  const n = x.length;
-  // frame-local bbox (f64 subtract BEFORE any narrowing — the one hard rule)
+function buildChunk({ x, y, z, intensity, classification, rgb, recIdx }, frame, rnd, indices = null) {
+  const n = indices ? indices.length : x.length;
   const o = frame.origin;
+  // pass 1 — frame-local bbox (f64 subtract BEFORE any narrowing — the one hard rule)
   let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  const lx = new Float64Array(n), ly = new Float64Array(n), lz = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
+  for (let k = 0; k < n; k++) {
+    const i = indices ? indices[k] : k;
     const px = x[i] - o[0], py = y[i] - o[1], pz = z[i] - o[2];
-    lx[i] = px; ly[i] = py; lz[i] = pz;
     if (px < minX) minX = px; if (px > maxX) maxX = px;
     if (py < minY) minY = py; if (py > maxY) maxY = py;
     if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
@@ -430,15 +503,16 @@ function buildChunk({ x, y, z, intensity, classification, rgb, recIdx }, frame, 
   const sx = maxX > minX ? 65535 / (maxX - minX) : 0;
   const sy = maxY > minY ? 65535 / (maxY - minY) : 0;
   const sz = maxZ > minZ ? 65535 / (maxZ - minZ) : 0;
-  const perm = shuffledIndices(n, rnd);
+  // pass 2 — shuffle the gather order, then gather + quantize in one sweep
+  const perm = indices ? shuffleInPlace(Uint32Array.from(indices), rnd) : shuffledIndices(n, rnd);
   const pos = new Uint16Array(3 * n);
   const outI = new Uint16Array(n), outC = new Uint8Array(n), outR = new Uint32Array(n);
   const outRgb = rgb ? new Uint8Array(3 * n) : null;
   for (let k = 0; k < n; k++) {
     const i = perm[k];
-    pos[k * 3] = ((lx[i] - minX) * sx + 0.5) | 0;
-    pos[k * 3 + 1] = ((ly[i] - minY) * sy + 0.5) | 0;
-    pos[k * 3 + 2] = ((lz[i] - minZ) * sz + 0.5) | 0;
+    pos[k * 3] = ((x[i] - o[0] - minX) * sx + 0.5) | 0;
+    pos[k * 3 + 1] = ((y[i] - o[1] - minY) * sy + 0.5) | 0;
+    pos[k * 3 + 2] = ((z[i] - o[2] - minZ) * sz + 0.5) | 0;
     outI[k] = intensity[i];
     outC[k] = classification[i];
     outR[k] = recIdx[i];
@@ -463,13 +537,16 @@ function chunkLocalPosition(chunk, k) {
 }
 
 /**
- * ChunkBuilder — feed RawChunks as they stream in; emits finished Chunks of
- * ~chunkSize elements via onChunk. flush() emits the remainder. Also tracks the
- * document-wide local bbox + counts for camera fitting.
+ * ChunkBuilder — feed RawChunks as they stream in; emits finished Chunks via
+ * onChunk. Batch-Morton by default: elements accumulate to ~batchSize, the batch
+ * is Morton-sorted and sliced into chunkSize chunks (each internally shuffled).
+ * `morton: false` slices in arrival order instead (still shuffled). flush()
+ * emits the remainder and returns the document summary.
  */
-function createChunkBuilder({ frame, chunkSize = 1 << 20, seed = 1, onChunk }) {
+function createChunkBuilder({ frame, chunkSize = 1 << 20, batchSize = 0, morton = true, seed = 1, onChunk }) {
   const rnd = mulberry32(seed);
-  let pend = [];                                           // pending RawChunk slices
+  const batchN = batchSize || chunkSize * 4;               // default: 4 chunks per spatial batch
+  let pend = [];                                           // pending RawChunk column slices
   let pendCount = 0;
   const doc = { count: 0, bboxLocal: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity), hasRgb: false };
 
@@ -479,7 +556,14 @@ function createChunkBuilder({ frame, chunkSize = 1 << 20, seed = 1, onChunk }) {
     for (const p of parts) { out.set(p, off); off += p.length; }
     return out;
   };
-  const emit = () => {
+  const emitChunk = (chunk) => {
+    doc.count += chunk.count;
+    doc.hasRgb = doc.hasRgb || !!chunk.rgb;
+    const b = doc.bboxLocal, cb = chunk.bboxLocal;
+    for (let i = 0; i < 3; i++) { if (cb[i] < b[i]) b[i] = cb[i]; if (cb[i + 3] > b[i + 3]) b[i + 3] = cb[i + 3]; }
+    onChunk(chunk);
+  };
+  const flushBatch = () => {
     if (!pendCount) return;
     const cols = {
       x: concat(Float64Array, pend.map((p) => p.x), 1),
@@ -490,13 +574,15 @@ function createChunkBuilder({ frame, chunkSize = 1 << 20, seed = 1, onChunk }) {
       rgb: pend.every((p) => p.rgb) ? concat(Uint8Array, pend.map((p) => p.rgb), 3) : null,
       recIdx: concat(Uint32Array, pend.map((p) => p.recIdx), 1),
     };
+    const n = pendCount;
     pend = []; pendCount = 0;
-    const chunk = buildChunk(cols, frame, rnd);
-    doc.count += chunk.count;
-    doc.hasRgb = doc.hasRgb || !!chunk.rgb;
-    const b = doc.bboxLocal, cb = chunk.bboxLocal;
-    for (let i = 0; i < 3; i++) { if (cb[i] < b[i]) b[i] = cb[i]; if (cb[i + 3] > b[i + 3]) b[i + 3] = cb[i + 3]; }
-    onChunk(chunk);
+    const order = morton ? radixSortIndices(mortonKeys(cols.x, cols.y, cols.z, n), n) : null;
+    for (let start = 0; start < n; start += chunkSize) {
+      const end = Math.min(start + chunkSize, n);
+      const slice = order ? order.subarray(start, end)
+        : Uint32Array.from({ length: end - start }, (_, i) => start + i);
+      emitChunk(buildChunk(cols, frame, rnd, slice));
+    }
   };
 
   return {
@@ -506,15 +592,15 @@ function createChunkBuilder({ frame, chunkSize = 1 << 20, seed = 1, onChunk }) {
       for (let i = 0; i < raw.count; i++) recIdx[i] = raw.recStart + i;
       let taken = 0;
       while (taken < raw.count) {
-        const room = chunkSize - pendCount;
+        const room = batchN - pendCount;
         const n = Math.min(room, raw.count - taken);
         const slice = (a, per = 1) => (a ? a.subarray(taken * per, (taken + n) * per) : null);
         pend.push({ x: slice(raw.x), y: slice(raw.y), z: slice(raw.z), intensity: slice(raw.intensity), classification: slice(raw.classification), rgb: slice(raw.rgb, 3), recIdx: recIdx.subarray(taken, taken + n) });
         pendCount += n; taken += n;
-        if (pendCount >= chunkSize) emit();
+        if (pendCount >= batchN) flushBatch();
       }
     },
-    flush() { emit(); return doc; },
+    flush() { flushBatch(); return doc; },
     get doc() { return doc; },
   };
 }
@@ -556,6 +642,26 @@ function mat4Multiply(a, b) {                       // a·b (both column-major)
     m[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
   }
   return m;
+}
+
+// Frustum planes from a viewProj matrix (Gribb–Hartmann, column-major): six
+// [a,b,c,d] rows — a point is inside when a·x+b·y+c·z+d ≥ 0 for all six.
+function frustumPlanes(m) {
+  const row = (r) => [m[r], m[4 + r], m[8 + r], m[12 + r]];
+  const r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+  const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]];
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]];
+  return [add(r3, r0), sub(r3, r0), add(r3, r1), sub(r3, r1), add(r3, r2), sub(r3, r2)];
+}
+
+// Conservative AABB-vs-frustum: positive-vertex test — the box is out only when
+// its most-positive corner for some plane is still behind that plane.
+function aabbInFrustum(planes, b) {                 // b = [minX,minY,minZ,maxX,maxY,maxZ]
+  for (const [a, bb, c, d] of planes) {
+    const px = a > 0 ? b[3] : b[0], py = bb > 0 ? b[4] : b[1], pz = c > 0 ? b[5] : b[2];
+    if (a * px + bb * py + c * pz + d < 0) return false;
+  }
+  return true;
 }
 
 function transformPoint(m, p) {                     // m · [p,1] → perspective divide
@@ -666,6 +772,7 @@ function attachOrbitInput(canvas, cam, { onChange } = {}) {
 // chunks proportionally; each chunk draws its FIRST k elements — correct as a
 // uniform subsample because chunks.js shuffled them (the §2.1.4 invariant).
 
+
 const VERT = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;        // uint16 normalized -> 0..1
@@ -762,11 +869,14 @@ function lutTexture(gl, pixels, n) {
   return t;
 }
 
-// Upload one chunk's buffers → a VAO. CPU copies are the caller's to release.
+// Upload one chunk's buffers → a VAO. CPU copies are the caller's to release —
+// after this returns, the GPU owns the data (§2.1.5 CPU-release). recIdx goes up
+// too (an unattached buffer, wired by the M5 pick pass) so nothing per-element
+// has to stay resident in JS.
 function uploadChunk(gl, chunk) {
   const vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
-  const buf = (data, loc, size, type, normalized, isInt = false) => {
+  const buf = (data, loc, size, type, normalized) => {
     const b = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, b);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
@@ -781,14 +891,28 @@ function uploadChunk(gl, chunk) {
   ];
   if (chunk.rgb) buffers.push(buf(chunk.rgb, 3, 3, gl.UNSIGNED_BYTE, true));
   else { gl.disableVertexAttribArray(3); gl.vertexAttrib3f(3, 0.7, 0.7, 0.7); }
+  const recBuf = gl.createBuffer();                        // pick-pass fodder (M5), GPU-resident
+  gl.bindBuffer(gl.ARRAY_BUFFER, recBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, chunk.recIdx, gl.STATIC_DRAW);
+  buffers.push(recBuf);
   gl.bindVertexArray(null);
-  return { vao, buffers, count: chunk.count, bboxLocal: chunk.bboxLocal };
+  return { vao, buffers, count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0 };
 }
 
 /**
  * createRenderer(canvas) — owns the GL context, program, LUTs, and the chunk
  * list; draw(cam, opts) renders one frame (into the current framebuffer — the
  * EDL pass wraps it). Chunks arrive via addChunk() as the stream lands.
+ *
+ * M2 state machine (§2.2): each frame classifies as MOVING (camera/viewport/
+ * uniform changed since last frame) or STILL.
+ *   moving → clear + draw a per-chunk PREFIX: k_i = budget · w_i/Σw where w_i is
+ *   the chunk's projected screen weight ((radius/dist)², floored so the coarse
+ *   global prefix never disappears), front-to-back over the frustum-culled set.
+ *   still  → no clear; draw the NEXT SLICE of each unfinished visible chunk
+ *   (progressive accumulation into the persistent FBO) until converged.
+ * New chunks stream INTO the accumulation (no clear — they just draw behind).
+ * All of it is correct because chunk prefixes are uniform subsamples (§2.1.4).
  */
 function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   // preserveDrawingBuffer: the viewport is also the screenshot-export surface
@@ -807,52 +931,100 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   const palette = lutTexture(gl, palettePixels(), 32);
   const chunks = [];
   let docBbox = null, intensityMax = 1;
+  // accumulation state
+  const lastVP = new Float32Array(16);
+  let lastKey = '', needClear = true, lastVisible = 0;
+
+  const vpChanged = (vp) => {
+    for (let i = 0; i < 16; i++) if (vp[i] !== lastVP[i]) { lastVP.set(vp); return true; }
+    return false;
+  };
 
   return {
     gl,
     get chunkCount() { return chunks.length; },
     get elementCount() { return chunks.reduce((s, c) => s + c.count, 0); },
+    get accumulated() { return chunks.reduce((s, c) => s + c.cursor, 0); },   // elements in the current accumulation
     addChunk(chunk) {
-      chunks.push(uploadChunk(gl, chunk));
+      chunks.push(uploadChunk(gl, chunk));                 // GPU owns it now; CPU copy dies with the caller
       let m = 0; const a = chunk.intensity;
       for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
       intensityMax = Math.max(intensityMax, m);
     },
     setDocBbox(b) { docBbox = b; },
-    clearChunks() { for (const c of chunks) { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); } chunks.length = 0; intensityMax = 1; },
+    invalidate() { needClear = true; },
+    clearChunks() {
+      for (const c of chunks) { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); }
+      chunks.length = 0; intensityMax = 1; needClear = true;
+    },
     resize() {
       const dpr = window.devicePixelRatio || 1;
       const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
-      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; needClear = true; }
       return [w, h];
     },
-    // Draw one frame into the CURRENT framebuffer (caller sets viewport target).
+    // Draw one frame into the CURRENT framebuffer (the EDL pass owns the target).
+    // Returns { drawn, converged, visible }.
     draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0 } = {}) {
-      const total = chunks.reduce((s, c) => s + c.count, 0) || 1;
-      const frac = Math.min(1, budget / total);            // M1 prefix-LOD: uniform fraction per chunk
+      const vp = cam.state.viewProj;
+      const key = `${pointPx}|${colorMode}|${canvas.width}x${canvas.height}`;
+      const moving = vpChanged(vp) || key !== lastKey || needClear;
+      lastKey = key; needClear = false;
+
+      // frustum-cull + front-to-back over chunk bboxes (tight, thanks to Morton)
+      const planes = frustumPlanes(vp);
+      const eye = cam.state.eye;
+      const visible = [];
+      for (const c of chunks) {
+        if (!aabbInFrustum(planes, c.bboxLocal)) { if (moving) c.cursor = 0; continue; }
+        const b = c.bboxLocal;
+        const cx = (b[0] + b[3]) / 2 - eye[0], cy = (b[1] + b[4]) / 2 - eye[1], cz = (b[2] + b[5]) / 2 - eye[2];
+        const dist = Math.max(Math.hypot(cx, cy, cz), cam.state.near);
+        const r = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2 || 1;
+        c._dist = dist;
+        c._w = Math.min(1, (r / dist) * (r / dist));       // projected-area weight
+        visible.push(c);
+      }
+      visible.sort((a, b) => a._dist - b._dist);           // front-to-back
+      lastVisible = visible.length;
+      const sumW = visible.reduce((s, c) => s + c._w, 0) || 1;
+
       gl.enable(gl.DEPTH_TEST);
-      gl.clearColor(background[0], background[1], background[2], background[3]);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      if (moving) {
+        gl.clearColor(background[0], background[1], background[2], background[3]);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        for (const c of visible) c.cursor = 0;
+      }
+
       gl.useProgram(prog);
-      gl.uniformMatrix4fv(uni.viewProj, false, cam.state.viewProj);
+      gl.uniformMatrix4fv(uni.viewProj, false, vp);
       gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
       gl.uniform1i(uni.colorMode, colorMode);
-      const b = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
-      gl.uniform2f(uni.zRange, b[2], Math.max(b[5] - b[2], 1e-6));
+      const db = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
+      gl.uniform2f(uni.zRange, db[2], Math.max(db[5] - db[2], 1e-6));
       gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
-      let drawn = 0;
-      for (const c of chunks) {
-        const k = Math.max(1, Math.floor(c.count * frac));
-        gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
-        gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
-        gl.bindVertexArray(c.vao);
-        gl.drawArrays(gl.POINTS, 0, k);
-        drawn += k;
+
+      let drawn = 0, converged = true;
+      for (const c of visible) {
+        // this frame's allotment for the chunk: budget share by projected weight,
+        // floored so distant chunks keep a sparse presence (coarse prefix always on)
+        const share = Math.max(Math.min(c.count, 1000), Math.floor(budget * (c._w / sumW)));
+        const first = moving ? 0 : c.cursor;
+        const k = Math.min(c.count - first, share);
+        if (k > 0) {
+          gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
+          gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
+          gl.bindVertexArray(c.vao);
+          gl.drawArrays(gl.POINTS, first, k);
+          drawn += k;
+          c.cursor = first + k;
+        }
+        if (c.cursor < c.count) converged = false;
       }
       gl.bindVertexArray(null);
-      return drawn;
+      return { drawn, converged, visible: lastVisible };
     },
   };
 }
@@ -938,12 +1110,14 @@ function createEdl(gl) {
 
   return {
     // Render `sceneDraw()` through the EDL pipeline onto the default framebuffer.
+    // ALWAYS goes via the FBO — progressive accumulation (§2.2) needs a persistent
+    // depth buffer, which the default framebuffer doesn't guarantee; EDL-disabled
+    // is strength 0 (exp(0) ≡ passthrough), so there's exactly one path.
     render(width, height, cam, sceneDraw, { enabled = true, strength = 1.0, radius = 1.4 } = {}) {
-      if (!enabled) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, width, height); return sceneDraw(); }
       ensure(width, height);
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
       gl.viewport(0, 0, w, h);
-      const drawn = sceneDraw();                           // the splat pass, into the FBO
+      const result = sceneDraw();                          // the splat pass, into the FBO (may draw 0 when converged)
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, width, height);
       gl.disable(gl.DEPTH_TEST);
@@ -952,11 +1126,11 @@ function createEdl(gl) {
       gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, depthTex); gl.uniform1i(uni.depth, 3);
       gl.uniform2f(uni.texel, 1 / w, 1 / h);
       gl.uniform2f(uni.nearFar, cam.state.near, cam.state.far);
-      gl.uniform1f(uni.strength, strength);
+      gl.uniform1f(uni.strength, enabled ? strength : 0);
       gl.uniform1f(uni.radius, radius);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.enable(gl.DEPTH_TEST);
-      return drawn;
+      return result;
     },
   };
 }
@@ -973,14 +1147,21 @@ export {
   openLas,
   mulberry32,
   shuffledIndices,
+  shuffleInPlace,
   documentFrame,
   buildChunk,
   chunkLocalPosition,
   createChunkBuilder,
+  part1by2,
+  mortonKey,
+  mortonKeys,
+  radixSortIndices,
   mat4Perspective,
   mat4LookAt,
   mat4Multiply,
   transformPoint,
+  frustumPlanes,
+  aabbInFrustum,
   createOrbitCamera,
   attachOrbitInput,
   makeProgram,

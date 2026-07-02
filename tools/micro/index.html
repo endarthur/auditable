@@ -75,7 +75,7 @@
     <button id="btnFit" title="frame the data">fit</button>
   </div>
   <div id="view"><canvas id="cv"></canvas></div>
-  <div id="empty"><b>open a point cloud</b><span>Open… or drag a .las anywhere</span><span>nothing handy? <a id="emptySample">▸ generate a sample bench scan</a> — 2,000,000 points, made locally</span></div>
+  <div id="empty"><b>open a point cloud</b><span>Open… or drag a .las anywhere</span><span>nothing handy? generate a sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points, made locally</span></div>
   <div id="drop-hint">drop to open</div>
   <footer><span id="meta">—</span><span id="stats"></span></footer>
 
@@ -94,17 +94,21 @@ function requestRender() { dirty = true; }
 attachOrbitInput(cv, cam, { onChange: requestRender });
 new ResizeObserver(() => { const [w, h] = renderer.resize(); cam.setAspect(w / h); requestRender(); }).observe(cv);
 
+let converged = true;
 function loop(t) {
-  if (dirty) {
+  if (dirty || !converged) {                               // keep converging while still (progressive accumulation)
     dirty = false;
     const [w, h] = renderer.resize();
     cam.setAspect(w / h);
     const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: +$('#colorBy').value };
     const t0 = performance.now();
-    lastDrawn = edl.render(w, h, cam, () => renderer.draw(cam, opts), { enabled: $('#edlOn').checked, strength: +$('#edlStr').value });
+    const r = edl.render(w, h, cam, () => renderer.draw(cam, opts), { enabled: $('#edlOn').checked, strength: +$('#edlStr').value });
+    converged = r.converged;
     fpsBuf.push(performance.now() - t0); if (fpsBuf.length > 30) fpsBuf.shift();
     const ms = fpsBuf.reduce((a, b) => a + b, 0) / fpsBuf.length;
-    $('#stats').textContent = `${renderer.elementCount.toLocaleString()} pts · ${renderer.chunkCount} chunks · drawn ${lastDrawn.toLocaleString()} · ${ms.toFixed(1)} ms`;
+    const total = renderer.elementCount, acc = renderer.accumulated;
+    const heap = performance.memory ? ` · heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)} MB` : '';
+    $('#stats').textContent = `${total.toLocaleString()} pts · ${renderer.chunkCount} chunks (${r.visible} vis) · ${converged ? `converged ${acc.toLocaleString()}` : `accumulating ${(100 * acc / (total || 1)).toFixed(0)}%`} · ${ms.toFixed(1)} ms${heap}`;
   }
   requestAnimationFrame(loop);
 }
@@ -158,50 +162,60 @@ addEventListener('drop', (e) => {
   if (f) openBlob(f, f.name);
 });
 
-// Synthetic sample: a bench scan generated straight into RawChunks (no LAS bytes,
-// no fetch) — 2M points over five 10 m benches with a pit-wall sinusoid.
-function makeSampleChunks(n) {
+// Synthetic sample: a bench scan generated STREAMING into RawChunks (no LAS bytes,
+// no fetch, and never all resident — the builder consumes each RawChunk as it's
+// made, so 50M points generate inside the same bounded-memory envelope as a file).
+// The patch scales with n so density stays LiDAR-ish (~1250 pts/m²).
+function* sampleRawChunks(n) {
   const rnd = mulberry32(42);
-  const per = 1 << 18, out = [];
-  const x0 = 610000, y0 = 7760000, z0 = 900, w = 400, h = 400;
+  const per = 1 << 18;
+  const scale = Math.sqrt(n / 2_000_000);
+  const x0 = 610000, y0 = 7760000, z0 = 900, w = 400 * scale, h = 400 * scale;
   for (let start = 0; start < n; start += per) {
     const m = Math.min(per, n - start);
     const x = new Float64Array(m), y = new Float64Array(m), z = new Float64Array(m);
     const intensity = new Uint16Array(m), classification = new Uint8Array(m);
     for (let i = 0; i < m; i++) {
       const px = x0 + rnd() * w, py = y0 + rnd() * h;
-      const bench = Math.floor(((px - x0) / w) * 5) * 10;
-      const wall = ((px - x0) / w * 5) % 1 > 0.92 ? (rnd() * 9) : 0;   // near-vertical faces
+      const benches = 5 * scale;
+      const bench = Math.floor(((px - x0) / w) * benches) * 10;
+      const wall = ((px - x0) / w * benches) % 1 > 0.92 ? (rnd() * 9) : 0;   // near-vertical faces
       x[i] = px; y[i] = py;
       z[i] = z0 - bench - wall + Math.sin((py - y0) / 40) * 1.5 + rnd() * 0.25;
       intensity[i] = 1000 + (rnd() * rnd() * 50000) | 0;
       classification[i] = wall ? 6 : 2;
     }
-    out.push({ count: m, x, y, z, intensity, classification, rgb: null, recStart: start });
+    yield { count: m, x, y, z, intensity, classification, rgb: null, recStart: start };
   }
-  return { header: { count: n, bbox: { min: [x0, y0, z0 - 60], max: [x0 + w, y0 + h, z0 + 2] } }, chunks: out };
 }
-async function openSample() {
+async function openSample(n = 2_000_000) {
   renderer.clearChunks(); requestRender();
   $('#empty').style.display = 'none';
   $('#meta').textContent = 'sample — generating…';
   await new Promise((r) => setTimeout(r));
-  const { header, chunks } = makeSampleChunks(2_000_000);
+  const scale = Math.sqrt(n / 2_000_000);
+  const x0 = 610000, y0 = 7760000, z0 = 900, w = 400 * scale, h = 400 * scale;
+  const header = { count: n, bbox: { min: [x0, y0, z0 - 12 * 5 * scale], max: [x0 + w, y0 + h, z0 + 2] } };
   frame = documentFrame(header, { crs: null });
   const o = frame.origin, b = header.bbox;
   _docBbox = Float64Array.of(b.min[0] - o[0], b.min[1] - o[1], b.min[2] - o[2], b.max[0] - o[0], b.max[1] - o[1], b.max[2] - o[2]);
   cam.fit(_docBbox);
   const cb = createChunkBuilder({ frame, chunkSize: 1 << 20, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
-  for (const rc of chunks) { cb.push(rc); await new Promise((r) => setTimeout(r)); }
+  let done = 0;
+  for (const rc of sampleRawChunks(n)) {
+    cb.push(rc); done += rc.count;
+    if ((done & 0xfffff) < (1 << 18)) { $('#meta').textContent = `sample — generating ${Math.round(100 * done / n)}%`; await new Promise((r) => setTimeout(r)); }
+  }
   const doc = cb.flush();
   renderer.setDocBbox(doc.bboxLocal);
   _docBbox = doc.bboxLocal;
   $('#meta').textContent = `sample bench scan — ${doc.count.toLocaleString()} points (synthetic, generated locally)`;
   requestRender();
 }
-$('#emptySample').onclick = openSample;
+document.querySelectorAll('[data-sample]').forEach((a) => a.onclick = () => openSample(+a.dataset.sample));
+window.addEventListener('keydown', (e) => { if (e.key === 'f') { $('#btnFit').click(); } });
 
-window._micro = { openBlob, openSample, renderer, cam, get frame() { return frame; }, requestRender };
+window._micro = { openBlob, openSample, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
