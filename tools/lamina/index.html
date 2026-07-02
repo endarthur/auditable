@@ -242,6 +242,9 @@
   #help .gb-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
   #help .gb-form label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
   #help .gb-form select { font: inherit; font-size: 12px; background: var(--bg-field); color: var(--text); border: 1px solid var(--bd2); border-radius: 4px; padding: 2px 6px; max-width: 180px; }
+  #help .gb-form input { font-size: 12px; background: var(--bg-field); color: var(--text-hi); border: 1px solid var(--bd2); border-radius: 4px; padding: 2px 6px; }
+  #help .gb-form input:focus { outline: none; border-color: var(--info); }
+  #help .gb-form input::placeholder { color: var(--faint); }
   #help .gb-vals { display: inline-flex; flex-direction: column; gap: 4px; }
   #help .gb-rm { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 2px; }
   #help .gb-rm:hover { color: var(--fault); }
@@ -258,6 +261,10 @@
   #help .gt-curve-legend { font-size: 10px; color: var(--dim); margin: 3px 0 6px; }
   #help .gt-curve-legend .lg-t { color: var(--accent); } #help .gt-curve-legend .lg-g { color: var(--info); }
   #help .gt-cut-tbl th { cursor: default; }
+  /* grid summary: every value cell is click-to-copy (raw, paste-ready) */
+  #help .gs-v { cursor: pointer; }
+  #help .gs-v:hover { background: var(--accent-soft); color: var(--text-hi); }
+  #help .gs-v.copied { background: var(--ok-soft, rgba(140, 184, 120, 0.25)); }
   #help .help-head { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #help .help-head button { background: none; border: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
   #help .help-head button:hover { color: var(--text-hi); }

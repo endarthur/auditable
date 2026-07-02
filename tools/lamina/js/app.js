@@ -2169,7 +2169,7 @@ const HELP = {
     `<b>Column statistics</b> — click a header's glyph (double-click), or right-click → Statistics. A histogram (log-x toggle) + quantiles, count / nulls / non-numeric (with examples), min / max / mean / std / <b>CV</b> / <b>skew</b> / <b>zeros</b>. Tick <b>exclude zeros</b> / <b>exclude negatives</b> and <b>apply</b> to re-stat grade-only. Copy as TSV. Big columns scan with a cancel (or <code>Esc</code>).<br><br>`
     + `<b>Σ stats</b> (toolbar) — precomputes stats for <i>every</i> column in one pass, then opens the <b>Column summary</b>: a sortable table (a row per column × n · null% · non-num · min · max · mean · std · CV · skew · zero% · p50). Sort by <b>null%</b> / <b>CV</b> / <b>non-num</b> to triage the file; click a row for that column's detail, or its <b>name</b> to jump to it in the grid; copy as TSV. The caret (▾) offers precompute-only — warm the cache so every Statistics opens instantly.<br><br>`
     + `<b>Group by</b> (Data → Group by…) — per-group aggregates over one or more value columns, with an optional <b>weight</b> column → a weighted mean shown next to the plain mean (so an unweighted vs length/volume-weighted grade difference is visible). Sort any column; click a group → filter the grid to it; copy as TSV. <b>Numeric bins:</b> add a calculated column <code>bin(rl, 10)</code>, then group by it — elevation bands, bench slices, etc.<br><br>`
-    + `<b>Grade–tonnage</b> (Data → Grade–tonnage…) — the resource view. <b>Volume · density · ore proportion</b> are expressions (a column, a constant, or e.g. <code>dx * dy * dz</code> — auto-detected where the columns are obvious); tonnes = Σ(volume × density × proportion). The report gives <b>tonnes · tonnage-weighted grade · contained metal per domain</b> (+ Σ total), and each grade field gets its <b>cutoff curve</b> — tonnes ≥ cutoff falling, mean grade rising — with a cutoff table at round cutoffs (tonnes · grade · metal · % of tonnes). Respects the current filter; add more grade fields with <b>+ add grade</b>; every table copies as TSV. All computed windowed — a multi-GB model reports without loading.<br><br>`
+    + `<b>Grade–tonnage</b> (Data → Grade–tonnage…) — the resource view. <b>Volume · density · ore proportion</b> are expressions (a column, a constant, or e.g. <code>dx * dy * dz</code> — auto-detected where the columns are obvious; <b>blank = 1</b>); tonnes = Σ(volume × density × proportion). The report gives <b>tonnes · tonnage-weighted grade · contained metal per domain</b> (+ Σ total), and each grade field gets its <b>cutoff curve</b> — tonnes ≥ cutoff falling, mean grade rising — with a cutoff table at automatic round cutoffs, <b>or type your own per grade</b> (<code>0.5, 1, 2</code> — computed exactly, not snapped to bins). Respects the current filter; add more grade fields with <b>+ add grade</b>; every table copies as TSV. All computed windowed — a multi-GB model reports without loading.<br><br>`
     + `<b>Grid summary</b> (Data → Grid summary…) — for a block model: infers the <b>grid</b> from the centroid columns (auto-detected; dx/dy/dz optional, they override spacing inference) — origin · block size · count per axis, coordinate <b>ordering</b> (fastest/slowest), <b>sub-block detection</b>, parent-cell count and <b>fill %</b>. "No regular grid" is itself an answer (scattered data, or a broken export). Copy as TSV.<br><br>`
     + `<b>Data quality</b> (Data → Data quality…) — scans a sample and flags the quiet bugs that bite an estimate: <b>leading zeros lost</b> (a code like <code>007</code> read as a number), <b>non-numeric values</b> in a numeric column, <b>missing-value sentinels</b> (<code>-999</code>…), thousands separators, whitespace padding, all-blank, constant, dates-as-text. Click a flag → that column's Statistics, or its <b>name</b> → jump to it in the grid; a leading-zeros flag offers a one-click <b>fix: treat as text</b>. <code>✓</code> when clean.<br><br>`
     + `<b>Color scale</b> — right-click a numeric header → Color scale: heatmap the cells (8 palettes · linear/log · clip outliers · reverse). <b>Record inspector</b> (View) — a row's fields as a list, follows the selection; <code>↑</code>/<code>↓</code> step, <b>pin</b> to compare two rows. <b>Columns</b> panel (View) — search · show/hide · reorder · pin-freeze.`],
@@ -2931,12 +2931,13 @@ function openGradeTonnage() {
   const d3 = c.schema.filter((s) => /^d[xyz]$/i.test(s.name));   // block dims → volume = dx·dy·dz
   const firstCat = c.schema.findIndex((s) => s.type !== 'number');
   const grade = num.find((o) => !/^(id|x|y|z|dx|dy|dz|east|north|elev|rl|row)$/i.test(o.s.name));
-  _gtConfig = {   // volume/density/proportion are now EXPRESSIONS (a column, a constant, or e.g. dx*dy*dz)
+  _gtConfig = {   // volume/density/proportion are EXPRESSIONS (a column, a constant, dx*dy*dz, or blank = 1)
     group: firstCat >= 0 ? firstCat : null,
     volume: d3.length === 3 ? d3.map((s) => colRef(s.name)).join(' * ') : (colName(/vol/i) || '1'),
     density: colName(/dens|(^|_)sg($|_)/i) || '2.7',
     proportion: colName(/(^|_)ore|prop|ore.?pct/i) || '1',
     grades: [grade ? grade.i : (num[0] ? num[0].i : 0)],
+    cutoffs: [''],   // per grade field: comma-separated cutoffs, blank = auto (round bin edges)
   };
   _gtResult = null;
   $('#helpTitle').textContent = `Grade–tonnage — ${c.label}${c.filterResult ? ' (filtered)' : ''}`;
@@ -2954,7 +2955,7 @@ function paintGradeTonnage() {
   h += `<label>Density ${exprInp('density', 'e.g. density or 2.7')}</label>`;
   h += `<label>Ore proportion ${exprInp('proportion', 'e.g. ore_pct or 1')}</label>`;
   h += '<span class="gb-vals">';
-  _gtConfig.grades.forEach((uc, gi) => { h += `<label class="gb-val">Grade <select class="gt-grade" data-gi="${gi}">${cols.map((s, i) => s.type === 'number' ? `<option value="${i}"${i === uc ? ' selected' : ''}>${esc(s.name)}</option>` : '').join('')}</select>${_gtConfig.grades.length > 1 ? `<button class="gt-rm" data-gi="${gi}" title="remove">✕</button>` : ''}</label>`; });
+  _gtConfig.grades.forEach((uc, gi) => { h += `<label class="gb-val">Grade <select class="gt-grade" data-gi="${gi}">${cols.map((s, i) => s.type === 'number' ? `<option value="${i}"${i === uc ? ' selected' : ''}>${esc(s.name)}</option>` : '').join('')}</select><input class="gt-cut" data-gi="${gi}" value="${esc(_gtConfig.cutoffs[gi] || '')}" placeholder="cutoffs · auto" title="comma-separated cutoffs for this grade, e.g. 0.5, 1, 2 — blank = automatic round steps" spellcheck="false" autocomplete="off" style="width:120px;font-family:var(--mono)">${_gtConfig.grades.length > 1 ? `<button class="gt-rm" data-gi="${gi}" title="remove">✕</button>` : ''}</label>`; });
   h += '</span>';
   h += `<button id="gtAdd" class="gb-add">+ add grade</button>`;
   h += `<button id="gtRun" class="gb-run">Report</button>`;
@@ -3026,7 +3027,10 @@ async function scanGTCurves(c, cfg, factors, extents, { rows, signal, onProgress
     const step = niceStep((e.gmax - floor) / 150);           // ~150–200 nice-edged bins
     const bins = Math.max(20, Math.min(400, Math.ceil((e.gmax - floor) / step)));
     const acc = gradeTonnage({ grade: 'g', weight: 'w', gradeMin: floor, gradeMax: floor + bins * step, bins });
-    return { acc, s: acc.create(), step };
+    // user-specified cutoffs → EXACT at-or-above accumulation (not snapped to bins)
+    const cuts = cfg.cutoffs && cfg.cutoffs[gi];
+    const cust = cuts ? { c: cuts, t: new Float64Array(cuts.length), m: new Float64Array(cuts.length) } : null;
+    return { acc, s: acc.create(), step, cust };
   });
   if (!accs.some(Boolean)) return null;
   const { volume: vol, density: dens, proportion: prop } = factors;
@@ -3038,14 +3042,23 @@ async function scanGTCurves(c, cfg, factors, extents, { rows, signal, onProgress
       const g = parseNum(fields[cfg.grades[gi]], c.d.decimal);
       if (Number.isNaN(g)) continue;
       a.acc.push(a.s, { g, w });
+      if (a.cust) {
+        const cc = a.cust.c;                                 // ascending; add to every cutoff ≤ g
+        for (let k = 0; k < cc.length && cc[k] <= g; k++) { a.cust.t[k] += w; a.cust.m[k] += w * g; }
+      }
     }
   });
-  return accs.map((a) => (a ? { ...a.acc.result(a.s), step: a.step } : null));
+  return accs.map((a) => (a ? {
+    ...a.acc.result(a.s), step: a.step,
+    custom: a.cust ? a.cust.c.map((cut, k) => ({ cutoff: cut, tonnage: a.cust.t[k], grade: a.cust.t[k] > 0 ? a.cust.m[k] / a.cust.t[k] : 0, metal: a.cust.m[k] })) : null,
+  } : null));
 }
 
-// The cutoff table rows: exact bin edges at a nice stride (~8–10 rows), trailing
-// zero-tonnage rows trimmed (the curve is cumulative-from-top → monotone falling).
+// The cutoff table rows: user cutoffs when given (exact, in their order), else exact
+// bin edges at a nice stride (~8–10 rows), trailing zero-tonnage rows trimmed (the
+// curve is cumulative-from-top → monotone falling).
 function gtCurveRows(cv) {
+  if (cv.custom) return cv.custom;                           // the user asked for these — show all
   const range = cv.gradeMax - cv.gradeMin;
   const stride = Math.max(1, Math.round(niceStep(range / 8) / cv.step));
   const rows = [];
@@ -3117,8 +3130,12 @@ function drawGTCurves(c) {
     ctx.strokeStyle = bd; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, padT + plotH + 0.5); ctx.lineTo(padL + plotW, padT + plotH + 0.5); ctx.stroke();
     ctx.fillStyle = dim; ctx.font = '10px ' + (css.getPropertyValue('--mono').trim() || 'monospace'); ctx.textAlign = 'center';
-    const stride = Math.max(1, Math.round(niceStep((cv.gradeMax - cv.gradeMin) / 8) / cv.step));
-    for (let i = 0; i < n; i += stride) { const x = X(i); ctx.fillRect(x, padT + plotH, 1, 3); ctx.fillText(fmtN(cv.curve[i].cutoff), x, H - 3); }
+    const span = (cv.gradeMax - cv.gradeMin) || 1;           // ticks at the table's cutoffs (handles custom, non-uniform)
+    for (const p of gtCurveRows(cv)) {
+      if (p.cutoff < cv.gradeMin || p.cutoff > cv.gradeMax) continue;
+      const x = padL + ((p.cutoff - cv.gradeMin) / span) * plotW;
+      ctx.fillRect(x, padT + plotH, 1, 3); ctx.fillText(fmtN(p.cutoff), x, H - 3);
+    }
     // tonnes (falling) — accent
     ctx.strokeStyle = acc; ctx.lineWidth = 1.5; ctx.beginPath();
     for (let i = 0; i < n; i++) { const y = padT + plotH * (1 - cv.curve[i].tonnage / t0); i ? ctx.lineTo(X(i), y) : ctx.moveTo(X(i), y); }
@@ -3141,15 +3158,22 @@ async function computeGradeTonnage() {
   const c = current; if (!c) return;
   if (!_gtConfig.grades.length) return;
   let vol, dens, prop;
-  try {   // compile the volume/density/proportion expressions (a column, constant, or e.g. dx*dy*dz)
+  try {   // compile the volume/density/proportion expressions (a column, constant, dx*dy*dz — blank = 1)
+    const one = () => 1;
     const mk = (label, s) => {
+      if (!(s || '').trim()) return { fn: one };               // blank factor = 1 (no error)
       const v = validate(s, c.schema);
       if (!v.ok) throw new Error(`${label}: ${friendlyError(v.errors, c.schema)}`);
       return { fn: compile(s, c.schema, { decimal: c.d.decimal }) };
     };
     vol = mk('Volume', _gtConfig.volume); dens = mk('Density', _gtConfig.density); prop = mk('Ore proportion', _gtConfig.proportion);
   } catch (e) { const r = $('#gtResults'); if (r) r.innerHTML = `<div style="color:var(--fault);margin-top:8px">${esc(e.message)}</div>`; return; }
-  const cfg = { group: _gtConfig.group, grades: _gtConfig.grades.slice(), volExpr: _gtConfig.volume, densExpr: _gtConfig.density, propExpr: _gtConfig.proportion };
+  // per-grade custom cutoffs: comma/space-separated numbers → sorted unique; blank/junk = auto
+  const parseCutoffs = (s) => {
+    const nums = String(s || '').split(/[\s,;]+/).map((t) => parseFloat(t)).filter((v) => Number.isFinite(v));
+    return nums.length ? [...new Set(nums)].sort((a, b) => a - b) : null;
+  };
+  const cfg = { group: _gtConfig.group, grades: _gtConfig.grades.slice(), cutoffs: _gtConfig.grades.map((g, gi) => parseCutoffs(_gtConfig.cutoffs[gi])), volExpr: _gtConfig.volume || '1', densExpr: _gtConfig.density || '1', propExpr: _gtConfig.proportion || '1' };
   const ac = newFooterScan();
   const rEl = $('#gtResults'); if (rEl) rEl.innerHTML = '<div style="color:#777;margin-top:8px">computing… <span id="scanPct">0%</span></div>';
   $('#meta').textContent = 'grade–tonnage…';
@@ -3179,8 +3203,9 @@ function wireGradeTonnage(c) {
   const g = $('#gtGroup'); if (g) g.onchange = () => { _gtConfig.group = g.value === '' ? null : +g.value; };
   $('#helpBody').querySelectorAll('.gt-expr').forEach((inp) => { inp.oninput = () => { _gtConfig[inp.dataset.f] = inp.value; }; attachAutocomplete(inp, calcCtx); });
   $('#helpBody').querySelectorAll('.gt-grade').forEach((sel) => sel.onchange = () => { _gtConfig.grades[+sel.dataset.gi] = +sel.value; });
-  $('#helpBody').querySelectorAll('.gt-rm').forEach((b) => b.onclick = () => { _gtConfig.grades.splice(+b.dataset.gi, 1); paintGradeTonnage(); });
-  const add = $('#gtAdd'); if (add) add.onclick = () => { const fn = c.schema.findIndex((s) => s.type === 'number'); _gtConfig.grades.push(fn >= 0 ? fn : 0); paintGradeTonnage(); };
+  $('#helpBody').querySelectorAll('.gt-cut').forEach((inp) => inp.oninput = () => { _gtConfig.cutoffs[+inp.dataset.gi] = inp.value; });
+  $('#helpBody').querySelectorAll('.gt-rm').forEach((b) => b.onclick = () => { const gi = +b.dataset.gi; _gtConfig.grades.splice(gi, 1); _gtConfig.cutoffs.splice(gi, 1); paintGradeTonnage(); });
+  const add = $('#gtAdd'); if (add) add.onclick = () => { const fn = c.schema.findIndex((s) => s.type === 'number'); _gtConfig.grades.push(fn >= 0 ? fn : 0); _gtConfig.cutoffs.push(''); paintGradeTonnage(); };
   const run = $('#gtRun'); if (run) run.onclick = () => computeGradeTonnage();
   $('#helpBody').querySelectorAll('.sum-tbl th[data-k]').forEach((th) => th.onclick = () => { const k = th.getAttribute('data-k'); if (_gtSort.col === k) _gtSort.dir *= -1; else _gtSort = { col: k, dir: k === 'key' ? 1 : -1 }; paintGradeTonnage(); });
   const cp = $('#gtCopy'); if (cp) cp.onclick = () => { copyText(gtTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
@@ -3236,6 +3261,11 @@ function paintGridSummary() {
   $('#helpBody').querySelectorAll('.gs-col').forEach((s) => s.onchange = () => { _gsConfig[s.dataset.f] = s.value === '' ? null : +s.value; });
   const run = $('#gsRun'); if (run) run.onclick = () => computeGridSummary();
   const cp = $('#gsCopy'); if (cp) cp.onclick = () => { copyText(gsTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
+  $('#helpBody').querySelectorAll('.gs-v').forEach((td) => td.onclick = () => {
+    const v = td.getAttribute('data-copy'); if (!v) return;
+    copyText(v);
+    td.classList.add('copied'); setTimeout(() => td.classList.remove('copied'), 700);
+  });
 }
 async function computeGridSummary() {
   const c = current; if (!c) return;
@@ -3268,52 +3298,73 @@ async function computeGridSummary() {
     else if (rEl) rEl.innerHTML = `<div style="color:var(--fault);margin-top:8px">${esc(e.message)}</div>`;
   } finally { if (_footerScanAbort === ac) _footerScanAbort = null; }
 }
-// The summary rows shared by render + TSV: [key, value, note?] triples.
-// Coordinates render locale-grouped, never exponential (a northing is 7,780,000 — not 7.78e+6).
-const fmtCoord = (x) => x == null ? '—' : (Number.isInteger(x) ? x.toLocaleString() : x.toLocaleString(undefined, { maximumFractionDigits: 4 }));
-function gsLines(c) {
+// The summary as data: an axis × parameter table + scalar key-values. All numbers RAW
+// (String(v) — no thousands separators, no exponential) because every value is a
+// click-to-copy destined for another package's dialog box.
+function gsData(c) {
   const { facet, accResult, rowsTotal, config } = _gsResult;
   const name = (i) => (c.schema[i] ? c.schema[i].name : '?');
-  const L = [];
-  if (facet.kind === 'gridded') {
-    const [nx, ny, nz] = facet.count, cells = nx * ny * nz;
-    const o = facet.order;
-    L.push(['grid', 'regular', `ordering ${o.fastest} fastest · ${o.middle} · ${o.slowest} slowest`]);
+  const raw = (v) => (v == null ? '' : String(v));
+  const gridded = facet.kind === 'gridded';
+  const axes = [];
+  if (gridded) {
     ['x', 'y', 'z'].forEach((a, i) => {
       const ax = accResult.axes[a];
-      L.push([`${a.toUpperCase()} (${name(config[a])})`, `origin ${fmtCoord(facet.origin[i])} · block ${fmtN(facet.size[i])} · count ${facet.count[i]}`, `extent ${fmtCoord(ax.min)} – ${fmtCoord(ax.max)}`]);
+      axes.push({ axis: a.toUpperCase(), col: name(config[a]), origin: raw(facet.origin[i]), size: raw(facet.size[i]), count: raw(facet.count[i]), min: raw(ax.min), max: raw(ax.max) });
     });
-    L.push(['parent cells', `${fmtInt(nx)} × ${fmtInt(ny)} × ${fmtInt(nz)} = ${fmtInt(cells)}`]);
-    L.push(['parent block volume', fmtN(facet.size[0] * facet.size[1] * facet.size[2])]);
-    L.push(['rows scanned', fmtInt(rowsTotal)]);
-    const fill = cells ? rowsTotal / cells : 0;
-    L.push(['fill', `${(100 * fill).toFixed(1)}%`, fill > 1 ? 'over 100% — sub-blocked or duplicate blocks' : '']);
-    if (facet.subBlocked) {
-      for (const a of ['x', 'y', 'z']) {
-        const subs = facet.subBlocks && facet.subBlocks[a];
-        if (subs && subs.length) L.push([`${a.toUpperCase()} sub-blocks`, subs.map((sb) => `${fmtN(sb.size)} (÷${sb.ratio})`).join(' · ')]);
-      }
-    }
   } else {
-    L.push(['grid', 'none detected', 'coordinates don\'t sit on one consistent spacing']);
     for (const a in accResult.axes) {
       const ax = accResult.axes[a];
       if (!ax.count) continue;
-      L.push([`${a.toUpperCase()} (${name(config[a])})`, `extent ${fmtCoord(ax.min)} – ${fmtCoord(ax.max)}`, `${fmtInt(ax.values.length)}${ax.overflow ? '+' : ''} distinct values`]);
+      axes.push({ axis: a.toUpperCase(), col: name(config[a]), origin: '', size: '', count: `${ax.values.length}${ax.overflow ? '+' : ''} distinct`, min: raw(ax.min), max: raw(ax.max) });
     }
-    L.push(['rows scanned', fmtInt(rowsTotal)]);
   }
-  const overflowed = Object.values(accResult.axes).some((ax) => ax.overflow);
-  if (overflowed) L.push(['note', 'distinct-coordinate cap hit on an axis', 'inference used the capped set']);
-  return L;
+  const kv = [];
+  if (gridded) {
+    const [nx, ny, nz] = facet.count, cells = nx * ny * nz;
+    const o = facet.order;
+    kv.push(['ordering', `${o.fastest} fastest · ${o.middle} · ${o.slowest} slowest`, '']);
+    kv.push(['parent cells', raw(cells), `${nx} × ${ny} × ${nz}`]);
+    kv.push(['parent block volume', raw(facet.size[0] * facet.size[1] * facet.size[2]), '']);
+    kv.push(['rows scanned', raw(rowsTotal), '']);
+    const fill = cells ? rowsTotal / cells : 0;
+    kv.push(['fill %', (100 * fill).toFixed(1), fill > 1 ? 'over 100% — sub-blocked or duplicate blocks' : '']);
+    if (facet.subBlocked) {
+      for (const a of ['x', 'y', 'z']) {
+        const subs = facet.subBlocks && facet.subBlocks[a];
+        if (subs && subs.length) kv.push([`${a.toUpperCase()} sub-blocks`, subs.map((sb) => `${sb.size} (÷${sb.ratio})`).join(' · '), '']);
+      }
+    }
+  } else {
+    kv.push(['grid', 'none detected', 'coordinates don\'t sit on one consistent spacing']);
+    kv.push(['rows scanned', raw(rowsTotal), '']);
+  }
+  if (Object.values(accResult.axes).some((ax) => ax.overflow)) kv.push(['note', 'distinct-coordinate cap hit on an axis', 'inference used the capped set']);
+  return { gridded, axes, kv };
 }
 function renderGSResult(c) {
+  const { gridded, axes, kv } = gsData(c);
+  const vcell = (v, num = true) => `<td class="${num ? 'num ' : ''}gs-v" data-copy="${esc(v)}" title="click to copy">${esc(v)}</td>`;
   let h = '<button id="gsCopy" class="sum-copy">copy all</button>';
-  h += '<div style="overflow:auto;max-height:60vh;margin-top:4px;width:fit-content;max-width:100%"><table class="sum-tbl"><tbody>';
-  for (const [k, v, note] of gsLines(c)) h += `<tr><td style="color:var(--muted)">${esc(k)}</td><td>${esc(v)}</td><td style="color:var(--dim)">${note ? esc(note) : ''}</td></tr>`;
-  return h + '</tbody></table></div>';
+  if (!gridded) h += '<div style="color:var(--accent);font-size:11px;margin:4px 0">no regular grid detected</div>';
+  h += '<div style="overflow:auto;max-height:60vh;margin-top:4px;width:fit-content;max-width:100%">';
+  h += '<table class="sum-tbl"><thead><tr><th>axis</th><th>column</th><th class="num">origin</th><th class="num">block size</th><th class="num">count</th><th class="num">min</th><th class="num">max</th></tr></thead><tbody>';
+  for (const a of axes) h += `<tr><td>${esc(a.axis)}</td><td>${esc(a.col)}</td>${vcell(a.origin)}${vcell(a.size)}${vcell(a.count)}${vcell(a.min)}${vcell(a.max)}</tr>`;
+  h += '</tbody></table>';
+  h += '<table class="sum-tbl" style="margin-top:10px"><tbody>';
+  for (const [k, v, note] of kv) h += `<tr><td style="color:var(--muted)">${esc(k)}</td>${vcell(v, false)}<td style="color:var(--dim)">${note ? esc(note) : ''}</td></tr>`;
+  h += '</tbody></table></div>';
+  h += '<div style="color:var(--dim);font-size:10px;margin-top:6px">click any value to copy it (raw, paste-ready)</div>';
+  return h;
 }
-function gsTSV(c) { return gsLines(c).map(([k, v, note]) => `${k}\t${v}${note ? '\t' + note : ''}`).join('\n'); }
+function gsTSV(c) {
+  const { axes, kv } = gsData(c);
+  const L = ['axis\tcolumn\torigin\tblock size\tcount\tmin\tmax'];
+  for (const a of axes) L.push([a.axis, a.col, a.origin, a.size, a.count, a.min, a.max].join('\t'));
+  L.push('');
+  for (const [k, v, note] of kv) L.push(`${k}\t${v}${note ? '\t' + note : ''}`);
+  return L.join('\n');
+}
 
 // A synthetic orebody block model generated in-page (networkless — no fetch, no bundled
 // file) so a first-time visitor with nothing to open can see lamina work: coordinates,
