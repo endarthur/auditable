@@ -18,9 +18,21 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); overflow: hidden; }
   #bar {
-    position: absolute; left: 0; right: 0; top: 0; height: 38px; display: flex; align-items: center;
+    position: absolute; left: 0; right: 0; top: 0; height: 36px; display: flex; align-items: center;
     gap: 10px; padding: 0 10px; border-bottom: 1px solid var(--border); background: var(--bg-bar); z-index: 2;
   }
+  #bar2 {
+    position: absolute; left: 0; right: 0; top: 36px; height: 32px; display: flex; align-items: center;
+    gap: 10px; padding: 0 10px; border-bottom: 1px solid var(--border); background: #171717; z-index: 2;
+    font-family: var(--mono);
+  }
+  #bar2 label { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  #bar2 select, #bar2 input[type="number"] {
+    font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field);
+    border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 6px;
+  }
+  #bar2 input[type="range"] { width: 90px; accent-color: var(--accent); }
+  #bar2 .spacer { flex: 1; }
   #bar .title { font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #bar button, #bar select {
     font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-btn);
@@ -59,7 +71,7 @@
   #bar #filter::placeholder { color: var(--faint); }
   #bar input[type="number"] { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 6px; }
   #bar .spacer { flex: 1; }
-  #view { position: absolute; inset: 38px 0 24px 0; }
+  #view { position: absolute; inset: 68px 0 24px 0; }
   #cv { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
   #cv:active { cursor: grabbing; }
   footer {
@@ -68,7 +80,7 @@
     font-family: var(--mono); font-size: 11px; color: var(--dim);
   }
   #empty {
-    position: absolute; inset: 38px 0 24px 0; display: flex; flex-direction: column; align-items: center;
+    position: absolute; inset: 68px 0 24px 0; display: flex; flex-direction: column; align-items: center;
     justify-content: center; gap: 10px; color: var(--faint); font-family: var(--mono); font-size: 13px;
     text-align: center; pointer-events: none; z-index: 1;
   }
@@ -82,7 +94,7 @@
   body.drag #drop-hint { display: flex; }
   /* record inspector — right-docked overlay (lamina's record-panel layout) */
   #recPanel {
-    position: absolute; top: 38px; right: 0; bottom: 24px; width: 280px; display: none;
+    position: absolute; top: 68px; right: 0; bottom: 24px; width: 280px; display: none;
     flex-direction: column; background: rgba(22, 22, 22, 0.96); border-left: 1px solid var(--border); z-index: 4;
   }
   #recPanel.show { display: flex; }
@@ -105,6 +117,13 @@
     <button class="mb" id="mFile">File</button>
     <button class="mb" id="mView">View</button>
     <button class="mb" id="mHelp">Help</button>
+    <input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears">
+    <label title="keep non-matching blocks as dimmed context instead of hiding them"><input type="checkbox" id="context"> context</label>
+    <span class="spacer"></span>
+    <button id="btnShot" title="save the viewport as PNG">png</button>
+    <button id="btnFit" title="frame the data">fit</button>
+  </div>
+  <div id="bar2">
     <label>color <select id="colorBy">
       <option value="0">elevation</option>
       <option value="1">intensity</option>
@@ -125,20 +144,16 @@
       <option value="8000000">8M</option>
       <option value="100000000">all</option>
     </select></label>
-    <label>section <select id="secMode" title="slab section: plan (horizontal) · N–S (east-facing) · E–W (north-facing)">
+    <span class="spacer"></span>
+    <label>section <select id="secMode" title="slab section: plan (horizontal) · N–S (east-facing) · E–W (north-facing) · knife (drag a line)">
       <option value="off">off</option>
       <option value="plan">plan</option>
       <option value="ns">N–S</option>
       <option value="ew">E–W</option>
       <option value="knife">knife</option>
     </select></label>
-    <input id="secPos" type="range" min="0" max="1" step="0.002" value="0.5" title="scrub the section" style="width:120px;display:none">
+    <input id="secPos" type="range" min="0" max="1" step="0.002" value="0.5" title="scrub the section" style="width:140px;display:none">
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
-    <input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = \"HEMATITE\"" title="lamina's filter language, over every column in the file — Enter applies, Esc clears">
-    <label title="keep non-matching blocks as dimmed context instead of hiding them"><input type="checkbox" id="context"> context</label>
-    <span class="spacer"></span>
-    <button id="btnShot" title="save the viewport as PNG">png</button>
-    <button id="btnFit" title="frame the data">fit</button>
   </div>
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .csv anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
