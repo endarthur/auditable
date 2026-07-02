@@ -172,7 +172,7 @@
     <input id="secPos" type="range" min="0" max="1" step="0.002" value="0.5" title="scrub the section" style="width:140px;display:none">
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
   </div>
-  <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg></div>
+  <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLine" stroke="#4a78b0" stroke-width="1.5"/><circle id="mA" r="3.5" fill="#4a78b0"/><circle id="mB" r="3.5" fill="#4a78b0"/><text id="mLabel" fill="#dfe6ee" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3"></text></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .csv anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
@@ -213,6 +213,7 @@ function loop(t) {
     const total = renderer.elementCount, acc = renderer.accumulated;
     const heap = performance.memory ? ` · heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)} MB` : '';
     $('#stats').textContent = `${total.toLocaleString()} pts · ${renderer.chunkCount} chunks (${r.visible} vis) · ${converged ? `converged ${acc.toLocaleString()}` : `accumulating ${(100 * acc / (total || 1)).toFixed(0)}%`} · ${ms.toFixed(1)} ms${heap}`;
+    drawMeasure();                                         // the overlay rides the camera
   }
   requestAnimationFrame(loop);
 }
@@ -370,6 +371,9 @@ async function openBlob(blob, name) {
   $('#empty').style.display = 'none';
   try {
     if (/\.dm$/i.test(name)) return await openDmBlob(blob, name);
+    // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
+    // so grid inference must not promote them to boxes.
+    if (/\.(xyz|pts)$/i.test(name)) return await openBlocksBlob(blob, name, { forcePoints: true });
     if (/\.(csv|txt|dat|asc)$/i.test(name)) return await openBlocksBlob(blob, name);
     const { header, streamChunks } = await openLas(blob);
     _lasDoc = { blob, header }; _blockDoc = null;
@@ -393,7 +397,8 @@ async function openBlocksBlob(blob, name, opts = {}) {
     ? { ..._blockDoc.header.mapping, chan: opts.chan } : null;
   renderer.clearChunks(); if (!opts.keepFilter) renderer.setFilter(null);
   const { header, streamChunks } = await openBlockModel(blob, mapping ? { mapping } : {});
-  _blockDoc = { blob, name, header, metaLine: '' };
+  if (opts.forcePoints) header.grid = null;
+  _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints };
   fitFromHeader(header);
   renderer.setCategories(header.categories ? header.categories.length : 0);
   setColorLabels(header);
@@ -421,7 +426,9 @@ async function openBlocksBlob(blob, name, opts = {}) {
     }
     const doc = cb.flush();
     renderer.setDocBbox(doc.bboxLocal); _docBbox = doc.bboxLocal;
-    $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} centroids (no regular grid detected — points view)`;
+    _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} centroids${_blockDoc.forcePoints ? '' : ' (no regular grid detected — points view)'}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
+    $('#meta').textContent = _blockDoc.metaLine;
+    if (_filterExpr.trim() && opts.keepFilter) applyBlockFilter(_filterExpr);
   }
   requestRender();
 }
@@ -477,7 +484,7 @@ $('#colorBy').addEventListener('change', () => {
   const v = $('#colorBy').value;
   if (v.startsWith('chan:') && _blockDoc && +v.slice(5) !== _blockDoc.header.mapping.chan) {
     const open = _blockDoc.header.dm ? openDmBlob : openBlocksBlob;
-    open(_blockDoc.blob, _blockDoc.name, { chan: +v.slice(5), keepFilter: true });
+    open(_blockDoc.blob, _blockDoc.name, { chan: +v.slice(5), keepFilter: true, forcePoints: _blockDoc.forcePoints });
   } else requestRender();
 });
 
@@ -520,7 +527,7 @@ async function applyBlockFilter(expr) {
       await new Promise((r) => setTimeout(r));
     }
   } else {
-    for await (const batch of lineFields(blob, header.delim, !!header.columns)) {
+    for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow !== undefined ? header.hasHeaderRow : !!header.columns)) {
       for (const f of batch) {
         const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
         if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // same rows sweep 2 kept
@@ -639,8 +646,37 @@ function menuAt(anchor, items) {
     if (!m.contains(e.target)) { closeMenu(); removeEventListener('pointerdown', onDoc); }
   }), 0);
 }
+// the header panel: everything the providers learned about the open file
+function showFileInfo() {
+  const doc = _blockDoc || _lasDoc;
+  if (!doc) { showHelp('file info', 'no file open'); return; }
+  const h = doc.header;
+  const fmtC = (v) => (v == null ? '—' : Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 4 }));
+  const row = (k, v) => `<div style="display:flex;justify-content:space-between;gap:18px;padding:2px 0"><span style="color:var(--muted)">${k}</span><span style="text-align:right">${v}</span></div>`;
+  let html = '';
+  html += row('file', _blockDoc ? _blockDoc.name : 'point cloud');
+  html += row('kind', _lasDoc ? `LAS ${h.version} · point format ${h.format}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points');
+  html += row('records', fmtC(h.count));
+  if (h.bbox) {
+    html += row('X', `${fmtC(h.bbox.min[0])} – ${fmtC(h.bbox.max[0])}`);
+    html += row('Y', `${fmtC(h.bbox.min[1])} – ${fmtC(h.bbox.max[1])}`);
+    html += row('Z', `${fmtC(h.bbox.min[2])} – ${fmtC(h.bbox.max[2])}`);
+  }
+  if (frame) html += row('frame origin', frame.origin.map(fmtC).join(', ') + (frame.crs ? ` · ${frame.crs}` : ''));
+  if (h.grid) {
+    html += row('grid', `${h.grid.x.count} × ${h.grid.y.count} × ${h.grid.z.count}`);
+    html += row('block size', `${fmtC(h.grid.x.pitch)} × ${fmtC(h.grid.y.pitch)} × ${fmtC(h.grid.z.pitch)}`);
+    html += row('block 0 centroid', [h.grid.x.origin, h.grid.y.origin, h.grid.z.origin].map(fmtC).join(', '));
+  }
+  if (h.scale) html += row('scale · offset', `${h.scale.join(', ')} · ${h.offset.map(fmtC).join(', ')}`);
+  if (h.columns) html += row('columns', h.columns.length <= 14 ? h.columns.join(' · ') : h.columns.length + ' columns');
+  if (h.attributes && h.attributes.length) html += row('channels', h.attributes.join(' · '));
+  if (h.categories && h.categories.length) html += row(h.columns ? h.columns[h.mapping.cat] : 'categories', h.categories.join(' · '));
+  showHelp('file info', html);
+}
 $('#mFile').onclick = () => menuAt($('#mFile'), [
   { label: 'Open…', kbd: '', action: openFilePicker },
+  { label: 'File info…', kbd: 'i', action: showFileInfo },
   { sep: true },
   { label: 'Sample bench scan — 2M', action: () => openSample(2_000_000) },
   { label: 'Sample bench scan — 10M', action: () => openSample(10_000_000) },
@@ -665,6 +701,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: (_viewMode === 'boxes' ? '✓ ' : '') + 'Blocks as boxes', action: () => { _viewMode = 'boxes'; requestRender(); } },
   { label: (_viewMode === 'points' ? '✓ ' : '') + 'Blocks as points', action: () => { _viewMode = 'points'; requestRender(); } },
   { sep: true },
+  { label: 'Measure…', kbd: 'm', action: armMeasure },
   { label: 'Section on/off', kbd: 'x', action: toggleSection },
   { label: 'Along the section', kbd: 'l', action: viewAlongSection },
   { label: 'Scrub section back', kbd: '[', action: () => scrubSection(-1) },
@@ -673,7 +710,8 @@ $('#mView').onclick = () => menuAt($('#mView'), [
 const HELP_KEYS = `
 <b>mouse</b><br>
 drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
-<b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br><br>
+<b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
+<code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
 <b>sections</b> — a slab through the data; everything hidden is neither drawn nor pickable<br>
@@ -761,6 +799,89 @@ async function openSample(n = 2_000_000) {
   requestRender();
 }
 document.querySelectorAll('[data-sample]').forEach((a) => a.onclick = () => openSample(+a.dataset.sample));
+// ── measure (m): two picks -> distance. Endpoints come from the SOURCE RECORDS
+// (block centroids / point coordinates) — exact, not screen unprojections. The
+// overlay re-projects each drawn frame, so it rides orbits. Esc clears. ──
+let _measure = { arm: 0, a: null, b: null };               // a/b = frame-local [x,y,z]
+async function recordPosition(rec) {
+  const m = _blockDoc && _blockDoc.header.mapping;
+  if (_blockDoc && _blockDoc.header.dm) {
+    const vals = await fetchDmRecord(_blockDoc.blob, _blockDoc.header.dm, rec);
+    return [vals[m.x], vals[m.y], vals[m.z]];
+  }
+  if (_blockDoc) {
+    const f = await fetchCsvRecord(rec);
+    return f ? [+f[m.x], +f[m.y], +f[m.z]] : null;
+  }
+  if (_lasDoc) {
+    const { blob, header } = _lasDoc;
+    const off = header.pointOffset + rec * header.recordLen;
+    const dv = new DataView(await blob.slice(off, off + header.recordLen).arrayBuffer());
+    const one = decodeLasRecords(dv, header, 1, rec);
+    return [one.x[0], one.y[0], one.z[0]];
+  }
+  return null;
+}
+function armMeasure() {
+  _measure = { arm: 1, a: null, b: null };
+  $('#measureSvg').style.display = 'none';
+  cv.style.cursor = 'crosshair';
+  $('#meta').textContent = 'measure: click two points/blocks';
+}
+function clearMeasure() {
+  _measure = { arm: 0, a: null, b: null };
+  $('#measureSvg').style.display = 'none';
+  cv.style.cursor = '';
+  requestRender();
+}
+async function measureClick(cssX, cssY) {
+  const rec = renderer.pick(cssX, cssY, cam, { pointPx: +$('#ptPx').value, blocksAsPoints: _viewMode === 'points', section: currentSection() });
+  if (rec == null) return;
+  const world = await recordPosition(rec);
+  if (!world) return;
+  const local = [world[0] - frame.origin[0], world[1] - frame.origin[1], world[2] - frame.origin[2]];
+  if (!_measure.a) { _measure.a = local; $('#meta').textContent = 'measure: click the second point'; }
+  else {
+    _measure.b = local; _measure.arm = 0;
+    cv.style.cursor = '';
+    const d = [0, 1, 2].map((i) => _measure.b[i] - _measure.a[i]);
+    const d3 = Math.hypot(...d), plan = Math.hypot(d[0], d[1]);
+    $('#meta').textContent = `measure: ${d3.toFixed(2)} m · plan ${plan.toFixed(2)} m · Δz ${Math.abs(d[2]).toFixed(2)} m`;
+    _measure.label = `${d3.toFixed(1)} m`;
+    drawMeasure();
+  }
+}
+function projectToCss(local) {
+  const m = cam.state.viewProj;
+  const w = m[3] * local[0] + m[7] * local[1] + m[11] * local[2] + m[15];
+  if (w <= 0) return null;
+  const x = (m[0] * local[0] + m[4] * local[1] + m[8] * local[2] + m[12]) / w;
+  const y = (m[1] * local[0] + m[5] * local[1] + m[9] * local[2] + m[13]) / w;
+  return [(x + 1) / 2 * cv.clientWidth, (1 - y) / 2 * cv.clientHeight];
+}
+function drawMeasure() {
+  const svg = $('#measureSvg');
+  if (!_measure.a || !_measure.b) { svg.style.display = 'none'; return; }
+  const a = projectToCss(_measure.a), b = projectToCss(_measure.b);
+  if (!a || !b) { svg.style.display = 'none'; return; }
+  svg.style.display = '';
+  const L = $('#mLine');
+  L.setAttribute('x1', a[0]); L.setAttribute('y1', a[1]);
+  L.setAttribute('x2', b[0]); L.setAttribute('y2', b[1]);
+  $('#mA').setAttribute('cx', a[0]); $('#mA').setAttribute('cy', a[1]);
+  $('#mB').setAttribute('cx', b[0]); $('#mB').setAttribute('cy', b[1]);
+  const T = $('#mLabel');
+  T.setAttribute('x', (a[0] + b[0]) / 2 + 8); T.setAttribute('y', (a[1] + b[1]) / 2 - 6);
+  T.textContent = _measure.label || '';
+}
+// measure clicks pre-empt pick/orbit while armed (capture phase, like the knife)
+cv.addEventListener('pointerdown', (e) => {
+  if (!_measure.arm || e.button !== 0) return;
+  e.stopImmediatePropagation(); e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  measureClick(e.clientX - r.left, e.clientY - r.top);
+}, { capture: true });
+
 // view directions: keep target + radius, set azimuth/elevation. Mining reading:
 // n = LOOKING north (camera south of target), level view; d = plan (down); u = up.
 function setView(theta, phi) {
@@ -825,6 +946,9 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'u') setView(cam.state.theta, -PHI_MAX); // looking up
   else if (k === 'l') viewAlongSection();                 // face-on to the section
   else if (k === '/') { e.preventDefault(); $('#filter').focus(); }
+  else if (k === 'i') showFileInfo();
+  else if (k === 'm') armMeasure();
+  else if (k === 'Escape' && (_measure.arm || _measure.b)) clearMeasure();
   else if (k === 'o') { cam.setOrtho(!cam.state.ortho); requestRender(); }
   else if (k === 'x') toggleSection();
   else if (k === '[') scrubSection(-1);
@@ -889,7 +1013,7 @@ async function fetchCsvRecord(rec) {
   const { blob, header } = _blockDoc;
   const m = header.mapping;
   let n = 0;
-  for await (const batch of lineFields(blob, header.delim, !!header.columns)) {
+  for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow !== undefined ? header.hasHeaderRow : !!header.columns)) {
     for (const f of batch) {
       const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
       if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;

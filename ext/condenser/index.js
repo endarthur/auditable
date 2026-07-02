@@ -891,6 +891,13 @@ const CAP_DISTINCT = 300000;                               // per-axis discovery
 async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, signal, onProgress } = {}) {
   const head = await blob.slice(0, Math.min(sample, blob.size)).text();
   const sniff = sniffDelimited(head);
+  // headerless numeric files (XYZ dumps): columns 0/1/2 = x/y/z, a 4th numeric = the
+  // scalar channel; names generated so schema/filter/autocomplete still work.
+  if (!sniff.header && sniff.columns >= 3) {
+    sniff.header = Array.from({ length: sniff.columns }, (_, i) => (i === 0 ? 'X' : i === 1 ? 'Y' : i === 2 ? 'Z' : `V${i + 1}`));
+    sniff.generated = true;
+    if (!mapping) mapping = { x: 0, y: 1, z: 2, chan: sniff.columns > 3 ? 3 : null, cat: null };
+  }
   const map = mapping || mapColumns(sniff.header);
   if (!map) throw new Error('blockmodel: could not identify X/Y/Z centroid columns — pass a mapping');
 
@@ -912,7 +919,8 @@ async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, signa
   const catCounts = new Map();
   const round10 = (v) => Number(v.toPrecision(10));
   let count = 0;
-  for await (const batch of lineFields(blob, sniff.delim, !!sniff.header, { signal, onProgress })) {
+  const hasHeaderRow = !!sniff.header && !sniff.generated;
+  for await (const batch of lineFields(blob, sniff.delim, hasHeaderRow, { signal, onProgress })) {
     for (const f of batch) {
       const xv = +f[map.x], yv = +f[map.y], zv = +f[map.z];
       if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
@@ -950,7 +958,7 @@ async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, signa
     bbox: { min, max },
     grid,                                                   // null → not a regular grid (points fallback)
     columns: sniff.header, mapping: { ...map, cat: categories ? catCol : null },
-    delim: sniff.delim,                                     // for external sweeps (the filter mask)
+    delim: sniff.delim, hasHeaderRow,                       // for external sweeps (the filter mask)
     numericColumns,
     categories,
     attributes: [
@@ -963,7 +971,7 @@ async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, signa
   async function* streamChunks({ chunkPoints = 1 << 18, signal: s2, onProgress: op2 } = {}) {
     const alloc = () => ({ x: new Float64Array(chunkPoints), y: new Float64Array(chunkPoints), z: new Float64Array(chunkPoints), chan: new Float64Array(chunkPoints), cat: catCode ? new Uint8Array(chunkPoints) : null });
     let buf = alloc(), fill = 0, recStart = 0;
-    for await (const batch of lineFields(blob, sniff.delim, !!sniff.header, { signal: s2, onProgress: op2 })) {
+    for await (const batch of lineFields(blob, sniff.delim, hasHeaderRow, { signal: s2, onProgress: op2 })) {
       for (const f of batch) {
         const xv = +f[map.x], yv = +f[map.y], zv = +f[map.z];
         if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
