@@ -439,3 +439,54 @@ test('ply: ascii provider matches binary — same positions, face lines ignored'
   const rec = await a.fetchRecord(250);
   assert.ok(Math.abs(rec[1] - d.y[250]) < 1e-6);
 });
+
+// ── sparse line-offset index (fetchDelimitedRecord) ──
+import { fetchDelimitedRecord } from '../ext/condenser/src/main.js';
+
+test('blockmodel: sparse index — anchors sized right, indexed fetch == full parse (CRLF, comments, broken rows, multi-byte)', async () => {
+  // a deliberately nasty file: CRLF endings, comment + blank lines sprinkled in,
+  // rows with junk coords (skipped — record numbers count ACCEPTED rows only),
+  // and multi-byte category values (byte offset ≠ char offset)
+  const rows = [];
+  let txt = 'XC,YC,ZC,FE,LITO\r\n';
+  let n = 0;
+  for (let i = 0; i < 5000; i++) {
+    if (i % 97 === 0) { txt += '# a comment line\r\n'; }
+    if (i % 131 === 0) { txt += '\r\n'; }
+    if (i % 53 === 7) { txt += `bad,${i},row,x,JUNK\r\n`; continue; }   // non-finite coords → skipped
+    const x = 612000 + (i % 40) * 10, y = 8_200_000 + Math.floor(i / 40) * 10, z = 900 + (i % 5) * 5;
+    const lito = i % 3 === 0 ? 'HEMATITA-AÇAÍ' : 'CANGA-ÀTÉ';
+    const fe = (30 + (i % 40) * 0.83).toFixed(2);
+    txt += `${x},${y},${z},${fe},${lito}\r\n`;
+    rows.push([String(x), String(y), String(z), fe, lito]);
+    n++;
+  }
+  const { header } = await openBlockModel(new Blob([txt]), { indexEvery: 64 });
+  assert.equal(header.count, n);
+  assert.ok(header.index && header.index.k === 64);
+  assert.equal(header.index.offsets.length, Math.ceil(n / 64));
+
+  // fetch parity at awkward spots: first, last, either side of anchors, mid-run
+  for (const rec of [0, 1, 63, 64, 65, 1000, 2500, n - 2, n - 1]) {
+    const f = await fetchDelimitedRecord(new Blob([txt]), header, rec);
+    assert.ok(f, `record ${rec} found`);
+    assert.deepEqual(f.slice(0, 5), rows[rec], `record ${rec} matches the full parse`);
+  }
+  assert.equal(await fetchDelimitedRecord(new Blob([txt]), header, n), null);
+  assert.equal(await fetchDelimitedRecord(new Blob([txt]), header, -1), null);
+});
+
+test('blockmodel: sparse index — headerless whitespace dump (generated names path)', async () => {
+  let txt = '';
+  const rows = [];
+  for (let i = 0; i < 300; i++) {
+    txt += `${500000 + i * 2}.50 ${8200000 + i}.25 ${900 + (i % 9)}.00 ${(i * 0.7).toFixed(3)}\n`;
+    rows.push(i);
+  }
+  const { header } = await openBlockModel(new Blob([txt]), { indexEvery: 32 });
+  assert.equal(header.count, 300);
+  assert.equal(header.hasHeaderRow, false);
+  const f = await fetchDelimitedRecord(new Blob([txt]), header, 200);
+  assert.equal(f[0], `${500000 + 200 * 2}.50`);
+  assert.equal(f[3], (200 * 0.7).toFixed(3));
+});

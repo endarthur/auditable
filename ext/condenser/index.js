@@ -886,9 +886,84 @@ async function* lineFields(blob, delim, hasHeader, { signal, onProgress } = {}) 
   } finally { reader.releaseLock(); }
 }
 
+// Byte-tracking sibling of lineFields for the discovery sweep: yields
+// { fields, at } batches where at[i] is the ABSOLUTE byte offset of that data
+// line's first byte. 0x0A never occurs inside a UTF-8 multi-byte sequence, so
+// byte-level line splitting is exact; text still decodes in BULK per chunk
+// (per-line decode would be ~50× slower at 50M rows). These offsets feed the
+// sparse record index (fetchDelimitedRecord) — the pick join on big CSVs.
+async function* lineFieldsWithOffsets(blob, delim, hasHeader, { signal, onProgress } = {}) {
+  const reader = blob.stream().getReader();
+  const dec = new TextDecoder();
+  const split = splitter(delim);
+  let carryText = '', carryAt = 0, pos = 0, first = hasHeader, bytesSeen = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      if (done) break;
+      bytesSeen += value.length;
+      // newline BYTE positions in this chunk (absolute)
+      const nl = [];
+      for (let j = 0; j < value.length; j++) if (value[j] === 10) nl.push(pos + j);
+      const text = carryText + dec.decode(value, { stream: true });
+      const lines = text.split('\n');
+      const nextCarry = lines.pop();                       // == nl.length complete lines remain
+      const fields = [], at = [];
+      for (let i = 0; i < lines.length; i++) {
+        const start = i === 0 ? carryAt : nl[i - 1] + 1;
+        let l = lines[i];
+        if (l.endsWith('\r')) l = l.slice(0, -1);
+        if (!l || l[0] === '#') continue;
+        if (first) { first = false; continue; }
+        fields.push(split(l)); at.push(start);
+      }
+      carryText = nextCarry;
+      carryAt = nl.length ? nl[nl.length - 1] + 1 : carryAt;
+      pos += value.length;
+      if (onProgress) onProgress(bytesSeen, blob.size);
+      if (fields.length) yield { fields, at };
+    }
+    const tail = carryText + dec.decode();                 // flush any held-back multi-byte bytes
+    if (tail && tail[0] !== '#' && tail.trim() && !first) yield { fields: [split(tail.endsWith('\r') ? tail.slice(0, -1) : tail)], at: [carryAt] };
+  } finally { reader.releaseLock(); }
+}
+
+// O(anchors) record fetch: jump to the nearest preceding anchor, walk forward
+// applying the SAME accept predicate as the sweeps (blank/# skipped in the
+// reader; non-finite coords skipped here — record numbers count accepted rows
+// only). Reads ~indexEvery lines instead of the whole file.
+async function fetchDelimitedRecord(blob, header, rec) {
+  const idx = header.index;
+  if (!idx || !idx.offsets.length || rec < 0 || rec >= header.count) return null;
+  const a = Math.min(Math.floor(rec / idx.k), idx.offsets.length - 1);
+  let remaining = rec - a * idx.k;
+  const m = header.mapping;
+  const split = splitter(header.delim);
+  const reader = blob.slice(idx.offsets[a]).stream().pipeThrough(new TextDecoderStream()).getReader();
+  let carry = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      const lines = done ? (carry ? [carry] : []) : (carry + value).split('\n');
+      if (!done) carry = lines.pop();
+      for (let l of lines) {
+        if (l.endsWith('\r')) l = l.slice(0, -1);
+        if (!l || l[0] === '#') continue;
+        const f = split(l);
+        const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
+        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+        if (remaining === 0) return f;
+        remaining--;
+      }
+      if (done) return null;
+    }
+  } finally { reader.releaseLock(); }
+}
+
 const CAP_DISTINCT = 300000;                               // per-axis discovery cap
 
-async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, signal, onProgress } = {}) {
+async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, indexEvery = 1024, signal, onProgress } = {}) {
   const head = await blob.slice(0, Math.min(sample, blob.size)).text();
   const sniff = sniffDelimited(head);
   // headerless numeric files (XYZ dumps): columns 0/1/2 = x/y/z, a 4th numeric = the
@@ -920,10 +995,13 @@ async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, signa
   const round10 = (v) => Number(v.toPrecision(10));
   let count = 0;
   const hasHeaderRow = !!sniff.header && !sniff.generated;
-  for await (const batch of lineFields(blob, sniff.delim, hasHeaderRow, { signal, onProgress })) {
-    for (const f of batch) {
+  const anchors = [];                                      // sparse record index: byte offset of every indexEvery-th accepted row
+  for await (const { fields, at } of lineFieldsWithOffsets(blob, sniff.delim, hasHeaderRow, { signal, onProgress })) {
+    for (let fi = 0; fi < fields.length; fi++) {
+      const f = fields[fi];
       const xv = +f[map.x], yv = +f[map.y], zv = +f[map.z];
       if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+      if (count % indexEvery === 0) anchors.push(at[fi]);
       count++;
       if (xv < min[0]) min[0] = xv; if (xv > max[0]) max[0] = xv;
       if (yv < min[1]) min[1] = yv; if (yv > max[1]) max[1] = yv;
@@ -959,6 +1037,7 @@ async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, signa
     grid,                                                   // null → not a regular grid (points fallback)
     columns: sniff.header, mapping: { ...map, cat: categories ? catCol : null },
     delim: sniff.delim, hasHeaderRow,                       // for external sweeps (the filter mask)
+    index: { k: indexEvery, offsets: Float64Array.from(anchors) },   // sparse line-offset index (fetchDelimitedRecord)
     numericColumns,
     categories,
     attributes: [
@@ -2929,6 +3008,7 @@ export {
   mapColumns,
   openBlockModel,
   lineFields,
+  fetchDelimitedRecord,
   categoryPalettePixels,
   createBlocksPipeline,
   createPickPipeline,

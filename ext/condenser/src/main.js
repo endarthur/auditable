@@ -4,7 +4,7 @@ export { LasFormatError, parseLasHeader, decodeLasRecords, openLas } from './las
 export { mulberry32, shuffledIndices, shuffleInPlace, documentFrame, buildChunk, chunkLocalPosition, createChunkBuilder } from './chunks.js';
 export { part1by2, mortonKey, mortonKeys, radixSortIndices } from './morton.js';
 export { inferAxis, makeBlockGrid, buildBlockChunk, blockLocalCenter, createBlockChunkBuilder } from './blocks.js';
-export { sniffDelimited, mapColumns, openBlockModel, lineFields } from './blockmodel.js';
+export { sniffDelimited, mapColumns, openBlockModel, lineFields, fetchDelimitedRecord } from './blockmodel.js';
 export { categoryPalettePixels, createBlocksPipeline } from './gl-blocks.js';
 export { createPickPipeline } from './gl-pick.js';
 export { openDmModel, fetchDmRecord } from './dm-provider.js';
