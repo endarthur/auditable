@@ -60,8 +60,9 @@ export function mapColumns(header) {
 
 // Async generator over the blob's data lines (cold recipe — call again for the
 // next sweep). Skips blanks + '#'; yields trimmed field arrays in batches so the
-// consumer controls pacing.
-async function* lineFields(blob, delim, hasHeader, { signal, onProgress } = {}) {
+// consumer controls pacing. Exported: the filter sweep (a mask by record index)
+// re-reads raw rows through the same path.
+export async function* lineFields(blob, delim, hasHeader, { signal, onProgress } = {}) {
   const reader = blob.stream().pipeThrough(new TextDecoderStream()).getReader();
   const split = splitter(delim);
   let carry = '', first = hasHeader, bytesSeen = 0;
@@ -135,11 +136,25 @@ export async function openBlockModel(blob, { mapping = null, sample = 512 * 1024
     ? [...catCounts.keys()].sort() : null;
   const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
 
+  // every plausible scalar column (numeric in the head sample, not a coord/dim) —
+  // the UI offers these as color channels; switching re-runs sweep 2 only.
+  const numericColumns = [];
+  if (sniff.header) {
+    const lines2 = head.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith('#')).slice(1, 40);
+    const split2 = splitter(sniff.delim);
+    for (let i = 0; i < sniff.columns; i++) {
+      if (i === map.x || i === map.y || i === map.z || DIM_RE.test(sniff.header[i].trim())) continue;
+      const vals = lines2.map((l) => (split2(l)[i] || '').trim()).filter(Boolean);
+      if (vals.length && vals.every((v) => !Number.isNaN(Number(v)))) numericColumns.push({ i, name: sniff.header[i] });
+    }
+  }
   const header = {
     kind: 'blockmodel', count,
     bbox: { min, max },
     grid,                                                   // null → not a regular grid (points fallback)
     columns: sniff.header, mapping: { ...map, cat: categories ? catCol : null },
+    delim: sniff.delim,                                     // for external sweeps (the filter mask)
+    numericColumns,
     categories,
     attributes: [
       ...(map.chan != null && sniff.header ? [sniff.header[map.chan]] : []),

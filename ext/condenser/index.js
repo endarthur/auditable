@@ -846,7 +846,8 @@ function mapColumns(header) {
 
 // Async generator over the blob's data lines (cold recipe — call again for the
 // next sweep). Skips blanks + '#'; yields trimmed field arrays in batches so the
-// consumer controls pacing.
+// consumer controls pacing. Exported: the filter sweep (a mask by record index)
+// re-reads raw rows through the same path.
 async function* lineFields(blob, delim, hasHeader, { signal, onProgress } = {}) {
   const reader = blob.stream().pipeThrough(new TextDecoderStream()).getReader();
   const split = splitter(delim);
@@ -921,11 +922,25 @@ async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, signa
     ? [...catCounts.keys()].sort() : null;
   const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
 
+  // every plausible scalar column (numeric in the head sample, not a coord/dim) —
+  // the UI offers these as color channels; switching re-runs sweep 2 only.
+  const numericColumns = [];
+  if (sniff.header) {
+    const lines2 = head.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith('#')).slice(1, 40);
+    const split2 = splitter(sniff.delim);
+    for (let i = 0; i < sniff.columns; i++) {
+      if (i === map.x || i === map.y || i === map.z || DIM_RE.test(sniff.header[i].trim())) continue;
+      const vals = lines2.map((l) => (split2(l)[i] || '').trim()).filter(Boolean);
+      if (vals.length && vals.every((v) => !Number.isNaN(Number(v)))) numericColumns.push({ i, name: sniff.header[i] });
+    }
+  }
   const header = {
     kind: 'blockmodel', count,
     bbox: { min, max },
     grid,                                                   // null → not a regular grid (points fallback)
     columns: sniff.header, mapping: { ...map, cat: categories ? catCol : null },
+    delim: sniff.delim,                                     // for external sweeps (the filter mask)
+    numericColumns,
     categories,
     attributes: [
       ...(map.chan != null && sniff.header ? [sniff.header[map.chan]] : []),
@@ -1003,6 +1018,7 @@ precision highp float;
 layout(location=0) in vec3 aIjk;        // uint16 raw (integer lattice)
 layout(location=1) in float aChan;      // uint16 normalized (per-chunk range)
 layout(location=2) in float aCat;       // uint8 raw
+layout(location=3) in uint aRec;        // uint32 record index (the join key)
 uniform mat4 uViewProj;
 uniform vec3 uEye, uRight, uUp;
 uniform vec3 uGridOrigin, uGridSize;
@@ -1014,10 +1030,14 @@ uniform vec2 uChanChunk;                // this chunk's [min, span] (dequantize 
 uniform vec2 uChanDoc;                  // document [min, span] (ramp normalization)
 uniform sampler2D uRamp;
 uniform sampler2D uPalette;
+uniform sampler2D uMask;                // filter bitmask by record index (8192-wide)
+uniform float uFilterOn, uIsolate;
+uniform float uForceSplat;              // 1 = whole chunk demoted (cheap far-field path)
 flat out vec3 vCenter;
 flat out vec3 vHalf;
 flat out vec4 vColor;
 flat out float vMode;                   // 0 = impostor, 1 = splat
+flat out float vCull;
 out vec2 vCorner;
 out vec3 vWorldPos;
 void main() {
@@ -1026,7 +1046,14 @@ void main() {
   float r = length(half_);
   float dist = max(distance(uEye, center), 1e-3);
   float pxR = r * uPerspScale / dist;
-  float demoted = pxR < uDemotePx ? 1.0 : 0.0;
+  float demoted = max(pxR < uDemotePx ? 1.0 : 0.0, uForceSplat);
+  // filter mask: dim (default) or cull (isolate)
+  float m = 1.0;
+  if (uFilterOn > 0.5) {
+    int rec = int(aRec);
+    m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
+  }
+  vCull = (uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0;
   float quadR = mix(r, max(uPointPx * 0.5, pxR) * dist / uPerspScale, demoted);
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp = center + (uRight * corner.x + uUp * corner.y) * quadR;
@@ -1044,6 +1071,7 @@ void main() {
   } else {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
   }
+  if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.12, vColor.a);   // dim non-matching
 }`;
 
 const FRAG$gl_blocks = `#version 300 es
@@ -1052,6 +1080,7 @@ flat in vec3 vCenter;
 flat in vec3 vHalf;
 flat in vec4 vColor;
 flat in float vMode;
+flat in float vCull;
 in vec2 vCorner;
 in vec3 vWorldPos;
 uniform vec3 uEye;
@@ -1059,6 +1088,7 @@ uniform vec3 uLightDir;
 uniform mat4 uViewProj;
 out vec4 outColor;
 void main() {
+  if (vCull > 0.5) discard;             // isolate mode: filtered-out block
   if (vMode > 0.5) {                    // demoted splat: circular mask, rasterizer depth
     if (dot(vCorner, vCorner) > 1.0) discard;
     gl_FragDepth = gl_FragCoord.z;
@@ -1088,6 +1118,27 @@ void main() {
   outColor = vec4(vColor.rgb * shade, vColor.a);
 }`;
 
+// Far-field fragment: splat only, NO gl_FragDepth anywhere → early-z stays
+// enabled for these draws — the perf lever for distant chunks (§2.3 mitigation).
+const FRAG_CHEAP = `#version 300 es
+precision highp float;
+flat in vec3 vCenter;
+flat in vec3 vHalf;
+flat in vec4 vColor;
+flat in float vMode;
+flat in float vCull;
+in vec2 vCorner;
+in vec3 vWorldPos;
+uniform vec3 uEye;
+uniform vec3 uLightDir;
+uniform mat4 uViewProj;
+out vec4 outColor;
+void main() {
+  if (vCull > 0.5) discard;
+  if (dot(vCorner, vCorner) > 1.0) discard;
+  outColor = vColor;
+}`;
+
 // Golden-angle hue walk → visually distinct category colors (code → color).
 function categoryPalettePixels(n = 256) {
   const out = new Uint8Array(n * 4);
@@ -1101,35 +1152,46 @@ function categoryPalettePixels(n = 256) {
 }
 
 function createBlocksPipeline(gl) {
-  const prog = makeProgram(gl, VERT$gl_blocks, FRAG$gl_blocks);
-  const U = (n) => gl.getUniformLocation(prog, n);
-  const uni = {
-    viewProj: U('uViewProj'), eye: U('uEye'), right: U('uRight'), up: U('uUp'),
-    gridOrigin: U('uGridOrigin'), gridSize: U('uGridSize'),
-    perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'),
-    colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
-    ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
+  const mkProg = (frag) => {
+    const prog = makeProgram(gl, VERT$gl_blocks, frag);
+    const U = (n) => gl.getUniformLocation(prog, n);
+    return { prog, uni: {
+      viewProj: U('uViewProj'), eye: U('uEye'), right: U('uRight'), up: U('uUp'),
+      gridOrigin: U('uGridOrigin'), gridSize: U('uGridSize'),
+      perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'),
+      colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
+      ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
+      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'),
+    } };
   };
+  const full = mkProg(FRAG$gl_blocks), cheap = mkProg(FRAG_CHEAP);
+  let active = full;
 
   // Upload one BlockChunk → buffers + a VAO whose instance pointers get re-aimed
   // per slice. CPU arrays are free to die after this returns.
   function upload(chunk) {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-    const mk = (data) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return b; };
-    const bIjk = mk(chunk.ijk), bChan = mk(chunk.chan), bCat = mk(chunk.cat);
-    const recBuf = mk(chunk.recIdx);                       // pick-pass fodder (M5)
+    const mkBuf = (data) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return b; };
+    const bIjk = mkBuf(chunk.ijk), bChan = mkBuf(chunk.chan), bCat = mkBuf(chunk.cat);
+    const bRec = mkBuf(chunk.recIdx);                      // filter-mask lookup + pick pass
     gl.bindVertexArray(null);
     return {
-      kind: 'blocks', vao, buffers: [bIjk, bChan, bCat, recBuf],
-      bIjk, bChan, bCat,
+      kind: 'blocks', vao, buffers: [bIjk, bChan, bCat, bRec],
+      bIjk, bChan, bCat, bRec,
       count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0,
       grid: chunk.grid, chanRange: chunk.chanRange,
     };
   }
 
   // Aim the instance attributes at element `first` and draw k instances.
-  function drawSlice(c, first, k) {
+  // useCheap: the whole chunk projects below the demotion threshold, so the
+  // no-gl_FragDepth program (early-z enabled) draws it as forced splats.
+  function drawSlice(c, first, k, useCheap = false) {
+    const pp = useCheap ? cheap : full;
+    if (pp !== active) { gl.useProgram(pp.prog); active = pp; }
+    const uni = active.uni;
+    gl.uniform1f(uni.forceSplat, useCheap ? 1 : 0);
     gl.bindVertexArray(c.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, c.bIjk);
     gl.enableVertexAttribArray(0);
@@ -1143,6 +1205,10 @@ function createBlocksPipeline(gl) {
     gl.enableVertexAttribArray(2);
     gl.vertexAttribPointer(2, 1, gl.UNSIGNED_BYTE, false, 0, first);
     gl.vertexAttribDivisor(2, 1);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bRec);
+    gl.enableVertexAttribArray(3);
+    gl.vertexAttribIPointer(3, 1, gl.UNSIGNED_INT, 0, first * 4);
+    gl.vertexAttribDivisor(3, 1);
     gl.uniform3f(uni.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
     gl.uniform3f(uni.gridSize, c.grid.size[0], c.grid.size[1], c.grid.size[2]);
     const span = c.chanRange[1] - c.chanRange[0];
@@ -1150,29 +1216,38 @@ function createBlocksPipeline(gl) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
   }
 
-  // Per-frame program state (called once before the chunk loop).
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH }) {
-    gl.useProgram(prog);
+  // Per-frame program state (called once before the chunk loop) — set on BOTH
+  // programs so drawSlice can switch freely between full and cheap.
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false }) {
     const s = cam.state;
-    gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
-    gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
-    const v = s.view;                                      // camera basis = view-matrix rotation rows
-    gl.uniform3f(uni.right, v[0], v[4], v[8]);
-    gl.uniform3f(uni.up, v[1], v[5], v[9]);
-    // headlight, slightly above the view direction
-    let lx = s.eye[0] - s.target[0], ly = s.eye[1] - s.target[1], lz = s.eye[2] - s.target[2];
-    const ll = Math.hypot(lx, ly, lz) || 1;
-    lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
-    const l2 = Math.hypot(lx, ly, lz) || 1;
-    gl.uniform3f(uni.lightDir, lx / l2, ly / l2, lz / l2);
-    gl.uniform1f(uni.perspScale, (viewportH / 2) / Math.tan(s.fovY / 2));
-    gl.uniform1f(uni.demotePx, 2.0);
-    gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
-    gl.uniform1i(uni.colorMode, colorMode);
-    gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
-    gl.uniform2f(uni.chanDoc, chanDoc[0], chanDoc[1]);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
-    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
+    for (const pp of [full, cheap]) {
+      gl.useProgram(pp.prog);
+      const uni = pp.uni;
+      gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
+      gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
+      const v = s.view;                                    // camera basis = view-matrix rotation rows
+      gl.uniform3f(uni.right, v[0], v[4], v[8]);
+      gl.uniform3f(uni.up, v[1], v[5], v[9]);
+      // headlight, slightly above the view direction
+      let lx = s.eye[0] - s.target[0], ly = s.eye[1] - s.target[1], lz = s.eye[2] - s.target[2];
+      const ll = Math.hypot(lx, ly, lz) || 1;
+      lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
+      const l2 = Math.hypot(lx, ly, lz) || 1;
+      gl.uniform3f(uni.lightDir, lx / l2, ly / l2, lz / l2);
+      gl.uniform1f(uni.perspScale, (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uni.demotePx, 2.0);
+      gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
+      gl.uniform1i(uni.colorMode, colorMode);
+      gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
+      gl.uniform2f(uni.chanDoc, chanDoc[0], chanDoc[1]);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
+      gl.uniform1f(uni.filterOn, maskTex ? 1 : 0);
+      gl.uniform1f(uni.isolate, isolate ? 1 : 0);
+      if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uni.mask, 4); }
+    }
+    active = full;
+    gl.useProgram(full.prog);
   }
 
   return { upload, drawSlice, begin };
@@ -1493,6 +1568,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   const chunks = [];
   let docBbox = null, intensityMax = 1;
   const docChan = [Infinity, -Infinity];                  // block grade range across chunks
+  let maskTex = null, maskH = 0, isolateMode = false;     // filter bitmask (by record index)
   // accumulation state
   const lastVP = new Float32Array(16);
   let lastKey = '', needClear = true, lastVisible = 0;
@@ -1522,6 +1598,32 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     },
     setCategories(n) {                                     // block category palette (golden-angle hues)
       if (n > 0 && !catPalette) catPalette = lutTexture(gl, categoryPalettePixels(256), 256);
+    },
+    // Filter bitmask by RECORD INDEX (micro-spec section 4: arbitrary index sets → a
+    // bitmask texture). mask = Uint8Array (0|1 per source row) or null to clear;
+    // isolate: true discards non-matching, false dims them.
+    setFilter(mask, { isolate = false } = {}) {
+      isolateMode = isolate;
+      if (!mask) {
+        if (maskTex) { gl.deleteTexture(maskTex); maskTex = null; }
+      } else {
+        const W = 8192, H = Math.max(1, Math.ceil(mask.length / W));
+        const padded = new Uint8Array(W * H);
+        for (let i = 0; i < mask.length; i++) padded[i] = mask[i] ? 255 : 0;
+        if (maskTex && H === maskH) {
+          gl.bindTexture(gl.TEXTURE_2D, maskTex);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, padded);
+        } else {
+          if (maskTex) gl.deleteTexture(maskTex);
+          maskTex = gl.createTexture(); maskH = H;
+          gl.bindTexture(gl.TEXTURE_2D, maskTex);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, W, H, 0, gl.RED, gl.UNSIGNED_BYTE, padded);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        }
+      }
+      needClear = true;
     },
     setDocBbox(b) { docBbox = b; },
     invalidate() { needClear = true; },
@@ -1610,10 +1712,22 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           pointPx, colorMode, zRange,
           chanDoc: [docChan[0] === Infinity ? 0 : docChan[0], chanSpan],
           ramp, palette: catPalette || palette, viewportH: canvas.height,
+          maskTex, isolate: isolateMode,
         });
+        const perspScale = (canvas.height / 2) / Math.tan(cam.state.fovY / 2);
         for (const c of blks) {
           const [first, k] = allot(c);
-          if (k > 0) { blocksPipe.drawSlice(c, first, k); drawn += k; c.cursor = first + k; }
+          if (k > 0) {
+            // the whole chunk below the demotion threshold → the cheap program
+            // (no gl_FragDepth → early-z stays on): the far-field perf lever
+            const b = c.bboxLocal;
+            const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
+            const rBlock = Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
+            const distNear = Math.max(cam.state.near, c._dist - bboxR);
+            const cheap = rBlock * perspScale / distNear < 2.0;
+            blocksPipe.drawSlice(c, first, k, cheap);
+            drawn += k; c.cursor = first + k;
+          }
           if (c.cursor < c.count) converged = false;
         }
       }
@@ -1758,6 +1872,7 @@ export {
   sniffDelimited,
   mapColumns,
   openBlockModel,
+  lineFields,
   categoryPalettePixels,
   createBlocksPipeline,
   mat4Perspective,

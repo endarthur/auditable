@@ -160,6 +160,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   const chunks = [];
   let docBbox = null, intensityMax = 1;
   const docChan = [Infinity, -Infinity];                  // block grade range across chunks
+  let maskTex = null, maskH = 0, isolateMode = false;     // filter bitmask (by record index)
   // accumulation state
   const lastVP = new Float32Array(16);
   let lastKey = '', needClear = true, lastVisible = 0;
@@ -189,6 +190,32 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     },
     setCategories(n) {                                     // block category palette (golden-angle hues)
       if (n > 0 && !catPalette) catPalette = lutTexture(gl, categoryPalettePixels(256), 256);
+    },
+    // Filter bitmask by RECORD INDEX (micro-spec section 4: arbitrary index sets → a
+    // bitmask texture). mask = Uint8Array (0|1 per source row) or null to clear;
+    // isolate: true discards non-matching, false dims them.
+    setFilter(mask, { isolate = false } = {}) {
+      isolateMode = isolate;
+      if (!mask) {
+        if (maskTex) { gl.deleteTexture(maskTex); maskTex = null; }
+      } else {
+        const W = 8192, H = Math.max(1, Math.ceil(mask.length / W));
+        const padded = new Uint8Array(W * H);
+        for (let i = 0; i < mask.length; i++) padded[i] = mask[i] ? 255 : 0;
+        if (maskTex && H === maskH) {
+          gl.bindTexture(gl.TEXTURE_2D, maskTex);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, padded);
+        } else {
+          if (maskTex) gl.deleteTexture(maskTex);
+          maskTex = gl.createTexture(); maskH = H;
+          gl.bindTexture(gl.TEXTURE_2D, maskTex);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, W, H, 0, gl.RED, gl.UNSIGNED_BYTE, padded);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        }
+      }
+      needClear = true;
     },
     setDocBbox(b) { docBbox = b; },
     invalidate() { needClear = true; },
@@ -277,10 +304,22 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           pointPx, colorMode, zRange,
           chanDoc: [docChan[0] === Infinity ? 0 : docChan[0], chanSpan],
           ramp, palette: catPalette || palette, viewportH: canvas.height,
+          maskTex, isolate: isolateMode,
         });
+        const perspScale = (canvas.height / 2) / Math.tan(cam.state.fovY / 2);
         for (const c of blks) {
           const [first, k] = allot(c);
-          if (k > 0) { blocksPipe.drawSlice(c, first, k); drawn += k; c.cursor = first + k; }
+          if (k > 0) {
+            // the whole chunk below the demotion threshold → the cheap program
+            // (no gl_FragDepth → early-z stays on): the far-field perf lever
+            const b = c.bboxLocal;
+            const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
+            const rBlock = Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
+            const distNear = Math.max(cam.state.near, c._dist - bboxR);
+            const cheap = rBlock * perspScale / distNear < 2.0;
+            blocksPipe.drawSlice(c, first, k, cheap);
+            drawn += k; c.cursor = first + k;
+          }
           if (c.cursor < c.count) converged = false;
         }
       }
