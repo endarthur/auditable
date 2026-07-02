@@ -432,7 +432,7 @@ function showRecPanel(title, rows, note) {
   $('#rpList').innerHTML = h;
   $('#recPanel').classList.add('show');
 }
-$('#rpClose').onclick = () => $('#recPanel').classList.remove('show');
+$('#rpClose').onclick = () => { $('#recPanel').classList.remove('show'); renderer.setPicked(null); requestRender(); };
 
 async function fetchCsvRecord(rec) {
   const { blob, header } = _blockDoc;
@@ -477,7 +477,8 @@ cv.addEventListener('pointerup', (e) => {
   if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5 || performance.now() - d.t > 500) return;
   const r = cv.getBoundingClientRect();
   const rec = renderer.pick(e.clientX - r.left, e.clientY - r.top, cam, { pointPx: +$('#ptPx').value, blocksAsPoints: $('#viewMode').value === 'points' });
-  if (rec == null) { $('#recPanel').classList.remove('show'); return; }
+  if (rec == null) { $('#recPanel').classList.remove('show'); renderer.setPicked(null); requestRender(); return; }
+  renderer.setPicked(rec); requestRender();
   showRecord(rec);
 });
 

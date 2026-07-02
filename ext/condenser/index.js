@@ -1034,6 +1034,7 @@ uniform sampler2D uMask;                // filter bitmask by record index (8192-
 uniform float uFilterOn, uIsolate;
 uniform float uForceSplat;              // 1 = whole chunk demoted (cheap far-field path)
 uniform float uFixedSplat;              // 1 = points view: fixed-px splats regardless of block size
+uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
 flat out vec3 vCenter;
 flat out vec3 vHalf;
 flat out vec4 vColor;
@@ -1075,6 +1076,7 @@ void main() {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
   }
   if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);   // context mode: dim non-matching (still legible)
+  if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.72, 0.25), 0.75) + 0.15, vColor.a);   // picked: accent glow
 }`;
 
 const FRAG$gl_blocks = `#version 300 es
@@ -1164,7 +1166,7 @@ function createBlocksPipeline(gl) {
       perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'),
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
-      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'),
+      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'),
     } };
   };
   const full = mkProg(FRAG$gl_blocks), cheap = mkProg(FRAG_CHEAP);
@@ -1221,7 +1223,7 @@ function createBlocksPipeline(gl) {
 
   // Per-frame program state (called once before the chunk loop) — set on BOTH
   // programs so drawSlice can switch freely between full and cheap.
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -1246,6 +1248,7 @@ function createBlocksPipeline(gl) {
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
       gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
+      gl.uniform1ui(uni.picked, picked >>> 0);
       gl.uniform1f(uni.filterOn, maskTex ? 1 : 0);
       gl.uniform1f(uni.isolate, isolate ? 1 : 0);
       if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uni.mask, 4); }
@@ -1658,6 +1661,8 @@ layout(location=0) in vec3 aPos;        // uint16 normalized -> 0..1
 layout(location=1) in float aIntensity; // uint16 normalized
 layout(location=2) in float aClass;     // uint8, raw (0..255)
 layout(location=3) in vec3 aRgb;        // uint8 normalized
+layout(location=4) in uint aRec;        // uint32 record index (highlight + mask lookups)
+uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
 uniform mat4 uViewProj;
 uniform vec3 uBoxMin, uBoxSpan;
 uniform float uPointPx;
@@ -1682,6 +1687,7 @@ void main() {
   } else {
     vColor = vec4(aRgb, 1.0);
   }
+  if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.72, 0.25), 0.75) + 0.15, vColor.a);   // picked: accent glow
 }`;
 
 const FRAG$gl = `#version 300 es
@@ -1756,9 +1762,11 @@ function uploadChunk(gl, chunk) {
   ];
   if (chunk.rgb) buffers.push(buf(chunk.rgb, 3, 3, gl.UNSIGNED_BYTE, true));
   else { gl.disableVertexAttribArray(3); gl.vertexAttrib3f(3, 0.7, 0.7, 0.7); }
-  const recBuf = gl.createBuffer();                        // pick-pass fodder (M5), GPU-resident
+  const recBuf = gl.createBuffer();                        // highlight + pick lookups, GPU-resident
   gl.bindBuffer(gl.ARRAY_BUFFER, recBuf);
   gl.bufferData(gl.ARRAY_BUFFER, chunk.recIdx, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(4);
+  gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_INT, 0, 0);
   buffers.push(recBuf);
   gl.bindVertexArray(null);
   return { vao, buffers, count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0 };
@@ -1790,7 +1798,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   const uni = {
     viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
     pointPx: U('uPointPx'), colorMode: U('uColorMode'), zRange: U('uZRange'),
-    intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'),
+    intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
@@ -1801,6 +1809,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   let docBbox = null, intensityMax = 1;
   const docChan = [Infinity, -Infinity];                  // block grade range across chunks
   let maskTex = null, maskH = 0, isolateMode = false;     // filter bitmask (by record index)
+  let pickedRec = 0xFFFFFFFF;                             // highlighted record (sentinel = none)
   // accumulation state
   const lastVP = new Float32Array(16);
   let lastKey = '', needClear = true, lastVisible = 0;
@@ -1859,6 +1868,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     },
     setDocBbox(b) { docBbox = b; },
     invalidate() { needClear = true; },
+    setPicked(rec) { pickedRec = rec == null ? 0xFFFFFFFF : rec >>> 0; needClear = true; },
     // GPU pick at CSS coordinates → record index | null. Draws each chunk's
     // current accumulated prefix into a scissored offscreen target with the
     // record index as the color (gl-pick.js) — you pick exactly what you see.
@@ -1936,6 +1946,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         gl.uniform1i(uni.colorMode, colorMode);
         gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
         gl.uniform1f(uni.intensityScale, 65535 / (intensityMax || 1));
+        gl.uniform1ui(uni.picked, pickedRec);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
         for (const c of pts) {
@@ -1958,7 +1969,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           pointPx, colorMode, zRange,
           chanDoc: [docChan[0] === Infinity ? 0 : docChan[0], chanSpan],
           ramp, palette: catPalette || palette, viewportH: canvas.height,
-          maskTex, isolate: isolateMode, pointsView: blocksAsPoints,
+          maskTex, isolate: isolateMode, pointsView: blocksAsPoints, picked: pickedRec,
         });
         const perspScale = (canvas.height / 2) / Math.tan(cam.state.fovY / 2);
         for (const c of blks) {
