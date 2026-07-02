@@ -111,6 +111,8 @@
       <option value="2">classification</option>
       <option value="3">rgb</option>
     </select></label>
+    <input id="clipMin" type="number" step="any" placeholder="min" title="color-scale clip minimum — empty = auto" style="width:58px">
+    <input id="clipMax" type="number" step="any" placeholder="max" title="color-scale clip maximum — empty = auto" style="width:58px">
     <label><input type="checkbox" id="edlOn" checked> EDL</label>
     <label>strength <input type="range" id="edlStr" min="0" max="3" step="0.1" value="1"></label>
     <label>pt px <input type="range" id="ptPx" min="1" max="6" step="0.5" value="2.5"></label>
@@ -168,7 +170,8 @@ function loop(t) {
     dirty = false;
     const [w, h] = renderer.resize();
     cam.setAspect(w / h);
-    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', section: currentSection() };
+    const clipV = (id) => { const v = $('#' + id).value.trim(); return v === '' ? null : +v; };
+    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')] };
     const t0 = performance.now();
     const r = edl.render(w, h, cam, () => renderer.draw(cam, opts), { enabled: $('#edlOn').checked, strength: +$('#edlStr').value });
     converged = r.converged;
@@ -302,7 +305,7 @@ $('#btnShot').onclick = () => {
   }, 'image/png');
 };
 
-['colorBy', 'edlOn', 'edlStr', 'ptPx', 'budget'].forEach((id) => $('#' + id).addEventListener('input', requestRender));
+['colorBy', 'edlOn', 'edlStr', 'ptPx', 'budget', 'clipMin', 'clipMax'].forEach((id) => $('#' + id).addEventListener('input', requestRender));
 // budget survives refreshes (per-frame element budget is a machine preference)
 try { const b = localStorage.getItem('micro.budget'); if (b && [...$('#budget').options].some((o) => o.value === b)) $('#budget').value = b; } catch { /* private mode */ }
 $('#budget').addEventListener('change', () => { try { localStorage.setItem('micro.budget', $('#budget').value); } catch { /* ignore */ } });
@@ -578,7 +581,7 @@ pick a preset (plan · N–S · E–W) or press <code>k</code> and <b>drag a lin
 <code>FE &gt; 55 and LITO = "HEMATITE"</code> · <code>between</code> · <code>in (…)</code> — Enter applies, Esc clears<br>
 default hides non-matching blocks; <b>context</b> keeps them dimmed<br><br>
 <b>knobs</b><br>
-View menu: <b>boxes</b> = true block faces · <b>points</b> = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
+<b>min/max</b> boxes clip the color scale (outliers stop eating the ramp; empty = auto) · View menu: <b>boxes</b> = true block faces · <b>points</b> = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
 const HELP_ABOUT = `
 <b>micro</b> — a viewer for massive spatial-element files: LiDAR point clouds (.las) and
 block models (.csv, Datamine .dm). Streaming, no import step — first look in about a

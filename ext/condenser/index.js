@@ -2375,11 +2375,12 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     },
     // Draw one frame into the CURRENT framebuffer (the EDL pass owns the target).
     // Returns { drawn, converged, visible }.
-    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false, section = null } = {}) {
+    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false, section = null, clip = null } = {}) {
       const vp = cam.state.viewProj;
       const sec = section && section.on ? section : null;
       const secKey = sec ? `${sec.n.join(',')}|${sec.d}|${sec.half}` : 'off';
-      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${secKey}|${canvas.width}x${canvas.height}`;
+      const clipKey = clip ? `${clip[0]}~${clip[1]}` : 'a';
+      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${secKey}|${clipKey}|${canvas.width}x${canvas.height}`;
       const moving = vpChanged(vp) || key !== lastKey || needClear;
       lastKey = key; needClear = false;
 
@@ -2409,7 +2410,10 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       }
 
       const db = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
-      const zRange = [db[2], Math.max(db[5] - db[2], 1e-6)];
+      // color-scale clip: user min/max override the auto range (null = auto side)
+      const zLo = clip && clip[0] != null && colorMode === 0 ? clip[0] : db[2];
+      const zHi = clip && clip[1] != null && colorMode === 0 ? clip[1] : db[5];
+      const zRange = [zLo, Math.max(zHi - zLo, 1e-6)];
       // this frame's allotment per chunk: budget share by projected weight, floored
       // so distant chunks keep a sparse presence (coarse prefix always on)
       const allot = (c) => {
@@ -2447,10 +2451,12 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
 
       const blks = visible.filter((c) => c.kind === 'blocks');
       if (blks.length) {
-        const chanSpan = docChan[1] > docChan[0] ? docChan[1] - docChan[0] : 1;
+        const cLo = clip && clip[0] != null && colorMode === 1 ? clip[0] : (docChan[0] === Infinity ? 0 : docChan[0]);
+        const cHi = clip && clip[1] != null && colorMode === 1 ? clip[1] : docChan[1];
+        const chanSpan = cHi > cLo ? cHi - cLo : 1;
         blocksPipe.begin(cam, {
           pointPx, colorMode, zRange,
-          chanDoc: [docChan[0] === Infinity ? 0 : docChan[0], chanSpan],
+          chanDoc: [cLo, chanSpan],
           ramp, palette: catPalette || palette, viewportH: canvas.height,
           maskTex, isolate: isolateMode, pointsView: blocksAsPoints, picked: pickedRec, section: sec,
         });
