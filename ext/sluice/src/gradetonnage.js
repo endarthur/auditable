@@ -7,6 +7,10 @@
 // Tonnage per block = volume × density, from a SERIALIZABLE model (a fixed
 // blockVolume, or dx·dy·dz columns, × an optional density column) — column NAMES
 // only, no closures, so it crosses to workers as a spec (the §7a contract).
+// Alternatively `weight`: the name of a PRECOMPUTED tonnage column, taken directly
+// (block models often carry a TONNES field; a host can also pre-multiply its own
+// factors — e.g. lamina's expr-compiled volume×density×proportion — into one field
+// and stay inside the spec contract). `weight` overrides the v×ρ model.
 //
 // Note: this is a mining-domain accumulator living in the otherwise-generic
 // sluice so that worker scans (which import only sluice) can rebuild it from a
@@ -15,12 +19,13 @@
 
 import { cumulativeFromTop } from './histogram.js';
 
-export function gradeTonnage({ grade, gradeMin, gradeMax, bins = 200, blockVolume = null, dims = null, density = null } = {}) {
+export function gradeTonnage({ grade, gradeMin, gradeMax, bins = 200, blockVolume = null, dims = null, density = null, weight = null } = {}) {
   if (!grade) throw new Error('sluice: gradeTonnage needs a `grade` column');
   if (!(bins > 0) || !(gradeMax > gradeMin)) throw new Error('sluice: gradeTonnage needs bins>0 and gradeMax>gradeMin');
   const width = (gradeMax - gradeMin) / bins;
 
   const tonnageOf = (r) => {
+    if (weight) { const wv = r[weight]; return Number.isFinite(wv) ? wv : 0; }   // precomputed tonnage column
     let v = blockVolume != null ? blockVolume : 1;
     if (dims) {
       const a = r[dims[0]], b = r[dims[1]], c = r[dims[2]];

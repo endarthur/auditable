@@ -50,7 +50,7 @@ export function accumulatorFromSpec(spec) {
     case 'binned':
       return binned(col(spec.column), spec.bins, () => accumulatorFromSpec(spec.of), weightOpt(spec));
     case 'gradeTonnage':
-      return gradeTonnage(spec);   // grade/gradeMin/gradeMax/bins/blockVolume/dims/density
+      return gradeTonnage(spec);   // grade/gradeMin/gradeMax/bins/blockVolume/dims/density/weight
     default:
       throw new Error(`sluice: unknown accumulator spec kind "${spec.kind}"`);
   }

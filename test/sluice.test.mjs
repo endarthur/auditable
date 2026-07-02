@@ -352,6 +352,20 @@ test('gradeTonnage cumulative curve (via spec) + merge == single', () => {
   assert.ok(approx(m.curve[0].tonnage, 4000) && approx(m.curve[2].grade, 1.5), 'merge == single');
 });
 
+test('gradeTonnage weight column (precomputed tonnage) overrides the v×ρ model', () => {
+  // weight = a precomputed tonnage field, taken directly — spec-serializable (still a column name)
+  const acc = accumulatorFromSpec({ kind: 'gradeTonnage', grade: 'g', gradeMin: 0, gradeMax: 2, bins: 4, weight: 'w', blockVolume: 999, density: 'rho' });
+  const s = acc.create();
+  acc.push(s, { g: 0.5, w: 100, rho: 3 });     // tonnage = 100 (weight wins; blockVolume/density ignored)
+  acc.push(s, { g: 1.5, w: 300 });
+  acc.push(s, { g: 1.0, w: 0 });               // zero weight → no mass, skipped
+  acc.push(s, { g: 1.0, w: NaN });             // bad weight → skipped
+  const out = acc.result(s);
+  assert.equal(out.count, 2);
+  assert.ok(approx(out.curve[0].tonnage, 400) && approx(out.curve[0].metal, 0.5 * 100 + 1.5 * 300), 'cutoff 0: Σw + Σw·g');
+  assert.ok(approx(out.curve[2].tonnage, 300) && approx(out.curve[2].grade, 1.5), 'cutoff 1.0: only the w=300 block');
+});
+
 test('chunks exposes raw Blob slices (for by-reference worker dispatch)', async () => {
   let csv = 'X,G\n';
   for (let i = 0; i < 200; i++) csv += `${i},${i % 3}\n`;
