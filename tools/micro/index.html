@@ -173,7 +173,7 @@
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
   </div>
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLine" stroke="#4a78b0" stroke-width="1.5"/><circle id="mA" r="3.5" fill="#4a78b0"/><circle id="mB" r="3.5" fill="#4a78b0"/><text id="mLabel" fill="#dfe6ee" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3"></text></svg></div>
-  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .csv anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
+  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .ply / .csv / .xyz / .dm anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
@@ -181,7 +181,7 @@
   <footer><span id="meta">—</span><span id="stats"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openBlockModel, openDmModel, fetchDmRecord, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 
 const $ = (s) => document.querySelector(s);
@@ -375,8 +375,9 @@ async function openBlob(blob, name) {
     // so grid inference must not promote them to boxes.
     if (/\.(xyz|pts)$/i.test(name)) return await openBlocksBlob(blob, name, { forcePoints: true });
     if (/\.(csv|txt|dat|asc)$/i.test(name)) return await openBlocksBlob(blob, name);
+    if (/\.ply$/i.test(name)) return await openPlyBlob(blob, name);
     const { header, streamChunks } = await openLas(blob);
-    _lasDoc = { blob, header }; _blockDoc = null;
+    _lasDoc = { blob, header }; _blockDoc = null; _plyDoc = null;
     fitFromHeader(header);
     const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
     const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
@@ -387,11 +388,24 @@ async function openBlob(blob, name) {
     $('#empty').style.display = '';
   }
 }
+// PLY path: discovery sweep (no header bbox) → the points pipeline. The
+// provider owns fetchRecord (O(1) binary / sweep ascii) for the pick join.
+let _plyDoc = null;
+async function openPlyBlob(blob, name) {
+  $('#meta').textContent = `${name} — reading header…`;
+  const { header, streamChunks, fetchRecord } = await openPly(blob);
+  _plyDoc = { blob, name, header, fetchRecord }; _lasDoc = null; _blockDoc = null;
+  fitFromHeader(header);
+  const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+  const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
+  $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} points · PLY ${header.format === 'ascii' ? 'ascii' : 'binary'}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
+  requestRender();
+}
 // Block-model path (.csv etc.): two-sweep provider → regular grid → box impostors.
 // Not a regular grid → the points pipeline still shows the centroids.
 let _blockDoc = null, _lasDoc = null;
 async function openBlocksBlob(blob, name, opts = {}) {
-  _lasDoc = null;
+  _lasDoc = null; _plyDoc = null;
   $('#meta').textContent = `${name} — discovering grid…`;
   const mapping = opts.chan != null && _blockDoc && _blockDoc.header
     ? { ..._blockDoc.header.mapping, chan: opts.chan } : null;
@@ -435,7 +449,7 @@ async function openBlocksBlob(blob, name, opts = {}) {
 // .dm path: grid, bbox, and schema come from the DD page — no discovery sweep
 // (micro-spec Addendum A.2). Record numbers are RAW, so picks fetch O(1).
 async function openDmBlob(blob, name, opts = {}) {
-  _lasDoc = null;
+  _lasDoc = null; _plyDoc = null;
   $('#meta').textContent = `${name} — reading DD…`;
   const mapping = opts.chan != null && _blockDoc && _blockDoc.header ? { chan: opts.chan } : null;
   renderer.clearChunks(); if (!opts.keepFilter) renderer.setFilter(null);
@@ -618,7 +632,7 @@ $('#context').addEventListener('change', () => { if (_filterExpr.trim()) applyBl
 
 function openFilePicker() {
   const inp = document.createElement('input');
-  inp.type = 'file'; inp.accept = '.las,.csv,.txt,.dat,.dm';
+  inp.type = 'file'; inp.accept = '.las,.ply,.csv,.txt,.dat,.asc,.xyz,.pts,.dm';
   inp.onchange = () => { if (inp.files[0]) openBlob(inp.files[0], inp.files[0].name); };
   inp.click();
 }
@@ -648,14 +662,14 @@ function menuAt(anchor, items) {
 }
 // the header panel: everything the providers learned about the open file
 function showFileInfo() {
-  const doc = _blockDoc || _lasDoc;
+  const doc = _blockDoc || _plyDoc || _lasDoc;
   if (!doc) { showHelp('file info', 'no file open'); return; }
   const h = doc.header;
   const fmtC = (v) => (v == null ? '—' : Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 4 }));
   const row = (k, v) => `<div style="display:flex;justify-content:space-between;gap:18px;padding:2px 0"><span style="color:var(--muted)">${k}</span><span style="text-align:right">${v}</span></div>`;
   let html = '';
-  html += row('file', _blockDoc ? _blockDoc.name : 'point cloud');
-  html += row('kind', _lasDoc ? `LAS ${h.version} · point format ${h.format}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points');
+  html += row('file', _blockDoc ? _blockDoc.name : _plyDoc ? _plyDoc.name : 'point cloud');
+  html += row('kind', _lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points');
   html += row('records', fmtC(h.count));
   if (h.bbox) {
     html += row('X', `${fmtC(h.bbox.min[0])} – ${fmtC(h.bbox.max[0])}`);
@@ -723,7 +737,7 @@ default hides non-matching blocks; <b>context</b> keeps them dimmed<br><br>
 <b>knobs</b><br>
 <b>min/max</b> boxes clip the color scale (outliers stop eating the ramp; empty = auto) · View menu: <b>boxes</b> = true block faces · <b>points</b> = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
 const HELP_ABOUT = `
-<b>micro</b> — a viewer for massive spatial-element files: LiDAR point clouds (.las) and
+<b>micro</b> — a viewer for massive spatial-element files: LiDAR point clouds (.las, .ply, .xyz) and
 block models (.csv, Datamine .dm). Streaming, no import step — first look in about a
 second at any size, densifying while you orbit. Filter, section, and pick against the
 source file. Nothing leaves your machine.<br><br>
@@ -812,6 +826,12 @@ async function recordPosition(rec) {
   if (_blockDoc) {
     const f = await fetchCsvRecord(rec);
     return f ? [+f[m.x], +f[m.y], +f[m.z]] : null;
+  }
+  if (_plyDoc) {
+    const vals = await _plyDoc.fetchRecord(rec);
+    if (!vals) return null;
+    const h = _plyDoc.header, cols = h.columns.map((c) => c.toLowerCase());
+    return [vals[cols.indexOf('x')], vals[cols.indexOf('y')], vals[cols.indexOf('z')]];
   }
   if (_lasDoc) {
     const { blob, header } = _lasDoc;
@@ -1036,6 +1056,12 @@ async function showRecord(rec) {
     if (!f) { showRecPanel(`block · row ${rec.toLocaleString()}`, [], 'row not found'); return; }
     const rows = _blockDoc.header.columns.map((name, i) => [name, f[i]]);
     showRecPanel(`block · row ${rec.toLocaleString()}`, rows);
+  } else if (_plyDoc) {
+    showRecPanel(`point · #${rec.toLocaleString()}`, [], 'fetching…');
+    const vals = await _plyDoc.fetchRecord(rec);
+    if (!vals) { showRecPanel(`point · #${rec.toLocaleString()}`, [], 'record not found'); return; }
+    const rows = _plyDoc.header.columns.map((name, i) => [name, Number.isInteger(vals[i]) ? vals[i] : +vals[i].toFixed(4)]);
+    showRecPanel(`point · #${rec.toLocaleString()}`, rows);
   } else if (_lasDoc) {
     const { blob, header } = _lasDoc;
     const off = header.pointOffset + rec * header.recordLen;

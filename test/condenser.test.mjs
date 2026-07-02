@@ -346,3 +346,96 @@ test('camera: fit + project — bbox corners land inside clip space, center at o
   const center2 = transformPoint(c2.viewProj, [(bbox[0] + bbox[3]) / 2, (bbox[1] + bbox[4]) / 2, (bbox[2] + bbox[5]) / 2]);
   assert.ok(Math.abs(center2[0]) < 1e-3 && Math.abs(center2[1]) < 1e-3);
 });
+
+// ── PLY provider ──
+import { parsePlyHeader, openPly } from '../ext/condenser/src/main.js';
+
+function makePlyData(n, seed = 7) {
+  const rnd = mulberry32(seed);
+  const x = new Float64Array(n), y = new Float64Array(n), z = new Float64Array(n);
+  const inten = new Float32Array(n), rgb = new Uint8Array(3 * n);
+  for (let i = 0; i < n; i++) {
+    x[i] = 500000 + rnd() * 400; y[i] = 8200000 + rnd() * 300; z[i] = 900 + rnd() * 80;
+    inten[i] = rnd() * 100;
+    rgb[3 * i] = (rnd() * 256) | 0; rgb[3 * i + 1] = (rnd() * 256) | 0; rgb[3 * i + 2] = (rnd() * 256) | 0;
+  }
+  return { x, y, z, inten, rgb };
+}
+function makePlyBinary(d) {
+  const n = d.x.length;
+  const head = `ply\nformat binary_little_endian 1.0\ncomment condenser test\nelement vertex ${n}\nproperty double x\nproperty double y\nproperty double z\nproperty float intensity\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n`;
+  const hb = new TextEncoder().encode(head);
+  const stride = 8 * 3 + 4 + 3;
+  const body = new Uint8Array(n * stride);
+  const dv = new DataView(body.buffer);
+  for (let i = 0; i < n; i++) {
+    const o = i * stride;
+    dv.setFloat64(o, d.x[i], true); dv.setFloat64(o + 8, d.y[i], true); dv.setFloat64(o + 16, d.z[i], true);
+    dv.setFloat32(o + 24, d.inten[i], true);
+    body[o + 28] = d.rgb[3 * i]; body[o + 29] = d.rgb[3 * i + 1]; body[o + 30] = d.rgb[3 * i + 2];
+  }
+  return new Blob([hb, body]);
+}
+function makePlyAscii(d) {
+  const n = d.x.length;
+  let s = `ply\nformat ascii 1.0\nelement vertex ${n}\nproperty double x\nproperty double y\nproperty double z\nproperty float intensity\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n`;
+  for (let i = 0; i < n; i++) s += `${d.x[i]} ${d.y[i]} ${d.z[i]} ${d.inten[i]} ${d.rgb[3 * i]} ${d.rgb[3 * i + 1]} ${d.rgb[3 * i + 2]}\n`;
+  s += '3 0 1 2\n';                                       // a face line after the vertices — must be ignored
+  return new Blob([s]);
+}
+
+test('ply: header parse — format, count, props, stride, honest rejections', () => {
+  const h = parsePlyHeader('ply\nformat binary_little_endian 1.0\nelement vertex 42\nproperty float x\nproperty float y\nproperty float z\nend_header\nBINARY');
+  assert.equal(h.format, 'binary_le');
+  assert.equal(h.count, 42);
+  assert.equal(h.stride, 12);
+  assert.equal(h.props[2].offset, 8);
+  assert.equal(parsePlyHeader('ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\n'), null); // no end_header yet
+  assert.throws(() => parsePlyHeader('ply\nformat binary_big_endian 1.0\nelement vertex 1\nproperty float x\nend_header\n'), /unsupported format/);
+  assert.throws(() => parsePlyHeader('ply\nformat ascii 1.0\nelement face 1\nproperty list uchar int v\nend_header\n'), /vertex must be the first/);
+});
+
+test('ply: binary provider — bbox from discovery, chunks + rgb + intensity round-trip, O(1) fetch', async () => {
+  const d = makePlyData(3000);
+  const { header, streamChunks, fetchRecord } = await openPly(makePlyBinary(d));
+  assert.equal(header.count, 3000);
+  assert.equal(header.hasRgb, true);
+  assert.ok(Math.abs(header.bbox.min[0] - Math.min(...d.x)) < 1e-9);
+  assert.ok(Math.abs(header.bbox.max[2] - Math.max(...d.z)) < 1e-9);
+  let seen = 0, iLo = Infinity, iHi = -Infinity;
+  for await (const c of streamChunks({ chunkPoints: 700 })) {   // ragged boundary on purpose
+    for (let i = 0; i < c.count; i++) {
+      const rec = c.recStart + i;
+      assert.ok(Math.abs(c.x[i] - d.x[rec]) < 1e-9);
+      assert.ok(Math.abs(c.z[i] - d.z[rec]) < 1e-9);
+      assert.equal(c.rgb[3 * i], d.rgb[3 * rec]);
+      if (c.intensity[i] < iLo) iLo = c.intensity[i];
+      if (c.intensity[i] > iHi) iHi = c.intensity[i];
+    }
+    seen += c.count;
+  }
+  assert.equal(seen, 3000);
+  assert.ok(iLo === 0 && iHi > 60000, `intensity normalized to u16 range (got ${iLo}..${iHi})`);
+  const rec = await fetchRecord(1234);
+  assert.ok(Math.abs(rec[0] - d.x[1234]) < 1e-9 && Math.abs(rec[3] - d.inten[1234]) < 1e-5);
+  assert.equal(rec[4], d.rgb[3 * 1234]);
+  assert.equal(await fetchRecord(3000), null);
+});
+
+test('ply: ascii provider matches binary — same positions, face lines ignored', async () => {
+  const d = makePlyData(500, 11);
+  const a = await openPly(makePlyAscii(d));
+  assert.equal(a.header.count, 500);
+  let seen = 0;
+  for await (const c of a.streamChunks({ chunkPoints: 128 })) {
+    for (let i = 0; i < c.count; i++) {
+      const rec = c.recStart + i;
+      assert.ok(Math.abs(c.x[i] - d.x[rec]) < 1e-6);
+      assert.equal(c.rgb[3 * i + 2], d.rgb[3 * rec + 2]);
+    }
+    seen += c.count;
+  }
+  assert.equal(seen, 500);
+  const rec = await a.fetchRecord(250);
+  assert.ok(Math.abs(rec[1] - d.y[250]) < 1e-6);
+});
