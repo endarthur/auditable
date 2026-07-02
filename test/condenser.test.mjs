@@ -257,6 +257,70 @@ test('blocks: irregular coordinates → header.grid is null (points fallback sig
   assert.equal(header.count, 4);
 });
 
+// ── M3.5: the .dm provider (grid from the DD, no discovery sweep) ──
+import { openDmModel, fetchDmRecord } from '../ext/condenser/src/main.js';
+import { makeDM } from './dm-make.mjs';
+
+test('dm provider: grid from DD constants, IJK exact, raw record numbers, categories', async () => {
+  // a 6×4×3 block model .dm: definition fields as constants, XC/YC/ZC centroids
+  const fields = [
+    { name: 'IJK', type: 'N' }, { name: 'XC', type: 'N' }, { name: 'YC', type: 'N' }, { name: 'ZC', type: 'N' },
+    { name: 'XINC', type: 'N', constant: 10 }, { name: 'YINC', type: 'N', constant: 10 }, { name: 'ZINC', type: 'N', constant: 5 },
+    { name: 'XMORIG', type: 'N', constant: 612000 }, { name: 'YMORIG', type: 'N', constant: 7765000 }, { name: 'ZMORIG', type: 'N', constant: 400 },
+    { name: 'NX', type: 'N', constant: 6 }, { name: 'NY', type: 'N', constant: 4 }, { name: 'NZ', type: 'N', constant: 3 },
+    { name: 'FE', type: 'N' }, { name: 'LITO', type: 'A', width: 8 },
+  ];
+  const rows = [], truth = [];
+  let rec = 0;
+  for (let k = 0; k < 3; k++) for (let j = 0; j < 4; j++) for (let i = 0; i < 6; i++) {
+    const r = { IJK: rec, XC: 612000 + i * 10 + 5, YC: 7765000 + j * 10 + 5, ZC: 400 + k * 5 + 2.5, FE: 50 + i + j + k, LITO: k === 2 ? 'CANGA' : 'BIF' };
+    rows.push(r); truth.push({ ...r, i, j, k }); rec++;
+  }
+  rows.splice(30, 0, { IJK: 999, XC: null, YC: null, ZC: null, FE: 0, LITO: 'BAD' });   // a broken row mid-file
+  const blob = new Blob([makeDM(fields, rows, { precision: 'ep' })]);
+  const { header, streamChunks } = await openDmModel(blob);
+  assert.equal(header.count, 73);
+  assert.deepEqual([header.grid.x.origin, header.grid.x.pitch, header.grid.x.count], [612005, 10, 6]);
+  assert.deepEqual([header.grid.z.origin, header.grid.z.pitch, header.grid.z.count], [402.5, 5, 3]);
+  assert.ok(header.numericColumns.some((c) => c.name === 'FE'));
+  assert.ok(!header.numericColumns.some((c) => c.name === 'XINC'), 'definition fields are not channels');
+  // stream → builder → strict IJK exactness, RAW record numbers preserved past the bad row
+  const frame = documentFrame(header);
+  const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
+  const chunks = [];
+  const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 32, seed: 1, onChunk: (c) => chunks.push(c) });
+  for await (const rc of streamChunks({ chunkPoints: 16 })) cb.push(rc);
+  const doc = cb.flush();
+  assert.equal(doc.count, 72, 'the broken row was skipped');
+  let checked = 0;
+  const rowAt = (raw) => rows[raw];                        // RAW record number == position in the file
+  for (const c of chunks) for (let k = 0; k < c.count; k++) {
+    const src = rowAt(c.recIdx[k]);
+    assert.ok(src && src.XC != null, `recIdx ${c.recIdx[k]} maps to a valid source row`);
+    const ctr = blockLocalCenter(c, k);
+    assert.equal(ctr[0] + frame.origin[0], src.XC, 'x EXACT');
+    assert.equal(ctr[2] + frame.origin[2], src.ZC, 'z EXACT');
+    checked++;
+  }
+  assert.equal(checked, 72);
+  assert.ok(c0recPast30(chunks), 'record numbers past the bad row are shifted by one (raw numbering)');
+  assert.deepEqual([...header.categories].sort(), ['BIF', 'CANGA'], 'category dictionary built during the sweep');
+  // O(1) record fetch by raw number
+  const vals = await fetchDmRecord(blob, header.dm, 31);   // first row AFTER the bad one
+  assert.equal(vals[header.columns.indexOf('XC')], rows[31].XC);
+  assert.equal(vals[header.columns.indexOf('LITO')], rows[31].LITO);
+});
+function c0recPast30(chunks) {
+  for (const c of chunks) for (let k = 0; k < c.count; k++) if (c.recIdx[k] === 30) return false;   // 30 is the bad row
+  return true;
+}
+
+test('dm provider: rejects a non-model .dm with direction', async () => {
+  const blob = new Blob([makeDM([{ name: 'BHID', type: 'A', width: 8 }, { name: 'FROM', type: 'N' }, { name: 'TO', type: 'N' }],
+    [{ BHID: 'DDH1', FROM: 0, TO: 1 }], { precision: 'ep' })]);
+  await assert.rejects(() => openDmModel(blob), /XC|centroid/);
+});
+
 test('shuffledIndices: deterministic for a seed, permutation always', () => {
   const a = shuffledIndices(100, mulberry32(3)), b = shuffledIndices(100, mulberry32(3));
   assert.deepEqual([...a], [...b]);

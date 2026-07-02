@@ -159,8 +159,14 @@ export function createBlockChunkBuilder({ frame, grid, chunkSize = 1 << 20, batc
   };
   return {
     push(raw) {
-      const recIdx = new Uint32Array(raw.count);
-      for (let i = 0; i < raw.count; i++) recIdx[i] = raw.recStart + i;
+      // record indices: the provider may supply raw.recIdx directly (RAW record
+      // numbers, gaps allowed — .dm skips bad rows but keeps true row numbers so
+      // O(1) record fetch works); default = recStart + i (gapless providers).
+      let recIdx = raw.recIdx;
+      if (!recIdx) {
+        recIdx = new Uint32Array(raw.count);
+        for (let i = 0; i < raw.count; i++) recIdx[i] = raw.recStart + i;
+      }
       let taken = 0;
       while (taken < raw.count) {
         const room = batchN - pendCount;

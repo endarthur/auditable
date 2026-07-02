@@ -112,7 +112,7 @@
   <footer><span id="meta">—</span><span id="stats"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openBlockModel, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openBlockModel, openDmModel, fetchDmRecord, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate } from '../../ext/expr/index.js';   // lamina's filter language, verbatim
 
 const $ = (s) => document.querySelector(s);
@@ -178,6 +178,7 @@ async function openBlob(blob, name) {
   $('#meta').textContent = `${name} — reading…`;
   $('#empty').style.display = 'none';
   try {
+    if (/\.dm$/i.test(name)) return await openDmBlob(blob, name);
     if (/\.(csv|txt|dat|asc)$/i.test(name)) return await openBlocksBlob(blob, name);
     const { header, streamChunks } = await openLas(blob);
     _lasDoc = { blob, header }; _blockDoc = null;
@@ -233,6 +234,27 @@ async function openBlocksBlob(blob, name, opts = {}) {
   }
   requestRender();
 }
+// .dm path: grid, bbox, and schema come from the DD page — no discovery sweep
+// (micro-spec Addendum A.2). Record numbers are RAW, so picks fetch O(1).
+async function openDmBlob(blob, name, opts = {}) {
+  _lasDoc = null;
+  $('#meta').textContent = `${name} — reading DD…`;
+  const mapping = opts.chan != null && _blockDoc && _blockDoc.header ? { chan: opts.chan } : null;
+  renderer.clearChunks(); if (!opts.keepFilter) renderer.setFilter(null);
+  const { header, streamChunks } = await openDmModel(blob, mapping ? { mapping } : {});
+  _blockDoc = { blob, name, header, metaLine: '' };
+  fitFromHeader(header);
+  renderer.setCategories(header.categories ? 1 : 0);
+  setColorLabels(header);
+  const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
+  const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c); requestRender(); } });
+  const doc = await streamInto(cb, streamChunks, header, name, 1 << 18);
+  _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} blocks · .dm grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
+  $('#meta').textContent = _blockDoc.metaLine;
+  if (_filterExpr.trim() && opts.keepFilter) applyBlockFilter(_filterExpr);
+  requestRender();
+}
+
 // Color-by adapts to the document: for a block model the select lists EVERY
 // numeric column (switching re-streams sweep 2 with the new channel), plus the
 // category column, elevation, and solid.
@@ -263,7 +285,8 @@ function setColorLabels(header) {
 $('#colorBy').addEventListener('change', () => {
   const v = $('#colorBy').value;
   if (v.startsWith('chan:') && _blockDoc && +v.slice(5) !== _blockDoc.header.mapping.chan) {
-    openBlocksBlob(_blockDoc.blob, _blockDoc.name, { chan: +v.slice(5), keepFilter: true });
+    const open = _blockDoc.header.dm ? openDmBlob : openBlocksBlob;
+    open(_blockDoc.blob, _blockDoc.name, { chan: +v.slice(5), keepFilter: true });
   } else requestRender();
 });
 
@@ -294,14 +317,27 @@ async function applyBlockFilter(expr) {
   const mask = new Uint8Array(header.count);
   let rec = 0, hits = 0;
   const m = header.mapping;
-  for await (const batch of lineFields(blob, header.delim, !!header.columns)) {
-    for (const f of batch) {
-      const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
-      if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // same rows sweep 2 kept
-      if (fn(f)) { mask[rec] = 1; hits++; }
-      rec++;
+  if (header.dm) {
+    // .dm: decoded record batches, RAW record numbering (matches recIdx exactly)
+    const { recordBatches } = await openDmModel(blob);
+    for await (const { recStart, rows } of recordBatches()) {
+      for (let k = 0; k < rows.length; k++) {
+        const vals = rows[k].map((v) => (v == null ? '' : v));
+        if (fn(vals)) { mask[recStart + k] = 1; hits++; }
+      }
+      rec = recStart + rows.length;
+      await new Promise((r) => setTimeout(r));
     }
-    await new Promise((r) => setTimeout(r));
+  } else {
+    for await (const batch of lineFields(blob, header.delim, !!header.columns)) {
+      for (const f of batch) {
+        const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
+        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // same rows sweep 2 kept
+        if (fn(f)) { mask[rec] = 1; hits++; }
+        rec++;
+      }
+      await new Promise((r) => setTimeout(r));
+    }
   }
   renderer.setFilter(mask, { isolate: !$('#context').checked });   // default = isolate; context = dim the rest
   requestRender();
@@ -449,6 +485,12 @@ async function fetchCsvRecord(rec) {
   return null;
 }
 async function showRecord(rec) {
+  if (_blockDoc && _blockDoc.header.dm) {
+    const vals = await fetchDmRecord(_blockDoc.blob, _blockDoc.header.dm, rec);
+    const rows = _blockDoc.header.columns.map((name, i) => [name, vals[i] == null ? '—' : vals[i]]);
+    showRecPanel(`block · record ${rec.toLocaleString()}`, rows);
+    return;
+  }
   if (_blockDoc) {
     showRecPanel(`block · row ${rec.toLocaleString()}`, [], 'fetching…');
     const f = await fetchCsvRecord(rec);

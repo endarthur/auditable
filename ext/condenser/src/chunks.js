@@ -174,9 +174,14 @@ export function createChunkBuilder({ frame, chunkSize = 1 << 20, batchSize = 0, 
 
   return {
     push(raw) {
-      // attach record indices (provider gives recStart; elements are file-ordered)
-      const recIdx = new Uint32Array(raw.count);
-      for (let i = 0; i < raw.count; i++) recIdx[i] = raw.recStart + i;
+      // record indices: the provider may supply raw.recIdx directly (RAW record
+      // numbers, gaps allowed — .dm skips bad rows but keeps true row numbers so
+      // O(1) record fetch works); default = recStart + i (gapless providers).
+      let recIdx = raw.recIdx;
+      if (!recIdx) {
+        recIdx = new Uint32Array(raw.count);
+        for (let i = 0; i < raw.count; i++) recIdx[i] = raw.recStart + i;
+      }
       let taken = 0;
       while (taken < raw.count) {
         const room = batchN - pendCount;
