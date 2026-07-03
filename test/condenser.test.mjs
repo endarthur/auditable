@@ -490,3 +490,84 @@ test('blockmodel: sparse index — headerless whitespace dump (generated names p
   assert.equal(f[0], `${500000 + 200 * 2}.50`);
   assert.equal(f[3], (200 * 0.7).toFixed(3));
 });
+
+// ── drillhole provider ──
+import { classifyDrillholeHeader, sniffDrillholeFiles, openDrillholes } from '../ext/condenser/src/main.js';
+
+test('drillholes: header classification (collar / survey / intervals)', () => {
+  assert.equal(classifyDrillholeHeader(['BHID', 'X', 'Y', 'Z', 'EOH']).role, 'collar');
+  assert.equal(classifyDrillholeHeader(['HOLEID', 'AT', 'AZIMUTH', 'DIP']).role, 'survey');
+  assert.equal(classifyDrillholeHeader(['DHID', 'FROM', 'TO', 'FE', 'LITO']).role, 'intervals');
+  assert.equal(classifyDrillholeHeader(['XC', 'YC', 'ZC', 'FE']), null);          // no BHID → not drillholes
+  const s = classifyDrillholeHeader(['bhid', 'depth', 'brg', 'incl']);
+  assert.equal(s.role, 'survey');                                                  // alias names
+});
+
+test('drillholes: desurveyed midpoints — analytic positions, identity through the sort, report', async () => {
+  const collar = new Blob(['BHID,X,Y,Z,EOH\nV1,1000,2000,500,100\nI1,1200,2000,500,100\nNS,1400,2000,500,50\n']);
+  const survey = new Blob(['BHID,AT,AZ,DIP\nV1,0,0,90\nI1,0,90,45\n']);            // NS: no survey → straight down
+  // interval rows DELIBERATELY out of hole/depth order — the identity must survive
+  const intervals = new Blob([
+    'BHID,FROM,TO,FE,LITO\n' +
+    'I1,20,30,55.5,HEMATITE\n' +      // row 0
+    'V1,10,12,42.0,ITABIRITE\n' +     // row 1
+    'GHOST,0,2,9.9,WASTE\n' +         // row 2: orphan (no collar)
+    'V1,0,2,30.1,CANGA\n' +           // row 3 (shallower than row 1 — sorts first)
+    'NS,4,6,12.3,WASTE\n',            // row 4: the no-survey hole
+  ]);
+  const { header, streamChunks, fetchRecord } = await openDrillholes({ collar, survey, intervals });
+  assert.equal(header.kind, 'drillholes');
+  assert.equal(header.count, 5);                          // ORIGINAL interval rows (incl. the orphan)
+  assert.equal(header.placed, 4);                         // orphan excluded from placement
+  assert.equal(header.holes, 3);
+  assert.deepEqual(header.categories, ['CANGA', 'HEMATITE', 'ITABIRITE', 'WASTE']);
+  assert.ok(header.report.checks.some((c) => c.id === 'orphan-sample' && c.bhids.includes('GHOST')));
+  assert.ok(header.report.checks.some((c) => c.id === 'collar-no-survey' && c.bhids.includes('NS')));
+
+  const placed = new Map();                               // recIdx → [x,y,z,chan]
+  for await (const rc of streamChunks({ chunkPoints: 3 })) {
+    for (let i = 0; i < rc.count; i++) placed.set(rc.recIdx[i], [rc.x[i], rc.y[i], rc.z[i], rc.chan[i]]);
+  }
+  assert.equal(placed.size, 4);
+  assert.ok(!placed.has(2));                              // the orphan never renders
+  // V1 vertical: mid 11 → (1000, 2000, 489); mid 1 → z 499
+  const v1a = placed.get(1), v1b = placed.get(3);
+  assert.ok(Math.abs(v1a[0] - 1000) < 1e-9 && Math.abs(v1a[2] - 489) < 1e-9);
+  assert.ok(Math.abs(v1b[2] - 499) < 1e-9);
+  assert.ok(Math.abs(v1a[3] - 42.0) < 1e-9 && Math.abs(v1b[3] - 30.1) < 1e-9);     // chan follows the SOURCE row
+  // I1 az 90 dip 45: mid 25 → collar + 25·(√2/2, 0, -√2/2)
+  const i1 = placed.get(0), c = Math.SQRT1_2 * 25;
+  assert.ok(Math.abs(i1[0] - (1200 + c)) < 1e-9 && Math.abs(i1[1] - 2000) < 1e-9 && Math.abs(i1[2] - (500 - c)) < 1e-9);
+  // NS straight-down fallback: mid 5 → z 495 under the collar
+  const ns = placed.get(4);
+  assert.ok(Math.abs(ns[0] - 1400) < 1e-9 && Math.abs(ns[2] - 495) < 1e-9);
+
+  // the pick join: fetchRecord returns the ORIGINAL row
+  assert.deepEqual(fetchRecord(0).slice(0, 5), ['I1', '20', '30', '55.5', 'HEMATITE']);
+  assert.equal(fetchRecord(5), null);
+});
+
+test('drillholes: method + dip convention options thread through', async () => {
+  const collar = new Blob(['BHID,X,Y,Z\nA,0,0,0\n']);
+  const surveyNeg = new Blob(['BHID,AT,AZ,DIP\nA,0,0,-90\n']);                     // neg-down file
+  const intervals = new Blob(['BHID,FROM,TO,AU\nA,8,12,1.5\n']);
+  const { header, streamChunks } = await openDrillholes(
+    { collar, survey: surveyNeg, intervals },
+    { method: 'tangential', dipConvention: 'auto' },
+  );
+  assert.equal(header.dipConvention, 'neg-down');                                  // detected
+  assert.equal(header.method, 'tangential');
+  for await (const rc of streamChunks()) assert.ok(Math.abs(rc.z[0] - (-10)) < 1e-9);   // still goes DOWN
+});
+
+test('drillholes: sniffDrillholeFiles recognizes a trio in any order', async () => {
+  const mk = (t, name) => { const f = new Blob([t]); f.name = name; return f; };
+  const trio = await sniffDrillholeFiles([
+    mk('BHID,FROM,TO,FE\nA,0,2,50\n', 'assay.csv'),
+    mk('BHID,X,Y,Z\nA,0,0,0\n', 'collars.csv'),
+    mk('BHID,AT,AZ,DIP\nA,0,0,90\n', 'survey.csv'),
+  ]);
+  assert.ok(trio && trio.collar.name === 'collars.csv' && trio.survey.name === 'survey.csv' && trio.intervals.name === 'assay.csv');
+  const notTrio = await sniffDrillholeFiles([mk('XC,YC,ZC,FE\n1,2,3,4\n', 'model.csv')]);
+  assert.equal(notTrio, null);
+});

@@ -30,7 +30,8 @@ uniform int uColorMode;                 // 0 elevation | 1 intensity | 2 classif
 uniform vec2 uZRange;                   // document local z min/span (elevation ramp)
 uniform float uIntensityScale;          // 1 / (p98-ish max, normalized units)
 uniform sampler2D uRamp;                // 256x1 continuous ramp
-uniform sampler2D uPalette;             // 32x1 classification palette
+uniform sampler2D uPalette;             // classification / category palette
+uniform float uPaletteN;                // its width (32 = LAS classes, 256 = category dict)
 uniform sampler2D uMask;                // filter bitmask by record index (8192-wide)
 uniform float uFilterOn, uIsolate;
 out vec4 vColor;
@@ -53,7 +54,7 @@ void main() {
     float t = clamp(aIntensity * uIntensityScale, 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
   } else if (uColorMode == 2) {
-    vColor = texture(uPalette, vec2((aClass + 0.5) / 32.0, 0.5));
+    vColor = texture(uPalette, vec2((aClass + 0.5) / uPaletteN, 0.5));
   } else {
     vColor = vec4(aRgb, 1.0);
   }
@@ -176,7 +177,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     pointPx: U('uPointPx'), colorMode: U('uColorMode'), zRange: U('uZRange'),
     intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'), repaint: U('uRepaint'),
     secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
-    mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'),
+    mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), paletteN: U('uPaletteN'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
@@ -198,7 +199,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     let l = layers.get(id);
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
-            intensityMax: 1, docChan: [Infinity, -Infinity] };
+            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0 };
       layers.set(id, l);
     }
     return l;
@@ -294,6 +295,9 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       const ls = layerOf(layer);
       if (ls.set === 'compact') { ls.set = 'base'; needClear = true; }
     },
+    // points layers with a CATEGORY dict color class codes through the 256-wide
+    // golden-angle palette instead of the 32-entry LAS classification table
+    setLayerCats(layer, n) { const ls = layerOf(layer); if (ls.catN !== (n || 0)) { ls.catN = n || 0; needClear = true; } },
     setLayerVisible(layer, on) {
       const ls = layerOf(layer);
       if (ls.visible !== !!on) { ls.visible = !!on; needClear = true; }
@@ -438,6 +442,10 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           gl.uniform1i(uni.colorMode, o.colorMode);
           gl.uniform2f(uni.zRange, zr[0], zr[1]);
           gl.uniform1f(uni.intensityScale, 65535 / (ls.intensityMax || 1));
+          gl.uniform1f(uni.paletteN, ls.catN || 32);
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, ls.catN && catPalette ? catPalette : palette);
+          gl.uniform1i(uni.palette, 1);
           gl.uniform1f(uni.filterOn, ls.maskTex ? 1 : 0);
           gl.uniform1f(uni.isolate, ls.isolate ? 1 : 0);
           if (ls.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, ls.maskTex); gl.uniform1i(uni.mask, 4); }

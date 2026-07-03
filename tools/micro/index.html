@@ -171,6 +171,22 @@
   #compass.nw { left: 12px; top: 78px; }
   #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: calc(var(--recw, 280px) + 12px); }
   #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: calc(var(--lpw, 224px) + 12px); }
+  #dhDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
+  #dhDlg.show { display: flex; }
+  #dhDlg .box { width: 560px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #dhDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #dhDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #dhDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  #dhDlg .dh-row { margin-bottom: 12px; }
+  #dhDlg .dh-head { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+  #dhDlg .dh-head b { color: var(--text-hi); width: 72px; }
+  #dhDlg .dh-file { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #dhDlg button { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-btn); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 10px; cursor: pointer; }
+  #dhDlg .dh-maps { display: flex; flex-wrap: wrap; gap: 6px 14px; padding-left: 82px; margin-bottom: 8px; }
+  #dhDlg .dh-maps label { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+  #dhDlg select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; max-width: 150px; }
+  #dhDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
+  #dhDlg .dh-foot #dhDlgMsg { color: var(--warn, #c98a3c); font-family: var(--mono); font-size: 12px; }
   .lp-grab, .rp-grab { position: absolute; top: 0; bottom: 0; width: 5px; cursor: ew-resize; z-index: 5; }
   .lp-grab { right: -2px; }
   .rp-grab { left: -2px; }
@@ -241,6 +257,7 @@
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
   <div id="recPanel"><div class="rp-grab" id="rpGrab"></div><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
   <div id="layersPanel"><div class="lp-head"><span>layers</span><button class="lp-close" id="lpClose">×</button></div><div id="lpRows"></div><div class="lp-grab" id="lpGrab"></div></div>
+  <div id="dhDlg"><div class="box"><div class="hd"><span>import drillholes</span><button id="dhCancel">×</button></div><div class="bd" id="dhDlgBody"></div><div class="dh-foot"><span id="dhDlgMsg"></span><button id="dhImport">Import</button></div></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
     <circle cx="37" cy="37" r="33" fill="rgba(18,18,18,0.55)" stroke="#4a4a4a" stroke-width="2"/>
     <rect x="35.5" y="0" width="3" height="7" fill="#4a4a4a"/>
@@ -254,7 +271,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
@@ -473,7 +490,7 @@ const allocLayerId = () => { for (let i = 0; i <= 6; i++) if (!layerById(i)) ret
 function closeAllLayers() {
   renderer.clearChunks(); renderer.setPicked(null);
   _layers = []; _activeId = 0; frame = null; _docBbox = null;
-  _blockDoc = null; _lasDoc = null; _plyDoc = null;
+  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   _filterExpr = ''; _filterEpoch++;
   $('#filter').value = ''; syncFilterClear();
   $('#recPanel').classList.remove('show');
@@ -494,8 +511,8 @@ function recomputeUnion() {
 function setActiveLayer(id) {
   const L = layerById(id); if (!L) return;
   _activeId = id;
-  _blockDoc = L.docs.blockDoc || null; _lasDoc = L.docs.lasDoc || null; _plyDoc = L.docs.plyDoc || null;
-  setColorLabels(_blockDoc ? _blockDoc.header : _lasDoc ? { kind: 'las' } : _plyDoc ? _plyDoc.header : null);
+  _blockDoc = L.docs.blockDoc || null; _lasDoc = L.docs.lasDoc || null; _plyDoc = L.docs.plyDoc || null; _dhDoc = L.docs.dhDoc || null;
+  setColorLabels(_blockDoc ? _blockDoc.header : _dhDoc ? _dhDoc.header : _lasDoc ? { kind: 'las' } : _plyDoc ? _plyDoc.header : null);
   if (L.colorSel != null && [...$('#colorBy').options].some((o) => o.value === L.colorSel)) $('#colorBy').value = L.colorSel;
   $('#clipMin').value = L.clip[0]; $('#clipMax').value = L.clip[1];
   _filterExpr = L.filterExpr || '';
@@ -518,6 +535,20 @@ async function openBlobs(files, mode = 'replace', at = null) {
   files = [...files];
   if (!files.length) return;
   if (files.length === 1) return openBlob(files[0], files[0].name, mode, at);
+  // a batch that sniffs as collar + survey + intervals is offered as drillholes
+  if (mode === 'ask' && files.length >= 3) {
+    const trio = await sniffDrillholeFiles(files);
+    if (trio) {
+      const act = await new Promise((res) => menuXY(at && at.x != null ? at.x : innerWidth / 2 - 120, at && at.y != null ? at.y : innerHeight / 3, [
+        { label: 'Import as drillholes…', action: () => res('dh') },
+        { label: `Open as ${files.length} separate layers`, action: () => res('layers') },
+        ...(_layers.length ? [{ label: 'Replace the view', action: () => res('replace') }] : []),
+      ], () => res(null)));
+      if (!act) return;
+      if (act === 'dh') { openDhDialog(trio); return; }
+      mode = act === 'replace' ? 'replace' : (_layers.length ? 'add' : 'replace');
+    }
+  }
   if (mode === 'ask') {
     mode = _layers.length ? await askOpenMode(files[0].name, at && at.x, at && at.y, files.length) : 'replace';
     if (!mode) return;
@@ -574,7 +605,7 @@ async function openBlob(blob, name, mode = 'replace', at = null) {
 function registerDocs(lid, kind) {
   const L = layerById(lid); if (!L) return;
   L.kind = kind;
-  L.docs = { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
+  L.docs = { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc, dhDoc: _dhDoc };
 }
 // PLY path: discovery sweep (no header bbox) → the points pipeline. The
 // provider owns fetchRecord (O(1) binary / sweep ascii) for the pick join.
@@ -592,9 +623,186 @@ async function openPlyBlob(blob, name, opts = {}) {
   $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} points · PLY ${header.format === 'ascii' ? 'ascii' : 'binary'}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
   requestRender();
 }
+// Drillholes (micro-layers spec §5): collar + survey + intervals → desurveyed
+// interval midpoints as ONE element layer over the assay table. recIdx = the
+// original interval row (the identity survives @gcu/drillhole's depth sort).
+async function openDrillholeLayer(files, opts = {}, mode = 'add') {
+  if (mode !== 'add') closeAllLayers();
+  const lid = allocLayerId();
+  if (lid == null) { $('#meta').textContent = 'layer limit reached (7) — remove one first'; return; }
+  const first = _layers.length === 0;
+  const name = (files.intervals && files.intervals.name) || 'drillholes';
+  _layers.push({ id: lid, name, label: `holes · ${name}`, kind: 'points', dh: true, docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'loose' });
+  _activeId = lid;
+  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
+  $('#meta').textContent = `${name} — desurveying…`;
+  $('#empty').style.display = 'none';
+  try {
+    const { header, streamChunks, fetchRecord, recordPosition } = await openDrillholes(
+      { collar: files.collar, survey: files.survey, intervals: files.intervals }, opts);
+    _dhDoc = { blobs: { ...files }, header, fetchRecord, recordPosition, config: { ...opts } };
+    registerDocs(lid, 'points');
+    fitFromHeader(header, first);
+    renderer.setCategories(header.categories ? 1 : 0);
+    renderer.setLayerCats(lid, header.categories ? 256 : 0);
+    setColorLabels(header);
+    const [cLo, cHi] = header.chanRange;
+    const cs = cHi > cLo ? 65535 / (cHi - cLo) : 0;
+    const cb = createChunkBuilder({ frame, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
+    for await (const rc of streamChunks({ chunkPoints: 1 << 17 })) {
+      const intensity = new Uint16Array(rc.count);
+      for (let i = 0; i < rc.count; i++) intensity[i] = Number.isFinite(rc.chan[i]) ? ((rc.chan[i] - cLo) * cs) | 0 : 0;
+      cb.push({ count: rc.count, x: rc.x, y: rc.y, z: rc.z, intensity, classification: rc.cat || new Uint8Array(rc.count), rgb: null, recIdx: rc.recIdx });
+      await new Promise((r) => setTimeout(r));
+    }
+    const doc = cb.flush();
+    const L = layerById(lid);
+    if (L) { L.bboxLocal = doc.bboxLocal; L.colorSel = $('#colorBy').value; }
+    recomputeUnion();
+    const warn = header.report.checks.reduce((t, c) => t + c.count, 0);
+    _dhDoc.metaLine = `${name} — ${header.placed.toLocaleString()}/${header.count.toLocaleString()} intervals · ${header.holes} holes · ${header.method === 'minimumCurvature' ? 'min curvature' : header.method} · dip ${header.dipConvention}${warn ? ` · ⚠ ${warn} check${warn > 1 ? 's' : ''} (File info)` : ''}`;
+    $('#meta').textContent = _dhDoc.metaLine;
+    renderLayers();
+    dispatchEvent(new Event('micro:project-dirty'));
+    requestRender();
+  } catch (e) {
+    $('#meta').textContent = `${name} — ${e.message}`;
+    renderer.removeLayer(lid);
+    _layers = _layers.filter((l) => l.id !== lid);
+    if (_layers.length) setActiveLayer(_layers[0].id);
+    else $('#empty').style.display = '';
+    renderLayers();
+  }
+}
+// re-channel a drillhole layer (all in memory upstream — cheap)
+async function reopenDhChan(chan) {
+  const L = activeLayer(); if (!L || !L.dh || !_dhDoc) return;
+  const files = _dhDoc.blobs, cfg = { ..._dhDoc.config, chan };
+  const keepLabel = L.label, keepFilter = L.filterExpr;
+  renderer.removeLayer(L.id);
+  _layers = _layers.filter((l) => l.id !== L.id);
+  await openDrillholeLayer(files, cfg, 'add');
+  const L2 = activeLayer();
+  if (L2) { L2.label = keepLabel; if (keepFilter) { $('#filter').value = keepFilter; syncFilterClear(); applyBlockFilter(keepFilter); } }
+  renderLayers();
+}
+
+// ── the import dialog: three slots + mappings + method — File → Import
+// drillholes…, or offered when a dropped batch sniffs as a trio ──
+let _dhDlg = null;
+function openDhDialog(trio) {
+  _dhDlg = { slots: {}, method: 'minimumCurvature', dip: 'auto' };
+  if (trio) for (const role of ['collar', 'survey', 'intervals']) _dhDlg.slots[role] = trio[role];
+  renderDhDialog();
+  $('#dhDlg').classList.add('show');
+}
+async function dhPickSlot(role) {
+  try {
+    let file;
+    if (window.showOpenFilePicker) { const [h] = await window.showOpenFilePicker(); file = await h.getFile(); _fileHandles.set(file, h); }
+    else { file = await new Promise((res) => { const i = document.createElement('input'); i.type = 'file'; i.onchange = () => res(i.files[0]); i.click(); }); }
+    if (!file) return;
+    const sniff = sniffDelimitedSafe(await file.slice(0, 64 * 1024).text());
+    const columns = sniff && sniff.header ? sniff.header.map((c) => String(c).trim()) : [];
+    const cls = classifyDrillholeHeader(columns);
+    _dhDlg.slots[role] = { blob: file, name: file.name, columns, mapping: cls && cls.role === role ? { ...cls.mapping } : {} };
+    renderDhDialog();
+  } catch { /* cancelled */ }
+}
+function sniffDelimitedSafe(text) { try { return sniffDelimited(text); } catch { return null; } }
+const DH_FIELDS = {
+  collar: [['bhid', 'hole id'], ['x', 'X'], ['y', 'Y'], ['z', 'Z'], ['eoh', 'EOH (optional)']],
+  survey: [['bhid', 'hole id'], ['at', 'depth (AT)'], ['az', 'azimuth'], ['dip', 'dip']],
+  intervals: [['bhid', 'hole id'], ['from', 'FROM'], ['to', 'TO']],
+};
+function renderDhDialog() {
+  const body = $('#dhDlgBody');
+  body.textContent = '';
+  const mkSel = (opts, value, onchange, allowNone) => {
+    const sel = document.createElement('select');
+    if (allowNone) { const o = document.createElement('option'); o.value = '-1'; o.textContent = '—'; sel.appendChild(o); }
+    opts.forEach((name, i) => { const o = document.createElement('option'); o.value = String(i); o.textContent = name; sel.appendChild(o); });
+    sel.value = String(value != null && value >= 0 ? value : -1);
+    if (sel.value === '' && opts.length) sel.value = '0';
+    sel.onchange = onchange;
+    return sel;
+  };
+  for (const role of ['collar', 'survey', 'intervals']) {
+    const slot = _dhDlg.slots[role];
+    const row = document.createElement('div'); row.className = 'dh-row';
+    const head = document.createElement('div'); head.className = 'dh-head';
+    const lab = document.createElement('b'); lab.textContent = role;
+    const fname = document.createElement('span'); fname.className = 'dh-file';
+    fname.textContent = slot ? slot.name : '— no file —';
+    const pick = document.createElement('button'); pick.textContent = slot ? 'change…' : 'pick…';
+    pick.onclick = () => dhPickSlot(role);
+    head.append(lab, fname, pick);
+    row.appendChild(head);
+    if (slot && slot.columns.length) {
+      const maps = document.createElement('div'); maps.className = 'dh-maps';
+      for (const [key, label] of DH_FIELDS[role]) {
+        if (slot.mapping[key] == null && key !== 'eoh') slot.mapping[key] = 0;   // what the select shows IS the mapping
+        const wrap = document.createElement('label');
+        wrap.append(label + ' ');
+        wrap.appendChild(mkSel(slot.columns, slot.mapping[key], (e) => { slot.mapping[key] = +e.target.value; }, key === 'eoh'));
+        maps.appendChild(wrap);
+      }
+      row.appendChild(maps);
+    }
+    body.appendChild(row);
+  }
+  // interval channel + category (from the intervals slot's columns)
+  const iv = _dhDlg.slots.intervals;
+  if (iv && iv.columns.length) {
+    const opts = document.createElement('div'); opts.className = 'dh-maps';
+    const chanW = document.createElement('label'); chanW.append('color by ');
+    chanW.appendChild(mkSel(iv.columns, _dhDlg.chan, (e) => { _dhDlg.chan = +e.target.value; }, true));
+    const catW = document.createElement('label'); catW.append('category ');
+    catW.appendChild(mkSel(iv.columns, _dhDlg.cat, (e) => { _dhDlg.cat = +e.target.value; }, true));
+    opts.append(chanW, catW);
+    body.appendChild(opts);
+  }
+  const cfg = document.createElement('div'); cfg.className = 'dh-maps';
+  const mW = document.createElement('label'); mW.append('desurvey ');
+  const mSel = document.createElement('select');
+  for (const [v, t] of [['minimumCurvature', 'minimum curvature'], ['balancedTangential', 'balanced tangential'], ['tangential', 'tangential']]) {
+    const o = document.createElement('option'); o.value = v; o.textContent = t; mSel.appendChild(o);
+  }
+  mSel.value = _dhDlg.method; mSel.onchange = () => { _dhDlg.method = mSel.value; };
+  mW.appendChild(mSel);
+  const dW = document.createElement('label'); dW.append('dip convention ');
+  const dSel = document.createElement('select');
+  for (const [v, t] of [['auto', 'auto-detect'], ['pos-down', 'positive down'], ['neg-down', 'negative down']]) {
+    const o = document.createElement('option'); o.value = v; o.textContent = t; dSel.appendChild(o);
+  }
+  dSel.value = _dhDlg.dip; dSel.onchange = () => { _dhDlg.dip = dSel.value; };
+  dW.appendChild(dSel);
+  cfg.append(mW, dW);
+  body.appendChild(cfg);
+}
+$('#dhImport').onclick = async () => {
+  const sl = _dhDlg && _dhDlg.slots;
+  if (!sl || !sl.collar || !sl.survey || !sl.intervals) { $('#dhDlgMsg').textContent = 'all three tables are needed'; return; }
+  $('#dhDlg').classList.remove('show');
+  const mappings = {};
+  for (const role of ['collar', 'survey', 'intervals']) {
+    if (sl[role].mapping && sl[role].mapping.bhid != null) mappings[role] = { ...sl[role].mapping };
+  }
+  await openDrillholeLayer(
+    { collar: sl.collar.blob, survey: sl.survey.blob, intervals: sl.intervals.blob },
+    {
+      mappings,                                             // per-role; the provider sniffs any missing role
+      method: _dhDlg.method, dipConvention: _dhDlg.dip,
+      ...(_dhDlg.chan != null && _dhDlg.chan >= 0 ? { chan: _dhDlg.chan } : {}),
+      ...(_dhDlg.cat != null && _dhDlg.cat >= 0 ? { cat: _dhDlg.cat } : {}),
+    },
+    _layers.length ? 'add' : 'replace');
+};
+$('#dhCancel').onclick = () => $('#dhDlg').classList.remove('show');
+
 // Block-model path (.csv etc.): two-sweep provider → regular grid → box impostors.
 // Not a regular grid → the points pipeline still shows the centroids.
-let _blockDoc = null, _lasDoc = null;
+let _blockDoc = null, _lasDoc = null, _dhDoc = null;
 async function openBlocksBlob(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : _activeId;
   _lasDoc = null; _plyDoc = null;
@@ -678,7 +886,7 @@ function resolveColorMode() {
 }
 function setColorLabels(header) {
   const sel = $('#colorBy');
-  const blocks = header && header.kind === 'blockmodel';
+  const blocks = header && (header.kind === 'blockmodel' || header.kind === 'drillholes');
   if (!blocks) {
     sel.innerHTML = '<option value="0">elevation</option><option value="1">intensity</option><option value="2">classification</option><option value="3">rgb</option>';
     sel.value = '0';
@@ -696,6 +904,7 @@ $('#colorBy').addEventListener('change', () => {
   const v = $('#colorBy').value;
   const L = activeLayer(); if (L) L.colorSel = v;
   dispatchEvent(new Event('micro:project-dirty'));
+  if (v.startsWith('chan:') && _dhDoc && +v.slice(5) !== _dhDoc.header.mapping.chan) { reopenDhChan(+v.slice(5)); return; }
   if (v.startsWith('chan:') && _blockDoc && +v.slice(5) !== _blockDoc.header.mapping.chan) {
     const open = _blockDoc.header.dm ? openDmBlob : openBlocksBlob;
     open(_blockDoc.blob, _blockDoc.name, { chan: +v.slice(5), keepFilter: true, forcePoints: _blockDoc.forcePoints, layer: _activeId, first: false });
@@ -718,7 +927,7 @@ function blockSchema(header) {
 }
 async function applyBlockFilter(expr) {
   const inp = $('#filter');
-  if (!_blockDoc) { $('#meta').textContent = 'filter: open a block model first'; return; }
+  if (!_blockDoc && !_dhDoc) { $('#meta').textContent = 'filter: open a block model or drillholes first'; return; }
   const lid = _activeId;                                   // the sweep belongs to THIS layer even if focus moves
   const Lr = layerById(lid); if (Lr) Lr.filterExpr = expr;
   dispatchEvent(new Event('micro:project-dirty'));
@@ -726,7 +935,24 @@ async function applyBlockFilter(expr) {
   const epoch = ++_filterEpoch;
   if (!expr.trim()) {
     renderer.setFilter(null, {}, lid); renderer.clearCompact(lid); inp.classList.remove('err'); requestRender();
-    $('#meta').textContent = _blockDoc.metaLine; return;
+    $('#meta').textContent = (_blockDoc || _dhDoc).metaLine; return;
+  }
+  // drillholes: the interval table is in memory — the sweep is a plain loop
+  if (_dhDoc) {
+    const dh = _dhDoc;
+    const schema = blockSchema(dh.header);
+    const v2 = validate(expr, schema);
+    if (!v2.ok) { inp.classList.add('err'); $('#meta').textContent = `filter: ${v2.errors[0] && v2.errors[0].message || 'invalid expression'}`; return; }
+    inp.classList.remove('err');
+    const fn2 = compileBool(expr, schema, { decimal: '.' });
+    const mask2 = new Uint8Array(dh.header.count);
+    let hits2 = 0;
+    for (let i = 0; i < dh.header.count; i++) { if (fn2(dh.fetchRecord(i))) { mask2[i] = 1; hits2++; } }
+    renderer.setActiveSet('base', lid);
+    renderer.setFilter(mask2, { isolate: true }, lid);
+    requestRender();
+    $('#meta').textContent = `${dh.metaLine} · filter: ${hits2.toLocaleString()} of ${dh.header.count.toLocaleString()} match`;
+    return;
   }
   const { blob, header } = _blockDoc;
   const schema = blockSchema(header);
@@ -817,13 +1043,13 @@ async function applyBlockFilter(expr) {
 // keywords, and DATA VALUES (the category dictionary — picking "HEMATITE" from the
 // list is how you dodge the bare-word-vs-quoted footgun). ──
 function columnValues(name) {
-  const h = _blockDoc && _blockDoc.header;
+  const h = (_blockDoc || _dhDoc) && (_blockDoc || _dhDoc).header;
   if (!h || !h.categories) return [];
   const lc = String(name).toLowerCase();
   const catName = h.mapping.cat != null ? h.columns[h.mapping.cat] : null;
   return catName && catName.toLowerCase() === lc ? h.categories : [];
 }
-const filterCtx = () => (_blockDoc ? { columns: blockSchema(_blockDoc.header), values: columnValues } : null);
+const filterCtx = () => ((_blockDoc || _dhDoc) ? { columns: blockSchema((_blockDoc || _dhDoc).header), values: columnValues } : null);
 const _ac = { input: null, res: null, sel: 0, suppress: false };
 function attachAutocomplete(input, getCtx) {
   input.addEventListener('input', () => acRefresh(input, getCtx));
@@ -1042,7 +1268,7 @@ function applySection(sec) {
 function projectManifest() {
   return {
     app: 'micro', version: 1, name: _project.name,
-    layers: _layers.map((L) => ({ source: L.name, label: L.label && L.label !== L.name ? L.label : undefined, external: L.storage === 'external' || undefined, colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible })),
+    layers: _layers.map((L) => ({ source: L.name, dh: L.dh || undefined, label: L.label && L.label !== L.name ? L.label : undefined, external: L.storage === 'external' || undefined, colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible })),
     camera: captureCamera(),
     section: captureSection(),
     views: _views,
@@ -1145,6 +1371,7 @@ async function openProjectDir(dir) {
     try { const list = (await _idb.get(PROJECTS_KEY)) || []; const e = list.find((x) => x.name === dir.name); links = (e && e.links) || {}; } catch { /* none */ }
     for (let i = 0; i < mf.layers.length; i++) {
       const ls = mf.layers[i];
+      if (ls.dh) { $('#meta').textContent = `project: drillhole layer “${ls.source}” — re-import via File → Import drillholes… (project restore for drillholes is coming)`; continue; }
       let file = null, handle = null;
       if (ls.external) {
         handle = links[ls.source] || null;
@@ -1278,7 +1505,7 @@ function copyText(text) {
   ta.remove();
 }
 function showFileInfo() {
-  const doc = _blockDoc || _plyDoc || _lasDoc;
+  const doc = _blockDoc || _dhDoc || _plyDoc || _lasDoc;
   if (!doc) { showHelp('file info', 'no file open'); return; }
   const h = doc.header;
   const escA = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -1290,8 +1517,13 @@ function showFileInfo() {
   const rows = [];
   const row = (k, v) => rows.push(`<tr><td class="fi-k">${k}</td><td>${v}</td></tr>`);
   row('file', V(_blockDoc ? _blockDoc.name : _plyDoc ? _plyDoc.name : 'point cloud'));
-  row('kind', V(_lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
+  row('kind', V(_dhDoc ? `drillholes (${h.method === 'minimumCurvature' ? 'minimum curvature' : h.method}, dip ${h.dipConvention})` : _lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
   row('records', num(h.count));
+  if (_dhDoc) {
+    row('holes', num(h.holes));
+    row('placed', num(h.placed));
+    for (const c of h.report.checks) row(`⚠ ${c.label}`, `${V(c.count)} ${c.bhids.length ? sep('· ') + V(c.bhids.slice(0, 8).join(', ') + (c.bhids.length > 8 ? '…' : '')) : ''}`);
+  }
   if (h.bbox) {
     for (const [ax, i] of [['X', 0], ['Y', 1], ['Z', 2]]) {
       row(ax, `${num(h.bbox.min[i])} ${sep('–')} ${num(h.bbox.max[i])} ${sep('(Δ')} ${num(h.bbox.max[i] - h.bbox.min[i])}${sep(')')}`);
@@ -1320,6 +1552,7 @@ function showFileInfo() {
 $('#mFile').onclick = () => {
   const items = [
     { label: 'Open…', kbd: '', action: openFilePicker },
+    { label: 'Import drillholes…', action: () => openDhDialog(null) },
     { label: 'File info…', kbd: 'i', action: showFileInfo },
   ];
   if (hasFSAA) {
@@ -1502,7 +1735,8 @@ async function recordPosition(fullId) {
   const lid = fullId >>> 29, rec = fullId & 0x1FFFFFFF;    // measure works ACROSS layers
   const L = layerById(lid);
   const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
-  const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc;
+  const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
+  if (dd) return dd.recordPosition(rec);
   const m = bd && bd.header.mapping;
   if (bd && bd.header.dm) {
     const vals = await fetchDmRecord(bd.blob, bd.header.dm, rec);
@@ -1920,7 +2154,14 @@ async function showRecord(fullId) {
   const L = layerById(lid);
   const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
   const tag = _layers.length > 1 && L ? `${L.label || L.name} · ` : '';
-  const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc;
+  const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
+  if (dd) {
+    const f = dd.fetchRecord(rec);
+    if (!f) { showRecPanel(`${tag}interval · row ${rec.toLocaleString()}`, [], 'row not found'); return; }
+    const rows = dd.header.columns.map((name, i) => [name, f[i]]);
+    showRecPanel(`${tag}interval · row ${rec.toLocaleString()}`, rows);
+    return;
+  }
   if (bd && bd.header.dm) {
     const vals = await fetchDmRecord(bd.blob, bd.header.dm, rec);
     const rows = bd.header.columns.map((name, i) => [name, vals[i] == null ? '—' : vals[i]]);
