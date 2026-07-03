@@ -598,7 +598,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   const first = _layers.length === 0;
   _layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: (typeof File !== 'undefined' && blob instanceof File && _fileHandles.get(blob)) || null, storage: 'loose' });
   _activeId = lid;
-  _blockDoc = null; _lasDoc = null; _plyDoc = null;
+  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   $('#meta').textContent = `${name} — reading…`;
   $('#empty').style.display = 'none';
   try {
@@ -1068,7 +1068,13 @@ function blockSchema(header) {
 }
 async function applyBlockFilter(expr) {
   const inp = $('#filter');
-  if (!_blockDoc && !_dhDoc) { $('#meta').textContent = 'filter: open a block model or drillholes first'; return; }
+  // the ACTIVE LAYER's docs, never the module aliases — a stale alias once
+  // filtered the assay table while the model was active and hung a 7k-bit
+  // mask on a 1.8M-block layer
+  const AL = activeLayer();
+  const fBlockDoc = AL ? AL.docs.blockDoc : _blockDoc;
+  const fDhDoc = AL ? AL.docs.dhDoc : _dhDoc;
+  if (!fBlockDoc && !fDhDoc) { $('#meta').textContent = 'filter: open a block model or drillholes first'; return; }
   const lid = _activeId;                                   // the sweep belongs to THIS layer even if focus moves
   const Lr = layerById(lid); if (Lr) Lr.filterExpr = expr;
   dispatchEvent(new Event('micro:project-dirty'));
@@ -1076,11 +1082,11 @@ async function applyBlockFilter(expr) {
   const epoch = ++_filterEpoch;
   if (!expr.trim()) {
     renderer.setFilter(null, {}, lid); renderer.clearCompact(lid); inp.classList.remove('err'); requestRender();
-    $('#meta').textContent = (_blockDoc || _dhDoc).metaLine; return;
+    $('#meta').textContent = (fBlockDoc || fDhDoc).metaLine; return;
   }
   // drillholes: the interval table is in memory — the sweep is a plain loop
-  if (_dhDoc) {
-    const dh = _dhDoc;
+  if (fDhDoc) {
+    const dh = fDhDoc;
     const schema = blockSchema(dh.header);
     const v2 = validate(expr, schema);
     if (!v2.ok) { inp.classList.add('err'); $('#meta').textContent = `filter: ${v2.errors[0] && v2.errors[0].message || 'invalid expression'}`; return; }
@@ -1095,7 +1101,7 @@ async function applyBlockFilter(expr) {
     $('#meta').textContent = `${dh.metaLine} · filter: ${hits2.toLocaleString()} of ${dh.header.count.toLocaleString()} match`;
     return;
   }
-  const { blob, header } = _blockDoc;
+  const { blob, header } = fBlockDoc;
   const schema = blockSchema(header);
   const v = validate(expr, schema);
   if (!v.ok) { inp.classList.add('err'); $('#meta').textContent = `filter: ${v.errors[0] && v.errors[0].message || 'invalid expression'}`; return; }
@@ -1116,8 +1122,8 @@ async function applyBlockFilter(expr) {
   // color stays full-doc (addChunk skips the ramp update for the compact set). ──
   const compactCap = Math.min(Math.floor(header.count / 2) || 0, 8_000_000);
   const catCode = header.categories ? new Map(header.categories.map((v2, i2) => [v2, i2])) : null;
-  let cb2 = isolate && _blockDoc.grid && compactCap > 0
-    ? createBlockChunkBuilder({ frame, grid: _blockDoc.grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 2, onChunk: (c) => renderer.addChunk(c, 'compact', lid) })
+  let cb2 = isolate && fBlockDoc.grid && compactCap > 0
+    ? createBlockChunkBuilder({ frame, grid: fBlockDoc.grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 2, onChunk: (c) => renderer.addChunk(c, 'compact', lid) })
     : null;
   const CB = 1 << 18;
   let cx, cy, czz, cch, cct, crr, cfill = 0, collected = 0;
@@ -1178,7 +1184,7 @@ async function applyBlockFilter(expr) {
     renderer.setFilter(mask, { isolate }, lid);            // default = isolate; context = dim the rest
   }
   requestRender();
-  $('#meta').textContent = `${_blockDoc.metaLine} · filter: ${hits.toLocaleString()} of ${rec.toLocaleString()} match${cb2 ? ' · compacted' : ''}`;
+  $('#meta').textContent = `${fBlockDoc.metaLine} · filter: ${hits.toLocaleString()} of ${rec.toLocaleString()} match${cb2 ? ' · compacted' : ''}`;
 }
 // ── autocomplete (lamina's engine over @gcu/expr complete()): columns, functions,
 // keywords, and DATA VALUES (the category dictionary — picking "HEMATITE" from the
@@ -1891,7 +1897,7 @@ async function openSample(n = 2_000_000) {
   const lid = allocLayerId();
   _layers.push({ id: lid, name: 'sample bench scan', kind: 'points', docs: {}, bboxLocal: null, colorSel: '0', clip: ['', ''], filterExpr: '', visible: true });
   _activeId = lid;
-  _blockDoc = null; _lasDoc = null; _plyDoc = null;
+  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   setColorLabels(null);
   $('#empty').style.display = 'none';
   $('#meta').textContent = 'sample — generating…';
