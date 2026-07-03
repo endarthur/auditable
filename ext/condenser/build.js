@@ -5,5 +5,5 @@ import { bundle } from '../build/src/main.js';
 
 // @gcu/frame is the coordinate-frame contract the chunk store speaks; INLINE it
 // (collision-safe via the rename pass) so index.js stays a self-contained ESM.
-const r = await bundle({ at: import.meta.url, inline: ['../frame/src/frame.js', '../dm/src/dm.js', '../drillhole/index.js'], sourcemap: false, meta: false });
+const r = await bundle({ at: import.meta.url, inline: ['../frame/src/frame.js', '../dm/src/dm.js', '../drillhole/src/desurvey.js', '../drillhole/src/validate.js', '../drillhole/src/samples.js'], sourcemap: false, meta: false });
 console.log(`Built ext/condenser/index.js (${(r.code.length / 1024).toFixed(1)} KB, ${r.meta.exports.length} exports)`);

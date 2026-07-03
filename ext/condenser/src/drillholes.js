@@ -13,7 +13,8 @@
 // streaming machinery is for the 10⁸ element tables), which also makes
 // fetchRecord O(1) and channel switches free.
 
-import { desurveySamples, validate } from '../../drillhole/index.js';
+import { dhDesurveySamples } from '../../drillhole/src/samples.js';
+import { dhValidate } from '../../drillhole/src/validate.js';
 import { sniffDelimited, lineFields } from './blockmodel.js';
 
 const BHID_RE = /^(bhid|holeid|hole_?id|dhid|dh_?id|hole|collar_?id|id)$/i;
@@ -149,7 +150,7 @@ export async function openDrillholes({ collar, survey, intervals }, opts = {}) {
   }
   const samples = { bhid, depth, cols: [{ name: '__row', values: rowIdx }, { name: '__end', values: endIdx }] };
 
-  const ds = desurveySamples({ collars, surveys, samples }, { method: opts.method || 'minimumCurvature', dipConvention: opts.dipConvention || 'auto' });
+  const ds = dhDesurveySamples({ collars, surveys, samples }, { method: opts.method || 'minimumCurvature', dipConvention: opts.dipConvention || 'auto' });
 
   // the interval-shape checks (overlaps, inverted from/to…) come from validate
   const iv = {
@@ -157,7 +158,7 @@ export async function openDrillholes({ collar, survey, intervals }, opts = {}) {
   };
   let report = ds.report;
   try {
-    const v = validate({ collars, surveys, intervals: iv }, { dipConvention: opts.dipConvention || 'auto' });
+    const v = dhValidate({ collars, surveys, intervals: iv }, { dipConvention: opts.dipConvention || 'auto' });
     const seen = new Set(report.checks.map((c) => c.id));
     const extra = Object.values(v.checks || {}).filter((c) => !seen.has(c.id));
     report = { ...report, checks: report.checks.concat(extra) };
