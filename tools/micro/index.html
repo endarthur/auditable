@@ -160,6 +160,11 @@
   #lpRows .lp-row .lp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #lpRows .lp-row.off .lp-name { color: var(--dim); }
   #lpRows .lp-row .lp-n { color: var(--dim); font-size: 11px; }
+  /* compass: bottom-right, above the statusbar; slides left when the record
+     panel opens. Click = plan view, north up. */
+  #compass { position: absolute; right: 12px; bottom: 34px; z-index: 3; cursor: pointer; opacity: 0.85; }
+  #compass:hover { opacity: 1; }
+  #recPanel.show ~ #compass { right: 292px; }
   #recPanel.show { display: flex; }
   #recPanel .rp-head {
     display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border);
@@ -227,6 +232,16 @@
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
   <div id="recPanel"><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
   <div id="layersPanel"><div class="lp-head"><span>layers</span><button class="lp-close" id="lpClose">×</button></div><div id="lpRows"></div></div>
+  <svg id="compass" width="74" height="74" viewBox="0 0 74 74" title="north">
+    <circle cx="37" cy="37" r="33" fill="rgba(18,18,18,0.55)" stroke="#4a4a4a" stroke-width="2"/>
+    <rect x="35.5" y="0" width="3" height="7" fill="#4a4a4a"/>
+    <rect x="35.5" y="67" width="3" height="7" fill="#4a4a4a"/>
+    <rect x="0" y="35.5" width="7" height="3" fill="#4a4a4a"/>
+    <rect x="67" y="35.5" width="7" height="3" fill="#4a4a4a"/>
+    <polygon id="cmpW" fill="#666d75"/>
+    <polygon id="cmpE" fill="#d4d9de"/>
+    <text id="cmpN" fill="#c89b3c" font-size="11" font-family="monospace" font-weight="bold" text-anchor="middle" dominant-baseline="middle" paint-order="stroke" stroke="#121212" stroke-width="3">N</text>
+  </svg>
   <footer><span id="meta">—</span><span id="stats"></span></footer>
 
 <script type="module">
@@ -268,10 +283,12 @@ function loop(t) {
     const heap = performance.memory ? ` · heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)} MB` : '';
     $('#stats').textContent = `${total.toLocaleString()} pts · ${renderer.chunkCount} chunks (${r.visible} vis) · ${converged ? `converged ${acc.toLocaleString()}` : `accumulating ${(100 * acc / (total || 1)).toFixed(0)}%`} · ${ms.toFixed(1)} ms${heap}`;
     drawMeasure();                                         // the overlay rides the camera
+    drawCompass();
   }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
+drawCompass();
 
 // ── sections: a slab is four floats (normal + offset) + a half-thickness —
 // scrubbing re-prefixes and re-converges each step (§2.2: it must feel free).
@@ -1283,6 +1300,34 @@ function drawMeasure() {
   T.setAttribute('x', (a[0] + b[0]) / 2 + 8); T.setAttribute('y', (a[1] + b[1]) / 2 - 6);
   T.textContent = pending ? '' : (_measure.label || '');
 }
+// ── compass: the classic folded north dart (two triangles, west half dark),
+// living on the ground plane and projected through the CAMERA — it foreshortens
+// in oblique views, collapses edge-on, and flips seen from below, so it reads
+// as real orientation, not a decal. Ring + ticks stay screen-fixed. ──
+function drawCompass() {
+  const v = cam.state.view;
+  if (!v) return;                                          // camera not updated yet (first paint comes with the loop)
+  const R = [v[0], v[4], v[8]], U = [v[1], v[5], v[9]];    // camera basis (world → screen)
+  const S = 27, cxp = 37, cyp = 37;
+  const pr = (d) => [cxp + (R[0] * d[0] + R[1] * d[1] + R[2] * d[2]) * S,
+                     cyp - (U[0] * d[0] + U[1] * d[1] + U[2] * d[2]) * S];
+  const tip = pr([0, 0.95, 0]), notch = pr([0, -0.22, 0]);
+  const bL = pr([-0.5, -0.82, 0]), bR = pr([0.5, -0.82, 0]);
+  $('#cmpW').setAttribute('points', `${tip} ${bL} ${notch}`);
+  $('#cmpE').setAttribute('points', `${tip} ${notch} ${bR}`);
+  const nx = R[1] * S, ny = -U[1] * S;                     // projected north (screen px)
+  const m = Math.hypot(nx, ny);
+  const T = $('#cmpN');
+  if (m < 3) T.setAttribute('opacity', '0');               // north points at/away from the eye
+  else {
+    T.setAttribute('opacity', '1');
+    T.setAttribute('x', cxp + (nx / m) * 24);
+    T.setAttribute('y', cyp + (ny / m) * 24);
+  }
+}
+$('#compass').addEventListener('click', () => setView(-Math.PI / 2, PHI_MAX));   // plan, north up
+$('#compass').addEventListener('pointerdown', (e) => e.stopPropagation());       // don't start an orbit
+
 // the rubber band follows the mouse between the two clicks
 cv.addEventListener('pointermove', (e) => {
   if (!_measure.arm || !_measure.a || _measure.b) return;
