@@ -1821,7 +1821,7 @@ function layerMenu(L, x, y) {
     { label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } },
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); } },
-    ...(_project && L.storage === 'external' && layerBlob(L) ? [{
+    ...(_project && L.storage !== 'project' && L.storage !== 'volatile' && layerBlob(L) ? [{
       label: `Copy into project (${fmtSize(layerBlob(L).size)})`,
       action: () => setTimeout(() => menuXY(innerWidth / 2 - 120, innerHeight / 3, [
         { label: `Copy “${L.name}” (${fmtSize(layerBlob(L).size)}) into ${_project.name}/`, action: async () => { $('#meta').textContent = `copying ${L.name}…`; await copyLayerIn(L, _project.dir); markProjectDirty(); $('#meta').textContent = `copied ${L.name} into the project (${fmtSize(layerBlob(L).size)})`; } },
