@@ -160,11 +160,16 @@
   #lpRows .lp-row .lp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #lpRows .lp-row.off .lp-name { color: var(--dim); }
   #lpRows .lp-row .lp-n { color: var(--dim); font-size: 11px; }
-  /* compass: bottom-right, above the statusbar; slides left when the record
-     panel opens. Click = plan view, north up. */
-  #compass { position: absolute; right: 12px; bottom: 34px; z-index: 3; cursor: pointer; opacity: 0.85; }
+  /* compass: corner + size are user choices (right-click it). Dodges whichever
+     panel shares its side. Click = plan view, north up. */
+  #compass { position: absolute; z-index: 3; cursor: pointer; opacity: 0.85; }
   #compass:hover { opacity: 1; }
-  #recPanel.show ~ #compass { right: 292px; }
+  #compass.se { right: 12px; bottom: 34px; }
+  #compass.ne { right: 12px; top: 78px; }
+  #compass.sw { left: 12px; bottom: 34px; }
+  #compass.nw { left: 12px; top: 78px; }
+  #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: 292px; }
+  #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: 236px; }
   #recPanel.show { display: flex; }
   #recPanel .rp-head {
     display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border);
@@ -186,7 +191,6 @@
     <button class="mb" id="mView">View</button>
     <button class="mb" id="mHelp">Help</button>
     <span id="filterWrap"><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
-    <label title="keep non-matching blocks as dimmed context instead of hiding them"><input type="checkbox" id="context"> context</label>
     <span class="spacer"></span>
     <button id="btnMeasure" title="measure between two picked points/blocks (m)">measure</button>
     <button id="btnSection" title="section on/off (x) — mode and scrub live on the row below">section</button>
@@ -232,7 +236,7 @@
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
   <div id="recPanel"><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
   <div id="layersPanel"><div class="lp-head"><span>layers</span><button class="lp-close" id="lpClose">×</button></div><div id="lpRows"></div></div>
-  <svg id="compass" width="74" height="74" viewBox="0 0 74 74" title="north">
+  <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
     <circle cx="37" cy="37" r="33" fill="rgba(18,18,18,0.55)" stroke="#4a4a4a" stroke-width="2"/>
     <rect x="35.5" y="0" width="3" height="7" fill="#4a4a4a"/>
     <rect x="35.5" y="67" width="3" height="7" fill="#4a4a4a"/>
@@ -725,14 +729,13 @@ async function applyBlockFilter(expr) {
   const mask = new Uint8Array(header.count);
   let rec = 0, hits = 0;
   const m = header.mapping;
-  const isolate = !$('#context').checked;
+  const isolate = true;                                    // filters isolate — the dim/context mode had no takers
 
   // ── compaction (isolate + regular grid): the sweep already has every matching
   // row in hand, so tee matches into a second chunk builder — the render budget
   // then runs over the MATCHES (12k feels like 12k, not like 1.8M shader-discards).
-  // Bounded: above the cap (half the model, ≤8M) the mask path wins on memory;
-  // context mode never compacts (it needs the non-matches by definition). Compact
-  // chunks carry RAW record indices, so pick / record panel / measure are untouched;
+  // Bounded: above the cap (half the model, ≤8M) the mask path wins on memory.
+  // Compact chunks carry RAW record indices, so pick / panel / measure are untouched;
   // color stays full-doc (addChunk skips the ramp update for the compact set). ──
   const compactCap = Math.min(Math.floor(header.count / 2) || 0, 8_000_000);
   const catCode = header.categories ? new Map(header.categories.map((v2, i2) => [v2, i2])) : null;
@@ -873,7 +876,6 @@ $('#filter').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') applyBlockFilter($('#filter').value);
   else if (e.key === 'Escape') { $('#filter').value = ''; syncFilterClear(); applyBlockFilter(''); }
 });
-$('#context').addEventListener('change', () => { if (_filterExpr.trim()) applyBlockFilter(_filterExpr); });
 
 // ── recents (local · opt-in · clearable) — lamina's pattern verbatim ──
 // LOCAL only: IndexedDB, never transmitted (connect-src 'none' holds). An FSAA
@@ -1099,6 +1101,8 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
   { label: 'Measure…', kbd: 'm', action: armMeasure },
+  { label: (_measureTP ? '✓ ' : '') + 'Measure trend & plunge', action: toggleMeasureTP },
+  { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
   { label: 'Section on/off', kbd: 'x', action: toggleSection },
   { label: 'Along the section', kbd: 'l', action: viewAlongSection },
   { label: 'Scrub section back', kbd: '[', action: () => scrubSection(-1) },
@@ -1117,7 +1121,7 @@ pick a preset (plan · N–S · E–W) or press <code>k</code> and <b>drag a lin
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
 <b>filter</b> (block models) — lamina's language over every column in the file:<br>
 <code>/</code> focuses the box · autocomplete offers columns, functions, and the category values — <code>Tab</code>/<code>Enter</code> accepts<br><code>FE &gt; 55 and LITO = "HEMATITE"</code> · <code>between</code> · <code>in (…)</code> — Enter applies, Esc clears<br>
-default hides non-matching blocks; <b>context</b> keeps them dimmed<br><br>
+matching elements isolate — everything else drops out of the render<br><br>
 <b>knobs</b><br>
 <b>min/max</b> boxes clip the color scale (outliers stop eating the ramp; empty = auto) · View menu: <b>boxes</b> = true block faces · <b>points</b> = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
 const HELP_ABOUT = `
@@ -1261,12 +1265,29 @@ async function measureClick(cssX, cssY) {
     _measure.b = local; _measure.arm = 0; _measure.mouse = null;
     cv.style.cursor = '';
     $('#btnMeasure').classList.remove('on');
-    const d = [0, 1, 2].map((i) => _measure.b[i] - _measure.a[i]);
-    const d3 = Math.hypot(...d), plan = Math.hypot(d[0], d[1]);
-    $('#meta').textContent = `measure: ${d3.toFixed(2)} m · plan ${plan.toFixed(2)} m · Δz ${Math.abs(d[2]).toFixed(2)} m`;
-    _measure.label = `${d3.toFixed(1)} m`;
+    updateMeasureReadout();
     drawMeasure();
   }
+}
+// trend & plunge of the A→B line (structural convention: plunge positive
+// down, trend degrees clockwise from north). Toggleable — View menu.
+let _measureTP = (() => { try { return localStorage.getItem('micro.measureTP') === 'on'; } catch { return false; } })();
+function toggleMeasureTP() {
+  _measureTP = !_measureTP;
+  try { localStorage.setItem('micro.measureTP', _measureTP ? 'on' : 'off'); } catch { /* ignore */ }
+  if (_measure.a && _measure.b) { updateMeasureReadout(); drawMeasure(); }
+}
+function updateMeasureReadout() {
+  const d = [0, 1, 2].map((i) => _measure.b[i] - _measure.a[i]);
+  const d3 = Math.hypot(...d), plan = Math.hypot(d[0], d[1]);
+  let tp = '';
+  if (_measureTP) {
+    const trend = ((Math.atan2(d[0], d[1]) * 180 / Math.PI) + 360) % 360;
+    const plunge = Math.atan2(-d[2], plan) * 180 / Math.PI;   // positive DOWN (mining convention)
+    tp = ` · ${Math.round(plunge)}°→${String(Math.round(trend)).padStart(3, '0')}°`;
+  }
+  $('#meta').textContent = `measure: ${d3.toFixed(2)} m · plan ${plan.toFixed(2)} m · Δz ${Math.abs(d[2]).toFixed(2)} m${tp}`;
+  _measure.label = `${d3.toFixed(1)} m${tp}`;
 }
 function projectToCss(local) {
   const m = cam.state.viewProj;
@@ -1327,6 +1348,29 @@ function drawCompass() {
 }
 $('#compass').addEventListener('click', () => setView(-Math.PI / 2, PHI_MAX));   // plan, north up
 $('#compass').addEventListener('pointerdown', (e) => e.stopPropagation());       // don't start an orbit
+// corner + size, persisted; the same menu hangs off right-click and View → Compass…
+const CMP_SIZES = { small: 54, medium: 74, large: 100 };
+let _cmp = (() => { try { return JSON.parse(localStorage.getItem('micro.compass')) || {}; } catch { return {}; } })();
+if (!CMP_SIZES[_cmp.size]) _cmp.size = 'medium';
+if (!['ne', 'se', 'sw', 'nw'].includes(_cmp.pos)) _cmp.pos = 'se';
+function applyCompass() {
+  const el = $('#compass');
+  el.setAttribute('class', _cmp.pos);
+  const px = CMP_SIZES[_cmp.size];
+  el.setAttribute('width', px); el.setAttribute('height', px);
+  try { localStorage.setItem('micro.compass', JSON.stringify(_cmp)); } catch { /* ignore */ }
+}
+applyCompass();
+function compassMenu(x, y) {
+  const pos = (id, label) => ({ label: (_cmp.pos === id ? '✓ ' : '') + label, action: () => { _cmp.pos = id; applyCompass(); } });
+  const size = (id) => ({ label: (_cmp.size === id ? '✓ ' : '') + id[0].toUpperCase() + id.slice(1), action: () => { _cmp.size = id; applyCompass(); } });
+  menuXY(x, y, [
+    pos('nw', 'North-west'), pos('ne', 'North-east'), pos('sw', 'South-west'), pos('se', 'South-east'),
+    { sep: true },
+    size('small'), size('medium'), size('large'),
+  ]);
+}
+$('#compass').addEventListener('contextmenu', (e) => { e.preventDefault(); compassMenu(e.clientX, e.clientY); });
 
 // the rubber band follows the mouse between the two clicks
 cv.addEventListener('pointermove', (e) => {
