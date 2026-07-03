@@ -257,17 +257,26 @@
       <option value="100000000">all</option>
     </select></label>
     <span class="spacer"></span>
-    <label>section <select id="secMode" title="slab section: plan (horizontal) · N–S (east-facing) · E–W (north-facing) · knife (drag a line)">
+    <label>section <select id="secMode" title="section orientation: plan (horizontal) · N–S (east-facing) · E–W (north-facing) · knife (drag a line) · custom (dip direction + dip)">
       <option value="off">off</option>
       <option value="plan">plan</option>
       <option value="ns">N–S</option>
       <option value="ew">E–W</option>
       <option value="knife">knife</option>
+      <option value="custom">custom</option>
     </select></label>
+    <input id="secDipDir" type="number" min="0" max="360" step="1" value="90" title="dip direction of the section plane (°)" style="width:52px;display:none">
+    <input id="secDip" type="number" min="0" max="90" step="1" value="90" title="dip of the section plane (°)" style="width:44px;display:none">
+    <select id="secClip" title="what the section keeps: slab (a band of ±thickness) · front (everything on the normal side) · behind (everything on the other side)" style="display:none">
+      <option value="slab">slab</option>
+      <option value="front">front</option>
+      <option value="behind">behind</option>
+    </select>
     <input id="secPos" type="range" min="0" max="1" step="0.002" value="0.5" title="scrub the section" style="width:140px;display:none">
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
+    <label id="secPlaneW" title="outline the section plane in the view" style="display:none"><input id="secPlaneVis" type="checkbox">plane</label>
   </div>
-  <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
+  <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
@@ -327,6 +336,7 @@ function loop(t) {
     const heap = performance.memory ? ` · heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)} MB` : '';
     $('#stats').textContent = `${total.toLocaleString()} pts · ${renderer.chunkCount} chunks (${r.visible} vis) · ${converged ? `converged ${acc.toLocaleString()}` : `accumulating ${(100 * acc / (total || 1)).toFixed(0)}%`} · ${ms.toFixed(1)} ms${heap}`;
     drawMeasure();                                         // the overlay rides the camera
+    drawSectionPlane();
     drawCompass();
   }
   requestAnimationFrame(loop);
@@ -343,6 +353,12 @@ let _knife = null;                                       // { n:[3] } set by the
 function secNormal() {
   const mode = $('#secMode').value;
   if (mode === 'knife') return _knife && _knife.n;
+  if (mode === 'custom') {
+    // plane by dip direction α + dip δ → the upward-ish pole (δ=0 → plan)
+    const a = ((+$('#secDipDir').value || 0) % 360) * Math.PI / 180;
+    const d = Math.max(0, Math.min(90, +$('#secDip').value || 0)) * Math.PI / 180;
+    return [-Math.sin(a) * Math.sin(d), -Math.cos(a) * Math.sin(d), Math.cos(d)];
+  }
   return SEC_N[mode] || null;
 }
 function secRange() {
@@ -362,7 +378,17 @@ function currentSection() {
   const n = secNormal();
   if (!n) return null;                                    // knife armed but no cut drawn yet
   const [lo, hi] = secRange();
-  return { on: true, n, d: lo + (+$('#secPos').value) * (hi - lo), half: Math.max(0.01, +$('#secHalf').value) };
+  const d0 = lo + (+$('#secPos').value) * (hi - lo);
+  const clip = $('#secClip').value;
+  if (clip === 'front' || clip === 'behind') {
+    // a half-space IS a slab with the far face pushed past the data: keep
+    // |dot−(d0±H)| ≤ H ⇒ dot ≥ d0 (front, the normal side) or ≤ d0 (behind).
+    // H is big enough to swallow any scene yet small enough that the f32
+    // uniform still places the near face exactly at d0.
+    const H = Math.max(1e5, 8 * (hi - lo || 1));
+    return { on: true, n, d: clip === 'front' ? d0 + H : d0 - H, half: H, d0, clip };
+  }
+  return { on: true, n, d: d0, half: Math.max(0.01, +$('#secHalf').value), d0, clip: 'slab' };
 }
 // A camera ray through a CSS pixel, intersected with the horizontal plane at the
 // document's mid-elevation → a frame-local world point (no picking needed).
@@ -431,22 +457,33 @@ cv.addEventListener('pointerup', (e) => {
     $('#secMode').value = 'off'; $('#secMode').dispatchEvent(new Event('input'));
   }
 }, { capture: true });
-$('#secMode').addEventListener('input', () => {
+function syncSecUI() {
   const mode = $('#secMode').value;
   const on = mode !== 'off';
   $('#secPos').style.display = on ? '' : 'none';
-  $('#secHalf').style.display = on ? '' : 'none';
-  if (mode === 'knife') { _knife = null; armKnife(true); }
+  $('#secClip').style.display = on ? '' : 'none';
+  $('#secHalf').style.display = on && $('#secClip').value === 'slab' ? '' : 'none';
+  $('#secPlaneW').style.display = on ? '' : 'none';
+  $('#secDipDir').style.display = mode === 'custom' ? '' : 'none';
+  $('#secDip').style.display = mode === 'custom' ? '' : 'none';
+}
+$('#secMode').addEventListener('input', () => {
+  syncSecUI();
+  if ($('#secMode').value === 'knife') { _knife = null; armKnife(true); }
   else armKnife(false);
   requestRender();
 });
+$('#secClip').addEventListener('input', () => { syncSecUI(); requestRender(); });
+$('#secDipDir').addEventListener('input', requestRender);
+$('#secDip').addEventListener('input', requestRender);
+$('#secPlaneVis').addEventListener('input', requestRender);
 $('#btnMeasure').onclick = () => { if (_measure.arm) clearMeasure(); else armMeasure(); };
 $('#btnSection').onclick = () => toggleSection();
 function syncSectionBtn() { $('#btnSection').classList.toggle('on', $('#secMode').value !== 'off'); }
 $('#secMode').addEventListener('input', syncSectionBtn);
 $('#secPos').addEventListener('input', requestRender);
 $('#secHalf').addEventListener('input', requestRender);
-for (const id of ['secMode', 'secPos', 'secHalf']) $('#' + id).addEventListener('input', () => dispatchEvent(new Event('micro:project-dirty')));
+for (const id of ['secMode', 'secPos', 'secHalf', 'secClip', 'secDipDir', 'secDip', 'secPlaneVis']) $('#' + id).addEventListener('input', () => dispatchEvent(new Event('micro:project-dirty')));
 
 // screenshot: the canvas is the export surface (preserveDrawingBuffer is on)
 $('#btnShot').onclick = () => {
@@ -1394,16 +1431,21 @@ function applyCamera(c) {
   cam.update(); requestRender();
 }
 function captureSection() {
-  return { mode: $('#secMode').value, pos: +$('#secPos').value, half: +$('#secHalf').value, knifeN: _knife ? _knife.n : null };
+  return { mode: $('#secMode').value, pos: +$('#secPos').value, half: +$('#secHalf').value, knifeN: _knife ? _knife.n : null,
+           clip: $('#secClip').value, dipDir: +$('#secDipDir').value, dip: +$('#secDip').value, plane: $('#secPlaneVis').checked || undefined };
 }
 function applySection(sec) {
   if (!sec) return;
   const sel = $('#secMode');
+  $('#secClip').value = ['slab', 'front', 'behind'].includes(sec.clip) ? sec.clip : 'slab';
+  if (sec.dipDir != null) $('#secDipDir').value = sec.dipDir;
+  if (sec.dip != null) $('#secDip').value = sec.dip;
+  $('#secPlaneVis').checked = !!sec.plane;
   if (sec.mode === 'knife' && sec.knifeN) {
     // bypass the input handler (it would re-ARM the knife and wipe the cut)
     _knife = { n: sec.knifeN };
     sel.value = 'knife';
-    $('#secPos').style.display = ''; $('#secHalf').style.display = '';
+    syncSecUI();
   } else {
     sel.value = sec.mode || 'off';
     sel.dispatchEvent(new Event('input'));
@@ -1424,6 +1466,7 @@ function projectManifest() {
       label: L.label && L.label !== L.name ? L.label : undefined,
       external: L.storage === 'external' || undefined,
       colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible,
+      sectioned: renderer.layerSectioned(L.id) ? undefined : false,
     })),
     camera: captureCamera(),
     section: captureSection(),
@@ -1562,6 +1605,7 @@ async function openProjectDir(dir) {
           if (ls.label) Ld.label = ls.label;
           if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
           if (ls.visible === false) { Ld.visible = false; renderer.setLayerVisible(Ld.id, false); }
+          if (ls.sectioned === false) renderer.setLayerSectioned(Ld.id, false);
         }
         continue;
       }
@@ -1605,6 +1649,7 @@ async function openProjectDir(dir) {
       if (ls.clip && (ls.clip[0] || ls.clip[1])) { L.clip = [String(ls.clip[0] || ''), String(ls.clip[1] || '')]; $('#clipMin').value = L.clip[0]; $('#clipMax').value = L.clip[1]; }
       if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
       if (ls.visible === false) { L.visible = false; renderer.setLayerVisible(L.id, false); }
+      if (ls.sectioned === false) renderer.setLayerSectioned(L.id, false);
     }
     applyCamera(mf.camera);
     applySection(mf.section);
@@ -1811,8 +1856,10 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <code>Ctrl+S</code> — <b>save the project</b>: File → project folder (Chromium) keeps your layers, styling, filters, camera, section, and saved views in a plain folder — project.json + the files<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
-<b>sections</b> — a slab through the data; everything hidden is neither drawn nor pickable<br>
-pick a preset (plan · N–S · E–W) or press <code>k</code> and <b>drag a line</b> — the vertical section through it (<code>Esc</code> cancels) · <code>x</code> toggles the section on/off<br>
+<b>sections</b> — a cut through the data; everything hidden is neither drawn nor pickable<br>
+pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line</b> (the vertical section through it, <code>Esc</code> cancels), or choose <b>custom</b> and type the plane's dip direction + dip · <code>x</code> toggles the section on/off<br>
+<b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
+<b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
 <b>filter</b> (block models) — lamina's language over every column in the file:<br>
 <code>/</code> focuses the box · autocomplete offers columns, functions, and the category values — <code>Tab</code>/<code>Enter</code> accepts<br><code>FE &gt; 55 and LITO = "HEMATITE"</code> · <code>between</code> · <code>in (…)</code> — Enter applies, Esc clears<br>
@@ -2039,6 +2086,44 @@ function drawMeasure() {
 // living on the ground plane and projected through the CAMERA — it foreshortens
 // in oblique views, collapses edge-on, and flips seen from below, so it reads
 // as real orientation, not a decal. Ring + ticks stay screen-fixed. ──
+// the section plane made visible: intersect the plane with the document bbox
+// (12 edges), order the crossings around their centroid in an in-plane basis,
+// project through the camera → a dashed outline in the overlay SVG.
+function drawSectionPlane() {
+  const svg = $('#secSvg');
+  const sec = $('#secPlaneVis').checked ? currentSection() : null;
+  if (!sec || !cam.state.viewProj) { svg.style.display = 'none'; return; }
+  const n = sec.n, d = sec.d0, b = rendererDocBbox();
+  const corner = (c) => [b[(c & 1) ? 3 : 0], b[(c & 2) ? 4 : 1], b[(c & 4) ? 5 : 2]];
+  const sd = (p) => p[0] * n[0] + p[1] * n[1] + p[2] * n[2] - d;
+  const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+  const P = [];
+  for (const [i, j] of EDGES) {
+    const a = corner(i), c2 = corner(j), sa = sd(a), sb = sd(c2);
+    if ((sa > 0) === (sb > 0)) continue;
+    const t = sa / (sa - sb);
+    P.push([a[0] + t * (c2[0] - a[0]), a[1] + t * (c2[1] - a[1]), a[2] + t * (c2[2] - a[2])]);
+  }
+  if (P.length < 3) { svg.style.display = 'none'; return; }
+  const c0 = [0, 1, 2].map((k) => P.reduce((s2, p) => s2 + p[k], 0) / P.length);
+  let u = Math.abs(n[2]) < 0.9 ? [-n[1], n[0], 0] : [1, 0, 0];
+  const ul = Math.hypot(u[0], u[1], u[2]); u = [u[0] / ul, u[1] / ul, u[2] / ul];
+  const w2 = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]];
+  const ang = (p) => Math.atan2((p[0] - c0[0]) * w2[0] + (p[1] - c0[1]) * w2[1] + (p[2] - c0[2]) * w2[2],
+                                (p[0] - c0[0]) * u[0] + (p[1] - c0[1]) * u[1] + (p[2] - c0[2]) * u[2]);
+  P.sort((a, c2) => ang(a) - ang(c2));
+  const vp = cam.state.viewProj, r = cv.getBoundingClientRect();
+  const pts = [];
+  for (const p of P) {
+    const cx = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12];
+    const cy = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13];
+    const cw = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
+    if (cw < 1e-6) { svg.style.display = 'none'; return; }   // a vertex behind the eye — skip this frame
+    pts.push(`${((cx / cw) * 0.5 + 0.5) * r.width},${(0.5 - (cy / cw) * 0.5) * r.height}`);
+  }
+  $('#secPoly').setAttribute('points', pts.join(' '));
+  svg.style.display = '';
+}
 function drawCompass() {
   const v = cam.state.view;
   if (!v) return;                                          // camera not updated yet (first paint comes with the loop)
@@ -2126,7 +2211,7 @@ function viewAlongSection() {
   const sign = (fwd[0] * n[0] + fwd[1] * n[1] + fwd[2] * n[2]) >= 0 ? 1 : -1;   // look dir = sign·n
   const off = [-sign * n[0], -sign * n[1], -sign * n[2]];                        // eye offset = -lookdir
   // re-center the pivot on the plane, then aim
-  const dd = st.target[0] * n[0] + st.target[1] * n[1] + st.target[2] * n[2] - sec.d;
+  const dd = st.target[0] * n[0] + st.target[1] * n[1] + st.target[2] * n[2] - sec.d0;
   st.target = [st.target[0] - dd * n[0], st.target[1] - dd * n[1], st.target[2] - dd * n[2]];
   st.theta = Math.atan2(off[1], off[0]);
   st.phi = Math.max(-PHI_MAX, Math.min(PHI_MAX, Math.asin(Math.max(-1, Math.min(1, off[2])))));
@@ -2140,7 +2225,7 @@ function toggleSection() {
     sel.value = (_lastSecMode === 'knife' && !_knife) ? 'plan' : _lastSecMode;
     // re-entering knife with a stored cut should NOT re-arm drawing — show the cut
     if (sel.value === 'knife' && _knife) {
-      $('#secPos').style.display = ''; $('#secHalf').style.display = '';
+      syncSecUI();
       syncSectionBtn();
       requestRender();
       return;
@@ -2156,7 +2241,7 @@ function scrubSection(dir) {
   const sec = currentSection(); if (!sec) return;
   const [lo, hi] = secRange();
   if (!(hi > lo)) return;
-  const step = (2 * sec.half) / (hi - lo);
+  const step = (2 * Math.max(0.01, +$('#secHalf').value)) / (hi - lo);
   $('#secPos').value = Math.max(0, Math.min(1, +$('#secPos').value + dir * step));
   requestRender();
 }
@@ -2291,6 +2376,7 @@ function layerMenu(L, x, y) {
     { label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } },
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); } },
+    { label: (renderer.layerSectioned(L.id) ? '✓ ' : '') + 'Cut by sections', action: () => { renderer.setLayerSectioned(L.id, !renderer.layerSectioned(L.id)); markProjectDirty(); requestRender(); } },
     ...(_project && L.storage !== 'project' && L.storage !== 'volatile' && layerBlob(L) ? [{
       label: `Copy into project (${fmtSize(layerBlob(L).size)})`,
       action: () => setTimeout(() => menuXY(innerWidth / 2 - 120, innerHeight / 3, [
@@ -2414,7 +2500,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

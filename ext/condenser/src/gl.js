@@ -201,7 +201,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     let l = layers.get(id);
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
-            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1 };
+            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true };
       layers.set(id, l);
     }
     return l;
@@ -305,6 +305,10 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     // stick thickness (world metres) — a live per-layer knob
     setLayerStickRadius(layer, r) { const ls = layerOf(layer); const v = Math.max(0.05, +r || 1); if (ls.stickRadius !== v) { ls.stickRadius = v; needClear = true; } },
     layerStickRadius(layer) { return layerOf(layer).stickRadius; },
+    // per-layer section participation: an exempt layer draws (and picks) whole
+    // while the others are slabbed — e.g. topo kept for context during sectioning
+    setLayerSectioned(layer, on) { const ls = layerOf(layer); const v = on !== false; if (ls.sectioned !== v) { ls.sectioned = v; needClear = true; } },
+    layerSectioned(layer) { return layerOf(layer).sectioned !== false; },
     setLayerVisible(layer, on) {
       const ls = layerOf(layer);
       if (ls.visible !== !!on) { ls.visible = !!on; needClear = true; }
@@ -446,13 +450,14 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
         gl.uniform1ui(uni.picked, pickedRec);
         gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
-        gl.uniform4f(uni.secPlane, sec ? sec.n[0] : 0, sec ? sec.n[1] : 0, sec ? sec.n[2] : 1, sec ? sec.d : 0);
-        gl.uniform2f(uni.secCfg, sec ? 1 : 0, sec ? sec.half : 0);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
         // per-layer uniforms + slices (front-to-back preserved within each group)
         const setupPtsLayer = (id) => {
           const ls = layerOf(id), o = lopt(id), zr = zRangeOf(o);
+          const lsec = ls.sectioned === false ? null : sec;
+          gl.uniform4f(uni.secPlane, lsec ? lsec.n[0] : 0, lsec ? lsec.n[1] : 0, lsec ? lsec.n[2] : 1, lsec ? lsec.d : 0);
+          gl.uniform2f(uni.secCfg, lsec ? 1 : 0, lsec ? lsec.half : 0);
           gl.uniform1i(uni.colorMode, o.colorMode);
           gl.uniform2f(uni.zRange, zr[0], zr[1]);
           gl.uniform1f(uni.intensityScale, 65535 / (ls.intensityMax || 1));
@@ -516,7 +521,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
             ramp, palette: catPalette || palette, viewportH: canvas.height,
-            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, section: sec,
+            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
+            section: ls.sectioned === false ? null : sec,
           });
         };
         for (const [id, group] of blkGroups) {
@@ -562,7 +568,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
             ramp, palette: catPalette || palette, viewportH: canvas.height,
-            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, section: sec,
+            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
+            section: ls.sectioned === false ? null : sec,
             radius: ls.stickRadius,
           });
         };

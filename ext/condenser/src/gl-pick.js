@@ -302,9 +302,11 @@ export function createPickPipeline(gl) {
       for (const c of arr) { const id = c._layer || 0; let g = m.get(id); if (!g) m.set(id, g = []); g.push(c); }
       return m;
     };
-    const setSec = (u) => {
-      gl.uniform4f(u.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
-      gl.uniform2f(u.secCfg, section ? 1 : 0, section ? section.half : 0);
+    // per layer: an exempt layer (st.sectioned === false) picks whole
+    const setSec = (u, st) => {
+      const s = st && st.sectioned === false ? null : section;
+      gl.uniform4f(u.secPlane, s ? s.n[0] : 0, s ? s.n[1] : 0, s ? s.n[2] : 1, s ? s.d : 0);
+      gl.uniform2f(u.secCfg, s ? 1 : 0, s ? s.half : 0);
     };
     ensure(viewportW, viewportH);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
@@ -322,9 +324,9 @@ export function createPickPipeline(gl) {
       gl.useProgram(pts);
       gl.uniformMatrix4fv(uPts.viewProj, false, s.viewProj);
       gl.uniform1f(uPts.pointPx, dpp);
-      setSec(uPts);
       for (const [id, group] of byLayer(ptsChunks)) {
       const st = stateOf(id);
+      setSec(uPts, st);
       gl.uniform1f(uPts.filterOn, st.maskTex ? 1 : 0);
       gl.uniform1f(uPts.isolate, st.isolate ? 1 : 0);
       if (st.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, st.maskTex); gl.uniform1i(uPts.mask, 4); }
@@ -361,9 +363,9 @@ export function createPickPipeline(gl) {
       gl.uniform1f(uBlk.demotePx, 2.0);
       gl.uniform1f(uBlk.pointPx, dpp);
       gl.uniform1f(uBlk.fixedSplat, blocksAsPoints ? 1 : 0);
-      setSec(uBlk);
       for (const [id, group] of byLayer(blkChunks)) {
       const st = stateOf(id);
+      setSec(uBlk, st);
       gl.uniform1f(uBlk.filterOn, st.maskTex ? 1 : 0);
       gl.uniform1f(uBlk.isolate, st.isolate ? 1 : 0);
       if (st.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, st.maskTex); gl.uniform1i(uBlk.mask, 4); }
@@ -401,9 +403,9 @@ export function createPickPipeline(gl) {
       gl.uniform1f(uStk.demotePx, 2.0);
       gl.uniform1f(uStk.pointPx, dpp);
       gl.uniform1f(uStk.fixedSplat, blocksAsPoints ? 1 : 0);
-      setSec(uStk);
       for (const [id, group] of byLayer(stkChunks)) {
       const st2 = stateOf(id);
+      setSec(uStk, st2);
       gl.uniform1f(uStk.radius, (st2 && st2.stickRadius) || 1);
       gl.uniform1f(uStk.filterOn, st2.maskTex ? 1 : 0);
       gl.uniform1f(uStk.isolate, st2.isolate ? 1 : 0);
