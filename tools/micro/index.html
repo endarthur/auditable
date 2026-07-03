@@ -221,7 +221,7 @@
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
   </div>
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
-  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag a .las / .ply / .csv / .xyz / .dm anywhere</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div></div>
+  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
@@ -477,13 +477,26 @@ function setActiveLayer(id) {
 }
 // "add as layer or replace?" — a compact menu at the drop point (GIS instinct:
 // opening a second dataset should never silently destroy the first)
-function askOpenMode(name, x, y) {
+function askOpenMode(name, x, y, count = 1) {
   return new Promise((res) => {
     menuXY(x != null ? x : innerWidth / 2 - 110, y != null ? y : innerHeight / 3, [
-      { label: `Add “${name.length > 28 ? name.slice(0, 27) + '…' : name}” as a layer`, action: () => res('add') },
+      { label: count > 1 ? `Add ${count} files as layers` : `Add “${name.length > 28 ? name.slice(0, 27) + '…' : name}” as a layer`, action: () => res('add') },
       { label: 'Replace the view', action: () => res('replace') },
     ], () => res(null));
   });
+}
+// several files at once → one question for the batch, then sequential opens
+// (the first replaces or adds per the answer; the rest always add as layers)
+async function openBlobs(files, mode = 'replace', at = null) {
+  files = [...files];
+  if (!files.length) return;
+  if (files.length === 1) return openBlob(files[0], files[0].name, mode, at);
+  if (mode === 'ask') {
+    mode = _layers.length ? await askOpenMode(files[0].name, at && at.x, at && at.y, files.length) : 'replace';
+    if (!mode) return;
+  }
+  await openBlob(files[0], files[0].name, mode === 'add' ? 'add' : 'replace', at);
+  for (let i = 1; i < files.length; i++) await openBlob(files[i], files[i].name, 'add');
 }
 async function openBlob(blob, name, mode = 'replace', at = null) {
   if (mode === 'ask') {
@@ -924,15 +937,25 @@ function renderEmptyRecents() {
 function openFilePicker() {
   if (window.showOpenFilePicker) {
     (async () => {
-      try { const [h] = await window.showOpenFilePicker(); if (h) { const f = await h.getFile(); addRecent(f, h); openBlob(f, f.name, 'ask'); } } catch { /* cancelled */ }
+      try {
+        const handles = await window.showOpenFilePicker({ multiple: true });
+        const files = [];
+        for (const h of handles) { const f = await h.getFile(); addRecent(f, h); files.push(f); }
+        if (files.length) openBlobs(files, 'ask');
+      } catch { /* cancelled */ }
     })();
   } else {
     // The <input> fallback (Firefox + mobile). NO `accept` filter: on Android the
     // OS picker hides files whose extension has no registered MIME — which greys
     // out a .dm (lamina's lesson).
     const inp = document.createElement('input');
-    inp.type = 'file';
-    inp.onchange = () => { if (inp.files[0]) { addRecent(inp.files[0], null); openBlob(inp.files[0], inp.files[0].name, 'ask'); } };
+    inp.type = 'file'; inp.multiple = true;
+    inp.onchange = () => {
+      const files = [...inp.files];
+      if (!files.length) return;
+      for (const f of files) addRecent(f, null);
+      openBlobs(files, 'ask');
+    };
     inp.click();
   }
 }
@@ -1069,7 +1092,7 @@ const HELP_KEYS = `
 drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
 <code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br>
-<code>p</code> — <b>layers panel</b>: open several datasets together (Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove<br><br>
+<code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
 <b>sections</b> — a slab through the data; everything hidden is neither drawn nor pickable<br>
@@ -1103,8 +1126,10 @@ addEventListener('dragover', (e) => { e.preventDefault(); document.body.classLis
 addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('drag'); });
 addEventListener('drop', (e) => {
   e.preventDefault(); document.body.classList.remove('drag');
-  const f = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) { addRecent(f, null); openBlob(f, f.name, 'ask', { x: e.clientX, y: e.clientY }); }
+  const files = e.dataTransfer.files ? [...e.dataTransfer.files] : [];
+  if (!files.length) return;
+  for (const f of files) addRecent(f, null);
+  openBlobs(files, 'ask', { x: e.clientX, y: e.clientY });
 });
 
 // Synthetic sample: a bench scan generated STREAMING into RawChunks (no LAS bytes,
