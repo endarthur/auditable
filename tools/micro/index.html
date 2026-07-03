@@ -231,7 +231,7 @@
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
   </div>
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
-  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div></div>
+  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
@@ -407,6 +407,7 @@ function syncSectionBtn() { $('#btnSection').classList.toggle('on', $('#secMode'
 $('#secMode').addEventListener('input', syncSectionBtn);
 $('#secPos').addEventListener('input', requestRender);
 $('#secHalf').addEventListener('input', requestRender);
+for (const id of ['secMode', 'secPos', 'secHalf']) $('#' + id).addEventListener('input', () => dispatchEvent(new Event('micro:project-dirty')));
 
 // screenshot: the canvas is the export surface (preserveDrawingBuffer is on)
 $('#btnShot').onclick = () => {
@@ -555,6 +556,7 @@ async function openBlob(blob, name, mode = 'replace', at = null) {
     const L = layerById(lid);
     if (L) L.colorSel = $('#colorBy').value;
     renderLayers();
+    dispatchEvent(new Event('micro:project-dirty'));
   } catch (e) {
     $('#meta').textContent = `${name} — ${e.message}`;
     renderer.removeLayer(lid);
@@ -689,6 +691,7 @@ function setColorLabels(header) {
 $('#colorBy').addEventListener('change', () => {
   const v = $('#colorBy').value;
   const L = activeLayer(); if (L) L.colorSel = v;
+  dispatchEvent(new Event('micro:project-dirty'));
   if (v.startsWith('chan:') && _blockDoc && +v.slice(5) !== _blockDoc.header.mapping.chan) {
     const open = _blockDoc.header.dm ? openDmBlob : openBlocksBlob;
     open(_blockDoc.blob, _blockDoc.name, { chan: +v.slice(5), keepFilter: true, forcePoints: _blockDoc.forcePoints, layer: _activeId, first: false });
@@ -696,6 +699,7 @@ $('#colorBy').addEventListener('change', () => {
 });
 for (const id of ['clipMin', 'clipMax']) $('#' + id).addEventListener('input', () => {
   const L = activeLayer(); if (L) L.clip = [$('#clipMin').value, $('#clipMax').value];
+  dispatchEvent(new Event('micro:project-dirty'));
 });
 
 // ── filter: lamina's expression language over EVERY column, evaluated in one
@@ -713,6 +717,7 @@ async function applyBlockFilter(expr) {
   if (!_blockDoc) { $('#meta').textContent = 'filter: open a block model first'; return; }
   const lid = _activeId;                                   // the sweep belongs to THIS layer even if focus moves
   const Lr = layerById(lid); if (Lr) Lr.filterExpr = expr;
+  dispatchEvent(new Event('micro:project-dirty'));
   _filterExpr = expr;
   const epoch = ++_filterEpoch;
   if (!expr.trim()) {
@@ -981,6 +986,187 @@ function openFilePicker() {
 }
 refreshRecents();
 
+// ── project folders (micro-layers spec §12, G1 — Chromium/FSAA-gated) ──
+// The folder IS the project: project.json (layers + display state + camera +
+// section + saved views) + the source files beside it. "Save as" copies any
+// in-memory sources INTO the folder (we hold the blobs), so a saved project is
+// self-contained. Handles persist in IDB (re-grant on reopen, never silent).
+// Write-on-save-only: Ctrl+S, dirty marker, no background writes.
+const hasFSAA = !!window.showDirectoryPicker;
+let _project = null;                                       // { dir: FileSystemDirectoryHandle, name, dirty }
+let _views = [];                                           // saved views: { name, camera, section }
+const PROJECTS_KEY = '__projects__';
+function markProjectDirty() {
+  if (_project && !_project.dirty) { _project.dirty = true; updateProjectTitle(); }
+}
+function updateProjectTitle() {
+  document.title = _project ? `micro — ${_project.name}${_project.dirty ? ' •' : ''}` : 'micro';
+}
+function captureCamera() {
+  const st = cam.state, o = frame ? frame.origin : [0, 0, 0];
+  return { target: [st.target[0] + o[0], st.target[1] + o[1], st.target[2] + o[2]], radius: st.radius, theta: st.theta, phi: st.phi, ortho: !!st.ortho };
+}
+function applyCamera(c) {
+  if (!c) return;
+  const st = cam.state, o = frame ? frame.origin : [0, 0, 0];
+  st.target = [c.target[0] - o[0], c.target[1] - o[1], c.target[2] - o[2]];
+  st.radius = c.radius; st.theta = c.theta; st.phi = c.phi;
+  cam.setOrtho(!!c.ortho);
+  cam.update(); requestRender();
+}
+function captureSection() {
+  return { mode: $('#secMode').value, pos: +$('#secPos').value, half: +$('#secHalf').value, knifeN: _knife ? _knife.n : null };
+}
+function applySection(sec) {
+  if (!sec) return;
+  const sel = $('#secMode');
+  if (sec.mode === 'knife' && sec.knifeN) {
+    // bypass the input handler (it would re-ARM the knife and wipe the cut)
+    _knife = { n: sec.knifeN };
+    sel.value = 'knife';
+    $('#secPos').style.display = ''; $('#secHalf').style.display = '';
+  } else {
+    sel.value = sec.mode || 'off';
+    sel.dispatchEvent(new Event('input'));
+  }
+  $('#secPos').value = sec.pos != null ? sec.pos : 0.5;
+  $('#secHalf').value = sec.half != null ? sec.half : 10;
+  syncSectionBtn(); requestRender();
+}
+function projectManifest() {
+  return {
+    app: 'micro', version: 1, name: _project.name,
+    layers: _layers.map((L) => ({ source: L.name, colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible })),
+    camera: captureCamera(),
+    section: captureSection(),
+    views: _views,
+  };
+}
+async function rememberProject(dir) {
+  try {
+    const list = (await _idb.get(PROJECTS_KEY)) || [];
+    const next = [{ name: dir.name, handle: dir }].concat(list.filter((e) => e.name !== dir.name)).slice(0, 8);
+    await _idb.set(PROJECTS_KEY, next);
+    renderEmptyProjects();
+  } catch { /* best-effort */ }
+}
+async function saveProjectAs() {
+  if (!hasFSAA) return;
+  let dir;
+  try { dir = await window.showDirectoryPicker({ mode: 'readwrite' }); } catch { return; }   // cancelled
+  _project = { dir, name: dir.name, dirty: false };
+  await saveProject();
+  rememberProject(dir);
+}
+async function saveProject() {
+  if (!_project) return saveProjectAs();
+  const dir = _project.dir;
+  try {
+    if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'project: write permission denied'; return; }
+    // copy any source not yet in the folder (we hold the blobs) — self-containment
+    for (const L of _layers) {
+      const doc = L.docs.blockDoc || L.docs.plyDoc || L.docs.lasDoc;
+      if (!doc || !doc.blob) continue;                     // samples have no blob to keep
+      let exists = null;
+      try { exists = await dir.getFileHandle(L.name); } catch { /* not there */ }
+      if (exists) { const f = await exists.getFile(); if (f.size === doc.blob.size) continue; }
+      const fh = await dir.getFileHandle(L.name, { create: true });
+      const w = await fh.createWritable();
+      await doc.blob.stream().pipeTo(w);
+      $('#meta').textContent = `project: copied ${L.name} into the folder`;
+    }
+    const fh = await dir.getFileHandle('project.json', { create: true });
+    const w = await fh.createWritable();
+    await w.write(JSON.stringify(projectManifest(), null, 2) + '\n');
+    await w.close();
+    _project.dirty = false;
+    updateProjectTitle();
+    $('#meta').textContent = `project saved — ${_project.name}/project.json`;
+  } catch (e) {
+    $('#meta').textContent = `project save failed — ${e.message}`;
+  }
+}
+async function openProjectDir(dir) {
+  try {
+    if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'project: permission denied'; return; }
+    const mf = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
+    if (mf.app !== 'micro') { $('#meta').textContent = 'not a micro project (project.json says otherwise)'; return; }
+    _project = { dir, name: dir.name, dirty: false };
+    _views = mf.views || [];
+    closeAllLayers();
+    $('#empty').style.display = 'none';
+    for (let i = 0; i < mf.layers.length; i++) {
+      const ls = mf.layers[i];
+      let file;
+      try { file = await (await dir.getFileHandle(ls.source)).getFile(); }
+      catch { $('#meta').textContent = `project: “${ls.source}” missing from the folder — skipped`; continue; }
+      await openBlob(file, ls.source, i === 0 || !_layers.length ? 'replace' : 'add');
+      const L = activeLayer();
+      if (!L) continue;                                    // that open failed; its layer rolled back
+      // color channel first (may re-stream), then filter (sweeps), then the rest
+      if (ls.colorSel && ls.colorSel !== $('#colorBy').value && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) {
+        L.colorSel = ls.colorSel;
+        if (ls.colorSel.startsWith('chan:') && _blockDoc && +ls.colorSel.slice(5) !== _blockDoc.header.mapping.chan) {
+          const open2 = _blockDoc.header.dm ? openDmBlob : openBlocksBlob;
+          await open2(_blockDoc.blob, _blockDoc.name, { chan: +ls.colorSel.slice(5), keepFilter: false, forcePoints: _blockDoc.forcePoints, layer: _activeId, first: false });
+        }
+        if ([...$('#colorBy').options].some((o) => o.value === ls.colorSel)) $('#colorBy').value = ls.colorSel;
+      }
+      if (ls.clip && (ls.clip[0] || ls.clip[1])) { L.clip = [String(ls.clip[0] || ''), String(ls.clip[1] || '')]; $('#clipMin').value = L.clip[0]; $('#clipMax').value = L.clip[1]; }
+      if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
+      if (ls.visible === false) { L.visible = false; renderer.setLayerVisible(L.id, false); }
+    }
+    applyCamera(mf.camera);
+    applySection(mf.section);
+    renderLayers();
+    _project.dirty = false;
+    updateProjectTitle();
+    rememberProject(dir);
+    $('#meta').textContent = `project “${_project.name}” — ${_layers.length} layer${_layers.length === 1 ? '' : 's'}`;
+    requestRender();
+  } catch (e) {
+    $('#meta').textContent = `project open failed — ${e.message}`;
+  }
+}
+async function openProjectPicker() {
+  if (!hasFSAA) return;
+  try { await openProjectDir(await window.showDirectoryPicker({ mode: 'readwrite' })); } catch { /* cancelled */ }
+}
+function closeProject() { _project = null; _views = []; updateProjectTitle(); }
+// saved views: named camera + section bookmarks, kept in project.json
+function saveViewAs() {
+  const name = prompt('view name', `view ${_views.length + 1}`);
+  if (!name) return;
+  _views = _views.filter((v) => v.name !== name).concat([{ name, camera: captureCamera(), section: captureSection() }]);
+  markProjectDirty();
+}
+function applyView(v) { applyCamera(v.camera); applySection(v.section); }
+// recent projects on the empty state (chips, like recent files)
+async function renderEmptyProjects() {
+  const el = $('#emptyProjects'); if (!el) return;
+  el.textContent = '';
+  if (!hasFSAA) return;
+  let list = [];
+  try { list = (await _idb.get(PROJECTS_KEY)) || []; } catch { /* ignore */ }
+  if (!list.length) return;
+  const lab = document.createElement('span'); lab.className = 'er-label'; lab.textContent = 'projects:';
+  el.appendChild(lab);
+  for (const e of list.slice(0, 6)) {
+    const chip = document.createElement('a'); chip.className = 'er-chip';
+    chip.textContent = e.name; chip.title = 'open project';
+    chip.onclick = () => openProjectDir(e.handle);
+    el.appendChild(chip);
+  }
+}
+renderEmptyProjects();
+// dirty triggers: anything that lands in the manifest (camera excluded — it's
+// captured at save time; orbiting shouldn't nag)
+addEventListener('micro:project-dirty', markProjectDirty);
+// Ctrl+S saves the project (or prompts Save as… when none)
+addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && hasFSAA) { e.preventDefault(); saveProject(); }
+});
+
 // ── menubar (lamina's compact menuAt pattern — commands in menus, knobs in the bar) ──
 let _menuEl = null;
 function closeMenu() { if (_menuEl) { _menuEl.remove(); _menuEl = null; } }
@@ -1066,6 +1252,13 @@ $('#mFile').onclick = () => {
     { label: 'Open…', kbd: '', action: openFilePicker },
     { label: 'File info…', kbd: 'i', action: showFileInfo },
   ];
+  if (hasFSAA) {
+    items.push({ sep: true },
+      { label: 'Open project folder…', action: openProjectPicker },
+      { label: _project ? `Save project${_project.dirty ? ' •' : ''}` : 'Save project', kbd: 'Ctrl+S', action: saveProject },
+      { label: 'Save project as…', action: saveProjectAs });
+    if (_project) items.push({ label: `Close project (${_project.name})`, action: closeProject });
+  }
   if (_remember && _recents.length) {
     items.push({ sep: true });
     for (const e of _recents.slice(0, 10)) items.push({ label: (e.handle ? '' : '↻ ') + e.name, action: () => openRecent(e) });
@@ -1104,6 +1297,10 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Measure…', kbd: 'm', action: armMeasure },
   { label: (_measureTP ? '✓ ' : '') + 'Measure trend & plunge', action: toggleMeasureTP },
   { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
+  { sep: true },
+  ...(_views.length ? _views.map((v) => ({ label: `⤷ ${v.name}`, action: () => applyView(v) })) : []),
+  { label: 'Save view…', action: saveViewAs },
+  ...(_views.length ? [{ label: 'Remove view ▸', action: () => setTimeout(() => menuXY(innerWidth / 2 - 90, 100, _views.map((v) => ({ label: v.name, action: () => { _views = _views.filter((x) => x !== v); markProjectDirty(); } }))), 0) }] : []),
   { label: 'Section on/off', kbd: 'x', action: toggleSection },
   { label: 'Along the section', kbd: 'l', action: viewAlongSection },
   { label: 'Scrub section back', kbd: '[', action: () => scrubSection(-1) },
@@ -1114,7 +1311,8 @@ const HELP_KEYS = `
 drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
 <code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br>
-<code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove<br><br>
+<code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove<br>
+<code>Ctrl+S</code> — <b>save the project</b>: File → project folder (Chromium) keeps your layers, styling, filters, camera, section, and saved views in a plain folder — project.json + the files<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
 <b>sections</b> — a slab through the data; everything hidden is neither drawn nor pickable<br>
@@ -1542,6 +1740,7 @@ function toggleLayersPanel(force) {
 $('#lpClose').onclick = () => toggleLayersPanel(false);
 function fitLayer(L) { if (L.bboxLocal) { cam.fit(L.bboxLocal); requestRender(); } }
 function removeLayerUI(id) {
+  dispatchEvent(new Event('micro:project-dirty'));
   renderer.removeLayer(id);
   _layers = _layers.filter((l) => l.id !== id);
   recomputeUnion();
@@ -1567,7 +1766,7 @@ function renderLayers() {
     row.className = 'lp-row' + (L.id === _activeId ? ' active' : '') + (L.visible ? '' : ' off');
     const eye = document.createElement('input');
     eye.type = 'checkbox'; eye.checked = L.visible; eye.title = 'visible';
-    eye.onclick = (e) => { e.stopPropagation(); L.visible = eye.checked; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); };
+    eye.onclick = (e) => { e.stopPropagation(); L.visible = eye.checked; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); dispatchEvent(new Event('micro:project-dirty')); };
     const name = document.createElement('span'); name.className = 'lp-name'; name.textContent = L.name; name.title = L.name;
     const n = document.createElement('span'); n.className = 'lp-n';
     n.textContent = (renderer.layerElementCount(L.id) || 0).toLocaleString();
@@ -1663,7 +1862,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

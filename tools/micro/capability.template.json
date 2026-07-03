@@ -17,7 +17,7 @@
   },
   "filesystem": {
     "reads": "user-opened files only (picker / drag-drop)",
-    "writes": "user-initiated PNG export only, to a user-chosen path (OS Save dialog)",
+    "writes": "user-initiated PNG export (OS Save dialog), and — on explicit Ctrl+S — project.json + copied source files INSIDE project folders you explicitly grant (File System Access, Chromium only; permission re-requested per session)",
     "silent_or_arbitrary_io": false,
     "local_state": "render-budget preference in localStorage + an optional recents list (file handles + names) in IndexedDB — local only, never transmitted; reopening a recent re-grants permission (no silent re-read); clearable + disableable"
   },
