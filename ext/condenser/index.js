@@ -1940,20 +1940,25 @@ async function openDrillholes({ collar, survey, intervals }, opts = {}) {
   const chan = opts.chan != null ? opts.chan : (numericCols[0] ? numericCols[0].i : null);
   const catCol = opts.cat != null ? opts.cat : (textCols[0] ? textCols[0].i : null);
 
-  // samples = interval MIDPOINTS; __row threads the source row through the
-  // per-hole depth sort (the identity)
-  const bhid = new Array(n), depth = new Float64Array(n), rowIdx = new Float64Array(n);
+  // samples = BOTH interval endpoints (2 per row): the desurveyed FROM and TO
+  // positions are the capsule segment, arc-correct via positionAt; the render
+  // midpoint derives as (A+B)/2. __row + __end thread the source row and
+  // which endpoint through the per-hole depth sort (the identity).
+  const bhid = new Array(2 * n), depth = new Float64Array(2 * n);
+  const rowIdx = new Float64Array(2 * n), endIdx = new Float64Array(2 * n);
   const chanVals = new Float64Array(n), catVals = catCol != null ? new Array(n) : null;
   const catCounts = new Map();
   for (let i = 0; i < n; i++) {
     const r = tIv.rows[i];
-    bhid[i] = r[m.intervals.bhid];
-    depth[i] = (+r[m.intervals.from] + +r[m.intervals.to]) / 2;
-    rowIdx[i] = i;
+    const hb = r[m.intervals.bhid];
+    bhid[2 * i] = hb; bhid[2 * i + 1] = hb;
+    depth[2 * i] = +r[m.intervals.from]; depth[2 * i + 1] = +r[m.intervals.to];
+    rowIdx[2 * i] = i; rowIdx[2 * i + 1] = i;
+    endIdx[2 * i] = 0; endIdx[2 * i + 1] = 1;
     chanVals[i] = chan != null ? +r[chan] : 0;
     if (catVals) { const v = (r[catCol] || '').trim(); catVals[i] = v; if (v && catCounts.size <= 256) catCounts.set(v, (catCounts.get(v) || 0) + 1); }
   }
-  const samples = { bhid, depth, cols: [{ name: '__row', values: rowIdx }] };
+  const samples = { bhid, depth, cols: [{ name: '__row', values: rowIdx }, { name: '__end', values: endIdx }] };
 
   const ds = desurveySamples({ collars, surveys, samples }, { method: opts.method || 'minimumCurvature', dipConvention: opts.dipConvention || 'auto' });
 
@@ -1972,20 +1977,36 @@ async function openDrillholes({ collar, survey, intervals }, opts = {}) {
   const categories = catCounts.size > 0 && catCounts.size <= 255 ? [...catCounts.keys()].sort() : null;
   const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
 
-  // placed rows → arrays keyed back to source rows; bbox over placements
-  const nP = ds.rows.length;
+  // pair the placed endpoints back into SEGMENTS keyed by source row
+  const endA = new Map(), endB = new Map();               // src row → [x,y,z]
+  for (let k = 0; k < ds.rows.length; k++) {
+    const row = ds.rows[k];
+    const src = row[5] | 0, end = row[6] | 0;             // __row, __end
+    (end === 0 ? endA : endB).set(src, [row[1], row[2], row[3]]);
+  }
+  const placedRows = [];
+  for (const [src, a] of endA) if (endB.has(src)) placedRows.push(src);
+  placedRows.sort((x, y) => x - y);
+  const nP = placedRows.length;
+  const ax = new Float64Array(nP), ay = new Float64Array(nP), az = new Float64Array(nP);
+  const bx = new Float64Array(nP), by = new Float64Array(nP), bz = new Float64Array(nP);
   const px = new Float64Array(nP), py = new Float64Array(nP), pz = new Float64Array(nP);
   const pChan = new Float64Array(nP), pCat = catCode ? new Uint8Array(nP) : null;
   const pRec = new Uint32Array(nP);
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   for (let k = 0; k < nP; k++) {
-    const row = ds.rows[k];
-    const src = row[5] | 0;                                // __row (first sample col)
-    px[k] = row[1]; py[k] = row[2]; pz[k] = row[3];
+    const src = placedRows[k];
+    const A = endA.get(src), B = endB.get(src);
+    ax[k] = A[0]; ay[k] = A[1]; az[k] = A[2];
+    bx[k] = B[0]; by[k] = B[1]; bz[k] = B[2];
+    px[k] = (A[0] + B[0]) / 2; py[k] = (A[1] + B[1]) / 2; pz[k] = (A[2] + B[2]) / 2;
     pChan[k] = Number.isFinite(chanVals[src]) ? chanVals[src] : 0;
     if (pCat) { const c = catCode.get(catVals[src]); pCat[k] = c === undefined ? 0 : c; }
     pRec[k] = src;
-    for (let a = 0; a < 3; a++) { const v = row[1 + a]; if (v < min[a]) min[a] = v; if (v > max[a]) max[a] = v; }
+    for (let a2 = 0; a2 < 3; a2++) {
+      if (A[a2] < min[a2]) min[a2] = A[a2]; if (A[a2] > max[a2]) max[a2] = A[a2];
+      if (B[a2] < min[a2]) min[a2] = B[a2]; if (B[a2] > max[a2]) max[a2] = B[a2];
+    }
   }
 
   let cLo = Infinity, cHi = -Infinity;
@@ -2011,7 +2032,11 @@ async function openDrillholes({ collar, survey, intervals }, opts = {}) {
       const k = Math.min(chunkPoints, nP - at);
       yield {
         count: k,
+        // midpoints (points mode / section center / measure)
         x: px.subarray(at, at + k), y: py.subarray(at, at + k), z: pz.subarray(at, at + k),
+        // segment endpoints (sticks mode)
+        ax: ax.subarray(at, at + k), ay: ay.subarray(at, at + k), az: az.subarray(at, at + k),
+        bx: bx.subarray(at, at + k), by: by.subarray(at, at + k), bz: bz.subarray(at, at + k),
         chan: pChan.subarray(at, at + k), cat: pCat ? pCat.subarray(at, at + k) : null,
         recIdx: pRec.subarray(at, at + k),
       };
@@ -2031,6 +2056,125 @@ async function openDrillholes({ collar, survey, intervals }, opts = {}) {
   return { header, streamChunks, fetchRecord, recordPosition };
 }
 
+// ── src/sticks.js ──
+
+// @gcu/condenser — stick chunks: drillhole interval SEGMENTS (desurveyed
+// endpoint pairs) as instanced capsule impostors (micro-layers spec §6).
+// Same chunk discipline as blocks/points: batch-Morton on the midpoints,
+// intra-chunk shuffle (any prefix = a uniform subsample), per-chunk channel
+// quantization. Coordinates stay Float32 frame-local — stick counts are
+// 10³–10⁶, so the uint16 squeeze isn't needed and endpoints stay exact
+// to ~mm at frame-local magnitudes.
+
+
+/**
+ * Build one StickChunk from columnar world-space endpoints + attributes.
+ * raw = { ax..az, bx..bz (endpoints), x,y,z (midpoints), chan, cat, recIdx }.
+ * `indices` = optional gather list (a Morton slice); shuffled like the others.
+ */
+function buildStickChunk(raw, frame, rnd, indices = null) {
+  const n = indices ? indices.length : raw.x.length;
+  const o = frame.origin;
+  const perm = indices ? shuffleInPlace(Uint32Array.from(indices), rnd) : shuffledIndices(n, rnd);
+  const seg = new Float32Array(6 * n);                     // ax ay az bx by bz, frame-local
+  const outChan = new Uint16Array(n), outCat = new Uint8Array(n), outR = new Uint32Array(n);
+  let cMin = Infinity, cMax = -Infinity;
+  for (let k = 0; k < n; k++) { const v = raw.chan[perm[k]]; if (Number.isFinite(v)) { if (v < cMin) cMin = v; if (v > cMax) cMax = v; } }
+  if (!Number.isFinite(cMin)) { cMin = 0; cMax = 0; }
+  const cScale = cMax > cMin ? 65535 / (cMax - cMin) : 0;
+  const bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+  for (let k = 0; k < n; k++) {
+    const i = perm[k];
+    const A = [raw.ax[i] - o[0], raw.ay[i] - o[1], raw.az[i] - o[2]];
+    const B = [raw.bx[i] - o[0], raw.by[i] - o[1], raw.bz[i] - o[2]];
+    seg[k * 6] = A[0]; seg[k * 6 + 1] = A[1]; seg[k * 6 + 2] = A[2];
+    seg[k * 6 + 3] = B[0]; seg[k * 6 + 4] = B[1]; seg[k * 6 + 5] = B[2];
+    for (let a = 0; a < 3; a++) {
+      if (A[a] < bb[a]) bb[a] = A[a]; if (A[a] > bb[a + 3]) bb[a + 3] = A[a];
+      if (B[a] < bb[a]) bb[a] = B[a]; if (B[a] > bb[a + 3]) bb[a + 3] = B[a];
+    }
+    const cv = raw.chan[i];
+    outChan[k] = Number.isFinite(cv) ? ((cv - cMin) * cScale + 0.5) | 0 : 0;
+    outCat[k] = raw.cat ? raw.cat[i] : 0;
+    outR[k] = raw.recIdx[i];
+  }
+  // NB: the culling bbox covers the SEGMENTS; the renderer pads it by the
+  // current stick radius at cull time (the radius is a live per-layer knob).
+  return { kind: 'sticks', count: n, seg, chan: outChan, chanRange: [cMin, cMax], cat: outCat, recIdx: outR, bboxLocal: Float64Array.from(bb) };
+}
+
+// Exact midpoint of element k, frame-local (tests + pick verification).
+function stickLocalCenter(chunk, k) {
+  const s = chunk.seg;
+  return [(s[k * 6] + s[k * 6 + 3]) / 2, (s[k * 6 + 1] + s[k * 6 + 4]) / 2, (s[k * 6 + 2] + s[k * 6 + 5]) / 2];
+}
+
+/**
+ * StickChunkBuilder — the blocks builder's shape over segment RawChunks
+ * ({ count, ax..bz, x,y,z, chan, cat, recIdx }). Batch-Morton on midpoints,
+ * sliced, shuffled.
+ */
+function createStickChunkBuilder({ frame, chunkSize = 1 << 17, batchSize = 0, seed = 1, onChunk }) {
+  const rnd = mulberry32(seed);
+  const batchN = batchSize || chunkSize * 4;
+  let pend = [], pendCount = 0;
+  const doc = {
+    count: 0,
+    bboxLocal: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity),
+    chanRange: [Infinity, -Infinity],
+  };
+  const concat = (Type, parts) => {
+    const out = new Type(parts.reduce((t, p) => t + p.length, 0));
+    let off = 0;
+    for (const p of parts) { out.set(p, off); off += p.length; }
+    return out;
+  };
+  const flushBatch = () => {
+    if (!pendCount) return;
+    const cols = {
+      ax: concat(Float64Array, pend.map((p) => p.ax)), ay: concat(Float64Array, pend.map((p) => p.ay)), az: concat(Float64Array, pend.map((p) => p.az)),
+      bx: concat(Float64Array, pend.map((p) => p.bx)), by: concat(Float64Array, pend.map((p) => p.by)), bz: concat(Float64Array, pend.map((p) => p.bz)),
+      x: concat(Float64Array, pend.map((p) => p.x)), y: concat(Float64Array, pend.map((p) => p.y)), z: concat(Float64Array, pend.map((p) => p.z)),
+      chan: concat(Float64Array, pend.map((p) => p.chan)),
+      cat: pend.every((p) => p.cat) ? concat(Uint8Array, pend.map((p) => p.cat)) : null,
+      recIdx: concat(Uint32Array, pend.map((p) => p.recIdx)),
+    };
+    const n = pendCount;
+    pend = []; pendCount = 0;
+    const order = radixSortIndices(mortonKeys(cols.x, cols.y, cols.z, n), n);
+    for (let start = 0; start < n; start += chunkSize) {
+      const slice = order.subarray(start, Math.min(start + chunkSize, n));
+      const chunk = buildStickChunk(cols, frame, rnd, slice);
+      doc.count += chunk.count;
+      const b = doc.bboxLocal, cb = chunk.bboxLocal;
+      for (let i = 0; i < 3; i++) { if (cb[i] < b[i]) b[i] = cb[i]; if (cb[i + 3] > b[i + 3]) b[i + 3] = cb[i + 3]; }
+      if (chunk.chanRange[0] < doc.chanRange[0]) doc.chanRange[0] = chunk.chanRange[0];
+      if (chunk.chanRange[1] > doc.chanRange[1]) doc.chanRange[1] = chunk.chanRange[1];
+      onChunk(chunk);
+    }
+  };
+  return {
+    push(raw) {
+      let recIdx = raw.recIdx;
+      if (!recIdx) {
+        recIdx = new Uint32Array(raw.count);
+        for (let i = 0; i < raw.count; i++) recIdx[i] = (raw.recStart || 0) + i;
+      }
+      let taken = 0;
+      while (taken < raw.count) {
+        const room = batchN - pendCount;
+        const n = Math.min(room, raw.count - taken);
+        const s = (a) => (a ? a.subarray(taken, taken + n) : null);
+        pend.push({ ax: s(raw.ax), ay: s(raw.ay), az: s(raw.az), bx: s(raw.bx), by: s(raw.by), bz: s(raw.bz), x: s(raw.x), y: s(raw.y), z: s(raw.z), chan: s(raw.chan), cat: s(raw.cat), recIdx: recIdx.subarray(taken, taken + n) });
+        pendCount += n; taken += n;
+        if (pendCount >= batchN) flushBatch();
+      }
+    },
+    flush() { flushBatch(); return doc; },
+    get doc() { return doc; },
+  };
+}
+
 // ── src/gl-util.js ──
 
 // @gcu/condenser — shared GL scaffolding (used by the splat + impostor pipelines).
@@ -2047,6 +2191,301 @@ function makeProgram(gl, vsrc, fsrc) {
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('condenser link: ' + gl.getProgramInfoLog(p));
   return p;
+}
+
+// ── src/gl-sticks.js ──
+
+// @gcu/condenser — capsule impostors for drillhole sticks (micro-layers §6).
+// gl-blocks' trick with a different intersection: one instanced quad per
+// SEGMENT, billboarded to enclose the capsule's silhouette (spanned by the
+// segment axis and the axis⊥view direction), fragment ray-capsule test with a
+// real gl_FragDepth + surface normal (headlight shading). <2px → splat
+// demotion; a cheap no-gl_FragDepth program serves fully-demoted far chunks.
+// Radius is a live per-layer uniform (world metres) — the "stick thickness"
+// knob. Mask / section / picked-glow / repaint identical to blocks.
+
+
+const VERT$gl_sticks = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aA;          // segment start, frame-local
+layout(location=1) in vec3 aB;          // segment end
+layout(location=2) in float aChan;      // uint16 normalized (per-chunk range)
+layout(location=3) in float aCat;       // uint8 raw
+layout(location=4) in uint aRec;        // uint32 partitioned record id
+uniform mat4 uViewProj;
+uniform vec3 uEye;
+uniform float uRadius;                  // stick radius, world metres
+uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat, uOrtho;
+uniform vec3 uFwd;
+uniform int uColorMode;                 // 0 elevation | 1 channel | 2 category | 3 solid
+uniform vec2 uZRange;
+uniform vec2 uChanChunk;                // chunk chan min/span (dequantize)
+uniform vec2 uChanDoc;                  // doc chan min/span (ramp)
+uniform sampler2D uRamp;
+uniform sampler2D uPalette;
+uniform sampler2D uMask;
+uniform float uFilterOn, uIsolate;
+uniform uint uPicked;
+uniform uvec2 uRepaint;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
+flat out vec3 vA;
+flat out vec3 vB;
+flat out vec4 vColor;
+flat out float vMode;                   // 0 = capsule, 1 = splat
+flat out float vCull;
+out vec2 vCorner;
+out vec3 vWorldPos;
+void main() {
+  vec3 center = (aA + aB) * 0.5;
+  vec3 axis = aB - aA;
+  float len = max(length(axis), 1e-6);
+  vec3 u = axis / len;
+  float dist = max(distance(uEye, center), 1e-3);
+  float distEff = uOrtho > 0.5 ? 1.0 : dist;
+  vec3 viewDir = uOrtho > 0.5 ? uFwd : (center - uEye) / dist;
+  // quad plane: the segment axis × the axis-perpendicular-to-view — encloses
+  // the capsule silhouette. Axis ∥ view → any perpendicular works.
+  vec3 v = cross(u, viewDir);
+  float vl = length(v);
+  v = vl > 1e-4 ? v / vl : normalize(abs(u.z) < 0.9 ? cross(u, vec3(0.0, 0.0, 1.0)) : cross(u, vec3(1.0, 0.0, 0.0)));
+  float pxR = (len * 0.5 + uRadius) * uPerspScale / distEff;
+  float demoted = max(pxR < uDemotePx ? 1.0 : 0.0, uFixedSplat);
+  float m = 1.0;
+  if (uFilterOn > 0.5) {
+    int rec = int(aRec & 0x1FFFFFFFu);
+    m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
+  }
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
+  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+  vec3 wp;
+  if (demoted > 0.5) {                                   // splat: camera-facing square at the center
+    float quadR = max(uPointPx * 0.5, min(pxR, uPointPx * 2.0)) * distEff / uPerspScale;
+    vec3 sv = normalize(cross(viewDir, v));
+    wp = center + (v * corner.x + sv * corner.y) * quadR;
+  } else {
+    wp = center + u * (corner.x * (len * 0.5 + uRadius)) + v * (corner.y * uRadius);
+  }
+  gl_Position = uViewProj * vec4(wp, 1.0);
+  vA = aA; vB = aB; vMode = demoted; vCorner = corner; vWorldPos = wp;
+  if (uColorMode == 0) {
+    float t = clamp((center.z - uZRange.x) / max(uZRange.y, 1e-6), 0.0, 1.0);
+    vColor = texture(uRamp, vec2(t, 0.5));
+  } else if (uColorMode == 1) {
+    float cv = uChanChunk.x + aChan * uChanChunk.y;
+    float t = clamp((cv - uChanDoc.x) / max(uChanDoc.y, 1e-6), 0.0, 1.0);
+    vColor = texture(uRamp, vec2(t, 0.5));
+  } else if (uColorMode == 2) {
+    vColor = texture(uPalette, vec2((aCat + 0.5) / 256.0, 0.5));
+  } else {
+    vColor = vec4(0.62, 0.63, 0.66, 1.0);
+  }
+  if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);
+  if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);
+  if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+}`;
+
+const FRAG$gl_sticks = `#version 300 es
+precision highp float;
+flat in vec3 vA;
+flat in vec3 vB;
+flat in vec4 vColor;
+flat in float vMode;
+flat in float vCull;
+in vec2 vCorner;
+in vec3 vWorldPos;
+uniform vec3 uEye;
+uniform vec3 uFwd;
+uniform float uOrthoRay;
+uniform float uBackoff;
+uniform float uRadius;
+uniform vec3 uLightDir;
+uniform mat4 uViewProj;
+out vec4 outColor;
+void main() {
+  if (vCull > 0.5) discard;
+  if (vMode > 0.5) {                    // demoted splat
+    if (dot(vCorner, vCorner) > 1.0) discard;
+    gl_FragDepth = gl_FragCoord.z;
+    outColor = vColor;
+    return;
+  }
+  vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
+  vec3 rd = uOrthoRay > 0.5 ? uFwd : normalize(vWorldPos - uEye);
+  // ray-capsule (body cylinder + cap spheres)
+  vec3 ba = vB - vA;
+  vec3 oa = ro - vA;
+  float baba = dot(ba, ba), bard = dot(ba, rd), baoa = dot(ba, oa);
+  float rdoa = dot(rd, oa), oaoa = dot(oa, oa);
+  float a = baba - bard * bard;
+  float b = baba * rdoa - baoa * bard;
+  float c = baba * oaoa - baoa * baoa - uRadius * uRadius * baba;
+  float h = b * b - a * c;
+  float t = -1.0;
+  vec3 n = vec3(0.0);
+  if (h >= 0.0) {
+    float tb = (-b - sqrt(h)) / max(a, 1e-9);
+    float y = baoa + tb * bard;
+    if (y > 0.0 && y < baba && tb > 0.0) {
+      t = tb;
+      vec3 p = ro + rd * t;
+      n = (p - vA - ba * (y / baba)) / uRadius;
+    }
+  }
+  if (t < 0.0) {                        // the caps: try both, keep the nearest forward hit
+    for (int i = 0; i < 2; i++) {
+      vec3 capC = i == 0 ? vA : vB;
+      vec3 o2 = ro - capC;
+      float b2 = dot(rd, o2);
+      float c2 = dot(o2, o2) - uRadius * uRadius;
+      float h2 = b2 * b2 - c2;
+      if (h2 >= 0.0) {
+        float t2 = -b2 - sqrt(h2);
+        if (t2 > 0.0 && (t < 0.0 || t2 < t)) {
+          t = t2;
+          n = (ro + rd * t2 - capC) / uRadius;
+        }
+      }
+    }
+  }
+  if (t < 0.0) discard;
+  vec3 p = ro + rd * t;
+  vec4 clip = uViewProj * vec4(p, 1.0);
+  gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
+  float shade = 0.55 + 0.45 * max(dot(n, uLightDir), 0.0);
+  outColor = vec4(vColor.rgb * shade, vColor.a);
+}`;
+
+const FRAG_CHEAP$gl_sticks = `#version 300 es
+precision highp float;
+flat in vec3 vA;
+flat in vec3 vB;
+flat in vec4 vColor;
+flat in float vMode;
+flat in float vCull;
+in vec2 vCorner;
+in vec3 vWorldPos;
+uniform vec3 uEye;
+uniform vec3 uLightDir;
+uniform mat4 uViewProj;
+out vec4 outColor;
+void main() {
+  if (vCull > 0.5) discard;
+  if (dot(vCorner, vCorner) > 1.0) discard;
+  outColor = vColor;
+}`;
+
+function createSticksPipeline(gl) {
+  const mkProg = (frag) => {
+    const prog = makeProgram(gl, VERT$gl_sticks, frag);
+    const U = (n) => gl.getUniformLocation(prog, n);
+    return { prog, uni: {
+      viewProj: U('uViewProj'), eye: U('uEye'), radius: U('uRadius'),
+      perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'), fixedSplat: U('uFixedSplat'),
+      colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
+      ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
+      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), picked: U('uPicked'), repaint: U('uRepaint'),
+      secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
+      ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
+    } };
+  };
+  const full = mkProg(FRAG$gl_sticks), cheap = mkProg(FRAG_CHEAP$gl_sticks);
+  let active = full;
+
+  function upload(chunk) {
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const mkBuf = (data) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return b; };
+    const bSeg = mkBuf(chunk.seg), bChan = mkBuf(chunk.chan), bCat = mkBuf(chunk.cat), bRec = mkBuf(chunk.recIdx);
+    gl.bindVertexArray(null);
+    return {
+      kind: 'sticks', vao, buffers: [bSeg, bChan, bCat, bRec],
+      bSeg, bChan, bCat, bRec,
+      count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0,
+      chanRange: chunk.chanRange,
+    };
+  }
+
+  function drawSlice(c, first, k, useCheap = false) {
+    const pp = useCheap ? cheap : full;
+    if (pp !== active) { gl.useProgram(pp.prog); active = pp; }
+    const uni = active.uni;
+    gl.uniform1f(uni.fixedSplat, useCheap ? 1 : 0);
+    gl.bindVertexArray(c.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bSeg);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, first * 24);
+    gl.vertexAttribDivisor(0, 1);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, first * 24 + 12);
+    gl.vertexAttribDivisor(1, 1);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bChan);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 1, gl.UNSIGNED_SHORT, true, 0, first * 2);
+    gl.vertexAttribDivisor(2, 1);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bCat);
+    gl.enableVertexAttribArray(3);
+    gl.vertexAttribPointer(3, 1, gl.UNSIGNED_BYTE, false, 0, first);
+    gl.vertexAttribDivisor(3, 1);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bRec);
+    gl.enableVertexAttribArray(4);
+    gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_INT, 0, first * 4);
+    gl.vertexAttribDivisor(4, 1);
+    const span = c.chanRange[1] - c.chanRange[0];
+    gl.uniform2f(uni.chanChunk, c.chanRange[0], span > 0 ? span : 0);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
+  }
+
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1 }) {
+    const s = cam.state;
+    for (const pp of [full, cheap]) {
+      gl.useProgram(pp.prog);
+      const uni = pp.uni;
+      gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
+      gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
+      const v = s.view;
+      let lx = s.eye[0] - s.target[0], ly = s.eye[1] - s.target[1], lz = s.eye[2] - s.target[2];
+      const ll = Math.hypot(lx, ly, lz) || 1;
+      lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
+      const l2 = Math.hypot(lx, ly, lz) || 1;
+      gl.uniform3f(uni.lightDir, lx / l2, ly / l2, lz / l2);
+      gl.uniform1f(uni.radius, radius);
+      gl.uniform1f(uni.perspScale, s.ortho ? (viewportH / 2) / s.halfH : (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uni.ortho, s.ortho ? 1 : 0);
+      gl.uniform1f(uni.orthoRay, s.ortho ? 1 : 0);
+      {
+        const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+        const fl = Math.hypot(...f) || 1;
+        gl.uniform3f(uni.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+        gl.uniform1f(uni.backoff, s.radius * 2);
+      }
+      gl.uniform1f(uni.demotePx, 2.0);
+      gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
+      gl.uniform1i(uni.colorMode, colorMode);
+      gl.uniform2f(uni.zRange, zRange[0], zRange[1]);
+      gl.uniform2f(uni.chanDoc, chanDoc[0], chanDoc[1]);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
+      gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
+      gl.uniform1ui(uni.picked, picked >>> 0);
+      gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
+      gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
+      gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
+      gl.uniform1f(uni.filterOn, maskTex ? 1 : 0);
+      gl.uniform1f(uni.isolate, isolate ? 1 : 0);
+      if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uni.mask, 4); }
+    }
+    active = full;
+    gl.useProgram(full.prog);
+  }
+
+  function setRepaint(a, b) {
+    for (const pp of [full, cheap]) { gl.useProgram(pp.prog); gl.uniform2ui(pp.uni.repaint, a >>> 0, b >>> 0); }
+    if (active) gl.useProgram(active.prog);
+  }
+
+  return { upload, drawSlice, begin, setRepaint };
 }
 
 // ── src/gl-blocks.js ──
@@ -2195,7 +2634,7 @@ void main() {
 
 // Far-field fragment: splat only, NO gl_FragDepth anywhere → early-z stays
 // enabled for these draws — the perf lever for distant chunks (§2.3 mitigation).
-const FRAG_CHEAP = `#version 300 es
+const FRAG_CHEAP$gl_blocks = `#version 300 es
 precision highp float;
 flat in vec3 vCenter;
 flat in vec3 vHalf;
@@ -2241,7 +2680,7 @@ function createBlocksPipeline(gl) {
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
   };
-  const full = mkProg(FRAG$gl_blocks), cheap = mkProg(FRAG_CHEAP);
+  const full = mkProg(FRAG$gl_blocks), cheap = mkProg(FRAG_CHEAP$gl_blocks);
   let active = full;
 
   // Upload one BlockChunk → buffers + a VAO whose instance pointers get re-aimed
@@ -2487,11 +2926,125 @@ void main() {
   outColor = encodeRec(vRec);
 }`;
 
+// ── sticks (capsule geometry identical to gl-sticks; color = the encoded id) ──
+const PICK_VERT_STK = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aA;
+layout(location=1) in vec3 aB;
+layout(location=4) in uint aRec;
+uniform mat4 uViewProj;
+uniform vec3 uEye;
+uniform float uRadius, uPerspScale, uDemotePx, uPointPx, uFixedSplat, uOrtho;
+uniform vec3 uFwd;
+uniform sampler2D uMask;
+uniform float uFilterOn, uIsolate;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
+flat out vec3 vA;
+flat out vec3 vB;
+flat out uint vRec;
+flat out float vMode;
+flat out float vCull;
+out vec2 vCorner;
+out vec3 vWorldPos;
+void main() {
+  vec3 center = (aA + aB) * 0.5;
+  vec3 axis = aB - aA;
+  float len = max(length(axis), 1e-6);
+  vec3 u = axis / len;
+  float dist = max(distance(uEye, center), 1e-3);
+  float distEff = uOrtho > 0.5 ? 1.0 : dist;
+  vec3 viewDir = uOrtho > 0.5 ? uFwd : (center - uEye) / dist;
+  vec3 v = cross(u, viewDir);
+  float vl = length(v);
+  v = vl > 1e-4 ? v / vl : normalize(abs(u.z) < 0.9 ? cross(u, vec3(0.0, 0.0, 1.0)) : cross(u, vec3(1.0, 0.0, 0.0)));
+  float pxR = (len * 0.5 + uRadius) * uPerspScale / distEff;
+  float demoted = max(pxR < uDemotePx ? 1.0 : 0.0, uFixedSplat);
+  float m = 1.0;
+  if (uFilterOn > 0.5) {
+    int rec = int(aRec & 0x1FFFFFFFu);
+    m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
+  }
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
+  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+  vec3 wp;
+  if (demoted > 0.5) {
+    float quadR = max(uPointPx * 0.5, min(pxR, uPointPx * 2.0)) * distEff / uPerspScale;
+    vec3 sv = normalize(cross(viewDir, v));
+    wp = center + (v * corner.x + sv * corner.y) * quadR;
+  } else {
+    wp = center + u * (corner.x * (len * 0.5 + uRadius)) + v * (corner.y * uRadius);
+  }
+  gl_Position = uViewProj * vec4(wp, 1.0);
+  vA = aA; vB = aB; vRec = aRec; vMode = demoted; vCorner = corner; vWorldPos = wp;
+}`;
+const PICK_FRAG_STK = `#version 300 es
+precision highp float;
+flat in vec3 vA;
+flat in vec3 vB;
+flat in uint vRec;
+flat in float vMode;
+flat in float vCull;
+in vec2 vCorner;
+in vec3 vWorldPos;
+uniform vec3 uEye;
+uniform vec3 uFwd;
+uniform float uOrthoRay;
+uniform float uBackoff;
+uniform float uRadius;
+uniform mat4 uViewProj;
+out vec4 outColor;
+${ENCODE}
+void main() {
+  if (vCull > 0.5) discard;
+  if (vMode > 0.5) {
+    if (dot(vCorner, vCorner) > 1.0) discard;
+    gl_FragDepth = gl_FragCoord.z;
+    outColor = encodeRec(vRec);
+    return;
+  }
+  vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
+  vec3 rd = uOrthoRay > 0.5 ? uFwd : normalize(vWorldPos - uEye);
+  vec3 ba = vB - vA;
+  vec3 oa = ro - vA;
+  float baba = dot(ba, ba), bard = dot(ba, rd), baoa = dot(ba, oa);
+  float rdoa = dot(rd, oa), oaoa = dot(oa, oa);
+  float a = baba - bard * bard;
+  float b = baba * rdoa - baoa * bard;
+  float c = baba * oaoa - baoa * baoa - uRadius * uRadius * baba;
+  float h = b * b - a * c;
+  float t = -1.0;
+  if (h >= 0.0) {
+    float tb = (-b - sqrt(h)) / max(a, 1e-9);
+    float y = baoa + tb * bard;
+    if (y > 0.0 && y < baba && tb > 0.0) t = tb;
+  }
+  if (t < 0.0) {
+    for (int i = 0; i < 2; i++) {
+      vec3 capC = i == 0 ? vA : vB;
+      vec3 o2 = ro - capC;
+      float b2 = dot(rd, o2);
+      float c2 = dot(o2, o2) - uRadius * uRadius;
+      float h2 = b2 * b2 - c2;
+      if (h2 >= 0.0) {
+        float t2 = -b2 - sqrt(h2);
+        if (t2 > 0.0 && (t < 0.0 || t2 < t)) t = t2;
+      }
+    }
+  }
+  if (t < 0.0) discard;
+  vec4 clip = uViewProj * vec4(ro + rd * t, 1.0);
+  gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
+  outColor = encodeRec(vRec);
+}`;
+
 const NO_HIT = 0xFFFFFFFF;                                 // the clear color decodes to this
 
 function createPickPipeline(gl) {
   const pts = makeProgram(gl, PICK_VERT_PTS, PICK_FRAG_PTS);
   const blk = makeProgram(gl, PICK_VERT_BLK, PICK_FRAG_BLK);
+  const stk = makeProgram(gl, PICK_VERT_STK, PICK_FRAG_STK);
   const U = (p, n) => gl.getUniformLocation(p, n);
   const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg'), mask: U(pts, 'uMask'), filterOn: U(pts, 'uFilterOn'), isolate: U(pts, 'uIsolate') };
   const uBlk = {
@@ -2501,6 +3054,13 @@ function createPickPipeline(gl) {
     ortho: U(blk, 'uOrtho'), fwd: U(blk, 'uFwd'), orthoRay: U(blk, 'uOrthoRay'), backoff: U(blk, 'uBackoff'),
     mask: U(blk, 'uMask'), filterOn: U(blk, 'uFilterOn'), isolate: U(blk, 'uIsolate'),
     secPlane: U(blk, 'uSecPlane'), secCfg: U(blk, 'uSecCfg'),
+  };
+  const uStk = {
+    viewProj: U(stk, 'uViewProj'), eye: U(stk, 'uEye'), radius: U(stk, 'uRadius'),
+    perspScale: U(stk, 'uPerspScale'), demotePx: U(stk, 'uDemotePx'), pointPx: U(stk, 'uPointPx'), fixedSplat: U(stk, 'uFixedSplat'),
+    ortho: U(stk, 'uOrtho'), fwd: U(stk, 'uFwd'), orthoRay: U(stk, 'uOrthoRay'), backoff: U(stk, 'uBackoff'),
+    mask: U(stk, 'uMask'), filterOn: U(stk, 'uFilterOn'), isolate: U(stk, 'uIsolate'),
+    secPlane: U(stk, 'uSecPlane'), secCfg: U(stk, 'uSecCfg'),
   };
   let fbo = null, colorTex = null, depthRb = null, w = 0, h = 0;
 
@@ -2611,6 +3171,48 @@ function createPickPipeline(gl) {
         gl.vertexAttribDivisor(3, 1);
         gl.uniform3f(uBlk.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
         gl.uniform3f(uBlk.gridSize, c.grid.size[0], c.grid.size[1], c.grid.size[2]);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.cursor);
+      }
+      }
+    }
+
+    const stkChunks = chunks.filter((c) => c.kind === 'sticks' && c.cursor > 0);
+    if (stkChunks.length) {
+      gl.useProgram(stk);
+      gl.uniformMatrix4fv(uStk.viewProj, false, s.viewProj);
+      gl.uniform3f(uStk.eye, s.eye[0], s.eye[1], s.eye[2]);
+      gl.uniform1f(uStk.perspScale, s.ortho ? (viewportH / 2) / s.halfH : (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uStk.ortho, s.ortho ? 1 : 0);
+      gl.uniform1f(uStk.orthoRay, s.ortho ? 1 : 0);
+      {
+        const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+        const fl = Math.hypot(...f) || 1;
+        gl.uniform3f(uStk.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+        gl.uniform1f(uStk.backoff, s.radius * 2);
+      }
+      gl.uniform1f(uStk.demotePx, 2.0);
+      gl.uniform1f(uStk.pointPx, dpp);
+      gl.uniform1f(uStk.fixedSplat, blocksAsPoints ? 1 : 0);
+      setSec(uStk);
+      for (const [id, group] of byLayer(stkChunks)) {
+      const st2 = stateOf(id);
+      gl.uniform1f(uStk.radius, (st2 && st2.stickRadius) || 1);
+      gl.uniform1f(uStk.filterOn, st2.maskTex ? 1 : 0);
+      gl.uniform1f(uStk.isolate, st2.isolate ? 1 : 0);
+      if (st2.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, st2.maskTex); gl.uniform1i(uStk.mask, 4); }
+      for (const c of group) {
+        gl.bindVertexArray(c.vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.bSeg);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+        gl.vertexAttribDivisor(0, 1);
+        gl.enableVertexAttribArray(1);
+        gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+        gl.vertexAttribDivisor(1, 1);
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.bRec);
+        gl.enableVertexAttribArray(4);
+        gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_INT, 0, 0);
+        gl.vertexAttribDivisor(4, 1);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.cursor);
       }
       }
@@ -3589,6 +4191,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
   let catPalette = null;                                  // category palette (blocks), lazy
   let blocksPipe = null;                                  // impostor pipeline, lazy
+  let sticksPipe = null;                                  // capsule pipeline, lazy
   let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
   const chunks = [];
   let docBbox = null;                                     // scene bbox (fit + the shared elevation ramp)
@@ -3605,7 +4208,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     let l = layers.get(id);
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
-            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0 };
+            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1 };
       layers.set(id, l);
     }
     return l;
@@ -3637,9 +4240,11 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         const base = (layer << 29) >>> 0, r = chunk.recIdx;
         for (let i = 0; i < r.length; i++) r[i] = (r[i] | base) >>> 0;
       }
-      if (chunk.kind === 'blocks') {
-        if (!blocksPipe) blocksPipe = createBlocksPipeline(gl);
-        const up = blocksPipe.upload(chunk); up._set = set; up._layer = layer;
+      if (chunk.kind === 'blocks' || chunk.kind === 'sticks') {
+        if (chunk.kind === 'blocks' && !blocksPipe) blocksPipe = createBlocksPipeline(gl);
+        if (chunk.kind === 'sticks' && !sticksPipe) sticksPipe = createSticksPipeline(gl);
+        const up = (chunk.kind === 'blocks' ? blocksPipe : sticksPipe).upload(chunk);
+        up._set = set; up._layer = layer;
         chunks.push(up);                                   // GPU owns it now
         if (set === 'base') {                              // compact chunks never tighten the ramp
           if (chunk.chanRange[0] < ls.docChan[0]) ls.docChan[0] = chunk.chanRange[0];
@@ -3704,6 +4309,9 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     // points layers with a CATEGORY dict color class codes through the 256-wide
     // golden-angle palette instead of the 32-entry LAS classification table
     setLayerCats(layer, n) { const ls = layerOf(layer); if (ls.catN !== (n || 0)) { ls.catN = n || 0; needClear = true; } },
+    // stick thickness (world metres) — a live per-layer knob
+    setLayerStickRadius(layer, r) { const ls = layerOf(layer); const v = Math.max(0.05, +r || 1); if (ls.stickRadius !== v) { ls.stickRadius = v; needClear = true; } },
+    layerStickRadius(layer) { return layerOf(layer).stickRadius; },
     setLayerVisible(layer, on) {
       const ls = layerOf(layer);
       if (ls.visible !== !!on) { ls.visible = !!on; needClear = true; }
@@ -3786,9 +4394,16 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       const planes = frustumPlanes(vp);
       const eye = cam.state.eye;
       const visible = [];
+      const padBox = new Float64Array(6);
       for (const c of chunks) {
         if (!activeChunk(c)) continue;
-        if (!aabbInFrustum(planes, c.bboxLocal)) { if (moving) c.cursor = 0; continue; }
+        let cullBox = c.bboxLocal;
+        if (c.kind === 'sticks') {
+          const r = layerOf(c._layer).stickRadius;
+          for (let i = 0; i < 3; i++) { padBox[i] = c.bboxLocal[i] - r; padBox[i + 3] = c.bboxLocal[i + 3] + r; }
+          cullBox = padBox;
+        }
+        if (!aabbInFrustum(planes, cullBox)) { if (moving) c.cursor = 0; continue; }
         const b = c.bboxLocal;
         const cx = (b[0] + b[3]) / 2 - eye[0], cy = (b[1] + b[4]) / 2 - eye[1], cz = (b[2] + b[5]) / 2 - eye[2];
         const dist = Math.max(Math.hypot(cx, cy, cz), cam.state.near);
@@ -3930,6 +4545,53 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             for (const c of group) blocksPipe.drawSlice(c, 0, c.count, cheapOf(c));
           }
           blocksPipe.setRepaint(0xFFFFFFFF, 0xFFFFFFFF);
+          gl.depthFunc(gl.LESS);
+        }
+      }
+      const stks = visible.filter((c) => c.kind === 'sticks');
+      if (stks.length) {
+        const stkGroups = byLayer(stks);
+        const perspScale2 = cam.state.ortho ? (canvas.height / 2) / cam.state.halfH : (canvas.height / 2) / Math.tan(cam.state.fovY / 2);
+        const cheapOf2 = (c) => {
+          // whole chunk under the demotion threshold → the no-fragdepth program
+          const ls = layerOf(c._layer);
+          const b = c.bboxLocal;
+          const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
+          const distNear = Math.max(cam.state.near, c._dist - bboxR);
+          // a generous per-chunk proxy: the layer radius at the chunk's nearest point
+          return blocksAsPoints || (ls.stickRadius * 4) * perspScale2 / (cam.state.ortho ? 1 : distNear) < 2.0;
+        };
+        const beginStkLayer = (id) => {
+          const ls = layerOf(id), o = lopt(id);
+          const cLo = o.clip && o.clip[0] != null && o.colorMode === 1 ? o.clip[0] : (ls.docChan[0] === Infinity ? 0 : ls.docChan[0]);
+          const cHi = o.clip && o.clip[1] != null && o.colorMode === 1 ? o.clip[1] : ls.docChan[1];
+          sticksPipe.begin(cam, {
+            pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
+            chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
+            ramp, palette: catPalette || palette, viewportH: canvas.height,
+            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, section: sec,
+            radius: ls.stickRadius,
+          });
+        };
+        for (const [id, group] of stkGroups) {
+          beginStkLayer(id);
+          for (const c of group) {
+            const [first, k] = allot(c);
+            if (k > 0) {
+              sticksPipe.drawSlice(c, first, k, cheapOf2(c));
+              drawn += k; c.cursor = first + k;
+            }
+            if (c.cursor < c.count) converged = false;
+          }
+        }
+        if (rp) {
+          gl.depthFunc(gl.LEQUAL);
+          for (const [id, group] of stkGroups) {
+            beginStkLayer(id);
+            sticksPipe.setRepaint(rp[0], rp[1]);
+            for (const c of group) sticksPipe.drawSlice(c, 0, c.count, cheapOf2(c));
+          }
+          sticksPipe.setRepaint(0xFFFFFFFF, 0xFFFFFFFF);
           gl.depthFunc(gl.LESS);
         }
       }
@@ -4085,6 +4747,10 @@ export {
   sniffDrillholeFiles,
   readDelimited,
   openDrillholes,
+  buildStickChunk,
+  stickLocalCenter,
+  createStickChunkBuilder,
+  createSticksPipeline,
   categoryPalettePixels,
   createBlocksPipeline,
   createPickPipeline,

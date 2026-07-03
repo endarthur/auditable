@@ -289,7 +289,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
@@ -676,14 +676,11 @@ async function openDrillholeLayer(files, opts = {}, mode = 'add') {
     fitFromHeader(header, first);
     renderer.setCategories(header.categories ? 1 : 0);
     renderer.setLayerCats(lid, header.categories ? 256 : 0);
+    renderer.setLayerStickRadius(lid, opts.radius || 1);
     setColorLabels(header);
-    const [cLo, cHi] = header.chanRange;
-    const cs = cHi > cLo ? 65535 / (cHi - cLo) : 0;
-    const cb = createChunkBuilder({ frame, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
-    for await (const rc of streamChunks({ chunkPoints: 1 << 17 })) {
-      const intensity = new Uint16Array(rc.count);
-      for (let i = 0; i < rc.count; i++) intensity[i] = Number.isFinite(rc.chan[i]) ? ((rc.chan[i] - cLo) * cs) | 0 : 0;
-      cb.push({ count: rc.count, x: rc.x, y: rc.y, z: rc.z, intensity, classification: rc.cat || new Uint8Array(rc.count), rgb: null, recIdx: rc.recIdx });
+    const cb = createStickChunkBuilder({ frame, chunkSize: 1 << 16, batchSize: 1 << 20, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
+    for await (const rc of streamChunks({ chunkPoints: 1 << 16 })) {
+      cb.push(rc);
       await new Promise((r) => setTimeout(r));
     }
     const doc = cb.flush();
@@ -2283,6 +2280,15 @@ function layerMenu(L, x, y) {
   menuXY(x, y, [
     { label: 'Zoom to layer', action: () => fitLayer(L) },
     { label: 'Rename layer…', action: () => { const v = prompt('layer name', L.label || L.name); if (v && v.trim()) { L.label = v.trim(); renderLayers(); markProjectDirty(); } } },
+    ...(L.dh ? [{ label: `Stick radius… (${renderer.layerStickRadius(L.id)} m)`, action: () => {
+      const v = prompt('stick radius (metres)', String(renderer.layerStickRadius(L.id)));
+      const r = parseFloat(v);
+      if (Number.isFinite(r) && r > 0) {
+        renderer.setLayerStickRadius(L.id, r);
+        if (L.docs.dhDoc) L.docs.dhDoc.config.radius = r;   // persists via the project manifest
+        markProjectDirty(); requestRender();
+      }
+    } }] : []),
     { label: 'File info…', action: () => { setActiveLayer(L.id); showFileInfo(); } },
     { label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } },
     { sep: true },
@@ -2410,7 +2416,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

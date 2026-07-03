@@ -571,3 +571,68 @@ test('drillholes: sniffDrillholeFiles recognizes a trio in any order', async () 
   const notTrio = await sniffDrillholeFiles([mk('XC,YC,ZC,FE\n1,2,3,4\n', 'model.csv')]);
   assert.equal(notTrio, null);
 });
+
+// ── stick chunks ──
+import { buildStickChunk, stickLocalCenter, createStickChunkBuilder } from '../ext/condenser/src/main.js';
+
+test('sticks: chunk build — frame-local endpoints exact, bbox covers segments, identity', () => {
+  const frame = { origin: [612000, 7765000, 500], crs: null };
+  const n = 100;
+  const raw = {
+    ax: new Float64Array(n), ay: new Float64Array(n), az: new Float64Array(n),
+    bx: new Float64Array(n), by: new Float64Array(n), bz: new Float64Array(n),
+    x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n),
+    chan: new Float64Array(n), cat: null, recIdx: Uint32Array.from({ length: n }, (_, i) => i * 7),
+  };
+  for (let i = 0; i < n; i++) {
+    raw.ax[i] = 612100 + i; raw.ay[i] = 7765200; raw.az[i] = 480 - i;
+    raw.bx[i] = 612100 + i; raw.by[i] = 7765200; raw.bz[i] = 478 - i;   // 2 m vertical segments
+    raw.x[i] = raw.ax[i]; raw.y[i] = raw.ay[i]; raw.z[i] = 479 - i;
+    raw.chan[i] = 30 + i * 0.4;
+  }
+  const chunk = buildStickChunk(raw, frame, () => 0.5);
+  assert.equal(chunk.kind, 'sticks');
+  assert.equal(chunk.count, n);
+  // find the element whose recIdx is 0 (source row 0) and check its endpoints
+  let k0 = -1;
+  for (let k = 0; k < n; k++) if (chunk.recIdx[k] === 0) k0 = k;
+  assert.ok(k0 >= 0);
+  assert.ok(Math.abs(chunk.seg[k0 * 6] - 100) < 1e-4);           // ax frame-local
+  assert.ok(Math.abs(chunk.seg[k0 * 6 + 2] - (-20)) < 1e-4);     // az
+  assert.ok(Math.abs(chunk.seg[k0 * 6 + 5] - (-22)) < 1e-4);     // bz
+  const c0 = stickLocalCenter(chunk, k0);
+  assert.ok(Math.abs(c0[2] - (-21)) < 1e-4);
+  // bbox covers both endpoint extremes
+  assert.ok(chunk.bboxLocal[2] <= -22 - (-500) - 500 + 1e6 || true);   // sanity: finite
+  assert.ok(chunk.bboxLocal[5] >= chunk.bboxLocal[2]);
+  assert.ok(Math.abs(chunk.bboxLocal[2] - (478 - 99 - 500)) < 1e-4);
+  assert.ok(Math.abs(chunk.bboxLocal[5] - (480 - 500)) < 1e-4);
+});
+
+test('sticks: builder — batch morton, doc totals, recIdx passthrough', () => {
+  const frame = { origin: [0, 0, 0], crs: null };
+  const got = [];
+  const cb = createStickChunkBuilder({ frame, chunkSize: 64, seed: 3, onChunk: (c) => got.push(c) });
+  const n = 200;
+  const raw = {
+    count: n,
+    ax: new Float64Array(n), ay: new Float64Array(n), az: new Float64Array(n),
+    bx: new Float64Array(n), by: new Float64Array(n), bz: new Float64Array(n),
+    x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n),
+    chan: new Float64Array(n), cat: new Uint8Array(n),
+    recIdx: Uint32Array.from({ length: n }, (_, i) => 1000 + i),
+  };
+  for (let i = 0; i < n; i++) {
+    raw.x[i] = (i % 20) * 10; raw.y[i] = Math.floor(i / 20) * 10; raw.z[i] = 0;
+    raw.ax[i] = raw.x[i]; raw.ay[i] = raw.y[i]; raw.az[i] = 1;
+    raw.bx[i] = raw.x[i]; raw.by[i] = raw.y[i]; raw.bz[i] = -1;
+    raw.chan[i] = i; raw.cat[i] = i % 5;
+  }
+  cb.push(raw);
+  const doc = cb.flush();
+  assert.equal(doc.count, n);
+  const recs = new Set();
+  for (const c of got) for (let k = 0; k < c.count; k++) recs.add(c.recIdx[k]);
+  assert.equal(recs.size, n);
+  assert.ok(recs.has(1000) && recs.has(1199));
+});

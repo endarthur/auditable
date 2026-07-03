@@ -10,6 +10,7 @@
 
 import { frustumPlanes, aabbInFrustum } from './camera.js';
 import { createBlocksPipeline, categoryPalettePixels } from './gl-blocks.js';
+import { createSticksPipeline } from './gl-sticks.js';
 import { createPickPipeline } from './gl-pick.js';
 
 const VERT = `#version 300 es
@@ -183,6 +184,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
   let catPalette = null;                                  // category palette (blocks), lazy
   let blocksPipe = null;                                  // impostor pipeline, lazy
+  let sticksPipe = null;                                  // capsule pipeline, lazy
   let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
   const chunks = [];
   let docBbox = null;                                     // scene bbox (fit + the shared elevation ramp)
@@ -199,7 +201,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     let l = layers.get(id);
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
-            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0 };
+            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1 };
       layers.set(id, l);
     }
     return l;
@@ -231,9 +233,11 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         const base = (layer << 29) >>> 0, r = chunk.recIdx;
         for (let i = 0; i < r.length; i++) r[i] = (r[i] | base) >>> 0;
       }
-      if (chunk.kind === 'blocks') {
-        if (!blocksPipe) blocksPipe = createBlocksPipeline(gl);
-        const up = blocksPipe.upload(chunk); up._set = set; up._layer = layer;
+      if (chunk.kind === 'blocks' || chunk.kind === 'sticks') {
+        if (chunk.kind === 'blocks' && !blocksPipe) blocksPipe = createBlocksPipeline(gl);
+        if (chunk.kind === 'sticks' && !sticksPipe) sticksPipe = createSticksPipeline(gl);
+        const up = (chunk.kind === 'blocks' ? blocksPipe : sticksPipe).upload(chunk);
+        up._set = set; up._layer = layer;
         chunks.push(up);                                   // GPU owns it now
         if (set === 'base') {                              // compact chunks never tighten the ramp
           if (chunk.chanRange[0] < ls.docChan[0]) ls.docChan[0] = chunk.chanRange[0];
@@ -298,6 +302,9 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     // points layers with a CATEGORY dict color class codes through the 256-wide
     // golden-angle palette instead of the 32-entry LAS classification table
     setLayerCats(layer, n) { const ls = layerOf(layer); if (ls.catN !== (n || 0)) { ls.catN = n || 0; needClear = true; } },
+    // stick thickness (world metres) — a live per-layer knob
+    setLayerStickRadius(layer, r) { const ls = layerOf(layer); const v = Math.max(0.05, +r || 1); if (ls.stickRadius !== v) { ls.stickRadius = v; needClear = true; } },
+    layerStickRadius(layer) { return layerOf(layer).stickRadius; },
     setLayerVisible(layer, on) {
       const ls = layerOf(layer);
       if (ls.visible !== !!on) { ls.visible = !!on; needClear = true; }
@@ -380,9 +387,16 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       const planes = frustumPlanes(vp);
       const eye = cam.state.eye;
       const visible = [];
+      const padBox = new Float64Array(6);
       for (const c of chunks) {
         if (!activeChunk(c)) continue;
-        if (!aabbInFrustum(planes, c.bboxLocal)) { if (moving) c.cursor = 0; continue; }
+        let cullBox = c.bboxLocal;
+        if (c.kind === 'sticks') {
+          const r = layerOf(c._layer).stickRadius;
+          for (let i = 0; i < 3; i++) { padBox[i] = c.bboxLocal[i] - r; padBox[i + 3] = c.bboxLocal[i + 3] + r; }
+          cullBox = padBox;
+        }
+        if (!aabbInFrustum(planes, cullBox)) { if (moving) c.cursor = 0; continue; }
         const b = c.bboxLocal;
         const cx = (b[0] + b[3]) / 2 - eye[0], cy = (b[1] + b[4]) / 2 - eye[1], cz = (b[2] + b[5]) / 2 - eye[2];
         const dist = Math.max(Math.hypot(cx, cy, cz), cam.state.near);
@@ -524,6 +538,53 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             for (const c of group) blocksPipe.drawSlice(c, 0, c.count, cheapOf(c));
           }
           blocksPipe.setRepaint(0xFFFFFFFF, 0xFFFFFFFF);
+          gl.depthFunc(gl.LESS);
+        }
+      }
+      const stks = visible.filter((c) => c.kind === 'sticks');
+      if (stks.length) {
+        const stkGroups = byLayer(stks);
+        const perspScale2 = cam.state.ortho ? (canvas.height / 2) / cam.state.halfH : (canvas.height / 2) / Math.tan(cam.state.fovY / 2);
+        const cheapOf2 = (c) => {
+          // whole chunk under the demotion threshold → the no-fragdepth program
+          const ls = layerOf(c._layer);
+          const b = c.bboxLocal;
+          const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
+          const distNear = Math.max(cam.state.near, c._dist - bboxR);
+          // a generous per-chunk proxy: the layer radius at the chunk's nearest point
+          return blocksAsPoints || (ls.stickRadius * 4) * perspScale2 / (cam.state.ortho ? 1 : distNear) < 2.0;
+        };
+        const beginStkLayer = (id) => {
+          const ls = layerOf(id), o = lopt(id);
+          const cLo = o.clip && o.clip[0] != null && o.colorMode === 1 ? o.clip[0] : (ls.docChan[0] === Infinity ? 0 : ls.docChan[0]);
+          const cHi = o.clip && o.clip[1] != null && o.colorMode === 1 ? o.clip[1] : ls.docChan[1];
+          sticksPipe.begin(cam, {
+            pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
+            chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
+            ramp, palette: catPalette || palette, viewportH: canvas.height,
+            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, section: sec,
+            radius: ls.stickRadius,
+          });
+        };
+        for (const [id, group] of stkGroups) {
+          beginStkLayer(id);
+          for (const c of group) {
+            const [first, k] = allot(c);
+            if (k > 0) {
+              sticksPipe.drawSlice(c, first, k, cheapOf2(c));
+              drawn += k; c.cursor = first + k;
+            }
+            if (c.cursor < c.count) converged = false;
+          }
+        }
+        if (rp) {
+          gl.depthFunc(gl.LEQUAL);
+          for (const [id, group] of stkGroups) {
+            beginStkLayer(id);
+            sticksPipe.setRepaint(rp[0], rp[1]);
+            for (const c of group) sticksPipe.drawSlice(c, 0, c.count, cheapOf2(c));
+          }
+          sticksPipe.setRepaint(0xFFFFFFFF, 0xFFFFFFFF);
           gl.depthFunc(gl.LESS);
         }
       }

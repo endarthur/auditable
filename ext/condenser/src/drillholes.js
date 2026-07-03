@@ -129,20 +129,25 @@ export async function openDrillholes({ collar, survey, intervals }, opts = {}) {
   const chan = opts.chan != null ? opts.chan : (numericCols[0] ? numericCols[0].i : null);
   const catCol = opts.cat != null ? opts.cat : (textCols[0] ? textCols[0].i : null);
 
-  // samples = interval MIDPOINTS; __row threads the source row through the
-  // per-hole depth sort (the identity)
-  const bhid = new Array(n), depth = new Float64Array(n), rowIdx = new Float64Array(n);
+  // samples = BOTH interval endpoints (2 per row): the desurveyed FROM and TO
+  // positions are the capsule segment, arc-correct via positionAt; the render
+  // midpoint derives as (A+B)/2. __row + __end thread the source row and
+  // which endpoint through the per-hole depth sort (the identity).
+  const bhid = new Array(2 * n), depth = new Float64Array(2 * n);
+  const rowIdx = new Float64Array(2 * n), endIdx = new Float64Array(2 * n);
   const chanVals = new Float64Array(n), catVals = catCol != null ? new Array(n) : null;
   const catCounts = new Map();
   for (let i = 0; i < n; i++) {
     const r = tIv.rows[i];
-    bhid[i] = r[m.intervals.bhid];
-    depth[i] = (+r[m.intervals.from] + +r[m.intervals.to]) / 2;
-    rowIdx[i] = i;
+    const hb = r[m.intervals.bhid];
+    bhid[2 * i] = hb; bhid[2 * i + 1] = hb;
+    depth[2 * i] = +r[m.intervals.from]; depth[2 * i + 1] = +r[m.intervals.to];
+    rowIdx[2 * i] = i; rowIdx[2 * i + 1] = i;
+    endIdx[2 * i] = 0; endIdx[2 * i + 1] = 1;
     chanVals[i] = chan != null ? +r[chan] : 0;
     if (catVals) { const v = (r[catCol] || '').trim(); catVals[i] = v; if (v && catCounts.size <= 256) catCounts.set(v, (catCounts.get(v) || 0) + 1); }
   }
-  const samples = { bhid, depth, cols: [{ name: '__row', values: rowIdx }] };
+  const samples = { bhid, depth, cols: [{ name: '__row', values: rowIdx }, { name: '__end', values: endIdx }] };
 
   const ds = desurveySamples({ collars, surveys, samples }, { method: opts.method || 'minimumCurvature', dipConvention: opts.dipConvention || 'auto' });
 
@@ -161,20 +166,36 @@ export async function openDrillholes({ collar, survey, intervals }, opts = {}) {
   const categories = catCounts.size > 0 && catCounts.size <= 255 ? [...catCounts.keys()].sort() : null;
   const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
 
-  // placed rows → arrays keyed back to source rows; bbox over placements
-  const nP = ds.rows.length;
+  // pair the placed endpoints back into SEGMENTS keyed by source row
+  const endA = new Map(), endB = new Map();               // src row → [x,y,z]
+  for (let k = 0; k < ds.rows.length; k++) {
+    const row = ds.rows[k];
+    const src = row[5] | 0, end = row[6] | 0;             // __row, __end
+    (end === 0 ? endA : endB).set(src, [row[1], row[2], row[3]]);
+  }
+  const placedRows = [];
+  for (const [src, a] of endA) if (endB.has(src)) placedRows.push(src);
+  placedRows.sort((x, y) => x - y);
+  const nP = placedRows.length;
+  const ax = new Float64Array(nP), ay = new Float64Array(nP), az = new Float64Array(nP);
+  const bx = new Float64Array(nP), by = new Float64Array(nP), bz = new Float64Array(nP);
   const px = new Float64Array(nP), py = new Float64Array(nP), pz = new Float64Array(nP);
   const pChan = new Float64Array(nP), pCat = catCode ? new Uint8Array(nP) : null;
   const pRec = new Uint32Array(nP);
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   for (let k = 0; k < nP; k++) {
-    const row = ds.rows[k];
-    const src = row[5] | 0;                                // __row (first sample col)
-    px[k] = row[1]; py[k] = row[2]; pz[k] = row[3];
+    const src = placedRows[k];
+    const A = endA.get(src), B = endB.get(src);
+    ax[k] = A[0]; ay[k] = A[1]; az[k] = A[2];
+    bx[k] = B[0]; by[k] = B[1]; bz[k] = B[2];
+    px[k] = (A[0] + B[0]) / 2; py[k] = (A[1] + B[1]) / 2; pz[k] = (A[2] + B[2]) / 2;
     pChan[k] = Number.isFinite(chanVals[src]) ? chanVals[src] : 0;
     if (pCat) { const c = catCode.get(catVals[src]); pCat[k] = c === undefined ? 0 : c; }
     pRec[k] = src;
-    for (let a = 0; a < 3; a++) { const v = row[1 + a]; if (v < min[a]) min[a] = v; if (v > max[a]) max[a] = v; }
+    for (let a2 = 0; a2 < 3; a2++) {
+      if (A[a2] < min[a2]) min[a2] = A[a2]; if (A[a2] > max[a2]) max[a2] = A[a2];
+      if (B[a2] < min[a2]) min[a2] = B[a2]; if (B[a2] > max[a2]) max[a2] = B[a2];
+    }
   }
 
   let cLo = Infinity, cHi = -Infinity;
@@ -200,7 +221,11 @@ export async function openDrillholes({ collar, survey, intervals }, opts = {}) {
       const k = Math.min(chunkPoints, nP - at);
       yield {
         count: k,
+        // midpoints (points mode / section center / measure)
         x: px.subarray(at, at + k), y: py.subarray(at, at + k), z: pz.subarray(at, at + k),
+        // segment endpoints (sticks mode)
+        ax: ax.subarray(at, at + k), ay: ay.subarray(at, at + k), az: az.subarray(at, at + k),
+        bx: bx.subarray(at, at + k), by: by.subarray(at, at + k), bz: bz.subarray(at, at + k),
         chan: pChan.subarray(at, at + k), cat: pCat ? pCat.subarray(at, at + k) : null,
         recIdx: pRec.subarray(at, at + k),
       };

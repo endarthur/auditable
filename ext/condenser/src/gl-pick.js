@@ -134,11 +134,125 @@ void main() {
   outColor = encodeRec(vRec);
 }`;
 
+// ── sticks (capsule geometry identical to gl-sticks; color = the encoded id) ──
+const PICK_VERT_STK = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aA;
+layout(location=1) in vec3 aB;
+layout(location=4) in uint aRec;
+uniform mat4 uViewProj;
+uniform vec3 uEye;
+uniform float uRadius, uPerspScale, uDemotePx, uPointPx, uFixedSplat, uOrtho;
+uniform vec3 uFwd;
+uniform sampler2D uMask;
+uniform float uFilterOn, uIsolate;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
+flat out vec3 vA;
+flat out vec3 vB;
+flat out uint vRec;
+flat out float vMode;
+flat out float vCull;
+out vec2 vCorner;
+out vec3 vWorldPos;
+void main() {
+  vec3 center = (aA + aB) * 0.5;
+  vec3 axis = aB - aA;
+  float len = max(length(axis), 1e-6);
+  vec3 u = axis / len;
+  float dist = max(distance(uEye, center), 1e-3);
+  float distEff = uOrtho > 0.5 ? 1.0 : dist;
+  vec3 viewDir = uOrtho > 0.5 ? uFwd : (center - uEye) / dist;
+  vec3 v = cross(u, viewDir);
+  float vl = length(v);
+  v = vl > 1e-4 ? v / vl : normalize(abs(u.z) < 0.9 ? cross(u, vec3(0.0, 0.0, 1.0)) : cross(u, vec3(1.0, 0.0, 0.0)));
+  float pxR = (len * 0.5 + uRadius) * uPerspScale / distEff;
+  float demoted = max(pxR < uDemotePx ? 1.0 : 0.0, uFixedSplat);
+  float m = 1.0;
+  if (uFilterOn > 0.5) {
+    int rec = int(aRec & 0x1FFFFFFFu);
+    m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
+  }
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
+  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+  vec3 wp;
+  if (demoted > 0.5) {
+    float quadR = max(uPointPx * 0.5, min(pxR, uPointPx * 2.0)) * distEff / uPerspScale;
+    vec3 sv = normalize(cross(viewDir, v));
+    wp = center + (v * corner.x + sv * corner.y) * quadR;
+  } else {
+    wp = center + u * (corner.x * (len * 0.5 + uRadius)) + v * (corner.y * uRadius);
+  }
+  gl_Position = uViewProj * vec4(wp, 1.0);
+  vA = aA; vB = aB; vRec = aRec; vMode = demoted; vCorner = corner; vWorldPos = wp;
+}`;
+const PICK_FRAG_STK = `#version 300 es
+precision highp float;
+flat in vec3 vA;
+flat in vec3 vB;
+flat in uint vRec;
+flat in float vMode;
+flat in float vCull;
+in vec2 vCorner;
+in vec3 vWorldPos;
+uniform vec3 uEye;
+uniform vec3 uFwd;
+uniform float uOrthoRay;
+uniform float uBackoff;
+uniform float uRadius;
+uniform mat4 uViewProj;
+out vec4 outColor;
+${ENCODE}
+void main() {
+  if (vCull > 0.5) discard;
+  if (vMode > 0.5) {
+    if (dot(vCorner, vCorner) > 1.0) discard;
+    gl_FragDepth = gl_FragCoord.z;
+    outColor = encodeRec(vRec);
+    return;
+  }
+  vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
+  vec3 rd = uOrthoRay > 0.5 ? uFwd : normalize(vWorldPos - uEye);
+  vec3 ba = vB - vA;
+  vec3 oa = ro - vA;
+  float baba = dot(ba, ba), bard = dot(ba, rd), baoa = dot(ba, oa);
+  float rdoa = dot(rd, oa), oaoa = dot(oa, oa);
+  float a = baba - bard * bard;
+  float b = baba * rdoa - baoa * bard;
+  float c = baba * oaoa - baoa * baoa - uRadius * uRadius * baba;
+  float h = b * b - a * c;
+  float t = -1.0;
+  if (h >= 0.0) {
+    float tb = (-b - sqrt(h)) / max(a, 1e-9);
+    float y = baoa + tb * bard;
+    if (y > 0.0 && y < baba && tb > 0.0) t = tb;
+  }
+  if (t < 0.0) {
+    for (int i = 0; i < 2; i++) {
+      vec3 capC = i == 0 ? vA : vB;
+      vec3 o2 = ro - capC;
+      float b2 = dot(rd, o2);
+      float c2 = dot(o2, o2) - uRadius * uRadius;
+      float h2 = b2 * b2 - c2;
+      if (h2 >= 0.0) {
+        float t2 = -b2 - sqrt(h2);
+        if (t2 > 0.0 && (t < 0.0 || t2 < t)) t = t2;
+      }
+    }
+  }
+  if (t < 0.0) discard;
+  vec4 clip = uViewProj * vec4(ro + rd * t, 1.0);
+  gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
+  outColor = encodeRec(vRec);
+}`;
+
 const NO_HIT = 0xFFFFFFFF;                                 // the clear color decodes to this
 
 export function createPickPipeline(gl) {
   const pts = makeProgram(gl, PICK_VERT_PTS, PICK_FRAG_PTS);
   const blk = makeProgram(gl, PICK_VERT_BLK, PICK_FRAG_BLK);
+  const stk = makeProgram(gl, PICK_VERT_STK, PICK_FRAG_STK);
   const U = (p, n) => gl.getUniformLocation(p, n);
   const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg'), mask: U(pts, 'uMask'), filterOn: U(pts, 'uFilterOn'), isolate: U(pts, 'uIsolate') };
   const uBlk = {
@@ -148,6 +262,13 @@ export function createPickPipeline(gl) {
     ortho: U(blk, 'uOrtho'), fwd: U(blk, 'uFwd'), orthoRay: U(blk, 'uOrthoRay'), backoff: U(blk, 'uBackoff'),
     mask: U(blk, 'uMask'), filterOn: U(blk, 'uFilterOn'), isolate: U(blk, 'uIsolate'),
     secPlane: U(blk, 'uSecPlane'), secCfg: U(blk, 'uSecCfg'),
+  };
+  const uStk = {
+    viewProj: U(stk, 'uViewProj'), eye: U(stk, 'uEye'), radius: U(stk, 'uRadius'),
+    perspScale: U(stk, 'uPerspScale'), demotePx: U(stk, 'uDemotePx'), pointPx: U(stk, 'uPointPx'), fixedSplat: U(stk, 'uFixedSplat'),
+    ortho: U(stk, 'uOrtho'), fwd: U(stk, 'uFwd'), orthoRay: U(stk, 'uOrthoRay'), backoff: U(stk, 'uBackoff'),
+    mask: U(stk, 'uMask'), filterOn: U(stk, 'uFilterOn'), isolate: U(stk, 'uIsolate'),
+    secPlane: U(stk, 'uSecPlane'), secCfg: U(stk, 'uSecCfg'),
   };
   let fbo = null, colorTex = null, depthRb = null, w = 0, h = 0;
 
@@ -258,6 +379,48 @@ export function createPickPipeline(gl) {
         gl.vertexAttribDivisor(3, 1);
         gl.uniform3f(uBlk.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
         gl.uniform3f(uBlk.gridSize, c.grid.size[0], c.grid.size[1], c.grid.size[2]);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.cursor);
+      }
+      }
+    }
+
+    const stkChunks = chunks.filter((c) => c.kind === 'sticks' && c.cursor > 0);
+    if (stkChunks.length) {
+      gl.useProgram(stk);
+      gl.uniformMatrix4fv(uStk.viewProj, false, s.viewProj);
+      gl.uniform3f(uStk.eye, s.eye[0], s.eye[1], s.eye[2]);
+      gl.uniform1f(uStk.perspScale, s.ortho ? (viewportH / 2) / s.halfH : (viewportH / 2) / Math.tan(s.fovY / 2));
+      gl.uniform1f(uStk.ortho, s.ortho ? 1 : 0);
+      gl.uniform1f(uStk.orthoRay, s.ortho ? 1 : 0);
+      {
+        const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+        const fl = Math.hypot(...f) || 1;
+        gl.uniform3f(uStk.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+        gl.uniform1f(uStk.backoff, s.radius * 2);
+      }
+      gl.uniform1f(uStk.demotePx, 2.0);
+      gl.uniform1f(uStk.pointPx, dpp);
+      gl.uniform1f(uStk.fixedSplat, blocksAsPoints ? 1 : 0);
+      setSec(uStk);
+      for (const [id, group] of byLayer(stkChunks)) {
+      const st2 = stateOf(id);
+      gl.uniform1f(uStk.radius, (st2 && st2.stickRadius) || 1);
+      gl.uniform1f(uStk.filterOn, st2.maskTex ? 1 : 0);
+      gl.uniform1f(uStk.isolate, st2.isolate ? 1 : 0);
+      if (st2.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, st2.maskTex); gl.uniform1i(uStk.mask, 4); }
+      for (const c of group) {
+        gl.bindVertexArray(c.vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.bSeg);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+        gl.vertexAttribDivisor(0, 1);
+        gl.enableVertexAttribArray(1);
+        gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+        gl.vertexAttribDivisor(1, 1);
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.bRec);
+        gl.enableVertexAttribArray(4);
+        gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_INT, 0, 0);
+        gl.vertexAttribDivisor(4, 1);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.cursor);
       }
       }
