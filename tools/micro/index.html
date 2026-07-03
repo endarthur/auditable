@@ -530,7 +530,7 @@ async function openBlob(blob, name, mode = 'replace', at = null) {
   const lid = allocLayerId();
   if (lid == null) { $('#meta').textContent = 'layer limit reached (7) — remove one first'; return; }
   const first = _layers.length === 0;
-  _layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true });
+  _layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: (typeof File !== 'undefined' && blob instanceof File && _fileHandles.get(blob)) || null, storage: 'loose' });
   _activeId = lid;
   _blockDoc = null; _lasDoc = null; _plyDoc = null;
   $('#meta').textContent = `${name} — reading…`;
@@ -907,6 +907,7 @@ const _idb = (() => {
     async set(k, v) { try { await tx('readwrite', (st) => st.put(v, k)); } catch { /* best-effort */ } },
   };
 })();
+const _fileHandles = new WeakMap();                        // File → FileSystemFileHandle (picker/recents/project opens)
 const RECENTS_KEY = '__recents__', RECENTS_MAX = 12;
 let _recents = [];
 let _remember = (() => { try { return localStorage.getItem('micro.recents') !== 'off'; } catch { return true; } })();
@@ -938,6 +939,7 @@ async function openRecent(entry) {
       }
       const f = await h.getFile();
       addRecent(f, h);
+      _fileHandles.set(f, h);
       return openBlob(f, f.name, 'ask');
     } catch { $('#meta').textContent = `couldn't reopen “${entry.name}” — pick it again`; return openFilePicker(); }
   }
@@ -965,7 +967,7 @@ function openFilePicker() {
       try {
         const handles = await window.showOpenFilePicker({ multiple: true });
         const files = [];
-        for (const h of handles) { const f = await h.getFile(); addRecent(f, h); files.push(f); }
+        for (const h of handles) { const f = await h.getFile(); addRecent(f, h); _fileHandles.set(f, h); files.push(f); }
         if (files.length) openBlobs(files, 'ask');
       } catch { /* cancelled */ }
     })();
@@ -1036,7 +1038,7 @@ function applySection(sec) {
 function projectManifest() {
   return {
     app: 'micro', version: 1, name: _project.name,
-    layers: _layers.map((L) => ({ source: L.name, colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible })),
+    layers: _layers.map((L) => ({ source: L.name, external: L.storage === 'external' || undefined, colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible })),
     camera: captureCamera(),
     section: captureSection(),
     views: _views,
@@ -1045,7 +1047,9 @@ function projectManifest() {
 async function rememberProject(dir) {
   try {
     const list = (await _idb.get(PROJECTS_KEY)) || [];
-    const next = [{ name: dir.name, handle: dir }].concat(list.filter((e) => e.name !== dir.name)).slice(0, 8);
+    const links = {};
+    for (const L of _layers) if (L.storage === 'external' && L.handle) links[L.name] = L.handle;
+    const next = [{ name: dir.name, handle: dir, links }].concat(list.filter((e) => e.name !== dir.name)).slice(0, 8);
     await _idb.set(PROJECTS_KEY, next);
     renderEmptyProjects();
   } catch { /* best-effort */ }
@@ -1058,22 +1062,57 @@ async function saveProjectAs() {
   await saveProject();
   rememberProject(dir);
 }
+// Storage triage on save (GIS semantics — copying is CONSENT, never a side
+// effect): a layer is IN the folder (dir.resolve on its handle, or a same-name
+// same-size file already there) → plain reference; OUTSIDE with a handle →
+// LINKED (the handle persists in this browser's IDB; the manifest says
+// external — honest that the folder alone doesn't carry it); outside without
+// a handle (drag-drops, generated samples) can only be copied or located again
+// on reopen. One compact menu covers all outside layers per save.
+const fmtSize = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + ' GB' : b >= 1 << 20 ? (b / (1 << 20)).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
+const layerBlob = (L) => { const d = L.docs.blockDoc || L.docs.plyDoc || L.docs.lasDoc; return d && d.blob || null; };
+async function copyLayerIn(L, dir) {
+  const doc = L.docs.blockDoc || L.docs.plyDoc || L.docs.lasDoc;
+  if (!doc || !doc.blob) return;
+  const fh = await dir.getFileHandle(L.name, { create: true });
+  const w = await fh.createWritable();
+  await doc.blob.stream().pipeTo(w);
+  L.handle = fh; L.storage = 'project';
+  renderLayers();
+}
+function askCopyOutside(outside) {
+  return new Promise((res) => {
+    const linked = outside.filter((L) => L.handle).length, loose = outside.length - linked;
+    const total = outside.reduce((t, L) => t + ((layerBlob(L) || {}).size || 0), 0);
+    menuXY(innerWidth / 2 - 140, innerHeight / 3, [
+      { label: `Copy ${outside.length} outside file${outside.length > 1 ? 's' : ''} (${fmtSize(total)}) into the project`, action: () => res('copy') },
+      { label: `Link without copying${loose ? ` (${loose} will need locating on reopen)` : ' (this browser remembers)'}`, action: () => res('link') },
+    ], () => res('link'));
+  });
+}
 async function saveProject() {
   if (!_project) return saveProjectAs();
   const dir = _project.dir;
   try {
     if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'project: write permission denied'; return; }
-    // copy any source not yet in the folder (we hold the blobs) — self-containment
+    const outside = [];
     for (const L of _layers) {
       const doc = L.docs.blockDoc || L.docs.plyDoc || L.docs.lasDoc;
-      if (!doc || !doc.blob) continue;                     // samples have no blob to keep
-      let exists = null;
-      try { exists = await dir.getFileHandle(L.name); } catch { /* not there */ }
-      if (exists) { const f = await exists.getFile(); if (f.size === doc.blob.size) continue; }
-      const fh = await dir.getFileHandle(L.name, { create: true });
-      const w = await fh.createWritable();
-      await doc.blob.stream().pipeTo(w);
-      $('#meta').textContent = `project: copied ${L.name} into the folder`;
+      if (!doc || !doc.blob) { L.storage = 'volatile'; continue; }   // samples: nothing to reference
+      let inFolder = false;
+      if (L.handle && dir.resolve) { try { inFolder = !!(await dir.resolve(L.handle)); } catch { /* not a descendant */ } }
+      if (!inFolder) {
+        try {
+          const ex = await dir.getFileHandle(L.name);
+          const f = await ex.getFile();
+          if (f.size === doc.blob.size) { inFolder = true; L.handle = ex; }
+        } catch { /* not there */ }
+      }
+      L.storage = inFolder ? 'project' : 'external';
+      if (!inFolder) outside.push(L);
+    }
+    if (outside.length && await askCopyOutside(outside) === 'copy') {
+      for (const L of outside) { $('#meta').textContent = `project: copying ${L.name}…`; await copyLayerIn(L, dir); }
     }
     const fh = await dir.getFileHandle('project.json', { create: true });
     const w = await fh.createWritable();
@@ -1081,7 +1120,10 @@ async function saveProject() {
     await w.close();
     _project.dirty = false;
     updateProjectTitle();
-    $('#meta').textContent = `project saved — ${_project.name}/project.json`;
+    renderLayers();
+    rememberProject(dir);                                  // refresh the stored links alongside
+    const ext = _layers.filter((L) => L.storage === 'external').length;
+    $('#meta').textContent = `project saved — ${_project.name}/project.json${ext ? ` · ${ext} linked outside the folder` : ''}`;
   } catch (e) {
     $('#meta').textContent = `project save failed — ${e.message}`;
   }
@@ -1095,12 +1137,36 @@ async function openProjectDir(dir) {
     _views = mf.views || [];
     closeAllLayers();
     $('#empty').style.display = 'none';
+    let links = {};
+    try { const list = (await _idb.get(PROJECTS_KEY)) || []; const e = list.find((x) => x.name === dir.name); links = (e && e.links) || {}; } catch { /* none */ }
     for (let i = 0; i < mf.layers.length; i++) {
       const ls = mf.layers[i];
-      let file;
-      try { file = await (await dir.getFileHandle(ls.source)).getFile(); }
-      catch { $('#meta').textContent = `project: “${ls.source}” missing from the folder — skipped`; continue; }
+      let file = null, handle = null;
+      if (ls.external) {
+        handle = links[ls.source] || null;
+        if (handle) {
+          try {
+            if (handle.queryPermission && await handle.queryPermission({ mode: 'read' }) !== 'granted' && handle.requestPermission) await handle.requestPermission({ mode: 'read' });
+            file = await handle.getFile();
+          } catch { file = null; }
+        }
+        if (!file) {                                       // link lost (other browser / dropped file) → locate or skip
+          const act = await new Promise((res) => menuXY(innerWidth / 2 - 120, innerHeight / 3, [
+            { label: `Locate “${ls.source}”…`, action: () => res('locate') },
+            { label: 'Skip this layer', action: () => res(null) },
+          ], () => res(null)));
+          if (act === 'locate') {
+            try { const [h] = await window.showOpenFilePicker(); handle = h; file = await h.getFile(); } catch { /* cancelled */ }
+          }
+          if (!file) { $('#meta').textContent = `project: “${ls.source}” skipped (linked outside the folder)`; continue; }
+        }
+      } else {
+        try { handle = await dir.getFileHandle(ls.source); file = await handle.getFile(); }
+        catch { $('#meta').textContent = `project: “${ls.source}” missing from the folder — skipped`; continue; }
+      }
+      if (handle) _fileHandles.set(file, handle);
       await openBlob(file, ls.source, i === 0 || !_layers.length ? 'replace' : 'add');
+      { const Lx = activeLayer(); if (Lx) Lx.storage = ls.external ? 'external' : 'project'; }
       const L = activeLayer();
       if (!L) continue;                                    // that open failed; its layer rolled back
       // color channel first (may re-stream), then filter (sweeps), then the rest
@@ -1755,6 +1821,13 @@ function layerMenu(L, x, y) {
     { label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } },
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); } },
+    ...(_project && L.storage === 'external' && layerBlob(L) ? [{
+      label: `Copy into project (${fmtSize(layerBlob(L).size)})`,
+      action: () => setTimeout(() => menuXY(innerWidth / 2 - 120, innerHeight / 3, [
+        { label: `Copy “${L.name}” (${fmtSize(layerBlob(L).size)}) into ${_project.name}/`, action: async () => { $('#meta').textContent = `copying ${L.name}…`; await copyLayerIn(L, _project.dir); markProjectDirty(); $('#meta').textContent = `copied ${L.name} into the project (${fmtSize(layerBlob(L).size)})`; } },
+        { label: 'Cancel', action: () => {} },
+      ]), 0),
+    }] : []),
     { label: 'Remove layer', action: () => removeLayerUI(L.id) },
   ]);
 }
@@ -1767,7 +1840,9 @@ function renderLayers() {
     const eye = document.createElement('input');
     eye.type = 'checkbox'; eye.checked = L.visible; eye.title = 'visible';
     eye.onclick = (e) => { e.stopPropagation(); L.visible = eye.checked; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); dispatchEvent(new Event('micro:project-dirty')); };
-    const name = document.createElement('span'); name.className = 'lp-name'; name.textContent = L.name; name.title = L.name;
+    const name = document.createElement('span'); name.className = 'lp-name';
+    name.textContent = (L.storage === 'external' ? '↗ ' : '') + L.name;
+    name.title = L.storage === 'external' ? `${L.name} — linked from outside the project folder` : L.name;
     const n = document.createElement('span'); n.className = 'lp-n';
     n.textContent = (renderer.layerElementCount(L.id) || 0).toLocaleString();
     row.append(eye, name, n);
