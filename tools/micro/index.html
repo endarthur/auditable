@@ -171,8 +171,25 @@
   #compass.nw { left: 12px; top: 78px; }
   #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: calc(var(--recw, 280px) + 12px); }
   #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: calc(var(--lpw, 224px) + 12px); }
-  #dhDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
-  #dhDlg.show { display: flex; }
+  #dhDlg, #ofDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
+  #dhDlg.show, #ofDlg.show { display: flex; }
+  #ofDlg .box { width: 620px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #ofDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #ofDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #ofDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  #ofDlg .dh-row { margin-bottom: 10px; }
+  #ofDlg .dh-row.of-dh { opacity: 0.75; }
+  #ofDlg .dh-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  #ofDlg .dh-head b { color: var(--text-hi); font-weight: normal; }
+  #ofDlg .dh-file { color: var(--muted); white-space: nowrap; }
+  #ofDlg .dh-maps { display: flex; flex-wrap: wrap; gap: 5px 12px; padding-left: 26px; }
+  #ofDlg .dh-maps label { color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+  #ofDlg select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; max-width: 130px; }
+  #ofDlg .of-banner { margin: 12px 0 4px; padding: 7px 10px; border: 1px solid var(--accent); border-radius: 3px; color: var(--accent); display: flex; align-items: center; gap: 4px; }
+  #ofDlg .of-mode { display: flex; gap: 22px; margin-top: 12px; color: var(--muted); }
+  #ofDlg .dh-foot { display: flex; justify-content: flex-end; padding: 10px 16px; border-top: 1px solid var(--border); }
+  #ofDlg .dh-foot button, #ofDlg .of-mode input { font-family: var(--mono); }
+  #ofDlg .dh-foot button { font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
   #dhDlg .box { width: 560px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
   #dhDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #dhDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
@@ -258,6 +275,7 @@
   <div id="recPanel"><div class="rp-grab" id="rpGrab"></div><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
   <div id="layersPanel"><div class="lp-head"><span>layers</span><button class="lp-close" id="lpClose">×</button></div><div id="lpRows"></div><div class="lp-grab" id="lpGrab"></div></div>
   <div id="dhDlg"><div class="box"><div class="hd"><span>import drillholes</span><button id="dhCancel">×</button></div><div class="bd" id="dhDlgBody"></div><div class="dh-foot"><span id="dhDlgMsg"></span><button id="dhImport">Import</button></div></div></div>
+  <div id="ofDlg"><div class="box"><div class="hd"><span>open files</span><button id="ofCancel">×</button></div><div class="bd" id="ofDlgBody"></div><div class="dh-foot"><button id="ofOpen">Open</button></div></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
     <circle cx="37" cy="37" r="33" fill="rgba(18,18,18,0.55)" stroke="#4a4a4a" stroke-width="2"/>
     <rect x="35.5" y="0" width="3" height="7" fill="#4a4a4a"/>
@@ -271,7 +289,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
@@ -569,7 +587,7 @@ async function openBlobs(files, mode = 'replace', at = null) {
   await openBlob(files[0], files[0].name, mode === 'add' ? 'add' : 'replace', at);
   for (let i = 1; i < files.length; i++) await openBlob(files[i], files[i].name, 'add');
 }
-async function openBlob(blob, name, mode = 'replace', at = null) {
+async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   if (mode === 'ask') {
     mode = _layers.length ? await askOpenMode(name, at && at.x, at && at.y) : 'replace';
     if (!mode) return;                                     // dismissed
@@ -587,8 +605,8 @@ async function openBlob(blob, name, mode = 'replace', at = null) {
     if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
     // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
     // so grid inference must not promote them to boxes.
-    else if (/\.(xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { forcePoints: true, layer: lid, first }); }
-    else if (/\.(csv|txt|dat|asc)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first }); }
+    else if (/\.(xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { forcePoints: true, layer: lid, first, mapping: over.mapping }); }
+    else if (/\.(csv|txt|dat|asc)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints: over.forcePoints, mapping: over.mapping }); }
     else if (/\.ply$/i.test(name)) { await openPlyBlob(blob, name, { layer: lid, first }); }
     else {
       const { header, streamChunks } = await openLas(blob);
@@ -699,6 +717,132 @@ async function reopenDhChan(chan) {
   if (L2) { L2.label = keepLabel; if (keepFilter) { $('#filter').value = keepFilter; syncFilterClear(); applyBlockFilter(keepFilter); } }
   renderLayers();
 }
+
+// ── the OPEN dialog (every UI open lands here): a row per file — load toggle,
+// size, real header detection (LAS/PLY headers + delimited sniff), per-file
+// X/Y/Z + color/category mapping, load-as-points override, and the drillhole
+// trio banner chaining into the import dialog. Programmatic opens (openBlob/
+// openBlobs with explicit modes) bypass it. ──
+let _ofDlg = null;
+async function describeFile(f) {
+  const name = f.name || 'file';
+  const d = { file: f, name, load: true, kind: 'unknown', desc: '', columns: null, mapping: null, forcePoints: /\.(xyz|pts)$/i.test(name), dhRole: null };
+  try {
+    if (/\.las$/i.test(name)) {
+      const h = parseLasHeader(new DataView(await f.slice(0, 1024).arrayBuffer()));
+      d.kind = 'las'; d.desc = `LAS ${h.version} fmt ${h.format} · ${Number(h.count).toLocaleString()} points`;
+    } else if (/\.ply$/i.test(name)) {
+      const h = parsePlyHeader(new TextDecoder('latin1').decode(await f.slice(0, 64 * 1024).arrayBuffer()));
+      d.kind = 'ply'; d.desc = h ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary'} · ${h.count.toLocaleString()} vertices` : 'PLY';
+    } else if (/\.dm$/i.test(name)) {
+      d.kind = 'dm'; d.desc = 'Datamine .dm block model';
+    } else {
+      const sniff = sniffDelimited(await f.slice(0, 64 * 1024).text());
+      d.kind = 'delimited';
+      d.columns = sniff.header ? sniff.header.map((c) => String(c).trim()) : null;
+      d.desc = d.columns ? `delimited · ${d.columns.length} cols` : `delimited · ${sniff.columns} cols, no header`;
+      if (d.columns) {
+        const cls = classifyDrillholeHeader(d.columns);
+        if (cls) d.dhRole = cls.role;
+        const map = mapColumns(d.columns);
+        if (map) d.mapping = { ...map };
+      }
+    }
+  } catch (e) { d.desc = `unreadable — ${e.message}`; d.load = false; }
+  return d;
+}
+async function openFilesDialog(files) {
+  const rows = [];
+  for (const f of files) rows.push(await describeFile(f));
+  const dh = await sniffDrillholeFiles(files);
+  _ofDlg = { rows, dh, dhOn: !!dh, mode: _layers.length ? 'add' : 'replace' };
+  renderOfDialog();
+  $('#ofDlg').classList.add('show');
+}
+function renderOfDialog() {
+  const body = $('#ofDlgBody');
+  body.textContent = '';
+  const dhBlobs = _ofDlg.dh && _ofDlg.dhOn ? new Set([_ofDlg.dh.collar.blob, _ofDlg.dh.survey.blob, _ofDlg.dh.intervals.blob]) : new Set();
+  for (const r of _ofDlg.rows) {
+    const inDh = dhBlobs.has(r.file);
+    const row = document.createElement('div'); row.className = 'dh-row' + (inDh ? ' of-dh' : '');
+    const head = document.createElement('div'); head.className = 'dh-head';
+    const eye = document.createElement('input'); eye.type = 'checkbox';
+    eye.checked = inDh ? true : r.load; eye.disabled = inDh;
+    eye.onchange = () => { r.load = eye.checked; };
+    const nm = document.createElement('b'); nm.textContent = r.name; nm.style.width = 'auto'; nm.style.flex = '1';
+    nm.style.overflow = 'hidden'; nm.style.textOverflow = 'ellipsis'; nm.style.whiteSpace = 'nowrap';
+    const sz = document.createElement('span'); sz.className = 'dh-file'; sz.style.flex = '0 0 auto';
+    sz.textContent = fmtSize(r.file.size);
+    const desc = document.createElement('span'); desc.className = 'dh-file'; desc.style.flex = '0 1 auto';
+    desc.textContent = inDh ? `${r.dhRole} → drillholes` : r.desc;
+    head.append(eye, nm, sz, desc);
+    row.appendChild(head);
+    if (!inDh && r.kind === 'delimited' && r.columns) {
+      const maps = document.createElement('div'); maps.className = 'dh-maps';
+      const mkSel = (key, label, allowNone) => {
+        const wrap = document.createElement('label');
+        wrap.append(label + ' ');
+        const sel = document.createElement('select');
+        if (allowNone) { const o = document.createElement('option'); o.value = '-1'; o.textContent = '—'; sel.appendChild(o); }
+        r.columns.forEach((c, i) => { const o = document.createElement('option'); o.value = String(i); o.textContent = c; sel.appendChild(o); });
+        const cur = r.mapping && r.mapping[key] != null && r.mapping[key] >= 0 ? r.mapping[key] : -1;
+        sel.value = String(cur >= 0 ? cur : (allowNone ? -1 : 0));
+        if (!allowNone && cur < 0) { r.mapping = r.mapping || {}; r.mapping[key] = 0; }
+        sel.onchange = () => { r.mapping = r.mapping || {}; r.mapping[key] = +sel.value; };
+        wrap.appendChild(sel);
+        return wrap;
+      };
+      maps.append(mkSel('x', 'X'), mkSel('y', 'Y'), mkSel('z', 'Z'), mkSel('chan', 'color', true), mkSel('cat', 'category', true));
+      const fp = document.createElement('label');
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!r.forcePoints;
+      cb.onchange = () => { r.forcePoints = cb.checked; };
+      fp.append(cb, ' load as points');
+      maps.appendChild(fp);
+      row.appendChild(maps);
+    }
+    body.appendChild(row);
+  }
+  if (_ofDlg.dh) {
+    const banner = document.createElement('div'); banner.className = 'of-banner';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = _ofDlg.dhOn;
+    cb.onchange = () => { _ofDlg.dhOn = cb.checked; renderOfDialog(); };
+    const t = document.createElement('span');
+    t.textContent = ' collar + survey + intervals detected — import as drillholes (opens the import dialog)';
+    banner.append(cb, t);
+    body.appendChild(banner);
+  }
+  const modeRow = document.createElement('div'); modeRow.className = 'of-mode';
+  for (const [v, label] of [['add', 'add to the view'], ['replace', 'replace the view']]) {
+    const lab = document.createElement('label');
+    const rb = document.createElement('input'); rb.type = 'radio'; rb.name = 'ofMode';
+    rb.checked = _ofDlg.mode === v; rb.disabled = v === 'add' && !_layers.length;
+    rb.onchange = () => { _ofDlg.mode = v; };
+    lab.append(rb, ' ' + label);
+    modeRow.appendChild(lab);
+  }
+  body.appendChild(modeRow);
+}
+$('#ofOpen').onclick = async () => {
+  const st = _ofDlg;
+  $('#ofDlg').classList.remove('show');
+  if (!st) return;
+  const dhBlobs = st.dh && st.dhOn ? new Set([st.dh.collar.blob, st.dh.survey.blob, st.dh.intervals.blob]) : new Set();
+  const toLoad = st.rows.filter((r) => r.load && !dhBlobs.has(r.file));
+  let mode = st.mode === 'replace' ? 'replace' : 'add';
+  if (mode === 'replace') { closeAllLayers(); mode = 'replace'; }
+  let first = mode === 'replace' || !_layers.length;
+  for (const r of toLoad) {
+    const over = {};
+    if (r.mapping && r.kind === 'delimited') over.mapping = { x: r.mapping.x ?? 0, y: r.mapping.y ?? 1, z: r.mapping.z ?? 2, chan: r.mapping.chan >= 0 ? r.mapping.chan : null, cat: r.mapping.cat >= 0 ? r.mapping.cat : null };
+    if (r.forcePoints) over.forcePoints = true;
+    await openBlob(r.file, r.name, first ? 'replace' : 'add', null, over);
+    first = false;
+  }
+  if (st.dh && st.dhOn) openDhDialog(st.dh);
+  _ofDlg = null;
+};
+$('#ofCancel').onclick = () => { $('#ofDlg').classList.remove('show'); _ofDlg = null; };
 
 // ── the import dialog: three slots + mappings + method — File → Import
 // drillholes…, or offered when a dropped batch sniffs as a trio ──
@@ -820,8 +964,8 @@ async function openBlocksBlob(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : _activeId;
   _lasDoc = null; _plyDoc = null;
   $('#meta').textContent = `${name} — discovering grid…`;
-  const mapping = opts.chan != null && _blockDoc && _blockDoc.header
-    ? { ..._blockDoc.header.mapping, chan: opts.chan } : null;
+  const mapping = opts.mapping
+    || (opts.chan != null && _blockDoc && _blockDoc.header ? { ..._blockDoc.header.mapping, chan: opts.chan } : null);
   renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);
   const { header, streamChunks } = await openBlockModel(blob, mapping ? { mapping } : {});
   if (opts.forcePoints) header.grid = null;
@@ -1183,7 +1327,7 @@ async function openRecent(entry) {
       const f = await h.getFile();
       addRecent(f, h);
       _fileHandles.set(f, h);
-      return openBlob(f, f.name, 'ask');
+      return openFilesDialog([f]);
     } catch { $('#meta').textContent = `couldn't reopen “${entry.name}” — pick it again`; return openFilePicker(); }
   }
   $('#meta').textContent = `“${entry.name}” has no saved handle — pick it again`;
@@ -1211,7 +1355,7 @@ function openFilePicker() {
         const handles = await window.showOpenFilePicker({ multiple: true });
         const files = [];
         for (const h of handles) { const f = await h.getFile(); addRecent(f, h); _fileHandles.set(f, h); files.push(f); }
-        if (files.length) openBlobs(files, 'ask');
+        if (files.length) openFilesDialog(files);
       } catch { /* cancelled */ }
     })();
   } else {
@@ -1224,7 +1368,7 @@ function openFilePicker() {
       const files = [...inp.files];
       if (!files.length) return;
       for (const f of files) addRecent(f, null);
-      openBlobs(files, 'ask');
+      openFilesDialog(files);
     };
     inp.click();
   }
@@ -1729,7 +1873,7 @@ addEventListener('drop', (e) => {
   const files = e.dataTransfer.files ? [...e.dataTransfer.files] : [];
   if (!files.length) return;
   for (const f of files) addRecent(f, null);
-  openBlobs(files, 'ask', { x: e.clientX, y: e.clientY });
+  openFilesDialog(files);
 });
 
 // Synthetic sample: a bench scan generated STREAMING into RawChunks (no LAS bytes,
