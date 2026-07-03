@@ -8,6 +8,8 @@ export { sniffDelimited, mapColumns, openBlockModel, lineFields, fetchDelimitedR
 export { classifyDrillholeHeader, sniffDrillholeFiles, readDelimited, openDrillholes } from './drillholes.js';
 export { buildStickChunk, stickLocalCenter, createStickChunkBuilder } from './sticks.js';
 export { createSticksPipeline } from './gl-sticks.js';
+export { openMsh, openObj, openPlyMesh, buildMeshChunk } from './mesh.js';
+export { createMeshPipeline } from './gl-mesh.js';
 export { categoryPalettePixels, createBlocksPipeline } from './gl-blocks.js';
 export { createPickPipeline } from './gl-pick.js';
 export { openDmModel, fetchDmRecord } from './dm-provider.js';

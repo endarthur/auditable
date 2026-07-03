@@ -2141,6 +2141,891 @@ function createSticksPipeline(gl) {
   return { upload, drawSlice, begin, setRepaint };
 }
 
+// ── ../msh/msh.js ──
+
+// @gcu/msh — ARANZ-1.0 mesh file (.msh) reader and writer.
+// Single-file ESM, zero runtime deps. Works in browsers and Node 18+.
+//
+// Format (self-describing):
+//
+//   %ARANZ-1.0\n
+//   \n
+//   [index]\n
+//   <Name> <Type> <Components> <Count>;\n
+//   ...
+//   \n
+//   [binary]<12-byte signature><binary data in declared order, little-endian>
+//
+// The [index] section declares each binary array by name, element type
+// (Double | Integer), components per element (e.g. 3 for 3D vertices),
+// and element count. The [binary] section starts with a fixed 12-byte
+// signature whose meaning is undocumented; we preserve it verbatim on
+// round-trip. See the README for the bytes we've observed and our best
+// guesses about their meaning (short version: probably an ARANZ-internal
+// format sentinel; opaque to us).
+//
+// Common arrays in practice (single triangulated mesh per file):
+//   Location   Double  3   N    — flat XYZ, length 3*N
+//   Tri        Integer 3   M    — flat IJK indices, length 3*M
+//
+// Coordinates are returned unmodified — typically a UTM-like grid in
+// metres. Recentring is a rendering concern, not a parsing one (WebGL
+// f32 precision drops at the absolute coordinate magnitudes typical of
+// UTM, so renderers should subtract a centroid before uploading).
+//
+// SPDX-License-Identifier: BSD-3-Clause
+// Reference: vendor format, no public spec; reverse-engineered from
+// MacPass HG/LG and other Leapfrog Geo / Edge exports. ARANZ Geo was
+// the original developer (now Seequent / Bentley).
+
+/** Magic line at the start of every .msh file. */
+const MSH_MAGIC = '%ARANZ-1.0';
+
+/** Section headers we recognise (case-sensitive). */
+const SECTION_INDEX  = '[index]';
+const SECTION_BINARY = '[binary]';
+
+/** Length of the opaque-magic prefix that sits between '[binary]' and
+ *  the first array's bytes. See README "12-byte signature" section. */
+const BINARY_PREFIX_LENGTH = 12;
+
+/** The signature observed across all files we've seen — preserved on
+ *  writeback when the caller doesn't supply their own. Probably an
+ *  ARANZ-internal format sentinel; we don't interpret it. */
+const DEFAULT_BINARY_SIGNATURE = new Uint8Array([
+  0xFF, 0x0F, 0xF0, 0x00, 0x1B, 0xDE, 0x83, 0x42,
+  0xCA, 0xC0, 0xF3, 0x3F,
+]);
+
+/** Type catalog. Maps the index-declared Type name to its byte width
+ *  and a constructor for the typed-array we'll hand back. Little-endian
+ *  is assumed throughout; we don't write any other endianness either. */
+const MSH_TYPES = {
+  Double:  { bytes: 8, ctor: Float64Array, kind: 'float' },
+  Float:   { bytes: 4, ctor: Float32Array, kind: 'float' },
+  Integer: { bytes: 4, ctor: Int32Array,   kind: 'int'   },
+  Long:    { bytes: 8, ctor: BigInt64Array, kind: 'int'  },
+  Short:   { bytes: 2, ctor: Int16Array,   kind: 'int'   },
+  Byte:    { bytes: 1, ctor: Uint8Array,   kind: 'int'   },
+};
+
+/** Thrown on any MSH-specific failure: bad magic, malformed index,
+ *  unsupported type, declared/decoded size mismatch, out-of-range
+ *  triangle indices. */
+class MSHError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'MSHError';
+  }
+}
+
+/** @typedef {Object} MSHArray
+ *  @property {string} type        e.g. "Double", "Integer"
+ *  @property {number} components  values per element (3 for 3D vertex / triangle)
+ *  @property {number} count       element count (vertices, triangles, ...)
+ *  @property {TypedArray} data    flat values, length = components * count.
+ *                                  Float64Array for Double, Int32Array for
+ *                                  Integer, etc. */
+
+/** @typedef {Object} MSHResult
+ *  @property {string} version              From the magic line; '1.0' in practice.
+ *  @property {Map<string,MSHArray>} arrays Declared arrays, keyed by name in
+ *                                          DECLARATION ORDER (Map iteration
+ *                                          preserves insertion order).
+ *  @property {Uint8Array} binarySignature  The 12 bytes between '[binary]'
+ *                                          and the first array. Preserved
+ *                                          for byte-identical round-trip.
+ *  @property {Float64Array=} vertices      Convenience: the first Double-3
+ *                                          array (typically named "Location"),
+ *                                          if present.
+ *  @property {Int32Array=} triangles       Convenience: the first Integer-3
+ *                                          array (typically "Tri"), if present. */
+
+/** Read an .msh ArrayBuffer / Uint8Array and return a fully decoded
+ *  {@link MSHResult}. Throws {@link MSHError} on any structural problem.
+ *  @param {ArrayBuffer|Uint8Array} input
+ *  @param {Object} [opts]
+ *  @param {boolean} [opts.validateIndices=true]  Bounds-check triangle
+ *      indices against vertex count. Set false to skip if you have a
+ *      file with non-Location/Tri arrays whose meaning we can't infer.
+ *  @returns {Promise<MSHResult>}
+ */
+async function readMSH(input, opts = {}) {
+  const bytes = _coerceBytes(input);
+  const validateIndices = opts.validateIndices !== false;
+
+  // 1. Find the [binary] header by locating its literal bytes — the
+  //    section header sits on its own line in practice, but the binary
+  //    data starts IMMEDIATELY after the closing ']' (no newline).
+  const binaryHeaderStart = _indexOfBytes(bytes, SECTION_BINARY);
+  if (binaryHeaderStart < 0) {
+    throw new MSHError('missing [binary] section header');
+  }
+  const binaryStart = binaryHeaderStart + SECTION_BINARY.length;
+
+  // 2. Decode the text header (everything before [binary]) as UTF-8
+  //    and parse out the magic + index declarations.
+  const headerText = new TextDecoder('utf-8').decode(bytes.subarray(0, binaryHeaderStart));
+  const { version, declarations } = _parseTextHeader(headerText);
+
+  // 3. Capture the 12-byte signature.
+  if (binaryStart + BINARY_PREFIX_LENGTH > bytes.length) {
+    throw new MSHError('binary section truncated before signature');
+  }
+  const binarySignature = bytes.slice(binaryStart, binaryStart + BINARY_PREFIX_LENGTH);
+
+  // 4. Walk declarations in order, slicing the appropriate number of
+  //    bytes per array. Little-endian — we copy into a fresh typed
+  //    array rather than view-aliasing the source so the result is
+  //    independent of the input buffer (the caller may free it).
+  let cursor = binaryStart + BINARY_PREFIX_LENGTH;
+  const arrays = new Map();
+  for (const decl of declarations) {
+    const info = MSH_TYPES[decl.type];
+    if (!info) {
+      throw new MSHError(`unsupported type "${decl.type}" for array "${decl.name}"`);
+    }
+    const totalValues = decl.components * decl.count;
+    const totalBytes = totalValues * info.bytes;
+    if (cursor + totalBytes > bytes.length) {
+      throw new MSHError(
+        `array "${decl.name}" declared ${totalBytes} bytes but file has only ${bytes.length - cursor} remaining`
+      );
+    }
+    const data = _readTypedArray(bytes, cursor, totalValues, info);
+    arrays.set(decl.name, {
+      type: decl.type,
+      components: decl.components,
+      count: decl.count,
+      data,
+    });
+    cursor += totalBytes;
+  }
+  // Trailing bytes? Real files don't have any, but tolerate up to 8
+  // bytes of alignment padding (some writers append a record terminator).
+  const trailing = bytes.length - cursor;
+  if (trailing > 8) {
+    throw new MSHError(`${trailing} unexpected bytes after the last declared array`);
+  }
+
+  const result = { version, arrays, binarySignature };
+
+  // 5. Convenience accessors. Pick the FIRST Double-3 array as
+  //    vertices and the FIRST Integer-3 array as triangles. Files with
+  //    multiple Double-3 arrays (e.g. per-vertex normals) would need
+  //    the caller to reach into `arrays` directly — we don't try to
+  //    guess from names alone.
+  let vertices, triangles;
+  for (const [, arr] of arrays) {
+    if (!vertices && arr.type === 'Double' && arr.components === 3) {
+      vertices = arr.data;
+    } else if (!triangles && arr.type === 'Integer' && arr.components === 3) {
+      triangles = arr.data;
+    }
+  }
+  if (vertices) result.vertices = vertices;
+  if (triangles) result.triangles = triangles;
+
+  // 6. Validation: every triangle index must reference a real vertex.
+  //    Catches truncation / corruption that survived the size checks
+  //    (e.g. a swapped array order).
+  if (validateIndices && vertices && triangles) {
+    const vCount = vertices.length / 3 | 0;
+    for (let i = 0; i < triangles.length; i++) {
+      const idx = triangles[i];
+      if (idx < 0 || idx >= vCount) {
+        throw new MSHError(
+          `triangle index ${idx} at position ${i} is out of range (0..${vCount - 1})`
+        );
+      }
+    }
+  }
+
+  return result;
+}
+
+/** Serialise an {@link MSHResult} (or a synthesised mesh) back to bytes.
+ *  Round-trips byte-identical when given a result from readMSH that
+ *  hasn't been modified.
+ *  @param {Object} input
+ *  @param {string} [input.version='1.0']
+ *  @param {Map<string,MSHArray>|Object<string,MSHArray>} input.arrays
+ *  @param {Uint8Array} [input.binarySignature]   12-byte prefix; defaults
+ *      to the canonical observed signature.
+ *  @returns {Promise<Uint8Array>}
+ */
+async function writeMSH(input) {
+  const version = input.version || '1.0';
+  const arrays = input.arrays instanceof Map
+    ? input.arrays
+    : new Map(Object.entries(input.arrays || {}));
+  if (arrays.size === 0) {
+    throw new MSHError('writeMSH: at least one declared array is required');
+  }
+  const signature = input.binarySignature || DEFAULT_BINARY_SIGNATURE;
+  if (signature.length !== BINARY_PREFIX_LENGTH) {
+    throw new MSHError(`binarySignature must be ${BINARY_PREFIX_LENGTH} bytes`);
+  }
+
+  // 1. Validate every array AND compute total binary length so we can
+  //    allocate once. Keeps the writer single-pass and predictable.
+  let binaryLen = BINARY_PREFIX_LENGTH;
+  const orderedDeclarations = [];
+  for (const [name, arr] of arrays) {
+    const info = MSH_TYPES[arr.type];
+    if (!info) {
+      throw new MSHError(`writeMSH: unsupported type "${arr.type}" for array "${name}"`);
+    }
+    const declaredValues = arr.components * arr.count;
+    if (!arr.data || arr.data.length !== declaredValues) {
+      throw new MSHError(
+        `writeMSH: array "${name}" declares ${declaredValues} values but data has ${arr.data?.length ?? 0}`
+      );
+    }
+    orderedDeclarations.push({ name, ...arr, info });
+    binaryLen += declaredValues * info.bytes;
+  }
+
+  // 2. Build the text header.
+  const lines = [];
+  lines.push(`%ARANZ-${version}`);
+  lines.push('');
+  lines.push(SECTION_INDEX);
+  for (const decl of orderedDeclarations) {
+    lines.push(`${decl.name} ${decl.type} ${decl.components} ${decl.count};`);
+  }
+  lines.push('');
+  // The binary section header has NO trailing newline — the magic
+  // signature starts immediately after the closing ']' (matching what
+  // the readers in the wild expect, including the one this is based on).
+  // Join with \n and append the literal '[binary]' separately so we
+  // don't accidentally add one.
+  const headerText = lines.join('\n') + '\n' + SECTION_BINARY;
+  const headerBytes = new TextEncoder().encode(headerText);
+
+  // 3. Allocate the final buffer and copy in:
+  //    [header][signature][array 0 bytes][array 1 bytes]...
+  const out = new Uint8Array(headerBytes.length + binaryLen);
+  out.set(headerBytes, 0);
+  let cursor = headerBytes.length;
+  out.set(signature, cursor);
+  cursor += BINARY_PREFIX_LENGTH;
+  for (const decl of orderedDeclarations) {
+    _writeTypedArray(out, cursor, decl.data, decl.info);
+    cursor += decl.data.length * decl.info.bytes;
+  }
+  return out;
+}
+
+// ── internals ──
+
+function _coerceBytes(input) {
+  if (input instanceof Uint8Array) return input;
+  if (input instanceof ArrayBuffer) return new Uint8Array(input);
+  if (input && input.buffer instanceof ArrayBuffer) {
+    // Other typed-array view: use its underlying buffer slice.
+    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  }
+  throw new MSHError('readMSH: input must be ArrayBuffer or Uint8Array');
+}
+
+function _indexOfBytes(haystack, needleString) {
+  // Search for an ASCII substring in a Uint8Array. Used to find the
+  // [binary] header; we don't decode the whole file as UTF-8 because
+  // the binary section will contain arbitrary bytes that may form
+  // partial-UTF-8 sequences and corrupt the decoder.
+  const needle = new TextEncoder().encode(needleString);
+  outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+function _parseTextHeader(text) {
+  // Magic must be the first non-empty content line.
+  const lines = text.split('\n');
+  if (lines.length === 0 || !lines[0].startsWith('%ARANZ-')) {
+    throw new MSHError('missing %ARANZ-N magic line');
+  }
+  const version = lines[0].slice('%ARANZ-'.length).trim();
+  // Walk lines looking for [index]. Everything between [index] and the
+  // next bracketed-section header (we expect [binary]) is declarations.
+  let inIndex = false;
+  const declarations = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line === '') continue;
+    if (line.startsWith('[') && line.endsWith(']')) {
+      if (line === SECTION_INDEX) { inIndex = true; continue; }
+      // Any other bracketed section ends the index. (We only know
+      // about [binary] here, but other vendors might extend later.)
+      inIndex = false;
+      continue;
+    }
+    if (!inIndex) continue;
+    declarations.push(_parseDeclaration(line));
+  }
+  if (declarations.length === 0) {
+    throw new MSHError('[index] section is missing or empty');
+  }
+  return { version, declarations };
+}
+
+function _parseDeclaration(line) {
+  // Shape: "<Name> <Type> <Components> <Count>;"
+  // Name can contain spaces in theory (vendor-defined); we treat the
+  // trailing ';' as the terminator and walk backwards through the
+  // 3 numeric / type tokens. Anything before them is the name.
+  const stripped = line.endsWith(';') ? line.slice(0, -1).trim() : line.trim();
+  const tokens = stripped.split(/\s+/);
+  if (tokens.length < 4) {
+    throw new MSHError(`malformed index declaration: "${line}"`);
+  }
+  const count      = parseInt(tokens[tokens.length - 1], 10);
+  const components = parseInt(tokens[tokens.length - 2], 10);
+  const type       = tokens[tokens.length - 3];
+  const name       = tokens.slice(0, tokens.length - 3).join(' ');
+  if (!Number.isFinite(count) || count < 0
+      || !Number.isFinite(components) || components < 1
+      || !name) {
+    throw new MSHError(`malformed index declaration: "${line}"`);
+  }
+  return { name, type, components, count };
+}
+
+function _readTypedArray(bytes, offset, length, info) {
+  // The src bytes may not be aligned to the typed-array's stride, and
+  // even when aligned, slicing into a fresh buffer guarantees the
+  // returned array is independent of the input (we make NO promises
+  // about the lifetime of the input ArrayBuffer). Copy bytes then
+  // build the typed view on the copy.
+  const totalBytes = length * info.bytes;
+  const buf = new ArrayBuffer(totalBytes);
+  new Uint8Array(buf).set(bytes.subarray(offset, offset + totalBytes));
+  // BigInt64Array constructor takes (buffer, byteOffset, length).
+  // All others same shape.
+  return new info.ctor(buf, 0, length);
+}
+
+function _writeTypedArray(dst, offset, src, info) {
+  // src is already a typed array (Float64Array etc.). We need its raw
+  // bytes copied into dst at the given byte offset. The simplest path
+  // is to view the SAME bytes via Uint8Array and let .set() handle
+  // the copy.
+  const view = new Uint8Array(src.buffer, src.byteOffset, src.byteLength);
+  // Sanity check: declared values × stride MUST match.
+  if (view.byteLength !== src.length * info.bytes) {
+    throw new MSHError(
+      `writeMSH: typed-array stride mismatch (got ${view.byteLength}, expected ${src.length * info.bytes})`
+    );
+  }
+  dst.set(view, offset);
+}
+
+// ── src/ply.js ──
+
+// @gcu/condenser — PLY point-cloud provider (ascii + binary_little_endian).
+// Reads the vertex element only (meshes: faces are ignored — micro shows the
+// vertices). PLY carries no header bbox, so this provider runs a discovery
+// sweep (bbox + intensity range) before streaming — both cold recipes over
+// the Blob, same shape as the delimited provider. RawChunks match the LAS
+// shape so the points pipeline + chunk builder are reused verbatim:
+//   { count, x, y, z: Float64Array, intensity: Uint16Array,
+//     classification: Uint8Array, rgb: Uint8Array(3n)|null, recStart }
+//
+// openPly(blob) → { header, streamChunks, fetchRecord }
+//   header = { kind:'ply', format, count, bbox, columns, attributes, ply:{…} }
+//   fetchRecord(rec) → [values in property order] (O(1) binary, sweep ascii)
+//
+// Honest limits: binary_big_endian and list-typed VERTEX properties throw;
+// the vertex element must come first (a variable-size element before it
+// would make the binary offset unknowable).
+
+const TYPES = {
+  char: [1, 'getInt8'], int8: [1, 'getInt8'],
+  uchar: [1, 'getUint8'], uint8: [1, 'getUint8'],
+  short: [2, 'getInt16'], int16: [2, 'getInt16'],
+  ushort: [2, 'getUint16'], uint16: [2, 'getUint16'],
+  int: [4, 'getInt32'], int32: [4, 'getInt32'],
+  uint: [4, 'getUint32'], uint32: [4, 'getUint32'],
+  float: [4, 'getFloat32'], float32: [4, 'getFloat32'],
+  double: [8, 'getFloat64'], float64: [8, 'getFloat64'],
+};
+
+// Parse the ASCII header block. Returns null when 'end_header' isn't in the
+// sample (caller retries with a bigger slice).
+function parsePlyHeader(text) {
+  const endAt = text.indexOf('end_header');
+  if (endAt < 0) return null;
+  const nl = text.indexOf('\n', endAt);
+  if (nl < 0) return null;
+  const lines = text.slice(0, endAt).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines[0] !== 'ply') throw new Error('ply: missing magic');
+  let format = null;
+  const elements = [];
+  for (const l of lines.slice(1)) {
+    const f = l.split(/\s+/);
+    if (f[0] === 'format') {
+      if (f[1] === 'ascii') format = 'ascii';
+      else if (f[1] === 'binary_little_endian') format = 'binary_le';
+      else throw new Error(`ply: unsupported format ${f[1]}`);
+    } else if (f[0] === 'element') {
+      elements.push({ name: f[1], count: +f[2], props: [] });
+    } else if (f[0] === 'property') {
+      const el = elements[elements.length - 1];
+      if (!el) throw new Error('ply: property before element');
+      if (f[1] === 'list') el.props.push({ name: f[4], list: true, countType: f[2], idxType: f[3] });
+      else el.props.push({ name: f[2], type: f[1] });
+    }
+    // 'comment' / 'obj_info' — skipped
+  }
+  if (!format) throw new Error('ply: no format line');
+  const vertex = elements[0];
+  if (!vertex || vertex.name !== 'vertex') throw new Error('ply: vertex must be the first element');
+  let stride = 0;
+  for (const p of vertex.props) {
+    if (p.list) throw new Error('ply: list-typed vertex property unsupported');
+    const t = TYPES[p.type];
+    if (!t) throw new Error(`ply: unknown type ${p.type}`);
+    p.size = t[0]; p.getter = t[1]; p.offset = stride;
+    stride += t[0];
+  }
+  return { format, count: vertex.count, props: vertex.props, stride, dataOffset: nl + 1, elements };
+}
+
+const findProp = (props, ...names) => {
+  for (const n of names) { const p = props.find((q) => q.name.toLowerCase() === n); if (p) return p; }
+  return null;
+};
+
+async function openPly(blob, { signal, onProgress } = {}) {
+  // header is ASCII even for binary files — sample up front, grow if needed
+  let sampleLen = 64 * 1024, ply = null;
+  for (;;) {
+    const text = new TextDecoder('latin1').decode(await blob.slice(0, Math.min(sampleLen, blob.size)).arrayBuffer());
+    ply = parsePlyHeader(text);
+    if (ply) break;
+    if (sampleLen >= blob.size) throw new Error('ply: no end_header');
+    sampleLen *= 4;
+  }
+  const { props, stride, count } = ply;
+  const px = findProp(props, 'x'), py = findProp(props, 'y'), pz = findProp(props, 'z');
+  if (!px || !py || !pz) throw new Error('ply: vertex needs x/y/z properties');
+  const pr = findProp(props, 'red', 'r', 'diffuse_red'), pg = findProp(props, 'green', 'g', 'diffuse_green'), pb = findProp(props, 'blue', 'b', 'diffuse_blue');
+  const hasRgb = !!(pr && pg && pb);
+  const pi = findProp(props, 'intensity', 'scalar_intensity', 'quality', 'confidence');
+  const idx = { x: props.indexOf(px), y: props.indexOf(py), z: props.indexOf(pz), i: pi ? props.indexOf(pi) : -1, r: pr ? props.indexOf(pr) : -1, g: pg ? props.indexOf(pg) : -1, b: pb ? props.indexOf(pb) : -1 };
+  const ascii = ply.format === 'ascii';
+
+  // ── record iteration (cold recipe): yields batches of decoded raw fields ──
+  // binary: DataView slabs; ascii: line stream. Both yield {fields, recStart}
+  // where fields[k] is a Float64Array per needed property.
+  const NEED = [...new Set([idx.x, idx.y, idx.z, idx.i, idx.r, idx.g, idx.b].filter((v) => v >= 0))];
+  async function* recordBatches(batchRecords, s2, op2) {
+    const alloc = () => { const o = {}; for (const k of NEED) o[k] = new Float64Array(batchRecords); return o; };
+    if (!ascii) {
+      let rec = 0;
+      while (rec < count) {
+        if (s2 && s2.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+        const n = Math.min(batchRecords, count - rec);
+        const off = ply.dataOffset + rec * stride;
+        const dv = new DataView(await blob.slice(off, off + n * stride).arrayBuffer());
+        const fields = alloc();
+        for (const k of NEED) {
+          const p = props[k], g = p.getter, po = p.offset, col = fields[k];
+          for (let i = 0; i < n; i++) col[i] = dv[g](i * stride + po, true);
+        }
+        if (op2) op2(off + n * stride, blob.size);
+        yield { fields, n, recStart: rec };
+        rec += n;
+      }
+    } else {
+      const reader = blob.slice(ply.dataOffset).stream().pipeThrough(new TextDecoderStream()).getReader();
+      let carry = '', rec = 0, fields = alloc(), n = 0, seen = ply.dataOffset;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (s2 && s2.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+          const lines = done ? (carry ? [carry] : []) : (carry + value).split('\n');
+          if (!done) { carry = lines.pop(); seen += value.length; }
+          for (const l of lines) {
+            if (rec + n >= count) break;                    // face lines follow — stop at the vertex count
+            const t = l.trim();
+            if (!t) continue;
+            const f = t.split(/\s+/);
+            for (const k of NEED) fields[k][n] = +f[k];
+            n++;
+            if (n === batchRecords) { yield { fields, n, recStart: rec }; rec += n; fields = alloc(); n = 0; }
+          }
+          if (op2) op2(Math.min(seen, blob.size), blob.size);
+          if (done || rec + n >= count) break;
+        }
+        if (n) yield { fields, n, recStart: rec };
+      } finally { reader.releaseLock(); }
+    }
+  }
+
+  // ── discovery sweep: bbox + intensity range ──
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  let iMin = Infinity, iMax = -Infinity;
+  for await (const { fields, n } of recordBatches(1 << 16, signal, onProgress)) {
+    const xs = fields[idx.x], ys = fields[idx.y], zs = fields[idx.z], is = idx.i >= 0 ? fields[idx.i] : null;
+    for (let i = 0; i < n; i++) {
+      const xv = xs[i], yv = ys[i], zv = zs[i];
+      if (xv < min[0]) min[0] = xv; if (xv > max[0]) max[0] = xv;
+      if (yv < min[1]) min[1] = yv; if (yv > max[1]) max[1] = yv;
+      if (zv < min[2]) min[2] = zv; if (zv > max[2]) max[2] = zv;
+      if (is) { const v = is[i]; if (v < iMin) iMin = v; if (v > iMax) iMax = v; }
+    }
+  }
+  const iScale = idx.i >= 0 && iMax > iMin ? 65535 / (iMax - iMin) : 0;
+
+  const header = {
+    kind: 'ply', format: ply.format, count,
+    bbox: { min, max },
+    columns: props.map((p) => p.name),
+    attributes: [...(pi ? [pi.name] : []), ...(hasRgb ? ['rgb'] : [])],
+    hasRgb,
+    ply: { props, stride, dataOffset: ply.dataOffset, ascii },
+  };
+
+  // ── streaming sweep (cold recipe): LAS-shaped RawChunks ──
+  async function* streamChunks({ chunkPoints = 1 << 18, signal: s2, onProgress: op2 } = {}) {
+    for await (const { fields, n, recStart } of recordBatches(chunkPoints, s2, op2)) {
+      const intensity = new Uint16Array(n);
+      if (idx.i >= 0) { const is = fields[idx.i]; for (let i = 0; i < n; i++) intensity[i] = ((is[i] - iMin) * iScale) | 0; }
+      let rgb = null;
+      if (hasRgb) {
+        rgb = new Uint8Array(3 * n);
+        const rs = fields[idx.r], gs = fields[idx.g], bs = fields[idx.b];
+        for (let i = 0; i < n; i++) { rgb[3 * i] = rs[i]; rgb[3 * i + 1] = gs[i]; rgb[3 * i + 2] = bs[i]; }
+      }
+      yield {
+        count: n,
+        x: fields[idx.x].subarray(0, n), y: fields[idx.y].subarray(0, n), z: fields[idx.z].subarray(0, n),
+        intensity, classification: new Uint8Array(n), rgb, recStart,
+      };
+    }
+  }
+
+  // ── record fetch (the pick join): O(1) binary, early-exit sweep ascii ──
+  async function fetchRecord(rec) {
+    if (rec < 0 || rec >= count) return null;
+    if (!ascii) {
+      const off = ply.dataOffset + rec * stride;
+      const dv = new DataView(await blob.slice(off, off + stride).arrayBuffer());
+      return props.map((p) => dv[p.getter](p.offset, true));
+    }
+    const reader = blob.slice(ply.dataOffset).stream().pipeThrough(new TextDecoderStream()).getReader();
+    let carry = '', at = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        const lines = done ? (carry ? [carry] : []) : (carry + value).split('\n');
+        if (!done) carry = lines.pop();
+        for (const l of lines) {
+          const t = l.trim();
+          if (!t) continue;
+          if (at === rec) return t.split(/\s+/).map(Number);
+          at++;
+        }
+        if (done) return null;
+      }
+    } finally { reader.releaseLock(); }
+  }
+
+  return { header, streamChunks, fetchRecord };
+}
+
+// ── src/mesh.js ──
+
+// @gcu/condenser — context-tier mesh providers (micro-layers §7, tier 1).
+// Wireframes, solids, TINs: whole-file reads into { vertices, triangles },
+// then buildMeshChunk rebases to frame-local Float32 for the static indexed
+// pipeline (gl-mesh.js). The tier is bounded by design — huge triangle-soup
+// scans (photogrammetry) belong to the roadmapped streaming tier, which gets
+// the full Morton/prefix treatment. Context meshes carry no records: scenery.
+//
+// Providers (each → { header, vertices: Float64Array(3n), triangles: Uint32Array(3m) }):
+//   openMsh(blob)      — Leapfrog ARANZ-1.0 .msh via @gcu/msh
+//   openObj(blob)      — Wavefront OBJ (v/f; fans n-gons; negative indices)
+//   openPlyMesh(blob)  — PLY with a face element (ascii + binary_little_endian)
+// header = { kind:'mesh', format, vertexCount, triCount, bbox:{min,max} }
+
+
+function meshBbox(vertices) {
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < vertices.length; i += 3) {
+    for (let k = 0; k < 3; k++) {
+      const v = vertices[i + k];
+      if (v < min[k]) min[k] = v;
+      if (v > max[k]) max[k] = v;
+    }
+  }
+  return { min, max };
+}
+
+function meshHeader(format, vertices, triangles) {
+  return {
+    kind: 'mesh', format,
+    vertexCount: (vertices.length / 3) | 0,
+    triCount: (triangles.length / 3) | 0,
+    bbox: meshBbox(vertices),
+  };
+}
+
+// ── Leapfrog .msh ──
+async function openMsh(blob) {
+  const msh = await readMSH(new Uint8Array(await blob.arrayBuffer()));
+  if (!msh.vertices || !msh.triangles) throw new Error('msh: no vertex/triangle arrays found');
+  const vertices = Float64Array.from(msh.vertices);
+  const triangles = Uint32Array.from(msh.triangles);
+  return { header: meshHeader('msh', vertices, triangles), vertices, triangles };
+}
+
+// ── Wavefront OBJ — v + f only (groups/materials are the records roadmap) ──
+async function openObj(blob) {
+  const text = await blob.text();
+  const vx = [], tris = [];
+  let nv = 0;
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line[0] === '#') continue;
+    if (line.startsWith('v ')) {
+      const f = line.split(/\s+/);
+      vx.push(+f[1], +f[2], +f[3]);
+      nv++;
+    } else if (line.startsWith('f ')) {
+      const f = line.split(/\s+/);
+      const ix = [];
+      for (let k = 1; k < f.length; k++) {
+        // "v", "v/vt", "v//vn", "v/vt/vn" — the vertex index leads; negatives
+        // count back from the vertices seen so far (OBJ spec)
+        let v = parseInt(f[k], 10);
+        if (!Number.isFinite(v) || v === 0) continue;
+        if (v < 0) v = nv + v; else v = v - 1;
+        ix.push(v);
+      }
+      for (let k = 2; k < ix.length; k++) tris.push(ix[0], ix[k - 1], ix[k]);   // fan
+    }
+  }
+  if (!nv || !tris.length) throw new Error('obj: no v/f geometry found');
+  const vertices = Float64Array.from(vx);
+  const triangles = Uint32Array.from(tris);
+  for (let i = 0; i < triangles.length; i++) if (triangles[i] >= nv) throw new Error(`obj: face index ${triangles[i]} out of range (${nv} vertices)`);
+  return { header: meshHeader('obj', vertices, triangles), vertices, triangles };
+}
+
+// ── PLY with faces — reuses ply.js's header parse (vertex first, face after) ──
+async function openPlyMesh(blob) {
+  let sampleLen = 64 * 1024, ply = null;
+  for (;;) {
+    const text = new TextDecoder('latin1').decode(await blob.slice(0, Math.min(sampleLen, blob.size)).arrayBuffer());
+    ply = parsePlyHeader(text);
+    if (ply) break;
+    if (sampleLen >= blob.size) throw new Error('ply: no end_header');
+    sampleLen *= 4;
+  }
+  const face = ply.elements.find((e) => e.name === 'face');
+  if (!face || !face.count) throw new Error('ply: no face element (points file — use openPly)');
+  const px = ply.props.findIndex((p) => p.name.toLowerCase() === 'x');
+  const py = ply.props.findIndex((p) => p.name.toLowerCase() === 'y');
+  const pz = ply.props.findIndex((p) => p.name.toLowerCase() === 'z');
+  if (px < 0 || py < 0 || pz < 0) throw new Error('ply: vertex needs x/y/z');
+  const nv = ply.count;
+  const vertices = new Float64Array(3 * nv);
+  const tris = [];
+  const SIZES = { char: 1, int8: 1, uchar: 1, uint8: 1, short: 2, int16: 2, ushort: 2, uint16: 2, int: 4, int32: 4, uint: 4, uint32: 4, float: 4, float32: 4, double: 8, float64: 8 };
+  const GETTERS = { 1: 'getUint8', 2: 'getUint16', 4: 'getUint32' };
+
+  if (ply.format === 'ascii') {
+    const text = await blob.text();
+    const lines = text.slice(ply.dataOffset).split('\n');
+    let at = 0, rec = 0;
+    while (rec < nv && at < lines.length) {
+      const t = lines[at++].trim();
+      if (!t) continue;
+      const f = t.split(/\s+/);
+      vertices[3 * rec] = +f[px]; vertices[3 * rec + 1] = +f[py]; vertices[3 * rec + 2] = +f[pz];
+      rec++;
+    }
+    let fc = 0;
+    while (fc < face.count && at < lines.length) {
+      const t = lines[at++].trim();
+      if (!t) continue;
+      const f = t.split(/\s+/);
+      const k = +f[0];
+      for (let j = 2; j < k; j++) tris.push(+f[1], +f[j], +f[j + 1]);   // fan
+      fc++;
+    }
+  } else {
+    const bytes = await blob.arrayBuffer();
+    const dv = new DataView(bytes);
+    for (let i = 0; i < nv; i++) {
+      const base = ply.dataOffset + i * ply.stride;
+      vertices[3 * i] = dv[ply.props[px].getter](base + ply.props[px].offset, true);
+      vertices[3 * i + 1] = dv[ply.props[py].getter](base + ply.props[py].offset, true);
+      vertices[3 * i + 2] = dv[ply.props[pz].getter](base + ply.props[pz].offset, true);
+    }
+    // faces: sequential walk (variable-size records). Only the vertex-index
+    // list is kept; other per-face properties are stepped over.
+    let off = ply.dataOffset + nv * ply.stride;
+    // counts + indices are unsigned in practice (int32 indices are non-negative)
+    const rd = (size) => { const v = dv[GETTERS[size]](off, true); off += size; return v; };
+    for (let i = 0; i < face.count; i++) {
+      for (const p of face.props) {
+        if (p.list) {
+          const cs = SIZES[p.countType] || 1, is = SIZES[p.idxType] || 4;
+          const k = rd(cs);
+          if (/vertex_ind/i.test(p.name) || face.props.length === 1) {
+            const ix = new Array(k);
+            for (let j = 0; j < k; j++) ix[j] = rd(is);
+            for (let j = 2; j < k; j++) tris.push(ix[0], ix[j - 1], ix[j]);
+          } else off += k * is;
+        } else {
+          const sz = SIZES[p.type] || 4;
+          off += sz;
+        }
+      }
+    }
+  }
+  if (!tris.length) throw new Error('ply: face element yielded no triangles');
+  const triangles = Uint32Array.from(tris);
+  for (let i = 0; i < triangles.length; i++) if (triangles[i] >= nv) throw new Error(`ply: face index ${triangles[i]} out of range (${nv} vertices)`);
+  return { header: meshHeader(ply.format === 'ascii' ? 'ply-ascii' : 'ply-binary', vertices, triangles), vertices, triangles };
+}
+
+// ── world f64 → one frame-local GPU-ready chunk ──
+// Float32 positions are safe at frame-local magnitudes (the whole point of
+// @gcu/frame); indices stay u32. Context meshes are ONE chunk — they draw
+// whole on clear frames, no prefix, no budget.
+function buildMeshChunk({ vertices, triangles, frame }) {
+  const o = frame ? frame.origin : [0, 0, 0];
+  const n = (vertices.length / 3) | 0;
+  const pos = new Float32Array(3 * n);
+  const bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < 3; k++) {
+      const v = vertices[3 * i + k] - o[k];
+      pos[3 * i + k] = v;
+      if (v < bb[k]) bb[k] = v;
+      if (v > bb[k + 3]) bb[k + 3] = v;
+    }
+  }
+  return {
+    kind: 'mesh',
+    pos,
+    idx: triangles instanceof Uint32Array ? triangles : Uint32Array.from(triangles),
+    count: (triangles.length / 3) | 0,                     // elements = triangles
+    vertexCount: n,
+    bboxLocal: Float64Array.from(bb),
+  };
+}
+
+// ── src/gl-mesh.js ──
+
+// @gcu/condenser — the context-mesh pipeline (micro-layers §7, tier 1).
+// Static indexed triangles: one VAO + element buffer per mesh, drawn whole on
+// clear frames (no prefix, no budget — the tier is bounded at open). Flat
+// shading comes from screen-space derivatives (no normals buffer), two-sided
+// (geological wireframes are rarely consistently wound). The section cut is
+// PER-PIXEL — a triangle crossing the plane is clipped at it, not dropped —
+// which is exactly the sectioned-solid view. Opacity is 4×4-Bayer screen-door:
+// depth-correct, blend-free, safe under progressive accumulation and EDL.
+
+
+const VERT$gl_mesh = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;        // frame-local vertex
+uniform mat4 uViewProj;
+uniform vec4 uSecPlane;
+out vec3 vWorldPos;
+out float vSecDist;
+void main() {
+  gl_Position = uViewProj * vec4(aPos, 1.0);
+  vWorldPos = aPos;
+  vSecDist = dot(aPos, uSecPlane.xyz) - uSecPlane.w;
+}`;
+
+const FRAG$gl_mesh = `#version 300 es
+precision highp float;
+in vec3 vWorldPos;
+in float vSecDist;
+uniform vec2 uSecCfg;                   // x: on, y: half-thickness
+uniform vec4 uTint;                     // rgb + opacity
+uniform vec3 uLightDir;
+uniform vec3 uEye;
+out vec4 outColor;
+const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+void main() {
+  if (uSecCfg.x > 0.5 && abs(vSecDist) > uSecCfg.y) discard;   // per-pixel plane cut
+  if (uTint.a < 0.999) {
+    int bi = (int(gl_FragCoord.x) & 3) + ((int(gl_FragCoord.y) & 3) << 2);
+    if (uTint.a < (BAYER[bi] + 0.5) / 16.0) discard;
+  }
+  vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));  // flat shading
+  vec3 vd = normalize(uEye - vWorldPos);
+  if (dot(n, vd) < 0.0) n = -n;                                 // two-sided
+  float shade = 0.42 + 0.58 * max(dot(n, uLightDir), 0.0);
+  outColor = vec4(uTint.rgb * shade, 1.0);
+}`;
+
+function createMeshPipeline(gl) {
+  const prog = makeProgram(gl, VERT$gl_mesh, FRAG$gl_mesh);
+  const U = (n) => gl.getUniformLocation(prog, n);
+  const uni = {
+    viewProj: U('uViewProj'), secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
+    tint: U('uTint'), lightDir: U('uLightDir'), eye: U('uEye'),
+  };
+
+  function upload(chunk) {
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const bPos = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, bPos);
+    gl.bufferData(gl.ARRAY_BUFFER, chunk.pos, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    const bIdx = gl.createBuffer();                        // stays bound in the VAO
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bIdx);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, chunk.idx, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    return {
+      kind: 'mesh', vao, buffers: [bPos, bIdx],
+      count: chunk.count, idxCount: chunk.idx.length,
+      bboxLocal: chunk.bboxLocal, cursor: 0,
+    };
+  }
+
+  // per-layer uniforms — tint [r,g,b] 0..1, opacity 0..1, section may be null
+  function begin(cam, { tint = [0.62, 0.64, 0.66], opacity = 1, section = null }) {
+    const s = cam.state;
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
+    gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
+    // the headlight of blocks/sticks: eye direction + a little up
+    const v = s.view;
+    let lx = s.eye[0] - s.target[0], ly = s.eye[1] - s.target[1], lz = s.eye[2] - s.target[2];
+    const ll = Math.hypot(lx, ly, lz) || 1;
+    lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
+    const l2 = Math.hypot(lx, ly, lz) || 1;
+    gl.uniform3f(uni.lightDir, lx / l2, ly / l2, lz / l2);
+    gl.uniform4f(uni.tint, tint[0], tint[1], tint[2], Math.max(0.02, Math.min(1, opacity)));
+    gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
+    gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
+  }
+
+  function draw(c) {
+    gl.bindVertexArray(c.vao);
+    gl.drawElements(gl.TRIANGLES, c.idxCount, gl.UNSIGNED_INT, 0);
+  }
+
+  return { upload, begin, draw };
+}
+
 // ── src/gl-blocks.js ──
 
 // @gcu/condenser — box impostors for block models (micro-spec §2.3).
@@ -2764,7 +3649,7 @@ function createPickPipeline(gl) {
     const s = cam.state;
     const dpp = pointPx * (window.devicePixelRatio || 1);
 
-    const ptsChunks = chunks.filter((c) => c.kind !== 'blocks' && c.cursor > 0);
+    const ptsChunks = chunks.filter((c) => c.kind === 'points' && c.cursor > 0);
     if (ptsChunks.length) {
       gl.useProgram(pts);
       gl.uniformMatrix4fv(uPts.viewProj, false, s.viewProj);
@@ -3283,221 +4168,6 @@ async function fetchDmRecord(blob, h, rec) {
   return decodeRecord(bytes, h);                           // positional values, h.columns order
 }
 
-// ── src/ply.js ──
-
-// @gcu/condenser — PLY point-cloud provider (ascii + binary_little_endian).
-// Reads the vertex element only (meshes: faces are ignored — micro shows the
-// vertices). PLY carries no header bbox, so this provider runs a discovery
-// sweep (bbox + intensity range) before streaming — both cold recipes over
-// the Blob, same shape as the delimited provider. RawChunks match the LAS
-// shape so the points pipeline + chunk builder are reused verbatim:
-//   { count, x, y, z: Float64Array, intensity: Uint16Array,
-//     classification: Uint8Array, rgb: Uint8Array(3n)|null, recStart }
-//
-// openPly(blob) → { header, streamChunks, fetchRecord }
-//   header = { kind:'ply', format, count, bbox, columns, attributes, ply:{…} }
-//   fetchRecord(rec) → [values in property order] (O(1) binary, sweep ascii)
-//
-// Honest limits: binary_big_endian and list-typed VERTEX properties throw;
-// the vertex element must come first (a variable-size element before it
-// would make the binary offset unknowable).
-
-const TYPES = {
-  char: [1, 'getInt8'], int8: [1, 'getInt8'],
-  uchar: [1, 'getUint8'], uint8: [1, 'getUint8'],
-  short: [2, 'getInt16'], int16: [2, 'getInt16'],
-  ushort: [2, 'getUint16'], uint16: [2, 'getUint16'],
-  int: [4, 'getInt32'], int32: [4, 'getInt32'],
-  uint: [4, 'getUint32'], uint32: [4, 'getUint32'],
-  float: [4, 'getFloat32'], float32: [4, 'getFloat32'],
-  double: [8, 'getFloat64'], float64: [8, 'getFloat64'],
-};
-
-// Parse the ASCII header block. Returns null when 'end_header' isn't in the
-// sample (caller retries with a bigger slice).
-function parsePlyHeader(text) {
-  const endAt = text.indexOf('end_header');
-  if (endAt < 0) return null;
-  const nl = text.indexOf('\n', endAt);
-  if (nl < 0) return null;
-  const lines = text.slice(0, endAt).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (lines[0] !== 'ply') throw new Error('ply: missing magic');
-  let format = null;
-  const elements = [];
-  for (const l of lines.slice(1)) {
-    const f = l.split(/\s+/);
-    if (f[0] === 'format') {
-      if (f[1] === 'ascii') format = 'ascii';
-      else if (f[1] === 'binary_little_endian') format = 'binary_le';
-      else throw new Error(`ply: unsupported format ${f[1]}`);
-    } else if (f[0] === 'element') {
-      elements.push({ name: f[1], count: +f[2], props: [] });
-    } else if (f[0] === 'property') {
-      const el = elements[elements.length - 1];
-      if (!el) throw new Error('ply: property before element');
-      if (f[1] === 'list') el.props.push({ name: f[4], list: true });
-      else el.props.push({ name: f[2], type: f[1] });
-    }
-    // 'comment' / 'obj_info' — skipped
-  }
-  if (!format) throw new Error('ply: no format line');
-  const vertex = elements[0];
-  if (!vertex || vertex.name !== 'vertex') throw new Error('ply: vertex must be the first element');
-  let stride = 0;
-  for (const p of vertex.props) {
-    if (p.list) throw new Error('ply: list-typed vertex property unsupported');
-    const t = TYPES[p.type];
-    if (!t) throw new Error(`ply: unknown type ${p.type}`);
-    p.size = t[0]; p.getter = t[1]; p.offset = stride;
-    stride += t[0];
-  }
-  return { format, count: vertex.count, props: vertex.props, stride, dataOffset: nl + 1, elements };
-}
-
-const findProp = (props, ...names) => {
-  for (const n of names) { const p = props.find((q) => q.name.toLowerCase() === n); if (p) return p; }
-  return null;
-};
-
-async function openPly(blob, { signal, onProgress } = {}) {
-  // header is ASCII even for binary files — sample up front, grow if needed
-  let sampleLen = 64 * 1024, ply = null;
-  for (;;) {
-    const text = new TextDecoder('latin1').decode(await blob.slice(0, Math.min(sampleLen, blob.size)).arrayBuffer());
-    ply = parsePlyHeader(text);
-    if (ply) break;
-    if (sampleLen >= blob.size) throw new Error('ply: no end_header');
-    sampleLen *= 4;
-  }
-  const { props, stride, count } = ply;
-  const px = findProp(props, 'x'), py = findProp(props, 'y'), pz = findProp(props, 'z');
-  if (!px || !py || !pz) throw new Error('ply: vertex needs x/y/z properties');
-  const pr = findProp(props, 'red', 'r', 'diffuse_red'), pg = findProp(props, 'green', 'g', 'diffuse_green'), pb = findProp(props, 'blue', 'b', 'diffuse_blue');
-  const hasRgb = !!(pr && pg && pb);
-  const pi = findProp(props, 'intensity', 'scalar_intensity', 'quality', 'confidence');
-  const idx = { x: props.indexOf(px), y: props.indexOf(py), z: props.indexOf(pz), i: pi ? props.indexOf(pi) : -1, r: pr ? props.indexOf(pr) : -1, g: pg ? props.indexOf(pg) : -1, b: pb ? props.indexOf(pb) : -1 };
-  const ascii = ply.format === 'ascii';
-
-  // ── record iteration (cold recipe): yields batches of decoded raw fields ──
-  // binary: DataView slabs; ascii: line stream. Both yield {fields, recStart}
-  // where fields[k] is a Float64Array per needed property.
-  const NEED = [...new Set([idx.x, idx.y, idx.z, idx.i, idx.r, idx.g, idx.b].filter((v) => v >= 0))];
-  async function* recordBatches(batchRecords, s2, op2) {
-    const alloc = () => { const o = {}; for (const k of NEED) o[k] = new Float64Array(batchRecords); return o; };
-    if (!ascii) {
-      let rec = 0;
-      while (rec < count) {
-        if (s2 && s2.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-        const n = Math.min(batchRecords, count - rec);
-        const off = ply.dataOffset + rec * stride;
-        const dv = new DataView(await blob.slice(off, off + n * stride).arrayBuffer());
-        const fields = alloc();
-        for (const k of NEED) {
-          const p = props[k], g = p.getter, po = p.offset, col = fields[k];
-          for (let i = 0; i < n; i++) col[i] = dv[g](i * stride + po, true);
-        }
-        if (op2) op2(off + n * stride, blob.size);
-        yield { fields, n, recStart: rec };
-        rec += n;
-      }
-    } else {
-      const reader = blob.slice(ply.dataOffset).stream().pipeThrough(new TextDecoderStream()).getReader();
-      let carry = '', rec = 0, fields = alloc(), n = 0, seen = ply.dataOffset;
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (s2 && s2.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-          const lines = done ? (carry ? [carry] : []) : (carry + value).split('\n');
-          if (!done) { carry = lines.pop(); seen += value.length; }
-          for (const l of lines) {
-            if (rec + n >= count) break;                    // face lines follow — stop at the vertex count
-            const t = l.trim();
-            if (!t) continue;
-            const f = t.split(/\s+/);
-            for (const k of NEED) fields[k][n] = +f[k];
-            n++;
-            if (n === batchRecords) { yield { fields, n, recStart: rec }; rec += n; fields = alloc(); n = 0; }
-          }
-          if (op2) op2(Math.min(seen, blob.size), blob.size);
-          if (done || rec + n >= count) break;
-        }
-        if (n) yield { fields, n, recStart: rec };
-      } finally { reader.releaseLock(); }
-    }
-  }
-
-  // ── discovery sweep: bbox + intensity range ──
-  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
-  let iMin = Infinity, iMax = -Infinity;
-  for await (const { fields, n } of recordBatches(1 << 16, signal, onProgress)) {
-    const xs = fields[idx.x], ys = fields[idx.y], zs = fields[idx.z], is = idx.i >= 0 ? fields[idx.i] : null;
-    for (let i = 0; i < n; i++) {
-      const xv = xs[i], yv = ys[i], zv = zs[i];
-      if (xv < min[0]) min[0] = xv; if (xv > max[0]) max[0] = xv;
-      if (yv < min[1]) min[1] = yv; if (yv > max[1]) max[1] = yv;
-      if (zv < min[2]) min[2] = zv; if (zv > max[2]) max[2] = zv;
-      if (is) { const v = is[i]; if (v < iMin) iMin = v; if (v > iMax) iMax = v; }
-    }
-  }
-  const iScale = idx.i >= 0 && iMax > iMin ? 65535 / (iMax - iMin) : 0;
-
-  const header = {
-    kind: 'ply', format: ply.format, count,
-    bbox: { min, max },
-    columns: props.map((p) => p.name),
-    attributes: [...(pi ? [pi.name] : []), ...(hasRgb ? ['rgb'] : [])],
-    hasRgb,
-    ply: { props, stride, dataOffset: ply.dataOffset, ascii },
-  };
-
-  // ── streaming sweep (cold recipe): LAS-shaped RawChunks ──
-  async function* streamChunks({ chunkPoints = 1 << 18, signal: s2, onProgress: op2 } = {}) {
-    for await (const { fields, n, recStart } of recordBatches(chunkPoints, s2, op2)) {
-      const intensity = new Uint16Array(n);
-      if (idx.i >= 0) { const is = fields[idx.i]; for (let i = 0; i < n; i++) intensity[i] = ((is[i] - iMin) * iScale) | 0; }
-      let rgb = null;
-      if (hasRgb) {
-        rgb = new Uint8Array(3 * n);
-        const rs = fields[idx.r], gs = fields[idx.g], bs = fields[idx.b];
-        for (let i = 0; i < n; i++) { rgb[3 * i] = rs[i]; rgb[3 * i + 1] = gs[i]; rgb[3 * i + 2] = bs[i]; }
-      }
-      yield {
-        count: n,
-        x: fields[idx.x].subarray(0, n), y: fields[idx.y].subarray(0, n), z: fields[idx.z].subarray(0, n),
-        intensity, classification: new Uint8Array(n), rgb, recStart,
-      };
-    }
-  }
-
-  // ── record fetch (the pick join): O(1) binary, early-exit sweep ascii ──
-  async function fetchRecord(rec) {
-    if (rec < 0 || rec >= count) return null;
-    if (!ascii) {
-      const off = ply.dataOffset + rec * stride;
-      const dv = new DataView(await blob.slice(off, off + stride).arrayBuffer());
-      return props.map((p) => dv[p.getter](p.offset, true));
-    }
-    const reader = blob.slice(ply.dataOffset).stream().pipeThrough(new TextDecoderStream()).getReader();
-    let carry = '', at = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        const lines = done ? (carry ? [carry] : []) : (carry + value).split('\n');
-        if (!done) carry = lines.pop();
-        for (const l of lines) {
-          const t = l.trim();
-          if (!t) continue;
-          if (at === rec) return t.split(/\s+/).map(Number);
-          at++;
-        }
-        if (done) return null;
-      }
-    } finally { reader.releaseLock(); }
-  }
-
-  return { header, streamChunks, fetchRecord };
-}
-
 // ── src/camera.js ──
 
 // @gcu/condenser — minimal mat4 math + an orbit camera. Raw WebGL2 needs ~four
@@ -3809,7 +4479,7 @@ function uploadChunk(gl, chunk) {
   gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_INT, 0, 0);
   buffers.push(recBuf);
   gl.bindVertexArray(null);
-  return { vao, buffers, count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0 };
+  return { kind: 'points', vao, buffers, count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0 };
 }
 
 /**
@@ -3847,6 +4517,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   let catPalette = null;                                  // category palette (blocks), lazy
   let blocksPipe = null;                                  // impostor pipeline, lazy
   let sticksPipe = null;                                  // capsule pipeline, lazy
+  let meshPipe = null;                                    // context-mesh pipeline, lazy
   let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
   const chunks = [];
   let docBbox = null;                                     // scene bbox (fit + the shared elevation ramp)
@@ -3863,7 +4534,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     let l = layers.get(id);
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
-            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true };
+            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
+            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1 };
       layers.set(id, l);
     }
     return l;
@@ -3891,9 +4563,16 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     get accumulated() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.cursor : 0), 0); },   // elements in the current accumulation
     addChunk(chunk, set = 'base', layer = 0) {
       const ls = layerOf(layer);
-      if (layer) {                                        // partition the record ids (layer 0 shifts by zero)
+      if (layer && chunk.recIdx) {                        // partition the record ids (layer 0 shifts by zero)
         const base = (layer << 29) >>> 0, r = chunk.recIdx;
         for (let i = 0; i < r.length; i++) r[i] = (r[i] | base) >>> 0;
+      }
+      if (chunk.kind === 'mesh') {                        // context tier: static, recordless, whole-draw
+        if (!meshPipe) meshPipe = createMeshPipeline(gl);
+        const up = meshPipe.upload(chunk); up._set = set; up._layer = layer;
+        chunks.push(up);
+        needClear = true;                                 // draw it into a fresh accumulation
+        return;
       }
       if (chunk.kind === 'blocks' || chunk.kind === 'sticks') {
         if (chunk.kind === 'blocks' && !blocksPipe) blocksPipe = createBlocksPipeline(gl);
@@ -3971,6 +4650,14 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     // while the others are slabbed — e.g. topo kept for context during sectioning
     setLayerSectioned(layer, on) { const ls = layerOf(layer); const v = on !== false; if (ls.sectioned !== v) { ls.sectioned = v; needClear = true; } },
     layerSectioned(layer) { return layerOf(layer).sectioned !== false; },
+    // context-mesh style: tint [r,g,b] 0..1 + opacity 0..1 (Bayer screen-door)
+    setLayerMeshStyle(layer, { tint, opacity } = {}) {
+      const ls = layerOf(layer);
+      if (tint) ls.meshTint = tint;
+      if (opacity != null) ls.meshOpacity = Math.max(0.02, Math.min(1, +opacity));
+      needClear = true;
+    },
+    layerMeshStyle(layer) { const ls = layerOf(layer); return { tint: ls.meshTint, opacity: ls.meshOpacity }; },
     setLayerVisible(layer, on) {
       const ls = layerOf(layer);
       if (ls.visible !== !!on) { ls.visible = !!on; needClear = true; }
@@ -4104,7 +4791,26 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       const rp = !moving && repaintSet.size
         ? [...repaintSet, 0xFFFFFFFF, 0xFFFFFFFF].slice(0, 2).map((v) => v >>> 0) : null;
 
-      const pts = visible.filter((c) => c.kind !== 'blocks');
+      // context meshes first: static occluders drawn WHOLE on clear frames (or
+      // when freshly streamed in) — early-z then rejects points behind them.
+      // On still frames their cursor == count, so accumulation skips them.
+      const msh = visible.filter((c) => c.kind === 'mesh');
+      if (msh.length) {
+        for (const [id, group] of byLayer(msh)) {
+          if (!group.some((c) => moving || c.cursor === 0)) continue;
+          const ls = layerOf(id);
+          meshPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: ls.sectioned === false ? null : sec });
+          for (const c of group) {
+            if (!(moving || c.cursor === 0)) continue;
+            meshPipe.draw(c);
+            c.cursor = c.count;
+            drawn += c.count;
+          }
+        }
+        gl.bindVertexArray(null);
+      }
+
+      const pts = visible.filter((c) => c.kind === 'points');
       if (pts.length) {
         const ptsGroups = byLayer(pts);
         gl.useProgram(prog);
@@ -4413,6 +5119,11 @@ export {
   stickLocalCenter,
   createStickChunkBuilder,
   createSticksPipeline,
+  openMsh,
+  openObj,
+  openPlyMesh,
+  buildMeshChunk,
+  createMeshPipeline,
   categoryPalettePixels,
   createBlocksPipeline,
   createPickPipeline,

@@ -48,7 +48,7 @@ export function parsePlyHeader(text) {
     } else if (f[0] === 'property') {
       const el = elements[elements.length - 1];
       if (!el) throw new Error('ply: property before element');
-      if (f[1] === 'list') el.props.push({ name: f[4], list: true });
+      if (f[1] === 'list') el.props.push({ name: f[4], list: true, countType: f[2], idxType: f[3] });
       else el.props.push({ name: f[2], type: f[1] });
     }
     // 'comment' / 'obj_info' — skipped

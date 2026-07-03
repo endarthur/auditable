@@ -319,7 +319,7 @@ export function createPickPipeline(gl) {
     const s = cam.state;
     const dpp = pointPx * (window.devicePixelRatio || 1);
 
-    const ptsChunks = chunks.filter((c) => c.kind !== 'blocks' && c.cursor > 0);
+    const ptsChunks = chunks.filter((c) => c.kind === 'points' && c.cursor > 0);
     if (ptsChunks.length) {
       gl.useProgram(pts);
       gl.uniformMatrix4fv(uPts.viewProj, false, s.viewProj);

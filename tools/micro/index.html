@@ -277,7 +277,7 @@
     <label id="secPlaneW" title="outline the section plane in the view" style="display:none"><input id="secPlaneVis" type="checkbox">plane</label>
   </div>
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
-  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
+  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
@@ -298,7 +298,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, openMsh, openObj, openPlyMesh, buildMeshChunk, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
@@ -639,7 +639,9 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   $('#meta').textContent = `${name} — reading…`;
   $('#empty').style.display = 'none';
   try {
-    if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
+    if (/\.(msh|obj)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity }); }
+    else if (/\.ply$/i.test(name) && !over.forcePoints && await plyHasFaces(blob)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity }); }
+    else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
     // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
     // so grid inference must not promote them to boxes.
     else if (/\.(xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { forcePoints: true, layer: lid, first, mapping: over.mapping }); }
@@ -689,6 +691,48 @@ async function openPlyBlob(blob, name, opts = {}) {
   const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
   const doc = await streamInto(cb, streamChunks, header, name, 1 << 18, lid);
   $('#meta').textContent = `${name} — ${doc.count.toLocaleString()} points · PLY ${header.format === 'ascii' ? 'ascii' : 'binary'}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
+  requestRender();
+}
+// Context meshes (micro-layers spec §7 tier 1): wireframes / solids / TINs —
+// whole-file read, one static chunk, scenery (no records: not pickable, not
+// filterable). Picks pass THROUGH a mesh to the elements behind it.
+const MESH_TRI_CAP = 3_000_000;
+async function plyHasFaces(blob) {
+  try {
+    let sampleLen = 64 * 1024, h = null;
+    for (;;) {
+      h = parsePlyHeader(new TextDecoder('latin1').decode(await blob.slice(0, Math.min(sampleLen, blob.size)).arrayBuffer()));
+      if (h) break;
+      if (sampleLen >= blob.size) return false;
+      sampleLen *= 4;
+    }
+    const face = h.elements.find((e) => e.name === 'face');
+    return !!(face && face.count);
+  } catch { return false; }
+}
+function hexToRgb01(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; }
+async function openMeshDoc(blob, name, opts = {}) {
+  const lid = opts.layer != null ? opts.layer : _activeId;
+  $('#meta').textContent = `${name} — reading mesh…`;
+  const open = /\.msh$/i.test(name) ? openMsh : /\.obj$/i.test(name) ? openObj : openPlyMesh;
+  const { header, vertices, triangles } = await open(blob);
+  if (header.triCount > MESH_TRI_CAP) throw new Error(`${header.triCount.toLocaleString()} triangles — beyond the context tier (${MESH_TRI_CAP / 1e6}M cap); the streaming mesh tier is roadmapped`);
+  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
+  const L = layerById(lid);
+  if (L) {
+    L.kind = 'mesh';
+    L.docs = { meshDoc: { blob, name, header } };
+    L.tint = opts.tint || '#9ea3a8';
+    L.opacity = opts.opacity != null ? opts.opacity : 1;
+  }
+  fitFromHeader(header, opts.first !== false);
+  const chunk = buildMeshChunk({ vertices, triangles, frame });
+  renderer.addChunk(chunk, 'base', lid);
+  if (L) L.bboxLocal = chunk.bboxLocal;
+  recomputeUnion();
+  renderer.setLayerMeshStyle(lid, { tint: hexToRgb01(L ? L.tint : '#9ea3a8'), opacity: L ? L.opacity : 1 });
+  setColorLabels(null);
+  $('#meta').textContent = `${name} — ${header.triCount.toLocaleString()} triangles · ${header.vertexCount.toLocaleString()} vertices · ${header.format}`;
   requestRender();
 }
 // Drillholes (micro-layers spec §5): collar + survey + intervals → desurveyed
@@ -767,7 +811,14 @@ async function describeFile(f) {
       d.kind = 'las'; d.desc = `LAS ${h.version} fmt ${h.format} · ${Number(h.count).toLocaleString()} points`;
     } else if (/\.ply$/i.test(name)) {
       const h = parsePlyHeader(new TextDecoder('latin1').decode(await f.slice(0, 64 * 1024).arrayBuffer()));
-      d.kind = 'ply'; d.desc = h ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary'} · ${h.count.toLocaleString()} vertices` : 'PLY';
+      const face = h && h.elements ? h.elements.find((e) => e.name === 'face') : null;
+      d.plyFaces = face ? face.count : 0;
+      d.kind = 'ply';
+      d.desc = h ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary'} · ${h.count.toLocaleString()} vertices${d.plyFaces ? ` · ${d.plyFaces.toLocaleString()} faces → mesh` : ''}` : 'PLY';
+    } else if (/\.msh$/i.test(name)) {
+      d.kind = 'mesh'; d.desc = 'Leapfrog mesh (.msh)';
+    } else if (/\.obj$/i.test(name)) {
+      d.kind = 'mesh'; d.desc = 'Wavefront mesh (.obj)';
     } else if (/\.dm$/i.test(name)) {
       d.kind = 'dm'; d.desc = 'Datamine .dm block model';
     } else {
@@ -832,6 +883,16 @@ function renderOfDialog() {
       const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!r.forcePoints;
       cb.onchange = () => { r.forcePoints = cb.checked; };
       fp.append(cb, ' load as points');
+      maps.appendChild(fp);
+      row.appendChild(maps);
+    }
+    if (!inDh && r.kind === 'ply' && r.plyFaces) {
+      // a mesh-bearing PLY can still open as a point cloud (vertices only)
+      const maps = document.createElement('div'); maps.className = 'dh-maps';
+      const fp = document.createElement('label');
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!r.forcePoints;
+      cb.onchange = () => { r.forcePoints = cb.checked; };
+      fp.append(cb, ' load as points (vertices only)');
       maps.appendChild(fp);
       row.appendChild(maps);
     }
@@ -1467,6 +1528,9 @@ function projectManifest() {
       external: L.storage === 'external' || undefined,
       colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible,
       sectioned: renderer.layerSectioned(L.id) ? undefined : false,
+      kind: L.kind === 'mesh' ? 'mesh' : undefined,
+      tint: L.kind === 'mesh' ? L.tint : undefined,
+      opacity: L.kind === 'mesh' && L.opacity !== 1 ? L.opacity : undefined,
     })),
     camera: captureCamera(),
     section: captureSection(),
@@ -1500,7 +1564,7 @@ async function saveProjectAs() {
 // on reopen. One compact menu covers all outside layers per save.
 const fmtSize = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + ' GB' : b >= 1 << 20 ? (b / (1 << 20)).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
 const layerBytes = (L) => layerFiles(L).reduce((t, fd) => t + (fd.blob && fd.blob.size || 0), 0);
-const layerBlob = (L) => { const d = L.docs.blockDoc || L.docs.plyDoc || L.docs.lasDoc; return d && d.blob || null; };
+const layerBlob = (L) => { const d = L.docs.blockDoc || L.docs.plyDoc || L.docs.lasDoc || L.docs.meshDoc; return d && d.blob || null; };
 // every file a layer depends on — one for most kinds, three for drillholes
 function layerFiles(L) {
   if (L.dh && L.docs.dhDoc) {
@@ -1633,7 +1697,11 @@ async function openProjectDir(dir) {
         catch { $('#meta').textContent = `project: “${ls.source}” missing from the folder — skipped`; continue; }
       }
       if (handle) _fileHandles.set(file, handle);
-      await openBlob(file, ls.source, i === 0 || !_layers.length ? 'replace' : 'add');
+      // a mesh-bearing .ply saved as a POINTS layer must reopen as points
+      const overR = ls.kind === 'mesh'
+        ? { tint: ls.tint, opacity: ls.opacity }
+        : (/\.ply$/i.test(ls.source) ? { forcePoints: true } : {});
+      await openBlob(file, ls.source, i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
       { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; } }
       const L = activeLayer();
       if (!L) continue;                                    // that open failed; its layer rolled back
@@ -1743,7 +1811,9 @@ function copyText(text) {
   ta.remove();
 }
 function showFileInfo() {
-  const doc = _blockDoc || _dhDoc || _plyDoc || _lasDoc;
+  const AL0 = activeLayer();
+  const meshDoc = AL0 && AL0.docs ? AL0.docs.meshDoc : null;
+  const doc = meshDoc || _blockDoc || _dhDoc || _plyDoc || _lasDoc;
   if (!doc) { showHelp('file info', 'no file open'); return; }
   const h = doc.header;
   const escA = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -1754,9 +1824,10 @@ function showFileInfo() {
   const sep = (x) => `<span class="fi-x">${x}</span>`;
   const rows = [];
   const row = (k, v) => rows.push(`<tr><td class="fi-k">${k}</td><td>${v}</td></tr>`);
-  row('file', V(_blockDoc ? _blockDoc.name : _plyDoc ? _plyDoc.name : 'point cloud'));
-  row('kind', V(_dhDoc ? `drillholes (${h.method === 'minimumCurvature' ? 'minimum curvature' : h.method}, dip ${h.dipConvention})` : _lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
-  row('records', num(h.count));
+  row('file', V(meshDoc ? meshDoc.name : _blockDoc ? _blockDoc.name : _plyDoc ? _plyDoc.name : 'point cloud'));
+  row('kind', V(meshDoc ? `context mesh (${h.format})` : _dhDoc ? `drillholes (${h.method === 'minimumCurvature' ? 'minimum curvature' : h.method}, dip ${h.dipConvention})` : _lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
+  if (meshDoc) { row('triangles', num(h.triCount)); row('vertices', num(h.vertexCount)); }
+  else row('records', num(h.count));
   if (_dhDoc) {
     row('holes', num(h.holes));
     row('placed', num(h.placed));
@@ -1861,6 +1932,8 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
+<b>meshes</b> — .msh (Leapfrog) / .obj / .ply-with-faces open as context layers: scenery, not records (no pick, no filter — clicks pass through to the data behind)<br>
+right-click the layer → <b>Tint…</b> / <b>Opacity…</b> · sections cut meshes per-pixel — front/behind give the classic sectioned-solid view<br><br>
 <b>filter</b> (block models) — lamina's language over every column in the file:<br>
 <code>/</code> focuses the box · autocomplete offers columns, functions, and the category values — <code>Tab</code>/<code>Enter</code> accepts<br><code>FE &gt; 55 and LITO = "HEMATITE"</code> · <code>between</code> · <code>in (…)</code> — Enter applies, Esc clears<br>
 matching elements isolate — everything else drops out of the render<br><br>
@@ -2372,8 +2445,12 @@ function layerMenu(L, x, y) {
         markProjectDirty(); requestRender();
       }
     } }] : []),
+    ...(L.kind === 'mesh' ? [
+      { label: 'Tint…', action: () => setTimeout(() => meshTintMenu(L, x, y), 0) },
+      { label: `Opacity… (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, action: () => setTimeout(() => meshOpacityMenu(L, x, y), 0) },
+    ] : []),
     { label: 'File info…', action: () => { setActiveLayer(L.id); showFileInfo(); } },
-    { label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } },
+    ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); } },
     { label: (renderer.layerSectioned(L.id) ? '✓ ' : '') + 'Cut by sections', action: () => { renderer.setLayerSectioned(L.id, !renderer.layerSectioned(L.id)); markProjectDirty(); requestRender(); } },
@@ -2386,6 +2463,26 @@ function layerMenu(L, x, y) {
     }] : []),
     { label: 'Remove layer', action: () => removeLayerUI(L.id) },
   ]);
+}
+// mesh styling: a small preset palette (geology-ish) + custom hex; opacity is
+// Bayer screen-door in the pipeline, so any value is depth-correct
+const MESH_TINTS = [['Grey', '#9ea3a8'], ['Sand', '#c9a86a'], ['Rust', '#b0563a'], ['Green', '#5c8a5a'], ['Blue', '#5b7fa6'], ['Violet', '#8a6fae'], ['Brown', '#8a6a4f']];
+function setMeshTint(L, hex) { L.tint = hex; renderer.setLayerMeshStyle(L.id, { tint: hexToRgb01(hex) }); markProjectDirty(); requestRender(); }
+function meshTintMenu(L, x, y) {
+  menuXY(x, y, [
+    ...MESH_TINTS.map(([label, hex]) => ({ label: (L.tint === hex ? '✓ ' : '') + label, action: () => setMeshTint(L, hex) })),
+    { sep: true },
+    { label: 'Custom…', action: () => {
+      const v = (prompt('tint (hex)', L.tint || '#9ea3a8') || '').trim();
+      if (/^#?[0-9a-fA-F]{6}$/.test(v)) setMeshTint(L, v.startsWith('#') ? v : '#' + v);
+    } },
+  ]);
+}
+function meshOpacityMenu(L, x, y) {
+  menuXY(x, y, [100, 75, 50, 25].map((pc) => ({
+    label: (Math.round((L.opacity != null ? L.opacity : 1) * 100) === pc ? '✓ ' : '') + pc + '%',
+    action: () => { L.opacity = pc / 100; renderer.setLayerMeshStyle(L.id, { opacity: pc / 100 }); markProjectDirty(); requestRender(); },
+  })));
 }
 function renderLayers() {
   const rows = $('#lpRows'); if (!rows) return;

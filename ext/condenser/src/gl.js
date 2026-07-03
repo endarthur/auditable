@@ -11,6 +11,7 @@
 import { frustumPlanes, aabbInFrustum } from './camera.js';
 import { createBlocksPipeline, categoryPalettePixels } from './gl-blocks.js';
 import { createSticksPipeline } from './gl-sticks.js';
+import { createMeshPipeline } from './gl-mesh.js';
 import { createPickPipeline } from './gl-pick.js';
 
 const VERT = `#version 300 es
@@ -147,7 +148,7 @@ export function uploadChunk(gl, chunk) {
   gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_INT, 0, 0);
   buffers.push(recBuf);
   gl.bindVertexArray(null);
-  return { vao, buffers, count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0 };
+  return { kind: 'points', vao, buffers, count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0 };
 }
 
 /**
@@ -185,6 +186,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   let catPalette = null;                                  // category palette (blocks), lazy
   let blocksPipe = null;                                  // impostor pipeline, lazy
   let sticksPipe = null;                                  // capsule pipeline, lazy
+  let meshPipe = null;                                    // context-mesh pipeline, lazy
   let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
   const chunks = [];
   let docBbox = null;                                     // scene bbox (fit + the shared elevation ramp)
@@ -201,7 +203,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     let l = layers.get(id);
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
-            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true };
+            intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
+            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1 };
       layers.set(id, l);
     }
     return l;
@@ -229,9 +232,16 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     get accumulated() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.cursor : 0), 0); },   // elements in the current accumulation
     addChunk(chunk, set = 'base', layer = 0) {
       const ls = layerOf(layer);
-      if (layer) {                                        // partition the record ids (layer 0 shifts by zero)
+      if (layer && chunk.recIdx) {                        // partition the record ids (layer 0 shifts by zero)
         const base = (layer << 29) >>> 0, r = chunk.recIdx;
         for (let i = 0; i < r.length; i++) r[i] = (r[i] | base) >>> 0;
+      }
+      if (chunk.kind === 'mesh') {                        // context tier: static, recordless, whole-draw
+        if (!meshPipe) meshPipe = createMeshPipeline(gl);
+        const up = meshPipe.upload(chunk); up._set = set; up._layer = layer;
+        chunks.push(up);
+        needClear = true;                                 // draw it into a fresh accumulation
+        return;
       }
       if (chunk.kind === 'blocks' || chunk.kind === 'sticks') {
         if (chunk.kind === 'blocks' && !blocksPipe) blocksPipe = createBlocksPipeline(gl);
@@ -309,6 +319,14 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     // while the others are slabbed — e.g. topo kept for context during sectioning
     setLayerSectioned(layer, on) { const ls = layerOf(layer); const v = on !== false; if (ls.sectioned !== v) { ls.sectioned = v; needClear = true; } },
     layerSectioned(layer) { return layerOf(layer).sectioned !== false; },
+    // context-mesh style: tint [r,g,b] 0..1 + opacity 0..1 (Bayer screen-door)
+    setLayerMeshStyle(layer, { tint, opacity } = {}) {
+      const ls = layerOf(layer);
+      if (tint) ls.meshTint = tint;
+      if (opacity != null) ls.meshOpacity = Math.max(0.02, Math.min(1, +opacity));
+      needClear = true;
+    },
+    layerMeshStyle(layer) { const ls = layerOf(layer); return { tint: ls.meshTint, opacity: ls.meshOpacity }; },
     setLayerVisible(layer, on) {
       const ls = layerOf(layer);
       if (ls.visible !== !!on) { ls.visible = !!on; needClear = true; }
@@ -442,7 +460,26 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       const rp = !moving && repaintSet.size
         ? [...repaintSet, 0xFFFFFFFF, 0xFFFFFFFF].slice(0, 2).map((v) => v >>> 0) : null;
 
-      const pts = visible.filter((c) => c.kind !== 'blocks');
+      // context meshes first: static occluders drawn WHOLE on clear frames (or
+      // when freshly streamed in) — early-z then rejects points behind them.
+      // On still frames their cursor == count, so accumulation skips them.
+      const msh = visible.filter((c) => c.kind === 'mesh');
+      if (msh.length) {
+        for (const [id, group] of byLayer(msh)) {
+          if (!group.some((c) => moving || c.cursor === 0)) continue;
+          const ls = layerOf(id);
+          meshPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: ls.sectioned === false ? null : sec });
+          for (const c of group) {
+            if (!(moving || c.cursor === 0)) continue;
+            meshPipe.draw(c);
+            c.cursor = c.count;
+            drawn += c.count;
+          }
+        }
+        gl.bindVertexArray(null);
+      }
+
+      const pts = visible.filter((c) => c.kind === 'points');
       if (pts.length) {
         const ptsGroups = byLayer(pts);
         gl.useProgram(prog);

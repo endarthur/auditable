@@ -636,3 +636,90 @@ test('sticks: builder — batch morton, doc totals, recIdx passthrough', () => {
   assert.equal(recs.size, n);
   assert.ok(recs.has(1000) && recs.has(1199));
 });
+
+// ── context meshes (micro-layers §7 tier 1): providers + the frame-local chunk ──
+import { openMsh, openObj, openPlyMesh, buildMeshChunk } from '../ext/condenser/src/mesh.js';
+import { writeMSH } from '../ext/msh/msh.js';
+
+// a unit tetra pushed to UTM-ish coordinates — 4 verts, 4 faces
+const TETRA_V = [612000, 7765000, 700, 612100, 7765000, 700, 612050, 7765100, 700, 612050, 7765050, 800];
+const TETRA_T = [0, 1, 2, 0, 1, 3, 1, 2, 3, 2, 0, 3];
+
+test('mesh: obj — v/f, slash forms, negative indices, quad fan', async () => {
+  const obj = [
+    '# tetra', 'v 612000 7765000 700', 'v 612100 7765000 700', 'v 612050 7765100 700', 'v 612050 7765050 800',
+    'f 1 2 3', 'f 1/5 2/6 4/7', 'f 2//1 3//2 4//3', 'f -2 -4 -1',   // -2=v3 -4=v1 -1=v4
+    'g roof', 'f 1 2 3 4',                                          // quad → 2 tris
+  ].join('\n');
+  const m = await openObj(new Blob([obj]));
+  assert.equal(m.header.vertexCount, 4);
+  assert.equal(m.header.triCount, 6);
+  assert.deepEqual([...m.triangles.slice(0, 3)], [0, 1, 2]);
+  assert.deepEqual([...m.triangles.slice(3, 6)], [0, 1, 3]);        // slash forms strip
+  assert.deepEqual([...m.triangles.slice(9, 12)], [2, 0, 3]);       // negatives resolve
+  assert.deepEqual([...m.triangles.slice(12)], [0, 1, 2, 0, 2, 3]); // fan
+  assert.equal(m.header.bbox.min[2], 700);
+  assert.equal(m.header.bbox.max[2], 800);
+});
+
+test('mesh: ply ascii faces — vertices + fanned faces, mixed blank lines', async () => {
+  const ply = [
+    'ply', 'format ascii 1.0', 'element vertex 4',
+    'property float x', 'property float y', 'property float z',
+    'element face 3', 'property list uchar int vertex_indices', 'end_header',
+    '612000 7765000 700', '612100 7765000 700', '612050 7765100 700', '612050 7765050 800',
+    '3 0 1 2', '', '3 0 1 3', '4 0 1 2 3',
+  ].join('\n');
+  const m = await openPlyMesh(new Blob([ply]));
+  assert.equal(m.header.vertexCount, 4);
+  assert.equal(m.header.triCount, 4);                               // 1 + 1 + quad(2)
+  assert.deepEqual([...m.triangles.slice(6)], [0, 1, 2, 0, 2, 3]);
+  assert.equal(m.vertices[3 * 3 + 2], 800);
+});
+
+test('mesh: ply binary faces — sequential walk over variable-size records', async () => {
+  const head = [
+    'ply', 'format binary_little_endian 1.0', 'element vertex 4',
+    'property float x', 'property float y', 'property float z',
+    'element face 2', 'property list uchar int vertex_indices', 'end_header', '',
+  ].join('\n');
+  const hb = new TextEncoder().encode(head);
+  const body = new ArrayBuffer(4 * 12 + (1 + 3 * 4) + (1 + 4 * 4)); // 4 verts + tri record + quad record
+  const dv = new DataView(body);
+  for (let i = 0; i < 4; i++) for (let k = 0; k < 3; k++) dv.setFloat32(i * 12 + k * 4, TETRA_V[3 * i + k] - 612000, true);
+  let off = 48;
+  dv.setUint8(off, 3); off += 1;                                    // tri 0 1 2
+  for (const ix of [0, 1, 2]) { dv.setInt32(off, ix, true); off += 4; }
+  dv.setUint8(off, 4); off += 1;                                    // quad 0 1 2 3 → 2 tris
+  for (const ix of [0, 1, 2, 3]) { dv.setInt32(off, ix, true); off += 4; }
+  const m = await openPlyMesh(new Blob([hb, body.slice(0, off)]));
+  assert.equal(m.header.vertexCount, 4);
+  assert.equal(m.header.triCount, 3);
+  assert.deepEqual([...m.triangles], [0, 1, 2, 0, 1, 2, 0, 2, 3]);
+});
+
+test('mesh: msh round trip — writeMSH → openMsh', async () => {
+  const arrays = new Map([
+    ['Location', { type: 'Double', components: 3, count: 4, data: Float64Array.from(TETRA_V) }],
+    ['Tri', { type: 'Integer', components: 3, count: 4, data: Int32Array.from(TETRA_T) }],
+  ]);
+  const bytes = await writeMSH({ arrays });
+  const m = await openMsh(new Blob([bytes]));
+  assert.equal(m.header.format, 'msh');
+  assert.equal(m.header.vertexCount, 4);
+  assert.equal(m.header.triCount, 4);
+  assert.deepEqual([...m.triangles], TETRA_T);
+  assert.equal(m.header.bbox.max[2], 800);
+});
+
+test('mesh: buildMeshChunk — frame rebase, bbox, element count = triangles', () => {
+  const frame = { origin: [612000, 7765000, 700] };
+  const c = buildMeshChunk({ vertices: Float64Array.from(TETRA_V), triangles: Uint32Array.from(TETRA_T), frame });
+  assert.equal(c.kind, 'mesh');
+  assert.equal(c.count, 4);
+  assert.equal(c.vertexCount, 4);
+  assert.equal(c.pos[0], 0);                                        // first vert at the origin
+  assert.equal(c.pos[3], 100);                                      // second vert 100 east
+  assert.deepEqual([...c.bboxLocal], [0, 0, 0, 100, 100, 100]);
+  assert.equal(c.idx.length, 12);
+});
