@@ -133,13 +133,13 @@
   body.drag #drop-hint { display: flex; }
   /* record inspector — right-docked overlay (lamina's record-panel layout) */
   #recPanel {
-    position: absolute; top: 68px; right: 0; bottom: 24px; width: 280px; display: none;
+    position: absolute; top: 68px; right: 0; bottom: 24px; width: var(--recw, 280px); display: none;
     flex-direction: column; background: rgba(22, 22, 22, 0.96); border-left: 1px solid var(--border); z-index: 4;
   }
   /* layers panel: GIS-shaped — a tight left-docked list, eye checkbox, active
      layer marked by an accent bar. Context menu on right-click. */
   #layersPanel {
-    position: absolute; top: 68px; left: 0; bottom: 24px; width: 224px; display: none;
+    position: absolute; top: 68px; left: 0; bottom: 24px; width: var(--lpw, 224px); display: none;
     flex-direction: column; background: rgba(22, 22, 22, 0.96); border-right: 1px solid var(--border); z-index: 4;
     font-family: var(--mono); font-size: 12px;
   }
@@ -169,8 +169,12 @@
   #compass.ne { right: 12px; top: 78px; }
   #compass.sw { left: 12px; bottom: 34px; }
   #compass.nw { left: 12px; top: 78px; }
-  #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: 292px; }
-  #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: 236px; }
+  #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: calc(var(--recw, 280px) + 12px); }
+  #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: calc(var(--lpw, 224px) + 12px); }
+  .lp-grab, .rp-grab { position: absolute; top: 0; bottom: 0; width: 5px; cursor: ew-resize; z-index: 5; }
+  .lp-grab { right: -2px; }
+  .rp-grab { left: -2px; }
+  .lp-grab:hover, .rp-grab:hover { background: var(--accent); opacity: 0.4; }
   #recPanel.show { display: flex; }
   #recPanel .rp-head {
     display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border);
@@ -235,8 +239,8 @@
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
-  <div id="recPanel"><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
-  <div id="layersPanel"><div class="lp-head"><span>layers</span><button class="lp-close" id="lpClose">×</button></div><div id="lpRows"></div></div>
+  <div id="recPanel"><div class="rp-grab" id="rpGrab"></div><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
+  <div id="layersPanel"><div class="lp-head"><span>layers</span><button class="lp-close" id="lpClose">×</button></div><div id="lpRows"></div><div class="lp-grab" id="lpGrab"></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
     <circle cx="37" cy="37" r="33" fill="rgba(18,18,18,0.55)" stroke="#4a4a4a" stroke-width="2"/>
     <rect x="35.5" y="0" width="3" height="7" fill="#4a4a4a"/>
@@ -1038,7 +1042,7 @@ function applySection(sec) {
 function projectManifest() {
   return {
     app: 'micro', version: 1, name: _project.name,
-    layers: _layers.map((L) => ({ source: L.name, external: L.storage === 'external' || undefined, colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible })),
+    layers: _layers.map((L) => ({ source: L.name, label: L.label && L.label !== L.name ? L.label : undefined, external: L.storage === 'external' || undefined, colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible })),
     camera: captureCamera(),
     section: captureSection(),
     views: _views,
@@ -1166,7 +1170,7 @@ async function openProjectDir(dir) {
       }
       if (handle) _fileHandles.set(file, handle);
       await openBlob(file, ls.source, i === 0 || !_layers.length ? 'replace' : 'add');
-      { const Lx = activeLayer(); if (Lx) Lx.storage = ls.external ? 'external' : 'project'; }
+      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; } }
       const L = activeLayer();
       if (!L) continue;                                    // that open failed; its layer rolled back
       // color channel first (may re-stream), then filter (sweeps), then the rest
@@ -1797,6 +1801,30 @@ $('#sampleBlocks').onclick = async () => {
 // context menu (zoom/info/filter/remove). Auto-shows at two layers; 'p' or
 // View → Layers toggles it any time. ──
 let _lpUserHidden = false;
+// panel widths: drag the inner edge; machine prefs (localStorage), CSS vars so
+// the compass dodge tracks live
+{
+  const saved = (() => { try { return JSON.parse(localStorage.getItem('micro.panels')) || {}; } catch { return {}; } })();
+  const setW = (which, px) => {
+    px = Math.max(160, Math.min(520, px));
+    document.documentElement.style.setProperty(which === 'lp' ? '--lpw' : '--recw', px + 'px');
+    saved[which] = px;
+    try { localStorage.setItem('micro.panels', JSON.stringify(saved)); } catch { /* ignore */ }
+  };
+  if (saved.lp) setW('lp', saved.lp);
+  if (saved.rec) setW('rec', saved.rec);
+  const grab = (el, which, fromRight) => {
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      el.setPointerCapture(e.pointerId);
+      const move = (ev) => setW(which, fromRight ? innerWidth - ev.clientX : ev.clientX);
+      const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+      addEventListener('pointermove', move); addEventListener('pointerup', up);
+    });
+  };
+  grab($('#lpGrab'), 'lp', false);
+  grab($('#rpGrab'), 'rec', true);
+}
 function toggleLayersPanel(force) {
   const el = $('#layersPanel');
   const show = force != null ? force : !el.classList.contains('show');
@@ -1817,6 +1845,7 @@ function removeLayerUI(id) {
 function layerMenu(L, x, y) {
   menuXY(x, y, [
     { label: 'Zoom to layer', action: () => fitLayer(L) },
+    { label: 'Rename layer…', action: () => { const v = prompt('layer name', L.label || L.name); if (v && v.trim()) { L.label = v.trim(); renderLayers(); markProjectDirty(); } } },
     { label: 'File info…', action: () => { setActiveLayer(L.id); showFileInfo(); } },
     { label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } },
     { sep: true },
@@ -1841,8 +1870,8 @@ function renderLayers() {
     eye.type = 'checkbox'; eye.checked = L.visible; eye.title = 'visible';
     eye.onclick = (e) => { e.stopPropagation(); L.visible = eye.checked; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); dispatchEvent(new Event('micro:project-dirty')); };
     const name = document.createElement('span'); name.className = 'lp-name';
-    name.textContent = (L.storage === 'external' ? '↗ ' : '') + L.name;
-    name.title = L.storage === 'external' ? `${L.name} — linked from outside the project folder` : L.name;
+    name.textContent = (L.storage === 'external' ? '↗ ' : '') + (L.label || L.name);
+    name.title = (L.label && L.label !== L.name ? `${L.label} (${L.name})` : L.name) + (L.storage === 'external' ? ' — linked from outside the project folder' : '');
     const n = document.createElement('span'); n.className = 'lp-n';
     n.textContent = (renderer.layerElementCount(L.id) || 0).toLocaleString();
     row.append(eye, name, n);
@@ -1890,7 +1919,7 @@ async function showRecord(fullId) {
   const lid = fullId >>> 29, rec = fullId & 0x1FFFFFFF;
   const L = layerById(lid);
   const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
-  const tag = _layers.length > 1 && L ? `${L.name} · ` : '';
+  const tag = _layers.length > 1 && L ? `${L.label || L.name} · ` : '';
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc;
   if (bd && bd.header.dm) {
     const vals = await fetchDmRecord(bd.blob, bd.header.dm, rec);
