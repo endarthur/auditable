@@ -1807,7 +1807,7 @@ const HELP_KEYS = `
 drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
 <code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br>
-<code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove<br>
+<code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove · <code>,</code> / <code>.</code> step the active layer<br>
 <code>Ctrl+S</code> — <b>save the project</b>: File → project folder (Chromium) keeps your layers, styling, filters, camera, section, and saved views in a plain folder — project.json + the files<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
@@ -2177,6 +2177,11 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'i') showFileInfo();
   else if (k === 'm') armMeasure();
   else if (k === 'p') toggleLayersPanel();
+  else if ((k === ',' || k === '.') && _layers.length > 1) {   // step the active layer (wraps)
+    const i = _layers.findIndex((L) => L.id === _activeId);
+    const j = (i + (k === '.' ? 1 : -1) + _layers.length) % _layers.length;
+    setActiveLayer(_layers[j].id);
+  }
   else if (k === 'Escape' && (_measure.arm || _measure.b)) clearMeasure();
   else if (k === 'o') { cam.setOrtho(!cam.state.ortho); requestRender(); }
   else if (k === 'x') toggleSection();
