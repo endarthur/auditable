@@ -1131,7 +1131,25 @@ block models (.csv, Datamine .dm). Streaming, no import step — first look in a
 second at any size, densifying while you orbit. Filter, section, and pick against the
 source file. Nothing leaves your machine.<br><br>
 Engine: <code>@gcu/condenser</code>. Part of the Auditable project — Geoscientific Chaos
-Union, <code>gentropic.org</code>. MIT.<br><br>
+Union, <code>gentropic.org</code>. MIT. All code in this file is GCU's own,
+implemented from the published methods below.<br><br>
+<b>References</b> — the rendering model follows:<br>
+· M. Schütz, G. Mandlburger, J. Otepka, M. Wimmer — <i>Progressive Real-Time Rendering of
+One Billion Points Without Hierarchical Acceleration Structures</i>. Computer Graphics
+Forum 39(2), 51–64, 2020. doi:10.1111/cgf.13911 — the streaming, no-preprocess,
+progressive-accumulation model at micro's core.<br>
+· M. Schütz, B. Kerbl, M. Wimmer — <i>Rendering Point Clouds with Compute Shaders and
+Vertex Order Optimization</i>. Computer Graphics Forum 40(4), 2021. doi:10.1111/cgf.14345
+— the vertex-order/Morton line behind micro's batch chunking.<br>
+· M. Schütz, B. Kerbl, M. Wimmer — <i>Software Rasterization of 2 Billion Points in Real
+Time</i>. Proc. ACM Comput. Graph. Interact. Tech. 5(3), art. 24, 2022. doi:10.1145/3543863<br>
+· C. Boucheny — <i>Visualisation scientifique de grands volumes de données: pour une
+approche perceptive</i>. PhD thesis, Université Joseph Fourier, 2009; and A. Ribes,
+C. Boucheny — <i>Eye-Dome Lighting: a non-photorealistic shading technique</i>. Kitware
+Source 7, 2011 — the EDL shading.<br>
+· C. Sigg, T. Weyrich, M. Botsch, M. Gross — <i>GPU-Based Ray-Casting of Quadratic
+Surfaces</i>. Eurographics Symp. on Point-Based Graphics, 59–65, 2006 — the ray-cast
+impostor technique behind the exact block rendering.<br><br>
 build <code>${__MICRO_BUILD__}</code>`;
 function showHelp(title, html) {
   $('#helpTitle').textContent = title;
