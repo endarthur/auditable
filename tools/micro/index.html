@@ -848,6 +848,7 @@ function openDhDialog(trio) {
   _dhDlg = { slots: {}, method: 'minimumCurvature', dip: 'auto' };
   if (trio) for (const role of ['collar', 'survey', 'intervals']) _dhDlg.slots[role] = trio[role];
   renderDhDialog();
+  dhSeedIntervalDefaults();
   $('#dhDlg').classList.add('show');
 }
 async function dhPickSlot(role) {
@@ -860,7 +861,9 @@ async function dhPickSlot(role) {
     const columns = sniff && sniff.header ? sniff.header.map((c) => String(c).trim()) : [];
     const cls = classifyDrillholeHeader(columns);
     _dhDlg.slots[role] = { blob: file, name: file.name, columns, mapping: cls && cls.role === role ? { ...cls.mapping } : {} };
+    if (role === 'intervals') _dhDlg.chan = _dhDlg.cat = undefined;
     renderDhDialog();
+    dhSeedIntervalDefaults();
   } catch { /* cancelled */ }
 }
 function sniffDelimitedSafe(text) { try { return sniffDelimited(text); } catch { return null; } }
@@ -869,6 +872,28 @@ const DH_FIELDS = {
   survey: [['bhid', 'hole id'], ['at', 'depth (AT)'], ['az', 'azimuth'], ['dip', 'dip']],
   intervals: [['bhid', 'hole id'], ['from', 'FROM'], ['to', 'TO']],
 };
+// mirror the provider's default choice (first numeric / first all-text
+// non-key column) so the dialog SHOWS what will happen instead of a dash
+async function dhSeedIntervalDefaults() {
+  const slot = _dhDlg && _dhDlg.slots.intervals;
+  if (!slot || _dhDlg.chan != null || !slot.columns.length) return;
+  try {
+    const head = await slot.blob.slice(0, 64 * 1024).text();
+    const sniff = sniffDelimitedSafe(head);
+    if (!sniff) return;
+    const split = sniff.delim === 'ws' ? (l) => l.trim().split(/\s+/) : (l) => l.split(sniff.delim);
+    const rows = head.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith('#')).slice(1, 60).map(split);
+    const keys = new Set([slot.mapping.bhid, slot.mapping.from, slot.mapping.to]);
+    for (let i = 0; i < slot.columns.length; i++) {
+      if (keys.has(i)) continue;
+      const vals = rows.map((r) => (r[i] || '').trim()).filter(Boolean);
+      if (!vals.length) continue;
+      if (_dhDlg.chan == null && vals.every((v) => !Number.isNaN(Number(v)))) _dhDlg.chan = i;
+      else if (_dhDlg.cat == null && vals.every((v) => Number.isNaN(Number(v)))) _dhDlg.cat = i;
+    }
+    renderDhDialog();
+  } catch { /* the provider's own defaults still apply on import */ }
+}
 function renderDhDialog() {
   const body = $('#dhDlgBody');
   body.textContent = '';
@@ -910,8 +935,10 @@ function renderDhDialog() {
   if (iv && iv.columns.length) {
     const opts = document.createElement('div'); opts.className = 'dh-maps';
     const chanW = document.createElement('label'); chanW.append('color by ');
+    chanW.title = 'the grade channel — drives the continuous color ramp down the holes (and the clip boxes)';
     chanW.appendChild(mkSel(iv.columns, _dhDlg.chan, (e) => { _dhDlg.chan = +e.target.value; }, true));
     const catW = document.createElement('label'); catW.append('category ');
+    catW.title = 'the categorical column (e.g. lithology) — class colors + quoted values in the filter autocomplete';
     catW.appendChild(mkSel(iv.columns, _dhDlg.cat, (e) => { _dhDlg.cat = +e.target.value; }, true));
     opts.append(chanW, catW);
     body.appendChild(opts);
