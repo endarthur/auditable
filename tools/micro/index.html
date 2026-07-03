@@ -106,6 +106,7 @@
     gap: 16px; padding: 0 12px; border-top: 1px solid var(--border); background: #161616;
     font-family: var(--mono); font-size: 11px; color: var(--dim);
   }
+  footer #camTP { margin-left: auto; white-space: pre; color: var(--dim); }
   #empty {
     position: absolute; inset: 68px 0 24px 0; display: flex; flex-direction: column; align-items: center;
     justify-content: center; gap: 10px; color: var(--faint); font-family: var(--mono); font-size: 13px;
@@ -246,7 +247,7 @@
     <polygon id="cmpE" fill="#d4d9de"/>
     <text id="cmpN" fill="#c89b3c" font-size="11" font-family="monospace" font-weight="bold" text-anchor="middle" dominant-baseline="middle" paint-order="stroke" stroke="#121212" stroke-width="3">N</text>
   </svg>
-  <footer><span id="meta">—</span><span id="stats"></span></footer>
+  <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
 import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
@@ -1328,6 +1329,14 @@ function drawMeasure() {
 function drawCompass() {
   const v = cam.state.view;
   if (!v) return;                                          // camera not updated yet (first paint comes with the loop)
+  { // camera plunge → trend, far right of the footer (mining convention, positive down)
+    const st = cam.state;
+    const f = [st.target[0] - st.eye[0], st.target[1] - st.eye[1], st.target[2] - st.eye[2]];
+    const plan = Math.hypot(f[0], f[1]);
+    const trend = ((Math.atan2(f[0], f[1]) * 180 / Math.PI) + 360) % 360;
+    const plunge = Math.atan2(-f[2], plan) * 180 / Math.PI;
+    $('#camTP').textContent = `${String(Math.round(plunge)).padStart(3)}°→${String(Math.round(trend)).padStart(3, '0')}°`;
+  }
   const R = [v[0], v[4], v[8]], U = [v[1], v[5], v[9]];    // camera basis (world → screen)
   const S = 27, cxp = 37, cyp = 37;
   const pr = (d) => [cxp + (R[0] * d[0] + R[1] * d[1] + R[2] * d[2]) * S,
