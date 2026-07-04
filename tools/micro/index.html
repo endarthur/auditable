@@ -2776,8 +2776,24 @@ function renderStyleTab(body, L) {
   const cb = $('#colorBy');
   const sel = document.createElement('select');
   sel.innerHTML = cb.innerHTML; sel.value = cb.value;
-  sel.onchange = () => { cb.value = sel.value; cb.dispatchEvent(new Event('change')); };
+  sel.onchange = () => { cb.value = sel.value; cb.dispatchEvent(new Event('change')); renderProps(); };
   body.appendChild(mkRow('color by', sel));
+  // the mode decides the rest of the tab (QGIS renderer semantics):
+  // categorical → the class legend; solid/rgb → nothing to style;
+  // continuous (elevation / channel / intensity) → clip + ramp
+  const selv = colorSelOf(L);
+  if (selv === 'cat' || selv === '2') {
+    const info = layerClassInfo(L);
+    if (info) renderClassList(body, L, info);
+    else body.appendChild(ppNote('no category classes in this layer'));
+    if (L.dh && L.docs.dhDoc) renderStickRadius(body, L);
+    return;
+  }
+  if (selv === 'solid' || selv === '3') {
+    body.appendChild(ppNote(selv === 'solid' ? 'solid — one color, nothing to map' : 'rgb — colors come from the file'));
+    if (L.dh && L.docs.dhDoc) renderStickRadius(body, L);
+    return;
+  }
   const mkClip = (id) => {
     const inp = document.createElement('input'); inp.type = 'number'; inp.style.width = '76px';
     inp.value = $('#' + id).value; inp.placeholder = id === 'clipMin' ? 'min' : 'max';
@@ -2786,18 +2802,19 @@ function renderStyleTab(body, L) {
   };
   body.appendChild(mkRow('clip', mkClip('clipMin'), mkClip('clipMax')));
   renderRampSection(body, L);
-  if (L.dh && L.docs.dhDoc) {
-    const r = document.createElement('input'); r.type = 'range'; r.min = 0.2; r.max = 8; r.step = 0.1;
-    r.value = renderer.layerStickRadius(L.id);
-    const rv = document.createElement('span'); rv.className = 'pp-val'; rv.textContent = r.value + ' m';
-    r.oninput = () => {
-      rv.textContent = (+r.value).toFixed(1) + ' m';
-      renderer.setLayerStickRadius(L.id, +r.value);
-      L.docs.dhDoc.config.radius = +r.value;
-      markProjectDirty(); requestRender();
-    };
-    body.appendChild(mkRow('stick radius', r, rv));
-  }
+  if (L.dh && L.docs.dhDoc) renderStickRadius(body, L);
+}
+function renderStickRadius(body, L) {
+  const r = document.createElement('input'); r.type = 'range'; r.min = 0.2; r.max = 8; r.step = 0.1;
+  r.value = renderer.layerStickRadius(L.id);
+  const rv = document.createElement('span'); rv.className = 'pp-val'; rv.textContent = r.value + ' m';
+  r.oninput = () => {
+    rv.textContent = (+r.value).toFixed(1) + ' m';
+    renderer.setLayerStickRadius(L.id, +r.value);
+    L.docs.dhDoc.config.radius = +r.value;
+    markProjectDirty(); requestRender();
+  };
+  body.appendChild(mkRow('stick radius', r, rv));
 }
 function renderRampSection(body, L) {
   const cfg = rampCfgOf(L) || { preset: 'viridis', classed: false, breaks: [] };
@@ -2825,18 +2842,38 @@ function renderRampSection(body, L) {
   };
   drawPreview();
   body.appendChild(prev);
-  // breakpoints ride the CHANNEL histogram: chan mode + a scanned column
   const selv = colorSelOf(L);
-  if (!String(selv).startsWith('chan:')) {
-    body.appendChild(ppNote('breakpoints live on grade channels — pick a column under color by'));
+  const isChan = String(selv).startsWith('chan:');
+  const isElev = selv === 'elev' || selv === '0';
+  if (!isChan && !isElev) {
+    body.appendChild(ppNote('breakpoints live on grade channels and elevation'));
     return;
   }
+  // the breaks TABLE — type round numbers, Enter applies (sorted, deduped);
+  // works with or without a scan
+  {
+    const cfgNow = rampCfgOf(L);
+    const bIn = document.createElement('input'); bIn.type = 'text';
+    bIn.placeholder = 'e.g. 15, 25, 40';
+    bIn.style.cssText = 'flex:1;background:#242424;color:var(--text);border:1px solid var(--border);font:inherit;padding:2px 5px;';
+    bIn.value = ((cfgNow && cfgNow.breaks) || []).map((v) => fmtStat(v)).join(', ');
+    const applyBreaks = () => {
+      const vals = bIn.value.split(/[,;\s]+/).map(parseFloat).filter(Number.isFinite).sort((a, b2) => a - b2);
+      const breaks = vals.filter((v, i) => i === 0 || v > vals[i - 1]);
+      setRampCfg(L, { breaks });
+      renderProps();
+    };
+    bIn.onkeydown = (e) => { if (e.key === 'Enter') applyBreaks(); };
+    bIn.onblur = () => { if (bIn.value !== ((rampCfgOf(L) || {}).breaks || []).map((v) => fmtStat(v)).join(', ')) applyBreaks(); };
+    body.appendChild(mkRow('breaks', bIn));
+  }
+  if (!isChan) return;                                     // the histogram is scan-fed and channel-only (for now)
   const h = layerTableHeader(L);
   const colName = h && h.columns[+String(selv).slice(5)];
   const stat = colName && L._colStats && L._colStats[colName];
   if (!stat || stat.kind !== 'num' || !stat.centroids) {
     const btn = document.createElement('button'); btn.className = 'pp-scan';
-    btn.textContent = `scan columns to edit ${colName || 'channel'} breakpoints`;
+    btn.textContent = `scan columns for the ${colName || 'channel'} histogram + quantiles`;
     btn.onclick = async () => {
       btn.disabled = true;
       await scanColumns(L, (a, b2) => { btn.textContent = `scanning… ${b2 ? Math.round((100 * a) / b2) : a}%`; });
@@ -3054,6 +3091,11 @@ function renderClassesTab(body, L) {
       : 'no category column in this layer — classes light up when one is mapped (LITO, classification, …)'));
     return;
   }
+  renderClassList(body, L, info);
+}
+// the class legend (eyes + swatches + counts + bulk) — the classes tab's body,
+// also embedded by the style tab's categorized mode
+function renderClassList(body, L, info) {
   const sec = document.createElement('div'); sec.className = 'pp-sec';
   sec.textContent = `classes — ${info.column}`;
   body.appendChild(sec);
