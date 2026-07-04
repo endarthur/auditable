@@ -244,6 +244,9 @@
   .pp-bulk a { color: var(--muted); cursor: pointer; }
   .pp-bulk a:hover { color: var(--accent); }
   .pp-sec { color: var(--accent); margin: 12px 0 8px; font-size: 11px; letter-spacing: 0.06em; }
+  .pp-ramp-preview { display: block; width: 100%; height: 10px; border-radius: 2px; border: 1px solid var(--border); margin: 2px 0 8px; }
+  .pp-hist { display: block; width: 100%; height: 72px; border: 1px solid var(--border); border-radius: 2px; cursor: crosshair; touch-action: none; }
+  .pp-hist-hint { color: var(--dim); font-size: 10px; margin: 3px 0 8px; }
   .pp-col { display: flex; align-items: center; gap: 7px; padding: 4px 2px; border-radius: 2px; cursor: default; }
   .pp-col:hover { background: #242424; }
   .pp-col .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1235,7 +1238,7 @@ function setColorLabels(header) {
 // switching the grade channel = re-stream sweep 2 with a new mapping (windowed ethos)
 $('#colorBy').addEventListener('change', () => {
   const v = $('#colorBy').value;
-  const L = activeLayer(); if (L) L.colorSel = v;
+  const L = activeLayer(); if (L) { L.colorSel = v; applyRamp(L); }
   dispatchEvent(new Event('micro:project-dirty'));
   if (v.startsWith('chan:') && _dhDoc && +v.slice(5) !== _dhDoc.header.mapping.chan) { reopenDhChan(+v.slice(5)); return; }
   if (v.startsWith('chan:') && _blockDoc && +v.slice(5) !== _blockDoc.header.mapping.chan) {
@@ -1244,7 +1247,7 @@ $('#colorBy').addEventListener('change', () => {
   } else requestRender();
 });
 for (const id of ['clipMin', 'clipMax']) $('#' + id).addEventListener('input', () => {
-  const L = activeLayer(); if (L) L.clip = [$('#clipMin').value, $('#clipMax').value];
+  const L = activeLayer(); if (L) { L.clip = [$('#clipMin').value, $('#clipMax').value]; if (rampCfgOf(L)) applyRamp(L); }
   dispatchEvent(new Event('micro:project-dirty'));
 });
 
@@ -1631,6 +1634,7 @@ function projectManifest() {
         : undefined,
       colTypes: L.colTypes && Object.keys(L.colTypes).length ? L.colTypes : undefined,
       calcCols: L.calcCols && L.calcCols.length ? L.calcCols : undefined,
+      ramps: L.ramps && Object.keys(L.ramps).length ? L.ramps : undefined,
       // delimited parsing intent: the column mapping (incl. a re-keyed category)
       // — indices are stable because the file rides in the project
       mapping: L.docs.blockDoc && !L.docs.blockDoc.header.dm ? L.docs.blockDoc.header.mapping : undefined,
@@ -1776,6 +1780,7 @@ async function openProjectDir(dir) {
           restoreHiddenCats(Ld, ls.hiddenCats);
           if (ls.colTypes) { Ld.colTypes = ls.colTypes; applyColTypes(Ld); }
           if (ls.calcCols) Ld.calcCols = ls.calcCols;
+          if (ls.ramps) { Ld.ramps = ls.ramps; applyRamp(Ld); }
         }
         continue;
       }
@@ -1827,6 +1832,7 @@ async function openProjectDir(dir) {
       restoreHiddenCats(L, ls.hiddenCats);
       if (ls.colTypes) { L.colTypes = ls.colTypes; applyColTypes(L); }
       if (ls.calcCols) L.calcCols = ls.calcCols;
+      if (ls.ramps) { L.ramps = ls.ramps; applyRamp(L); }
     }
     applyCamera(mf.camera);
     applySection(mf.section);
@@ -2093,7 +2099,8 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
-<b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br><br>
+<b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
+<b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; quantile/equal auto-breaks from the scan<br><br>
 <b>meshes</b> — .msh (Leapfrog) / .obj / .ply-with-faces open as context layers: scenery, not records (no pick, no filter — clicks pass through to the data behind)<br>
 right-click the layer → <b>Tint…</b> / <b>Opacity…</b> · sections cut meshes per-pixel — front/behind give the classic sectioned-solid view<br><br>
 <b>filter</b> (block models) — lamina's language over every column in the file:<br>
@@ -2778,6 +2785,7 @@ function renderStyleTab(body, L) {
     return inp;
   };
   body.appendChild(mkRow('clip', mkClip('clipMin'), mkClip('clipMax')));
+  renderRampSection(body, L);
   if (L.dh && L.docs.dhDoc) {
     const r = document.createElement('input'); r.type = 'range'; r.min = 0.2; r.max = 8; r.step = 0.1;
     r.value = renderer.layerStickRadius(L.id);
@@ -2790,6 +2798,142 @@ function renderStyleTab(body, L) {
     };
     body.appendChild(mkRow('stick radius', r, rv));
   }
+}
+function renderRampSection(body, L) {
+  const cfg = rampCfgOf(L) || { preset: 'viridis', classed: false, breaks: [] };
+  const sec = document.createElement('div'); sec.className = 'pp-sec'; sec.textContent = 'ramp';
+  body.appendChild(sec);
+  const sel = document.createElement('select');
+  for (const name of Object.keys(RAMP_PRESETS)) { const o = document.createElement('option'); o.value = name; o.textContent = name; sel.appendChild(o); }
+  sel.value = cfg.preset;
+  sel.onchange = () => { setRampCfg(L, { preset: sel.value }); renderProps(); };
+  const cl = document.createElement('label');
+  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!cfg.classed;
+  cb.onchange = () => setRampCfg(L, { classed: cb.checked });
+  cl.append(cb, ' classed');
+  cl.title = 'solid color per interval — the grade-shell legend; unchecked stretches the ramp between breakpoints';
+  body.appendChild(mkRow('', sel, cl));
+  // the baked preview strip
+  const prev = document.createElement('canvas'); prev.className = 'pp-ramp-preview'; prev.width = 256; prev.height = 1;
+  const drawPreview = () => {
+    const [lo, hi] = rampRangeFor(L);
+    const px = bakeRampPixels(rampCfgOf(L) || cfg, lo, hi);
+    const g2 = prev.getContext('2d');
+    const img = g2.createImageData(256, 1);
+    img.data.set(px);
+    g2.putImageData(img, 0, 0);
+  };
+  drawPreview();
+  body.appendChild(prev);
+  // breakpoints ride the CHANNEL histogram: chan mode + a scanned column
+  const selv = colorSelOf(L);
+  if (!String(selv).startsWith('chan:')) {
+    body.appendChild(ppNote('breakpoints live on grade channels — pick a column under color by'));
+    return;
+  }
+  const h = layerTableHeader(L);
+  const colName = h && h.columns[+String(selv).slice(5)];
+  const stat = colName && L._colStats && L._colStats[colName];
+  if (!stat || stat.kind !== 'num' || !stat.centroids) {
+    const btn = document.createElement('button'); btn.className = 'pp-scan';
+    btn.textContent = `scan columns to edit ${colName || 'channel'} breakpoints`;
+    btn.onclick = async () => {
+      btn.disabled = true;
+      await scanColumns(L, (a, b2) => { btn.textContent = `scanning… ${b2 ? Math.round((100 * a) / b2) : a}%`; });
+      renderProps();
+    };
+    body.appendChild(btn);
+    return;
+  }
+  // ── the histogram editor ──
+  const cvh = document.createElement('canvas'); cvh.className = 'pp-hist'; cvh.width = 480; cvh.height = 144;
+  const [lo, hi] = rampRangeFor(L);
+  const span = hi > lo ? hi - lo : 1;
+  const N = 48, bins = new Float64Array(N);
+  for (const [mean, n] of stat.centroids) bins[Math.min(N - 1, Math.max(0, Math.floor(((mean - lo) / span) * N)))] += n;
+  let peak = 0; for (let b2 = 0; b2 < N; b2++) if (bins[b2] > peak) peak = bins[b2];
+  const vx = (v) => ((v - lo) / span) * cvh.width;
+  const xv = (x) => lo + (x / cvh.width) * span;
+  const draw = () => {
+    const g2 = cvh.getContext('2d');
+    g2.clearRect(0, 0, cvh.width, cvh.height);
+    g2.fillStyle = '#3a3a3a';
+    for (let b2 = 0; b2 < N; b2++) {
+      const hp = peak ? Math.round((cvh.height - 14) * (bins[b2] / peak)) : 0;
+      if (hp) g2.fillRect(b2 * 10, cvh.height - hp, 9, hp);
+    }
+    const c2 = rampCfgOf(L);
+    for (const v of (c2 && c2.breaks) || []) {
+      const x = vx(v);
+      g2.fillStyle = '#c89b3c';
+      g2.fillRect(x - 1, 0, 2, cvh.height);
+      g2.font = '11px monospace'; g2.textAlign = 'center';
+      g2.fillText(fmtStat(v), Math.max(18, Math.min(cvh.width - 18, x)), 11);
+    }
+  };
+  draw();
+  const evX = (e) => { const r2 = cvh.getBoundingClientRect(); return ((e.clientX - r2.left) / r2.width) * cvh.width; };
+  const nearBreak = (x) => {
+    const c2 = rampCfgOf(L);
+    if (!c2 || !c2.breaks) return -1;
+    let best = -1, bd = 8;
+    c2.breaks.forEach((v, i) => { const d2 = Math.abs(vx(v) - x); if (d2 < bd) { bd = d2; best = i; } });
+    return best;
+  };
+  let dragging = -1;
+  cvh.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const x = evX(e);
+    const k = nearBreak(x);
+    if (k >= 0) { dragging = k; cvh.setPointerCapture(e.pointerId); }
+  });
+  cvh.addEventListener('pointermove', (e) => {
+    const x = evX(e);
+    if (dragging >= 0) {
+      const c2 = rampCfgOf(L, true);
+      c2.breaks[dragging] = xv(x);
+      draw(); drawPreview();
+    } else cvh.style.cursor = nearBreak(x) >= 0 ? 'ew-resize' : 'crosshair';
+  });
+  cvh.addEventListener('pointerup', () => { if (dragging >= 0) { dragging = -1; setRampCfg(L, {}); } });
+  cvh.addEventListener('dblclick', (e) => {
+    const c2 = rampCfgOf(L, true);
+    c2.breaks.push(xv(evX(e)));
+    c2.breaks.sort((a, b2) => a - b2);
+    setRampCfg(L, {}); draw(); drawPreview();
+  });
+  cvh.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const k = nearBreak(evX(e));
+    if (k >= 0) { const c2 = rampCfgOf(L, true); c2.breaks.splice(k, 1); setRampCfg(L, {}); draw(); drawPreview(); }
+  });
+  body.appendChild(cvh);
+  const hint = document.createElement('div'); hint.className = 'pp-hist-hint';
+  hint.textContent = 'double-click adds a breakpoint · drag moves · right-click removes';
+  body.appendChild(hint);
+  // auto-breaks from the scan's t-digest
+  const bulk = document.createElement('div'); bulk.className = 'pp-bulk';
+  const nIn = document.createElement('input'); nIn.type = 'number'; nIn.min = 2; nIn.max = 12; nIn.value = 5;
+  nIn.style.cssText = 'width:44px;background:#242424;color:var(--text);border:1px solid var(--border);font:inherit;padding:1px 3px;';
+  const mkA = (label, fn) => { const a = document.createElement('a'); a.textContent = label; a.onclick = fn; return a; };
+  bulk.append(
+    nIn,
+    mkA('quantiles', () => {
+      const n = Math.max(2, Math.min(12, +nIn.value || 5));
+      const q = (p2) => quantileFromCentroids(stat.centroids, stat.total, p2);
+      const breaks = [];
+      for (let i = 1; i < n; i++) breaks.push(q(i / n));
+      setRampCfg(L, { breaks }); renderProps();
+    }),
+    mkA('equal', () => {
+      const n = Math.max(2, Math.min(12, +nIn.value || 5));
+      const breaks = [];
+      for (let i = 1; i < n; i++) breaks.push(lo + (span * i) / n);
+      setRampCfg(L, { breaks }); renderProps();
+    }),
+    mkA('clear', () => { setRampCfg(L, { breaks: [] }); renderProps(); }),
+  );
+  body.appendChild(bulk);
 }
 // LAS classification names (ASPRS standard 0–18)
 const LAS_CLASSES = ['never classified', 'unclassified', 'ground', 'low vegetation', 'medium vegetation', 'high vegetation', 'building', 'low point (noise)', 'reserved', 'water', 'rail', 'road surface', 'reserved', 'wire — guard', 'wire — conductor', 'transmission tower', 'wire connector', 'bridge deck', 'high noise'];
@@ -3226,7 +3370,7 @@ function renderCalcForm(body, L, h) {
 async function reopenDh(L, patch, { clearCats = false } = {}) {
   const dh = L.docs.dhDoc; if (!dh) return;
   const files = dh.blobs, cfg = { ...dh.config, ...patch };
-  const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, catHidden: clearCats ? null : L.catHidden };
+  const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden };
   renderer.removeLayer(L.id);
   _layers = _layers.filter((l) => l.id !== L.id);
   await openDrillholeLayer(files, cfg, 'add');
@@ -3235,6 +3379,7 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
     L2.label = keep.label;
     L2.colTypes = keep.colTypes; applyColTypes(L2);
     L2.calcCols = keep.calcCols;
+    L2.ramps = keep.ramps; if (rampCfgOf(L2)) applyRamp(L2);
     if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2); }
   }
   renderLayers();
@@ -3244,7 +3389,7 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
 async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
   const doc = L.docs.blockDoc; if (!doc || doc.header.dm) return;
   const m = { ...doc.header.mapping, ...patch };
-  const keep = { colTypes: L.colTypes, calcCols: L.calcCols, catHidden: clearCats ? null : L.catHidden };
+  const keep = { colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden };
   await openBlocksBlob(doc.blob, doc.name, {
     layer: L.id, first: false, forcePoints: doc.forcePoints,
     mapping: { x: m.x, y: m.y, z: m.z, chan: m.chan, cat: m.cat },
@@ -3253,6 +3398,7 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
   if (L2) {
     L2.colTypes = keep.colTypes; applyColTypes(L2);
     L2.calcCols = keep.calcCols;
+    L2.ramps = keep.ramps; if (rampCfgOf(L2)) applyRamp(L2);
     if (clearCats) { L2.catHidden = null; renderer.setLayerCatVisibility(L2.id, null); }
     else if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2); }
   }
@@ -3263,6 +3409,83 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
 async function useAsCategory(L, i) {
   if (L.dh && L.docs.dhDoc) return reopenDh(L, { cat: i }, { clearCats: true });
   return reopenWithMapping(L, { cat: i }, { clearCats: true });
+}
+// ── per-layer color ramps (§10 breakpoints): presets + value BREAKPOINTS,
+// baked into a 256-px LUT the shaders already sample — zero shader changes.
+// classed = solid color per interval (the grade-shell legend); unclassed
+// breaks = a stretched continuous ramp. Config lives PER COLOR SELECTION
+// (L.ramps[colorSel]) so FE and AU each remember their own legend. ──
+const RAMP_PRESETS = {
+  viridis: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]],
+  spectral: [[43, 131, 186], [171, 221, 164], [255, 255, 191], [253, 174, 97], [215, 25, 28]],
+  magma: [[0, 0, 4], [81, 18, 124], [183, 55, 121], [252, 137, 97], [252, 253, 191]],
+  turbo: [[48, 18, 59], [62, 156, 254], [34, 236, 161], [218, 226, 25], [122, 4, 3]],
+  greys: [[24, 24, 24], [235, 235, 235]],
+};
+function rampSample(stops, t) {
+  const x = Math.max(0, Math.min(1, t)) * (stops.length - 1);
+  const k = Math.min(stops.length - 2, x | 0), f = x - k;
+  return [0, 1, 2].map((c) => Math.round(stops[k][c] * (1 - f) + stops[k + 1][c] * f));
+}
+function bakeRampPixels(cfg, lo, hi) {
+  const px = new Uint8Array(256 * 4);
+  const stops = RAMP_PRESETS[cfg.preset] || RAMP_PRESETS.viridis;
+  const span = hi > lo ? hi - lo : 1;
+  const breaks = (cfg.breaks || []).filter((v) => Number.isFinite(v) && v > lo && v < hi).sort((a, b) => a - b);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let c;
+    if (cfg.classed && breaks.length) {
+      const v = lo + t * span;
+      let k = 0; while (k < breaks.length && v >= breaks[k]) k++;
+      c = rampSample(stops, (k + 0.5) / (breaks.length + 1));
+    } else if (breaks.length) {
+      const v = lo + t * span;
+      const edges = [lo, ...breaks, hi];
+      let k = 0; while (k < edges.length - 2 && v >= edges[k + 1]) k++;
+      const f = (v - edges[k]) / Math.max(edges[k + 1] - edges[k], 1e-9);
+      c = rampSample(stops, (k + Math.min(1, Math.max(0, f))) / (edges.length - 1));
+    } else {
+      c = rampSample(stops, t);
+    }
+    px[i * 4] = c[0]; px[i * 4 + 1] = c[1]; px[i * 4 + 2] = c[2]; px[i * 4 + 3] = 255;
+  }
+  return px;
+}
+const colorSelOf = (L) => (L.id === _activeId ? $('#colorBy').value : (L.colorSel || 'elev'));
+function rampCfgOf(L, create = false) {
+  const sel = colorSelOf(L);
+  if (!L.ramps) { if (!create) return null; L.ramps = {}; }
+  if (!L.ramps[sel]) { if (!create) return null; L.ramps[sel] = { preset: 'viridis', classed: false, breaks: [] }; }
+  return L.ramps[sel];
+}
+// the value range the SHADER maps to t — mirrors the clip-aware ranges
+function rampRangeFor(L) {
+  const sel = colorSelOf(L);
+  const clip = [parseFloat(L.clip[0]), parseFloat(L.clip[1])];
+  if (String(sel).startsWith('chan:')) {
+    const cr = renderer.layerChanRange(L.id) || [0, 1];
+    return [Number.isFinite(clip[0]) ? clip[0] : cr[0], Number.isFinite(clip[1]) ? clip[1] : cr[1]];
+  }
+  const b = _docBbox || [0, 0, 0, 1, 1, 1];
+  const o = frame ? frame.origin[2] : 0;
+  return [Number.isFinite(clip[0]) ? clip[0] : b[2] + o, Number.isFinite(clip[1]) ? clip[1] : b[5] + o];
+}
+function applyRamp(L) {
+  const cfg = rampCfgOf(L);
+  if (!cfg || (cfg.preset === 'viridis' && !(cfg.breaks && cfg.breaks.length))) {
+    renderer.setLayerRamp(L.id, null);
+  } else {
+    const [lo, hi] = rampRangeFor(L);
+    renderer.setLayerRamp(L.id, bakeRampPixels(cfg, lo, hi));
+  }
+  requestRender();
+}
+function setRampCfg(L, patch) {
+  const cfg = rampCfgOf(L, true);
+  Object.assign(cfg, patch);
+  applyRamp(L);
+  markProjectDirty();
 }
 // ── the source tab: where the layer's positions come from + what it spans.
 // Per kind: delimited get LIVE X/Y/Z mapping selects (re-reads the file, like
@@ -3473,7 +3696,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

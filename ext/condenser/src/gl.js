@@ -210,7 +210,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
             intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
-            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null };
+            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null, rampTex: null };
       layers.set(id, l);
     }
     return l;
@@ -335,6 +335,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     // stick thickness (world metres) — a live per-layer knob
     setLayerStickRadius(layer, r) { const ls = layerOf(layer); const v = Math.max(0.05, +r || 1); if (ls.stickRadius !== v) { ls.stickRadius = v; needClear = true; } },
     layerStickRadius(layer) { return layerOf(layer).stickRadius; },
+    layerChanRange(layer) { const ls = layers.get(layer); return ls && ls.docChan[0] !== Infinity ? [ls.docChan[0], ls.docChan[1]] : null; },
     // per-layer section participation: an exempt layer draws (and picks) whole
     // while the others are slabbed — e.g. topo kept for context during sectioning
     setLayerSectioned(layer, on) { const ls = layerOf(layer); const v = on !== false; if (ls.sectioned !== v) { ls.sectioned = v; needClear = true; } },
@@ -347,6 +348,20 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       needClear = true;
     },
     layerMeshStyle(layer) { const ls = layerOf(layer); return { tint: ls.meshTint, opacity: ls.meshOpacity }; },
+    // per-layer color ramp LUT (layer properties: presets + baked breakpoints).
+    // pixels = Uint8Array(256*4) RGBA, or null to fall back to the built-in ramp.
+    setLayerRamp(layer, pixels) {
+      const ls = layerOf(layer);
+      if (!pixels) {
+        if (ls.rampTex) { gl.deleteTexture(ls.rampTex); ls.rampTex = null; }
+      } else if (!ls.rampTex) {
+        ls.rampTex = lutTexture(gl, pixels, 256);
+      } else {
+        gl.bindTexture(gl.TEXTURE_2D, ls.rampTex);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      }
+      needClear = true;
+    },
     // per-CLASS visibility (layer properties): vis = Uint8Array(256) of 0|1, or
     // null to clear. GPU-side — the class code already rides every element as
     // an attribute, so eyes are a texture update: no sweeps, any element count.
@@ -386,6 +401,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       const ls = layers.get(layer);
       if (ls && ls.maskTex) gl.deleteTexture(ls.maskTex);
       if (ls && ls.catVisTex) gl.deleteTexture(ls.catVisTex);
+      if (ls && ls.rampTex) gl.deleteTexture(ls.rampTex);
       layers.delete(layer);
       needClear = true;
     },
@@ -428,7 +444,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     clearChunks() {
       for (const c of chunks) freeChunk(c);
       chunks.length = 0; needClear = true;
-      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); }
+      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); if (ls.rampTex) gl.deleteTexture(ls.rampTex); }
       layers.clear();
     },
     resize() {
@@ -574,6 +590,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           if (ls.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, ls.maskTex); gl.uniform1i(uni.mask, 4); }
           gl.uniform1f(uni.catVisOn, ls.catVisTex ? 1 : 0);
           if (ls.catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, ls.catVisTex); gl.uniform1i(uni.catVis, 5); }
+          gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ls.rampTex || ramp); gl.uniform1i(uni.ramp, 0);
         };
         for (const [id, group] of ptsGroups) {
           setupPtsLayer(id);
@@ -626,7 +643,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           blocksPipe.begin(cam, {
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
-            ramp, palette: catPalette || palette, viewportH: canvas.height,
+            ramp: ls.rampTex || ramp, palette: catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
             catVisTex: ls.catVisTex,
@@ -674,7 +691,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           sticksPipe.begin(cam, {
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
-            ramp, palette: catPalette || palette, viewportH: canvas.height,
+            ramp: ls.rampTex || ramp, palette: catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
             radius: ls.stickRadius, catVisTex: ls.catVisTex,
