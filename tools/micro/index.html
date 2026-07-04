@@ -172,8 +172,27 @@
   #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: calc(var(--recw, 280px) + 12px); }
   #propPanel.show ~ #compass.se, #propPanel.show ~ #compass.ne { right: calc(var(--ppw, 272px) + 12px); }
   #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: calc(var(--lpw, 224px) + 12px); }
-  #dhDlg, #ofDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
-  #dhDlg.show, #ofDlg.show { display: flex; }
+  #dhDlg, #ofDlg, #exDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
+  #dhDlg.show, #ofDlg.show, #exDlg.show { display: flex; }
+  #exDlg .box { width: 480px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #exDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #exDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #exDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  #exDlg .ex-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  #exDlg .ex-row > b { color: var(--text-hi); width: 66px; font-weight: normal; flex: 0 0 auto; }
+  #exDlg .ex-row label { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+  #exDlg .ex-row label.dis { opacity: 0.45; }
+  #exDlg select, #exDlg input[type="text"] { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
+  #exDlg input[type="text"] { flex: 1; min-width: 120px; }
+  #exDlg .ex-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; margin: 4px 0 10px 76px; max-height: 180px; overflow-y: auto; }
+  #exDlg .ex-cols label { color: var(--muted); display: flex; align-items: center; gap: 5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #exDlg .ex-cols .bdg { color: var(--accent); flex: 0 0 auto; font-size: 11px; }
+  #exDlg .ex-links { margin-left: 76px; margin-bottom: 4px; }
+  #exDlg .ex-links a { color: var(--accent); cursor: pointer; margin-right: 12px; }
+  #exDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
+  #exDlg .dh-foot #exDlgMsg { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  #exDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
+  #exDlg .dh-foot button:disabled { opacity: 0.5; cursor: default; }
   #ofDlg .box { width: 620px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
   #ofDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #ofDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
@@ -417,6 +436,7 @@
   <div id="propPanel"><div class="rp-grab" id="ppGrab"></div><div class="rp-head"><span id="ppTitle">properties</span><button class="rp-close" id="ppClose">×</button></div><div class="pp-sub" id="ppSub"></div><div class="pp-tabs" id="ppTabs"></div><div class="pp-body" id="ppBody"></div><div class="pp-foot"><label title="apply style edits as you make them — uncheck to batch changes (each apply restarts accumulation on huge layers)"><input type="checkbox" id="ppAuto" checked>auto</label><span class="spacer"></span><button id="ppApply" disabled>apply</button><button id="ppRevert">revert</button></div></div>
   <div id="dhDlg"><div class="box"><div class="hd"><span>import drillholes</span><button id="dhCancel">×</button></div><div class="bd" id="dhDlgBody"></div><div class="dh-foot"><span id="dhDlgMsg"></span><button id="dhImport">Import</button></div></div></div>
   <div id="ofDlg"><div class="box"><div class="hd"><span>open files</span><button id="ofCancel">×</button></div><div class="bd" id="ofDlgBody"></div><div class="dh-foot"><button id="ofOpen">Open</button></div></div></div>
+  <div id="exDlg"><div class="box"><div class="hd"><span>export rows</span><button id="exCancel">×</button></div><div class="bd" id="exDlgBody"></div><div class="dh-foot"><span id="exDlgMsg"></span><button id="exGo">Export</button></div></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
     <circle cx="37" cy="37" r="33" fill="rgba(18,18,18,0.55)" stroke="#4a4a4a" stroke-width="2"/>
     <rect x="35.5" y="0" width="3" height="7" fill="#4a4a4a"/>
@@ -1157,6 +1177,180 @@ function openPaintPalette(L) {
   if (st.colName) setLayerColorSel(L, 'paint:' + st.colName);
 }
 $('#btnPaint').onclick = () => { const Lp = activeLayer(); if (Lp) openPaintPalette(Lp); };
+
+// ── export tools (§16): data leaves micro the way it came in — as ROWS.
+// An export IS a filter sweep with a writer at the end: renderer record
+// numbering (masks line up), extendRow carries ƒ calculated AND ✎ painted
+// columns out — paint a DOMAIN by lasso, export, feed the estimator. CSV
+// streamed into Blob parts → download; no size cliff. .dm exports too
+// (@gcu/dm stays a reader — this is the .dm → CSV converter). ──
+function exportColumnsOf(L) {
+  const h = layerTableHeader(L);
+  if (!h) return null;
+  const cols = h.columns.map((name, i) => ({ name, num: colIsNumeric(L, h, i), badge: '' }));
+  for (const c of L.calcCols || []) cols.push({ name: c.name, num: (c.ty || 'number') === 'number', badge: 'ƒ' });
+  for (const c of L.paintCols || []) cols.push({ name: c.name, num: false, badge: '✎' });
+  return cols;
+}
+let _exportEpoch = 0;
+async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimalComma = false, filename = 'export.csv', download = true } = {}) {
+  const h = layerTableHeader(L); if (!h) return -1;
+  const cols = exportColumnsOf(L);
+  if (!colIdx) colIdx = cols.map((_, i) => i);
+  const epoch = ++_exportEpoch;
+  const mask = scope === 'matches' ? L._filterMask : scope === 'selection' ? L._selMask : null;
+  if (scope !== 'all' && !mask) { $('#meta').textContent = `export: no ${scope === 'matches' ? 'filter' : 'selection'} on this layer`; return -1; }
+  const sep = delim === 'tab' ? '\t' : delim;
+  const needQuote = new RegExp('["\\r\\n' + (sep === '\t' ? '\\t' : '\\' + sep) + ']');
+  const esc = (s) => (needQuote.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
+  const numAt = colIdx.map((i) => cols[i].num);
+  const NUMRE = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
+  const fmt = (v, isNum) => {
+    if (v == null || v === '') return '';
+    const s = String(v);
+    if (decimalComma && isNum && NUMRE.test(s)) return esc(s.replace('.', ','));
+    return esc(s);
+  };
+  const parts = [colIdx.map((i) => esc(cols[i].name)).join(sep) + '\r\n'];
+  let buf = [];
+  const m = h.mapping || {};
+  const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm);
+  const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm);
+  let rec = 0, written = 0;
+  for await (const batch of layerRows(L, null)) {
+    for (const f0 of batch) {
+      if (isDelim) {
+        const xv = +f0[m.x], yv = +f0[m.y], zv = +f0[m.z];
+        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // renderer numbering
+      }
+      const rAt = rec++;
+      if (mask && !mask[rAt]) continue;
+      const f = extendRow(L, isDm ? f0.map((v) => (v == null ? '' : v)) : f0, rAt);
+      let line = '';
+      for (let k = 0; k < colIdx.length; k++) line += (k ? sep : '') + fmt(f[colIdx[k]], numAt[k]);
+      buf.push(line);
+      written++;
+      if (buf.length >= 65536) { parts.push(buf.join('\r\n') + '\r\n'); buf = []; }
+    }
+    $('#meta').textContent = `export: ${written.toLocaleString()} rows…`;
+    await new Promise((r) => setTimeout(r));
+    if (epoch !== _exportEpoch) return -1;                 // superseded
+  }
+  if (buf.length) parts.push(buf.join('\r\n') + '\r\n');
+  const blob = new Blob(parts, { type: 'text/csv' });
+  if (download) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  }
+  window._lastExport = blob;                               // the smoke reads content here
+  $('#meta').textContent = `exported ${written.toLocaleString()} rows → ${filename} (${fmtSize(blob.size)})`;
+  return written;
+}
+// ── the export dialog ──
+let _exDlg = null;
+function openExportDialog(L0) {
+  const layers = _layers.filter((L) => layerTableHeader(L));
+  if (!layers.length) { $('#meta').textContent = 'export: no table-backed layers (blocks or drillholes)'; return; }
+  const L = L0 && layerTableHeader(L0) ? L0 : (activeLayer() && layerTableHeader(activeLayer()) ? activeLayer() : layers[0]);
+  _exDlg = { lid: L.id, scope: 'all', off: new Set(), delim: ',', dec: false, name: null };
+  renderExportDialog();
+  $('#exDlg').classList.add('show');
+}
+function exDefaultName(L) {
+  const base = (L.label || L.name).replace(/\.[^.]+$/, '').replace(/[^\wÀ-ɏ .-]+/g, '_');
+  return `${base}_export.csv`;
+}
+function renderExportDialog() {
+  const d = _exDlg; if (!d) return;
+  const L = layerById(d.lid); if (!L) return;
+  const body = $('#exDlgBody');
+  body.textContent = '';
+  const mkRow2 = (label, ...els) => {
+    const row = document.createElement('div'); row.className = 'ex-row';
+    const b2 = document.createElement('b'); b2.textContent = label;
+    row.append(b2, ...els);
+    body.appendChild(row);
+    return row;
+  };
+  // layer
+  const lSel = document.createElement('select');
+  for (const L2 of _layers.filter((x) => layerTableHeader(x))) {
+    const o = document.createElement('option'); o.value = String(L2.id); o.textContent = L2.label || L2.name; lSel.appendChild(o);
+  }
+  lSel.value = String(d.lid);
+  lSel.onchange = () => { d.lid = +lSel.value; d.off = new Set(); d.name = null; renderExportDialog(); };
+  mkRow2('layer', lSel);
+  // scope (counts shown live; absent scopes disabled)
+  const total = attrRowCountOf(L);
+  let fN = 0; if (L._filterMask) for (let i = 0; i < L._filterMask.length; i++) fN += L._filterMask[i];
+  let sN = 0; if (L._selMask) for (let i = 0; i < L._selMask.length; i++) sN += L._selMask[i];
+  if ((d.scope === 'matches' && !fN) || (d.scope === 'selection' && !sN)) d.scope = 'all';
+  const scopeRow = mkRow2('rows');
+  for (const [key, label, n, on] of [['all', 'all', total, true], ['matches', 'filter matches', fN, fN > 0], ['selection', 'selection', sN, sN > 0]]) {
+    const lab = document.createElement('label');
+    if (!on) lab.className = 'dis';
+    const r2 = document.createElement('input'); r2.type = 'radio'; r2.name = 'exscope';
+    r2.checked = d.scope === key; r2.disabled = !on;
+    r2.onchange = () => { d.scope = key; };
+    lab.append(r2, `${label} (${n.toLocaleString()})`);
+    scopeRow.appendChild(lab);
+  }
+  // columns
+  const cols = exportColumnsOf(L);
+  mkRow2('columns');
+  const links = document.createElement('div'); links.className = 'ex-links';
+  const mkLink = (t, fn) => { const a = document.createElement('a'); a.textContent = t; a.onclick = fn; links.appendChild(a); };
+  mkLink('all', () => { d.off = new Set(); renderExportDialog(); });
+  mkLink('none', () => { d.off = new Set(cols.map((_, i) => i)); renderExportDialog(); });
+  body.appendChild(links);
+  const grid = document.createElement('div'); grid.className = 'ex-cols';
+  cols.forEach((c, i) => {
+    const lab = document.createElement('label');
+    const cb2 = document.createElement('input'); cb2.type = 'checkbox'; cb2.checked = !d.off.has(i);
+    cb2.onchange = () => { if (cb2.checked) d.off.delete(i); else d.off.add(i); };
+    lab.appendChild(cb2);
+    if (c.badge) { const b3 = document.createElement('span'); b3.className = 'bdg'; b3.textContent = c.badge; lab.appendChild(b3); }
+    lab.append(c.name);
+    lab.title = c.name;
+    grid.appendChild(lab);
+  });
+  body.appendChild(grid);
+  // format
+  const dSel = document.createElement('select');
+  for (const [v, t] of [[',', 'comma ,'], [';', 'semicolon ;'], ['tab', 'tab']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; dSel.appendChild(o); }
+  dSel.value = d.delim;
+  dSel.onchange = () => { d.delim = dSel.value; };
+  const decLab = document.createElement('label');
+  const decCb = document.createElement('input'); decCb.type = 'checkbox'; decCb.checked = d.dec;
+  decCb.onchange = () => { d.dec = decCb.checked; };
+  decLab.append(decCb, 'decimal comma');
+  decLab.title = 'write 61,4 instead of 61.4 in numeric columns (pt-BR Excel)';
+  mkRow2('format', dSel, decLab);
+  // filename
+  const nameIn = document.createElement('input'); nameIn.type = 'text';
+  nameIn.value = d.name != null ? d.name : exDefaultName(L);
+  nameIn.onchange = () => { d.name = nameIn.value; };
+  mkRow2('file', nameIn);
+  $('#exDlgMsg').textContent = '';
+}
+$('#exCancel').onclick = () => { $('#exDlg').classList.remove('show'); _exDlg = null; };
+$('#exGo').onclick = async () => {
+  const d = _exDlg; if (!d) return;
+  const L = layerById(d.lid); if (!L) return;
+  const cols = exportColumnsOf(L);
+  const colIdx = cols.map((_, i) => i).filter((i) => !d.off.has(i));
+  if (!colIdx.length) { $('#exDlgMsg').textContent = 'pick at least one column'; return; }
+  const btn = $('#exGo');
+  btn.disabled = true;
+  $('#exDlgMsg').textContent = 'sweeping…';
+  try {
+    const n = await runExport(L, { scope: d.scope, colIdx, delim: d.delim, decimalComma: d.dec, filename: (d.name || exDefaultName(L)).trim() || exDefaultName(L) });
+    if (n >= 0) { $('#exDlg').classList.remove('show'); _exDlg = null; }
+  } finally { btn.disabled = false; }
+};
 
 // screenshot: the canvas is the export surface (preserveDrawingBuffer is on)
 $('#btnShot').onclick = () => {
@@ -2783,6 +2977,8 @@ $('#mData').onclick = () => menuAt($('#mData'), [
   { sep: true },
   { label: 'Filter…', kbd: '/', action: () => $('#filter').focus() },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyBlockFilter(''); } },
+  { sep: true },
+  { label: 'Export rows…', action: () => openExportDialog(activeLayer()) },
 ]);
 // Tools = the instruments and readouts (lamina's grammar: View is how it
 // LOOKS, Tools is what you DO to it)
@@ -2822,6 +3018,7 @@ Tools → <b>Select through (volume)</b> flips the tools to the extruded tube: E
 <b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
 <b>rule-based styling</b> — style mode <b>rule-based</b> (block models + drillholes): ordered rules, each an expression (<code>FE > 60 and LITO = "HEM"</code>) with a name + color; ONE sweep over the table paints each record with its first matching rule (drag to re-prioritize), everything unmatched wears the <b>else</b> color; per-rule eyes hide a rule's records (draw + pick, GPU-side); counts per rule after the sweep; rules persist in the project and re-sweep on load<br>
 <b>paint to column</b> (<code>b</code> / the brush button / Data menu) — interactive domaining: a PAINTED column is a category column you fill by hand. The palette window (layer-pinned, like tables) picks the column + the value; while a value is armed, the <code>r</code> / <code>v</code> gestures PAINT it onto whatever they cross (<b>alt</b> erases, Tools → Select through paints the whole tube, <code>Esc</code> puts the brush down, <code>Ctrl+Z</code> undoes a stroke); or build a careful selection first and <b>apply to selection</b>. While painting the layer colors by the column (unpainted recedes dark); painted values are REAL columns — the filter (<code>DOMAIN = "HW_OXIDE"</code>), the scan, the attribute table, and the record panel all see them; they persist in the project<br>
+<b>export rows</b> (Data → Export rows… / the layer context menu) — data leaves micro the way it came in, as rows: scope <b>all</b> · <b>filter matches</b> · <b>selection</b>; every column including ƒ calculated and ✎ painted ones (paint a DOMAIN, export it, feed the estimator); CSV with delimiter choice + decimal comma; streamed, so 1.8M rows is one sweep, and opening a .dm then exporting IS the .dm → CSV converter. In the attribute table, <code>Ctrl+C</code> copies the grid selection as TSV<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
 <b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; the <b>interval table</b> lists every band with an editable upper bound, a count from the scan, and (classed) a color chip per shell; quantile/equal auto-breaks from the scan<br><br>
@@ -3556,6 +3753,7 @@ function layerMenu(L, x, y) {
     { label: 'File info…', action: () => { setActiveLayer(L.id); showFileInfo(); } },
     ...(L.kind !== 'mesh' ? [{ label: 'Attribute table…', kbd: 't', action: () => openAttrTable(L) }] : []),
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
+    ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); } },
     { label: (renderer.layerSectioned(L.id) ? '✓ ' : '') + 'Cut by sections', action: () => { renderer.setLayerSectioned(L.id, !renderer.layerSectioned(L.id)); markProjectDirty(); requestRender(); } },
@@ -5347,7 +5545,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
