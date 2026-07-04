@@ -259,6 +259,23 @@
   .pp-rule .grip { color: var(--dim); cursor: grab; user-select: none; font-size: 10px; }
   .pp-rule .grip:hover { color: var(--accent); }
   .pp-rule .else-nm { color: var(--dim); font-size: 11px; }
+  .pw-body { padding: 6px 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+  .pw-colrow { display: flex; align-items: center; gap: 6px; padding: 2px 0 6px; }
+  .pw-colrow label { color: var(--dim); flex: 0 0 auto; }
+  .pw-colrow select, .pw-colrow input[type="text"] { flex: 1; min-width: 60px; background: #242424; color: var(--text); border: 1px solid var(--border); font: inherit; padding: 1px 3px; }
+  .pw-row { display: grid; grid-template-columns: 14px 16px 1fr 46px 14px; align-items: center; gap: 6px; padding: 3px 2px; border-radius: 2px; }
+  .pw-row:hover { background: #242424; }
+  .pw-row.armed { background: #2a2417; box-shadow: inset 2px 0 0 var(--accent); }
+  .pw-row input[type="radio"] { margin: 0; accent-color: var(--accent); justify-self: center; }
+  .pw-row input[type="color"] { width: 16px; height: 14px; padding: 0; border: 1px solid var(--border); background: none; cursor: pointer; }
+  .pw-row input[type="text"] { width: 100%; box-sizing: border-box; background: none; color: var(--text); border: 1px solid transparent; font: inherit; padding: 1px 3px; }
+  .pw-row input[type="text"]:hover, .pw-row input[type="text"]:focus { background: #242424; border-color: var(--border); }
+  .pw-row .ct { text-align: right; color: var(--dim); font-size: 11px; white-space: nowrap; }
+  .pw-row .pw-blank { color: var(--dim); }
+  .pw-tools { display: flex; gap: 5px; padding: 8px 0 2px; flex-wrap: wrap; }
+  .pw-tools button { background: #242424; color: var(--text); border: 1px solid var(--border); font: inherit; font-size: 11px; padding: 2px 8px; cursor: pointer; border-radius: 2px; }
+  .pw-tools button:hover:not(:disabled) { border-color: var(--accent); }
+  .pw-tools button:disabled { color: var(--dim); cursor: default; }
   #propPanel .pp-foot {
     display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border);
     font-family: var(--mono); font-size: 12px; color: var(--muted);
@@ -343,6 +360,7 @@
     <span class="spacer"></span>
     <button id="btnSelRect" title="select — rectangle (r) · shift adds, alt subtracts · Tools → Select through flips to volume"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/><path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/></svg></button>
     <button id="btnSelLasso" title="select — lasso (v) · shift adds, alt subtracts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 22a5 5 0 0 1-2-4"/><path d="M3.3 14A6.8 6.8 0 0 1 2 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 0 1-5-1"/><path d="M5 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></button>
+    <button id="btnPaint" title="paint to column (b) — the palette window; armed values paint through the r / v gestures"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/></svg></button>
     <button id="btnMeasure" title="measure between two picked points/blocks (m)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2"/><path d="m11.5 9.5 2-2"/><path d="m8.5 6.5 2-2"/><path d="m17.5 15.5 2-2"/></svg></button>
     <button id="btnSection" title="section on/off (x) — mode and scrub live on the row below"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg></button>
     <button id="btnShot" title="save the viewport as PNG"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></button>
@@ -439,7 +457,7 @@ function loop(t) {
     cam.setAspect(w / h);
     const clipV = (id) => { const v = $('#' + id).value.trim(); return v === '' ? null : +v; };
     const clipOf = (L) => { const c = [L.clip[0].trim(), L.clip[1].trim()]; return [c[0] === '' ? null : +c[0], c[1] === '' ? null : +c[1]]; };
-    const modeOf = (v) => (v === 'elev' ? 0 : v && v.startsWith('chan:') ? 1 : v === 'cat' || v === 'rules' ? 2 : v === 'solid' ? 3 : +v || 0);
+    const modeOf = (v) => (v === 'elev' ? 0 : v && v.startsWith('chan:') ? 1 : v === 'cat' || v === 'rules' || (v && v.startsWith('paint:')) ? 2 : v === 'solid' ? 3 : +v || 0);
     const layerOpts = {};
     for (const L of _layers) layerOpts[L.id] = { colorMode: L.id === _activeId ? resolveColorMode() : modeOf(L.colorSel), clip: L.id === _activeId ? [clipV('clipMin'), clipV('clipMax')] : clipOf(L) };
     const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')], layerOpts: _layers.length ? layerOpts : null };
@@ -749,12 +767,15 @@ let _selArm = null;                                        // 'rect' | 'lasso' |
 let _selPts = null;
 function armSelect(kind) {
   _selArm = kind; _selPts = null;
+  _paintLastKind = kind;
   $('#btnSelRect').classList.toggle('on', kind === 'rect');
   $('#btnSelLasso').classList.toggle('on', kind === 'lasso');
   cv.style.cursor = 'crosshair';
-  $('#meta').textContent = (kind === 'rect'
-    ? 'select: drag a rectangle — shift adds, alt subtracts'
-    : 'select: draw a lasso — shift adds, alt subtracts') + (_selThrough ? ' · THROUGH (everything in the tube)' : ' · visible');
+  $('#meta').textContent = _paintArm
+    ? `painting ${paintArmLabel()} — drag to paint · alt erases · Esc stops` + (_selThrough ? ' · THROUGH' : '')
+    : (kind === 'rect'
+      ? 'select: drag a rectangle — shift adds, alt subtracts'
+      : 'select: draw a lasso — shift adds, alt subtracts') + (_selThrough ? ' · THROUGH (everything in the tube)' : ' · visible');
 }
 function disarmSelect() {
   _selArm = null; _selPts = null;
@@ -799,9 +820,344 @@ cv.addEventListener('pointerup', (e) => {
   const kind = _selArm;
   disarmSelect();
   if (poly.length >= (kind === 'rect' ? 4 : 3)) {
-    (_selThrough ? selectVolume : selectByPolygon)(poly, selModeOf(e), kind === 'rect');
-  } else $('#meta').textContent = 'selection: nothing there';
+    if (_paintArm) {
+      // painting: the gesture assigns the armed value (alt erases) and STAYS
+      // armed — drag, drag, drag; Esc puts the brush down
+      (_selThrough ? paintVolume : paintByPolygon)(poly, e.altKey ? 0 : _paintArm.code, kind === 'rect');
+      armSelect(kind);
+    } else (_selThrough ? selectVolume : selectByPolygon)(poly, selModeOf(e), kind === 'rect');
+  } else $('#meta').textContent = _paintArm ? 'paint: nothing there' : 'selection: nothing there';
 }, { capture: true });
+// ── paint-to-column (§15, the crown jewel): interactive domaining. A painted
+// column = per-record u8 codes + a value dict, filled by the selection
+// GESTURES while a brush value is armed — the rules machinery with a brush
+// instead of an expression. The palette is a LAYER-PINNED floating window
+// (the attribute-table rule: a brush must never retarget under your hand).
+// Painted values ride extendRow, so filter/scan/table/record-panel see them
+// as ordinary text columns; codes persist byte-RLE'd in project.json. ──
+const _paintWins = new Map();                              // layerId → { win, render }
+let _paintArm = null;                                      // { lid, colName, code } — ONE armed brush globally
+let _paintLastKind = 'rect';
+function paintColByName(L, name) { return ((L && L.paintCols) || []).find((c) => c.name === name); }
+function paintArmLabel() {
+  if (!_paintArm) return '';
+  const L = layerById(_paintArm.lid);
+  const col = L && paintColByName(L, _paintArm.colName);
+  if (!col) return '';
+  return `${col.name} = ${_paintArm.code ? col.dict[_paintArm.code] : 'unpainted'}`;
+}
+function paintDisarm() {
+  if (!_paintArm) return;
+  const t = _paintArm;
+  _paintArm = null;
+  $('#btnPaint').classList.remove('on');
+  if (_selArm) disarmSelect();
+  const w = _paintWins.get(t.lid);
+  if (w) w.render();
+  $('#meta').textContent = 'brush down';
+}
+function paintArm(lid, colName, code) {
+  _paintArm = { lid, colName, code };
+  $('#btnPaint').classList.add('on');
+  for (const [, w] of _paintWins) w.render();
+  armSelect(_selArm || _paintLastKind || 'rect');          // painting rides the gesture tools, sticky
+}
+function createPaintCol(L, name) {
+  const n = attrRowCountOf(L);
+  if (!n) { $('#meta').textContent = 'paint: no records behind this layer'; return null; }
+  name = (name || '').trim();
+  if (!name) return null;
+  const h = layerTableHeader(L);
+  const taken = new Set([...((h && h.columns) || []), ...(L.calcCols || []).map((c) => c.name), ...(L.paintCols || []).map((c) => c.name)]);
+  if (taken.has(name)) { $('#meta').textContent = `paint: “${name}” already exists — pick another name`; return null; }
+  const col = { name, dict: [''], colors: ['#000000'], blankColor: PAINT_BLANK, codes: new Uint8Array(n) };
+  paintRecount(col);
+  (L.paintCols = L.paintCols || []).push(col);
+  L._colStats = null;                                      // the scan doesn't know this column yet
+  addPaintColorOptions(L);
+  markProjectDirty();
+  return col;
+}
+function addPaintValue(L, col, label) {
+  const live = col.dict.filter((d, i) => i > 0 && d != null).length;
+  if (col.dict.length >= 256) { $('#meta').textContent = 'paint: a column holds at most 255 values'; return null; }
+  label = (label || '').trim() || `value ${live + 1}`;
+  col.dict.push(label);
+  col.colors.push(ruleDefaultColor(live));
+  const c2 = new Uint32Array(col.dict.length); c2.set(col.counts); col.counts = c2;
+  if (paintSelOf(L) === col.name) applyPaintPalette(L, col);
+  markProjectDirty();
+  return col.dict.length - 1;
+}
+// set a layer's color channel (through the toolbar when active, direct otherwise)
+function setLayerColorSel(L, v) {
+  L.colorSel = v;
+  if (L.id === _activeId) {
+    addPaintColorOptions(L);
+    const cb = $('#colorBy');
+    if ([...cb.options].some((o) => o.value === v)) { cb.value = v; cb.dispatchEvent(new Event('change')); return; }
+  }
+  applyRamp(L, true);
+  syncRuleMode(L);
+  dispatchEvent(new Event('micro:project-dirty'));
+}
+// the stroke core: assign `code` to a set of records, with a diff-based undo
+// entry (indices + old codes — bounded, cheap even at 50M records)
+function paintApply(L, col, recs, code) {
+  const n = attrRowCountOf(L);
+  if (col.codes.length !== n) { const c2 = new Uint8Array(n); c2.set(col.codes.subarray(0, Math.min(n, col.codes.length))); col.codes = c2; paintRecount(col); }
+  const idx = [], old = [];
+  for (const r of recs) if (r < n && col.codes[r] !== code) { idx.push(r); old.push(col.codes[r]); }
+  if (!idx.length) { $('#meta').textContent = 'paint: nothing new there'; return 0; }
+  const st = (L._paintUndo = L._paintUndo || []);
+  st.push({ col: col.name, idx: Uint32Array.from(idx), old: Uint8Array.from(old) });
+  let bytes = 0; for (const u of st) bytes += u.idx.length * 5;
+  while (st.length > 1 && bytes > 32e6) { const d = st.shift(); bytes -= d.idx.length * 5; }
+  for (let i = 0; i < idx.length; i++) { col.counts[old[i]]--; col.counts[code]++; col.codes[idx[i]] = code; }
+  paintAfterEdit(L, col);
+  $('#meta').textContent = `paint: ${idx.length.toLocaleString()} → ${code ? col.dict[code] : 'unpainted'} · ${col.name} (Ctrl+Z undoes)`;
+  return idx.length;
+}
+function paintUndo(L) {
+  const st = L._paintUndo;
+  if (!st || !st.length) { $('#meta').textContent = 'paint: nothing to undo'; return; }
+  const u = st.pop();
+  const col = paintColByName(L, u.col);
+  if (!col) return;
+  for (let i = 0; i < u.idx.length; i++) {
+    const r = u.idx[i];
+    if (r < col.codes.length) { col.counts[col.codes[r]]--; col.counts[u.old[i]]++; col.codes[r] = u.old[i]; }
+  }
+  paintAfterEdit(L, col);
+  $('#meta').textContent = `paint: undid ${u.idx.length.toLocaleString()} · ${col.name}`;
+}
+function paintAfterEdit(L, col) {
+  if (paintSelOf(L) === col.name) renderer.setLayerRuleCodes(L.id, col.codes);
+  const w = _paintWins.get(L.id); if (w) w.render();
+  const t2 = _attrTables.get(L.id); if (t2 && t2.invalidate) t2.invalidate();
+  L._colStats = null;                                      // stats are stale for this column
+  markProjectDirty(); requestRender();
+}
+// visible-mode stroke: the ID-buffer readback (occlusion-honest, like the
+// selection tools) filtered to the brush's layer
+function paintByPolygon(poly, code, isRect) {
+  const t = _paintArm; if (!t) return;
+  const L = layerById(t.lid);
+  const col = L && paintColByName(L, t.colName);
+  if (!col) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of poly) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  const region = renderer.pickRegion({ x: Math.max(0, x0), y: Math.max(0, y0), w: x1 - x0, h: y1 - y0 }, cam,
+    { pointPx: +$('#ptPx').value, blocksAsPoints: _viewMode === 'points', section: currentSection() });
+  if (!region) { $('#meta').textContent = 'paint: nothing there'; return; }
+  const { data, w, h, dpr } = region;
+  const rx = Math.max(0, x0), ry = Math.max(0, y0);
+  const hits = new Set();
+  for (let j = 0; j < h; j++) {
+    const cssY = ry + (h - 1 - j) / dpr;
+    for (let i = 0; i < w; i++) {
+      const o = (j * w + i) * 4;
+      const id = (data[o] | (data[o + 1] << 8) | (data[o + 2] << 16) | (data[o + 3] << 24)) >>> 0;
+      if (id === 0xFFFFFFFF || (id >>> 29) !== t.lid) continue;
+      if (!isRect && !pipTest(rx + i / dpr, cssY, poly)) continue;
+      hits.add(id & 0x1FFFFFFF);
+    }
+  }
+  paintApply(L, col, hits, code);
+}
+// through-mode stroke: the extruded tube over the brush's layer (grabs what
+// occlusion hides — the domaining gesture usually WANTS the whole tube)
+async function paintVolume(poly, code, isRect) {
+  const t = _paintArm; if (!t) return;
+  const L = layerById(t.lid);
+  const col = L && paintColByName(L, t.colName);
+  if (!col) return;
+  const epoch = ++_selEpoch;                               // shares the gesture epoch — a newer stroke supersedes
+  const o = frame ? frame.origin : [0, 0, 0];
+  const vp = cam.state.viewProj;
+  const rc = cv.getBoundingClientRect();
+  let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+  for (const [x, y] of poly) { if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y; }
+  const inPoly = (px2, py2) => px2 >= bx0 && px2 <= bx1 && py2 >= by0 && py2 <= by1 && (isRect || pipTest(px2, py2, poly));
+  const hit = (wx, wy, wz) => {
+    const X = wx - o[0], Y = wy - o[1], Z = wz - o[2];
+    const cw = vp[3] * X + vp[7] * Y + vp[11] * Z + vp[15];
+    if (cw <= 1e-9) return false;
+    const px2 = ((vp[0] * X + vp[4] * Y + vp[8] * Z + vp[12]) / cw * 0.5 + 0.5) * rc.width;
+    const py2 = (0.5 - (vp[1] * X + vp[5] * Y + vp[9] * Z + vp[13]) / cw * 0.5) * rc.height;
+    return inPoly(px2, py2);
+  };
+  const d = L.docs;
+  const n = attrRowCountOf(L);
+  const hits = [];
+  try {
+    if (d.dhDoc && d.dhDoc.recordPosition) {
+      for (let r = 0; r < n; r++) { const pos = d.dhDoc.recordPosition(r); if (pos && hit(pos[0], pos[1], pos[2])) hits.push(r); }
+    } else {
+      let streamChunks = null;
+      if (d.blockDoc && d.blockDoc.header.dm) ({ streamChunks } = await openDmModel(d.blockDoc.blob));
+      else if (d.blockDoc) ({ streamChunks } = await openBlockModel(d.blockDoc.blob, { mapping: d.blockDoc.header.mapping }));
+      else return;
+      let done = 0;
+      for await (const rc2 of streamChunks({ chunkPoints: 1 << 18 })) {
+        if (epoch !== _selEpoch) return;
+        const xs = rc2.x, ys = rc2.y, zs = rc2.z;
+        const recs = rc2.recIdx || null;
+        const base = rc2.recStart || 0;
+        for (let i = 0; i < rc2.count; i++) if (hit(xs[i], ys[i], zs[i])) { const r = recs ? recs[i] : base + i; if (r < n) hits.push(r); }
+        done += rc2.count;
+        if ((done & 0xFFFFF) === 0) { $('#meta').textContent = `paint through: ${L.label || L.name} — ${done.toLocaleString()} scanned…`; await new Promise((r2) => setTimeout(r2)); }
+      }
+    }
+  } catch (e) { $('#meta').textContent = `paint through: ${e.message}`; return; }
+  if (epoch !== _selEpoch) return;
+  paintApply(L, col, hits, code);
+}
+// ── the palette window ──
+function openPaintPalette(L) {
+  if (!L) return;
+  if (L.kind === 'mesh' || !layerTableHeader(L)) { $('#meta').textContent = 'paint: needs a table-backed layer (blocks or drillholes)'; return; }
+  const ex = _paintWins.get(L.id);
+  if (ex) { ex.win.el.style.zIndex = ++_fwinZ; ex.win.el.classList.remove('min'); return; }
+  const st = {
+    colName: (L.paintCols && L.paintCols[0] && L.paintCols[0].name) || null,
+    prevSel: colorSelOf(L),                                // hand the color back on close (unless re-aimed)
+    creating: !(L.paintCols && L.paintCols.length),
+  };
+  const win = floatWin({
+    title: `paint · ${L.label || L.name}`, sub: '',
+    x: Math.max(12, innerWidth - 610), y: 92, w: 264, h: 340,
+    onClose: () => {
+      _paintWins.delete(L.id);
+      if (_paintArm && _paintArm.lid === L.id) paintDisarm();
+      if (paintSelOf(L) && st.prevSel != null && !String(st.prevSel).startsWith('paint:')) setLayerColorSel(L, st.prevSel);
+    },
+  });
+  const render = () => {
+    const body = win.body; body.textContent = '';
+    body.classList.add('pw-body');
+    const col = st.colName ? paintColByName(L, st.colName) : null;
+    win.sub.textContent = col ? `✎ ${col.name}` : '';
+    // ── column row ──
+    const colSel = document.createElement('select');
+    for (const pc of L.paintCols || []) { const o = document.createElement('option'); o.value = pc.name; o.textContent = pc.name; colSel.appendChild(o); }
+    { const o = document.createElement('option'); o.value = '__new__'; o.textContent = '＋ new column…'; colSel.appendChild(o); }
+    if (st.colName) colSel.value = st.colName;
+    colSel.onchange = () => {
+      if (colSel.value === '__new__') { st.creating = true; render(); return; }
+      st.colName = colSel.value;
+      if (_paintArm && _paintArm.lid === L.id) _paintArm = null;
+      setLayerColorSel(L, 'paint:' + st.colName);
+      render();
+    };
+    const colRow = document.createElement('div'); colRow.className = 'pw-colrow';
+    const colLab = document.createElement('label'); colLab.textContent = 'column';
+    colRow.append(colLab, colSel);
+    body.appendChild(colRow);
+    if (st.creating) {
+      const nameIn = document.createElement('input'); nameIn.type = 'text'; nameIn.placeholder = 'DOMAIN';
+      nameIn.className = 'pw-name-in';
+      const mk = document.createElement('button'); mk.textContent = 'create';
+      const commit = () => {
+        const c2 = createPaintCol(L, nameIn.value || 'DOMAIN');
+        if (!c2) return;
+        st.colName = c2.name; st.creating = false;
+        setLayerColorSel(L, 'paint:' + c2.name);
+        render();
+      };
+      mk.onclick = commit;
+      nameIn.onkeydown = (ev) => { if (ev.key === 'Enter') commit(); };
+      const row = document.createElement('div'); row.className = 'pw-colrow';
+      const lab = document.createElement('label'); lab.textContent = 'name';
+      row.append(lab, nameIn, mk);
+      body.appendChild(row);
+      if (!col) { setTimeout(() => nameIn.focus(), 0); return; }
+    }
+    if (!col) return;
+    // ── value rows: click to arm the brush; every r/v gesture then paints ──
+    const armedHere = (code) => _paintArm && _paintArm.lid === L.id && _paintArm.colName === col.name && _paintArm.code === code;
+    const rowFor = (code) => {
+      const isBlank = code === 0;
+      const row = document.createElement('div'); row.className = 'pw-row' + (armedHere(code) ? ' armed' : '');
+      const dot = document.createElement('input'); dot.type = 'radio'; dot.name = 'pwarm' + L.id;
+      dot.checked = armedHere(code);
+      dot.title = isBlank ? 'arm the eraser' : 'arm this value — r / v gestures paint it';
+      const arm = () => { if (armedHere(code)) paintDisarm(); else paintArm(L.id, col.name, code); };
+      dot.onclick = (ev) => { ev.preventDefault(); arm(); };
+      const sw = document.createElement('input'); sw.type = 'color';
+      sw.value = isBlank ? (col.blankColor || PAINT_BLANK) : (col.colors[code] || RULE_ELSE);
+      sw.oninput = () => {
+        if (isBlank) col.blankColor = sw.value; else col.colors[code] = sw.value;
+        if (paintSelOf(L) === col.name) applyPaintPalette(L, col);
+        markProjectDirty();
+      };
+      let nm;
+      if (isBlank) {
+        nm = document.createElement('span'); nm.className = 'pw-blank'; nm.textContent = 'unpainted';
+      } else {
+        nm = document.createElement('input'); nm.type = 'text'; nm.value = col.dict[code];
+        nm.onchange = () => { const v = nm.value.trim(); if (v) { col.dict[code] = v; L._colStats = null; markProjectDirty(); if (armedHere(code)) armSelect(_selArm || _paintLastKind); } else nm.value = col.dict[code]; };
+      }
+      const ct = document.createElement('span'); ct.className = 'ct';
+      ct.textContent = col.counts && code < col.counts.length ? col.counts[code].toLocaleString() : '';
+      row.append(dot, sw, nm, ct);
+      if (!isBlank) {
+        const kb = document.createElement('span'); kb.className = 'pp-kebab'; kb.textContent = '⋮';
+        kb.onclick = (ev) => {
+          ev.stopPropagation();
+          const r2 = kb.getBoundingClientRect();
+          const cnt = col.counts[code] || 0;
+          menuXY(r2.left - 60, r2.bottom + 2, [
+            { label: `Clear (${cnt.toLocaleString()} → unpainted)`, action: () => { const recs = []; for (let i = 0; i < col.codes.length; i++) if (col.codes[i] === code) recs.push(i); paintApply(L, col, recs, 0); } },
+            { label: 'Remove value', action: () => {
+              const recs = []; for (let i = 0; i < col.codes.length; i++) if (col.codes[i] === code) recs.push(i);
+              if (recs.length) paintApply(L, col, recs, 0);
+              col.dict[code] = null;                       // tombstone — codes stay stable
+              if (armedHere(code)) _paintArm = null;
+              if (paintSelOf(L) === col.name) applyPaintPalette(L, col);
+              markProjectDirty(); render();
+            } },
+          ]);
+        };
+        row.appendChild(kb);
+      } else {
+        row.appendChild(document.createElement('span'));
+      }
+      return row;
+    };
+    for (let c2 = 1; c2 < col.dict.length; c2++) if (col.dict[c2] != null) body.appendChild(rowFor(c2));
+    body.appendChild(rowFor(0));
+    // ── footer tools ──
+    const add = document.createElement('button'); add.textContent = '+ value';
+    add.onclick = () => { const code = addPaintValue(L, col); if (code != null) { paintArm(L.id, col.name, code); render(); } };
+    const apply = document.createElement('button'); apply.textContent = 'apply to selection';
+    apply.title = 'stamp the armed value onto the current selection (build one with plain r / v first)';
+    apply.disabled = !(L._selMask && _paintArm && _paintArm.lid === L.id);
+    apply.onclick = () => {
+      if (!L._selMask || !_paintArm || _paintArm.lid !== L.id) return;
+      const recs = [];
+      for (let i = 0; i < L._selMask.length; i++) if (L._selMask[i]) recs.push(i);
+      paintApply(L, paintColByName(L, _paintArm.colName), recs, _paintArm.code);
+    };
+    const undo = document.createElement('button'); undo.textContent = 'undo';
+    undo.title = 'undo the last stroke (Ctrl+Z)';
+    undo.disabled = !(L._paintUndo && L._paintUndo.length);
+    undo.onclick = () => paintUndo(L);
+    const tools = document.createElement('div'); tools.className = 'pw-tools';
+    tools.append(add, apply, undo);
+    body.appendChild(tools);
+    const hint = document.createElement('div'); hint.className = 'pp-note';
+    hint.textContent = _paintArm && _paintArm.lid === L.id
+      ? 'drag r / v gestures to paint · alt erases · Tools → Select through paints the whole tube · Esc stops'
+      : 'click a value to arm the brush';
+    body.appendChild(hint);
+  };
+  _paintWins.set(L.id, { win, render });
+  render();
+  if (st.colName) setLayerColorSel(L, 'paint:' + st.colName);
+}
+$('#btnPaint').onclick = () => { const Lp = activeLayer(); if (Lp) openPaintPalette(Lp); };
+
 // screenshot: the canvas is the export surface (preserveDrawingBuffer is on)
 $('#btnShot').onclick = () => {
   cv.toBlob((blob) => {
@@ -886,6 +1242,7 @@ function setActiveLayer(id) {
   _activeId = id;
   _blockDoc = L.docs.blockDoc || null; _lasDoc = L.docs.lasDoc || null; _plyDoc = L.docs.plyDoc || null; _dhDoc = L.docs.dhDoc || null;
   setColorLabels(_blockDoc ? _blockDoc.header : _dhDoc ? _dhDoc.header : _lasDoc ? { kind: 'las' } : _plyDoc ? _plyDoc.header : null);
+  addPaintColorOptions(L);
   if (L.colorSel != null && [...$('#colorBy').options].some((o) => o.value === L.colorSel)) $('#colorBy').value = L.colorSel;
   $('#clipMin').value = L.clip[0]; $('#clipMax').value = L.clip[1];
   _filterExpr = L.filterExpr || '';
@@ -1476,7 +1833,7 @@ function resolveColorMode() {
   const v = $('#colorBy').value;
   if (v === 'elev') return 0;
   if (v.startsWith('chan:')) return 1;
-  if (v === 'cat' || v === 'rules') return 2;              // rules color through the palette (codes substitute)
+  if (v === 'cat' || v === 'rules' || v.startsWith('paint:')) return 2;   // rules/paint color through the palette (codes substitute)
   if (v === 'solid') return 3;
   return +v || 0;                                          // LAS numeric values
 }
@@ -1551,7 +1908,7 @@ async function applyBlockFilter(expr) {
     const fn2 = compileBool(expr, schema, { decimal: '.' });
     const mask2 = new Uint8Array(dh.header.count);
     let hits2 = 0;
-    for (let i = 0; i < dh.header.count; i++) { if (fn2(extendRow(AL, dh.fetchRecord(i)))) { mask2[i] = 1; hits2++; } }
+    for (let i = 0; i < dh.header.count; i++) { if (fn2(extendRow(AL, dh.fetchRecord(i), i))) { mask2[i] = 1; hits2++; } }
     renderer.setActiveSet('base', lid);
     renderer.setFilter(mask2, { isolate: true }, lid);
     { const Lf = layerById(lid); if (Lf) { Lf._filterMask = mask2; attrTableFilterChanged(lid); } }
@@ -1605,7 +1962,7 @@ async function applyBlockFilter(expr) {
     for await (const { recStart, rows } of recordBatches()) {
       for (let k = 0; k < rows.length; k++) {
         const vals = rows[k].map((v) => (v == null ? '' : v));
-        if (fn(extendRow(AL, vals))) {
+        if (fn(extendRow(AL, vals, recStart + k))) {
           mask[recStart + k] = 1; hits++;
           const code = catCode ? (catCode.get(String(vals[m.cat] ?? '').trim()) ?? 0) : 0;
           collect(+vals[m.x], +vals[m.y], +vals[m.z], m.chan != null ? +vals[m.chan] : 0, code, recStart + k);
@@ -1620,7 +1977,7 @@ async function applyBlockFilter(expr) {
       for (const f of batch) {
         const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
         if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // same rows sweep 2 kept
-        if (fn(extendRow(AL, f))) {
+        if (fn(extendRow(AL, f, rec))) {
           mask[rec] = 1; hits++;
           const code = catCode ? (catCode.get((f[m.cat] || '').trim()) ?? 0) : 0;
           collect(xv, yv, zv, m.chan != null ? +f[m.chan] : 0, code, rec);
@@ -1898,6 +2255,28 @@ function rleDecode(runs, n) {
   for (const r of runs) { if (v) m.fill(1, at, Math.min(n, at + r)); at += r; v ^= 1; }
   return m;
 }
+// painted-column codes are BYTES (0..255), so their RLE carries the value:
+// [value, run, value, run, …]
+function rleEncodeBytes(codes) {
+  const runs = [];
+  let cur = codes.length ? codes[0] : 0, run = 0;
+  for (let i = 0; i < codes.length; i++) {
+    if (codes[i] === cur) run++;
+    else { runs.push(cur, run); cur = codes[i]; run = 1; }
+  }
+  if (codes.length) runs.push(cur, run);
+  return runs;
+}
+function rleDecodeBytes(runs, n) {
+  const m = new Uint8Array(n);
+  let at = 0;
+  for (let i = 0; i + 1 < runs.length; i += 2) {
+    const v = runs[i], r = runs[i + 1];
+    if (v) m.fill(v, at, Math.min(n, at + r));
+    at += r;
+  }
+  return m;
+}
 function projectManifest() {
   return {
     app: 'micro', version: 1, name: _project.name,
@@ -1924,6 +2303,9 @@ function projectManifest() {
       catLegend: L.catLegend || undefined,
       rules: L.rules && L.rules.list && L.rules.list.length ? L.rules : undefined,
       ruleHidden: L.ruleHidden && L.ruleHidden.size ? [...L.ruleHidden] : undefined,
+      paintCols: L.paintCols && L.paintCols.length
+        ? L.paintCols.map((c) => ({ name: c.name, dict: c.dict, colors: c.colors, blankColor: c.blankColor, rle: rleEncodeBytes(c.codes) }))
+        : undefined,
       sel: L._selMask && L._selCount ? rleEncode(L._selMask) : undefined,
       // delimited parsing intent: the column mapping (incl. a re-keyed category)
       // — indices are stable because the file rides in the project
@@ -2037,6 +2419,28 @@ async function saveProject() {
     $('#meta').textContent = `project save failed — ${e.message}`;
   }
 }
+// rules + painted columns + selection restore — shared by the delimited and
+// drillhole project-restore branches (all three are per-record layer state)
+async function restoreStyleExtras(L, ls) {
+  if (ls.rules) {
+    L.rules = ls.rules;
+    L.ruleHidden = new Set(ls.ruleHidden || []);
+    if (ruleModeOf(L)) { renderer.setLayerRuleMode(L.id, true); await runRules(L, true); }   // declarative: codes rebuild by sweep
+  }
+  if (ls.paintCols) {
+    const n2 = attrRowCountOf(L);
+    L.paintCols = ls.paintCols.map((c) => ({ name: c.name, dict: c.dict.slice(), colors: (c.colors || []).slice(), blankColor: c.blankColor, codes: rleDecodeBytes(c.rle || [], n2) }));
+    for (const pc of L.paintCols) paintRecount(pc);
+    addPaintColorOptions(L);
+    // colorSel 'paint:…' couldn't land earlier (its option only exists now)
+    if (ls.colorSel && ls.colorSel.startsWith('paint:')) {
+      L.colorSel = ls.colorSel;
+      if (L.id === _activeId && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) $('#colorBy').value = ls.colorSel;
+      syncRuleMode(L);
+    }
+  }
+  if (ls.sel) { L._selMask = rleDecode(ls.sel, attrRowCountOf(L)); applyLayerSelection(L); }
+}
 async function openProjectDir(dir) {
   try {
     if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'project: permission denied'; return; }
@@ -2072,6 +2476,8 @@ async function openProjectDir(dir) {
           if (ls.calcCols) Ld.calcCols = ls.calcCols;
           if (ls.ramps) { Ld.ramps = ls.ramps; applyRamp(Ld, true); }
           if (ls.catLegend) { Ld.catLegend = ls.catLegend; applyCatLegend(Ld, true); }
+          if (ls.colorSel && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) { Ld.colorSel = ls.colorSel; $('#colorBy').value = ls.colorSel; syncRuleMode(Ld); }
+          await restoreStyleExtras(Ld, ls);
         }
         continue;
       }
@@ -2125,12 +2531,7 @@ async function openProjectDir(dir) {
       if (ls.calcCols) L.calcCols = ls.calcCols;
       if (ls.ramps) { L.ramps = ls.ramps; applyRamp(L, true); }
       if (ls.catLegend) { L.catLegend = ls.catLegend; applyCatLegend(L, true); }
-      if (ls.rules) {
-        L.rules = ls.rules;
-        L.ruleHidden = new Set(ls.ruleHidden || []);
-        if (ruleModeOf(L)) { renderer.setLayerRuleMode(L.id, true); await runRules(L, true); }   // declarative: codes rebuild by sweep
-      }
-      if (ls.sel) { L._selMask = rleDecode(ls.sel, attrRowCountOf(L)); applyLayerSelection(L); }
+      await restoreStyleExtras(L, ls);
     }
     applyCamera(mf.camera);
     applySection(mf.section);
@@ -2378,6 +2779,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
   } },
   { sep: true },
   { label: 'Attribute table', kbd: 't', action: () => { const L = activeLayer(); if (L && L.kind !== 'mesh') openAttrTable(L); } },
+  { label: 'Paint to column…', kbd: 'b', action: () => { const L = activeLayer(); if (L) openPaintPalette(L); } },
   { sep: true },
   { label: 'Filter…', kbd: '/', action: () => $('#filter').focus() },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyBlockFilter(''); } },
@@ -2419,6 +2821,7 @@ Tools → <b>Select through (volume)</b> flips the tools to the extruded tube: E
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
 <b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
 <b>rule-based styling</b> — style mode <b>rule-based</b> (block models + drillholes): ordered rules, each an expression (<code>FE > 60 and LITO = "HEM"</code>) with a name + color; ONE sweep over the table paints each record with its first matching rule (drag to re-prioritize), everything unmatched wears the <b>else</b> color; per-rule eyes hide a rule's records (draw + pick, GPU-side); counts per rule after the sweep; rules persist in the project and re-sweep on load<br>
+<b>paint to column</b> (<code>b</code> / the brush button / Data menu) — interactive domaining: a PAINTED column is a category column you fill by hand. The palette window (layer-pinned, like tables) picks the column + the value; while a value is armed, the <code>r</code> / <code>v</code> gestures PAINT it onto whatever they cross (<b>alt</b> erases, Tools → Select through paints the whole tube, <code>Esc</code> puts the brush down, <code>Ctrl+Z</code> undoes a stroke); or build a careful selection first and <b>apply to selection</b>. While painting the layer colors by the column (unpainted recedes dark); painted values are REAL columns — the filter (<code>DOMAIN = "HW_OXIDE"</code>), the scan, the attribute table, and the record panel all see them; they persist in the project<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
 <b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; the <b>interval table</b> lists every band with an editable upper bound, a count from the scan, and (classed) a color chip per shell; quantile/equal auto-breaks from the scan<br><br>
@@ -2829,6 +3232,9 @@ window.addEventListener('keydown', (e) => {
   else if (k === 't') { const Lt = activeLayer(); if (Lt && Lt.kind !== 'mesh') openAttrTable(Lt); }
   else if (k === 'r') armSelect('rect');
   else if (k === 'v') armSelect('lasso');
+  else if (k === 'b') { const Lb = activeLayer(); if (Lb) openPaintPalette(Lb); }
+  else if (k === 'z' && (e.ctrlKey || e.metaKey)) { const Lz = _paintArm ? layerById(_paintArm.lid) : activeLayer(); if (Lz && Lz._paintUndo && Lz._paintUndo.length) { e.preventDefault(); paintUndo(Lz); } }
+  else if (k === 'Escape' && _paintArm) paintDisarm();
   else if (k === 'Escape' && _selArm) disarmSelect();
   else if (k === 'Escape' && !_knifeArm && !_measure.arm && !_measure.b) clearSelection();
   else if ((k === ',' || k === '.') && _layers.length > 1) {   // step the active layer (wraps)
@@ -2948,6 +3354,7 @@ function attrColumnsOf(L) {
   if (h) {
     const cols = h.columns.map((name, i) => ({ name, num: colIsNumeric(L, h, i) }));
     for (const c of L.calcCols || []) cols.push({ name: 'ƒ ' + c.name, num: (c.ty || 'number') === 'number' });
+    for (const c of L.paintCols || []) cols.push({ name: '✎ ' + c.name, num: false });
     return cols;
   }
   if (L.docs.plyDoc) return L.docs.plyDoc.header.columns.map((name) => ({ name, num: true }));
@@ -2976,7 +3383,7 @@ function openAttrTable(L) {
       for (const r of batch) queue.delete(r);
       for (const r of batch) {
         if (cache.has(r)) continue;
-        try { cache.set(r, extendRow(L, await fetchLayerRow(L, r)) || []); }
+        try { cache.set(r, extendRow(L, await fetchLayerRow(L, r), r) || []); }
         catch { cache.set(r, []); }
       }
       if (cache.size > 6000) { const it = cache.keys(); for (let i = 0; i < 2000; i++) cache.delete(it.next().value); }
@@ -3059,6 +3466,7 @@ function openAttrTable(L) {
     },
     filterChanged() { if (oc.checked) rebuildView(); },
     selChanged() { if (sc.checked) rebuildView(); },
+    invalidate() { cache.clear(); grid.refresh(); },       // painted values changed under the cache
     close: () => win.close(),
   });
   rebuildView();
@@ -3865,6 +4273,7 @@ $('#ppRevert').onclick = () => { const L = activeLayer(); if (L) revertStyle(L);
 function applyCatVisibility(L, force) {
   if (!force) return stageGate(L, () => applyCatVisibility(L, true));
   if (ruleModeOf(L)) return applyRuleVisibility(L, true);  // rule mode: the vis texture is indexed by RULE code
+  if (paintActiveCol(L)) { renderer.setLayerCatVisibility(L.id, null); requestRender(); return; }   // paint mode: no code eyes
   if (!L.catHidden || !L.catHidden.size) renderer.setLayerCatVisibility(L.id, null);
   else {
     const v = new Uint8Array(256).fill(1);
@@ -3960,6 +4369,7 @@ const legendCodesOf = (info, e) => e.values.map((v) => (typeof v === 'number' ? 
 function applyCatLegend(L, force) {
   if (!force) return stageGate(L, () => applyCatLegend(L, true));
   if (ruleModeOf(L)) return applyRulePalette(L, true);     // rule mode: the palette holds RULE colors
+  { const pc = paintActiveCol(L); if (pc) return applyPaintPalette(L, pc); }   // paint mode: painted-value colors
   const info = layerClassInfo(L);
   if (!info) return;
   const leg = L.catLegend && L.catLegend.col === info.column ? L.catLegend : null;
@@ -3985,6 +4395,49 @@ function applyCatLegend(L, force) {
 const RULE_ELSE = '#555a5f';
 function ruleModeOf(L) { return L && colorSelOf(L) === 'rules'; }
 function rulesOf(L) { return (L.rules && L.rules.list) || []; }
+// painted-column color channel: colorSel 'paint:<name>' → that column's codes
+// ride the SAME rule texture + palette (rules fill codes by expression,
+// painting fills them by gesture — one GPU path)
+function paintSelOf(L) {
+  const v = L && colorSelOf(L);
+  return v && typeof v === 'string' && v.startsWith('paint:') ? v.slice(6) : null;
+}
+function paintActiveCol(L) {
+  const name = paintSelOf(L);
+  return name ? (L.paintCols || []).find((c) => c.name === name) : null;
+}
+const PAINT_BLANK = '#33373c';                             // unpainted recedes toward the background
+function applyPaintPalette(L, col) {
+  const px = new Uint8Array(256 * 4);
+  const put = (c, hex) => {
+    const v = parseInt(hex.slice(1), 16);
+    px[c * 4] = (v >> 16) & 255; px[c * 4 + 1] = (v >> 8) & 255; px[c * 4 + 2] = v & 255; px[c * 4 + 3] = 255;
+  };
+  for (let c = 0; c < 256; c++) put(c, col.blankColor || PAINT_BLANK);
+  col.dict.forEach((label, i) => { if (i > 0 && i < 256 && label != null) put(i, col.colors[i] || RULE_ELSE); });
+  renderer.setLayerPalette(L.id, px, 256);
+  requestRender();
+}
+function paintRecount(col) {
+  const counts = new Uint32Array(col.dict.length);
+  for (let i = 0; i < col.codes.length; i++) if (col.codes[i] < counts.length) counts[col.codes[i]]++;
+  col.counts = counts;
+  return counts;
+}
+// paint options ride the toolbar color select for the ACTIVE layer (inserted
+// before 'solid'); called on layer switch, column create, and restore
+function addPaintColorOptions(L) {
+  if (!L || L.id !== _activeId) return;
+  const sel = $('#colorBy');
+  for (const pc of L.paintCols || []) {
+    const v = 'paint:' + pc.name;
+    if (![...sel.options].some((o) => o.value === v)) {
+      const o = document.createElement('option'); o.value = v; o.textContent = '✎ ' + pc.name;
+      const solid = [...sel.options].find((x) => x.value === 'solid');
+      sel.insertBefore(o, solid || null);
+    }
+  }
+}
 function ruleDefaultColor(i) {                             // golden-angle hues, same family as the category palette
   const h = (i * 137.508) % 360, s = 0.62, v = 0.86;
   const f = (n2) => { const k = (n2 + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
@@ -4014,16 +4467,26 @@ function applyRuleVisibility(L, force) {
   }
   markProjectDirty(); requestRender();
 }
-// mode entry/exit: rules and categories SHARE the palette + vis textures, so
-// switching re-bakes whichever owns them now (a texture upload, no sweeps)
+// mode entry/exit: rules, PAINTED COLUMNS, and categories share the palette +
+// vis + code textures, so switching re-bakes/re-uploads whichever owns them
+// now (texture updates, no sweeps — rule codes are kept CPU-side for exactly
+// this hand-back)
 function syncRuleMode(L) {
   if (!L) return;
-  const on = ruleModeOf(L);
-  renderer.setLayerRuleMode(L.id, on);
-  if (on) {
+  const pc = paintActiveCol(L);
+  if (ruleModeOf(L)) {
+    renderer.setLayerRuleMode(L.id, true);
     applyRulePalette(L, true); applyRuleVisibility(L, true);
-    if (rulesOf(L).length && (!L._ruleCodes || L._rulesDirty)) runRules(L, true);
+    if (L._ruleCodes) renderer.setLayerRuleCodes(L.id, L._ruleCodes);   // paint may have borrowed the texture
+    else if (rulesOf(L).length && (!L._ruleCodes || L._rulesDirty)) runRules(L, true);
+    else renderer.setLayerRuleCodes(L.id, null);
+  } else if (pc) {
+    renderer.setLayerRuleMode(L.id, true);
+    applyPaintPalette(L, pc);
+    renderer.setLayerCatVisibility(L.id, null);            // no per-value eyes on paint (v1)
+    renderer.setLayerRuleCodes(L.id, pc.codes);
   } else {
+    renderer.setLayerRuleMode(L.id, false);
     applyCatLegend(L, true); applyCatVisibility(L, true);
   }
   requestRender();
@@ -4062,7 +4525,7 @@ async function runRules(L, force) {
         const xv = +f0[m.x], yv = +f0[m.y], zv = +f0[m.z];
         if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // renderer numbering skips these
       }
-      const f = extendRow(L, isDm ? f0.map((v) => (v == null ? '' : v)) : f0);
+      const f = extendRow(L, isDm ? f0.map((v) => (v == null ? '' : v)) : f0, rec);
       let c = 0;
       for (let i = 0; i < fns.length; i++) if (fns[i](f)) { c = i + 1; break; }
       if (rec < n) { codes[rec] = c; counts[c]++; }
@@ -4248,17 +4711,22 @@ function calcFns(L) {
   });
   return L._calcFns;
 }
-function extendRow(L, f) {
+// rec (the renderer record index) keys painted-column lookups; callers that
+// sweep in renderer numbering pass it, others leave painted values blank
+function extendRow(L, f, rec) {
   const fns = calcFns(L);
-  if (!fns || !f) return f;
+  const pcs = L && L.paintCols && L.paintCols.length ? L.paintCols : null;
+  if ((!fns && !pcs) || !f) return f;
   const out = f.slice();
-  for (const fn of fns) { let v; try { v = fn(f); } catch { v = null; } out.push(v); }
+  if (fns) for (const fn of fns) { let v; try { v = fn(f); } catch { v = null; } out.push(v); }
+  if (pcs) for (const pc of pcs) { const c = rec != null && rec < pc.codes.length ? pc.codes[rec] : 0; out.push((c && pc.dict[c]) || ''); }
   return out;
 }
 function schemaExt(L, h) {
-  const base = blockSchema(h);
-  if (!L || !L.calcCols || !L.calcCols.length) return base;
-  return base.concat(L.calcCols.map((c) => ({ name: c.name, type: c.ty === 'string' ? 'string' : 'number' })));
+  let out = blockSchema(h);
+  if (L && L.calcCols && L.calcCols.length) out = out.concat(L.calcCols.map((c) => ({ name: c.name, type: c.ty === 'string' ? 'string' : 'number' })));
+  if (L && L.paintCols && L.paintCols.length) out = out.concat(L.paintCols.map((c) => ({ name: c.name, type: 'string' })));
+  return out;
 }
 async function sampleRow(L) {
   const d = L.docs || {};
@@ -4330,16 +4798,26 @@ async function* layerRows(L, onProgress) {
 async function scanColumns(L, onTick) {
   const h = layerTableHeader(L); if (!h) return null;
   const calc = L.calcCols || [];
-  const cols = h.columns.concat(calc.map((c) => c.name));
-  const isNumAt = (i) => (i < h.columns.length ? colIsNumeric(L, h, i) : (calc[i - h.columns.length].ty || 'number') === 'number');
+  const paint = L.paintCols || [];
+  const cols = h.columns.concat(calc.map((c) => c.name), paint.map((c) => c.name));
+  const isNumAt = (i) => (i < h.columns.length ? colIsNumeric(L, h, i)
+    : i < h.columns.length + calc.length ? (calc[i - h.columns.length].ty || 'number') === 'number'
+    : false);                                              // painted columns are categorical
   const W = welford(), TD = tdigest(), TK = topK({ limit: 500 }), CD = cardinality({ limit: 4096 });
   const st = cols.map((name, i) => (isNumAt(i)
     ? { num: true, w: W.create(), td: TD.create(), nulls: 0 }
     : { num: false, top: TK.create(), card: CD.create(), nulls: 0 }));
   let rows = 0;
+  // renderer record numbering for painted lookups (delimited skips bad-coord rows)
+  const mSc = h.mapping || {};
+  const isDelimSc = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm);
+  let recSc = 0;
   for await (const batch of layerRows(L, onTick ? (a, b) => onTick(a, b) : null)) {
     for (const f0 of batch) {
-      const f = extendRow(L, f0);
+      let rAt = null;
+      if (!isDelimSc) rAt = recSc++;
+      else if (Number.isFinite(+f0[mSc.x]) && Number.isFinite(+f0[mSc.y]) && Number.isFinite(+f0[mSc.z])) rAt = recSc++;
+      const f = extendRow(L, f0, rAt);
       rows++;
       for (let i = 0; i < cols.length; i++) {
         const c = st[i], v = f[i];
@@ -4522,7 +5000,7 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
   const dh = L.docs.dhDoc; if (!dh) return;
   closeAttrTable(L.id);
   const files = dh.blobs, cfg = { ...dh.config, ...patch };
-  const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend, rules: L.rules, ruleHidden: L.ruleHidden };
+  const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend, rules: L.rules, ruleHidden: L.ruleHidden, paintCols: L.paintCols };
   renderer.removeLayer(L.id);
   _layers = _layers.filter((l) => l.id !== L.id);
   await openDrillholeLayer(files, cfg, 'add');
@@ -4535,6 +5013,7 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
     if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2, true); }
     if (keep.catLegend) { L2.catLegend = keep.catLegend; applyCatLegend(L2, true); }
     if (keep.rules) { L2.rules = keep.rules; L2.ruleHidden = keep.ruleHidden; L2._rulesDirty = true; if (ruleModeOf(L2)) { renderer.setLayerRuleMode(L2.id, true); runRules(L2, true); } }
+    if (keep.paintCols) { L2.paintCols = keep.paintCols; addPaintColorOptions(L2); if (paintActiveCol(L2)) syncRuleMode(L2); }
   }
   renderLayers();
   if (_propOpen) { _propFor = null; renderProps(); }
@@ -4544,7 +5023,7 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
   const doc = L.docs.blockDoc; if (!doc || doc.header.dm) return;
   closeAttrTable(L.id);
   const m = { ...doc.header.mapping, ...patch };
-  const keep = { colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend, rules: L.rules, ruleHidden: L.ruleHidden };
+  const keep = { colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend, rules: L.rules, ruleHidden: L.ruleHidden, paintCols: L.paintCols };
   await openBlocksBlob(doc.blob, doc.name, {
     layer: L.id, first: false, forcePoints: doc.forcePoints,
     mapping: { x: m.x, y: m.y, z: m.z, chan: m.chan, cat: m.cat },
@@ -4558,6 +5037,7 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
     else if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2, true); }
     if (!clearCats && keep.catLegend) { L2.catLegend = keep.catLegend; applyCatLegend(L2, true); }
     if (keep.rules) { L2.rules = keep.rules; L2.ruleHidden = keep.ruleHidden; L2._rulesDirty = true; if (ruleModeOf(L2)) { renderer.setLayerRuleMode(L2.id, true); runRules(L2, true); } }
+    if (keep.paintCols) { L2.paintCols = keep.paintCols; addPaintColorOptions(L2); if (paintActiveCol(L2)) syncRuleMode(L2); }
   }
   markProjectDirty();
   if (_propOpen) { _propFor = null; renderProps(); }
@@ -4791,12 +5271,16 @@ async function fetchCsvRecord(rec, doc = _blockDoc) {
   return null;
 }
 function attrTableReveal(lid, rec) { const t2 = _attrTables.get(lid); if (t2) t2.revealRec(rec); }
-function appendCalcRows(rows, L, f, h) {
-  if (!L || !L.calcCols || !L.calcCols.length) return;
-  const ext = extendRow(L, f);
-  L.calcCols.forEach((c, k) => {
+function appendCalcRows(rows, L, f, h, rec) {
+  if (!L || ((!L.calcCols || !L.calcCols.length) && (!L.paintCols || !L.paintCols.length))) return;
+  const ext = extendRow(L, f, rec);
+  (L.calcCols || []).forEach((c, k) => {
     const v = ext[h.columns.length + k];
     rows.push([`ƒ ${c.name}`, v == null ? '—' : (typeof v === 'number' && !Number.isInteger(v) ? +v.toFixed(4) : v)]);
+  });
+  (L.paintCols || []).forEach((c, k) => {
+    const v = ext[h.columns.length + (L.calcCols || []).length + k];
+    rows.push([`✎ ${c.name}`, v || '—']);
   });
 }
 async function showRecord(fullId) {
@@ -4812,14 +5296,14 @@ async function showRecord(fullId) {
     const f = dd.fetchRecord(rec);
     if (!f) { showRecPanel(`${tag}interval · row ${rec.toLocaleString()}`, [], 'row not found'); return; }
     const rows = dd.header.columns.map((name, i) => [name, f[i]]);
-    appendCalcRows(rows, L, f, dd.header);
+    appendCalcRows(rows, L, f, dd.header, rec);
     showRecPanel(`${tag}interval · row ${rec.toLocaleString()}`, rows);
     return;
   }
   if (bd && bd.header.dm) {
     const vals = await fetchDmRecord(bd.blob, bd.header.dm, rec);
     const rows = bd.header.columns.map((name, i) => [name, vals[i] == null ? '—' : vals[i]]);
-    appendCalcRows(rows, L, vals, bd.header);
+    appendCalcRows(rows, L, vals, bd.header, rec);
     showRecPanel(`${tag}block · record ${rec.toLocaleString()}`, rows);
     return;
   }
@@ -4828,7 +5312,7 @@ async function showRecord(fullId) {
     const f = await fetchCsvRecord(rec, bd);
     if (!f) { showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, [], 'row not found'); return; }
     const rows = bd.header.columns.map((name, i) => [name, f[i]]);
-    appendCalcRows(rows, L, f, bd.header);
+    appendCalcRows(rows, L, f, bd.header, rec);
     showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, rows);
   } else if (pd) {
     showRecPanel(`${tag}point · #${rec.toLocaleString()}`, [], 'fetching…');
@@ -4863,7 +5347,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
