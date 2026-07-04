@@ -1635,6 +1635,7 @@ function projectManifest() {
       colTypes: L.colTypes && Object.keys(L.colTypes).length ? L.colTypes : undefined,
       calcCols: L.calcCols && L.calcCols.length ? L.calcCols : undefined,
       ramps: L.ramps && Object.keys(L.ramps).length ? L.ramps : undefined,
+      catLegend: L.catLegend || undefined,
       // delimited parsing intent: the column mapping (incl. a re-keyed category)
       // — indices are stable because the file rides in the project
       mapping: L.docs.blockDoc && !L.docs.blockDoc.header.dm ? L.docs.blockDoc.header.mapping : undefined,
@@ -1781,6 +1782,7 @@ async function openProjectDir(dir) {
           if (ls.colTypes) { Ld.colTypes = ls.colTypes; applyColTypes(Ld); }
           if (ls.calcCols) Ld.calcCols = ls.calcCols;
           if (ls.ramps) { Ld.ramps = ls.ramps; applyRamp(Ld); }
+          if (ls.catLegend) { Ld.catLegend = ls.catLegend; applyCatLegend(Ld); }
         }
         continue;
       }
@@ -1833,6 +1835,7 @@ async function openProjectDir(dir) {
       if (ls.colTypes) { L.colTypes = ls.colTypes; applyColTypes(L); }
       if (ls.calcCols) L.calcCols = ls.calcCols;
       if (ls.ramps) { L.ramps = ls.ramps; applyRamp(L); }
+      if (ls.catLegend) { L.catLegend = ls.catLegend; applyCatLegend(L); }
     }
     applyCamera(mf.camera);
     applySection(mf.section);
@@ -2100,6 +2103,7 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
 <b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
+<b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; quantile/equal auto-breaks from the scan<br><br>
 <b>meshes</b> — .msh (Leapfrog) / .obj / .ply-with-faces open as context layers: scenery, not records (no pick, no filter — clicks pass through to the data behind)<br>
 right-click the layer → <b>Tint…</b> / <b>Opacity…</b> · sections cut meshes per-pixel — front/behind give the classic sectioned-solid view<br><br>
@@ -3138,6 +3142,43 @@ function renderClassesTab(body, L) {
   }
   renderClassList(body, L, info);
 }
+// ── the CATEGORY LEGEND (§10 categorized): entries decoupled from the raw
+// column values — each owns a color, a label, and a SET of member values
+// (grouping = one row, one color, eyes toggle every member code). Removed
+// values fall into an automatic grey "other" bucket. Colors bake into a
+// per-layer palette texture; the class codes on the GPU never change. ──
+const rgbCssToHex = (css) => {
+  const m2 = String(css).match(/(\d+)\D+(\d+)\D+(\d+)/);
+  return m2 ? '#' + [1, 2, 3].map((i) => (+m2[i]).toString(16).padStart(2, '0')).join('') : '#888888';
+};
+function defaultLegendEntries(info) {
+  return info.codes.map((c) => ({ label: String(info.names[c]), values: [info.kind === 'las' ? c : String(info.names[c])], color: rgbCssToHex(info.colorAt(c)) }));
+}
+function legendOf(L, info) {
+  if (L.catLegend && L.catLegend.col === info.column) return L.catLegend;
+  return { col: info.column, entries: defaultLegendEntries(info), otherColor: '#555a5f' };
+}
+function ensureLegend(L, info) {
+  if (!L.catLegend || L.catLegend.col !== info.column) L.catLegend = legendOf(L, info);
+  return L.catLegend;
+}
+const legendCodesOf = (info, e) => e.values.map((v) => (typeof v === 'number' ? v : info.names.indexOf(v))).filter((c) => c >= 0);
+function applyCatLegend(L) {
+  const info = layerClassInfo(L);
+  if (!info) return;
+  const leg = L.catLegend && L.catLegend.col === info.column ? L.catLegend : null;
+  if (!leg) { renderer.setLayerPalette(L.id, null); requestRender(); return; }
+  const width = info.kind === 'las' ? 32 : 256;
+  const px = new Uint8Array(width * 4);
+  const put = (c, hex) => {
+    const n = parseInt(hex.slice(1), 16);
+    px[c * 4] = (n >> 16) & 255; px[c * 4 + 1] = (n >> 8) & 255; px[c * 4 + 2] = n & 255; px[c * 4 + 3] = 255;
+  };
+  for (let c = 0; c < width; c++) put(c, leg.otherColor || '#555a5f');   // uncovered → the other bucket
+  for (const e of leg.entries) for (const c of legendCodesOf(info, e)) if (c < width) put(c, e.color);
+  renderer.setLayerPalette(L.id, px, width);
+  requestRender();
+}
 // the class legend (eyes + swatches + counts + bulk) — the classes tab's body,
 // also embedded by the style tab's categorized mode
 function renderClassList(body, L, info) {
@@ -3145,37 +3186,100 @@ function renderClassList(body, L, info) {
   sec.textContent = `classes — ${info.column}`;
   body.appendChild(sec);
   if (!L.catHidden) L.catHidden = new Set();
-  const rows = new Map();
-  for (const c of info.codes) {
-    const row = document.createElement('div'); row.className = 'pp-cat' + (L.catHidden.has(c) ? ' off' : '');
-    const eye = document.createElement('input'); eye.type = 'checkbox'; eye.checked = !L.catHidden.has(c);
+  const leg = legendOf(L, info);
+  const stored = L.catLegend === leg;
+  const covered = new Set();
+  for (const e of leg.entries) for (const c of legendCodesOf(info, e)) covered.add(c);
+  const uncovered = stored ? info.codes.filter((c) => !covered.has(c)) : [];
+  const touch = () => { ensureLegend(L, info); applyCatLegend(L); markProjectDirty(); };
+  const rowFor = (e, codes, isOther) => {
+    const row = document.createElement('div'); row.className = 'pp-cat' + (codes.length && codes.every((c) => L.catHidden.has(c)) ? ' off' : '');
+    const eye = document.createElement('input'); eye.type = 'checkbox';
+    eye.checked = !codes.length || codes.some((c) => !L.catHidden.has(c));
     eye.onchange = () => {
-      if (eye.checked) L.catHidden.delete(c); else L.catHidden.add(c);
+      for (const c of codes) { if (eye.checked) L.catHidden.delete(c); else L.catHidden.add(c); }
       row.classList.toggle('off', !eye.checked);
       applyCatVisibility(L);
     };
-    const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = info.colorAt(c);
-    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = info.names[c];
-    nm.title = info.names[c];
+    const sw = document.createElement('input'); sw.type = 'color'; sw.value = isOther ? (leg.otherColor || '#555a5f') : e.color;
+    sw.style.cssText = 'width:16px;height:14px;padding:0;border:1px solid var(--border);background:none;cursor:pointer;flex:0 0 auto;';
+    sw.oninput = () => {
+      const legS = ensureLegend(L, info);
+      if (isOther) legS.otherColor = sw.value;
+      else { const me = legS.entries.find((x) => x === e) || legS.entries.find((x) => x.label === e.label); if (me) me.color = sw.value; }
+      applyCatLegend(L); markProjectDirty();
+    };
+    const nm = document.createElement('span'); nm.className = 'nm';
+    nm.textContent = isOther ? `other (${codes.length})` : e.label + (e.values.length > 1 ? ` (${e.values.length})` : '');
+    nm.title = isOther ? codes.map((c) => info.names[c]).join(', ') : e.values.map((v) => (typeof v === 'number' ? info.names[v] : v)).join(', ');
     const ct = document.createElement('span'); ct.className = 'ct'; ct.textContent = info.countable ? '…' : '–';
     row.append(eye, sw, nm, ct);
+    row.oncontextmenu = (ev) => {
+      ev.preventDefault();
+      const legS = () => ensureLegend(L, info);
+      if (isOther) {
+        menuXY(ev.clientX, ev.clientY, [
+          { label: 'Split into entries', action: () => {
+            const l2 = legS();
+            for (const c of codes) l2.entries.push({ label: String(info.names[c]), values: [info.kind === 'las' ? c : String(info.names[c])], color: rgbCssToHex(info.colorAt(c)) });
+            touch(); renderProps();
+          } },
+        ]);
+        return;
+      }
+      menuXY(ev.clientX, ev.clientY, [
+        { label: 'Rename…', action: () => { const v = prompt('legend label', e.label); if (v && v.trim()) { const l2 = legS(); const me = l2.entries.find((x) => x.label === e.label); if (me) me.label = v.trim(); touch(); renderProps(); } } },
+        ...(leg.entries.length > 1 ? [{ label: 'Merge into ▸', action: () => setTimeout(() => menuXY(ev.clientX + 16, ev.clientY + 8,
+          leg.entries.filter((x) => x !== e).map((t2) => ({ label: t2.label, action: () => {
+            const l2 = legS();
+            const src = l2.entries.find((x) => x.label === e.label), dst = l2.entries.find((x) => x.label === t2.label);
+            if (src && dst && src !== dst) { dst.values.push(...src.values); l2.entries.splice(l2.entries.indexOf(src), 1); touch(); renderProps(); }
+          } }))), 0) }] : []),
+        ...(e.values.length > 1 ? [{ label: 'Ungroup', action: () => {
+          const l2 = legS();
+          const me = l2.entries.find((x) => x.label === e.label);
+          if (me) {
+            const at = l2.entries.indexOf(me);
+            const split = me.values.map((v) => { const c = typeof v === 'number' ? v : info.names.indexOf(v); return { label: String(typeof v === 'number' ? info.names[v] : v), values: [v], color: c >= 0 ? rgbCssToHex(info.colorAt(c)) : me.color }; });
+            l2.entries.splice(at, 1, ...split);
+            touch(); renderProps();
+          }
+        } }] : []),
+        { label: 'Remove (→ other)', action: () => {
+          const l2 = legS();
+          const me = l2.entries.find((x) => x.label === e.label);
+          if (me) { l2.entries.splice(l2.entries.indexOf(me), 1); touch(); renderProps(); }
+        } },
+      ]);
+    };
     body.appendChild(row);
-    rows.set(c, { row, eye, ct });
-  }
+    return { codes, ct, row, eye };
+  };
+  const rows = [];
+  for (const e of leg.entries) rows.push(rowFor(e, legendCodesOf(info, e), false));
+  if (uncovered.length) rows.push(rowFor(null, uncovered, true));
   const bulk = document.createElement('div'); bulk.className = 'pp-bulk';
   const mkA = (label, fn) => { const a = document.createElement('a'); a.textContent = label; a.onclick = fn; return a; };
-  const sync = () => { for (const [c, r] of rows) { r.eye.checked = !L.catHidden.has(c); r.row.classList.toggle('off', !r.eye.checked); } applyCatVisibility(L); };
+  const sync = () => {
+    for (const r of rows) {
+      r.eye.checked = !r.codes.length || r.codes.some((c) => !L.catHidden.has(c));
+      r.row.classList.toggle('off', !r.eye.checked);
+    }
+    applyCatVisibility(L);
+  };
   bulk.append(
     mkA('all', () => { L.catHidden.clear(); sync(); }),
     mkA('none', () => { for (const c of info.codes) L.catHidden.add(c); sync(); }),
     mkA('invert', () => { for (const c of info.codes) { if (L.catHidden.has(c)) L.catHidden.delete(c); else L.catHidden.add(c); } sync(); }),
+    ...(stored ? [mkA('reset legend', () => { L.catLegend = null; renderer.setLayerPalette(L.id, null); markProjectDirty(); requestRender(); renderProps(); })] : []),
   );
   body.appendChild(bulk);
+  body.appendChild(ppNote('right-click an entry: rename · merge into · ungroup · remove — the color chip edits in place'));
   if (info.countable) {
     ensureCatCounts(L, info).then((cc) => {
-      if (!cc || activeLayer() !== L || _propTab !== 'classes') return;
-      for (const [c, r] of rows) {
-        const n = cc.counts.get(c) || 0;
+      if (!cc || activeLayer() !== L) return;
+      for (const r of rows) {
+        const n = r.codes.reduce((a, c) => a + (cc.counts.get(c) || 0), 0);
         r.ct.textContent = `${n.toLocaleString()} · ${cc.total ? Math.round((100 * n) / cc.total) : 0}%`;
       }
     });
@@ -3486,7 +3590,7 @@ function renderCalcForm(body, L, h) {
 async function reopenDh(L, patch, { clearCats = false } = {}) {
   const dh = L.docs.dhDoc; if (!dh) return;
   const files = dh.blobs, cfg = { ...dh.config, ...patch };
-  const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden };
+  const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend };
   renderer.removeLayer(L.id);
   _layers = _layers.filter((l) => l.id !== L.id);
   await openDrillholeLayer(files, cfg, 'add');
@@ -3497,6 +3601,7 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
     L2.calcCols = keep.calcCols;
     L2.ramps = keep.ramps; if (rampCfgOf(L2)) applyRamp(L2);
     if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2); }
+    if (keep.catLegend) { L2.catLegend = keep.catLegend; applyCatLegend(L2); }
   }
   renderLayers();
   if (_propOpen) { _propFor = null; renderProps(); }
@@ -3505,7 +3610,7 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
 async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
   const doc = L.docs.blockDoc; if (!doc || doc.header.dm) return;
   const m = { ...doc.header.mapping, ...patch };
-  const keep = { colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden };
+  const keep = { colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend };
   await openBlocksBlob(doc.blob, doc.name, {
     layer: L.id, first: false, forcePoints: doc.forcePoints,
     mapping: { x: m.x, y: m.y, z: m.z, chan: m.chan, cat: m.cat },
@@ -3515,8 +3620,9 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
     L2.colTypes = keep.colTypes; applyColTypes(L2);
     L2.calcCols = keep.calcCols;
     L2.ramps = keep.ramps; if (rampCfgOf(L2)) applyRamp(L2);
-    if (clearCats) { L2.catHidden = null; renderer.setLayerCatVisibility(L2.id, null); }
+    if (clearCats) { L2.catHidden = null; L2.catLegend = null; renderer.setLayerCatVisibility(L2.id, null); renderer.setLayerPalette(L2.id, null); }
     else if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2); }
+    if (!clearCats && keep.catLegend) { L2.catLegend = keep.catLegend; applyCatLegend(L2); }
   }
   markProjectDirty();
   if (_propOpen) { _propFor = null; renderProps(); }
@@ -3812,7 +3918,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

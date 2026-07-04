@@ -976,6 +976,17 @@ async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, index
   const map = mapping || mapColumns(sniff.header);
   if (!map) throw new Error('blockmodel: could not identify X/Y/Z centroid columns — pass a mapping');
 
+  // mapColumns picks the channel BY NAME (first leftover column) — a text
+  // column (XC,YC,ZC,LITO) would claim it, killing both the channel and the
+  // category detection below (which skips map.chan). Demote a non-numeric
+  // AUTO pick; an explicit mapping stays the caller's call.
+  if (!mapping && map.chan != null && sniff.header) {
+    const lines0 = head.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith('#')).slice(1, 40);
+    const split0 = splitter(sniff.delim);
+    const vals0 = lines0.map((l) => (split0(l)[map.chan] || '').trim()).filter(Boolean);
+    if (vals0.length && vals0.every((v) => Number.isNaN(Number(v)))) map.chan = null;
+  }
+
   // auto category: first column whose head-sample values are all non-numeric
   let catCol = map.cat;
   if (catCol == null && sniff.header) {
@@ -4998,7 +5009,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
             intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
-            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null, rampTex: null };
+            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0 };
       layers.set(id, l);
     }
     return l;
@@ -5136,6 +5147,23 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       needClear = true;
     },
     layerMeshStyle(layer) { const ls = layerOf(layer); return { tint: ls.meshTint, opacity: ls.meshOpacity }; },
+    // per-layer CATEGORY palette (legend colors/groups baked app-side).
+    // pixels = Uint8Array(width*4) RGBA (width 256 for dict layers, 32 for LAS
+    // classification — it must match what uPaletteN samples), null = built-ins.
+    setLayerPalette(layer, pixels, width = 256) {
+      const ls = layerOf(layer);
+      if (!pixels) {
+        if (ls.paletteTex) { gl.deleteTexture(ls.paletteTex); ls.paletteTex = null; ls.paletteW = 0; }
+      } else if (!ls.paletteTex || ls.paletteW !== width) {
+        if (ls.paletteTex) gl.deleteTexture(ls.paletteTex);
+        ls.paletteTex = lutTexture(gl, pixels, width);
+        ls.paletteW = width;
+      } else {
+        gl.bindTexture(gl.TEXTURE_2D, ls.paletteTex);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      }
+      needClear = true;
+    },
     // per-layer color ramp LUT (layer properties: presets + baked breakpoints).
     // pixels = Uint8Array(256*4) RGBA, or null to fall back to the built-in ramp.
     setLayerRamp(layer, pixels) {
@@ -5190,6 +5218,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       if (ls && ls.maskTex) gl.deleteTexture(ls.maskTex);
       if (ls && ls.catVisTex) gl.deleteTexture(ls.catVisTex);
       if (ls && ls.rampTex) gl.deleteTexture(ls.rampTex);
+      if (ls && ls.paletteTex) gl.deleteTexture(ls.paletteTex);
       layers.delete(layer);
       needClear = true;
     },
@@ -5232,7 +5261,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     clearChunks() {
       for (const c of chunks) freeChunk(c);
       chunks.length = 0; needClear = true;
-      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); if (ls.rampTex) gl.deleteTexture(ls.rampTex); }
+      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); if (ls.rampTex) gl.deleteTexture(ls.rampTex); if (ls.paletteTex) gl.deleteTexture(ls.paletteTex); }
       layers.clear();
     },
     resize() {
@@ -5371,7 +5400,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           gl.uniform1f(uni.intensityScale, 65535 / (ls.intensityMax || 1));
           gl.uniform1f(uni.paletteN, ls.catN || 32);
           gl.activeTexture(gl.TEXTURE1);
-          gl.bindTexture(gl.TEXTURE_2D, ls.catN && catPalette ? catPalette : palette);
+          gl.bindTexture(gl.TEXTURE_2D, ls.paletteTex || (ls.catN && catPalette ? catPalette : palette));
           gl.uniform1i(uni.palette, 1);
           gl.uniform1f(uni.filterOn, ls.maskTex ? 1 : 0);
           gl.uniform1f(uni.isolate, ls.isolate ? 1 : 0);
@@ -5431,7 +5460,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           blocksPipe.begin(cam, {
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
-            ramp: ls.rampTex || ramp, palette: catPalette || palette, viewportH: canvas.height,
+            ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
             catVisTex: ls.catVisTex,
@@ -5479,7 +5508,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           sticksPipe.begin(cam, {
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
-            ramp: ls.rampTex || ramp, palette: catPalette || palette, viewportH: canvas.height,
+            ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
             radius: ls.stickRadius, catVisTex: ls.catVisTex,

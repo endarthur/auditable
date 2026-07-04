@@ -179,6 +179,17 @@ export async function openBlockModel(blob, { mapping = null, sample = 512 * 1024
   const map = mapping || mapColumns(sniff.header);
   if (!map) throw new Error('blockmodel: could not identify X/Y/Z centroid columns — pass a mapping');
 
+  // mapColumns picks the channel BY NAME (first leftover column) — a text
+  // column (XC,YC,ZC,LITO) would claim it, killing both the channel and the
+  // category detection below (which skips map.chan). Demote a non-numeric
+  // AUTO pick; an explicit mapping stays the caller's call.
+  if (!mapping && map.chan != null && sniff.header) {
+    const lines0 = head.split(/\r?\n/).filter((l) => l.trim() && !l.startsWith('#')).slice(1, 40);
+    const split0 = splitter(sniff.delim);
+    const vals0 = lines0.map((l) => (split0(l)[map.chan] || '').trim()).filter(Boolean);
+    if (vals0.length && vals0.every((v) => Number.isNaN(Number(v)))) map.chan = null;
+  }
+
   // auto category: first column whose head-sample values are all non-numeric
   let catCol = map.cat;
   if (catCol == null && sniff.header) {
