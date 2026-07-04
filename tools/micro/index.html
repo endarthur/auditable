@@ -277,6 +277,7 @@
     <span class="title">micro</span>
     <button class="mb" id="mFile">File</button>
     <button class="mb" id="mView">View</button>
+    <button class="mb" id="mTools">Tools</button>
     <button class="mb" id="mHelp">Help</button>
     <span id="filterWrap"><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
     <span class="spacer"></span>
@@ -2037,18 +2038,24 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
   { label: 'Layer properties…', action: () => { if (_layers.length) openProps(); } },
-  { label: 'Memory…', action: showMemoryInfo },
-  { label: 'Measure…', kbd: 'm', action: armMeasure },
-  { label: (_measureTP ? '✓ ' : '') + 'Measure trend & plunge', action: toggleMeasureTP },
   { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
   { sep: true },
   ...(_views.length ? _views.map((v) => ({ label: `⤷ ${v.name}`, action: () => applyView(v) })) : []),
   { label: 'Save view…', action: saveViewAs },
   ...(_views.length ? [{ label: 'Remove view ▸', action: () => setTimeout(() => menuXY(innerWidth / 2 - 90, 100, _views.map((v) => ({ label: v.name, action: () => { _views = _views.filter((x) => x !== v); markProjectDirty(); } }))), 0) }] : []),
+]);
+// Tools = the instruments and readouts (lamina's grammar: View is how it
+// LOOKS, Tools is what you DO to it)
+$('#mTools').onclick = () => menuAt($('#mTools'), [
+  { label: 'Measure…', kbd: 'm', action: armMeasure },
+  { label: (_measureTP ? '✓ ' : '') + 'Measure trend & plunge', action: toggleMeasureTP },
+  { sep: true },
   { label: 'Section on/off', kbd: 'x', action: toggleSection },
   { label: 'Along the section', kbd: 'l', action: viewAlongSection },
   { label: 'Scrub section back', kbd: '[', action: () => scrubSection(-1) },
   { label: 'Scrub section forward', kbd: ']', action: () => scrubSection(1) },
+  { sep: true },
+  { label: 'Memory…', action: showMemoryInfo },
 ]);
 const HELP_KEYS = `
 <b>mouse</b><br>
