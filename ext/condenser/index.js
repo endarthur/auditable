@@ -1890,6 +1890,8 @@ uniform sampler2D uRamp;
 uniform sampler2D uPalette;
 uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
+uniform sampler2D uSel;
+uniform float uSelOn;
 uniform sampler2D uCatVis;
 uniform float uCatVisOn;
 uniform uint uPicked;
@@ -1948,6 +1950,10 @@ void main() {
     vColor = texture(uPalette, vec2((aCat + 0.5) / 256.0, 0.5));
   } else {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
+  }
+  if (uSelOn > 0.5) {
+    int rs = int(aRec & 0x1FFFFFFFu);
+    if (texelFetch(uSel, ivec2(rs & 8191, rs >> 13), 0).r > 0.5) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.85, 0.3), 0.55), vColor.a);
   }
   if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);
   if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);
@@ -2054,7 +2060,7 @@ function createSticksPipeline(gl) {
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), picked: U('uPicked'), repaint: U('uRepaint'),
-      catVis: U('uCatVis'), catVisOn: U('uCatVisOn'),
+      catVis: U('uCatVis'), catVisOn: U('uCatVisOn'), sel: U('uSel'), selOn: U('uSelOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
@@ -2106,7 +2112,7 @@ function createSticksPipeline(gl) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
   }
 
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null, selTex = null }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -2146,6 +2152,8 @@ function createSticksPipeline(gl) {
       if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uni.mask, 4); }
       gl.uniform1f(uni.catVisOn, catVisTex ? 1 : 0);
       if (catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, catVisTex); gl.uniform1i(uni.catVis, 5); }
+      gl.uniform1f(uni.selOn, selTex ? 1 : 0);
+      if (selTex) { gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, selTex); gl.uniform1i(uni.sel, 6); }
     }
     active = full;
     gl.useProgram(full.prog);
@@ -3501,6 +3509,8 @@ uniform sampler2D uRamp;
 uniform sampler2D uPalette;
 uniform sampler2D uMask;                // filter bitmask by record index (8192-wide)
 uniform float uFilterOn, uIsolate;
+uniform sampler2D uSel;
+uniform float uSelOn;
 uniform sampler2D uCatVis;              // 256x1 per-class visibility
 uniform float uCatVisOn;
 uniform float uForceSplat;              // 1 = whole chunk demoted (cheap far-field path)
@@ -3551,6 +3561,10 @@ void main() {
     vColor = texture(uPalette, vec2((aCat + 0.5) / 256.0, 0.5));
   } else {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
+  }
+  if (uSelOn > 0.5) {
+    int rs = int(aRec & 0x1FFFFFFFu);
+    if (texelFetch(uSel, ivec2(rs & 8191, rs >> 13), 0).r > 0.5) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.85, 0.3), 0.55), vColor.a);
   }
   if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);   // context mode: dim non-matching (still legible)
   if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
@@ -3649,7 +3663,7 @@ function createBlocksPipeline(gl) {
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'), repaint: U('uRepaint'),
-      catVis: U('uCatVis'), catVisOn: U('uCatVisOn'),
+      catVis: U('uCatVis'), catVisOn: U('uCatVisOn'), sel: U('uSel'), selOn: U('uSelOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
@@ -3708,7 +3722,7 @@ function createBlocksPipeline(gl) {
 
   // Per-frame program state (called once before the chunk loop) — set on BOTH
   // programs so drawSlice can switch freely between full and cheap.
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, catVisTex = null }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, catVisTex = null, selTex = null }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -3750,6 +3764,8 @@ function createBlocksPipeline(gl) {
       if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uni.mask, 4); }
       gl.uniform1f(uni.catVisOn, catVisTex ? 1 : 0);
       if (catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, catVisTex); gl.uniform1i(uni.catVis, 5); }
+      gl.uniform1f(uni.selOn, selTex ? 1 : 0);
+      if (selTex) { gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, selTex); gl.uniform1i(uni.sel, 6); }
     }
     active = full;
     gl.useProgram(full.prog);
@@ -4077,7 +4093,9 @@ function createPickPipeline(gl) {
    * CURRENT accumulated prefix (you pick what you can see), scissored to the
    * pixel. Returns the record index, or null.
    */
-  function pick(px, py, chunks, cam, { pointPx, blocksAsPoints = false, layerStates = null, section = null, viewportW, viewportH }) {
+  // the shared ID-buffer pass: scissored to (px,py,w,h), leaves the FBO bound
+  // for the caller's readPixels. pick() reads 1px; pickRegion() reads the block.
+  function renderInto(px, py, w2, h2, chunks, cam, { pointPx, blocksAsPoints = false, layerStates = null, section = null, viewportW, viewportH }) {
     const stateOf = (id) => (layerStates && layerStates.get(id)) || { maskTex: null, isolate: false };
     const byLayer = (arr) => {
       const m = new Map();
@@ -4100,7 +4118,7 @@ function createPickPipeline(gl) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.viewport(0, 0, w, h);
     gl.enable(gl.SCISSOR_TEST);
-    gl.scissor(px, py, 1, 1);
+    gl.scissor(px, py, w2, h2);
     gl.clearColor(1, 1, 1, 1);                             // decodes to NO_HIT
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
@@ -4228,6 +4246,10 @@ function createPickPipeline(gl) {
     }
 
     gl.disable(gl.SCISSOR_TEST);
+  }
+
+  function pick(px, py, chunks, cam, opts) {
+    renderInto(px, py, 1, 1, chunks, cam, opts);
     const px4 = new Uint8Array(4);
     gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px4);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -4236,7 +4258,19 @@ function createPickPipeline(gl) {
     return rec === NO_HIT ? null : rec;
   }
 
-  return { pick };
+  // one ID-buffer pass over a RECT (device px, GL bottom-left origin) — the
+  // marquee/lasso read. Same programs, same per-layer gates; returns the raw
+  // RGBA block (rows bottom-up); the caller masks by polygon and decodes.
+  function pickRegion(px, py, w2, h2, chunks, cam, opts) {
+    renderInto(px, py, w2, h2, chunks, cam, opts);
+    const out = new Uint8Array(w2 * h2 * 4);
+    gl.readPixels(px, py, w2, h2, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindVertexArray(null);
+    return out;
+  }
+
+  return { pick, pickRegion };
 }
 
 // ── ../dm/src/dm.js ──
@@ -4840,6 +4874,8 @@ uniform sampler2D uMask;                // filter bitmask by record index (8192-
 uniform float uFilterOn, uIsolate;
 uniform sampler2D uCatVis;              // 256x1 per-class visibility (layer properties)
 uniform float uCatVisOn;
+uniform sampler2D uSel;                 // selection bitmask by record index (8192-wide)
+uniform float uSelOn;
 out vec4 vColor;
 flat out float vCull;
 void main() {
@@ -4854,6 +4890,11 @@ void main() {
     if (uIsolate > 0.5 && m < 0.5) vCull = 1.0;
   }
   if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aClass) & 255, 0), 0).r < 0.5) vCull = 1.0;
+  float selHit = 0.0;
+  if (uSelOn > 0.5) {
+    int rs = int(aRec & 0x1FFFFFFFu);
+    selHit = texelFetch(uSel, ivec2(rs & 8191, rs >> 13), 0).r;
+  }
   if (uColorMode == 0) {
     float t = clamp((p.z - uZRange.x) / max(uZRange.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
@@ -4866,6 +4907,7 @@ void main() {
     vColor = vec4(aRgb, 1.0);
   }
   if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);   // context mode: dim non-matching
+  if (selHit > 0.5) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.85, 0.3), 0.55), vColor.a);   // selected: warm gold wash
   if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
   if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);   // repaint pass: everything else clips out
 }`;
@@ -4984,6 +5026,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
     mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), paletteN: U('uPaletteN'),
     catVis: U('uCatVis'), catVisOn: U('uCatVisOn'),
+    sel: U('uSel'), selOn: U('uSelOn'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
@@ -5009,7 +5052,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
             intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
-            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0 };
+            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0, selTex: null, selH: 0 };
       layers.set(id, l);
     }
     return l;
@@ -5147,6 +5190,31 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       needClear = true;
     },
     layerMeshStyle(layer) { const ls = layerOf(layer); return { tint: ls.meshTint, opacity: ls.meshOpacity }; },
+    // per-layer SELECTION bitmask (spec §15): same texture shape as the filter
+    // mask; selected elements get a warm tint in every element program
+    setLayerSelection(layer, mask) {
+      const ls = layerOf(layer);
+      if (!mask) {
+        if (ls.selTex) { gl.deleteTexture(ls.selTex); ls.selTex = null; ls.selH = 0; }
+      } else {
+        const W = 8192, H = Math.max(1, Math.ceil(mask.length / W));
+        const padded = new Uint8Array(W * H);
+        for (let i = 0; i < mask.length; i++) padded[i] = mask[i] ? 255 : 0;
+        if (ls.selTex && H === ls.selH) {
+          gl.bindTexture(gl.TEXTURE_2D, ls.selTex);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, padded);
+        } else {
+          if (ls.selTex) gl.deleteTexture(ls.selTex);
+          ls.selTex = gl.createTexture(); ls.selH = H;
+          gl.bindTexture(gl.TEXTURE_2D, ls.selTex);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, W, H, 0, gl.RED, gl.UNSIGNED_BYTE, padded);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        }
+      }
+      needClear = true;
+    },
     // per-layer CATEGORY palette (legend colors/groups baked app-side).
     // pixels = Uint8Array(width*4) RGBA (width 256 for dict layers, 32 for LAS
     // classification — it must match what uPaletteN samples), null = built-ins.
@@ -5219,6 +5287,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       if (ls && ls.catVisTex) gl.deleteTexture(ls.catVisTex);
       if (ls && ls.rampTex) gl.deleteTexture(ls.rampTex);
       if (ls && ls.paletteTex) gl.deleteTexture(ls.paletteTex);
+      if (ls && ls.selTex) gl.deleteTexture(ls.selTex);
       layers.delete(layer);
       needClear = true;
     },
@@ -5246,6 +5315,25 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     // GPU pick at CSS coordinates → PARTITIONED record id | null. Draws each
     // visible layer's accumulated prefix into a scissored offscreen target with
     // the record id as the color (gl-pick.js) — you pick exactly what you see.
+    // marquee/lasso support (spec §15): render the ID buffer once over a CSS
+    // rect and hand back the raw pixels — the app polygon-masks and decodes.
+    pickRegion(cssRect, cam, { pointPx = 2.5, blocksAsPoints = false, section = null } = {}) {
+      if (!chunks.length) return null;
+      if (!pickPipe) pickPipe = createPickPipeline(gl);
+      const dpr = window.devicePixelRatio || 1;
+      const x = Math.max(0, Math.round(cssRect.x * dpr));
+      const yTop = Math.round(cssRect.y * dpr);
+      const w = Math.min(canvas.width - x, Math.round(cssRect.w * dpr));
+      const h = Math.min(canvas.height, Math.round(cssRect.h * dpr));
+      const y = Math.max(0, canvas.height - yTop - h);
+      if (w <= 0 || h <= 0) return null;
+      const data = pickPipe.pickRegion(x, y, w, h, chunks.filter(activeChunk), cam, {
+        pointPx, blocksAsPoints, layerStates: layers,
+        section: section && section.on ? section : null,
+        viewportW: canvas.width, viewportH: canvas.height,
+      });
+      return { data, w, h, dpr };                          // rows bottom-up (GL), NO_HIT = 0xFFFFFFFF
+    },
     pick(cssX, cssY, cam, { pointPx = 2.5, blocksAsPoints = false, section = null } = {}) {
       if (!chunks.length) return null;
       if (!pickPipe) pickPipe = createPickPipeline(gl);
@@ -5261,7 +5349,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     clearChunks() {
       for (const c of chunks) freeChunk(c);
       chunks.length = 0; needClear = true;
-      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); if (ls.rampTex) gl.deleteTexture(ls.rampTex); if (ls.paletteTex) gl.deleteTexture(ls.paletteTex); }
+      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); if (ls.rampTex) gl.deleteTexture(ls.rampTex); if (ls.paletteTex) gl.deleteTexture(ls.paletteTex); if (ls.selTex) gl.deleteTexture(ls.selTex); }
       layers.clear();
     },
     resize() {
@@ -5407,6 +5495,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           if (ls.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, ls.maskTex); gl.uniform1i(uni.mask, 4); }
           gl.uniform1f(uni.catVisOn, ls.catVisTex ? 1 : 0);
           if (ls.catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, ls.catVisTex); gl.uniform1i(uni.catVis, 5); }
+          gl.uniform1f(uni.selOn, ls.selTex ? 1 : 0);
+          if (ls.selTex) { gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, ls.selTex); gl.uniform1i(uni.sel, 6); }
           gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ls.rampTex || ramp); gl.uniform1i(uni.ramp, 0);
         };
         for (const [id, group] of ptsGroups) {
@@ -5463,7 +5553,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
-            catVisTex: ls.catVisTex,
+            catVisTex: ls.catVisTex, selTex: ls.selTex,
           });
         };
         for (const [id, group] of blkGroups) {
@@ -5511,7 +5601,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
-            radius: ls.stickRadius, catVisTex: ls.catVisTex,
+            radius: ls.stickRadius, catVisTex: ls.catVisTex, selTex: ls.selTex,
           });
         };
         for (const [id, group] of stkGroups) {

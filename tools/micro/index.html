@@ -373,7 +373,7 @@
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
     <label id="secPlaneW" title="outline the section plane in the view" style="display:none"><input id="secPlaneVis" type="checkbox">plane</label>
   </div>
-  <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
+  <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
@@ -586,6 +586,129 @@ $('#secPos').addEventListener('input', requestRender);
 $('#secHalf').addEventListener('input', requestRender);
 for (const id of ['secMode', 'secPos', 'secHalf', 'secClip', 'secDipDir', 'secDip', 'secPlaneVis']) $('#' + id).addEventListener('input', () => dispatchEvent(new Event('micro:project-dirty')));
 
+// ── SELECTION (spec §15 v1): rectangle + lasso, visible-mode — one ID-buffer
+// pass over the gesture's bbox, polygon-masked, decoded into per-layer masks
+// (the filter-mask pattern; a warm tint in the scene, a 'selected' view in the
+// attribute tables). Shift adds, Alt subtracts, Esc clears. ──
+function pipTest(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const yi = poly[i][1], yj = poly[j][1];
+    if ((yi > y) !== (yj > y) && x < ((poly[j][0] - poly[i][0]) * (y - yi)) / (yj - yi) + poly[i][0]) inside = !inside;
+  }
+  return inside;
+}
+function clearSelection({ silent } = {}) {
+  let had = false;
+  for (const L of _layers) {
+    if (L._selMask) { had = true; L._selMask = null; L._selCount = 0; renderer.setLayerSelection(L.id, null); attrTableSelChanged(L.id); }
+  }
+  if (had) { markProjectDirty(); requestRender(); if (!silent) $('#meta').textContent = 'selection cleared'; }
+  return had;
+}
+function applyLayerSelection(L) {
+  let c = 0;
+  const m = L._selMask;
+  if (m) for (let i = 0; i < m.length; i++) c += m[i];
+  L._selCount = c;
+  if (!c) L._selMask = null;
+  renderer.setLayerSelection(L.id, c ? L._selMask : null);
+  attrTableSelChanged(L.id);
+}
+function selectionStatus() {
+  let total = 0, nL = 0;
+  for (const L of _layers) if (L._selCount) { total += L._selCount; nL++; }
+  $('#meta').textContent = total
+    ? `selected: ${total.toLocaleString()} element${total === 1 ? '' : 's'}${nL > 1 ? ` across ${nL} layers` : ''} — shift adds · alt subtracts · Esc clears`
+    : 'selection: nothing there';
+}
+function selectByPolygon(poly, mode, isRect) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of poly) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  const region = renderer.pickRegion({ x: Math.max(0, x0), y: Math.max(0, y0), w: x1 - x0, h: y1 - y0 }, cam,
+    { pointPx: +$('#ptPx').value, blocksAsPoints: _viewMode === 'points', section: currentSection() });
+  if (!region) { $('#meta').textContent = 'selection: nothing there'; return; }
+  const { data, w, h, dpr } = region;
+  const rx = Math.max(0, x0), ry = Math.max(0, y0);
+  const perLayer = new Map();
+  for (let j = 0; j < h; j++) {
+    const cssY = ry + (h - 1 - j) / dpr;                   // GL rows are bottom-up
+    for (let i = 0; i < w; i++) {
+      const o = (j * w + i) * 4;
+      const id = (data[o] | (data[o + 1] << 8) | (data[o + 2] << 16) | (data[o + 3] << 24)) >>> 0;
+      if (id === 0xFFFFFFFF) continue;
+      if (!isRect && !pipTest(rx + i / dpr, cssY, poly)) continue;
+      const lid = id >>> 29;
+      let set = perLayer.get(lid);
+      if (!set) perLayer.set(lid, set = new Set());
+      set.add(id & 0x1FFFFFFF);
+    }
+  }
+  if (mode === 'replace') clearSelection({ silent: true });
+  for (const L of _layers) {
+    const hits = perLayer.get(L.id);
+    if (!hits) continue;
+    const n = attrRowCountOf(L);
+    if (!n) continue;
+    if (!L._selMask || L._selMask.length !== n) L._selMask = new Uint8Array(n);
+    const v = mode === 'subtract' ? 0 : 1;
+    for (const r of hits) if (r < n) L._selMask[r] = v;
+    applyLayerSelection(L);
+  }
+  selectionStatus();
+  markProjectDirty(); requestRender();
+}
+// gesture arming — the knife's grammar: one-shot, capture-phase, Esc cancels
+let _selArm = null;                                        // 'rect' | 'lasso' | null
+let _selPts = null;
+function armSelect(kind) {
+  _selArm = kind; _selPts = null;
+  cv.style.cursor = 'crosshair';
+  $('#meta').textContent = kind === 'rect'
+    ? 'select: drag a rectangle — shift adds, alt subtracts'
+    : 'select: draw a lasso — shift adds, alt subtracts';
+}
+function disarmSelect() {
+  _selArm = null; _selPts = null;
+  cv.style.cursor = '';
+  $('#selSvg').style.display = 'none';
+}
+const selModeOf = (e) => (e.shiftKey ? 'add' : e.altKey ? 'subtract' : 'replace');
+function drawSelShape() {
+  const el = $('#selShape');
+  if (!_selPts || _selPts.length < 2) { el.setAttribute('points', ''); return; }
+  el.setAttribute('points', _selPts.map((p2) => p2.join(',')).join(' '));
+}
+cv.addEventListener('pointerdown', (e) => {
+  if (!_selArm || e.button !== 0) return;
+  e.stopImmediatePropagation(); e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  _selPts = [[e.clientX - r.left, e.clientY - r.top]];
+  $('#selSvg').style.display = '';
+}, { capture: true });
+cv.addEventListener('pointermove', (e) => {
+  if (!_selArm || !_selPts) return;
+  e.stopImmediatePropagation();
+  const r = cv.getBoundingClientRect();
+  const pt = [e.clientX - r.left, e.clientY - r.top];
+  if (_selArm === 'rect') {
+    const a = _selPts[0];
+    _selPts = [a, [pt[0], a[1]], pt, [a[0], pt[1]]];
+  } else {
+    const last = _selPts[_selPts.length - 1];
+    if (Math.hypot(pt[0] - last[0], pt[1] - last[1]) > 4) _selPts.push(pt);
+  }
+  drawSelShape();
+}, { capture: true });
+cv.addEventListener('pointerup', (e) => {
+  if (!_selArm || !_selPts) return;
+  e.stopImmediatePropagation();
+  const poly = _selPts.slice();
+  const kind = _selArm;
+  disarmSelect();
+  if (poly.length >= (kind === 'rect' ? 4 : 3)) selectByPolygon(poly, selModeOf(e), kind === 'rect');
+  else $('#meta').textContent = 'selection: nothing there';
+}, { capture: true });
 // screenshot: the canvas is the export surface (preserveDrawingBuffer is on)
 $('#btnShot').onclick = () => {
   cv.toBlob((blob) => {
@@ -1663,6 +1786,24 @@ function applySection(sec) {
   $('#secHalf').value = sec.half != null ? sec.half : 10;
   syncSectionBtn(); requestRender();
 }
+// selection masks persist run-length encoded (alternating 0-run/1-run lengths)
+function rleEncode(mask) {
+  const runs = [];
+  let cur = 0, run = 0;
+  for (let i = 0; i < mask.length; i++) {
+    const v = mask[i] ? 1 : 0;
+    if (v === cur) run++;
+    else { runs.push(run); cur = v; run = 1; }
+  }
+  runs.push(run);
+  return runs;
+}
+function rleDecode(runs, n) {
+  const m = new Uint8Array(n);
+  let at = 0, v = 0;
+  for (const r of runs) { if (v) m.fill(1, at, Math.min(n, at + r)); at += r; v ^= 1; }
+  return m;
+}
 function projectManifest() {
   return {
     app: 'micro', version: 1, name: _project.name,
@@ -1687,6 +1828,7 @@ function projectManifest() {
       calcCols: L.calcCols && L.calcCols.length ? L.calcCols : undefined,
       ramps: L.ramps && Object.keys(L.ramps).length ? L.ramps : undefined,
       catLegend: L.catLegend || undefined,
+      sel: L._selMask && L._selCount ? rleEncode(L._selMask) : undefined,
       // delimited parsing intent: the column mapping (incl. a re-keyed category)
       // — indices are stable because the file rides in the project
       mapping: L.docs.blockDoc && !L.docs.blockDoc.header.dm ? L.docs.blockDoc.header.mapping : undefined,
@@ -1887,6 +2029,7 @@ async function openProjectDir(dir) {
       if (ls.calcCols) L.calcCols = ls.calcCols;
       if (ls.ramps) { L.ramps = ls.ramps; applyRamp(L, true); }
       if (ls.catLegend) { L.catLegend = ls.catLegend; applyCatLegend(L, true); }
+      if (ls.sel) { L._selMask = rleDecode(ls.sel, attrRowCountOf(L)); applyLayerSelection(L); }
     }
     applyCamera(mf.camera);
     applySection(mf.section);
@@ -2144,6 +2287,10 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
   { label: 'Measure…', kbd: 'm', action: armMeasure },
   { label: (_measureTP ? '✓ ' : '') + 'Measure trend & plunge', action: toggleMeasureTP },
   { sep: true },
+  { label: 'Select — rectangle', kbd: 'r', action: () => armSelect('rect') },
+  { label: 'Select — lasso', kbd: 'v', action: () => armSelect('lasso') },
+  { label: 'Clear selection', kbd: 'Esc', action: () => clearSelection() },
+  { sep: true },
   { label: 'Section on/off', kbd: 'x', action: toggleSection },
   { label: 'Along the section', kbd: 'l', action: viewAlongSection },
   { label: 'Scrub section back', kbd: '[', action: () => scrubSection(-1) },
@@ -2165,6 +2312,7 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
+<b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br><br>
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
 <b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
@@ -2574,6 +2722,10 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'm') armMeasure();
   else if (k === 'p') toggleLayersPanel();
   else if (k === 't') { const Lt = activeLayer(); if (Lt && Lt.kind !== 'mesh') openAttrTable(Lt); }
+  else if (k === 'r') armSelect('rect');
+  else if (k === 'v') armSelect('lasso');
+  else if (k === 'Escape' && _selArm) disarmSelect();
+  else if (k === 'Escape' && !_knifeArm && !_measure.arm && !_measure.b) clearSelection();
   else if ((k === ',' || k === '.') && _layers.length > 1) {   // step the active layer (wraps)
     const i = _layers.findIndex((L) => L.id === _activeId);
     const j = (i + (k === '.' ? 1 : -1) + _layers.length) % _layers.length;
@@ -2749,22 +2901,30 @@ function openAttrTable(L) {
     x: 80 + (_attrTables.size % 4) * 36, y: 80 + (_attrTables.size % 4) * 30,
     onClose: () => { grid.destroy(); _attrTables.delete(L.id); },
   });
-  // only-matches toggle rides the retained filter mask
-  const only = document.createElement('label');
-  const oc = document.createElement('input'); oc.type = 'checkbox';
-  only.append(oc, ' matches');
-  only.title = 'show only rows matching the current filter';
-  win.head.insertBefore(only, win.head.querySelector('button'));
+  // view toggles: 'matches' rides the retained filter mask, 'selected' the
+  // §15 selection mask — mutually exclusive (a view, not a query language)
+  const mkToggle = (label2, title2) => {
+    const lab = document.createElement('label');
+    const cb2 = document.createElement('input'); cb2.type = 'checkbox';
+    lab.append(cb2, ' ' + label2);
+    lab.title = title2;
+    win.head.insertBefore(lab, win.head.querySelector('button'));
+    return cb2;
+  };
+  const oc = mkToggle('matches', 'show only rows matching the current filter');
+  const sc = mkToggle('selected', 'show only selected rows (r / v to select in the scene)');
   const rebuildView = () => {
-    if (oc.checked && L._filterMask) {
-      const m = L._filterMask, out = [];
-      for (let i = 0; i < m.length; i++) if (m[i]) out.push(i);
+    const src = sc.checked ? L._selMask : oc.checked ? L._filterMask : null;
+    if (src) {
+      const out = [];
+      for (let i = 0; i < src.length; i++) if (src[i]) out.push(i);
       view.matches = Uint32Array.from(out);
     } else view.matches = null;
     win.sub.textContent = `${(view.matches ? view.matches.length : total).toLocaleString()} rows${view.matches ? ` of ${total.toLocaleString()}` : ''}`;
     grid.refresh();
   };
-  oc.onchange = () => { view.only = oc.checked; rebuildView(); };
+  oc.onchange = () => { if (oc.checked) sc.checked = false; rebuildView(); };
+  sc.onchange = () => { if (sc.checked) oc.checked = false; rebuildView(); };
   const grid = createGrid(win.body, provider, { readOnly: true, defaultColW: 96, rowH: 22, hdrH: 22, rowHdrW: 64, fontPx: 12 });
   win.el._onResized = () => grid.refresh();
   let syncing = false;
@@ -2793,11 +2953,13 @@ function openAttrTable(L) {
       win.el.style.zIndex = ++_fwinZ;
     },
     filterChanged() { if (oc.checked) rebuildView(); },
+    selChanged() { if (sc.checked) rebuildView(); },
     close: () => win.close(),
   });
   rebuildView();
 }
 function attrTableFilterChanged(lid) { const t2 = _attrTables.get(lid); if (t2) t2.filterChanged(); }
+function attrTableSelChanged(lid) { const t2 = _attrTables.get(lid); if (t2 && t2.selChanged) t2.selChanged(); }
 function closeAttrTable(lid) { const t2 = _attrTables.get(lid); if (t2) t2.close(); }
 // ── the layers panel: visibility eyes, active-layer routing, and the layer
 // context menu (zoom/info/filter/remove). Auto-shows at two layers; 'p' or
@@ -4344,7 +4506,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, openAttrTable, attrTables: _attrTables, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, openAttrTable, attrTables: _attrTables, selectByPolygon, clearSelection, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

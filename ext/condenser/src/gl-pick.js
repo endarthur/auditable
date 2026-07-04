@@ -309,7 +309,9 @@ export function createPickPipeline(gl) {
    * CURRENT accumulated prefix (you pick what you can see), scissored to the
    * pixel. Returns the record index, or null.
    */
-  function pick(px, py, chunks, cam, { pointPx, blocksAsPoints = false, layerStates = null, section = null, viewportW, viewportH }) {
+  // the shared ID-buffer pass: scissored to (px,py,w,h), leaves the FBO bound
+  // for the caller's readPixels. pick() reads 1px; pickRegion() reads the block.
+  function renderInto(px, py, w2, h2, chunks, cam, { pointPx, blocksAsPoints = false, layerStates = null, section = null, viewportW, viewportH }) {
     const stateOf = (id) => (layerStates && layerStates.get(id)) || { maskTex: null, isolate: false };
     const byLayer = (arr) => {
       const m = new Map();
@@ -332,7 +334,7 @@ export function createPickPipeline(gl) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.viewport(0, 0, w, h);
     gl.enable(gl.SCISSOR_TEST);
-    gl.scissor(px, py, 1, 1);
+    gl.scissor(px, py, w2, h2);
     gl.clearColor(1, 1, 1, 1);                             // decodes to NO_HIT
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
@@ -460,6 +462,10 @@ export function createPickPipeline(gl) {
     }
 
     gl.disable(gl.SCISSOR_TEST);
+  }
+
+  function pick(px, py, chunks, cam, opts) {
+    renderInto(px, py, 1, 1, chunks, cam, opts);
     const px4 = new Uint8Array(4);
     gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px4);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -468,5 +474,17 @@ export function createPickPipeline(gl) {
     return rec === NO_HIT ? null : rec;
   }
 
-  return { pick };
+  // one ID-buffer pass over a RECT (device px, GL bottom-left origin) — the
+  // marquee/lasso read. Same programs, same per-layer gates; returns the raw
+  // RGBA block (rows bottom-up); the caller masks by polygon and decodes.
+  function pickRegion(px, py, w2, h2, chunks, cam, opts) {
+    renderInto(px, py, w2, h2, chunks, cam, opts);
+    const out = new Uint8Array(w2 * h2 * 4);
+    gl.readPixels(px, py, w2, h2, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindVertexArray(null);
+    return out;
+  }
+
+  return { pick, pickRegion };
 }
