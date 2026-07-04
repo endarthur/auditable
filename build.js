@@ -1695,6 +1695,7 @@ if (target === 'micro') {
     '../../ext/sluice/index.js': '#sluice',
     '../../ext/loom/index.js': '#loom',
     '../../ext/winding/index.js': '#winding',
+    '../../ext/lfm/lfm.js': '#lfm',
   };
   const libs = [
     ['condenser', 'ext/condenser/index.js'],
@@ -1702,6 +1703,7 @@ if (target === 'micro') {
     ['sluice',    'ext/sluice/index.js'],              // streaming column stats (the columns tab)
     ['loom',      'ext/loom/index.js'],                // the attribute table's canvas grid
     ['winding',   'ext/winding/index.js'],             // select-by-solid containment (spec 17)
+    ['lfm',       'ext/lfm/lfm.js'],                   // Leapfrog model files (multi-mesh, colours)
   ];
   const modules = [];
   for (const [name, rel] of libs) {

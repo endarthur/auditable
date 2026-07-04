@@ -447,7 +447,7 @@
     <label id="secPlaneW" title="outline the section plane in the view" style="display:none"><input id="secPlaneVis" type="checkbox">plane</label>
   </div>
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
-  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
+  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj / .lfm anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
@@ -479,6 +479,7 @@ import { compileBool, compileValue, validate, complete } from '../../ext/expr/in
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
+import { readLFM, writeLFM } from '../../ext/lfm/lfm.js';   // Leapfrog model files (multi-mesh + colours)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -1443,7 +1444,7 @@ async function solidOrientedMesh(meshL) {
   if (meshL._solidMesh) return meshL._solidMesh;
   const md = meshL.docs && meshL.docs.meshDoc;
   if (!md || md.header.soup) return null;                  // context tier only (soup keeps no CPU triangles)
-  const open = /\.msh$/i.test(md.name) ? openMsh : /\.obj$/i.test(md.name) ? openObj : openPlyMesh;
+  const open = /\.msh$/i.test(md.name) ? openMsh : /\.obj$/i.test(md.name) ? openObj : /\.lfm$/i.test(md.name) ? openLfmMesh : openPlyMesh;
   const m = await open(md.blob);
   // topology: edge → face count; a boundary edge has exactly one face
   const edges = new Map();
@@ -2300,7 +2301,7 @@ async function openBlobs(files, mode = 'replace', at = null) {
 }
 async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   if (mode !== 'add') closeAllLayers();
-  const isMesh = /\.(msh|obj)$/i.test(name) || (/\.ply$/i.test(name) && !over.forcePoints && await plyHasFaces(blob));
+  const isMesh = /\.(msh|obj|lfm)$/i.test(name) || (/\.ply$/i.test(name) && !over.forcePoints && await plyHasFaces(blob));
   const lid = allocLayerId(isMesh ? 'mesh' : 'element');
   if (lid == null) { $('#meta').textContent = isMesh ? 'mesh layer limit reached — remove one first' : 'layer limit reached (7 element layers) — remove one first'; return; }
   const first = _layers.length === 0;
@@ -2310,7 +2311,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   $('#meta').textContent = `${name} — reading…`;
   $('#empty').style.display = 'none';
   try {
-    if (/\.(msh|obj)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
+    if (/\.(msh|obj|lfm)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
     else if (/\.ply$/i.test(name) && isMesh) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
     else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
     // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
@@ -2420,6 +2421,60 @@ async function openObjSplit(blob, name, mode) {
   $('#meta').textContent = `${name} — split into ${ids.length} solids${skipped ? ` (${skipped} skipped — mesh layer limit)` : ''}`;
   return ids;
 }
+// .lfm → the condenser mesh contract. The merged view (all meshes as one)
+// serves the unsplit open; the split path writes ONE-MESH .lfm children via
+// writeLFM, so every layer stays a real Leapfrog file (round-trippable,
+// self-contained for projects, re-parsed by winding).
+async function openLfmMesh(blob) {
+  const r = await readLFM(await blob.arrayBuffer());
+  let nv = 0, nt = 0;
+  for (const m of r.meshes) { nv += m.vCount; nt += m.tCount; }
+  const vertices = new Float64Array(nv * 3);
+  const triangles = new Uint32Array(nt * 3);
+  let vo = 0, to = 0;
+  for (const m of r.meshes) {
+    vertices.set(m.vertices, vo * 3);
+    for (let k = 0; k < m.triangles.length; k++) triangles[to * 3 + k] = m.triangles[k] + vo;
+    vo += m.vCount; to += m.tCount;
+  }
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < vertices.length; i += 3) {
+    for (let k = 0; k < 3; k++) {
+      const v = vertices[i + k];
+      if (v < min[k]) min[k] = v;
+      if (v > max[k]) max[k] = v;
+    }
+  }
+  return {
+    header: { kind: 'mesh', format: 'lfm', vertexCount: nv, triCount: nt, bbox: { min, max } },
+    vertices, triangles,
+    lfmMeshes: r.meshes.map((m) => ({ name: m.name, colour: m.colour })),
+  };
+}
+const lfmTint = (c) => (c ? '#' + [c.r, c.g, c.b].map((v) => Math.max(0, Math.min(255, v | 0)).toString(16).padStart(2, '0')).join('') : null);
+// split a multi-mesh .lfm into per-solid layers inside a layer group; each
+// child is a valid ONE-MESH .lfm carrying its name + colour (→ the tint)
+async function openLfmSplit(blob, name, mode) {
+  const r = await readLFM(await blob.arrayBuffer());
+  const base = name.replace(/\.lfm$/i, '');
+  const ids = [];
+  let first = mode !== 'add';
+  let skipped = 0;
+  for (const m of r.meshes) {
+    $('#meta').textContent = `${name} — writing ${m.name}…`;
+    const buf = await writeLFM({ collectionName: m.name, meshes: [m] });
+    const before = _layers.length;
+    await openBlob(new Blob([buf]), `${base} · ${m.name}.lfm`, first ? 'replace' : 'add', null, { tint: lfmTint(m.colour) || undefined });
+    first = false;
+    if (_layers.length > before || (before && mode !== 'add' && _layers.length === 1)) {
+      const L = activeLayer();
+      if (L && !ids.includes(L.id)) ids.push(L.id); else skipped++;
+    } else skipped++;
+  }
+  if (ids.length > 1) createLayerGroup(name, ids, { collapsed: false });
+  $('#meta').textContent = `${name} — split into ${ids.length} solids${skipped ? ` (${skipped} skipped — mesh layer limit)` : ''}`;
+  return ids;
+}
 async function openMeshDoc(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : _activeId;
   $('#meta').textContent = `${name} — reading mesh…`;
@@ -2444,7 +2499,7 @@ async function openMeshDoc(blob, name, opts = {}) {
     header = doc.header;
     soupSrc = (o) => doc.streamChunks(o);
   } else {
-    const open = /\.msh$/i.test(name) ? openMsh : /\.obj$/i.test(name) ? openObj : openPlyMesh;
+    const open = /\.msh$/i.test(name) ? openMsh : /\.obj$/i.test(name) ? openObj : /\.lfm$/i.test(name) ? openLfmMesh : openPlyMesh;
     const m = await open(blob);
     header = m.header;
     if (opts.forceSoup || header.triCount > CONTEXT_TRI_CAP) {
@@ -2562,6 +2617,20 @@ async function describeFile(f) {
       d.plyFaces = face ? face.count : 0;
       d.kind = 'ply';
       d.desc = h ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary'} · ${h.count.toLocaleString()} vertices${d.plyFaces ? ` · ${d.plyFaces.toLocaleString()} faces → mesh` : ''}` : 'PLY';
+    } else if (/\.lfm$/i.test(name)) {
+      d.kind = 'mesh';
+      // the descriptor is XML before the binary — a head slice yields the
+      // mesh census without touching the zlib streams
+      let sampleLen = 256 * 1024, xml = '';
+      for (;;) {
+        xml = new TextDecoder('utf-8', { fatal: false }).decode(await f.slice(0, Math.min(sampleLen, f.size)).arrayBuffer());
+        if (xml.includes('</leapfrogModelFile>') || sampleLen >= f.size) break;
+        sampleLen *= 4;
+      }
+      const names = [...xml.matchAll(/<mesh>[\s\S]*?<name>([^<]*)<\/name>/g)].map((m2) => m2[1].trim()).filter(Boolean);
+      d.objGroups = names;
+      d.split = names.length > 1;
+      d.desc = `Leapfrog model (.lfm)${names.length ? ` · ${names.length} mesh${names.length > 1 ? 'es' : ''}` : ''}`;
     } else if (/\.msh$/i.test(name)) {
       d.kind = 'mesh'; d.desc = 'Leapfrog mesh (.msh)';
     } else if (/\.obj$/i.test(name)) {
@@ -2707,7 +2776,8 @@ $('#ofOpen').onclick = async () => {
     if (r.mapping && r.kind === 'delimited') over.mapping = { x: r.mapping.x ?? 0, y: r.mapping.y ?? 1, z: r.mapping.z ?? 2, chan: r.mapping.chan ?? null, cat: r.mapping.cat ?? null };
     if (r.forcePoints) over.forcePoints = true;
     if (r.objGroups && r.objGroups.length > 1 && r.split !== false) {
-      await openObjSplit(r.file, r.name, first ? 'replace' : 'add');
+      if (/\.lfm$/i.test(r.name)) await openLfmSplit(r.file, r.name, first ? 'replace' : 'add');
+      else await openObjSplit(r.file, r.name, first ? 'replace' : 'add');
     } else await openBlob(r.file, r.name, first ? 'replace' : 'add', null, over);
     first = false;
   }
@@ -4013,7 +4083,7 @@ Tools → <b>Select through (volume)</b> flips the tools to the extruded tube: E
 <b>paint to column</b> (<code>b</code> / the brush button / Data menu) — interactive domaining: a PAINTED column is a category column you fill by hand. The palette window (layer-pinned, like tables) picks the column + the value; while a value is armed, the <code>r</code> / <code>v</code> gestures PAINT it onto whatever they cross (<b>alt</b> erases, Tools → Select through paints the whole tube, <code>Esc</code> puts the brush down, <code>Ctrl+Z</code> undoes a stroke); or build a careful selection first and <b>apply to selection</b>. While painting the layer colors by the column (unpainted recedes dark); painted values are REAL columns — the filter (<code>DOMAIN = "HW_OXIDE"</code>), the scan, the attribute table, and the record panel all see them; they persist in the project<br>
 <b>export rows</b> (Data → Export rows… / the layer context menu) — data leaves micro the way it came in, as rows: scope <b>all</b> · <b>filter matches</b> · <b>selection</b>; every column including ƒ calculated and ✎ painted ones (paint a DOMAIN, export it, feed the estimator); CSV with delimiter choice + decimal comma; streamed, so 1.8M rows is one sweep, and opening a .dm then exporting IS the .dm → CSV converter. In the attribute table, <code>Ctrl+C</code> copies the grid selection as TSV<br>
 <b>select by solid</b> (Tools menu / right-click a mesh layer) — a closed context mesh (.msh / .obj / small .ply) classifies records by winding number: <b>select inside/outside</b> sweeps any element layers into the ordinary selection (paint or export it — the solids → coded-model loop), a <b>flag column</b> writes a value (e.g. <code>IN</code>) into a NEW painted column on any table-backed layers — blocks, points, drillholes — which you can then touch up with the brush; or <b>fraction-inside column</b> probes each block of a regular model (any per-axis resolution — 3×3×2 for benches, 10×10×10 for 1 m blocklings) and writes a numeric 0–1 column (<code>%</code> badge) the filter, table, and export all see; all of it works with flipped solids and colors the layer by the result when done. OPEN SURFACES (topo, weathering horizons — the dialog reads the mesh topology and says which) classify <b>above / below / between</b> instead: the surface is CLOSED by a skirt to a far apex and the same winding containment applies — strong at any depth, and blocks beyond the surface's footprint honestly come back unclassified; <b>between</b> takes a second surface (below the first AND above the second)<br>
-<b>assign domains</b> (Tools menu) — the whole coded-model loop in one run: pick the domain solids (a multi-object .obj offers "split into N solids (as a group)" at open — each object becomes its own layer inside a layer GROUP), pick the model and a column name, and every block goes to the solid holding its largest fraction; unclaimed blocks stay unpainted and the result is an ordinary painted column — filter it, export it, touch it up with the brush<br>
+<b>assign domains</b> (Tools menu) — the whole coded-model loop in one run: pick the domain solids (a multi-object .obj or Leapfrog .lfm offers "split into N solids (as a group)" at open — .lfm solids arrive with their Leapfrog colours as tints — each object becomes its own layer inside a layer GROUP), pick the model and a column name, and every block goes to the solid holding its largest fraction; unclaimed blocks stay unpainted and the result is an ordinary painted column — filter it, export it, touch it up with the brush<br>
 <b>layer groups</b> — the layers panel is a tree: a group's eye greys its children without touching THEIR eyes (re-enable and the pattern returns); <b>drag the ⠿ grip</b> (hover a row) between rows to reorder, ONTO a group to join it; right-click a layer → <b>Move to group…</b> (or New group…), right-click a group → rename / zoom / ungroup; groups persist in the project<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
@@ -6824,7 +6894,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
