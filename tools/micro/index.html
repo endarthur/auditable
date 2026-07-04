@@ -1890,7 +1890,11 @@ addEventListener('keydown', (e) => {
 
 // ── menubar (lamina's compact menuAt pattern — commands in menus, knobs in the bar) ──
 let _menuEl = null;
-function closeMenu() { if (_menuEl) { _menuEl.remove(); _menuEl = null; } }
+let _menuDoc = null;                                       // the dismiss listener — owned by closeMenu
+function closeMenu() {
+  if (_menuEl) { _menuEl.remove(); _menuEl = null; }
+  if (_menuDoc) { removeEventListener('pointerdown', _menuDoc); _menuDoc = null; }
+}
 function menuXY(x, y, items, onCancel) {
   closeMenu();
   const m = document.createElement('div');
@@ -1909,9 +1913,15 @@ function menuXY(x, y, items, onCancel) {
   m.style.left = Math.min(x, innerWidth - mw - 4) + 'px';
   m.style.top = Math.min(y, innerHeight - mh - 4) + 'px';
   _menuEl = m;
-  setTimeout(() => addEventListener('pointerdown', function onDoc(e) {
-    if (!m.contains(e.target)) { closeMenu(); removeEventListener('pointerdown', onDoc); if (onCancel) onCancel(); }
-  }), 0);
+  // the dismiss listener is OWNED by closeMenu — selecting an item must not
+  // leak it, or the stale pointerdown kills the NEXT menu before its click
+  // lands (chained menus: merge-into submenus, copy-consent sequences)
+  setTimeout(() => {
+    if (_menuEl !== m) return;                             // a newer menu already replaced this one
+    const onDoc = (e) => { if (!m.contains(e.target)) { closeMenu(); if (onCancel) onCancel(); } };
+    _menuDoc = onDoc;
+    addEventListener('pointerdown', onDoc);
+  }, 0);
 }
 function menuAt(anchor, items) {
   const r = anchor.getBoundingClientRect();
