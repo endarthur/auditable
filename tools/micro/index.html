@@ -172,12 +172,12 @@
   #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: calc(var(--recw, 280px) + 12px); }
   #propPanel.show ~ #compass.se, #propPanel.show ~ #compass.ne { right: calc(var(--ppw, 272px) + 12px); }
   #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: calc(var(--lpw, 224px) + 12px); }
-  #dhDlg, #ofDlg, #exDlg, #sbDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
-  #dhDlg.show, #ofDlg.show, #exDlg.show, #sbDlg.show { display: flex; }
-  #exDlg .box, #sbDlg .box { width: 480px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
-  #exDlg .hd, #sbDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
-  #exDlg .hd button, #sbDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
-  #exDlg .bd, #sbDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  #dhDlg, #ofDlg, #exDlg, #sbDlg, #svDlg, #plDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
+  #dhDlg.show, #ofDlg.show, #exDlg.show, #sbDlg.show, #svDlg.show, #plDlg.show { display: flex; }
+  #exDlg .box, #sbDlg .box, #svDlg .box, #plDlg .box { width: 480px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #exDlg .hd, #sbDlg .hd, #svDlg .hd, #plDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #exDlg .hd button, #sbDlg .hd button, #svDlg .hd button, #plDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #exDlg .bd, #sbDlg .bd, #svDlg .bd, #plDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
   #exDlg .ex-row, #sbDlg .ex-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
   #exDlg .ex-row > b, #sbDlg .ex-row > b { color: var(--text-hi); width: 66px; font-weight: normal; flex: 0 0 auto; }
   #exDlg .ex-row label, #sbDlg .ex-row label { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
@@ -189,9 +189,18 @@
   #exDlg .ex-cols .bdg { color: var(--accent); flex: 0 0 auto; font-size: 11px; }
   #exDlg .ex-links { margin-left: 76px; margin-bottom: 4px; }
   #exDlg .ex-links a { color: var(--accent); cursor: pointer; margin-right: 12px; }
-  #exDlg .dh-foot, #sbDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
+  #exDlg .dh-foot, #sbDlg .dh-foot, #svDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
   #exDlg .dh-foot #exDlgMsg, #sbDlg .dh-foot #sbDlgMsg { color: var(--muted); font-family: var(--mono); font-size: 12px; }
-  #exDlg .dh-foot button, #sbDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
+  #exDlg .dh-foot button, #sbDlg .dh-foot button, #svDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
+  #svDlg #svLink { border-color: var(--bd2); color: var(--text); }
+  .pl-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
+  .pl-row .nm { flex: 0 0 auto; color: var(--text-hi); max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pl-row .st { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pl-row.done .st { color: var(--ok, #5c8a5a); }
+  .pl-row.skip .st { color: var(--warn, #c98a3c); }
+  .sv-row { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; }
+  .sv-row .nm { flex: 1; color: var(--text-hi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sv-row .sz { color: var(--muted); }
   #sbProg { height: 3px; background: #242424; margin: 0 16px; border-radius: 2px; overflow: hidden; }
   #sbProgFill { height: 100%; width: 0%; background: var(--accent); transition: width 0.15s linear; }
   #exDlg .dh-foot button:disabled, #sbDlg .dh-foot button:disabled { opacity: 0.5; cursor: default; }
@@ -439,6 +448,8 @@
   <div id="dhDlg"><div class="box"><div class="hd"><span>import drillholes</span><button id="dhCancel">×</button></div><div class="bd" id="dhDlgBody"></div><div class="dh-foot"><span id="dhDlgMsg"></span><button id="dhImport">Import</button></div></div></div>
   <div id="ofDlg"><div class="box"><div class="hd"><span>open files</span><button id="ofCancel">×</button></div><div class="bd" id="ofDlgBody"></div><div class="dh-foot"><button id="ofOpen">Open</button></div></div></div>
   <div id="exDlg"><div class="box"><div class="hd"><span>export rows</span><button id="exCancel">×</button></div><div class="bd" id="exDlgBody"></div><div class="dh-foot"><span id="exDlgMsg"></span><button id="exGo">Export</button></div></div></div>
+  <div id="svDlg"><div class="box"><div class="hd"><span>save project</span><button id="svCancel">×</button></div><div class="bd" id="svDlgBody"></div><div class="dh-foot"><button id="svLink">Link without copying</button><button id="svCopy">Copy into project</button></div></div></div>
+  <div id="plDlg"><div class="box"><div class="hd"><span>opening project</span><button id="plClose">×</button></div><div class="bd" id="plDlgBody"></div></div></div>
   <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
     <circle cx="37" cy="37" r="33" fill="rgba(18,18,18,0.55)" stroke="#4a4a4a" stroke-width="2"/>
@@ -3049,12 +3060,32 @@ async function copyLayerIn(L, dir) {
 }
 function askCopyOutside(outside) {
   return new Promise((res) => {
-    const linked = outside.filter((L) => L.handle).length, loose = outside.length - linked;
+    const loose = outside.length - outside.filter((L) => L.handle).length;
     const total = outside.reduce((t, L) => t + layerBytes(L), 0);
-    menuXY(innerWidth / 2 - 140, innerHeight / 3, [
-      { label: `Copy ${outside.length} outside file${outside.length > 1 ? 's' : ''} (${fmtSize(total)}) into the project`, action: () => res('copy') },
-      { label: `Link without copying${loose ? ` (${loose} will need locating on reopen)` : ' (this browser remembers)'}`, action: () => res('link') },
-    ], () => res('link'));
+    const body = $('#svDlgBody');
+    body.textContent = '';
+    const note = document.createElement('div'); note.className = 'ex-row';
+    note.textContent = `${outside.length} layer${outside.length > 1 ? 's' : ''} (${fmtSize(total)}) live${outside.length > 1 ? '' : 's'} outside the project folder:`;
+    body.appendChild(note);
+    for (const L of outside) {
+      for (const fd of layerFiles(L)) {
+        const row = document.createElement('div'); row.className = 'sv-row';
+        const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = fd.name; nm.title = fd.name;
+        const sz = document.createElement('span'); sz.className = 'sz'; sz.textContent = fmtSize(fd.blob.size);
+        row.append(nm, sz);
+        body.appendChild(row);
+      }
+    }
+    const hint = document.createElement('div'); hint.className = 'pp-note';
+    hint.textContent = loose
+      ? `copying makes the project self-contained; linking leaves them in place (${loose} without a saved handle will need locating on reopen)`
+      : 'copying makes the project self-contained; linking leaves them in place (this browser remembers where)';
+    body.appendChild(hint);
+    const finish = (v) => { $('#svDlg').classList.remove('show'); res(v); };
+    $('#svCopy').onclick = () => finish('copy');
+    $('#svLink').onclick = () => finish('link');
+    $('#svCancel').onclick = () => finish('link');         // dismiss = the non-destructive default, as before
+    $('#svDlg').classList.add('show');
   });
 }
 async function saveProject() {
@@ -3121,6 +3152,48 @@ async function restoreStyleExtras(L, ls) {
   }
   if (ls.sel) { L._selMask = rleDecode(ls.sel, attrRowCountOf(L)); applyLayerSelection(L); }
 }
+// the load dialog: every manifest layer as a row, live status per row (the
+// footer's messages mirror into the active row, so multi-second restores are
+// visible even without watching the statusbar). Clean loads close themselves;
+// skips/errors hold the dialog open so they're actually SEEN.
+const _plState = { rows: null, obs: null, active: -1 };
+function plStart(layers, name) {
+  const body = $('#plDlgBody');
+  body.textContent = '';
+  $('#plDlg').querySelector('.hd span').textContent = `opening project · ${name}`;
+  _plState.rows = layers.map((ls) => {
+    const row = document.createElement('div'); row.className = 'pl-row';
+    const nm = document.createElement('span'); nm.className = 'nm';
+    nm.textContent = ls.dh ? `${ls.dh.collar} + survey + intervals` : ls.source;
+    nm.title = nm.textContent;
+    const st = document.createElement('span'); st.className = 'st'; st.textContent = 'waiting…';
+    row.append(nm, st);
+    body.appendChild(row);
+    return { row, st };
+  });
+  _plState.active = -1;
+  // mirror the statusbar into the active row (sweeps, sub-steps — free detail)
+  _plState.obs = new MutationObserver(() => {
+    const a = _plState.rows && _plState.rows[_plState.active];
+    if (a && !a.row.classList.contains('done') && !a.row.classList.contains('skip')) a.st.textContent = $('#meta').textContent;
+  });
+  _plState.obs.observe($('#meta'), { childList: true, characterData: true, subtree: true });
+  $('#plDlg').classList.add('show');
+}
+function plRow(i, status, cls) {
+  _plState.active = i;
+  const r = _plState.rows && _plState.rows[i];
+  if (!r) return;
+  r.st.textContent = status;
+  if (cls) r.row.classList.add(cls);
+}
+function plEnd() {
+  if (_plState.obs) { _plState.obs.disconnect(); _plState.obs = null; }
+  const dirty = _plState.rows && _plState.rows.some((r) => r.row.classList.contains('skip'));
+  if (!dirty) $('#plDlg').classList.remove('show');        // clean load: out of the way
+  _plState.rows = null; _plState.active = -1;
+}
+$('#plClose').onclick = () => { $('#plDlg').classList.remove('show'); };
 async function openProjectDir(dir) {
   try {
     if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'project: permission denied'; return; }
@@ -3132,8 +3205,10 @@ async function openProjectDir(dir) {
     $('#empty').style.display = 'none';
     let links = {};
     try { const list = (await _idb.get(PROJECTS_KEY)) || []; const e = list.find((x) => x.name === dir.name); links = (e && e.links) || {}; } catch { /* none */ }
+    plStart(mf.layers, dir.name);
     for (let i = 0; i < mf.layers.length; i++) {
       const ls = mf.layers[i];
+      plRow(i, 'loading…');
       if (ls.dh) {
         // drillholes restore from the three in-folder files + the saved config
         const dhFiles = {};
@@ -3142,7 +3217,7 @@ async function openProjectDir(dir) {
           try { dhFiles[role] = await (await dir.getFileHandle(ls.dh[role])).getFile(); }
           catch { missing = ls.dh[role]; break; }
         }
-        if (missing) { $('#meta').textContent = `project: drillhole file “${missing}” missing from the folder — layer skipped`; continue; }
+        if (missing) { $('#meta').textContent = `project: drillhole file “${missing}” missing from the folder — layer skipped`; plRow(i, `skipped — ${missing} missing`, 'skip'); continue; }
         await openDrillholeLayer(dhFiles, ls.dh.config || {}, _layers.length ? 'add' : 'replace');
         const Ld = activeLayer();
         if (Ld) {
@@ -3159,6 +3234,7 @@ async function openProjectDir(dir) {
           if (ls.colorSel && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) { Ld.colorSel = ls.colorSel; $('#colorBy').value = ls.colorSel; syncRuleMode(Ld); }
           await restoreStyleExtras(Ld, ls);
         }
+        plRow(i, 'done', 'done');
         continue;
       }
       let file = null, handle = null;
@@ -3178,11 +3254,11 @@ async function openProjectDir(dir) {
           if (act === 'locate') {
             try { const [h] = await window.showOpenFilePicker(); handle = h; file = await h.getFile(); } catch { /* cancelled */ }
           }
-          if (!file) { $('#meta').textContent = `project: “${ls.source}” skipped (linked outside the folder)`; continue; }
+          if (!file) { $('#meta').textContent = `project: “${ls.source}” skipped (linked outside the folder)`; plRow(i, 'skipped — linked outside, not located', 'skip'); continue; }
         }
       } else {
         try { handle = await dir.getFileHandle(ls.source); file = await handle.getFile(); }
-        catch { $('#meta').textContent = `project: “${ls.source}” missing from the folder — skipped`; continue; }
+        catch { $('#meta').textContent = `project: “${ls.source}” missing from the folder — skipped`; plRow(i, 'skipped — missing from the folder', 'skip'); continue; }
       }
       if (handle) _fileHandles.set(file, handle);
       // a mesh-bearing .ply saved as a POINTS layer must reopen as points
@@ -3192,7 +3268,7 @@ async function openProjectDir(dir) {
       await openBlob(file, ls.source, i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
       { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; } }
       const L = activeLayer();
-      if (!L) continue;                                    // that open failed; its layer rolled back
+      if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
       // color channel first (may re-stream), then filter (sweeps), then the rest
       if (ls.colorSel && ls.colorSel !== $('#colorBy').value && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) {
         L.colorSel = ls.colorSel;
@@ -3212,6 +3288,7 @@ async function openProjectDir(dir) {
       if (ls.ramps) { L.ramps = ls.ramps; applyRamp(L, true); }
       if (ls.catLegend) { L.catLegend = ls.catLegend; applyCatLegend(L, true); }
       await restoreStyleExtras(L, ls);
+      plRow(i, 'done', 'done');
     }
     applyCamera(mf.camera);
     applySection(mf.section);
@@ -3219,9 +3296,11 @@ async function openProjectDir(dir) {
     _project.dirty = false;
     updateProjectTitle();
     rememberProject(dir);
+    plEnd();
     $('#meta').textContent = `project “${_project.name}” — ${_layers.length} layer${_layers.length === 1 ? '' : 's'}`;
     requestRender();
   } catch (e) {
+    plEnd();
     $('#meta').textContent = `project open failed — ${e.message}`;
   }
 }
@@ -4390,16 +4469,21 @@ function renderStyleTab(body, L) {
   const cb = $('#colorBy');
   const isTable = !!(L.docs.blockDoc || L.docs.dhDoc);
   const selv = colorSelOf(L);
+  const selPaint = typeof selv === 'string' && selv.startsWith('paint:') ? paintColByName(L, selv.slice(6)) : null;
   const mode = isTable
-    ? (selv === 'solid' ? 'solid' : selv === 'cat' ? 'categorized' : selv === 'rules' ? 'rule-based' : 'continuous')
+    ? (selv === 'solid' ? 'solid' : selv === 'cat' ? 'categorized' : selv === 'rules' ? 'rule-based'
+      : selPaint && selPaint.kind !== 'ratio' ? 'painted' : 'continuous')
     : (selv === '2' ? 'categorized' : selv === '3' ? 'rgb' : 'continuous');
   if (mode === 'continuous') L._lastCont = selv;           // return here when leaving solid/categorized
   const setSel = (v) => {
     if ([...cb.options].some((o) => o.value === v)) { cb.value = v; cb.dispatchEvent(new Event('change')); }
     renderProps();
   };
+  const brushCols = (L.paintCols || []).filter((c) => c.kind !== 'ratio');
   const mSel = document.createElement('select');
-  for (const m2 of (isTable ? ['continuous', 'categorized', 'rule-based', 'solid'] : ['continuous', 'categorized', 'rgb'])) {
+  for (const m2 of (isTable
+    ? ['continuous', 'categorized', 'rule-based', ...(brushCols.length ? ['painted'] : []), 'solid']
+    : ['continuous', 'categorized', 'rgb'])) {
     const o = document.createElement('option'); o.value = m2; o.textContent = m2; mSel.appendChild(o);
   }
   mSel.value = mode;
@@ -4407,6 +4491,7 @@ function renderStyleTab(body, L) {
     const m2 = mSel.value;
     if (m2 === 'solid') return setSel('solid');
     if (m2 === 'rule-based') return setSel('rules');
+    if (m2 === 'painted') { const pc = brushCols[0]; if (pc) { addPaintColorOptions(L); return setSel('paint:' + pc.name); } return; }
     if (m2 === 'rgb') return setSel('3');
     if (m2 === 'continuous') {
       if (!isTable) return setSel('0');
@@ -4431,12 +4516,18 @@ function renderStyleTab(body, L) {
       const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; colSel.appendChild(o); };
       add('elev', 'elevation');
       for (const c of (h2 && h2.numericColumns) || []) add(`chan:${c.i}`, c.name);
+      for (const pc of (L.paintCols || []).filter((c) => c.kind === 'ratio')) add('paint:' + pc.name, '% ' + pc.name);
     } else {
       colSel.innerHTML = '<option value="0">elevation</option><option value="1">intensity</option>';
     }
     if ([...colSel.options].some((o) => o.value === selv)) colSel.value = selv;
-    colSel.onchange = () => setSel(colSel.value);
+    colSel.onchange = () => { if (colSel.value.startsWith('paint:')) addPaintColorOptions(L); setSel(colSel.value); };
     body.appendChild(mkRow('column', colSel));
+    if (selPaint && selPaint.kind === 'ratio') {           // fraction column: absolute 0–1, viridis-baked
+      body.appendChild(ppNote('fraction-inside column — values are 0–1 (code/255), colored through a fixed viridis ramp; recompute it from Tools → Select by solid…'));
+      if (L.dh && L.docs.dhDoc) renderStickRadius(body, L);
+      return;
+    }
     const mkClip = (id) => {
       const inp = document.createElement('input'); inp.type = 'number'; inp.style.width = '76px';
       inp.value = $('#' + id).value; inp.placeholder = id === 'clipMin' ? 'min' : 'max';
@@ -4460,6 +4551,29 @@ function renderStyleTab(body, L) {
     else body.appendChild(ppNote('no category classes in this layer'));
   } else if (mode === 'rule-based') {
     renderRuleList(body, L);
+  } else if (mode === 'painted') {
+    const colSel = document.createElement('select');
+    for (const pc of brushCols) { const o = document.createElement('option'); o.value = 'paint:' + pc.name; o.textContent = pc.name; colSel.appendChild(o); }
+    if ([...colSel.options].some((o) => o.value === selv)) colSel.value = selv;
+    colSel.onchange = () => { addPaintColorOptions(L); setSel(colSel.value); };
+    body.appendChild(mkRow('column', colSel));
+    if (selPaint) {
+      const live = selPaint.dict.map((d2, c2) => (c2 > 0 && d2 != null ? { label: d2, n: selPaint.counts ? selPaint.counts[c2] : 0 } : null)).filter(Boolean);
+      for (const v of live) {
+        const row = document.createElement('div'); row.className = 'pp-cat';
+        const sw = document.createElement('span'); sw.className = 'sw';
+        sw.style.background = selPaint.colors[selPaint.dict.indexOf(v.label)] || '#555a5f';
+        const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = v.label;
+        const ct = document.createElement('span'); ct.className = 'ct'; ct.textContent = v.n.toLocaleString();
+        row.append(sw, nm, ct);
+        body.appendChild(row);
+      }
+    }
+    const open = document.createElement('button'); open.className = 'pp-tab';
+    open.textContent = 'open paint palette…';
+    open.onclick = () => openPaintPalette(L);
+    body.appendChild(mkRow('', open));
+    body.appendChild(ppNote('a painted column — values, colors, and the brush live in the palette window'));
   } else {
     body.appendChild(ppNote(mode === 'solid' ? 'solid — one color, nothing to map' : 'rgb — colors come from the file'));
   }
