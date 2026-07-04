@@ -1977,61 +1977,12 @@ function setActiveLayer(id) {
   $('#filter').value = _filterExpr; syncFilterClear();
   renderLayers();
 }
-// "add as layer or replace?" — a compact menu at the drop point (GIS instinct:
-// opening a second dataset should never silently destroy the first)
-function askOpenMode(name, x, y, count = 1) {
-  return new Promise((res) => {
-    menuXY(x != null ? x : innerWidth / 2 - 110, y != null ? y : innerHeight / 3, [
-      { label: count > 1 ? `Add ${count} files as layers` : `Add “${name.length > 28 ? name.slice(0, 27) + '…' : name}” as a layer`, action: () => res('add') },
-      { label: 'Replace the view', action: () => res('replace') },
-    ], () => res(null));
-  });
-}
-// several files at once → one question for the batch, then sequential opens
-// (the first replaces or adds per the answer; the rest always add as layers)
 async function openBlobs(files, mode = 'replace', at = null) {
-  files = [...files];
   if (!files.length) return;
-  if (files.length === 1) return openBlob(files[0], files[0].name, mode, at);
-  // a batch that sniffs as collar + survey + intervals is offered as drillholes;
-  // any files BESIDE the trio (drop the whole project folder's worth at once)
-  // open as ordinary layers around it
-  if (mode === 'ask' && files.length >= 3) {
-    const trio = await sniffDrillholeFiles(files);
-    if (trio) {
-      const trioSet = new Set([trio.collar.blob, trio.survey.blob, trio.intervals.blob]);
-      const rest = files.filter((f) => !trioSet.has(f));
-      const dhLabel = rest.length
-        ? `Import drillholes + open ${rest.length} other file${rest.length > 1 ? 's' : ''} as layers`
-        : 'Import as drillholes…';
-      const act = await new Promise((res) => menuXY(at && at.x != null ? at.x : innerWidth / 2 - 120, at && at.y != null ? at.y : innerHeight / 3, [
-        { label: dhLabel, action: () => res('dh') },
-        { label: `Open as ${files.length} separate layers`, action: () => res('layers') },
-        ...(_layers.length ? [{ label: 'Replace the view', action: () => res('replace') }] : []),
-      ], () => res(null)));
-      if (!act) return;
-      if (act === 'dh') {
-        // the non-trio files first (the first may replace an empty view), then
-        // the dialog — the dh layer adds on top when Import is clicked
-        if (rest.length) await openBlobs(rest, _layers.length ? 'add' : 'replace', at);
-        openDhDialog(trio);
-        return;
-      }
-      mode = act === 'replace' ? 'replace' : (_layers.length ? 'add' : 'replace');
-    }
-  }
-  if (mode === 'ask') {
-    mode = _layers.length ? await askOpenMode(files[0].name, at && at.x, at && at.y, files.length) : 'replace';
-    if (!mode) return;
-  }
   await openBlob(files[0], files[0].name, mode === 'add' ? 'add' : 'replace', at);
   for (let i = 1; i < files.length; i++) await openBlob(files[i], files[i].name, 'add');
 }
 async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
-  if (mode === 'ask') {
-    mode = _layers.length ? await askOpenMode(name, at && at.x, at && at.y) : 'replace';
-    if (!mode) return;                                     // dismissed
-  }
   if (mode !== 'add') closeAllLayers();
   const lid = allocLayerId();
   if (lid == null) { $('#meta').textContent = 'layer limit reached (7) — remove one first'; return; }
@@ -2863,9 +2814,10 @@ async function openRecent(entry) {
       const f = await h.getFile();
       addRecent(f, h);
       _fileHandles.set(f, h);
-      // a RECENT is a known file — no interrogation: straight open (the
-      // compact add/replace menu only when layers already exist)
-      return openBlob(f, f.name, 'ask');
+      // a recent is the picker with the file pre-picked: same dialog, same
+      // add/replace radio. An empty view opens straight — nothing to replace.
+      if (_layers.length) return openFilesDialog([f]);
+      return openBlob(f, f.name, 'replace');
     } catch { $('#meta').textContent = `couldn't reopen “${entry.name}” — pick it again`; return openFilePicker(); }
   }
   $('#meta').textContent = `“${entry.name}” has no saved handle — pick it again`;
