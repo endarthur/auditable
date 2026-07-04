@@ -2129,7 +2129,7 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
-<b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; quantile/equal auto-breaks from the scan<br><br>
+<b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; the <b>interval table</b> lists every band with an editable upper bound, a count from the scan, and (classed) a color chip per shell; quantile/equal auto-breaks from the scan<br><br>
 <b>meshes</b> — .msh (Leapfrog) / .obj / .ply-with-faces open as context layers: scenery, not records (no pick, no filter — clicks pass through to the data behind)<br>
 right-click the layer → <b>Tint…</b> / <b>Opacity…</b> · sections cut meshes per-pixel — front/behind give the classic sectioned-solid view<br><br>
 <b>filter</b> (block models) — lamina's language over every column in the file:<br>
@@ -2929,8 +2929,9 @@ function renderRampSection(body, L) {
     body.appendChild(ppNote('breakpoints live on grade channels and elevation'));
     return;
   }
-  // the breaks TABLE — type round numbers, Enter applies (sorted, deduped);
-  // works with or without a scan
+  const [rLo, rHi] = rampRangeFor(L);
+  renderIntervalTable(body, L, rLo, rHi);
+  // the breaks quick-entry — type round numbers, Enter applies (sorted, deduped)
   {
     const cfgNow = rampCfgOf(L);
     const bIn = document.createElement('input'); bIn.type = 'text';
@@ -2940,7 +2941,7 @@ function renderRampSection(body, L) {
     const applyBreaks = () => {
       const vals = bIn.value.split(/[,;\s]+/).map(parseFloat).filter(Number.isFinite).sort((a, b2) => a - b2);
       const breaks = vals.filter((v, i) => i === 0 || v > vals[i - 1]);
-      setRampCfg(L, { breaks });
+      setRampCfg(L, { breaks, colors: null });             // band count changed — custom colors are stale
       renderProps();
     };
     bIn.onkeydown = (e) => { if (e.key === 'Enter') applyBreaks(); };
@@ -3068,18 +3069,84 @@ function renderRampSection(body, L) {
         const tTotal = tail.reduce((a, c2) => a + c2[1], 0);
         if (tTotal > 0) breaks = collect(tail, tTotal);
       }
-      setRampCfg(L, { breaks }); renderProps();
+      setRampCfg(L, { breaks, colors: null }); renderProps();
     }),
     mkA('equal', () => {
       const n = Math.max(2, Math.min(12, +nIn.value || 5));
       const breaks = [];
       for (let i = 1; i < n; i++) breaks.push(lo + (span * i) / n);
-      setRampCfg(L, { breaks }); renderProps();
+      setRampCfg(L, { breaks, colors: null }); renderProps();
     }),
-    mkA('clear', () => { setRampCfg(L, { breaks: [] }); renderProps(); }),
+    mkA('clear', () => { setRampCfg(L, { breaks: [], colors: null }); renderProps(); }),
     logL,
   );
   body.appendChild(bulk);
+}
+// the interval table (§10 breakpoints): one row per BAND — swatch (an
+// editable color chip in classed mode: grade shells colored like categories),
+// the upper boundary editable in place, count + share from the scan's
+// centroids. The quick-entry input above stays for typing round numbers.
+function renderIntervalTable(body, L, lo, hi) {
+  const cfg = rampCfgOf(L);
+  const breaks = ((cfg && cfg.breaks) || []).filter((v) => Number.isFinite(v) && v > lo && v < hi).sort((a, b2) => a - b2);
+  if (!breaks.length) return;
+  const stops = RAMP_PRESETS[(cfg && cfg.preset) || 'viridis'] || RAMP_PRESETS.viridis;
+  const selv = colorSelOf(L);
+  const h = layerTableHeader(L);
+  const colName = String(selv).startsWith('chan:') && h ? h.columns[+String(selv).slice(5)] : null;
+  const stat = colName && L._colStats && L._colStats[colName];
+  const bandCount = (a, b2) => {
+    if (!stat || !stat.centroids) return null;
+    let n = 0;
+    for (const [m2, w2] of stat.centroids) if (m2 >= a && m2 < b2) n += w2;
+    return n;
+  };
+  const edges = [lo, ...breaks, hi];
+  for (let k = 0; k < edges.length - 1; k++) {
+    const row = document.createElement('div'); row.className = 'pp-cat';
+    const midT = cfg.classed ? (k + 0.5) / (edges.length - 1) : ((edges[k] + edges[k + 1]) / 2 - lo) / Math.max(hi - lo, 1e-9);
+    const defHex = '#' + rampSample(stops, midT).map((v) => v.toString(16).padStart(2, '0')).join('');
+    if (cfg.classed) {
+      const chip = document.createElement('input'); chip.type = 'color';
+      chip.value = (cfg.colors && cfg.colors[k]) || defHex;
+      chip.style.cssText = 'width:16px;height:14px;padding:0;border:1px solid var(--border);background:none;cursor:pointer;flex:0 0 auto;';
+      chip.oninput = () => {
+        const c2 = rampCfgOf(L, true);
+        c2.colors = c2.colors || [];
+        c2.colors[k] = chip.value;
+        setRampCfg(L, {});
+      };
+      row.appendChild(chip);
+    } else {
+      const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = defHex;
+      row.appendChild(sw);
+    }
+    const rng = document.createElement('span'); rng.className = 'nm'; rng.style.display = 'flex'; rng.style.alignItems = 'center'; rng.style.gap = '3px';
+    const fromS = document.createElement('span'); fromS.textContent = fmtStat(edges[k]) + ' –';
+    rng.appendChild(fromS);
+    if (k < edges.length - 2) {
+      const toIn = document.createElement('input'); toIn.type = 'number'; toIn.step = 'any';
+      toIn.value = +edges[k + 1].toFixed(4);
+      toIn.style.cssText = 'width:64px;background:#242424;color:var(--text);border:1px solid var(--border);font:inherit;padding:0 3px;';
+      toIn.onchange = () => {
+        const v = parseFloat(toIn.value);
+        if (!Number.isFinite(v) || v <= lo || v >= hi) { toIn.value = +edges[k + 1].toFixed(4); return; }
+        const c2 = rampCfgOf(L, true);
+        c2.breaks = breaks.map((b3, i) => (i === k ? v : b3)).sort((a, b3) => a - b3).filter((b3, i, arr) => i === 0 || b3 > arr[i - 1]);
+        setRampCfg(L, {});
+        renderProps();
+      };
+      rng.appendChild(toIn);
+    } else {
+      const toS = document.createElement('span'); toS.textContent = ' ' + fmtStat(edges[k + 1]);
+      rng.appendChild(toS);
+    }
+    const ct = document.createElement('span'); ct.className = 'ct';
+    const n = bandCount(edges[k], k === edges.length - 2 ? edges[k + 1] + 1e-9 : edges[k + 1]);
+    ct.textContent = n == null ? '–' : `${Math.round(n).toLocaleString()} · ${stat.total ? Math.round((100 * n) / stat.total) : 0}%`;
+    row.append(rng, ct);
+    body.appendChild(row);
+  }
 }
 // LAS classification names (ASPRS standard 0–18)
 const LAS_CLASSES = ['never classified', 'unclassified', 'ground', 'low vegetation', 'medium vegetation', 'high vegetation', 'building', 'low point (noise)', 'reserved', 'water', 'rail', 'road surface', 'reserved', 'wire — guard', 'wire — conductor', 'transmission tower', 'wire connector', 'bridge deck', 'high noise'];
@@ -3783,7 +3850,9 @@ function bakeRampPixels(cfg, lo, hi) {
     if (cfg.classed && breaks.length) {
       const v = lo + t * span;
       let k = 0; while (k < breaks.length && v >= breaks[k]) k++;
-      c = rampSample(stops, (k + 0.5) / (breaks.length + 1));
+      const ov = cfg.colors && cfg.colors[k];
+      if (ov) { const n2 = parseInt(ov.slice(1), 16); c = [(n2 >> 16) & 255, (n2 >> 8) & 255, n2 & 255]; }
+      else c = rampSample(stops, (k + 0.5) / (breaks.length + 1));
     } else if (breaks.length) {
       const v = lo + t * span;
       const edges = [lo, ...breaks, hi];
