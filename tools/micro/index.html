@@ -640,8 +640,8 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   $('#meta').textContent = `${name} — reading…`;
   $('#empty').style.display = 'none';
   try {
-    if (/\.(msh|obj)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity }); }
-    else if (/\.ply$/i.test(name) && !over.forcePoints && await plyHasFaces(blob)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity }); }
+    if (/\.(msh|obj)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
+    else if (/\.ply$/i.test(name) && !over.forcePoints && await plyHasFaces(blob)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
     else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
     // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
     // so grid inference must not promote them to boxes.
@@ -732,7 +732,7 @@ async function openMeshDoc(blob, name, opts = {}) {
   // file ever being held whole; .msh/.obj formats are whole-file reads anyway,
   // so their vertices are transient and only the soup stays resident.
   let header = null, soupSrc = null;
-  if (/\.ply$/i.test(name) && await plyFaceCount(blob) > CONTEXT_TRI_CAP) {
+  if (/\.ply$/i.test(name) && (opts.forceSoup || await plyFaceCount(blob) > CONTEXT_TRI_CAP)) {
     const doc = await openPlySoup(blob, { onProgress: (a, b2) => { $('#meta').textContent = `${name} — reading vertices… ${Math.round(100 * a / b2)}%`; } });
     header = doc.header;
     soupSrc = (o) => doc.streamChunks(o);
@@ -740,7 +740,7 @@ async function openMeshDoc(blob, name, opts = {}) {
     const open = /\.msh$/i.test(name) ? openMsh : /\.obj$/i.test(name) ? openObj : openPlyMesh;
     const m = await open(blob);
     header = m.header;
-    if (header.triCount > CONTEXT_TRI_CAP) {
+    if (opts.forceSoup || header.triCount > CONTEXT_TRI_CAP) {
       header = { ...header, soup: true };
       soupSrc = (o) => soupFromMesh(m, o);
     } else {
@@ -1571,6 +1571,7 @@ function projectManifest() {
       kind: L.kind === 'mesh' ? 'mesh' : undefined,
       tint: L.kind === 'mesh' ? L.tint : undefined,
       opacity: L.kind === 'mesh' && L.opacity !== 1 ? L.opacity : undefined,
+      soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
     })),
     camera: captureCamera(),
     section: captureSection(),
@@ -1739,7 +1740,7 @@ async function openProjectDir(dir) {
       if (handle) _fileHandles.set(file, handle);
       // a mesh-bearing .ply saved as a POINTS layer must reopen as points
       const overR = ls.kind === 'mesh'
-        ? { tint: ls.tint, opacity: ls.opacity }
+        ? { tint: ls.tint, opacity: ls.opacity, forceSoup: !!ls.soup }
         : (/\.ply$/i.test(ls.source) ? { forcePoints: true } : {});
       await openBlob(file, ls.source, i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
       { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; } }
@@ -2486,10 +2487,24 @@ function layerMenu(L, x, y) {
         markProjectDirty(); requestRender();
       }
     } }] : []),
-    ...(L.kind === 'mesh' ? [
-      { label: 'Tint…', action: () => setTimeout(() => meshTintMenu(L, x, y), 0) },
-      { label: `Opacity… (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, action: () => setTimeout(() => meshOpacityMenu(L, x, y), 0) },
-    ] : []),
+    ...(L.kind === 'mesh' ? (() => {
+      const items = [
+        { label: 'Tint…', action: () => setTimeout(() => meshTintMenu(L, x, y), 0) },
+        { label: `Opacity… (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, action: () => setTimeout(() => meshOpacityMenu(L, x, y), 0) },
+      ];
+      const h = L.docs.meshDoc && L.docs.meshDoc.header;
+      if (h) {
+        const now = renderer.layerVramBytes(L.id);
+        if (!h.soup) {
+          const est = h.triCount * 18;                     // u16 soup: 9 coords × 2 B
+          items.push({ label: `Convert to streamed (${fmtSize(now)} → ~${fmtSize(est)})`, action: () => convertMeshLayer(L, true) });
+        } else if (h.triCount <= CONTEXT_TRI_CAP) {
+          const est = h.vertexCount * 12 + h.triCount * 12; // indexed f32 + u32
+          items.push({ label: `Convert to exact (${fmtSize(now)} → ~${fmtSize(est)})`, action: () => convertMeshLayer(L, false) });
+        }
+      }
+      return items;
+    })() : []),
     { label: 'File info…', action: () => { setActiveLayer(L.id); showFileInfo(); } },
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     { sep: true },
@@ -2504,6 +2519,22 @@ function layerMenu(L, x, y) {
     }] : []),
     { label: 'Remove layer', action: () => removeLayerUI(L.id) },
   ]);
+}
+// tier conversion: re-open the SAME blob through the other tier, keeping the
+// layer's identity (id, label, style, visibility, section exemption). Exact
+// (indexed f32) trades VRAM for survey-true vertices; streamed (u16 soup)
+// trades ~8 mm-per-chunk quantization for ~2-3× less VRAM + budgeted draw.
+async function convertMeshLayer(L, toSoup) {
+  const md = L.docs.meshDoc; if (!md) return;
+  const keep = { visible: L.visible, sectioned: renderer.layerSectioned(L.id) };
+  renderer.removeLayer(L.id);                              // frees chunks + layer state
+  $('#meta').textContent = `${md.name} — converting to ${toSoup ? 'streamed' : 'exact'}…`;
+  try {
+    await openMeshDoc(md.blob, md.name, { layer: L.id, first: false, tint: L.tint, opacity: L.opacity, forceSoup: toSoup });
+    if (!keep.visible) { L.visible = false; renderer.setLayerVisible(L.id, false); }
+    if (!keep.sectioned) renderer.setLayerSectioned(L.id, false);
+    renderLayers(); markProjectDirty(); requestRender();
+  } catch (e) { $('#meta').textContent = `${md.name} — ${e.message}`; }
 }
 // mesh styling: a small preset palette (geology-ish) + custom hex; opacity is
 // Bayer screen-door in the pipeline, so any value is depth-correct
@@ -2638,7 +2669,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
