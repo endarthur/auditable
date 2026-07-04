@@ -327,6 +327,8 @@
     <button class="mb" id="mHelp">Help</button>
     <span id="filterWrap"><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
     <span class="spacer"></span>
+    <button id="btnSelRect" title="select — rectangle (r) · shift adds, alt subtracts · Tools → Select through flips to volume">select</button>
+    <button id="btnSelLasso" title="select — lasso (v) · shift adds, alt subtracts">lasso</button>
     <button id="btnMeasure" title="measure between two picked points/blocks (m)">measure</button>
     <button id="btnSection" title="section on/off (x) — mode and scrub live on the row below">section</button>
     <button id="btnShot" title="save the viewport as PNG">png</button>
@@ -733,6 +735,8 @@ let _selArm = null;                                        // 'rect' | 'lasso' |
 let _selPts = null;
 function armSelect(kind) {
   _selArm = kind; _selPts = null;
+  $('#btnSelRect').classList.toggle('on', kind === 'rect');
+  $('#btnSelLasso').classList.toggle('on', kind === 'lasso');
   cv.style.cursor = 'crosshair';
   $('#meta').textContent = (kind === 'rect'
     ? 'select: drag a rectangle — shift adds, alt subtracts'
@@ -740,9 +744,13 @@ function armSelect(kind) {
 }
 function disarmSelect() {
   _selArm = null; _selPts = null;
+  $('#btnSelRect').classList.remove('on');
+  $('#btnSelLasso').classList.remove('on');
   cv.style.cursor = '';
   $('#selSvg').style.display = 'none';
 }
+$('#btnSelRect').onclick = () => { if (_selArm === 'rect') disarmSelect(); else armSelect('rect'); };
+$('#btnSelLasso').onclick = () => { if (_selArm === 'lasso') disarmSelect(); else armSelect('lasso'); };
 const selModeOf = (e) => (e.shiftKey ? 'add' : e.altKey ? 'subtract' : 'replace');
 function drawSelShape() {
   const el = $('#selShape');
