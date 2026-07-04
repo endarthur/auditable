@@ -1471,7 +1471,7 @@ async function selectBySolid(meshL, { mode = 'inside', targets = null, combine =
 // filter / scan / table / export see a plain numeric column.
 let _ratioEpoch = 0;
 async function ratioBySolid(meshL, L, { name, res = 3 } = {}) {
-  const [rx, ry, rz] = Array.isArray(res) ? res.map((v) => Math.max(1, Math.min(8, v | 0))) : [res, res, res];
+  const [rx, ry, rz] = Array.isArray(res) ? res.map((v) => Math.max(1, v | 0)) : [res, res, res];
   const S = await meshSolidOf(meshL);
   if (!S) { $('#meta').textContent = 'ratio by solid: needs a context-tier mesh'; return null; }
   const doc = L.docs.blockDoc;
@@ -1622,7 +1622,7 @@ function renderSolidDialog() {
     const gSel = document.createElement('select');
     for (const L of grids) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; gSel.appendChild(o); }
     gSel.value = String(d.ratioLid);
-    gSel.onchange = () => { d.ratioLid = +gSel.value; };
+    gSel.onchange = () => { d.ratioLid = +gSel.value; renderSolidDialog(); };
     mkRow2('model', gSel);
     const nameIn = document.createElement('input'); nameIn.type = 'text';
     nameIn.value = d.name != null ? d.name : sbDefaultName(d);
@@ -1631,18 +1631,26 @@ function renderSolidDialog() {
     // probes per AXIS — benches are anisotropic (10×10×5 wants 3×3×2)
     const tally = document.createElement('span');
     tally.style.color = 'var(--muted)';
+    const tallyText = () => {
+      const n2 = d.res[0] * d.res[1] * d.res[2];
+      const Lg = layerById(d.ratioLid);
+      const doc2 = Lg && Lg.docs.blockDoc;
+      const gsz = doc2 && (doc2.grid || (doc2.header && doc2.header.grid));
+      const dims = gsz && gsz.size ? ` · ${gsz.size.map((v, k) => +(v / d.res[k]).toFixed(2)).join('×')} m blocklings` : '';
+      return `= ${n2.toLocaleString()} probes/block${dims}`;
+    };
     const ins = ['x', 'y', 'z'].map((ax, k) => {
       const inp = document.createElement('input'); inp.type = 'number';
-      inp.min = '1'; inp.max = '8'; inp.value = String(d.res[k]);
+      inp.min = '1'; inp.value = String(d.res[k]);
       inp.style.width = '44px';
       inp.title = `probes along ${ax}`;
       inp.oninput = () => {
-        d.res[k] = Math.max(1, Math.min(8, +inp.value || 1));
-        tally.textContent = `= ${d.res[0] * d.res[1] * d.res[2]} probes/block`;
+        d.res[k] = Math.max(1, +inp.value || 1);
+        tally.textContent = tallyText();
       };
       return inp;
     });
-    tally.textContent = `= ${d.res[0] * d.res[1] * d.res[2]} probes/block`;
+    tally.textContent = tallyText();
     const x2 = () => { const sp = document.createElement('span'); sp.style.color = 'var(--muted)'; sp.textContent = '×'; return sp; };
     mkRow2('probes', ins[0], x2(), ins[1], x2(), ins[2], tally);
   } else {
@@ -3370,7 +3378,7 @@ Tools → <b>Select through (volume)</b> flips the tools to the extruded tube: E
 <b>rule-based styling</b> — style mode <b>rule-based</b> (block models + drillholes): ordered rules, each an expression (<code>FE > 60 and LITO = "HEM"</code>) with a name + color; ONE sweep over the table paints each record with its first matching rule (drag to re-prioritize), everything unmatched wears the <b>else</b> color; per-rule eyes hide a rule's records (draw + pick, GPU-side); counts per rule after the sweep; rules persist in the project and re-sweep on load<br>
 <b>paint to column</b> (<code>b</code> / the brush button / Data menu) — interactive domaining: a PAINTED column is a category column you fill by hand. The palette window (layer-pinned, like tables) picks the column + the value; while a value is armed, the <code>r</code> / <code>v</code> gestures PAINT it onto whatever they cross (<b>alt</b> erases, Tools → Select through paints the whole tube, <code>Esc</code> puts the brush down, <code>Ctrl+Z</code> undoes a stroke); or build a careful selection first and <b>apply to selection</b>. While painting the layer colors by the column (unpainted recedes dark); painted values are REAL columns — the filter (<code>DOMAIN = "HW_OXIDE"</code>), the scan, the attribute table, and the record panel all see them; they persist in the project<br>
 <b>export rows</b> (Data → Export rows… / the layer context menu) — data leaves micro the way it came in, as rows: scope <b>all</b> · <b>filter matches</b> · <b>selection</b>; every column including ƒ calculated and ✎ painted ones (paint a DOMAIN, export it, feed the estimator); CSV with delimiter choice + decimal comma; streamed, so 1.8M rows is one sweep, and opening a .dm then exporting IS the .dm → CSV converter. In the attribute table, <code>Ctrl+C</code> copies the grid selection as TSV<br>
-<b>select by solid</b> (Tools menu / right-click a mesh layer) — a closed context mesh (.msh / .obj / small .ply) classifies records by winding number: <b>select inside/outside</b> sweeps any element layers into the ordinary selection (paint or export it — the solids → coded-model loop), a <b>flag column</b> writes a value (e.g. <code>IN</code>) into a NEW painted column on any table-backed layers — blocks, points, drillholes — which you can then touch up with the brush; or <b>fraction-inside column</b> probes each block of a regular model (1–8 probes per axis, e.g. 3×3×2 for benches) and writes a numeric 0–1 column (<code>%</code> badge) the filter, table, and export all see; all of it works with flipped solids and colors the layer by the result when done<br>
+<b>select by solid</b> (Tools menu / right-click a mesh layer) — a closed context mesh (.msh / .obj / small .ply) classifies records by winding number: <b>select inside/outside</b> sweeps any element layers into the ordinary selection (paint or export it — the solids → coded-model loop), a <b>flag column</b> writes a value (e.g. <code>IN</code>) into a NEW painted column on any table-backed layers — blocks, points, drillholes — which you can then touch up with the brush; or <b>fraction-inside column</b> probes each block of a regular model (any per-axis resolution — 3×3×2 for benches, 10×10×10 for 1 m blocklings) and writes a numeric 0–1 column (<code>%</code> badge) the filter, table, and export all see; all of it works with flipped solids and colors the layer by the result when done<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
 <b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; the <b>interval table</b> lists every band with an editable upper bound, a count from the scan, and (classed) a color chip per shell; quantile/equal auto-breaks from the scan<br><br>
