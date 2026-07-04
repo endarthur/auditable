@@ -2739,7 +2739,7 @@ function openProps() {
   if (L && !L._stagePend) L._styleSnap = styleSnap(L);
   renderProps();
 }
-function closeProps() { _propOpen = false; _propFor = null; _calcForm = null; $('#propPanel').classList.remove('show'); }
+function closeProps() { _propOpen = false; _propFor = null; _calcForm = null; _rampRepaint = null; $('#propPanel').classList.remove('show'); }
 $('#ppClose').onclick = closeProps;
 function layerHeaderOf(L) {
   const d = L.docs || {};
@@ -2916,7 +2916,7 @@ function renderRampSection(body, L) {
   sel.onchange = () => { setRampCfg(L, { preset: sel.value }); renderProps(); };
   const cl = document.createElement('label');
   const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!cfg.classed;
-  cb.onchange = () => setRampCfg(L, { classed: cb.checked });
+  cb.onchange = () => { setRampCfg(L, { classed: cb.checked }); renderProps(); };
   cl.append(cb, ' classed');
   cl.title = 'solid color per interval — the grade-shell legend; unchecked stretches the ramp between breakpoints';
   body.appendChild(mkRow('', sel, cl));
@@ -2931,6 +2931,7 @@ function renderRampSection(body, L) {
     g2.putImageData(img, 0, 0);
   };
   drawPreview();
+  _rampRepaint = { prev: drawPreview, hist: null };
   body.appendChild(prev);
   const selv = colorSelOf(L);
   const isChan = String(selv).startsWith('chan:');
@@ -2992,10 +2993,15 @@ function renderRampSection(body, L) {
   const draw = () => {
     const g2 = cvh.getContext('2d');
     g2.clearRect(0, 0, cvh.width, cvh.height);
-    g2.fillStyle = '#3a3a3a';
+    // the bars wear the colors their values RENDER as (the baked LUT) — the
+    // histogram is the legend; drag a break and the colors split at the line
+    const lut = bakeRampPixels(rampCfgOf(L) || { preset: 'viridis', breaks: [] }, lo, hi);
     for (let b2 = 0; b2 < N; b2++) {
       const hp = bins[b2] ? Math.max(1, Math.round((cvh.height - 14) * barH(bins[b2]))) : 0;
-      if (hp) g2.fillRect(b2 * 10, cvh.height - hp, 9, hp);
+      if (!hp) continue;
+      const ti = Math.min(255, Math.max(0, Math.round(((b2 + 0.5) / N) * 255)));
+      g2.fillStyle = `rgb(${lut[ti * 4]},${lut[ti * 4 + 1]},${lut[ti * 4 + 2]})`;
+      g2.fillRect(b2 * 10, cvh.height - hp, 9, hp);
     }
     const c2 = rampCfgOf(L);
     for (const v of (c2 && c2.breaks) || []) {
@@ -3007,6 +3013,7 @@ function renderRampSection(body, L) {
     }
   };
   draw();
+  if (_rampRepaint) _rampRepaint.hist = draw;
   const evX = (e) => { const r2 = cvh.getBoundingClientRect(); return ((e.clientX - r2.left) / r2.width) * cvh.width; };
   const nearBreak = (x) => {
     const c2 = rampCfgOf(L);
@@ -3907,10 +3914,15 @@ function applyRamp(L, force) {
   }
   requestRender();
 }
+let _rampRepaint = null;                                   // { prev, hist } — the ramp section's live canvases
 function setRampCfg(L, patch) {
   const cfg = rampCfgOf(L, true);
   Object.assign(cfg, patch);
   applyRamp(L);
+  if (_rampRepaint) {                                      // keep the strip + histogram honest without a DOM rebuild
+    if (_rampRepaint.prev) _rampRepaint.prev();
+    if (_rampRepaint.hist) _rampRepaint.hist();
+  }
   markProjectDirty();
 }
 // ── the source tab: where the layer's positions come from + what it spans.
