@@ -234,6 +234,20 @@
   .pp-row .pp-val { color: var(--dim); min-width: 44px; text-align: right; }
   .pp-note { color: var(--dim); margin: 8px 0; line-height: 1.5; }
   .pp-cat { display: flex; align-items: center; gap: 7px; padding: 3px 2px; border-radius: 2px; }
+  .pp-cat .grip { color: var(--dim); cursor: grab; user-select: none; flex: 0 0 auto; font-size: 10px; }
+  .pp-cat .grip:hover { color: var(--accent); }
+  .pp-cat.drop-above { box-shadow: 0 -2px 0 var(--accent); }
+  #propPanel .pp-foot {
+    display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+  }
+  #propPanel .pp-foot label { display: flex; align-items: center; gap: 4px; }
+  #propPanel .pp-foot button {
+    background: #242424; border: 1px solid var(--border); color: var(--muted); font: inherit; padding: 2px 10px; cursor: pointer;
+  }
+  #propPanel .pp-foot button:enabled:hover { color: var(--accent); border-color: var(--accent); }
+  #propPanel .pp-foot button:disabled { opacity: 0.4; cursor: default; }
+  #propPanel .pp-foot .spacer { flex: 1; }
   .pp-cat:hover { background: #242424; }
   .pp-cat input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
   .pp-cat .sw { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto; }
@@ -338,7 +352,7 @@
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
   <div id="recPanel"><div class="rp-grab" id="rpGrab"></div><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
   <div id="layersPanel"><div class="lp-head"><span>layers</span><button class="lp-close" id="lpClose">×</button></div><div id="lpRows"></div><div class="lp-grab" id="lpGrab"></div></div>
-  <div id="propPanel"><div class="rp-grab" id="ppGrab"></div><div class="rp-head"><span id="ppTitle">properties</span><button class="rp-close" id="ppClose">×</button></div><div class="pp-sub" id="ppSub"></div><div class="pp-tabs" id="ppTabs"></div><div class="pp-body" id="ppBody"></div></div>
+  <div id="propPanel"><div class="rp-grab" id="ppGrab"></div><div class="rp-head"><span id="ppTitle">properties</span><button class="rp-close" id="ppClose">×</button></div><div class="pp-sub" id="ppSub"></div><div class="pp-tabs" id="ppTabs"></div><div class="pp-body" id="ppBody"></div><div class="pp-foot"><label title="apply style edits as you make them — uncheck to batch changes (each apply restarts accumulation on huge layers)"><input type="checkbox" id="ppAuto" checked>auto</label><span class="spacer"></span><button id="ppApply" disabled>apply</button><button id="ppRevert">revert</button></div></div>
   <div id="dhDlg"><div class="box"><div class="hd"><span>import drillholes</span><button id="dhCancel">×</button></div><div class="bd" id="dhDlgBody"></div><div class="dh-foot"><span id="dhDlgMsg"></span><button id="dhImport">Import</button></div></div></div>
   <div id="ofDlg"><div class="box"><div class="hd"><span>open files</span><button id="ofCancel">×</button></div><div class="bd" id="ofDlgBody"></div><div class="dh-foot"><button id="ofOpen">Open</button></div></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
@@ -1238,7 +1252,7 @@ function setColorLabels(header) {
 // switching the grade channel = re-stream sweep 2 with a new mapping (windowed ethos)
 $('#colorBy').addEventListener('change', () => {
   const v = $('#colorBy').value;
-  const L = activeLayer(); if (L) { L.colorSel = v; applyRamp(L); }
+  const L = activeLayer(); if (L) { L.colorSel = v; applyRamp(L, true); }
   dispatchEvent(new Event('micro:project-dirty'));
   if (v.startsWith('chan:') && _dhDoc && +v.slice(5) !== _dhDoc.header.mapping.chan) { reopenDhChan(+v.slice(5)); return; }
   if (v.startsWith('chan:') && _blockDoc && +v.slice(5) !== _blockDoc.header.mapping.chan) {
@@ -1247,7 +1261,7 @@ $('#colorBy').addEventListener('change', () => {
   } else requestRender();
 });
 for (const id of ['clipMin', 'clipMax']) $('#' + id).addEventListener('input', () => {
-  const L = activeLayer(); if (L) { L.clip = [$('#clipMin').value, $('#clipMax').value]; if (rampCfgOf(L)) applyRamp(L); }
+  const L = activeLayer(); if (L) { L.clip = [$('#clipMin').value, $('#clipMax').value]; if (rampCfgOf(L)) applyRamp(L, true); }
   dispatchEvent(new Event('micro:project-dirty'));
 });
 
@@ -1781,8 +1795,8 @@ async function openProjectDir(dir) {
           restoreHiddenCats(Ld, ls.hiddenCats);
           if (ls.colTypes) { Ld.colTypes = ls.colTypes; applyColTypes(Ld); }
           if (ls.calcCols) Ld.calcCols = ls.calcCols;
-          if (ls.ramps) { Ld.ramps = ls.ramps; applyRamp(Ld); }
-          if (ls.catLegend) { Ld.catLegend = ls.catLegend; applyCatLegend(Ld); }
+          if (ls.ramps) { Ld.ramps = ls.ramps; applyRamp(Ld, true); }
+          if (ls.catLegend) { Ld.catLegend = ls.catLegend; applyCatLegend(Ld, true); }
         }
         continue;
       }
@@ -1834,8 +1848,8 @@ async function openProjectDir(dir) {
       restoreHiddenCats(L, ls.hiddenCats);
       if (ls.colTypes) { L.colTypes = ls.colTypes; applyColTypes(L); }
       if (ls.calcCols) L.calcCols = ls.calcCols;
-      if (ls.ramps) { L.ramps = ls.ramps; applyRamp(L); }
-      if (ls.catLegend) { L.catLegend = ls.catLegend; applyCatLegend(L); }
+      if (ls.ramps) { L.ramps = ls.ramps; applyRamp(L, true); }
+      if (ls.catLegend) { L.catLegend = ls.catLegend; applyCatLegend(L, true); }
     }
     applyCamera(mf.camera);
     applySection(mf.section);
@@ -2113,7 +2127,8 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
 <b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
-<b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
+<b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
+<b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
 <b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; quantile/equal auto-breaks from the scan<br><br>
 <b>meshes</b> — .msh (Leapfrog) / .obj / .ply-with-faces open as context layers: scenery, not records (no pick, no filter — clicks pass through to the data behind)<br>
 right-click the layer → <b>Tint…</b> / <b>Opacity…</b> · sections cut meshes per-pixel — front/behind give the classic sectioned-solid view<br><br>
@@ -2625,7 +2640,7 @@ function layerMenu(L, x, y) {
       const v = prompt('stick radius (metres)', String(renderer.layerStickRadius(L.id)));
       const r = parseFloat(v);
       if (Number.isFinite(r) && r > 0) {
-        renderer.setLayerStickRadius(L.id, r);
+        renderer.setLayerStickRadius(L.id, r);             // the context-menu path stays live (no panel involved)
         if (L.docs.dhDoc) L.docs.dhDoc.config.radius = r;   // persists via the project manifest
         markProjectDirty(); requestRender();
       }
@@ -2684,7 +2699,7 @@ async function convertMeshLayer(L, toSoup) {
 // mesh styling: a small preset palette (geology-ish) + custom hex; opacity is
 // Bayer screen-door in the pipeline, so any value is depth-correct
 const MESH_TINTS = [['Grey', '#9ea3a8'], ['Sand', '#c9a86a'], ['Rust', '#b0563a'], ['Green', '#5c8a5a'], ['Blue', '#5b7fa6'], ['Violet', '#8a6fae'], ['Brown', '#8a6a4f']];
-function setMeshTint(L, hex) { L.tint = hex; renderer.setLayerMeshStyle(L.id, { tint: hexToRgb01(hex) }); markProjectDirty(); requestRender(); }
+function setMeshTint(L, hex) { L.tint = hex; stageGate(L, () => { renderer.setLayerMeshStyle(L.id, { tint: hexToRgb01(hex) }); requestRender(); }); markProjectDirty(); }
 function meshTintMenu(L, x, y) {
   menuXY(x, y, [
     ...MESH_TINTS.map(([label, hex]) => ({ label: (L.tint === hex ? '✓ ' : '') + label, action: () => setMeshTint(L, hex) })),
@@ -2710,6 +2725,8 @@ function openProps() {
   _propOpen = true;
   $('#recPanel').classList.remove('show');
   $('#propPanel').classList.add('show');
+  const L = activeLayer();
+  if (L && !L._stagePend) L._styleSnap = styleSnap(L);
   renderProps();
 }
 function closeProps() { _propOpen = false; _propFor = null; _calcForm = null; $('#propPanel').classList.remove('show'); }
@@ -2729,8 +2746,12 @@ function propKindLine(L) {
 function renderProps() {
   const L = activeLayer();
   if (!L) { closeProps(); return; }
-  if (_propFor !== L.id) _calcForm = null;                 // the form belongs to one layer
+  if (_propFor !== L.id) {
+    _calcForm = null;                                      // the form belongs to one layer
+    if (!L._stagePend) L._styleSnap = styleSnap(L);        // revert's baseline
+  }
   _propFor = L.id;
+  syncPPFooter();
   $('#ppTitle').textContent = L.label || L.name;
   $('#ppSub').textContent = propKindLine(L);
   const tabs = $('#ppTabs'); tabs.textContent = '';
@@ -2766,8 +2787,8 @@ function renderStyleTab(body, L) {
     op.oninput = () => {
       opVal.textContent = op.value + '%';
       L.opacity = +op.value / 100;
-      renderer.setLayerMeshStyle(L.id, { opacity: L.opacity });
-      markProjectDirty(); requestRender();
+      stageGate(L, () => { renderer.setLayerMeshStyle(L.id, { opacity: L.opacity }); requestRender(); });
+      markProjectDirty();
     };
     body.appendChild(mkRow('opacity', op, opVal));
     if (h) {
@@ -2869,9 +2890,9 @@ function renderStickRadius(body, L) {
   const rv = document.createElement('span'); rv.className = 'pp-val'; rv.textContent = r.value + ' m';
   r.oninput = () => {
     rv.textContent = (+r.value).toFixed(1) + ' m';
-    renderer.setLayerStickRadius(L.id, +r.value);
     L.docs.dhDoc.config.radius = +r.value;
-    markProjectDirty(); requestRender();
+    stageGate(L, () => { renderer.setLayerStickRadius(L.id, +r.value); requestRender(); });
+    markProjectDirty();
   };
   body.appendChild(mkRow('stick radius', r, rv));
 }
@@ -3084,7 +3105,65 @@ function layerClassInfo(L) {
   }
   return null;
 }
-function applyCatVisibility(L) {
+// ── staged apply (the pp footer): auto ON = live-apply (the default, micro's
+// grammar); auto OFF = panel style edits mutate the LAYER STATE but hold the
+// renderer push until [apply] — one reconvergence instead of one per edit on
+// huge layers. [revert] restores the snapshot from when the panel targeted
+// the layer. Source-tab re-reads and toolbar controls stay immediate. ──
+let _autoApply = localStorage.getItem('micro.autoApply') !== 'off';
+function styleSnap(L) {
+  return {
+    ramps: L.ramps ? JSON.parse(JSON.stringify(L.ramps)) : null,
+    catLegend: L.catLegend ? JSON.parse(JSON.stringify(L.catLegend)) : null,
+    catHidden: L.catHidden ? [...L.catHidden] : [],
+    tint: L.tint, opacity: L.opacity,
+    radius: L.docs && L.docs.dhDoc ? L.docs.dhDoc.config.radius || 1 : null,
+  };
+}
+function stageGate(L, push) {
+  if (_autoApply || !_propOpen || !L || L.id !== _propFor) { push(); return; }
+  L._stagePend = true;
+  syncPPFooter();
+}
+function pushAllStyle(L) {
+  applyCatVisibility(L, true);
+  applyCatLegend(L, true);
+  applyRamp(L, true);
+  if (L.kind === 'mesh') renderer.setLayerMeshStyle(L.id, { tint: hexToRgb01(L.tint || '#9ea3a8'), opacity: L.opacity != null ? L.opacity : 1 });
+  if (L.dh && L.docs.dhDoc) renderer.setLayerStickRadius(L.id, L.docs.dhDoc.config.radius || 1);
+  L._stagePend = false;
+  requestRender();
+  syncPPFooter();
+}
+function revertStyle(L) {
+  const s2 = L._styleSnap; if (!s2) return;
+  L.ramps = s2.ramps ? JSON.parse(JSON.stringify(s2.ramps)) : null;
+  L.catLegend = s2.catLegend ? JSON.parse(JSON.stringify(s2.catLegend)) : null;
+  L.catHidden = new Set(s2.catHidden);
+  if (s2.tint != null) L.tint = s2.tint;
+  if (s2.opacity != null) L.opacity = s2.opacity;
+  if (s2.radius != null && L.docs && L.docs.dhDoc) L.docs.dhDoc.config.radius = s2.radius;
+  pushAllStyle(L);
+  markProjectDirty();
+  renderProps();
+}
+function syncPPFooter() {
+  const L = activeLayer();
+  $('#ppAuto').checked = _autoApply;
+  $('#ppApply').disabled = _autoApply || !L || !L._stagePend;
+  $('#ppApply').textContent = L && L._stagePend ? 'apply •' : 'apply';
+}
+$('#ppAuto').onchange = () => {
+  _autoApply = $('#ppAuto').checked;
+  try { localStorage.setItem('micro.autoApply', _autoApply ? 'on' : 'off'); } catch { /* ignore */ }
+  const L = activeLayer();
+  if (_autoApply && L && L._stagePend) pushAllStyle(L);    // least surprise: pending lands
+  syncPPFooter();
+};
+$('#ppApply').onclick = () => { const L = activeLayer(); if (L) { pushAllStyle(L); markProjectDirty(); } };
+$('#ppRevert').onclick = () => { const L = activeLayer(); if (L) revertStyle(L); };
+function applyCatVisibility(L, force) {
+  if (!force) return stageGate(L, () => applyCatVisibility(L, true));
   if (!L.catHidden || !L.catHidden.size) renderer.setLayerCatVisibility(L.id, null);
   else {
     const v = new Uint8Array(256).fill(1);
@@ -3098,7 +3177,7 @@ function restoreHiddenCats(L, arr) {
   const h = layerHeaderOf(L);
   const dict = h && h.categories;
   L.catHidden = new Set(arr.map((v) => (typeof v === 'number' ? v : dict ? dict.indexOf(v) : -1)).filter((c) => c >= 0));
-  if (L.catHidden.size) applyCatVisibility(L);
+  if (L.catHidden.size) applyCatVisibility(L, true);
 }
 // counts fill in async — the eyes never wait on a sweep
 async function ensureCatCounts(L, info) {
@@ -3173,7 +3252,8 @@ function ensureLegend(L, info) {
   return L.catLegend;
 }
 const legendCodesOf = (info, e) => e.values.map((v) => (typeof v === 'number' ? v : info.names.indexOf(v))).filter((c) => c >= 0);
-function applyCatLegend(L) {
+function applyCatLegend(L, force) {
+  if (!force) return stageGate(L, () => applyCatLegend(L, true));
   const info = layerClassInfo(L);
   if (!info) return;
   const leg = L.catLegend && L.catLegend.col === info.column ? L.catLegend : null;
@@ -3202,8 +3282,38 @@ function renderClassList(body, L, info) {
   for (const e of leg.entries) for (const c of legendCodesOf(info, e)) covered.add(c);
   const uncovered = stored ? info.codes.filter((c) => !covered.has(c)) : [];
   const touch = () => { ensureLegend(L, info); applyCatLegend(L); markProjectDirty(); };
+  const entryRows = [];                                    // for the drag map
   const rowFor = (e, codes, isOther) => {
     const row = document.createElement('div'); row.className = 'pp-cat' + (codes.length && codes.every((c) => L.catHidden.has(c)) ? ' off' : '');
+    if (!isOther) {
+      const grip = document.createElement('span'); grip.className = 'grip'; grip.textContent = '⠿'; grip.title = 'drag to reorder';
+      grip.onpointerdown = (ev) => {
+        ev.preventDefault();
+        try { grip.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+        row.style.opacity = '0.45';
+        let target = -1;
+        const clear = () => entryRows.forEach((r2) => r2.row.classList.remove('drop-above'));
+        const move = (mv) => {
+          clear();
+          target = entryRows.findIndex((r2) => mv.clientY < r2.row.getBoundingClientRect().top + r2.row.offsetHeight / 2);
+          if (target < 0) target = entryRows.length;
+          if (entryRows[target]) entryRows[target].row.classList.add('drop-above');
+        };
+        const up = () => {
+          removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+          row.style.opacity = ''; clear();
+          const from = entryRows.findIndex((r2) => r2.row === row);
+          if (from < 0 || target < 0 || target === from || target === from + 1) return;
+          const legS = ensureLegend(L, info);
+          const [it] = legS.entries.splice(from, 1);
+          legS.entries.splice(target > from ? target - 1 : target, 0, it);
+          markProjectDirty();
+          renderProps();
+        };
+        addEventListener('pointermove', move); addEventListener('pointerup', up);
+      };
+      row.appendChild(grip);
+    }
     const eye = document.createElement('input'); eye.type = 'checkbox';
     eye.checked = !codes.length || codes.some((c) => !L.catHidden.has(c));
     eye.onchange = () => {
@@ -3266,7 +3376,10 @@ function renderClassList(body, L, info) {
     return { codes, ct, row, eye };
   };
   const rows = [];
-  for (const e of leg.entries) rows.push(rowFor(e, legendCodesOf(info, e), false));
+  for (const e of leg.entries) {
+    const r2 = rowFor(e, legendCodesOf(info, e), false);
+    rows.push(r2); entryRows.push(r2);
+  }
   if (uncovered.length) rows.push(rowFor(null, uncovered, true));
   const bulk = document.createElement('div'); bulk.className = 'pp-bulk';
   const mkA = (label, fn) => { const a = document.createElement('a'); a.textContent = label; a.onclick = fn; return a; };
@@ -3609,9 +3722,9 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
     L2.label = keep.label;
     L2.colTypes = keep.colTypes; applyColTypes(L2);
     L2.calcCols = keep.calcCols;
-    L2.ramps = keep.ramps; if (rampCfgOf(L2)) applyRamp(L2);
-    if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2); }
-    if (keep.catLegend) { L2.catLegend = keep.catLegend; applyCatLegend(L2); }
+    L2.ramps = keep.ramps; if (rampCfgOf(L2)) applyRamp(L2, true);
+    if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2, true); }
+    if (keep.catLegend) { L2.catLegend = keep.catLegend; applyCatLegend(L2, true); }
   }
   renderLayers();
   if (_propOpen) { _propFor = null; renderProps(); }
@@ -3629,10 +3742,10 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
   if (L2) {
     L2.colTypes = keep.colTypes; applyColTypes(L2);
     L2.calcCols = keep.calcCols;
-    L2.ramps = keep.ramps; if (rampCfgOf(L2)) applyRamp(L2);
+    L2.ramps = keep.ramps; if (rampCfgOf(L2)) applyRamp(L2, true);
     if (clearCats) { L2.catHidden = null; L2.catLegend = null; renderer.setLayerCatVisibility(L2.id, null); renderer.setLayerPalette(L2.id, null); }
-    else if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2); }
-    if (!clearCats && keep.catLegend) { L2.catLegend = keep.catLegend; applyCatLegend(L2); }
+    else if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2, true); }
+    if (!clearCats && keep.catLegend) { L2.catLegend = keep.catLegend; applyCatLegend(L2, true); }
   }
   markProjectDirty();
   if (_propOpen) { _propFor = null; renderProps(); }
@@ -3703,7 +3816,8 @@ function rampRangeFor(L) {
   const o = frame ? frame.origin[2] : 0;
   return [Number.isFinite(clip[0]) ? clip[0] : b[2] + o, Number.isFinite(clip[1]) ? clip[1] : b[5] + o];
 }
-function applyRamp(L) {
+function applyRamp(L, force) {
+  if (!force) return stageGate(L, () => applyRamp(L, true));
   const cfg = rampCfgOf(L);
   if (!cfg || (cfg.preset === 'viridis' && !(cfg.breaks && cfg.breaks.length))) {
     renderer.setLayerRamp(L.id, null);
