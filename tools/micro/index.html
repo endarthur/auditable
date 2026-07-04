@@ -1281,7 +1281,7 @@ function renderExportDialog() {
     const o = document.createElement('option'); o.value = String(L2.id); o.textContent = L2.label || L2.name; lSel.appendChild(o);
   }
   lSel.value = String(d.lid);
-  lSel.onchange = () => { d.lid = +lSel.value; d.off = new Set(); d.name = null; renderExportDialog(); };
+  lSel.onchange = () => { d.lid = +lSel.value; d.off = new Set(); d.name = null; d.q = ''; renderExportDialog(); };
   mkRow2('layer', lSel);
   // scope (counts shown live; absent scopes disabled)
   const total = attrRowCountOf(L);
@@ -1298,26 +1298,46 @@ function renderExportDialog() {
     lab.append(r2, `${label} (${n.toLocaleString()})`);
     scopeRow.appendChild(lab);
   }
-  // columns
+  // columns — searchable (block models carry 50+ columns; the lamina lesson);
+  // all/none act on whatever the search currently shows. The grid rebuilds
+  // LOCALLY so typing in the search box never loses focus.
   const cols = exportColumnsOf(L);
-  mkRow2('columns');
+  const search = document.createElement('input'); search.type = 'text'; search.placeholder = 'search…';
+  search.value = d.q || '';
+  search.style.maxWidth = '150px';
+  mkRow2('columns', search);
   const links = document.createElement('div'); links.className = 'ex-links';
-  const mkLink = (t, fn) => { const a = document.createElement('a'); a.textContent = t; a.onclick = fn; links.appendChild(a); };
-  mkLink('all', () => { d.off = new Set(); renderExportDialog(); });
-  mkLink('none', () => { d.off = new Set(cols.map((_, i) => i)); renderExportDialog(); });
+  const allA = document.createElement('a'), noneA = document.createElement('a');
+  const tally = document.createElement('span'); tally.style.color = 'var(--muted)';
+  links.append(allA, noneA, tally);
   body.appendChild(links);
   const grid = document.createElement('div'); grid.className = 'ex-cols';
-  cols.forEach((c, i) => {
-    const lab = document.createElement('label');
-    const cb2 = document.createElement('input'); cb2.type = 'checkbox'; cb2.checked = !d.off.has(i);
-    cb2.onchange = () => { if (cb2.checked) d.off.delete(i); else d.off.add(i); };
-    lab.appendChild(cb2);
-    if (c.badge) { const b3 = document.createElement('span'); b3.className = 'bdg'; b3.textContent = c.badge; lab.appendChild(b3); }
-    lab.append(c.name);
-    lab.title = c.name;
-    grid.appendChild(lab);
-  });
   body.appendChild(grid);
+  let shown = [];
+  const rebuildCols = () => {
+    const q = (d.q || '').toLowerCase();
+    shown = cols.map((_, i) => i).filter((i) => !q || cols[i].name.toLowerCase().includes(q));
+    allA.textContent = q ? 'all shown' : 'all';
+    noneA.textContent = q ? 'none shown' : 'none';
+    tally.textContent = `${cols.length - d.off.size} of ${cols.length} picked${q ? ` · ${shown.length} shown` : ''}`;
+    grid.textContent = '';
+    for (const i of shown) {
+      const c = cols[i];
+      const lab = document.createElement('label');
+      const cb2 = document.createElement('input'); cb2.type = 'checkbox'; cb2.checked = !d.off.has(i);
+      cb2.onchange = () => { if (cb2.checked) d.off.delete(i); else d.off.add(i); rebuildCols(); };
+      lab.appendChild(cb2);
+      if (c.badge) { const b3 = document.createElement('span'); b3.className = 'bdg'; b3.textContent = c.badge; lab.appendChild(b3); }
+      lab.append(c.name);
+      lab.title = c.name;
+      grid.appendChild(lab);
+    }
+    if (!shown.length) { const none = document.createElement('span'); none.style.color = 'var(--muted)'; none.textContent = 'no columns match'; grid.appendChild(none); }
+  };
+  search.oninput = () => { d.q = search.value; rebuildCols(); };
+  allA.onclick = () => { for (const i of shown) d.off.delete(i); rebuildCols(); };
+  noneA.onclick = () => { for (const i of shown) d.off.add(i); rebuildCols(); };
+  rebuildCols();
   // format
   const dSel = document.createElement('select');
   for (const [v, t] of [[',', 'comma ,'], [';', 'semicolon ;'], ['tab', 'tab']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; dSel.appendChild(o); }
