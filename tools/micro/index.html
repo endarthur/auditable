@@ -2851,7 +2851,14 @@ function renderRampSection(body, L) {
   const span = hi > lo ? hi - lo : 1;
   const N = 48, bins = new Float64Array(N);
   for (const [mean, n] of stat.centroids) bins[Math.min(N - 1, Math.max(0, Math.floor(((mean - lo) / span) * N)))] += n;
-  let peak = 0; for (let b2 = 0; b2 < N; b2++) if (bins[b2] > peak) peak = bins[b2];
+  let peak = 0;
+  const pos = [];
+  for (let b2 = 0; b2 < N; b2++) { if (bins[b2] > peak) peak = bins[b2]; if (bins[b2] > 0) pos.push(bins[b2]); }
+  pos.sort((a, b2) => a - b2);
+  // grade data is lognormal — a dominant waste value buries the ore tail on a
+  // linear count axis. Auto log when the peak dwarfs the median populated bin.
+  if (L._histLog == null) L._histLog = peak > 50 * Math.max(1, pos.length ? pos[pos.length >> 1] : 1);
+  const barH = (n) => (L._histLog ? Math.log1p(n) / Math.log1p(peak) : peak ? n / peak : 0);
   const vx = (v) => ((v - lo) / span) * cvh.width;
   const xv = (x) => lo + (x / cvh.width) * span;
   const draw = () => {
@@ -2859,7 +2866,7 @@ function renderRampSection(body, L) {
     g2.clearRect(0, 0, cvh.width, cvh.height);
     g2.fillStyle = '#3a3a3a';
     for (let b2 = 0; b2 < N; b2++) {
-      const hp = peak ? Math.round((cvh.height - 14) * (bins[b2] / peak)) : 0;
+      const hp = bins[b2] ? Math.max(1, Math.round((cvh.height - 14) * barH(bins[b2]))) : 0;
       if (hp) g2.fillRect(b2 * 10, cvh.height - hp, 9, hp);
     }
     const c2 = rampCfgOf(L);
@@ -2916,13 +2923,34 @@ function renderRampSection(body, L) {
   const nIn = document.createElement('input'); nIn.type = 'number'; nIn.min = 2; nIn.max = 12; nIn.value = 5;
   nIn.style.cssText = 'width:44px;background:#242424;color:var(--text);border:1px solid var(--border);font:inherit;padding:1px 3px;';
   const mkA = (label, fn) => { const a = document.createElement('a'); a.textContent = label; a.onclick = fn; return a; };
+  const logL = document.createElement('label');
+  const logCb = document.createElement('input'); logCb.type = 'checkbox'; logCb.checked = !!L._histLog;
+  logCb.onchange = () => { L._histLog = logCb.checked; draw(); };
+  logL.append(logCb, ' log');
+  logL.title = 'log-scale the counts — grade distributions bury their ore tail on a linear axis';
   bulk.append(
     nIn,
     mkA('quantiles', () => {
       const n = Math.max(2, Math.min(12, +nIn.value || 5));
       const q = (p2) => quantileFromCentroids(stat.centroids, stat.total, p2);
-      const breaks = [];
-      for (let i = 1; i < n; i++) breaks.push(q(i / n));
+      let breaks = [];
+      const collect = (cents, total) => {
+        const out = [];
+        for (let i = 1; i < n; i++) {
+          const v = quantileFromCentroids(cents, total, i / n);
+          if (Number.isFinite(v) && v > lo && v < hi && (!out.length || v - out[out.length - 1] > span * 1e-4)) out.push(v);
+        }
+        return out;
+      };
+      breaks = collect(stat.centroids, stat.total);
+      if (breaks.length < Math.min(2, n - 1)) {
+        // a dominant value (waste at min grade) collapses the quantiles —
+        // fall back to quantiles of the TAIL above it: breaks within the
+        // mineralized population, which is what a grade legend wants
+        const tail = stat.centroids.filter(([m2]) => m2 > lo + span * 1e-6);
+        const tTotal = tail.reduce((a, c2) => a + c2[1], 0);
+        if (tTotal > 0) breaks = collect(tail, tTotal);
+      }
       setRampCfg(L, { breaks }); renderProps();
     }),
     mkA('equal', () => {
@@ -2932,6 +2960,7 @@ function renderRampSection(body, L) {
       setRampCfg(L, { breaks }); renderProps();
     }),
     mkA('clear', () => { setRampCfg(L, { breaks: [] }); renderProps(); }),
+    logL,
   );
   body.appendChild(bulk);
 }
