@@ -207,6 +207,7 @@ export async function openDrillholes({ collar, survey, intervals }, opts = {}) {
     chanRange: [cLo === Infinity ? 0 : cLo, cHi === -Infinity ? 1 : cHi],
     columns: tIv.columns,
     mapping: { x: -1, y: -1, z: -1, chan, cat: categories ? catCol : null },
+    intervalMapping: m.intervals,                          // resolved bhid/from/to (role badges + joins)
     numericColumns: numericCols,
     categories,
     attributes: [

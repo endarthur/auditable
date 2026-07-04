@@ -244,6 +244,16 @@
   .pp-bulk a { color: var(--muted); cursor: pointer; }
   .pp-bulk a:hover { color: var(--accent); }
   .pp-sec { color: var(--accent); margin: 12px 0 8px; font-size: 11px; letter-spacing: 0.06em; }
+  .pp-col { display: flex; align-items: center; gap: 7px; padding: 4px 2px; border-radius: 2px; cursor: default; }
+  .pp-col:hover { background: #242424; }
+  .pp-col .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pp-col .ty { color: var(--dim); font-size: 11px; white-space: nowrap; }
+  .pp-badge { color: var(--accent); font-size: 10px; border: 1px solid var(--border); border-radius: 2px; padding: 0 4px; }
+  .pp-stats { margin: 2px 0 8px 18px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+  .pp-stats .v { color: var(--text); }
+  .pp-spark { display: block; margin-top: 3px; }
+  .pp-scan { width: 100%; margin: 0 0 10px; background: #242424; border: 1px solid var(--border); color: var(--muted); font: inherit; padding: 4px 8px; cursor: pointer; }
+  .pp-scan:hover { color: var(--accent); border-color: var(--accent); }
   .pp-sec:first-child { margin-top: 0; }
   #recPanel .rp-head {
     display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border);
@@ -337,6 +347,7 @@
 <script type="module">
 import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
+import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -1612,6 +1623,7 @@ function projectManifest() {
       hiddenCats: L.catHidden && L.catHidden.size
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
         : undefined,
+      colTypes: L.colTypes && Object.keys(L.colTypes).length ? L.colTypes : undefined,
     })),
     camera: captureCamera(),
     section: captureSection(),
@@ -1752,6 +1764,7 @@ async function openProjectDir(dir) {
           if (ls.visible === false) { Ld.visible = false; renderer.setLayerVisible(Ld.id, false); }
           if (ls.sectioned === false) renderer.setLayerSectioned(Ld.id, false);
           restoreHiddenCats(Ld, ls.hiddenCats);
+          if (ls.colTypes) { Ld.colTypes = ls.colTypes; applyColTypes(Ld); }
         }
         continue;
       }
@@ -1801,6 +1814,7 @@ async function openProjectDir(dir) {
       if (ls.visible === false) { L.visible = false; renderer.setLayerVisible(L.id, false); }
       if (ls.sectioned === false) renderer.setLayerSectioned(L.id, false);
       restoreHiddenCats(L, ls.hiddenCats);
+      if (ls.colTypes) { L.colTypes = ls.colTypes; applyColTypes(L); }
     }
     applyCamera(mf.camera);
     applySection(mf.section);
@@ -2040,7 +2054,7 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
-<b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept)<br><br>
+<b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column)<br><br>
 <b>meshes</b> — .msh (Leapfrog) / .obj / .ply-with-faces open as context layers: scenery, not records (no pick, no filter — clicks pass through to the data behind)<br>
 right-click the layer → <b>Tint…</b> / <b>Opacity…</b> · sections cut meshes per-pixel — front/behind give the classic sectioned-solid view<br><br>
 <b>filter</b> (block models) — lamina's language over every column in the file:<br>
@@ -2659,7 +2673,7 @@ function renderProps() {
   $('#ppTitle').textContent = L.label || L.name;
   $('#ppSub').textContent = propKindLine(L);
   const tabs = $('#ppTabs'); tabs.textContent = '';
-  for (const t of ['style', 'classes']) {
+  for (const t of ['style', 'classes', 'columns']) {
     const b = document.createElement('button');
     b.className = 'pp-tab' + (t === _propTab ? ' active' : '');
     b.textContent = t;
@@ -2668,6 +2682,7 @@ function renderProps() {
   }
   const body = $('#ppBody'); body.textContent = '';
   if (_propTab === 'classes') renderClassesTab(body, L);
+  else if (_propTab === 'columns') renderColumnsTab(body, L);
   else renderStyleTab(body, L);
 }
 const mkRow = (label, ...ctrls) => {
@@ -2746,7 +2761,7 @@ function layerClassInfo(L) {
       kind: 'dict', names: h.categories, codes: h.categories.map((_, i) => i),
       colorAt: (c) => `rgb(${px[c * 4]},${px[c * 4 + 1]},${px[c * 4 + 2]})`,
       column: h.columns && h.mapping && h.mapping.cat != null ? h.columns[h.mapping.cat] : 'category',
-      countable: !!(d.dhDoc || (d.blockDoc && !d.blockDoc.header.dm)),
+      countable: !!(d.dhDoc || d.blockDoc),
     };
   }
   if (d.lasDoc) {
@@ -2788,6 +2803,18 @@ async function ensureCatCounts(L, info) {
       const f = dh.fetchRecord(i);
       const c = code.get(String(f[ci]).trim());
       if (c != null) { counts.set(c, (counts.get(c) || 0) + 1); total++; }
+    }
+  } else if (d.blockDoc && d.blockDoc.header.dm) {
+    const m = d.blockDoc.header.mapping;
+    const code = new Map(info.names.map((n, i) => [n, i]));
+    const { recordBatches } = await openDmModel(d.blockDoc.blob);
+    for await (const { rows } of recordBatches()) {
+      for (const f of rows) {
+        if (!Number.isFinite(+f[m.x]) || !Number.isFinite(+f[m.y]) || !Number.isFinite(+f[m.z])) continue;
+        const c = code.get(String(f[m.cat]).trim());
+        if (c != null) counts.set(c, (counts.get(c) || 0) + 1);
+        total++;
+      }
     }
   } else if (d.blockDoc) {
     const { blob, header } = d.blockDoc;
@@ -2852,6 +2879,216 @@ function renderClassesTab(body, L) {
       }
     });
   }
+}
+// ── the columns tab: per-column types (with real consumers — the filter's
+// schema, color-by eligibility, the category column) + streaming stats on
+// request: ONE pass, ALL columns, @gcu/sluice accumulators (welford + t-digest
+// for numerics, topK/cardinality for text). The t-digest centroids double as
+// the sparkline — and later feed the style tab's breakpoints editor. ──
+function layerTableHeader(L) {
+  const d = L.docs || {};
+  const h = (d.blockDoc || d.dhDoc || {}).header;
+  return h && h.columns ? h : null;
+}
+function colIsNumeric(L, h, i) {
+  const ov = L.colTypes && L.colTypes[h.columns[i]];
+  if (ov) return ov === 'number';
+  const m = h.mapping || {};
+  if (i === m.x || i === m.y || i === m.z) return true;
+  return (h.numericColumns || []).some((c) => c.i === i);
+}
+function colRole(h, i) {
+  const m = h.mapping || {}, im = h.intervalMapping || {};
+  if (i === m.x) return 'X'; if (i === m.y) return 'Y'; if (i === m.z) return 'Z';
+  if (i === im.bhid) return 'hole id'; if (i === im.from) return 'FROM'; if (i === im.to) return 'TO';
+  if (i === m.chan) return 'color'; if (i === m.cat) return 'category';
+  return null;
+}
+// type override = a MUTATION of the layer's derived schema, so every consumer
+// (filter schema, color-by options) agrees without new plumbing
+function setColType(L, i, ty) {
+  const h = layerTableHeader(L); if (!h) return;
+  const name = h.columns[i];
+  L.colTypes = L.colTypes || {};
+  L.colTypes[name] = ty;
+  const at = (h.numericColumns || (h.numericColumns = [])).findIndex((c) => c.i === i);
+  if (ty === 'number' && at < 0) { h.numericColumns.push({ i, name }); h.numericColumns.sort((a, b) => a.i - b.i); }
+  if (ty === 'string' && at >= 0) h.numericColumns.splice(at, 1);
+  L._colStats = null;                                      // the kind changed — stale
+  if (L.id === _activeId) { const keep = $('#colorBy').value; setColorLabels(h); if ([...$('#colorBy').options].some((o) => o.value === keep)) $('#colorBy').value = keep; }
+  markProjectDirty();
+  renderProps();
+}
+function applyColTypes(L) {
+  const h = layerTableHeader(L); if (!h || !L.colTypes) return;
+  for (const [name, ty] of Object.entries(L.colTypes)) {
+    const i = h.columns.indexOf(name); if (i < 0) continue;
+    const at = (h.numericColumns || (h.numericColumns = [])).findIndex((c) => c.i === i);
+    if (ty === 'number' && at < 0) h.numericColumns.push({ i, name });
+    if (ty === 'string' && at >= 0) h.numericColumns.splice(at, 1);
+  }
+  h.numericColumns.sort((a, b) => a.i - b.i);
+}
+// one streamed pass of decoded field arrays over the layer's table — the same
+// three sources the filter sweeps (dh in-memory, .dm pages, delimited lines)
+async function* layerRows(L, onProgress) {
+  const d = L.docs;
+  if (d.dhDoc) {
+    const dh = d.dhDoc, rows = [];
+    for (let i = 0; i < dh.header.count; i++) rows.push(dh.fetchRecord(i));
+    yield rows;
+  } else if (d.blockDoc && d.blockDoc.header.dm) {
+    const { recordBatches } = await openDmModel(d.blockDoc.blob);
+    let done = 0;
+    for await (const { rows } of recordBatches()) {
+      yield rows;
+      done += rows.length;
+      if (onProgress) onProgress(done, d.blockDoc.header.count);
+    }
+  } else if (d.blockDoc) {
+    const { blob, header } = d.blockDoc;
+    let done = 0;
+    for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow !== undefined ? header.hasHeaderRow : !!header.columns)) {
+      yield batch;
+      done += batch.length;
+      if (onProgress) onProgress(done, header.count);
+    }
+  }
+}
+async function scanColumns(L, onTick) {
+  const h = layerTableHeader(L); if (!h) return null;
+  const cols = h.columns;
+  const W = welford(), TD = tdigest(), TK = topK({ limit: 500 }), CD = cardinality({ limit: 4096 });
+  const st = cols.map((name, i) => (colIsNumeric(L, h, i)
+    ? { num: true, w: W.create(), td: TD.create(), nulls: 0 }
+    : { num: false, top: TK.create(), card: CD.create(), nulls: 0 }));
+  let rows = 0;
+  for await (const batch of layerRows(L, onTick ? (a, b) => onTick(a, b) : null)) {
+    for (const f of batch) {
+      rows++;
+      for (let i = 0; i < cols.length; i++) {
+        const c = st[i], v = f[i];
+        if (c.num) {
+          const x = typeof v === 'number' ? v : parseFloat(v);
+          if (!Number.isFinite(x)) { c.nulls++; continue; }
+          W.push(c.w, x); TD.push(c.td, x);
+        } else {
+          const sv = v == null ? '' : String(v).trim();
+          if (!sv) { c.nulls++; continue; }
+          TK.push(c.top, sv); CD.push(c.card, sv);
+        }
+      }
+    }
+    await new Promise((r) => setTimeout(r));               // the panel stays live
+  }
+  L._colStats = {};
+  for (let i = 0; i < cols.length; i++) {
+    const c = st[i];
+    if (c.num) {
+      const w = W.result(c.w), td = TD.result(c.td);
+      const q = (p) => quantileFromCentroids(td.centroids, td.count, p);
+      L._colStats[cols[i]] = { kind: 'num', n: w.count, nulls: c.nulls, mean: w.mean, std: w.std, min: w.min, max: w.max, p25: q(0.25), p50: q(0.5), p75: q(0.75), centroids: td.centroids, total: td.count };
+    } else {
+      const t = TK.result(c.top);
+      L._colStats[cols[i]] = { kind: 'txt', n: rows - c.nulls, nulls: c.nulls, distinct: t.distinct, overflow: t.overflow, top: t.top(5) };
+    }
+  }
+  return L._colStats;
+}
+function sparkline(centroids, total, min, max) {
+  const c = document.createElement('canvas'); c.width = 120; c.height = 18; c.className = 'pp-spark';
+  const g = c.getContext('2d');
+  const N = 24, bins = new Float64Array(N);
+  const span = max > min ? max - min : 1;
+  for (const [mean, n] of centroids) bins[Math.min(N - 1, Math.max(0, Math.floor(((mean - min) / span) * N)))] += n;
+  let peak = 0; for (let b = 0; b < N; b++) if (bins[b] > peak) peak = bins[b];
+  g.fillStyle = '#c89b3c';
+  for (let b = 0; b < N; b++) { const hp = peak ? Math.round((16 * bins[b]) / peak) : 0; if (hp) g.fillRect(b * 5, 17 - hp, 4, hp); }
+  return c;
+}
+const fmtStat = (v) => (v == null || !Number.isFinite(v) ? '–' : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString() : +v.toFixed(Math.abs(v) < 1 ? 4 : 2) + '');
+function renderColumnsTab(body, L) {
+  const h = layerTableHeader(L);
+  if (!h) {
+    body.appendChild(ppNote(L.kind === 'mesh' ? 'meshes carry no table — columns arrive with mesh records (OBJ groups)' : 'no column table in this layer (LAS/PLY attributes arrive later)'));
+    return;
+  }
+  const scan = document.createElement('button'); scan.className = 'pp-scan';
+  scan.textContent = L._colStats ? 'rescan columns' : 'scan columns — one pass, every column';
+  scan.onclick = async () => {
+    scan.disabled = true;
+    try {
+      await scanColumns(L, (a, b2) => { scan.textContent = `scanning… ${b2 ? Math.min(100, Math.round((100 * a) / b2)) : a.toLocaleString()}%`; });
+      renderProps();
+    } catch (e) { scan.textContent = `scan failed — ${e.message}`; scan.disabled = false; }
+  };
+  body.appendChild(scan);
+  for (let i = 0; i < h.columns.length; i++) {
+    const name = h.columns[i];
+    const row = document.createElement('div'); row.className = 'pp-col';
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = name; nm.title = name;
+    const ty = document.createElement('span'); ty.className = 'ty'; ty.textContent = colIsNumeric(L, h, i) ? 'number' : 'text';
+    row.append(nm, ty);
+    const role = colRole(h, i);
+    if (role) { const b2 = document.createElement('span'); b2.className = 'pp-badge'; b2.textContent = role; row.appendChild(b2); }
+    row.oncontextmenu = (e) => {
+      e.preventDefault();
+      const isNum = colIsNumeric(L, h, i);
+      const m = h.mapping || {};
+      const spatial = i === m.x || i === m.y || i === m.z;
+      menuXY(e.clientX, e.clientY, [
+        { label: (isNum ? '✓ ' : '') + 'Number', action: () => { if (!isNum && !spatial) setColType(L, i, 'number'); } },
+        { label: (!isNum ? '✓ ' : '') + 'Text', action: () => { if (isNum && !spatial) setColType(L, i, 'string'); } },
+        ...(spatial ? [] : [
+          { sep: true },
+          ...(isNum && L.docs.blockDoc ? [{ label: 'Use as color channel', action: () => { const v = `chan:${i}`; if ([...$('#colorBy').options].some((o) => o.value === v)) { $('#colorBy').value = v; $('#colorBy').dispatchEvent(new Event('change')); } } }] : []),
+          ...(L.docs.blockDoc && !L.docs.blockDoc.header.dm && i !== m.cat ? [{ label: 'Use as category', action: () => useAsCategory(L, i) }] : []),
+          ...(L.dh && L.docs.dhDoc && i !== m.cat ? [{ label: 'Use as category', action: () => useAsCategory(L, i) }] : []),
+        ]),
+      ]);
+    };
+    body.appendChild(row);
+    const stat = L._colStats && L._colStats[name];
+    if (stat) {
+      const d = document.createElement('div'); d.className = 'pp-stats';
+      if (stat.kind === 'num') {
+        d.innerHTML = `n <span class="v">${stat.n.toLocaleString()}</span> · nulls <span class="v">${stat.nulls.toLocaleString()}</span><br>`
+          + `mean <span class="v">${fmtStat(stat.mean)}</span> · std <span class="v">${fmtStat(stat.std)}</span><br>`
+          + `<span class="v">${fmtStat(stat.min)}</span> · p25 <span class="v">${fmtStat(stat.p25)}</span> · p50 <span class="v">${fmtStat(stat.p50)}</span> · p75 <span class="v">${fmtStat(stat.p75)}</span> · <span class="v">${fmtStat(stat.max)}</span>`;
+        if (stat.centroids && stat.centroids.length && stat.max > stat.min) d.appendChild(sparkline(stat.centroids, stat.total, stat.min, stat.max));
+      } else {
+        const top = stat.top.map(([v, n]) => `${v} <span class="v">${Math.round((100 * n) / (stat.n || 1))}%</span>`).join(' · ');
+        d.innerHTML = `n <span class="v">${stat.n.toLocaleString()}</span> · distinct <span class="v">${stat.distinct}${stat.overflow ? '+' : ''}</span> · nulls <span class="v">${stat.nulls.toLocaleString()}</span><br>${top}`;
+      }
+      body.appendChild(d);
+    }
+  }
+  body.appendChild(ppNote('right-click a column: type (number/text — drives the filter and color-by) · use as category / color channel'));
+}
+// re-key the class column: the same re-open machinery as re-channeling
+async function useAsCategory(L, i) {
+  if (L.dh && L.docs.dhDoc) {
+    const dh = L.docs.dhDoc;
+    const files = dh.blobs, cfg = { ...dh.config, cat: i };
+    const keepLabel = L.label, keepTypes = L.colTypes;
+    renderer.removeLayer(L.id);
+    _layers = _layers.filter((l) => l.id !== L.id);
+    await openDrillholeLayer(files, cfg, 'add');
+    const L2 = activeLayer();
+    if (L2) { L2.label = keepLabel; L2.colTypes = keepTypes; applyColTypes(L2); }
+    renderLayers(); if (_propOpen) { _propFor = null; renderProps(); }
+    return;
+  }
+  const doc = L.docs.blockDoc; if (!doc) return;
+  const m = doc.header.mapping;
+  await openBlocksBlob(doc.blob, doc.name, {
+    layer: L.id, first: false, forcePoints: doc.forcePoints,
+    mapping: { x: m.x, y: m.y, z: m.z, chan: m.chan, cat: i },
+  });
+  const L2 = layerById(L.id);
+  if (L2) { L2.colTypes = L.colTypes; applyColTypes(L2); L2.catHidden = null; renderer.setLayerCatVisibility(L2.id, null); }
+  markProjectDirty();
+  if (_propOpen) { _propFor = null; renderProps(); }
 }
 function renderLayers() {
   const rows = $('#lpRows'); if (!rows) return;
