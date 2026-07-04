@@ -157,6 +157,9 @@
   }
   #lpRows .lp-row:hover { background: #242424; }
   #lpRows .lp-row.active { border-left-color: var(--accent); background: #202020; }
+  #lpRows .lp-row.dim .lp-name, #lpRows .lp-row.dim .lp-n { opacity: 0.45; }
+  #lpRows .lp-group .lp-name { color: var(--text-hi); }
+  #lpRows .lp-caret { color: var(--dim); cursor: pointer; width: 11px; flex: 0 0 auto; }
   #lpRows .lp-row input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
   #lpRows .lp-row .lp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #lpRows .lp-row.off .lp-name { color: var(--dim); }
@@ -172,26 +175,26 @@
   #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: calc(var(--recw, 280px) + 12px); }
   #propPanel.show ~ #compass.se, #propPanel.show ~ #compass.ne { right: calc(var(--ppw, 272px) + 12px); }
   #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: calc(var(--lpw, 224px) + 12px); }
-  #dhDlg, #ofDlg, #exDlg, #sbDlg, #svDlg, #plDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
-  #dhDlg.show, #ofDlg.show, #exDlg.show, #sbDlg.show, #svDlg.show, #plDlg.show { display: flex; }
-  #exDlg .box, #sbDlg .box, #svDlg .box, #plDlg .box { width: 480px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
-  #exDlg .hd, #sbDlg .hd, #svDlg .hd, #plDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
-  #exDlg .hd button, #sbDlg .hd button, #svDlg .hd button, #plDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
-  #exDlg .bd, #sbDlg .bd, #svDlg .bd, #plDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
-  #exDlg .ex-row, #sbDlg .ex-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-  #exDlg .ex-row > b, #sbDlg .ex-row > b { color: var(--text-hi); width: 66px; font-weight: normal; flex: 0 0 auto; }
-  #exDlg .ex-row label, #sbDlg .ex-row label { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
-  #exDlg .ex-row label.dis, #sbDlg .ex-row label.dis { opacity: 0.45; }
-  #exDlg select, #exDlg input[type="text"], #sbDlg select, #sbDlg input[type="text"] { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
+  #dhDlg, #ofDlg, #exDlg, #sbDlg, #svDlg, #plDlg, #adDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
+  #dhDlg.show, #ofDlg.show, #exDlg.show, #sbDlg.show, #svDlg.show, #plDlg.show, #adDlg.show { display: flex; }
+  #exDlg .box, #sbDlg .box, #svDlg .box, #plDlg .box, #adDlg .box { width: 480px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #exDlg .hd, #sbDlg .hd, #svDlg .hd, #plDlg .hd, #adDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #exDlg .hd button, #sbDlg .hd button, #svDlg .hd button, #plDlg .hd button, #adDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #exDlg .bd, #sbDlg .bd, #svDlg .bd, #plDlg .bd, #adDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  #exDlg .ex-row, #sbDlg .ex-row, #adDlg .ex-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  #exDlg .ex-row > b, #sbDlg .ex-row > b, #adDlg .ex-row > b { color: var(--text-hi); width: 66px; font-weight: normal; flex: 0 0 auto; }
+  #exDlg .ex-row label, #sbDlg .ex-row label, #adDlg .ex-row label { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+  #exDlg .ex-row label.dis, #sbDlg .ex-row label.dis, #adDlg .ex-row label.dis, #adDlg label.dis { opacity: 0.45; }
+  #exDlg select, #exDlg input[type="text"], #sbDlg select, #sbDlg input[type="text"], #adDlg select, #adDlg input[type="text"] { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
   #exDlg input[type="text"], #sbDlg input[type="text"] { flex: 1; min-width: 120px; }
   #exDlg .ex-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; margin: 4px 0 10px 76px; max-height: 180px; overflow-y: auto; }
   #exDlg .ex-cols label { color: var(--muted); display: flex; align-items: center; gap: 5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   #exDlg .ex-cols .bdg { color: var(--accent); flex: 0 0 auto; font-size: 11px; }
   #exDlg .ex-links { margin-left: 76px; margin-bottom: 4px; }
   #exDlg .ex-links a { color: var(--accent); cursor: pointer; margin-right: 12px; }
-  #exDlg .dh-foot, #sbDlg .dh-foot, #svDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
-  #exDlg .dh-foot #exDlgMsg, #sbDlg .dh-foot #sbDlgMsg { color: var(--muted); font-family: var(--mono); font-size: 12px; }
-  #exDlg .dh-foot button, #sbDlg .dh-foot button, #svDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
+  #exDlg .dh-foot, #sbDlg .dh-foot, #svDlg .dh-foot, #adDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
+  #exDlg .dh-foot #exDlgMsg, #sbDlg .dh-foot #sbDlgMsg, #adDlg .dh-foot #adDlgMsg { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  #exDlg .dh-foot button, #sbDlg .dh-foot button, #svDlg .dh-foot button, #adDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
   #svDlg #svLink { border-color: var(--bd2); color: var(--text); }
   .pl-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
   .pl-row .nm { flex: 0 0 auto; color: var(--text-hi); max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -201,9 +204,9 @@
   .sv-row { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; }
   .sv-row .nm { flex: 1; color: var(--text-hi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sv-row .sz { color: var(--muted); }
-  #sbProg { height: 3px; background: #242424; margin: 0 16px; border-radius: 2px; overflow: hidden; }
-  #sbProgFill { height: 100%; width: 0%; background: var(--accent); transition: width 0.15s linear; }
-  #exDlg .dh-foot button:disabled, #sbDlg .dh-foot button:disabled { opacity: 0.5; cursor: default; }
+  #sbProg, #adProg { height: 3px; background: #242424; margin: 0 16px; border-radius: 2px; overflow: hidden; }
+  #sbProgFill, #adProgFill { height: 100%; width: 0%; background: var(--accent); transition: width 0.15s linear; }
+  #exDlg .dh-foot button:disabled, #sbDlg .dh-foot button:disabled, #adDlg .dh-foot button:disabled { opacity: 0.5; cursor: default; }
   #ofDlg .box { width: 620px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
   #ofDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #ofDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
@@ -451,6 +454,7 @@
   <div id="svDlg"><div class="box"><div class="hd"><span>save project</span><button id="svCancel">×</button></div><div class="bd" id="svDlgBody"></div><div class="dh-foot"><button id="svLink">Link without copying</button><button id="svCopy">Copy into project</button></div></div></div>
   <div id="plDlg"><div class="box"><div class="hd"><span>opening project</span><button id="plClose">×</button></div><div class="bd" id="plDlgBody"></div></div></div>
   <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
+  <div id="adDlg"><div class="box"><div class="hd"><span>assign domains</span><button id="adCancel">×</button></div><div class="bd" id="adDlgBody"></div><div id="adProg" style="display:none"><div id="adProgFill"></div></div><div class="dh-foot"><span id="adDlgMsg"></span><button id="adGo">Assign</button></div></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
     <circle cx="37" cy="37" r="33" fill="rgba(18,18,18,0.55)" stroke="#4a4a4a" stroke-width="2"/>
     <rect x="35.5" y="0" width="3" height="7" fill="#4a4a4a"/>
@@ -1830,7 +1834,153 @@ async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside'
   markProjectDirty(); requestRender();
   return made;
 }
-// ── the select-by-solid dialog ──// ── the select-by-solid dialog ──
+// ── ASSIGN DOMAINS (§7.2's payoff): one proportion field per solid, ONE
+// categorical column — each block goes to the solid holding its largest
+// fraction (ties → the earlier solid; nothing claims → unpainted). The
+// vendor-file → coded-model loop in a single run; painted-column storage,
+// so the result is brush-editable afterwards. ──
+async function assignDomains(solids, L, { name = 'DOMAIN', res = [2, 2, 2], onProgress = null } = {}) {
+  const doc = L.docs.blockDoc;
+  const grid = doc && (doc.grid || (doc.header && doc.header.grid));
+  if (!grid || !grid.size) { $('#meta').textContent = 'assign domains: needs a regular block model'; return null; }
+  const resolution = Array.isArray(res) ? res.map((v) => Math.max(1, v | 0)) : [res, res, res];
+  const epoch = ++_ratioEpoch;
+  const fields = [];
+  for (let k = 0; k < solids.length; k++) {
+    const meshL = solids[k];
+    $('#meta').textContent = `assign domains: ${meshL.label || meshL.name}…`;
+    let dense = null;
+    try {
+      dense = await evalSolidOnGrid(meshL, L, {
+        mode: 'proportion', resolution, variant: 'solid',
+        onProgress: (f) => { if (onProgress) onProgress((k + f) / (solids.length + 0.3), meshL.label || meshL.name); },
+      });
+    } catch (e) { if (e.message === 'cancelled') return null; }
+    if (epoch !== _ratioEpoch) return null;
+    fields.push(dense);                                    // null = unreadable mesh → claims nothing
+  }
+  const col = createPaintCol(L, name);
+  if (!col) return null;
+  const codeOf = solids.map((meshL) => addPaintValue(L, col, (meshL.label || meshL.name).replace(/\.[^.]+$/, '')));
+  const n = attrRowCountOf(L);
+  const codes = col.codes;
+  let done = 0, assigned = 0;
+  for await (const ch of layerPositions(L)) {
+    if (epoch !== _ratioEpoch) return null;
+    for (let i = 0; i < ch.count; i++) {
+      let best = 0, bi = -1;
+      for (let k = 0; k < fields.length; k++) {
+        if (!fields[k]) continue;
+        const p2 = fields[k].lookup(ch.x[i], ch.y[i], ch.z[i]);
+        if (p2 > best) { best = p2; bi = k; }
+      }
+      if (bi < 0) continue;
+      const r = ch.recs ? (ch.recs[i] & 0x1FFFFFFF) : ch.base + i;
+      if (r < n) { codes[r] = codeOf[bi]; assigned++; }
+    }
+    done += ch.count;
+    if (onProgress) onProgress((solids.length + 0.3 * Math.min(1, done / n)) / (solids.length + 0.3), 'assigning');
+    $('#meta').textContent = `assign domains: assigning ${done.toLocaleString()}…`;
+    await new Promise((r2) => setTimeout(r2));
+  }
+  paintRecount(col);
+  L._colStats = null;
+  addPaintColorOptions(L);
+  setLayerColorSel(L, 'paint:' + col.name);
+  const t2 = _attrTables.get(L.id); if (t2 && t2.invalidate) t2.invalidate();
+  $('#meta').textContent = `assign domains: ${assigned.toLocaleString()} of ${n.toLocaleString()} claimed by ${solids.length} solids → ${name}`;
+  markProjectDirty(); requestRender();
+  return col;
+}
+// ── the assign-domains dialog ──
+let _adDlg = null;
+function openDomainsDialog() {
+  const solids = _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
+  if (!solids.length) { $('#meta').textContent = 'assign domains: open the domain solids first (context-tier meshes)'; return; }
+  const grids = _layers.filter((L) => { const doc = L.docs.blockDoc; return doc && (doc.grid || (doc.header && doc.header.grid)); });
+  if (!grids.length) { $('#meta').textContent = 'assign domains: needs a regular block model layer'; return; }
+  _adDlg = {
+    picks: new Set(solids.map((L) => L.id)),
+    lid: grids[0].id, name: 'DOMAIN', res: [2, 2, 2],
+  };
+  renderDomainsDialog();
+  $('#adDlg').classList.add('show');
+  // topology reads label each row honestly (open sheets claim nothing)
+  for (const L of solids) if (!L._solidMesh) solidOrientedMesh(L).then(() => { if (_adDlg) renderDomainsDialog(); });
+}
+function renderDomainsDialog() {
+  const d = _adDlg; if (!d) return;
+  const body = $('#adDlgBody');
+  body.textContent = '';
+  const mkRow2 = (label, ...els) => {
+    const row = document.createElement('div'); row.className = 'ex-row';
+    const b2 = document.createElement('b'); b2.textContent = label;
+    row.append(b2, ...els);
+    body.appendChild(row);
+    return row;
+  };
+  const solids = _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
+  const sRow = mkRow2('solids');
+  sRow.style.alignItems = 'flex-start';
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+  for (const L of solids) {
+    const lab = document.createElement('label');
+    const cb2 = document.createElement('input'); cb2.type = 'checkbox'; cb2.checked = d.picks.has(L.id);
+    cb2.onchange = () => { if (cb2.checked) d.picks.add(L.id); else d.picks.delete(L.id); };
+    const open = L._solidMesh && !L._solidMesh.closed;
+    lab.append(cb2, ` ${L.label || L.name}${open ? ' — open surface, claims nothing' : ''}`);
+    if (open) lab.className = 'dis';
+    list.appendChild(lab);
+  }
+  sRow.appendChild(list);
+  const grids = _layers.filter((L) => { const doc = L.docs.blockDoc; return doc && (doc.grid || (doc.header && doc.header.grid)); });
+  const gSel = document.createElement('select');
+  for (const L of grids) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; gSel.appendChild(o); }
+  gSel.value = String(d.lid);
+  gSel.onchange = () => { d.lid = +gSel.value; };
+  mkRow2('model', gSel);
+  const nameIn = document.createElement('input'); nameIn.type = 'text'; nameIn.value = d.name;
+  nameIn.onchange = () => { d.name = nameIn.value.trim() || 'DOMAIN'; };
+  mkRow2('column', nameIn);
+  const ins = ['x', 'y', 'z'].map((ax, k) => {
+    const inp = document.createElement('input'); inp.type = 'number'; inp.min = '1'; inp.value = String(d.res[k]);
+    inp.style.width = '44px';
+    inp.oninput = () => { d.res[k] = Math.max(1, +inp.value || 1); };
+    return inp;
+  });
+  const x2 = () => { const sp = document.createElement('span'); sp.style.color = 'var(--muted)'; sp.textContent = '×'; return sp; };
+  mkRow2('probes', ins[0], x2(), ins[1], x2(), ins[2]);
+  body.appendChild(ppNote('each block goes to the solid holding its LARGEST fraction — edge blocks land with their dominant domain; unclaimed stay unpainted (brush-editable after)'));
+  $('#adDlgMsg').textContent = '';
+}
+function adProgress(frac, label) {
+  $('#adDlgMsg').textContent = label ? `${label} — ${Math.round(frac * 100)}%` : '';
+  const bar = $('#adProg');
+  bar.style.display = frac > 0 && frac < 1 ? '' : 'none';
+  $('#adProgFill').style.width = `${Math.round(frac * 100)}%`;
+}
+$('#adCancel').onclick = () => { sbCancelActive(); $('#adDlg').classList.remove('show'); _adDlg = null; };
+$('#adGo').onclick = async () => {
+  const d = _adDlg; if (!d) return;
+  const solids = _layers.filter((L) => d.picks.has(L.id));
+  const L = layerById(d.lid);
+  if (!solids.length || !L) { $('#adDlgMsg').textContent = 'pick at least one solid'; return; }
+  const btn = $('#adGo');
+  btn.disabled = true;
+  for (const el of $('#adDlgBody').querySelectorAll('input, select')) el.disabled = true;
+  adProgress(0.001, 'starting');
+  try {
+    const col = await assignDomains(solids, L, { name: d.name, res: d.res, onProgress: adProgress });
+    if (!col) { adProgress(0, ''); $('#adDlgMsg').textContent = $('#meta').textContent; return; }
+    $('#adDlg').classList.remove('show'); _adDlg = null;
+  } finally {
+    btn.disabled = false;
+    for (const el of $('#adDlgBody').querySelectorAll('input, select')) el.disabled = false;
+    adProgress(0, '');
+  }
+};
+// ── the select-by-solid dialog ──
 let _sbDlg = null;
 function openSolidDialog(meshL0) {
   const solids = _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
@@ -2095,7 +2245,14 @@ let _layers = [];
 let _activeId = 0;
 const layerById = (id) => _layers.find((l) => l.id === id) || null;
 const activeLayer = () => layerById(_activeId);
-const allocLayerId = () => { for (let i = 0; i <= 6; i++) if (!layerById(i)) return i; return null; };
+const allocLayerId = (pool) => {
+  // element layers live in the recIdx partition (3 bits → ids 0..6 with the
+  // status quo cap); MESH layers never join it (no records, no pick-by-row),
+  // so they draw from 8.. — a 12-domain solids file doesn't starve the model
+  if (pool === 'mesh') { for (let i = 8; i <= 31; i++) if (!layerById(i)) return i; return null; }
+  for (let i = 0; i <= 6; i++) if (!layerById(i)) return i;
+  return null;
+};
 function closeAllLayers() {
   for (const [lid] of _attrTables) closeAttrTable(lid);
   renderer.clearChunks(); renderer.setPicked(null);
@@ -2137,8 +2294,9 @@ async function openBlobs(files, mode = 'replace', at = null) {
 }
 async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   if (mode !== 'add') closeAllLayers();
-  const lid = allocLayerId();
-  if (lid == null) { $('#meta').textContent = 'layer limit reached (7) — remove one first'; return; }
+  const isMesh = /\.(msh|obj)$/i.test(name) || (/\.ply$/i.test(name) && !over.forcePoints && await plyHasFaces(blob));
+  const lid = allocLayerId(isMesh ? 'mesh' : 'element');
+  if (lid == null) { $('#meta').textContent = isMesh ? 'mesh layer limit reached — remove one first' : 'layer limit reached (7 element layers) — remove one first'; return; }
   const first = _layers.length === 0;
   _layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: (typeof File !== 'undefined' && blob instanceof File && _fileHandles.get(blob)) || null, storage: 'loose' });
   _activeId = lid;
@@ -2147,7 +2305,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   $('#empty').style.display = 'none';
   try {
     if (/\.(msh|obj)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
-    else if (/\.ply$/i.test(name) && !over.forcePoints && await plyHasFaces(blob)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
+    else if (/\.ply$/i.test(name) && isMesh) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
     else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
     // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
     // so grid inference must not promote them to boxes.
@@ -2219,6 +2377,43 @@ async function plyFaceCount(blob) {
 }
 const plyHasFaces = async (blob) => (await plyFaceCount(blob)) > 0;
 function hexToRgb01(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; }
+// split a multi-object OBJ into per-group mesh layers, landed in a collapsed
+// layer GROUP (§7.2). Vertex indices are global in OBJ, so each part = the
+// shared non-face lines + that group's faces — every layer keeps a REAL blob
+// (projects copy it; winding re-parses it) at the cost of duplicated v-lines.
+async function openObjSplit(blob, name, mode) {
+  const text = await blob.text();
+  const shared = [];
+  const parts = new Map();                                 // group → face lines
+  let cur = null;
+  for (const ln of text.split(/\r?\n/)) {
+    const t = ln.trim();
+    if (/^[go]\s/.test(t)) { cur = t.replace(/^[go]\s+/, '').trim() || 'group'; continue; }
+    if (/^f[\s]/.test(t)) {
+      const g = cur === null ? 'default' : cur;
+      let arr = parts.get(g); if (!arr) parts.set(g, arr = []);
+      arr.push(ln);
+    } else if (t && !/^usemtl|^mtllib|^s\s/.test(t)) shared.push(ln);
+  }
+  const base = name.replace(/\.obj$/i, '');
+  const head = shared.join('\n') + '\n';
+  const ids = [];
+  let first = mode !== 'add';
+  let skipped = 0;
+  for (const [gname, faces] of parts) {
+    const gblob = new Blob([head + faces.join('\n') + '\n']);
+    const before = _layers.length;
+    await openBlob(gblob, `${base} · ${gname}.obj`, first ? 'replace' : 'add');
+    first = false;
+    if (_layers.length > before || (before && mode !== 'add' && _layers.length === 1)) {
+      const L = activeLayer();
+      if (L && !ids.includes(L.id)) ids.push(L.id); else skipped++;
+    } else skipped++;
+  }
+  if (ids.length > 1) createLayerGroup(name, ids, { collapsed: false });
+  $('#meta').textContent = `${name} — split into ${ids.length} solids${skipped ? ` (${skipped} skipped — mesh layer limit)` : ''}`;
+  return ids;
+}
 async function openMeshDoc(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : _activeId;
   $('#meta').textContent = `${name} — reading mesh…`;
@@ -2364,7 +2559,25 @@ async function describeFile(f) {
     } else if (/\.msh$/i.test(name)) {
       d.kind = 'mesh'; d.desc = 'Leapfrog mesh (.msh)';
     } else if (/\.obj$/i.test(name)) {
-      d.kind = 'mesh'; d.desc = 'Wavefront mesh (.obj)';
+      d.kind = 'mesh';
+      // group census (full read — context meshes are small): only groups that
+      // actually own faces count; vertex indices are GLOBAL, so a split is
+      // shared v-lines + each group's f-lines
+      const text = await f.text();
+      const groups = []; const seen = new Set();
+      let cur = null, curHasFaces = false;
+      for (const ln of text.split(/\r?\n/)) {
+        const t = ln.trim();
+        if (/^[go]\s/.test(t)) { cur = t.replace(/^[go]\s+/, '').trim() || 'group'; curHasFaces = false; }
+        else if (/^f[\s]/.test(t)) {
+          if (cur === null) { cur = 'default'; }
+          if (!curHasFaces && !seen.has(cur)) { groups.push(cur); seen.add(cur); }
+          curHasFaces = true;
+        }
+      }
+      d.objGroups = groups;
+      d.split = groups.length > 1;                         // default: split (a group keeps it tidy)
+      d.desc = 'Wavefront mesh (.obj)' + (groups.length > 1 ? ` · ${groups.length} objects` : '');
     } else if (/\.dm$/i.test(name)) {
       d.kind = 'dm'; d.desc = 'Datamine .dm block model';
     } else {
@@ -2394,6 +2607,15 @@ function renderOfDialog() {
   const body = $('#ofDlgBody');
   body.textContent = '';
   const dhBlobs = _ofDlg.dh && _ofDlg.dhOn ? new Set([_ofDlg.dh.collar.blob, _ofDlg.dh.survey.blob, _ofDlg.dh.intervals.blob]) : new Set();
+  const mkSplitToggle = (r) => {
+    if (!r.objGroups || r.objGroups.length < 2) return null;
+    const lab = document.createElement('label');
+    const cb2 = document.createElement('input'); cb2.type = 'checkbox'; cb2.checked = r.split !== false;
+    cb2.onchange = () => { r.split = cb2.checked; };
+    lab.append(cb2, ` split into ${r.objGroups.length} solids (as a group)`);
+    lab.title = r.objGroups.join(' · ');
+    return lab;
+  };
   for (const r of _ofDlg.rows) {
     const inDh = dhBlobs.has(r.file);
     const row = document.createElement('div'); row.className = 'dh-row' + (inDh ? ' of-dh' : '');
@@ -2442,6 +2664,7 @@ function renderOfDialog() {
       maps.appendChild(fp);
       row.appendChild(maps);
     }
+    { const st2 = mkSplitToggle(r); if (st2) { const w2 = document.createElement('div'); w2.className = 'dh-maps'; w2.appendChild(st2); row.appendChild(w2); } }
     body.appendChild(row);
   }
   if (_ofDlg.dh) {
@@ -2477,7 +2700,9 @@ $('#ofOpen').onclick = async () => {
     const over = {};
     if (r.mapping && r.kind === 'delimited') over.mapping = { x: r.mapping.x ?? 0, y: r.mapping.y ?? 1, z: r.mapping.z ?? 2, chan: r.mapping.chan ?? null, cat: r.mapping.cat ?? null };
     if (r.forcePoints) over.forcePoints = true;
-    await openBlob(r.file, r.name, first ? 'replace' : 'add', null, over);
+    if (r.objGroups && r.objGroups.length > 1 && r.split !== false) {
+      await openObjSplit(r.file, r.name, first ? 'replace' : 'add');
+    } else await openBlob(r.file, r.name, first ? 'replace' : 'add', null, over);
     first = false;
   }
   if (st.dh && st.dhOn) openDhDialog(st.dh);
@@ -3154,6 +3379,10 @@ function projectManifest() {
     camera: captureCamera(),
     section: captureSection(),
     views: _views,
+    tree: (() => {                                         // groups (§4.1) — layers by manifest index
+      const idOf = new Map(_layers.map((L, i) => [L.id, i]));
+      return treeToManifest(idOf);
+    })(),
   };
 }
 async function rememberProject(dir) {
@@ -3379,6 +3608,7 @@ async function openProjectDir(dir) {
     let links = {};
     try { const list = (await _idb.get(PROJECTS_KEY)) || []; const e = list.find((x) => x.name === dir.name); links = (e && e.links) || {}; } catch { /* none */ }
     plStart(mf.layers, dir.name);
+    const idAt = [];                                       // manifest index → restored layer id
     for (let i = 0; i < mf.layers.length; i++) {
       const ls = mf.layers[i];
       plRow(i, 'loading…');
@@ -3406,6 +3636,7 @@ async function openProjectDir(dir) {
           if (ls.catLegend) { Ld.catLegend = ls.catLegend; applyCatLegend(Ld, true); }
           if (ls.colorSel && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) { Ld.colorSel = ls.colorSel; $('#colorBy').value = ls.colorSel; syncRuleMode(Ld); }
           await restoreStyleExtras(Ld, ls);
+          idAt[i] = Ld.id;
         }
         plRow(i, 'done', 'done');
         continue;
@@ -3463,7 +3694,7 @@ async function openProjectDir(dir) {
       }
       if (ls.clip && (ls.clip[0] || ls.clip[1])) { L.clip = [String(ls.clip[0] || ''), String(ls.clip[1] || '')]; $('#clipMin').value = L.clip[0]; $('#clipMax').value = L.clip[1]; }
       if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
-      if (ls.visible === false) { L.visible = false; renderer.setLayerVisible(L.id, false); }
+      if (ls.visible === false) { L.visible = false; applyTreeVisibility(); }
       if (ls.sectioned === false) renderer.setLayerSectioned(L.id, false);
       restoreHiddenCats(L, ls.hiddenCats);
       if (ls.colTypes) { L.colTypes = ls.colTypes; applyColTypes(L); }
@@ -3471,8 +3702,10 @@ async function openProjectDir(dir) {
       if (ls.ramps) { L.ramps = ls.ramps; applyRamp(L, true); }
       if (ls.catLegend) { L.catLegend = ls.catLegend; applyCatLegend(L, true); }
       await restoreStyleExtras(L, ls);
+      idAt[i] = L.id;
       plRow(i, 'done', 'done');
     }
+    if (mf.tree) treeFromManifest(mf.tree, idAt);
     applyCamera(mf.camera);
     applySection(mf.section);
     renderLayers();
@@ -3742,6 +3975,7 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
   { label: 'Select — lasso', kbd: 'v', action: () => armSelect('lasso') },
   { label: (_selThrough ? '✓ ' : '') + 'Select through (volume)', action: () => { _selThrough = !_selThrough; } },
   { label: 'Select by solid…', action: () => openSolidDialog(null) },
+  { label: 'Assign domains…', action: () => openDomainsDialog() },
   { label: 'Clear selection', kbd: 'Esc', action: () => clearSelection() },
   { sep: true },
   { label: 'Section on/off', kbd: 'x', action: toggleSection },
@@ -3773,6 +4007,7 @@ Tools → <b>Select through (volume)</b> flips the tools to the extruded tube: E
 <b>paint to column</b> (<code>b</code> / the brush button / Data menu) — interactive domaining: a PAINTED column is a category column you fill by hand. The palette window (layer-pinned, like tables) picks the column + the value; while a value is armed, the <code>r</code> / <code>v</code> gestures PAINT it onto whatever they cross (<b>alt</b> erases, Tools → Select through paints the whole tube, <code>Esc</code> puts the brush down, <code>Ctrl+Z</code> undoes a stroke); or build a careful selection first and <b>apply to selection</b>. While painting the layer colors by the column (unpainted recedes dark); painted values are REAL columns — the filter (<code>DOMAIN = "HW_OXIDE"</code>), the scan, the attribute table, and the record panel all see them; they persist in the project<br>
 <b>export rows</b> (Data → Export rows… / the layer context menu) — data leaves micro the way it came in, as rows: scope <b>all</b> · <b>filter matches</b> · <b>selection</b>; every column including ƒ calculated and ✎ painted ones (paint a DOMAIN, export it, feed the estimator); CSV with delimiter choice + decimal comma; streamed, so 1.8M rows is one sweep, and opening a .dm then exporting IS the .dm → CSV converter. In the attribute table, <code>Ctrl+C</code> copies the grid selection as TSV<br>
 <b>select by solid</b> (Tools menu / right-click a mesh layer) — a closed context mesh (.msh / .obj / small .ply) classifies records by winding number: <b>select inside/outside</b> sweeps any element layers into the ordinary selection (paint or export it — the solids → coded-model loop), a <b>flag column</b> writes a value (e.g. <code>IN</code>) into a NEW painted column on any table-backed layers — blocks, points, drillholes — which you can then touch up with the brush; or <b>fraction-inside column</b> probes each block of a regular model (any per-axis resolution — 3×3×2 for benches, 10×10×10 for 1 m blocklings) and writes a numeric 0–1 column (<code>%</code> badge) the filter, table, and export all see; all of it works with flipped solids and colors the layer by the result when done. OPEN SURFACES (topo, weathering horizons — the dialog reads the mesh topology and says which) classify <b>above / below / between</b> instead: the surface is CLOSED by a skirt to a far apex and the same winding containment applies — strong at any depth, and blocks beyond the surface's footprint honestly come back unclassified; <b>between</b> takes a second surface (below the first AND above the second)<br>
+<b>assign domains</b> (Tools menu) — the whole coded-model loop in one run: pick the domain solids (a multi-object .obj offers "split into N solids (as a group)" at open — each object becomes its own layer inside a layer GROUP), pick the model and a column name, and every block goes to the solid holding its largest fraction; unclaimed blocks stay unpainted and the result is an ordinary painted column — filter it, export it, touch it up with the brush<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
 <b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; the <b>interval table</b> lists every band with an editable upper bound, a count from the scan, and (classed) a color chip per shell; quantile/equal auto-breaks from the scan<br><br>
@@ -4510,7 +4745,7 @@ function layerMenu(L, x, y) {
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
     { sep: true },
-    { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); } },
+    { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
     { label: (renderer.layerSectioned(L.id) ? '✓ ' : '') + 'Cut by sections', action: () => { renderer.setLayerSectioned(L.id, !renderer.layerSectioned(L.id)); markProjectDirty(); requestRender(); } },
     ...(_project && L.storage !== 'project' && L.storage !== 'volatile' && layerBlob(L) ? [{
       label: `Copy into project (${fmtSize(layerBlob(L).size)})`,
@@ -6226,15 +6461,109 @@ function renderSourceTab(body, L) {
   }
   if (frame) { sec('frame'); line(`origin <span class="v">${frame.origin.map(fm).join(', ')}</span>`); }
 }
+// ── layer GROUPS (spec §4.1 v1): the panel is a tree. A node is a layerId or
+// { group, name, visible, collapsed, children }. Visibility is QGIS's: every
+// node owns its OWN eye; a layer draws iff its eye AND every ancestor's eye
+// are on. Toggling a group never rewrites the children — their pattern greys
+// out and returns intact. Order + groups persist in project.json. ──
+let _layerTree = [];
+function treeSync() {
+  const seen = new Set();
+  const prune = (arr) => arr.filter((nd) => {
+    if (typeof nd === 'number') {
+      if (!layerById(nd) || seen.has(nd)) return false;
+      seen.add(nd);
+      return true;
+    }
+    nd.children = prune(nd.children);
+    return nd.children.length > 0;                         // empty groups dissolve
+  });
+  _layerTree = prune(_layerTree);
+  for (const L of _layers) if (!seen.has(L.id)) _layerTree.push(L.id);
+}
+function applyTreeVisibility() {
+  treeSync();
+  const walk = (arr, on) => {
+    for (const nd of arr) {
+      if (typeof nd === 'number') {
+        const L = layerById(nd);
+        renderer.setLayerVisible(nd, !!(on && L && L.visible));
+      } else walk(nd.children, on && nd.visible);
+    }
+  };
+  walk(_layerTree, true);
+  requestRender();
+}
+// gather a group's layer ids (recursive)
+function groupLayerIds(nd, out = []) {
+  for (const c of nd.children) {
+    if (typeof c === 'number') out.push(c);
+    else groupLayerIds(c, out);
+  }
+  return out;
+}
+// nest the given root-level layers into a new (collapsed) group
+function createLayerGroup(name, layerIds, { collapsed = true } = {}) {
+  treeSync();
+  const set = new Set(layerIds);
+  const node = { group: true, name, visible: true, collapsed, children: [] };
+  _layerTree = _layerTree.filter((nd) => {
+    if (typeof nd === 'number' && set.has(nd)) { node.children.push(nd); return false; }
+    return true;
+  });
+  if (node.children.length) _layerTree.push(node);
+  renderLayers();
+  markProjectDirty();
+  return node;
+}
+// tree ⇄ manifest (layers referenced by their manifest index)
+function treeToManifest(idOf) {
+  const conv = (arr) => arr.map((nd) => (typeof nd === 'number'
+    ? (idOf.has(nd) ? idOf.get(nd) : null)
+    : { g: nd.name, v: nd.visible, c: nd.collapsed, ch: conv(nd.children) })).filter((x) => x !== null);
+  return conv(_layerTree);
+}
+function treeFromManifest(tree, idAt) {
+  const conv = (arr) => arr.map((nd) => (typeof nd === 'number'
+    ? (idAt[nd] != null ? idAt[nd] : null)
+    : { group: true, name: nd.g, visible: nd.v !== false, collapsed: !!nd.c, children: conv(nd.ch || []) }))
+    .filter((x) => x !== null && (typeof x === 'number' || x.children.length));
+  _layerTree = conv(tree || []);
+  treeSync();
+  applyTreeVisibility();
+}
+function groupMenu(nd, x, y) {
+  menuXY(x, y, [
+    { label: 'Rename group…', action: () => { const v = prompt('group name', nd.name); if (v && v.trim()) { nd.name = v.trim(); renderLayers(); markProjectDirty(); } } },
+    { label: 'Zoom to group', action: () => {
+      let u = null;
+      for (const id of groupLayerIds(nd)) {
+        const L = layerById(id); const b2 = L && L.bboxLocal; if (!b2) continue;
+        if (!u) u = Float64Array.from(b2);
+        else for (let i = 0; i < 3; i++) { if (b2[i] < u[i]) u[i] = b2[i]; if (b2[i + 3] > u[i + 3]) u[i + 3] = b2[i + 3]; }
+      }
+      if (u) { cam.fit(u); requestRender(); }
+    } },
+    { sep: true },
+    { label: 'Ungroup (keep layers)', action: () => {
+      treeSync();
+      const at = _layerTree.indexOf(nd);
+      if (at >= 0) _layerTree.splice(at, 1, ...nd.children);
+      renderLayers(); markProjectDirty();
+    } },
+  ]);
+}
 function renderLayers() {
   const rows = $('#lpRows'); if (!rows) return;
   rows.textContent = '';
-  for (const L of _layers) {
+  treeSync();
+  const layerRow = (L, depth, dim) => {
     const row = document.createElement('div');
-    row.className = 'lp-row' + (L.id === _activeId ? ' active' : '') + (L.visible ? '' : ' off');
+    row.className = 'lp-row' + (L.id === _activeId ? ' active' : '') + (L.visible ? '' : ' off') + (dim ? ' dim' : '');
+    row.style.paddingLeft = `${6 + depth * 14}px`;
     const eye = document.createElement('input');
-    eye.type = 'checkbox'; eye.checked = L.visible; eye.title = 'visible';
-    eye.onclick = (e) => { e.stopPropagation(); L.visible = eye.checked; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); dispatchEvent(new Event('micro:project-dirty')); };
+    eye.type = 'checkbox'; eye.checked = L.visible; eye.title = 'visible (a disabled group greys the row — the eye stays yours)';
+    eye.onclick = (e) => { e.stopPropagation(); L.visible = eye.checked; applyTreeVisibility(); renderLayers(); dispatchEvent(new Event('micro:project-dirty')); };
     const name = document.createElement('span'); name.className = 'lp-name';
     name.textContent = (L.storage === 'external' ? '↗ ' : '') + (L.label || L.name);
     name.title = (L.label && L.label !== L.name ? `${L.label} (${L.name})` : L.name) + (L.storage === 'external' ? ' — linked from outside the project folder' : '');
@@ -6245,7 +6574,32 @@ function renderLayers() {
     row.ondblclick = () => fitLayer(L);
     row.oncontextmenu = (e) => { e.preventDefault(); layerMenu(L, e.clientX, e.clientY); };
     rows.appendChild(row);
-  }
+  };
+  const walk = (arr, depth, dim) => {
+    for (const nd of arr) {
+      if (typeof nd === 'number') { const L = layerById(nd); if (L) layerRow(L, depth, dim); continue; }
+      const row = document.createElement('div');
+      row.className = 'lp-row lp-group' + (nd.visible ? '' : ' off') + (dim ? ' dim' : '');
+      row.style.paddingLeft = `${6 + depth * 14}px`;
+      const caret = document.createElement('span'); caret.className = 'lp-caret';
+      caret.textContent = nd.collapsed ? '▸' : '▾';
+      caret.onclick = (e) => { e.stopPropagation(); nd.collapsed = !nd.collapsed; renderLayers(); markProjectDirty(); };
+      const eye = document.createElement('input');
+      eye.type = 'checkbox'; eye.checked = nd.visible; eye.title = 'group visibility — children keep their own eyes';
+      eye.onclick = (e) => { e.stopPropagation(); nd.visible = eye.checked; applyTreeVisibility(); renderLayers(); dispatchEvent(new Event('micro:project-dirty')); };
+      const name = document.createElement('span'); name.className = 'lp-name';
+      name.textContent = nd.name;
+      const ids = groupLayerIds(nd);
+      const n = document.createElement('span'); n.className = 'lp-n';
+      n.textContent = ids.length + (nd.collapsed ? ` · ${ids.reduce((t, id) => t + (renderer.layerElementCount(id) || 0), 0).toLocaleString()}` : '');
+      row.append(caret, eye, name, n);
+      row.onclick = () => { nd.collapsed = !nd.collapsed; renderLayers(); };
+      row.oncontextmenu = (e) => { e.preventDefault(); groupMenu(nd, e.clientX, e.clientY); };
+      rows.appendChild(row);
+      if (!nd.collapsed) walk(nd.children, depth + 1, dim || !nd.visible);
+    }
+  };
+  walk(_layerTree, 0, false);
   if (_layers.length >= 1 && !_lpUserHidden) toggleLayersPanel(true);   // the panel is the layer's front door — right-click is the menu
   if (_layers.length === 0) toggleLayersPanel(false);
   if (_propOpen && _propFor !== _activeId) renderProps();  // re-target, never rebuild under a typing cursor
@@ -6359,7 +6713,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, meshSolidOf, openSolidDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, openObjSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
