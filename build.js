@@ -1694,12 +1694,14 @@ if (target === 'micro') {
     '../../ext/expr/index.js': '#expr',
     '../../ext/sluice/index.js': '#sluice',
     '../../ext/loom/index.js': '#loom',
+    '../../ext/winding/index.js': '#winding',
   };
   const libs = [
     ['condenser', 'ext/condenser/index.js'],
     ['expr',      'ext/expr/index.js'],
     ['sluice',    'ext/sluice/index.js'],              // streaming column stats (the columns tab)
     ['loom',      'ext/loom/index.js'],                // the attribute table's canvas grid
+    ['winding',   'ext/winding/index.js'],             // select-by-solid containment (spec 17)
   ];
   const modules = [];
   for (const [name, rel] of libs) {
