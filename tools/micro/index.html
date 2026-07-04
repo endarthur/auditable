@@ -3224,7 +3224,7 @@ function renderLayers() {
     row.oncontextmenu = (e) => { e.preventDefault(); layerMenu(L, e.clientX, e.clientY); };
     rows.appendChild(row);
   }
-  if (_layers.length >= 2 && !_lpUserHidden) toggleLayersPanel(true);
+  if (_layers.length >= 1 && !_lpUserHidden) toggleLayersPanel(true);   // the panel is the layer's front door — right-click is the menu
   if (_layers.length === 0) toggleLayersPanel(false);
   if (_propOpen && _propFor !== _activeId) renderProps();  // re-target, never rebuild under a typing cursor
   if (_propOpen && !_layers.length) closeProps();
