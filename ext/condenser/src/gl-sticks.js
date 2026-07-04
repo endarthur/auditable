@@ -29,6 +29,8 @@ uniform sampler2D uRamp;
 uniform sampler2D uPalette;
 uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
+uniform sampler2D uCatVis;
+uniform float uCatVisOn;
 uniform uint uPicked;
 uniform uvec2 uRepaint;
 uniform vec4 uSecPlane;
@@ -62,6 +64,7 @@ void main() {
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aCat) & 255, 0), 0).r < 0.5) vCull = 1.0;
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp;
   if (demoted > 0.5) {                                   // splat: camera-facing square at the center
@@ -190,6 +193,7 @@ export function createSticksPipeline(gl) {
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), picked: U('uPicked'), repaint: U('uRepaint'),
+      catVis: U('uCatVis'), catVisOn: U('uCatVisOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
@@ -241,7 +245,7 @@ export function createSticksPipeline(gl) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
   }
 
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1 }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -279,6 +283,8 @@ export function createSticksPipeline(gl) {
       gl.uniform1f(uni.filterOn, maskTex ? 1 : 0);
       gl.uniform1f(uni.isolate, isolate ? 1 : 0);
       if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uni.mask, 4); }
+      gl.uniform1f(uni.catVisOn, catVisTex ? 1 : 0);
+      if (catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, catVisTex); gl.uniform1i(uni.catVis, 5); }
     }
     active = full;
     gl.useProgram(full.prog);

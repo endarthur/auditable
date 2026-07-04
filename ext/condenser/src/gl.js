@@ -37,6 +37,8 @@ uniform sampler2D uPalette;             // classification / category palette
 uniform float uPaletteN;                // its width (32 = LAS classes, 256 = category dict)
 uniform sampler2D uMask;                // filter bitmask by record index (8192-wide)
 uniform float uFilterOn, uIsolate;
+uniform sampler2D uCatVis;              // 256x1 per-class visibility (layer properties)
+uniform float uCatVisOn;
 out vec4 vColor;
 flat out float vCull;
 void main() {
@@ -50,6 +52,7 @@ void main() {
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
     if (uIsolate > 0.5 && m < 0.5) vCull = 1.0;
   }
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aClass) & 255, 0), 0).r < 0.5) vCull = 1.0;
   if (uColorMode == 0) {
     float t = clamp((p.z - uZRange.x) / max(uZRange.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
@@ -181,6 +184,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'), repaint: U('uRepaint'),
     secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
     mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), paletteN: U('uPaletteN'),
+    catVis: U('uCatVis'), catVisOn: U('uCatVisOn'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
@@ -206,7 +210,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
             intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
-            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1 };
+            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null };
       layers.set(id, l);
     }
     return l;
@@ -343,6 +347,32 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       needClear = true;
     },
     layerMeshStyle(layer) { const ls = layerOf(layer); return { tint: ls.meshTint, opacity: ls.meshOpacity }; },
+    // per-CLASS visibility (layer properties): vis = Uint8Array(256) of 0|1, or
+    // null to clear. GPU-side — the class code already rides every element as
+    // an attribute, so eyes are a texture update: no sweeps, any element count.
+    // Composes with the filter mask (both are cull paths); hidden classes
+    // don't pick either (gl-pick reads the same texture).
+    setLayerCatVisibility(layer, vis) {
+      const ls = layerOf(layer);
+      if (!vis) {
+        if (ls.catVisTex) { gl.deleteTexture(ls.catVisTex); ls.catVisTex = null; }
+      } else {
+        const px = new Uint8Array(256);
+        for (let i = 0; i < 256; i++) px[i] = vis[i] ? 255 : 0;
+        if (!ls.catVisTex) {
+          ls.catVisTex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, ls.catVisTex);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 256, 1, 0, gl.RED, gl.UNSIGNED_BYTE, px);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        } else {
+          gl.bindTexture(gl.TEXTURE_2D, ls.catVisTex);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RED, gl.UNSIGNED_BYTE, px);
+        }
+      }
+      needClear = true;
+    },
     setLayerVisible(layer, on) {
       const ls = layerOf(layer);
       if (ls.visible !== !!on) { ls.visible = !!on; needClear = true; }
@@ -355,6 +385,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       }
       const ls = layers.get(layer);
       if (ls && ls.maskTex) gl.deleteTexture(ls.maskTex);
+      if (ls && ls.catVisTex) gl.deleteTexture(ls.catVisTex);
       layers.delete(layer);
       needClear = true;
     },
@@ -397,7 +428,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     clearChunks() {
       for (const c of chunks) freeChunk(c);
       chunks.length = 0; needClear = true;
-      for (const ls of layers.values()) if (ls.maskTex) gl.deleteTexture(ls.maskTex);
+      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); }
       layers.clear();
     },
     resize() {
@@ -541,6 +572,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           gl.uniform1f(uni.filterOn, ls.maskTex ? 1 : 0);
           gl.uniform1f(uni.isolate, ls.isolate ? 1 : 0);
           if (ls.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, ls.maskTex); gl.uniform1i(uni.mask, 4); }
+          gl.uniform1f(uni.catVisOn, ls.catVisTex ? 1 : 0);
+          if (ls.catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, ls.catVisTex); gl.uniform1i(uni.catVis, 5); }
         };
         for (const [id, group] of ptsGroups) {
           setupPtsLayer(id);
@@ -596,6 +629,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             ramp, palette: catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
+            catVisTex: ls.catVisTex,
           });
         };
         for (const [id, group] of blkGroups) {
@@ -643,7 +677,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             ramp, palette: catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
-            radius: ls.stickRadius,
+            radius: ls.stickRadius, catVisTex: ls.catVisTex,
           });
         };
         for (const [id, group] of stkGroups) {

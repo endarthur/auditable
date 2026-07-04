@@ -170,6 +170,7 @@
   #compass.sw { left: 12px; bottom: 34px; }
   #compass.nw { left: 12px; top: 78px; }
   #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: calc(var(--recw, 280px) + 12px); }
+  #propPanel.show ~ #compass.se, #propPanel.show ~ #compass.ne { right: calc(var(--ppw, 272px) + 12px); }
   #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: calc(var(--lpw, 224px) + 12px); }
   #dhDlg, #ofDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
   #dhDlg.show, #ofDlg.show { display: flex; }
@@ -209,6 +210,41 @@
   .rp-grab { left: -2px; }
   .lp-grab:hover, .rp-grab:hover { background: var(--accent); opacity: 0.4; }
   #recPanel.show { display: flex; }
+  /* layer properties (§10): right slot (exclusive with the record panel),
+     follows the ACTIVE layer, live-apply — tabs bound the scroll */
+  #propPanel {
+    position: absolute; top: 68px; right: 0; bottom: 24px; width: var(--ppw, 272px); display: none;
+    flex-direction: column; background: rgba(22, 22, 22, 0.96); border-left: 1px solid var(--border); z-index: 4;
+    font-family: var(--mono); font-size: 12px;
+  }
+  #propPanel.show { display: flex; }
+  #propPanel .pp-sub { padding: 2px 12px 6px; color: var(--dim); font-size: 11px; border-bottom: 1px solid var(--border); }
+  #propPanel .pp-tabs { display: flex; gap: 4px; padding: 6px 10px 0; }
+  #propPanel .pp-tab {
+    background: none; border: 1px solid var(--border); border-bottom: none; border-radius: 3px 3px 0 0;
+    color: var(--muted); font: inherit; padding: 3px 10px; cursor: pointer;
+  }
+  #propPanel .pp-tab.active { color: var(--accent); border-color: var(--accent); background: #202020; }
+  #propPanel .pp-body { flex: 1; overflow-y: auto; padding: 10px 12px; border-top: 1px solid var(--border); margin-top: -1px; }
+  .pp-row { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+  .pp-row > label { color: var(--muted); min-width: 64px; }
+  .pp-row select, .pp-row input[type="number"] { background: #242424; color: var(--text); border: 1px solid var(--border); font: inherit; padding: 2px 4px; }
+  .pp-row input[type="range"] { flex: 1; accent-color: var(--accent); }
+  .pp-row input[type="color"] { width: 42px; height: 22px; padding: 0; border: 1px solid var(--border); background: none; cursor: pointer; }
+  .pp-row .pp-val { color: var(--dim); min-width: 44px; text-align: right; }
+  .pp-note { color: var(--dim); margin: 8px 0; line-height: 1.5; }
+  .pp-cat { display: flex; align-items: center; gap: 7px; padding: 3px 2px; border-radius: 2px; }
+  .pp-cat:hover { background: #242424; }
+  .pp-cat input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+  .pp-cat .sw { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto; }
+  .pp-cat .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pp-cat.off .nm { color: var(--dim); text-decoration: line-through; }
+  .pp-cat .ct { color: var(--dim); font-size: 11px; white-space: nowrap; }
+  .pp-bulk { display: flex; gap: 12px; padding: 8px 2px 2px; color: var(--dim); }
+  .pp-bulk a { color: var(--muted); cursor: pointer; }
+  .pp-bulk a:hover { color: var(--accent); }
+  .pp-sec { color: var(--accent); margin: 12px 0 8px; font-size: 11px; letter-spacing: 0.06em; }
+  .pp-sec:first-child { margin-top: 0; }
   #recPanel .rp-head {
     display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border);
     font-family: var(--mono); font-size: 12px; color: var(--accent);
@@ -283,6 +319,7 @@
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
   <div id="recPanel"><div class="rp-grab" id="rpGrab"></div><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
   <div id="layersPanel"><div class="lp-head"><span>layers</span><button class="lp-close" id="lpClose">×</button></div><div id="lpRows"></div><div class="lp-grab" id="lpGrab"></div></div>
+  <div id="propPanel"><div class="rp-grab" id="ppGrab"></div><div class="rp-head"><span id="ppTitle">properties</span><button class="rp-close" id="ppClose">×</button></div><div class="pp-sub" id="ppSub"></div><div class="pp-tabs" id="ppTabs"></div><div class="pp-body" id="ppBody"></div></div>
   <div id="dhDlg"><div class="box"><div class="hd"><span>import drillholes</span><button id="dhCancel">×</button></div><div class="bd" id="dhDlgBody"></div><div class="dh-foot"><span id="dhDlgMsg"></span><button id="dhImport">Import</button></div></div></div>
   <div id="ofDlg"><div class="box"><div class="hd"><span>open files</span><button id="ofCancel">×</button></div><div class="bd" id="ofDlgBody"></div><div class="dh-foot"><button id="ofOpen">Open</button></div></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
@@ -298,7 +335,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
@@ -1572,6 +1609,9 @@ function projectManifest() {
       tint: L.kind === 'mesh' ? L.tint : undefined,
       opacity: L.kind === 'mesh' && L.opacity !== 1 ? L.opacity : undefined,
       soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
+      hiddenCats: L.catHidden && L.catHidden.size
+        ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
+        : undefined,
     })),
     camera: captureCamera(),
     section: captureSection(),
@@ -1711,6 +1751,7 @@ async function openProjectDir(dir) {
           if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
           if (ls.visible === false) { Ld.visible = false; renderer.setLayerVisible(Ld.id, false); }
           if (ls.sectioned === false) renderer.setLayerSectioned(Ld.id, false);
+          restoreHiddenCats(Ld, ls.hiddenCats);
         }
         continue;
       }
@@ -1759,6 +1800,7 @@ async function openProjectDir(dir) {
       if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
       if (ls.visible === false) { L.visible = false; renderer.setLayerVisible(L.id, false); }
       if (ls.sectioned === false) renderer.setLayerSectioned(L.id, false);
+      restoreHiddenCats(L, ls.hiddenCats);
     }
     applyCamera(mf.camera);
     applySection(mf.section);
@@ -1931,6 +1973,28 @@ $('#mFile').onclick = () => {
   );
   menuAt($('#mFile'), items);
 };
+// scene-global memory readout (the numbers live in the renderer; this is a table)
+async function showMemoryInfo() {
+  const escM = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const rows = [];
+  const row = (k, v) => rows.push(`<tr><td class="fi-k">${escM(k)}</td><td>${v}</td></tr>`);
+  let total = 0;
+  for (const L of _layers) {
+    const b = renderer.layerVramBytes(L.id);
+    total += b;
+    row(L.label || L.name, `${escM(fmtSize(b))} <span class="fi-x">· ${escM((renderer.layerElementCount(L.id) || 0).toLocaleString())} elements${L.visible ? '' : ' · hidden (still resident)'}</span>`);
+  }
+  row('total vram', `<b>${escM(fmtSize(renderer.vramBytes || total))}</b>`);
+  if (performance.memory) row('js heap', escM(fmtSize(performance.memory.usedJSHeapSize)));
+  if (navigator.storage && navigator.storage.estimate) {
+    try {
+      const est = await navigator.storage.estimate();
+      row('site storage', `${escM(fmtSize(est.usage || 0))} <span class="fi-x">of ${escM(fmtSize(est.quota || 0))} available</span>`);
+    } catch { /* unavailable */ }
+  }
+  row('', '<span class="fi-x">vram = geometry buffers held by layers (hidden layers included). Convert big meshes to streamed, or remove layers, to shed it.</span>');
+  showHelp('memory', `<table class="fi">${rows.join('')}</table>`);
+}
 $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Fit', kbd: 'f', action: () => $('#btnFit').click() },
   { sep: true },
@@ -1948,6 +2012,8 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: (_viewMode === 'points' ? '✓ ' : '') + 'Blocks as points', action: () => { _viewMode = 'points'; requestRender(); } },
   { sep: true },
   { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
+  { label: 'Layer properties…', action: () => { if (_layers.length) openProps(); } },
+  { label: 'Memory…', action: showMemoryInfo },
   { label: 'Measure…', kbd: 'm', action: armMeasure },
   { label: (_measureTP ? '✓ ' : '') + 'Measure trend & plunge', action: toggleMeasureTP },
   { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
@@ -1974,6 +2040,7 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
+<b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept)<br><br>
 <b>meshes</b> — .msh (Leapfrog) / .obj / .ply-with-faces open as context layers: scenery, not records (no pick, no filter — clicks pass through to the data behind)<br>
 right-click the layer → <b>Tint…</b> / <b>Opacity…</b> · sections cut meshes per-pixel — front/behind give the classic sectioned-solid view<br><br>
 <b>filter</b> (block models) — lamina's language over every column in the file:<br>
@@ -2439,7 +2506,7 @@ let _lpUserHidden = false;
   const saved = (() => { try { return JSON.parse(localStorage.getItem('micro.panels')) || {}; } catch { return {}; } })();
   const setW = (which, px) => {
     px = Math.max(160, Math.min(520, px));
-    document.documentElement.style.setProperty(which === 'lp' ? '--lpw' : '--recw', px + 'px');
+    document.documentElement.style.setProperty(which === 'lp' ? '--lpw' : which === 'pp' ? '--ppw' : '--recw', px + 'px');
     saved[which] = px;
     try { localStorage.setItem('micro.panels', JSON.stringify(saved)); } catch { /* ignore */ }
   };
@@ -2456,6 +2523,8 @@ let _lpUserHidden = false;
   };
   grab($('#lpGrab'), 'lp', false);
   grab($('#rpGrab'), 'rec', true);
+  grab($('#ppGrab'), 'pp', true);
+  if (saved.pp) setW('pp', saved.pp);
 }
 function toggleLayersPanel(force) {
   const el = $('#layersPanel');
@@ -2518,6 +2587,8 @@ function layerMenu(L, x, y) {
       ]), 0),
     }] : []),
     { label: 'Remove layer', action: () => removeLayerUI(L.id) },
+    { sep: true },
+    { label: 'Properties…', action: () => { setActiveLayer(L.id); openProps(); } },
   ]);
 }
 // tier conversion: re-open the SAME blob through the other tier, keeping the
@@ -2556,6 +2627,232 @@ function meshOpacityMenu(L, x, y) {
     action: () => { L.opacity = pc / 100; renderer.setLayerMeshStyle(L.id, { opacity: pc / 100 }); markProjectDirty(); requestRender(); },
   })));
 }
+// ── layer properties (§10 v1): follows the ACTIVE layer, live-apply, tabbed.
+// style = kind-adaptive controls; classes = per-class eyes (GPU cull — the
+// class code rides every element, so toggling is a texture update: no sweeps).
+let _propOpen = false, _propFor = null;
+let _propTab = localStorage.getItem('micro.propTab') || 'style';
+function openProps() {
+  _propOpen = true;
+  $('#recPanel').classList.remove('show');
+  $('#propPanel').classList.add('show');
+  renderProps();
+}
+function closeProps() { _propOpen = false; _propFor = null; $('#propPanel').classList.remove('show'); }
+$('#ppClose').onclick = closeProps;
+function layerHeaderOf(L) {
+  const d = L.docs || {};
+  return (d.blockDoc || d.dhDoc || d.meshDoc || d.plyDoc || d.lasDoc || {}).header || null;
+}
+function propKindLine(L) {
+  const h = layerHeaderOf(L);
+  const n = renderer.layerElementCount(L.id) || 0;
+  if (L.kind === 'mesh') return `${h && h.soup ? 'streamed' : 'context'} mesh · ${n.toLocaleString()} triangles`;
+  if (L.dh) return `drillholes · ${n.toLocaleString()} intervals`;
+  if (L.docs.blockDoc && L.docs.blockDoc.header.grid) return `block model · ${n.toLocaleString()} blocks`;
+  return `points · ${n.toLocaleString()}`;
+}
+function renderProps() {
+  const L = activeLayer();
+  if (!L) { closeProps(); return; }
+  _propFor = L.id;
+  $('#ppTitle').textContent = L.label || L.name;
+  $('#ppSub').textContent = propKindLine(L);
+  const tabs = $('#ppTabs'); tabs.textContent = '';
+  for (const t of ['style', 'classes']) {
+    const b = document.createElement('button');
+    b.className = 'pp-tab' + (t === _propTab ? ' active' : '');
+    b.textContent = t;
+    b.onclick = () => { _propTab = t; try { localStorage.setItem('micro.propTab', t); } catch { /* ignore */ } renderProps(); };
+    tabs.appendChild(b);
+  }
+  const body = $('#ppBody'); body.textContent = '';
+  if (_propTab === 'classes') renderClassesTab(body, L);
+  else renderStyleTab(body, L);
+}
+const mkRow = (label, ...ctrls) => {
+  const row = document.createElement('div'); row.className = 'pp-row';
+  const lab = document.createElement('label'); lab.textContent = label;
+  row.append(lab, ...ctrls);
+  return row;
+};
+const ppNote = (text) => { const d = document.createElement('div'); d.className = 'pp-note'; d.textContent = text; return d; };
+function renderStyleTab(body, L) {
+  if (L.kind === 'mesh') {
+    const h = layerHeaderOf(L);
+    const tintIn = document.createElement('input'); tintIn.type = 'color'; tintIn.value = L.tint || '#9ea3a8';
+    tintIn.oninput = () => setMeshTint(L, tintIn.value);
+    body.appendChild(mkRow('tint', tintIn));
+    const op = document.createElement('input'); op.type = 'range'; op.min = 5; op.max = 100; op.step = 5;
+    op.value = Math.round((L.opacity != null ? L.opacity : 1) * 100);
+    const opVal = document.createElement('span'); opVal.className = 'pp-val'; opVal.textContent = op.value + '%';
+    op.oninput = () => {
+      opVal.textContent = op.value + '%';
+      L.opacity = +op.value / 100;
+      renderer.setLayerMeshStyle(L.id, { opacity: L.opacity });
+      markProjectDirty(); requestRender();
+    };
+    body.appendChild(mkRow('opacity', op, opVal));
+    if (h) {
+      const now = renderer.layerVramBytes(L.id);
+      const tierTxt = document.createElement('span'); tierTxt.textContent = `${h.soup ? 'streamed' : 'exact'} · ${fmtSize(now)}`;
+      body.appendChild(mkRow('tier', tierTxt));
+      const canExact = h.soup && h.triCount <= CONTEXT_TRI_CAP;
+      if (!h.soup || canExact) {
+        const est = h.soup ? h.vertexCount * 12 + h.triCount * 12 : h.triCount * 18;
+        const btn = document.createElement('button'); btn.className = 'pp-tab';
+        btn.textContent = `convert to ${h.soup ? 'exact' : 'streamed'} (~${fmtSize(est)})`;
+        btn.onclick = async () => { await convertMeshLayer(L, !h.soup); renderProps(); };
+        body.appendChild(mkRow('', btn));
+      }
+    }
+    return;
+  }
+  // element layers: color-by + clip mirror the toolbar (same active layer, one
+  // source of truth — the panel writes THROUGH the toolbar's handlers)
+  const cb = $('#colorBy');
+  const sel = document.createElement('select');
+  sel.innerHTML = cb.innerHTML; sel.value = cb.value;
+  sel.onchange = () => { cb.value = sel.value; cb.dispatchEvent(new Event('change')); };
+  body.appendChild(mkRow('color by', sel));
+  const mkClip = (id) => {
+    const inp = document.createElement('input'); inp.type = 'number'; inp.style.width = '76px';
+    inp.value = $('#' + id).value; inp.placeholder = id === 'clipMin' ? 'min' : 'max';
+    inp.oninput = () => { $('#' + id).value = inp.value; $('#' + id).dispatchEvent(new Event('input')); requestRender(); };
+    return inp;
+  };
+  body.appendChild(mkRow('clip', mkClip('clipMin'), mkClip('clipMax')));
+  if (L.dh && L.docs.dhDoc) {
+    const r = document.createElement('input'); r.type = 'range'; r.min = 0.2; r.max = 8; r.step = 0.1;
+    r.value = renderer.layerStickRadius(L.id);
+    const rv = document.createElement('span'); rv.className = 'pp-val'; rv.textContent = r.value + ' m';
+    r.oninput = () => {
+      rv.textContent = (+r.value).toFixed(1) + ' m';
+      renderer.setLayerStickRadius(L.id, +r.value);
+      L.docs.dhDoc.config.radius = +r.value;
+      markProjectDirty(); requestRender();
+    };
+    body.appendChild(mkRow('stick radius', r, rv));
+  }
+}
+// LAS classification names (ASPRS standard 0–18)
+const LAS_CLASSES = ['never classified', 'unclassified', 'ground', 'low vegetation', 'medium vegetation', 'high vegetation', 'building', 'low point (noise)', 'reserved', 'water', 'rail', 'road surface', 'reserved', 'wire — guard', 'wire — conductor', 'transmission tower', 'wire connector', 'bridge deck', 'high noise'];
+function layerClassInfo(L) {
+  const d = L.docs || {};
+  const h = (d.blockDoc || d.dhDoc || {}).header;
+  if (h && h.categories && h.categories.length) {
+    const px = categoryPalettePixels(256);
+    return {
+      kind: 'dict', names: h.categories, codes: h.categories.map((_, i) => i),
+      colorAt: (c) => `rgb(${px[c * 4]},${px[c * 4 + 1]},${px[c * 4 + 2]})`,
+      column: h.columns && h.mapping && h.mapping.cat != null ? h.columns[h.mapping.cat] : 'category',
+      countable: !!(d.dhDoc || (d.blockDoc && !d.blockDoc.header.dm)),
+    };
+  }
+  if (d.lasDoc) {
+    const px = palettePixels();
+    return {
+      kind: 'las', names: LAS_CLASSES, codes: LAS_CLASSES.map((_, i) => i),
+      colorAt: (c) => `rgb(${px[c * 4]},${px[c * 4 + 1]},${px[c * 4 + 2]})`,
+      column: 'classification', countable: false,
+    };
+  }
+  return null;
+}
+function applyCatVisibility(L) {
+  if (!L.catHidden || !L.catHidden.size) renderer.setLayerCatVisibility(L.id, null);
+  else {
+    const v = new Uint8Array(256).fill(1);
+    for (const c of L.catHidden) v[c & 255] = 0;
+    renderer.setLayerCatVisibility(L.id, v);
+  }
+  markProjectDirty(); requestRender();
+}
+function restoreHiddenCats(L, arr) {
+  if (!arr || !arr.length) return;
+  const h = layerHeaderOf(L);
+  const dict = h && h.categories;
+  L.catHidden = new Set(arr.map((v) => (typeof v === 'number' ? v : dict ? dict.indexOf(v) : -1)).filter((c) => c >= 0));
+  if (L.catHidden.size) applyCatVisibility(L);
+}
+// counts fill in async — the eyes never wait on a sweep
+async function ensureCatCounts(L, info) {
+  if (L._catCounts || !info.countable) return L._catCounts || null;
+  const counts = new Map();
+  let total = 0;
+  const d = L.docs;
+  if (d.dhDoc) {
+    const dh = d.dhDoc, ci = dh.header.mapping.cat;
+    const code = new Map(info.names.map((n, i) => [n, i]));
+    for (let i = 0; i < dh.header.count; i++) {
+      const f = dh.fetchRecord(i);
+      const c = code.get(String(f[ci]).trim());
+      if (c != null) { counts.set(c, (counts.get(c) || 0) + 1); total++; }
+    }
+  } else if (d.blockDoc) {
+    const { blob, header } = d.blockDoc;
+    const m = header.mapping;
+    const code = new Map(info.names.map((n, i) => [n, i]));
+    for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow !== undefined ? header.hasHeaderRow : !!header.columns)) {
+      for (const f of batch) {
+        if (!Number.isFinite(+f[m.x]) || !Number.isFinite(+f[m.y]) || !Number.isFinite(+f[m.z])) continue;
+        const c = code.get(String(f[m.cat]).trim());
+        if (c != null) { counts.set(c, (counts.get(c) || 0) + 1); }
+        total++;
+      }
+    }
+  }
+  L._catCounts = { counts, total };
+  return L._catCounts;
+}
+function renderClassesTab(body, L) {
+  const info = layerClassInfo(L);
+  if (!info) {
+    body.appendChild(ppNote(L.kind === 'mesh'
+      ? 'meshes are scenery — classes arrive with mesh records (OBJ groups) on the roadmap'
+      : 'no category column in this layer — classes light up when one is mapped (LITO, classification, …)'));
+    return;
+  }
+  const sec = document.createElement('div'); sec.className = 'pp-sec';
+  sec.textContent = `classes — ${info.column}`;
+  body.appendChild(sec);
+  if (!L.catHidden) L.catHidden = new Set();
+  const rows = new Map();
+  for (const c of info.codes) {
+    const row = document.createElement('div'); row.className = 'pp-cat' + (L.catHidden.has(c) ? ' off' : '');
+    const eye = document.createElement('input'); eye.type = 'checkbox'; eye.checked = !L.catHidden.has(c);
+    eye.onchange = () => {
+      if (eye.checked) L.catHidden.delete(c); else L.catHidden.add(c);
+      row.classList.toggle('off', !eye.checked);
+      applyCatVisibility(L);
+    };
+    const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = info.colorAt(c);
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = info.names[c];
+    nm.title = info.names[c];
+    const ct = document.createElement('span'); ct.className = 'ct'; ct.textContent = info.countable ? '…' : '–';
+    row.append(eye, sw, nm, ct);
+    body.appendChild(row);
+    rows.set(c, { row, eye, ct });
+  }
+  const bulk = document.createElement('div'); bulk.className = 'pp-bulk';
+  const mkA = (label, fn) => { const a = document.createElement('a'); a.textContent = label; a.onclick = fn; return a; };
+  const sync = () => { for (const [c, r] of rows) { r.eye.checked = !L.catHidden.has(c); r.row.classList.toggle('off', !r.eye.checked); } applyCatVisibility(L); };
+  bulk.append(
+    mkA('all', () => { L.catHidden.clear(); sync(); }),
+    mkA('none', () => { for (const c of info.codes) L.catHidden.add(c); sync(); }),
+    mkA('invert', () => { for (const c of info.codes) { if (L.catHidden.has(c)) L.catHidden.delete(c); else L.catHidden.add(c); } sync(); }),
+  );
+  body.appendChild(bulk);
+  if (info.countable) {
+    ensureCatCounts(L, info).then((cc) => {
+      if (!cc || activeLayer() !== L || _propTab !== 'classes') return;
+      for (const [c, r] of rows) {
+        const n = cc.counts.get(c) || 0;
+        r.ct.textContent = `${n.toLocaleString()} · ${cc.total ? Math.round((100 * n) / cc.total) : 0}%`;
+      }
+    });
+  }
+}
 function renderLayers() {
   const rows = $('#lpRows'); if (!rows) return;
   rows.textContent = '';
@@ -2578,12 +2875,15 @@ function renderLayers() {
   }
   if (_layers.length >= 2 && !_lpUserHidden) toggleLayersPanel(true);
   if (_layers.length === 0) toggleLayersPanel(false);
+  if (_propOpen && _propFor !== _activeId) renderProps();  // re-target, never rebuild under a typing cursor
+  if (_propOpen && !_layers.length) closeProps();
 }
 
 // ── pick → record inspector: a CLICK (not a drag) GPU-picks the element under
 // the cursor (record index), then fetches the full source row — O(1) for LAS
 // (fixed records), an early-exit sweep for CSV — into the right panel. ──
 function showRecPanel(title, rows, note) {
+  if (_propOpen) closeProps();
   $('#rpTitle').textContent = title;
   let h = rows.map(([k, v]) => `<div class="rp-row"><span class="k" title="${k}">${k}</span><span class="v">${v}</span></div>`).join('');
   if (note) h += `<div class="rp-note">${note}</div>`;
@@ -2669,7 +2969,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

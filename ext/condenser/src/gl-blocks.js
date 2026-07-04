@@ -40,6 +40,8 @@ uniform sampler2D uRamp;
 uniform sampler2D uPalette;
 uniform sampler2D uMask;                // filter bitmask by record index (8192-wide)
 uniform float uFilterOn, uIsolate;
+uniform sampler2D uCatVis;              // 256x1 per-class visibility
+uniform float uCatVisOn;
 uniform float uForceSplat;              // 1 = whole chunk demoted (cheap far-field path)
 uniform float uFixedSplat;              // 1 = points view: fixed-px splats regardless of block size
 uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
@@ -69,6 +71,7 @@ void main() {
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;   // centroid-in-slab
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aCat) & 255, 0), 0).r < 0.5) vCull = 1.0;
   float quadR = uFixedSplat > 0.5
     ? uPointPx * 0.5 * distEff / uPerspScale
     : mix(r, max(uPointPx * 0.5, pxR) * distEff / uPerspScale, demoted);
@@ -185,6 +188,7 @@ export function createBlocksPipeline(gl) {
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'), repaint: U('uRepaint'),
+      catVis: U('uCatVis'), catVisOn: U('uCatVisOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
@@ -243,7 +247,7 @@ export function createBlocksPipeline(gl) {
 
   // Per-frame program state (called once before the chunk loop) — set on BOTH
   // programs so drawSlice can switch freely between full and cheap.
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, catVisTex = null }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -283,6 +287,8 @@ export function createBlocksPipeline(gl) {
       gl.uniform1f(uni.filterOn, maskTex ? 1 : 0);
       gl.uniform1f(uni.isolate, isolate ? 1 : 0);
       if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uni.mask, 4); }
+      gl.uniform1f(uni.catVisOn, catVisTex ? 1 : 0);
+      if (catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, catVisTex); gl.uniform1i(uni.catVis, 5); }
     }
     active = full;
     gl.useProgram(full.prog);
