@@ -1395,33 +1395,28 @@ $('#exGo').onclick = async () => {
 // selection masks (flags) or in a numeric ratio column on the painted-column
 // storage (fraction-inside, the tonnage-weighting half). |w| ≥ 0.5 so flipped
 // solids classify the same; mesh-bbox pretests short-circuit the far field.
-async function meshSolidOf(L) {
-  if (L._solid) return L._solid;
-  const md = L.docs && L.docs.meshDoc;
-  if (!md || md.header.soup) return null;                  // context tier only (soup keeps no CPU triangles)
-  $('#meta').textContent = `${L.label || L.name} — reading triangles…`;
-  await new Promise((r) => setTimeout(r));
-  const open = /\.msh$/i.test(md.name) ? openMsh : /\.obj$/i.test(md.name) ? openObj : openPlyMesh;
-  const m = await open(md.blob);
-  $('#meta').textContent = `${L.label || L.name} — building BVH (${(m.triangles.length / 3).toLocaleString()} triangles)…`;
+async function meshSolidOf(meshL, variant = 'solid') {
+  meshL._solidBVH = meshL._solidBVH || {};
+  if (meshL._solidBVH[variant]) return meshL._solidBVH[variant];
+  const m = await meshVariant(meshL, variant);
+  if (!m) return null;
+  $('#meta').textContent = `${meshL.label || meshL.name} — building BVH…`;
   await new Promise((r) => setTimeout(r));
   const bvh = buildBVH(m.vertices, m.triangles);
-  const bb = m.header.bbox;                                // {min, max} → flat [x0,y0,z0,x1,y1,z1]
-  L._solid = { vertices: m.vertices, triangles: m.triangles, nodes: bvh.nodes, triIndices: bvh.triIndices, bbox: [...bb.min, ...bb.max] };
-  return L._solid;
+  meshL._solidBVH[variant] = { vertices: m.vertices, triangles: m.triangles, nodes: bvh.nodes, triIndices: bvh.triIndices, bbox: m.bbox };
+  return meshL._solidBVH[variant];
 }
-// parse the mesh ONCE, orient it outward (signed volume — the library's
-// dense evaluator uses w >= 0.5, so a flipped solid must be righted), cache
-async function solidOrientedMesh(meshL) {
-  if (meshL._solidMesh) return meshL._solidMesh;
-  const md = meshL.docs && meshL.docs.meshDoc;
-  if (!md || md.header.soup) return null;
-  const open = /\.msh$/i.test(md.name) ? openMsh : /\.obj$/i.test(md.name) ? openObj : openPlyMesh;
-  const m = await open(md.blob);
-  // signed volume vs the bbox center (f64 cancellation guard at UTM magnitudes)
-  const bb = m.header.bbox;
-  const c0 = [(bb.min[0] + bb.max[0]) / 2, (bb.min[1] + bb.max[1]) / 2, (bb.min[2] + bb.max[2]) / 2];
-  const V = m.vertices, T = m.triangles;
+// parse the mesh ONCE; measure its topology (boundary-edge map — closed =
+// every edge shared by exactly two triangles); orient closed meshes outward
+// by signed volume (the dense evaluator is w >= 0.5). Cached per layer.
+function orientBySignedVolume(V, T) {
+  let mx0 = Infinity, my0 = Infinity, mz0 = Infinity, mx1 = -Infinity, my1 = -Infinity, mz1 = -Infinity;
+  for (let i = 0; i < V.length; i += 3) {
+    if (V[i] < mx0) mx0 = V[i]; if (V[i] > mx1) mx1 = V[i];
+    if (V[i + 1] < my0) my0 = V[i + 1]; if (V[i + 1] > my1) my1 = V[i + 1];
+    if (V[i + 2] < mz0) mz0 = V[i + 2]; if (V[i + 2] > mz1) mz1 = V[i + 2];
+  }
+  const c0 = [(mx0 + mx1) / 2, (my0 + my1) / 2, (mz0 + mz1) / 2];
   let vol = 0;
   for (let t = 0; t < T.length; t += 3) {
     const ax = V[T[t] * 3] - c0[0], ay = V[T[t] * 3 + 1] - c0[1], az = V[T[t] * 3 + 2] - c0[2];
@@ -1429,27 +1424,98 @@ async function solidOrientedMesh(meshL) {
     const cx = V[T[t + 2] * 3] - c0[0], cy = V[T[t + 2] * 3 + 1] - c0[1], cz = V[T[t + 2] * 3 + 2] - c0[2];
     vol += ax * (by * cz - bz * cy) + ay * (bz * cx - bx * cz) + az * (bx * cy - by * cx);
   }
-  let tris = T;
-  if (vol < 0) {                                           // inward-wound: flip
-    tris = new Uint32Array(T.length);
-    for (let t = 0; t < T.length; t += 3) { tris[t] = T[t]; tris[t + 1] = T[t + 2]; tris[t + 2] = T[t + 1]; }
+  if (vol >= 0) return T;
+  const flipped = new Uint32Array(T.length);
+  for (let t = 0; t < T.length; t += 3) { flipped[t] = T[t]; flipped[t + 1] = T[t + 2]; flipped[t + 2] = T[t + 1]; }
+  return flipped;
+}
+async function solidOrientedMesh(meshL) {
+  if (meshL._solidMesh) return meshL._solidMesh;
+  const md = meshL.docs && meshL.docs.meshDoc;
+  if (!md || md.header.soup) return null;                  // context tier only (soup keeps no CPU triangles)
+  const open = /\.msh$/i.test(md.name) ? openMsh : /\.obj$/i.test(md.name) ? openObj : openPlyMesh;
+  const m = await open(md.blob);
+  // topology: edge → face count; a boundary edge has exactly one face
+  const edges = new Map();
+  const T = m.triangles;
+  for (let t = 0; t < T.length; t += 3) {
+    for (let e = 0; e < 3; e++) {
+      const a = T[t + e], b2 = T[t + (e + 1) % 3];
+      const key = a < b2 ? a * 4294967296 + b2 : b2 * 4294967296 + a;
+      edges.set(key, (edges.get(key) || 0) + 1);
+    }
   }
-  meshL._solidMesh = { vertices: V, triangles: tris, bbox: [...bb.min, ...bb.max] };
+  const boundary = [];
+  for (let t = 0; t < T.length; t += 3) {
+    for (let e = 0; e < 3; e++) {
+      const a = T[t + e], b2 = T[t + (e + 1) % 3];
+      const key = a < b2 ? a * 4294967296 + b2 : b2 * 4294967296 + a;
+      if (edges.get(key) === 1) boundary.push(a, b2);
+    }
+  }
+  const closed = boundary.length === 0;
+  const bb = m.header.bbox;
+  const tris = closed ? orientBySignedVolume(m.vertices, T) : T;
+  meshL._solidMesh = {
+    vertices: m.vertices, triangles: tris,
+    bbox: [...bb.min, ...bb.max],
+    closed, boundaryEdges: boundary.length / 2, boundary,
+  };
   return meshL._solidMesh;
 }
-// the cached @gcu/winding engine per mesh layer: a Web Worker when the
-// environment allows (WebGPU inside it when present), silent main-thread CPU
-// fallback otherwise (file:// blocks blob workers)
-async function meshWinding(meshL) {
-  if (meshL._windingEngine) return meshL._windingEngine;
+// a surface CLOSURE: the boundary edges fan to an apex far below ('below') or
+// above ('above') → a watertight volume = everything on that side of the
+// surface within its footprint. Signed-volume re-orient makes w ≥ 0.5 inside;
+// beyond the footprint is genuinely outside — unclassified, honestly.
+function surfaceClosure(m, dir) {
+  const [bx0, by0, bz0, bx1, by1, bz1] = m.bbox;
+  const reach = Math.max(bx1 - bx0, by1 - by0, bz1 - bz0, 1) * 4;
+  const apexZ = dir === 'below' ? bz0 - reach : bz1 + reach;
+  const nv = m.vertices.length / 3;
+  const V = new Float64Array(m.vertices.length + 3);
+  V.set(m.vertices);
+  V[nv * 3] = (bx0 + bx1) / 2; V[nv * 3 + 1] = (by0 + by1) / 2; V[nv * 3 + 2] = apexZ;
+  const fan = new Uint32Array(m.triangles.length + (m.boundary.length / 2) * 3);
+  fan.set(m.triangles);
+  let at = m.triangles.length;
+  for (let e = 0; e < m.boundary.length; e += 2) {
+    // REVERSED boundary direction — the skirt is the "second face" of each
+    // boundary edge, so it must traverse it backwards to stay consistently
+    // wound with the sheet (else the signed volume cancels and w goes mixed)
+    fan[at++] = m.boundary[e + 1]; fan[at++] = m.boundary[e]; fan[at++] = nv;
+  }
+  const tris = orientBySignedVolume(V, fan);
+  const bbox = [bx0, by0, Math.min(bz0, apexZ), bx1, by1, Math.max(bz1, apexZ)];
+  return { vertices: V, triangles: tris, bbox, closed: true };
+}
+// the query VARIANT for a mode: a closed mesh is its own solid; an open
+// surface answers below/above through its closures. Cached per layer.
+async function meshVariant(meshL, variant) {
   const m = await solidOrientedMesh(meshL);
   if (!m) return null;
-  let W = null;
-  try { W = await Winding.create({ worker: true, gpu: true }); }
-  catch { W = await Winding.create({}); }
-  W.setMesh(m.vertices, m.triangles, { frame });
-  meshL._windingEngine = W;
-  return W;
+  if (variant === 'solid' || m.closed) return m;           // closed meshes ignore below/above (inside covers it)
+  meshL._variants = meshL._variants || {};
+  if (!meshL._variants[variant]) meshL._variants[variant] = surfaceClosure(m, variant);
+  return meshL._variants[variant];
+}
+// the cached @gcu/winding engine per mesh layer// the cached @gcu/winding engine per mesh layer: a Web Worker when the
+// environment allows (WebGPU inside it when present), silent main-thread CPU
+// fallback otherwise (file:// blocks blob workers)
+async function meshWinding(meshL, variant = 'solid') {
+  const m = await meshVariant(meshL, variant);
+  if (!m) return null;
+  if (!meshL._windingEngine) {
+    let W = null;
+    try { W = await Winding.create({ worker: true, gpu: true }); }
+    catch { W = await Winding.create({}); }
+    meshL._windingEngine = W;
+    meshL._windingMeshes = new Set();
+  }
+  if (!meshL._windingMeshes.has(variant)) {
+    meshL._windingEngine.setMesh(m.vertices, m.triangles, { frame, name: variant });
+    meshL._windingMeshes.add(variant);
+  }
+  return meshL._windingEngine;
 }
 // dense clipped-lattice evaluation for GRID layers: the block model's lattice
 // clipped to the solid's bbox (the pretest, expressed as lattice clipping —
@@ -1457,12 +1523,12 @@ async function meshWinding(meshL) {
 // (worker + per-layer progress), then one cheap position pass maps records
 // onto the lattice. Returns null when the layer has no regular grid.
 let _sbActive = null;                                      // { W, meshL, reject } while a dense run is up
-async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgress } = {}) {
+async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgress, variant = 'solid' } = {}) {
   const doc = L.docs.blockDoc;
   const grid = doc && (doc.grid || (doc.header && doc.header.grid));
   if (!grid || !grid.size || !grid.count) return null;
-  const m = await solidOrientedMesh(meshL);
-  const W = await meshWinding(meshL);
+  const m = await meshVariant(meshL, variant);
+  const W = await meshWinding(meshL, variant);
   if (!m || !W) return null;
   const [dx, dy, dz] = grid.size;
   const [nx, ny, nz] = grid.count;
@@ -1491,7 +1557,7 @@ async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgr
   let result;
   try {
     result = await Promise.race([
-      W.evaluate(bm, { mode, resolution, threshold: 0.5, frame, onProgress }),
+      W.evaluate(bm, { mode, resolution, threshold: 0.5, frame, onProgress, mesh: variant }),
       new Promise((_, rej) => { run.reject = rej; }),
     ]);
   } finally { if (_sbActive === run) _sbActive = null; }
@@ -1515,6 +1581,9 @@ function sbCancelActive() {
   _sbActive = null;
   _selEpoch++; _ratioEpoch++;
 }
+// which query variant answers a mode: solids by containment, surfaces by
+// their closures ('between' runs below-of-A AND above-of-B)
+const SB_VARIANT = { inside: 'solid', outside: 'solid', below: 'below', above: 'above' };
 function solidHit(S) {
   const [bx0, by0, bz0, bx1, by1, bz1] = S.bbox;
   return (x, y, z) =>
@@ -1547,13 +1616,15 @@ async function* layerPositions(L) {
     yield { x: rc2.x, y: rc2.y, z: rc2.z, recs: rc2.recIdx || null, base: rc2.recStart || 0, count: rc2.count };
   }
 }
-async function selectBySolid(meshL, { mode = 'inside', targets = null, combine = 'replace', onProgress = null } = {}) {
+async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = null, combine = 'replace', onProgress = null } = {}) {
+  const between = mode === 'between';
+  const variant = between ? 'below' : (SB_VARIANT[mode] || 'solid');
   const want = mode !== 'outside';
   const epoch = ++_selEpoch;
   if (combine === 'replace') clearSelection({ silent: true });
   const v = combine === 'subtract' ? 0 : 1;
   const Ls = targets || _layers.filter((L) => L.visible && L.kind !== 'mesh' && attrRowCountOf(L) > 0);
-  let S = null;                                            // the sparse-path BVH, built lazily
+  let S = null, SB = null;                                 // the sparse-path BVHs, built lazily
   for (let li = 0; li < Ls.length; li++) {
     const L = Ls[li];
     const n = attrRowCountOf(L);
@@ -1564,13 +1635,16 @@ async function selectBySolid(meshL, { mode = 'inside', targets = null, combine =
     $('#meta').textContent = `select by solid: sweeping ${L.label || L.name}…`;
     try {
       // grid layers: the dense engine (worker + clipped lattice) — centroids only
-      const dense = L.docs.blockDoc ? await evalSolidOnGrid(meshL, L, { mode: 'flag', onProgress: (f) => prog(f * 0.8, 'winding') }) : null;
-      if (dense) {
+      const dense = L.docs.blockDoc ? await evalSolidOnGrid(meshL, L, { mode: 'flag', variant, onProgress: (f) => prog(f * (between ? 0.4 : 0.8), 'winding') }) : null;
+      const denseB = dense && between ? await evalSolidOnGrid(meshB, L, { mode: 'flag', variant: 'above', onProgress: (f) => prog(0.4 + f * 0.4, 'winding B') }) : null;
+      if (dense && (!between || denseB)) {
         let done = 0;
         for await (const ch of layerPositions(L)) {
           if (epoch !== _selEpoch) return;
           for (let i = 0; i < ch.count; i++) {
-            if ((dense.lookup(ch.x[i], ch.y[i], ch.z[i]) >= 1) === want) {
+            const hitA = dense.lookup(ch.x[i], ch.y[i], ch.z[i]) >= 1;
+            const hit = between ? (hitA && denseB.lookup(ch.x[i], ch.y[i], ch.z[i]) >= 1) : (hitA === want);
+            if (hit) {
               const r = ch.recs ? (ch.recs[i] & 0x1FFFFFFF) : ch.base + i;
               if (r < n) m[r] = v;
             }
@@ -1580,14 +1654,18 @@ async function selectBySolid(meshL, { mode = 'inside', targets = null, combine =
           await new Promise((r2) => setTimeout(r2));
         }
       } else {
-        if (!S) S = await meshSolidOf(meshL);
-        if (!S) { $('#meta').textContent = 'select by solid: needs a context-tier mesh'; return; }
-        const inside = solidHit(S);
+        if (!S) S = await meshSolidOf(meshL, variant);
+        if (between && !SB) SB = await meshSolidOf(meshB, 'above');
+        if (!S || (between && !SB)) { $('#meta').textContent = 'select by solid: needs context-tier meshes'; return; }
+        const inA = solidHit(S);
+        const inB = between ? solidHit(SB) : null;
         let done = 0;
         for await (const ch of layerPositions(L)) {
           if (epoch !== _selEpoch) return;
           for (let i = 0; i < ch.count; i++) {
-            if (inside(ch.x[i], ch.y[i], ch.z[i]) === want) {
+            const hitA = inA(ch.x[i], ch.y[i], ch.z[i]);
+            const hit = between ? (hitA && inB(ch.x[i], ch.y[i], ch.z[i])) : (hitA === want);
+            if (hit) {
               const r = ch.recs ? (ch.recs[i] & 0x1FFFFFFF) : ch.base + i;
               if (r < n) m[r] = v;
             }
@@ -1614,24 +1692,33 @@ async function selectBySolid(meshL, { mode = 'inside', targets = null, combine =
 // the sampling error). Lands on the painted-column storage, kind 'ratio' —
 // filter / scan / table / export see a plain numeric column.
 let _ratioEpoch = 0;
-async function ratioBySolid(meshL, L, { name, res = 3, onProgress = null } = {}) {
+async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = null, onProgress = null } = {}) {
   const doc = L.docs.blockDoc;
   const grid = doc && (doc.grid || (doc.header && doc.header.grid));
   if (!grid || !grid.size) { $('#meta').textContent = 'ratio by solid: needs a regular block model'; return null; }
   const resolution = Array.isArray(res) ? res.map((v) => Math.max(1, v | 0)) : [res, res, res];
+  const between = mode === 'between';
+  const variant = between ? 'below' : (SB_VARIANT[mode] || 'solid');
   const epoch = ++_ratioEpoch;
   $('#meta').textContent = 'ratio by solid: winding sweep…';
-  let dense;
+  let dense, denseB = null;
   try {
     dense = await evalSolidOnGrid(meshL, L, {
-      mode: 'proportion', resolution,
+      mode: 'proportion', resolution, variant,
       onProgress: (f) => {
-        if (onProgress) onProgress(f * 0.85, 'winding sweep');
+        if (onProgress) onProgress(f * (between ? 0.45 : 0.85), 'winding sweep');
         $('#meta').textContent = `ratio by solid: winding sweep ${Math.round(f * 100)}%…`;
       },
     });
+    if (between) denseB = await evalSolidOnGrid(meshB, L, {
+      mode: 'proportion', resolution, variant: 'above',
+      onProgress: (f) => {
+        if (onProgress) onProgress(0.45 + f * 0.4, 'winding sweep B');
+        $('#meta').textContent = `ratio by solid: second surface ${Math.round(f * 100)}%…`;
+      },
+    });
   } catch (e) { if (e.message !== 'cancelled') $('#meta').textContent = `ratio by solid: ${e.message}`; return null; }
-  if (!dense) { $('#meta').textContent = 'ratio by solid: needs a context-tier mesh + a regular model'; return null; }
+  if (!dense || (between && !denseB)) { $('#meta').textContent = 'ratio by solid: needs context-tier meshes + a regular model'; return null; }
   if (epoch !== _ratioEpoch) return null;
   const col = createPaintCol(L, name, 'ratio');
   if (!col) return null;
@@ -1641,7 +1728,11 @@ async function ratioBySolid(meshL, L, { name, res = 3, onProgress = null } = {})
   for await (const ch of layerPositions(L)) {
     if (epoch !== _ratioEpoch) return null;
     for (let i = 0; i < ch.count; i++) {
-      const p2 = dense.lookup(ch.x[i], ch.y[i], ch.z[i]);
+      let p2 = dense.lookup(ch.x[i], ch.y[i], ch.z[i]);
+      // between = fraction below A AND above B: exact for non-crossing
+      // surfaces (probe columns are monotone), conservative when they cross
+      if (between) p2 = Math.max(0, p2 + denseB.lookup(ch.x[i], ch.y[i], ch.z[i]) - 1);
+      else if (mode === 'outside') p2 = 1 - p2;
       if (!p2) continue;
       const r = ch.recs ? (ch.recs[i] & 0x1FFFFFFF) : ch.base + i;
       if (r < n) { codes[r] = Math.round(255 * p2); touched++; }
@@ -1664,11 +1755,13 @@ async function ratioBySolid(meshL, L, { name, res = 3, onProgress = null } = {})
 // NEW painted column — one step instead of select-then-apply, and because it
 // IS a painted column you can touch it up with the brush afterwards. Works
 // on any table-backed layer (blocks, xyz points, drillholes).
-async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside', onProgress = null } = {}) {
+async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside', meshB = null, onProgress = null } = {}) {
+  const between = mode === 'between';
+  const variant = between ? 'below' : (SB_VARIANT[mode] || 'solid');
   const want = mode !== 'outside';
   const epoch = ++_ratioEpoch;
   let made = 0;
-  let S = null;
+  let S = null, SB = null;
   for (let li = 0; li < targets.length; li++) {
     const L = targets[li];
     if (!layerTableHeader(L)) continue;                    // painted columns need a table behind them
@@ -1681,13 +1774,16 @@ async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside'
     let cnt = 0, done = 0;
     $('#meta').textContent = `flag by solid: sweeping ${L.label || L.name}…`;
     try {
-      const dense = L.docs.blockDoc ? await evalSolidOnGrid(meshL, L, { mode: 'flag', onProgress: (f) => prog(f * 0.8, 'winding') }) : null;
+      const dense = L.docs.blockDoc ? await evalSolidOnGrid(meshL, L, { mode: 'flag', variant, onProgress: (f) => prog(f * (between ? 0.4 : 0.8), 'winding') }) : null;
+      const denseB = dense && between ? await evalSolidOnGrid(meshB, L, { mode: 'flag', variant: 'above', onProgress: (f) => prog(0.4 + f * 0.4, 'winding B') }) : null;
       if (epoch !== _ratioEpoch) return made;
-      if (dense) {
+      if (dense && (!between || denseB)) {
         for await (const ch of layerPositions(L)) {
           if (epoch !== _ratioEpoch) return made;
           for (let i = 0; i < ch.count; i++) {
-            if ((dense.lookup(ch.x[i], ch.y[i], ch.z[i]) >= 1) === want) {
+            const hitA = dense.lookup(ch.x[i], ch.y[i], ch.z[i]) >= 1;
+            const hit = between ? (hitA && denseB.lookup(ch.x[i], ch.y[i], ch.z[i]) >= 1) : (hitA === want);
+            if (hit) {
               const r = ch.recs ? (ch.recs[i] & 0x1FFFFFFF) : ch.base + i;
               if (r < n) { codes[r] = code; cnt++; }
             }
@@ -1697,13 +1793,17 @@ async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside'
           await new Promise((r2) => setTimeout(r2));
         }
       } else {
-        if (!S) S = await meshSolidOf(meshL);
-        if (!S) { $('#meta').textContent = 'flag by solid: needs a context-tier mesh'; return made; }
-        const inside = solidHit(S);
+        if (!S) S = await meshSolidOf(meshL, variant);
+        if (between && !SB) SB = await meshSolidOf(meshB, 'above');
+        if (!S || (between && !SB)) { $('#meta').textContent = 'flag by solid: needs context-tier meshes'; return made; }
+        const inA = solidHit(S);
+        const inB = between ? solidHit(SB) : null;
         for await (const ch of layerPositions(L)) {
           if (epoch !== _ratioEpoch) return made;
           for (let i = 0; i < ch.count; i++) {
-            if (inside(ch.x[i], ch.y[i], ch.z[i]) === want) {
+            const hitA = inA(ch.x[i], ch.y[i], ch.z[i]);
+            const hit = between ? (hitA && inB(ch.x[i], ch.y[i], ch.z[i])) : (hitA === want);
+            if (hit) {
               const r = ch.recs ? (ch.recs[i] & 0x1FFFFFFF) : ch.base + i;
               if (r < n) { codes[r] = code; cnt++; }
             }
@@ -1739,17 +1839,28 @@ function openSolidDialog(meshL0) {
   if (!elements.length) { $('#meta').textContent = 'select by solid: no element layers to classify'; return; }
   _sbDlg = {
     solid: (meshL0 && solids.includes(meshL0) ? meshL0 : solids[0]).id,
-    act: 'select', side: 'inside', combine: 'replace',
+    act: 'select', side: null, combine: 'replace',
     res: [3, 3, 3], name: null, flagName: null, flagLabel: 'IN',
     targets: new Set(elements.filter((L) => L.visible).map((L) => L.id)),
-    ratioLid: null,
+    ratioLid: null, surfB: null,
   };
   renderSolidDialog();
   $('#sbDlg').classList.add('show');
+  sbEnsureTopology();
+}
+// topology drives the dialog's grammar (inside/outside vs below/above/between);
+// it needs the mesh parsed — kick the read, re-render when it lands
+async function sbEnsureTopology() {
+  const d = _sbDlg; if (!d) return;
+  const meshL = layerById(d.solid);
+  if (!meshL || meshL._solidMesh) return;
+  await solidOrientedMesh(meshL);
+  if (_sbDlg === d) renderSolidDialog();
 }
 function sbDefaultName(d) {
   const meshL = layerById(d.solid);
-  return ('IN_' + (meshL ? (meshL.label || meshL.name) : 'SOLID')).replace(/\.[^.]+$/, '').replace(/[^\w]+/g, '_').toUpperCase().slice(0, 24);
+  const pre = { below: 'BELOW_', above: 'ABOVE_', between: 'BTW_' }[d.side] || 'IN_';
+  return (pre + (meshL ? (meshL.label || meshL.name) : 'SOLID')).replace(/\.[^.]+$/, '').replace(/[^\w]+/g, '_').toUpperCase().slice(0, 24);
 }
 function renderSolidDialog() {
   const d = _sbDlg; if (!d) return;
@@ -1776,13 +1887,41 @@ function renderSolidDialog() {
   const sSel = document.createElement('select');
   for (const L of solids) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; sSel.appendChild(o); }
   sSel.value = String(d.solid);
-  sSel.onchange = () => { d.solid = +sSel.value; d.name = null; d.flagName = null; renderSolidDialog(); };
-  mkRow2('solid', sSel);
+  sSel.onchange = () => { d.solid = +sSel.value; d.name = null; d.flagName = null; d.side = null; renderSolidDialog(); sbEnsureTopology(); };
+  mkRow2('geometry', sSel);
+  const meshSel = layerById(d.solid);
+  const topo = meshSel && meshSel._solidMesh;
+  const tNote = document.createElement('div'); tNote.className = 'pp-note';
+  tNote.textContent = !topo ? 'reading mesh topology…'
+    : topo.closed ? 'closed solid — inside / outside apply'
+    : `open surface (${topo.boundaryEdges.toLocaleString()} boundary edges) — above / below / between apply, via winding closures`;
+  body.appendChild(tNote);
+  const isSurf = topo && !topo.closed;
+  const sides = isSurf ? [['below', 'below'], ['above', 'above'], ['between', 'between']] : [['inside', 'inside'], ['outside', 'outside']];
+  if (!d.side || !sides.some(([k]) => k === d.side)) d.side = sides[0][0];
   mkRadios(mkRow2('do'), 'sbact',
-    [['select', 'select'], ['flag', 'flag column'], ['ratio', 'fraction-inside column']],
+    [['select', 'select'], ['flag', 'flag column'], ['ratio', 'fraction column']],
     d.act, (k) => { d.act = k; renderSolidDialog(); });
-  if (d.act !== 'ratio') {
-    mkRadios(mkRow2('which'), 'sbside', [['inside', 'inside'], ['outside', 'outside']], d.side, (k) => { d.side = k; });
+  if (d.act !== 'ratio' || isSurf) {
+    mkRadios(mkRow2('which'), 'sbside', sides, d.side, (k) => { d.side = k; renderSolidDialog(); });
+  }
+  if (isSurf && d.side === 'between') {
+    const others = _layers.filter((L) => L.kind === 'mesh' && L.id !== d.solid && L.docs.meshDoc && !L.docs.meshDoc.header.soup && L._solidMesh && !L._solidMesh.closed);
+    if (!others.length) {
+      body.appendChild(ppNote('between needs a SECOND open surface layer (open one, or wait for topology reads)'));
+      _layers.filter((L) => L.kind === 'mesh' && L.id !== d.solid && L.docs.meshDoc && !L.docs.meshDoc.header.soup && !L._solidMesh)
+        .forEach((L) => solidOrientedMesh(L).then(() => { if (_sbDlg === d) renderSolidDialog(); }));
+      $('#sbGo').disabled = true;
+    } else {
+      $('#sbGo').disabled = false;
+      if (d.surfB == null || !others.some((L) => L.id === d.surfB)) d.surfB = others[0].id;
+      const bSel = document.createElement('select');
+      for (const L of others) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; bSel.appendChild(o); }
+      bSel.value = String(d.surfB);
+      bSel.onchange = () => { d.surfB = +bSel.value; };
+      mkRow2('lower', bSel);
+      body.appendChild(ppNote('between = below the first surface AND above this one'));
+    }
   }
   if (d.act === 'ratio') {
     const grids = _layers.filter((L) => { const doc = L.docs.blockDoc; return doc && (doc.grid || (doc.header && doc.header.grid)); });
@@ -1874,19 +2013,22 @@ $('#sbGo').onclick = async () => {
   for (const el of $('#sbDlgBody').querySelectorAll('input, select')) el.disabled = true;
   sbProgress(0.001, 'starting');
   try {
+    const meshB = d.side === 'between' ? layerById(d.surfB) : null;
+    const topo2 = layerById(d.solid) && layerById(d.solid)._solidMesh;
+    const rMode = topo2 && !topo2.closed ? d.side : 'inside';
     if (d.act === 'ratio') {
       const L = layerById(d.ratioLid); if (!L) return;
       const defName = sbDefaultName(d);
-      const col = await ratioBySolid(meshL, L, { name: (d.name || defName).trim() || defName, res: d.res, onProgress: sbProgress });
+      const col = await ratioBySolid(meshL, L, { name: (d.name || defName).trim() || defName, res: d.res, mode: rMode, meshB, onProgress: sbProgress });
       if (!col) { sbProgress(0, ''); $('#sbDlgMsg').textContent = $('#meta').textContent; return; }
     } else if (d.act === 'flag') {
       const defName = sbDefaultName(d);
       const made = await flagBySolid(meshL, _layers.filter((L) => d.targets.has(L.id)), {
-        name: (d.flagName || defName).trim() || defName, label: d.flagLabel || 'IN', mode: d.side, onProgress: sbProgress,
+        name: (d.flagName || defName).trim() || defName, label: d.flagLabel || 'IN', mode: d.side, meshB, onProgress: sbProgress,
       });
       if (!made) { sbProgress(0, ''); $('#sbDlgMsg').textContent = $('#meta').textContent || 'no layer took the column'; return; }
     } else {
-      await selectBySolid(meshL, { mode: d.side, targets: _layers.filter((L) => d.targets.has(L.id)), combine: d.combine, onProgress: sbProgress });
+      await selectBySolid(meshL, { mode: d.side, meshB, targets: _layers.filter((L) => d.targets.has(L.id)), combine: d.combine, onProgress: sbProgress });
     }
     if (_sbDlg) { $('#sbDlg').classList.remove('show'); _sbDlg = null; }
   } finally {
@@ -3450,7 +3592,11 @@ function showFileInfo() {
   const row = (k, v) => rows.push(`<tr><td class="fi-k">${k}</td><td>${v}</td></tr>`);
   row('file', V(meshDoc ? meshDoc.name : _blockDoc ? _blockDoc.name : _plyDoc ? _plyDoc.name : 'point cloud'));
   row('kind', V(meshDoc ? `${h.soup ? 'streamed mesh' : 'context mesh'} (${h.format})` : _dhDoc ? `drillholes (${h.method === 'minimumCurvature' ? 'minimum curvature' : h.method}, dip ${h.dipConvention})` : _lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
-  if (meshDoc) { row('triangles', num(h.triCount)); row('vertices', num(h.vertexCount)); }
+  if (meshDoc) {
+    row('triangles', num(h.triCount)); row('vertices', num(h.vertexCount));
+    const tp = AL0 && AL0._solidMesh;
+    if (tp) row('topology', V(tp.closed ? 'closed solid (watertight)' : `open surface · ${tp.boundaryEdges.toLocaleString()} boundary edges`));
+  }
   else row('records', num(h.count));
   if (_dhDoc) {
     row('holes', num(h.holes));
@@ -3626,7 +3772,7 @@ Tools → <b>Select through (volume)</b> flips the tools to the extruded tube: E
 <b>rule-based styling</b> — style mode <b>rule-based</b> (block models + drillholes): ordered rules, each an expression (<code>FE > 60 and LITO = "HEM"</code>) with a name + color; ONE sweep over the table paints each record with its first matching rule (drag to re-prioritize), everything unmatched wears the <b>else</b> color; per-rule eyes hide a rule's records (draw + pick, GPU-side); counts per rule after the sweep; rules persist in the project and re-sweep on load<br>
 <b>paint to column</b> (<code>b</code> / the brush button / Data menu) — interactive domaining: a PAINTED column is a category column you fill by hand. The palette window (layer-pinned, like tables) picks the column + the value; while a value is armed, the <code>r</code> / <code>v</code> gestures PAINT it onto whatever they cross (<b>alt</b> erases, Tools → Select through paints the whole tube, <code>Esc</code> puts the brush down, <code>Ctrl+Z</code> undoes a stroke); or build a careful selection first and <b>apply to selection</b>. While painting the layer colors by the column (unpainted recedes dark); painted values are REAL columns — the filter (<code>DOMAIN = "HW_OXIDE"</code>), the scan, the attribute table, and the record panel all see them; they persist in the project<br>
 <b>export rows</b> (Data → Export rows… / the layer context menu) — data leaves micro the way it came in, as rows: scope <b>all</b> · <b>filter matches</b> · <b>selection</b>; every column including ƒ calculated and ✎ painted ones (paint a DOMAIN, export it, feed the estimator); CSV with delimiter choice + decimal comma; streamed, so 1.8M rows is one sweep, and opening a .dm then exporting IS the .dm → CSV converter. In the attribute table, <code>Ctrl+C</code> copies the grid selection as TSV<br>
-<b>select by solid</b> (Tools menu / right-click a mesh layer) — a closed context mesh (.msh / .obj / small .ply) classifies records by winding number: <b>select inside/outside</b> sweeps any element layers into the ordinary selection (paint or export it — the solids → coded-model loop), a <b>flag column</b> writes a value (e.g. <code>IN</code>) into a NEW painted column on any table-backed layers — blocks, points, drillholes — which you can then touch up with the brush; or <b>fraction-inside column</b> probes each block of a regular model (any per-axis resolution — 3×3×2 for benches, 10×10×10 for 1 m blocklings) and writes a numeric 0–1 column (<code>%</code> badge) the filter, table, and export all see; all of it works with flipped solids and colors the layer by the result when done<br>
+<b>select by solid</b> (Tools menu / right-click a mesh layer) — a closed context mesh (.msh / .obj / small .ply) classifies records by winding number: <b>select inside/outside</b> sweeps any element layers into the ordinary selection (paint or export it — the solids → coded-model loop), a <b>flag column</b> writes a value (e.g. <code>IN</code>) into a NEW painted column on any table-backed layers — blocks, points, drillholes — which you can then touch up with the brush; or <b>fraction-inside column</b> probes each block of a regular model (any per-axis resolution — 3×3×2 for benches, 10×10×10 for 1 m blocklings) and writes a numeric 0–1 column (<code>%</code> badge) the filter, table, and export all see; all of it works with flipped solids and colors the layer by the result when done. OPEN SURFACES (topo, weathering horizons — the dialog reads the mesh topology and says which) classify <b>above / below / between</b> instead: the surface is CLOSED by a skirt to a far apex and the same winding containment applies — strong at any depth, and blocks beyond the surface's footprint honestly come back unclassified; <b>between</b> takes a second surface (below the first AND above the second)<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
 <b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; the <b>interval table</b> lists every band with an editable upper bound, a count from the scan, and (classed) a color chip per shell; quantile/equal auto-breaks from the scan<br><br>
@@ -4815,7 +4961,7 @@ function renderRampSection(body, L) {
     bIn.onblur = () => { if (bIn.value !== ((rampCfgOf(L) || {}).breaks || []).map((v) => fmtStat(v)).join(', ')) applyBreaks(); };
     body.appendChild(mkRow('breaks', bIn));
   }
-  if (!isChan) return;                                     // the histogram is scan-fed and channel-only (for now)
+  if (!isChan && !isRatio) return;                         // the histogram is scan-fed — channels and ratio columns have stats
   const h = layerTableHeader(L);
   const colName = isRatio ? String(selv).slice(6) : (h && h.columns[+String(selv).slice(5)]);
   const stat = colName && L._colStats && L._colStats[colName];
