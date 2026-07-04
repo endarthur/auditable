@@ -658,15 +658,85 @@ function selectByPolygon(poly, mode, isRect) {
   selectionStatus();
   markProjectDirty(); requestRender();
 }
+// VOLUME (through) selection: the lasso extruded through the scene — pure
+// geometry, occlusion ignored (that's the point: grab what's BEHIND too, the
+// mode painting will want). Positions come from the same streams that loaded
+// the data; drillholes resolve O(1) via recordPosition. Cost ≈ one load sweep.
+let _selThrough = false;
+let _selEpoch = 0;
+async function selectVolume(poly, mode, isRect) {
+  const epoch = ++_selEpoch;
+  const o = frame ? frame.origin : [0, 0, 0];
+  const vp = cam.state.viewProj;
+  const rc = cv.getBoundingClientRect();
+  let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+  for (const [x, y] of poly) { if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y; }
+  const inPoly = (px2, py2) => px2 >= bx0 && px2 <= bx1 && py2 >= by0 && py2 <= by1 && (isRect || pipTest(px2, py2, poly));
+  const hit = (wx, wy, wz) => {
+    const X = wx - o[0], Y = wy - o[1], Z = wz - o[2];
+    const cw = vp[3] * X + vp[7] * Y + vp[11] * Z + vp[15];
+    if (cw <= 1e-9) return false;                          // behind the eye
+    const px2 = ((vp[0] * X + vp[4] * Y + vp[8] * Z + vp[12]) / cw * 0.5 + 0.5) * rc.width;
+    const py2 = (0.5 - (vp[1] * X + vp[5] * Y + vp[9] * Z + vp[13]) / cw * 0.5) * rc.height;
+    return inPoly(px2, py2);
+  };
+  if (mode === 'replace') clearSelection({ silent: true });
+  const v = mode === 'subtract' ? 0 : 1;
+  for (const L of _layers) {
+    if (!L.visible || L.kind === 'mesh') continue;
+    const d = L.docs;
+    const n = attrRowCountOf(L);
+    if (!n) continue;
+    if (!L._selMask || L._selMask.length !== n) L._selMask = new Uint8Array(n);
+    const m = L._selMask;
+    $('#meta').textContent = `select through: sweeping ${L.label || L.name}…`;
+    try {
+      if (d.dhDoc && d.dhDoc.recordPosition) {
+        for (let r = 0; r < n; r++) {
+          const pos = d.dhDoc.recordPosition(r);
+          if (pos && hit(pos[0], pos[1], pos[2])) m[r] = v;
+        }
+      } else {
+        // re-open the provider for a fresh position stream (the docs keep the
+        // blob + header; the stream is a cold recipe by design)
+        let streamChunks = null;
+        if (d.blockDoc && d.blockDoc.header.dm) ({ streamChunks } = await openDmModel(d.blockDoc.blob));
+        else if (d.blockDoc) ({ streamChunks } = await openBlockModel(d.blockDoc.blob, { mapping: d.blockDoc.header.mapping }));
+        else if (d.lasDoc) ({ streamChunks } = await openLas(d.lasDoc.blob));
+        else if (d.plyDoc) ({ streamChunks } = await openPly(d.plyDoc.blob));
+        if (!streamChunks) continue;
+        let done = 0;
+        for await (const rc2 of streamChunks({ chunkPoints: 1 << 18 })) {
+          if (epoch !== _selEpoch) return;                 // superseded by a newer gesture
+          const xs = rc2.x, ys = rc2.y, zs = rc2.z;
+          const recs = rc2.recIdx || null;
+          const base = rc2.recStart || 0;
+          for (let i = 0; i < rc2.count; i++) {
+            if (hit(xs[i], ys[i], zs[i])) {
+              const r = recs ? recs[i] : base + i;
+              if (r < n) m[r] = v;
+            }
+          }
+          done += rc2.count;
+          if ((done & 0xFFFFF) === 0) { $('#meta').textContent = `select through: ${L.label || L.name} — ${done.toLocaleString()} scanned…`; await new Promise((r2) => setTimeout(r2)); }
+        }
+      }
+    } catch (e) { $('#meta').textContent = `select through: ${L.name} — ${e.message}`; }
+    applyLayerSelection(L);
+  }
+  if (epoch !== _selEpoch) return;
+  selectionStatus();
+  markProjectDirty(); requestRender();
+}
 // gesture arming — the knife's grammar: one-shot, capture-phase, Esc cancels
 let _selArm = null;                                        // 'rect' | 'lasso' | null
 let _selPts = null;
 function armSelect(kind) {
   _selArm = kind; _selPts = null;
   cv.style.cursor = 'crosshair';
-  $('#meta').textContent = kind === 'rect'
+  $('#meta').textContent = (kind === 'rect'
     ? 'select: drag a rectangle — shift adds, alt subtracts'
-    : 'select: draw a lasso — shift adds, alt subtracts';
+    : 'select: draw a lasso — shift adds, alt subtracts') + (_selThrough ? ' · THROUGH (everything in the tube)' : ' · visible');
 }
 function disarmSelect() {
   _selArm = null; _selPts = null;
@@ -706,8 +776,9 @@ cv.addEventListener('pointerup', (e) => {
   const poly = _selPts.slice();
   const kind = _selArm;
   disarmSelect();
-  if (poly.length >= (kind === 'rect' ? 4 : 3)) selectByPolygon(poly, selModeOf(e), kind === 'rect');
-  else $('#meta').textContent = 'selection: nothing there';
+  if (poly.length >= (kind === 'rect' ? 4 : 3)) {
+    (_selThrough ? selectVolume : selectByPolygon)(poly, selModeOf(e), kind === 'rect');
+  } else $('#meta').textContent = 'selection: nothing there';
 }, { capture: true });
 // screenshot: the canvas is the export surface (preserveDrawingBuffer is on)
 $('#btnShot').onclick = () => {
@@ -2289,6 +2360,7 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
   { sep: true },
   { label: 'Select — rectangle', kbd: 'r', action: () => armSelect('rect') },
   { label: 'Select — lasso', kbd: 'v', action: () => armSelect('lasso') },
+  { label: (_selThrough ? '✓ ' : '') + 'Select through (volume)', action: () => { _selThrough = !_selThrough; } },
   { label: 'Clear selection', kbd: 'Esc', action: () => clearSelection() },
   { sep: true },
   { label: 'Section on/off', kbd: 'x', action: toggleSection },
@@ -2312,7 +2384,8 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
-<b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br><br>
+<b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br>
+Tools → <b>Select through (volume)</b> flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
 <b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
@@ -4506,7 +4579,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, openAttrTable, attrTables: _attrTables, selectByPolygon, clearSelection, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
