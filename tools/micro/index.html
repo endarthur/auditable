@@ -247,6 +247,18 @@
   .pp-band .ct { text-align: right; color: var(--dim); font-size: 11px; white-space: nowrap; }
   .pp-cat .grip:hover { color: var(--accent); }
   .pp-cat.drop-above { box-shadow: 0 -2px 0 var(--accent); }
+  .pp-rule { display: grid; grid-template-columns: 12px 16px 16px 62px 1fr 34px 14px; align-items: center; gap: 5px; padding: 3px 2px; border-radius: 2px; }
+  .pp-rule:hover { background: #242424; }
+  .pp-rule.drop-above { box-shadow: 0 -2px 0 var(--accent); }
+  .pp-rule input[type="text"] { width: 100%; box-sizing: border-box; background: #242424; color: var(--text); border: 1px solid var(--border); font: inherit; font-size: 11px; padding: 1px 3px; }
+  .pp-rule input[type="text"].err { border-color: #c0584a; }
+  .pp-rule input[type="checkbox"] { margin: 0; accent-color: var(--accent); justify-self: center; }
+  .pp-rule input[type="color"] { width: 16px; height: 14px; padding: 0; border: 1px solid var(--border); background: none; cursor: pointer; }
+  .pp-rule .ct { text-align: right; color: var(--dim); font-size: 11px; white-space: nowrap; }
+  .pp-rule.off input[type="text"] { color: var(--dim); }
+  .pp-rule .grip { color: var(--dim); cursor: grab; user-select: none; font-size: 10px; }
+  .pp-rule .grip:hover { color: var(--accent); }
+  .pp-rule .else-nm { color: var(--dim); font-size: 11px; }
   #propPanel .pp-foot {
     display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border);
     font-family: var(--mono); font-size: 12px; color: var(--muted);
@@ -427,7 +439,7 @@ function loop(t) {
     cam.setAspect(w / h);
     const clipV = (id) => { const v = $('#' + id).value.trim(); return v === '' ? null : +v; };
     const clipOf = (L) => { const c = [L.clip[0].trim(), L.clip[1].trim()]; return [c[0] === '' ? null : +c[0], c[1] === '' ? null : +c[1]]; };
-    const modeOf = (v) => (v === 'elev' ? 0 : v && v.startsWith('chan:') ? 1 : v === 'cat' ? 2 : v === 'solid' ? 3 : +v || 0);
+    const modeOf = (v) => (v === 'elev' ? 0 : v && v.startsWith('chan:') ? 1 : v === 'cat' || v === 'rules' ? 2 : v === 'solid' ? 3 : +v || 0);
     const layerOpts = {};
     for (const L of _layers) layerOpts[L.id] = { colorMode: L.id === _activeId ? resolveColorMode() : modeOf(L.colorSel), clip: L.id === _activeId ? [clipV('clipMin'), clipV('clipMax')] : clipOf(L) };
     const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')], layerOpts: _layers.length ? layerOpts : null };
@@ -1464,7 +1476,7 @@ function resolveColorMode() {
   const v = $('#colorBy').value;
   if (v === 'elev') return 0;
   if (v.startsWith('chan:')) return 1;
-  if (v === 'cat') return 2;
+  if (v === 'cat' || v === 'rules') return 2;              // rules color through the palette (codes substitute)
   if (v === 'solid') return 3;
   return +v || 0;                                          // LAS numeric values
 }
@@ -1479,6 +1491,7 @@ function setColorLabels(header) {
   let h = '<option value="elev">elevation</option>';
   for (const c of header.numericColumns || []) h += `<option value="chan:${c.i}">${c.name}</option>`;
   if (header.categories) h += `<option value="cat">${header.columns[header.mapping.cat]}</option>`;
+  h += '<option value="rules">rule-based</option>';
   h += '<option value="solid">solid</option>';
   sel.innerHTML = h;
   sel.value = header.mapping.chan != null ? `chan:${header.mapping.chan}` : 'elev';
@@ -1486,7 +1499,7 @@ function setColorLabels(header) {
 // switching the grade channel = re-stream sweep 2 with a new mapping (windowed ethos)
 $('#colorBy').addEventListener('change', () => {
   const v = $('#colorBy').value;
-  const L = activeLayer(); if (L) { L.colorSel = v; applyRamp(L, true); }
+  const L = activeLayer(); if (L) { L.colorSel = v; applyRamp(L, true); syncRuleMode(L); }
   dispatchEvent(new Event('micro:project-dirty'));
   if (v.startsWith('chan:') && _dhDoc && +v.slice(5) !== _dhDoc.header.mapping.chan) { reopenDhChan(+v.slice(5)); return; }
   if (v.startsWith('chan:') && _blockDoc && +v.slice(5) !== _blockDoc.header.mapping.chan) {
@@ -1909,6 +1922,8 @@ function projectManifest() {
       calcCols: L.calcCols && L.calcCols.length ? L.calcCols : undefined,
       ramps: L.ramps && Object.keys(L.ramps).length ? L.ramps : undefined,
       catLegend: L.catLegend || undefined,
+      rules: L.rules && L.rules.list && L.rules.list.length ? L.rules : undefined,
+      ruleHidden: L.ruleHidden && L.ruleHidden.size ? [...L.ruleHidden] : undefined,
       sel: L._selMask && L._selCount ? rleEncode(L._selMask) : undefined,
       // delimited parsing intent: the column mapping (incl. a re-keyed category)
       // — indices are stable because the file rides in the project
@@ -2110,6 +2125,11 @@ async function openProjectDir(dir) {
       if (ls.calcCols) L.calcCols = ls.calcCols;
       if (ls.ramps) { L.ramps = ls.ramps; applyRamp(L, true); }
       if (ls.catLegend) { L.catLegend = ls.catLegend; applyCatLegend(L, true); }
+      if (ls.rules) {
+        L.rules = ls.rules;
+        L.ruleHidden = new Set(ls.ruleHidden || []);
+        if (ruleModeOf(L)) { renderer.setLayerRuleMode(L.id, true); await runRules(L, true); }   // declarative: codes rebuild by sweep
+      }
       if (ls.sel) { L._selMask = rleDecode(ls.sel, attrRowCountOf(L)); applyLayerSelection(L); }
     }
     applyCamera(mf.camera);
@@ -2398,6 +2418,7 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 Tools → <b>Select through (volume)</b> flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
 <b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
+<b>rule-based styling</b> — style mode <b>rule-based</b> (block models + drillholes): ordered rules, each an expression (<code>FE > 60 and LITO = "HEM"</code>) with a name + color; ONE sweep over the table paints each record with its first matching rule (drag to re-prioritize), everything unmatched wears the <b>else</b> color; per-rule eyes hide a rule's records (draw + pick, GPU-side); counts per rule after the sweep; rules persist in the project and re-sweep on load<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
 <b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; the <b>interval table</b> lists every band with an editable upper bound, a count from the scan, and (classed) a color chip per shell; quantile/equal auto-breaks from the scan<br><br>
@@ -3275,7 +3296,7 @@ function renderStyleTab(body, L) {
   const isTable = !!(L.docs.blockDoc || L.docs.dhDoc);
   const selv = colorSelOf(L);
   const mode = isTable
-    ? (selv === 'solid' ? 'solid' : selv === 'cat' ? 'categorized' : 'continuous')
+    ? (selv === 'solid' ? 'solid' : selv === 'cat' ? 'categorized' : selv === 'rules' ? 'rule-based' : 'continuous')
     : (selv === '2' ? 'categorized' : selv === '3' ? 'rgb' : 'continuous');
   if (mode === 'continuous') L._lastCont = selv;           // return here when leaving solid/categorized
   const setSel = (v) => {
@@ -3283,13 +3304,14 @@ function renderStyleTab(body, L) {
     renderProps();
   };
   const mSel = document.createElement('select');
-  for (const m2 of (isTable ? ['continuous', 'categorized', 'solid'] : ['continuous', 'categorized', 'rgb'])) {
+  for (const m2 of (isTable ? ['continuous', 'categorized', 'rule-based', 'solid'] : ['continuous', 'categorized', 'rgb'])) {
     const o = document.createElement('option'); o.value = m2; o.textContent = m2; mSel.appendChild(o);
   }
   mSel.value = mode;
   mSel.onchange = async () => {
     const m2 = mSel.value;
     if (m2 === 'solid') return setSel('solid');
+    if (m2 === 'rule-based') return setSel('rules');
     if (m2 === 'rgb') return setSel('3');
     if (m2 === 'continuous') {
       if (!isTable) return setSel('0');
@@ -3341,10 +3363,145 @@ function renderStyleTab(body, L) {
     const info = layerClassInfo(L);
     if (info) renderClassList(body, L, info);
     else body.appendChild(ppNote('no category classes in this layer'));
+  } else if (mode === 'rule-based') {
+    renderRuleList(body, L);
   } else {
     body.appendChild(ppNote(mode === 'solid' ? 'solid — one color, nothing to map' : 'rgb — colors come from the file'));
   }
   if (L.dh && L.docs.dhDoc) renderStickRadius(body, L);
+}
+// the rules editor (§10.4): ordered rows, first match wins top-to-bottom.
+// Color/name/eye edits are texture-only (instant); expr edits, add, remove,
+// and reorder change what the codes MEAN, so they re-run the sweep (staged
+// like every other style edit — auto-apply sweeps on commit, otherwise the
+// apply button does).
+function renderRuleList(body, L) {
+  if (!L.rules) L.rules = { list: [], elseColor: RULE_ELSE };
+  if (!L.ruleHidden) L.ruleHidden = new Set();
+  const rules = L.rules.list;
+  const h = layerTableHeader(L);
+  const schema = h ? schemaExt(L, h) : null;
+  const sec = document.createElement('div'); sec.className = 'pp-sec';
+  sec.textContent = 'rules — first match wins';
+  body.appendChild(sec);
+  // structural change: codes are stale until the next sweep
+  const structural = () => { L._rulesDirty = true; markProjectDirty(); runRules(L); };
+  // hidden codes follow their rule OBJECTS through remove/reorder
+  const remapHidden = (fn) => {
+    const hidObjs = [...L.ruleHidden].filter((c) => c > 0).map((c) => rules[c - 1]).filter(Boolean);
+    const hadElse = L.ruleHidden.has(0);
+    fn();
+    L.ruleHidden = new Set((hadElse ? [0] : []).concat(hidObjs.map((o) => rules.indexOf(o) + 1).filter((c) => c > 0)));
+  };
+  const entryRows = [];
+  const rowFor = (r, idx, isElse) => {
+    const code = isElse ? 0 : idx + 1;
+    const row = document.createElement('div'); row.className = 'pp-rule' + (L.ruleHidden.has(code) ? ' off' : '');
+    if (!isElse) {
+      const grip = document.createElement('span'); grip.className = 'grip'; grip.textContent = '⠿'; grip.title = 'drag to reorder — priority is top-down';
+      grip.onpointerdown = (ev) => {
+        ev.preventDefault();
+        try { grip.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+        row.style.opacity = '0.45';
+        let target = -1;
+        const clear = () => entryRows.forEach((r2) => r2.row.classList.remove('drop-above'));
+        const move = (mv) => {
+          clear();
+          target = entryRows.findIndex((r2) => mv.clientY < r2.row.getBoundingClientRect().top + r2.row.offsetHeight / 2);
+          if (target < 0) target = entryRows.length;
+          if (entryRows[target]) entryRows[target].row.classList.add('drop-above');
+        };
+        const up = () => {
+          removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+          row.style.opacity = ''; clear();
+          const from = entryRows.findIndex((r2) => r2.row === row);
+          if (from < 0 || target < 0 || target === from || target === from + 1) return;
+          remapHidden(() => {
+            const [it] = rules.splice(from, 1);
+            rules.splice(target > from ? target - 1 : target, 0, it);
+          });
+          structural();
+          renderProps();
+        };
+        addEventListener('pointermove', move); addEventListener('pointerup', up);
+      };
+      row.appendChild(grip);
+    } else {
+      row.appendChild(document.createElement('span'));     // grid slot
+    }
+    const eye = document.createElement('input'); eye.type = 'checkbox';
+    eye.checked = !L.ruleHidden.has(code);
+    eye.title = isElse ? 'show/hide unmatched records' : 'show/hide this rule’s records';
+    eye.onchange = () => {
+      if (eye.checked) L.ruleHidden.delete(code); else L.ruleHidden.add(code);
+      row.classList.toggle('off', !eye.checked);
+      applyRuleVisibility(L);
+      markProjectDirty();
+    };
+    const sw = document.createElement('input'); sw.type = 'color';
+    sw.value = isElse ? ((L.rules.elseColor) || RULE_ELSE) : (r.color || RULE_ELSE);
+    sw.oninput = () => {
+      if (isElse) L.rules.elseColor = sw.value; else r.color = sw.value;
+      applyRulePalette(L);
+      markProjectDirty();
+    };
+    row.append(eye, sw);
+    if (isElse) {
+      const nm = document.createElement('span'); nm.className = 'else-nm'; nm.textContent = 'everything else';
+      nm.style.gridColumn = '4 / 6';
+      row.appendChild(nm);
+    } else {
+      const nm = document.createElement('input'); nm.type = 'text'; nm.placeholder = `rule ${idx + 1}`;
+      nm.value = r.name || '';
+      nm.onchange = () => { r.name = nm.value.trim(); markProjectDirty(); };
+      const ex = document.createElement('input'); ex.type = 'text'; ex.placeholder = 'FE > 55 and LITO = "HEM"';
+      ex.value = r.expr || '';
+      ex.title = 'the filter language, over every column (ƒ included)';
+      if ((r.expr || '').trim() && schema) ex.classList.toggle('err', !validate(r.expr, schema).ok);
+      ex.onchange = () => {
+        r.expr = ex.value;
+        const ok = !!ex.value.trim() && (!schema || validate(ex.value, schema).ok);
+        ex.classList.toggle('err', !!ex.value.trim() && !ok);
+        if (ok) structural();
+        else { L._rulesDirty = true; markProjectDirty(); }
+      };
+      row.append(nm, ex);
+    }
+    const ct = document.createElement('span'); ct.className = 'ct';
+    ct.textContent = L._ruleCounts && !L._rulesDirty && code < L._ruleCounts.length ? L._ruleCounts[code].toLocaleString() : '';
+    row.appendChild(ct);
+    if (!isElse) {
+      const kb = document.createElement('span'); kb.className = 'pp-kebab'; kb.textContent = '⋮'; kb.title = 'rule actions';
+      kb.onclick = (e) => {
+        e.stopPropagation();
+        const r2 = kb.getBoundingClientRect();
+        menuXY(r2.left - 60, r2.bottom + 2, [
+          { label: 'Duplicate', action: () => { remapHidden(() => rules.splice(idx + 1, 0, { name: r.name ? r.name + ' copy' : '', expr: r.expr, color: ruleDefaultColor(rules.length) })); structural(); renderProps(); } },
+          { label: 'Remove', action: () => { remapHidden(() => rules.splice(idx, 1)); structural(); renderProps(); } },
+        ]);
+      };
+      row.appendChild(kb);
+    } else {
+      row.appendChild(document.createElement('span'));     // grid slot
+    }
+    return row;
+  };
+  rules.forEach((r, i) => { const row = rowFor(r, i, false); entryRows.push({ row }); body.appendChild(row); });
+  body.appendChild(rowFor(null, -1, true));
+  const add = document.createElement('button'); add.className = 'pp-tab';
+  add.textContent = '+ add rule';
+  add.onclick = () => {
+    rules.push({ name: '', expr: '', color: ruleDefaultColor(rules.length) });
+    markProjectDirty();
+    renderProps();
+  };
+  const run = document.createElement('button'); run.className = 'pp-tab';
+  run.textContent = L._rulesDirty || !L._ruleCodes ? 'run rules •' : 'run rules';
+  run.title = 'one sweep over the table — first matching rule claims each record';
+  run.onclick = () => runRules(L, true);
+  body.appendChild(mkRow('', add, run));
+  if (!rules.length) body.appendChild(ppNote('no rules yet — everything wears the else color'));
+  else if (L._rulesDirty || !L._ruleCodes) body.appendChild(ppNote('rules edited — run (or apply) to re-sweep'));
 }
 function renderStickRadius(body, L) {
   const r = document.createElement('input'); r.type = 'range'; r.min = 0.2; r.max = 8; r.step = 0.1;
@@ -3653,6 +3810,8 @@ function styleSnap(L) {
     ramps: L.ramps ? JSON.parse(JSON.stringify(L.ramps)) : null,
     catLegend: L.catLegend ? JSON.parse(JSON.stringify(L.catLegend)) : null,
     catHidden: L.catHidden ? [...L.catHidden] : [],
+    rules: L.rules ? JSON.parse(JSON.stringify(L.rules)) : null,
+    ruleHidden: L.ruleHidden ? [...L.ruleHidden] : [],
     tint: L.tint, opacity: L.opacity,
     radius: L.docs && L.docs.dhDoc ? L.docs.dhDoc.config.radius || 1 : null,
   };
@@ -3666,6 +3825,7 @@ function pushAllStyle(L) {
   applyCatVisibility(L, true);
   applyCatLegend(L, true);
   applyRamp(L, true);
+  if (ruleModeOf(L) && (L._rulesDirty || !L._ruleCodes) && rulesOf(L).length) runRules(L, true);
   if (L.kind === 'mesh') renderer.setLayerMeshStyle(L.id, { tint: hexToRgb01(L.tint || '#9ea3a8'), opacity: L.opacity != null ? L.opacity : 1 });
   if (L.dh && L.docs.dhDoc) renderer.setLayerStickRadius(L.id, L.docs.dhDoc.config.radius || 1);
   L._stagePend = false;
@@ -3677,6 +3837,9 @@ function revertStyle(L) {
   L.ramps = s2.ramps ? JSON.parse(JSON.stringify(s2.ramps)) : null;
   L.catLegend = s2.catLegend ? JSON.parse(JSON.stringify(s2.catLegend)) : null;
   L.catHidden = new Set(s2.catHidden);
+  L.rules = s2.rules ? JSON.parse(JSON.stringify(s2.rules)) : null;
+  L.ruleHidden = new Set(s2.ruleHidden || []);
+  L._rulesDirty = true;                                    // codes may not match the restored list
   if (s2.tint != null) L.tint = s2.tint;
   if (s2.opacity != null) L.opacity = s2.opacity;
   if (s2.radius != null && L.docs && L.docs.dhDoc) L.docs.dhDoc.config.radius = s2.radius;
@@ -3701,6 +3864,7 @@ $('#ppApply').onclick = () => { const L = activeLayer(); if (L) { pushAllStyle(L
 $('#ppRevert').onclick = () => { const L = activeLayer(); if (L) revertStyle(L); };
 function applyCatVisibility(L, force) {
   if (!force) return stageGate(L, () => applyCatVisibility(L, true));
+  if (ruleModeOf(L)) return applyRuleVisibility(L, true);  // rule mode: the vis texture is indexed by RULE code
   if (!L.catHidden || !L.catHidden.size) renderer.setLayerCatVisibility(L.id, null);
   else {
     const v = new Uint8Array(256).fill(1);
@@ -3759,6 +3923,10 @@ async function ensureCatCounts(L, info) {
   return L._catCounts;
 }
 function renderClassesTab(body, L) {
+  if (ruleModeOf(L)) {
+    body.appendChild(ppNote('rule-based mode — visibility follows the RULES (style tab), not the category classes'));
+    return;
+  }
   const info = layerClassInfo(L);
   if (!info) {
     body.appendChild(ppNote(L.kind === 'mesh'
@@ -3791,6 +3959,7 @@ function ensureLegend(L, info) {
 const legendCodesOf = (info, e) => e.values.map((v) => (typeof v === 'number' ? v : info.names.indexOf(v))).filter((c) => c >= 0);
 function applyCatLegend(L, force) {
   if (!force) return stageGate(L, () => applyCatLegend(L, true));
+  if (ruleModeOf(L)) return applyRulePalette(L, true);     // rule mode: the palette holds RULE colors
   const info = layerClassInfo(L);
   if (!info) return;
   const leg = L.catLegend && L.catLegend.col === info.column ? L.catLegend : null;
@@ -3805,6 +3974,108 @@ function applyCatLegend(L, force) {
   for (const e of leg.entries) for (const c of legendCodesOf(info, e)) if (c < width) put(c, e.color);
   renderer.setLayerPalette(L.id, px, width);
   requestRender();
+}
+
+// ── rule-based styling (spec §10.4): ordered expr predicates → colors. One
+// sweep evaluates the rules FIRST-MATCH-WINS into a per-record u8 code array
+// (the filter-mask machinery), uploaded as the layer's rule texture; the code
+// then substitutes for the class code in every element program, so the
+// palette, per-rule eyes, and pick culling are the categorized machinery
+// re-aimed. Rules are declarative (they persist; codes rebuild on load). ──
+const RULE_ELSE = '#555a5f';
+function ruleModeOf(L) { return L && colorSelOf(L) === 'rules'; }
+function rulesOf(L) { return (L.rules && L.rules.list) || []; }
+function ruleDefaultColor(i) {                             // golden-angle hues, same family as the category palette
+  const h = (i * 137.508) % 360, s = 0.62, v = 0.86;
+  const f = (n2) => { const k = (n2 + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+  const hx = (x) => Math.round(x * 255).toString(16).padStart(2, '0');
+  return '#' + hx(f(5)) + hx(f(3)) + hx(f(1));
+}
+function applyRulePalette(L, force) {
+  if (!force) return stageGate(L, () => applyRulePalette(L, true));
+  const rules = rulesOf(L);
+  const px = new Uint8Array(256 * 4);
+  const put = (c, hex) => {
+    const v = parseInt(hex.slice(1), 16);
+    px[c * 4] = (v >> 16) & 255; px[c * 4 + 1] = (v >> 8) & 255; px[c * 4 + 2] = v & 255; px[c * 4 + 3] = 255;
+  };
+  for (let c = 0; c < 256; c++) put(c, (L.rules && L.rules.elseColor) || RULE_ELSE);
+  rules.forEach((r, i) => { if (i + 1 < 256) put(i + 1, r.color || RULE_ELSE); });
+  renderer.setLayerPalette(L.id, px, 256);
+  requestRender();
+}
+function applyRuleVisibility(L, force) {
+  if (!force) return stageGate(L, () => applyRuleVisibility(L, true));
+  if (!L.ruleHidden || !L.ruleHidden.size) renderer.setLayerCatVisibility(L.id, null);
+  else {
+    const v = new Uint8Array(256).fill(1);
+    for (const c of L.ruleHidden) v[c & 255] = 0;
+    renderer.setLayerCatVisibility(L.id, v);
+  }
+  markProjectDirty(); requestRender();
+}
+// mode entry/exit: rules and categories SHARE the palette + vis textures, so
+// switching re-bakes whichever owns them now (a texture upload, no sweeps)
+function syncRuleMode(L) {
+  if (!L) return;
+  const on = ruleModeOf(L);
+  renderer.setLayerRuleMode(L.id, on);
+  if (on) {
+    applyRulePalette(L, true); applyRuleVisibility(L, true);
+    if (rulesOf(L).length && (!L._ruleCodes || L._rulesDirty)) runRules(L, true);
+  } else {
+    applyCatLegend(L, true); applyCatVisibility(L, true);
+  }
+  requestRender();
+}
+// the sweep: compile each rule against the layer schema (ƒ columns included),
+// walk the table once, first matching rule claims the record. Numbering
+// mirrors applyBlockFilter exactly — delimited skips non-finite-coord rows,
+// .dm and drillholes are raw — so codes line up with recIdx.
+let _ruleEpoch = 0;
+async function runRules(L, force) {
+  if (!force) return stageGate(L, () => runRules(L, true));
+  const h = layerTableHeader(L); if (!h) return;
+  applyRulePalette(L, true); applyRuleVisibility(L, true);
+  renderer.setLayerRuleMode(L.id, ruleModeOf(L));
+  const rules = rulesOf(L);
+  if (!rules.length) { L._ruleCodes = null; L._ruleCounts = null; L._rulesDirty = false; renderer.setLayerRuleCodes(L.id, null); requestRender(); return; }
+  const schema = schemaExt(L, h);
+  const fns = [];
+  for (const r of rules) {
+    const v = validate(r.expr || '', schema);
+    if (!(r.expr || '').trim() || !v.ok) { $('#meta').textContent = `rules: “${r.name || r.expr || 'rule ' + (rules.indexOf(r) + 1)}” — ${!(r.expr || '').trim() ? 'empty expression' : (v.errors[0] && v.errors[0].message) || 'invalid expression'}`; return; }
+    fns.push(compileBool(r.expr, schema, { decimal: '.' }));
+  }
+  const n = attrRowCountOf(L); if (!n) return;
+  const epoch = ++_ruleEpoch;
+  const codes = new Uint8Array(n);
+  const counts = new Uint32Array(rules.length + 1);
+  const m = h.mapping || {};
+  const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm);
+  const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm);
+  let rec = 0;
+  $('#meta').textContent = 'rules: sweeping…';
+  for await (const batch of layerRows(L, (a, b) => { $('#meta').textContent = `rules: sweeping… ${b ? Math.min(100, Math.round((100 * a) / b)) + '%' : a.toLocaleString()}`; })) {
+    for (const f0 of batch) {
+      if (isDelim) {
+        const xv = +f0[m.x], yv = +f0[m.y], zv = +f0[m.z];
+        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // renderer numbering skips these
+      }
+      const f = extendRow(L, isDm ? f0.map((v) => (v == null ? '' : v)) : f0);
+      let c = 0;
+      for (let i = 0; i < fns.length; i++) if (fns[i](f)) { c = i + 1; break; }
+      if (rec < n) { codes[rec] = c; counts[c]++; }
+      rec++;
+    }
+    await new Promise((r) => setTimeout(r));
+    if (epoch !== _ruleEpoch) return;                      // superseded by a newer sweep
+  }
+  L._ruleCodes = codes; L._ruleCounts = counts; L._rulesDirty = false;
+  renderer.setLayerRuleCodes(L.id, codes);
+  $('#meta').textContent = `rules: ${rules.map((r, i) => `${r.name || 'rule ' + (i + 1)} ${counts[i + 1].toLocaleString()}`).join(' · ')} · else ${counts[0].toLocaleString()}`;
+  markProjectDirty(); requestRender();
+  if (_propOpen && _propFor === L.id && _propTab === 'style') renderProps();   // refresh the count badges
 }
 // the class legend (eyes + swatches + counts + bulk) — the classes tab's body,
 // also embedded by the style tab's categorized mode
@@ -4251,7 +4522,7 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
   const dh = L.docs.dhDoc; if (!dh) return;
   closeAttrTable(L.id);
   const files = dh.blobs, cfg = { ...dh.config, ...patch };
-  const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend };
+  const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend, rules: L.rules, ruleHidden: L.ruleHidden };
   renderer.removeLayer(L.id);
   _layers = _layers.filter((l) => l.id !== L.id);
   await openDrillholeLayer(files, cfg, 'add');
@@ -4263,6 +4534,7 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
     L2.ramps = keep.ramps; if (rampCfgOf(L2)) applyRamp(L2, true);
     if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2, true); }
     if (keep.catLegend) { L2.catLegend = keep.catLegend; applyCatLegend(L2, true); }
+    if (keep.rules) { L2.rules = keep.rules; L2.ruleHidden = keep.ruleHidden; L2._rulesDirty = true; if (ruleModeOf(L2)) { renderer.setLayerRuleMode(L2.id, true); runRules(L2, true); } }
   }
   renderLayers();
   if (_propOpen) { _propFor = null; renderProps(); }
@@ -4272,7 +4544,7 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
   const doc = L.docs.blockDoc; if (!doc || doc.header.dm) return;
   closeAttrTable(L.id);
   const m = { ...doc.header.mapping, ...patch };
-  const keep = { colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend };
+  const keep = { colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend, rules: L.rules, ruleHidden: L.ruleHidden };
   await openBlocksBlob(doc.blob, doc.name, {
     layer: L.id, first: false, forcePoints: doc.forcePoints,
     mapping: { x: m.x, y: m.y, z: m.z, chan: m.chan, cat: m.cat },
@@ -4285,6 +4557,7 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
     if (clearCats) { L2.catHidden = null; L2.catLegend = null; renderer.setLayerCatVisibility(L2.id, null); renderer.setLayerPalette(L2.id, null); }
     else if (keep.catHidden && keep.catHidden.size) { L2.catHidden = keep.catHidden; applyCatVisibility(L2, true); }
     if (!clearCats && keep.catLegend) { L2.catLegend = keep.catLegend; applyCatLegend(L2, true); }
+    if (keep.rules) { L2.rules = keep.rules; L2.ruleHidden = keep.ruleHidden; L2._rulesDirty = true; if (ruleModeOf(L2)) { renderer.setLayerRuleMode(L2.id, true); runRules(L2, true); } }
   }
   markProjectDirty();
   if (_propOpen) { _propFor = null; renderProps(); }
@@ -4590,7 +4863,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

@@ -33,6 +33,8 @@ uniform sampler2D uSel;
 uniform float uSelOn;
 uniform sampler2D uCatVis;
 uniform float uCatVisOn;
+uniform sampler2D uRule;                // rule-code byte by record index (8192-wide)
+uniform float uRuleOn;                  // rule mode: the code replaces the category
 uniform uint uPicked;
 uniform uvec2 uRepaint;
 uniform vec4 uSecPlane;
@@ -66,7 +68,12 @@ void main() {
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
-  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aCat) & 255, 0), 0).r < 0.5) vCull = 1.0;
+  float cls = aCat;
+  if (uRuleOn > 0.5) {
+    int rr = int(aRec & 0x1FFFFFFFu);
+    cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
+  }
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp;
   if (demoted > 0.5) {                                   // splat: camera-facing square at the center
@@ -86,7 +93,7 @@ void main() {
     float t = clamp((cv - uChanDoc.x) / max(uChanDoc.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
   } else if (uColorMode == 2) {
-    vColor = texture(uPalette, vec2((aCat + 0.5) / 256.0, 0.5));
+    vColor = texture(uPalette, vec2((cls + 0.5) / 256.0, 0.5));
   } else {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
   }
@@ -200,6 +207,7 @@ export function createSticksPipeline(gl) {
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), picked: U('uPicked'), repaint: U('uRepaint'),
       catVis: U('uCatVis'), catVisOn: U('uCatVisOn'), sel: U('uSel'), selOn: U('uSelOn'),
+      rule: U('uRule'), ruleOn: U('uRuleOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
@@ -251,7 +259,7 @@ export function createSticksPipeline(gl) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
   }
 
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null, selTex = null }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null, selTex = null, ruleTex = null }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -293,6 +301,8 @@ export function createSticksPipeline(gl) {
       if (catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, catVisTex); gl.uniform1i(uni.catVis, 5); }
       gl.uniform1f(uni.selOn, selTex ? 1 : 0);
       if (selTex) { gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, selTex); gl.uniform1i(uni.sel, 6); }
+      gl.uniform1f(uni.ruleOn, ruleTex ? 1 : 0);
+      if (ruleTex) { gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, ruleTex); gl.uniform1i(uni.rule, 7); }
     }
     active = full;
     gl.useProgram(full.prog);

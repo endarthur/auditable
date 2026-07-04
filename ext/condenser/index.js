@@ -1894,6 +1894,8 @@ uniform sampler2D uSel;
 uniform float uSelOn;
 uniform sampler2D uCatVis;
 uniform float uCatVisOn;
+uniform sampler2D uRule;                // rule-code byte by record index (8192-wide)
+uniform float uRuleOn;                  // rule mode: the code replaces the category
 uniform uint uPicked;
 uniform uvec2 uRepaint;
 uniform vec4 uSecPlane;
@@ -1927,7 +1929,12 @@ void main() {
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
-  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aCat) & 255, 0), 0).r < 0.5) vCull = 1.0;
+  float cls = aCat;
+  if (uRuleOn > 0.5) {
+    int rr = int(aRec & 0x1FFFFFFFu);
+    cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
+  }
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp;
   if (demoted > 0.5) {                                   // splat: camera-facing square at the center
@@ -1947,7 +1954,7 @@ void main() {
     float t = clamp((cv - uChanDoc.x) / max(uChanDoc.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
   } else if (uColorMode == 2) {
-    vColor = texture(uPalette, vec2((aCat + 0.5) / 256.0, 0.5));
+    vColor = texture(uPalette, vec2((cls + 0.5) / 256.0, 0.5));
   } else {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
   }
@@ -2061,6 +2068,7 @@ function createSticksPipeline(gl) {
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), picked: U('uPicked'), repaint: U('uRepaint'),
       catVis: U('uCatVis'), catVisOn: U('uCatVisOn'), sel: U('uSel'), selOn: U('uSelOn'),
+      rule: U('uRule'), ruleOn: U('uRuleOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
@@ -2112,7 +2120,7 @@ function createSticksPipeline(gl) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
   }
 
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null, selTex = null }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null, selTex = null, ruleTex = null }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -2154,6 +2162,8 @@ function createSticksPipeline(gl) {
       if (catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, catVisTex); gl.uniform1i(uni.catVis, 5); }
       gl.uniform1f(uni.selOn, selTex ? 1 : 0);
       if (selTex) { gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, selTex); gl.uniform1i(uni.sel, 6); }
+      gl.uniform1f(uni.ruleOn, ruleTex ? 1 : 0);
+      if (ruleTex) { gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, ruleTex); gl.uniform1i(uni.rule, 7); }
     }
     active = full;
     gl.useProgram(full.prog);
@@ -3513,6 +3523,8 @@ uniform sampler2D uSel;
 uniform float uSelOn;
 uniform sampler2D uCatVis;              // 256x1 per-class visibility
 uniform float uCatVisOn;
+uniform sampler2D uRule;                // rule-code byte by record index (8192-wide)
+uniform float uRuleOn;                  // rule mode: the code replaces the category
 uniform float uForceSplat;              // 1 = whole chunk demoted (cheap far-field path)
 uniform float uFixedSplat;              // 1 = points view: fixed-px splats regardless of block size
 uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
@@ -3542,7 +3554,12 @@ void main() {
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;   // centroid-in-slab
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
-  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aCat) & 255, 0), 0).r < 0.5) vCull = 1.0;
+  float cls = aCat;
+  if (uRuleOn > 0.5) {
+    int rr = int(aRec & 0x1FFFFFFFu);
+    cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
+  }
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
   float quadR = uFixedSplat > 0.5
     ? uPointPx * 0.5 * distEff / uPerspScale
     : mix(r, max(uPointPx * 0.5, pxR) * distEff / uPerspScale, demoted);
@@ -3558,7 +3575,7 @@ void main() {
     float t = clamp((v - uChanDoc.x) / max(uChanDoc.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
   } else if (uColorMode == 2) {
-    vColor = texture(uPalette, vec2((aCat + 0.5) / 256.0, 0.5));
+    vColor = texture(uPalette, vec2((cls + 0.5) / 256.0, 0.5));
   } else {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
   }
@@ -3664,6 +3681,7 @@ function createBlocksPipeline(gl) {
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'), repaint: U('uRepaint'),
       catVis: U('uCatVis'), catVisOn: U('uCatVisOn'), sel: U('uSel'), selOn: U('uSelOn'),
+      rule: U('uRule'), ruleOn: U('uRuleOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
@@ -3722,7 +3740,7 @@ function createBlocksPipeline(gl) {
 
   // Per-frame program state (called once before the chunk loop) — set on BOTH
   // programs so drawSlice can switch freely between full and cheap.
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, catVisTex = null, selTex = null }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, catVisTex = null, selTex = null, ruleTex = null }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -3766,6 +3784,8 @@ function createBlocksPipeline(gl) {
       if (catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, catVisTex); gl.uniform1i(uni.catVis, 5); }
       gl.uniform1f(uni.selOn, selTex ? 1 : 0);
       if (selTex) { gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, selTex); gl.uniform1i(uni.sel, 6); }
+      gl.uniform1f(uni.ruleOn, ruleTex ? 1 : 0);
+      if (ruleTex) { gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, ruleTex); gl.uniform1i(uni.rule, 7); }
     }
     active = full;
     gl.useProgram(full.prog);
@@ -3813,6 +3833,8 @@ uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
 uniform sampler2D uCatVis;
 uniform float uCatVisOn;
+uniform sampler2D uRule;
+uniform float uRuleOn;
 flat out uint vRec;
 flat out float vCull;
 void main() {
@@ -3825,7 +3847,12 @@ void main() {
     int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
     if (texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r < 0.5) vCull = 1.0;   // isolated-away isn't pickable
   }
-  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aClass) & 255, 0), 0).r < 0.5) vCull = 1.0;
+  float cls = aClass;
+  if (uRuleOn > 0.5) {
+    int rr = int(aRec & 0x1FFFFFFFu);
+    cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
+  }
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
 }`;
 const PICK_FRAG_PTS = `#version 300 es
 precision highp float;
@@ -3854,6 +3881,8 @@ uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
 uniform sampler2D uCatVis;
 uniform float uCatVisOn;
+uniform sampler2D uRule;
+uniform float uRuleOn;
 uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
 flat out vec3 vCenter;
@@ -3884,7 +3913,12 @@ void main() {
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);   // hidden (isolated or sectioned) isn't pickable
-  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aCat) & 255, 0), 0).r < 0.5) vCull = 1.0;
+  float cls = aCat;
+  if (uRuleOn > 0.5) {
+    int rr = int(aRec & 0x1FFFFFFFu);
+    cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
+  }
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
   vCenter = center; vHalf = half_; vRec = aRec; vMode = demoted; vCorner = corner; vWorldPos = wp;
 }`;
 const PICK_FRAG_BLK = `#version 300 es
@@ -3941,6 +3975,8 @@ uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
 uniform sampler2D uCatVis;
 uniform float uCatVisOn;
+uniform sampler2D uRule;
+uniform float uRuleOn;
 uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
 flat out vec3 vA;
@@ -3970,7 +4006,12 @@ void main() {
   }
   float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
-  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aCat) & 255, 0), 0).r < 0.5) vCull = 1.0;
+  float cls = aCat;
+  if (uRuleOn > 0.5) {
+    int rr = int(aRec & 0x1FFFFFFFu);
+    cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
+  }
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp;
   if (demoted > 0.5) {
@@ -4050,14 +4091,14 @@ function createPickPipeline(gl) {
   const blk = makeProgram(gl, PICK_VERT_BLK, PICK_FRAG_BLK);
   const stk = makeProgram(gl, PICK_VERT_STK, PICK_FRAG_STK);
   const U = (p, n) => gl.getUniformLocation(p, n);
-  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg'), mask: U(pts, 'uMask'), filterOn: U(pts, 'uFilterOn'), isolate: U(pts, 'uIsolate'), catVis: U(pts, 'uCatVis'), catVisOn: U(pts, 'uCatVisOn') };
+  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg'), mask: U(pts, 'uMask'), filterOn: U(pts, 'uFilterOn'), isolate: U(pts, 'uIsolate'), catVis: U(pts, 'uCatVis'), catVisOn: U(pts, 'uCatVisOn'), rule: U(pts, 'uRule'), ruleOn: U(pts, 'uRuleOn') };
   const uBlk = {
     viewProj: U(blk, 'uViewProj'), eye: U(blk, 'uEye'), right: U(blk, 'uRight'), up: U(blk, 'uUp'),
     gridOrigin: U(blk, 'uGridOrigin'), gridSize: U(blk, 'uGridSize'),
     perspScale: U(blk, 'uPerspScale'), demotePx: U(blk, 'uDemotePx'), pointPx: U(blk, 'uPointPx'), fixedSplat: U(blk, 'uFixedSplat'),
     ortho: U(blk, 'uOrtho'), fwd: U(blk, 'uFwd'), orthoRay: U(blk, 'uOrthoRay'), backoff: U(blk, 'uBackoff'),
     mask: U(blk, 'uMask'), filterOn: U(blk, 'uFilterOn'), isolate: U(blk, 'uIsolate'),
-    catVis: U(blk, 'uCatVis'), catVisOn: U(blk, 'uCatVisOn'),
+    catVis: U(blk, 'uCatVis'), catVisOn: U(blk, 'uCatVisOn'), rule: U(blk, 'uRule'), ruleOn: U(blk, 'uRuleOn'),
     secPlane: U(blk, 'uSecPlane'), secCfg: U(blk, 'uSecCfg'),
   };
   const uStk = {
@@ -4065,7 +4106,7 @@ function createPickPipeline(gl) {
     perspScale: U(stk, 'uPerspScale'), demotePx: U(stk, 'uDemotePx'), pointPx: U(stk, 'uPointPx'), fixedSplat: U(stk, 'uFixedSplat'),
     ortho: U(stk, 'uOrtho'), fwd: U(stk, 'uFwd'), orthoRay: U(stk, 'uOrthoRay'), backoff: U(stk, 'uBackoff'),
     mask: U(stk, 'uMask'), filterOn: U(stk, 'uFilterOn'), isolate: U(stk, 'uIsolate'),
-    catVis: U(stk, 'uCatVis'), catVisOn: U(stk, 'uCatVisOn'),
+    catVis: U(stk, 'uCatVis'), catVisOn: U(stk, 'uCatVisOn'), rule: U(stk, 'uRule'), ruleOn: U(stk, 'uRuleOn'),
     secPlane: U(stk, 'uSecPlane'), secCfg: U(stk, 'uSecCfg'),
   };
   let fbo = null, colorTex = null, depthRb = null, w = 0, h = 0;
@@ -4114,6 +4155,12 @@ function createPickPipeline(gl) {
       gl.uniform1f(u.catVisOn, t ? 1 : 0);
       if (t) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(u.catVis, 5); }
     };
+    // rule mode: the code substitutes for the class, so hidden RULES cull too
+    const setRule = (u, st) => {
+      const t = st && st.ruleOn && st.ruleTex;
+      gl.uniform1f(u.ruleOn, t ? 1 : 0);
+      if (t) { gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(u.rule, 7); }
+    };
     ensure(viewportW, viewportH);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.viewport(0, 0, w, h);
@@ -4134,6 +4181,7 @@ function createPickPipeline(gl) {
       const st = stateOf(id);
       setSec(uPts, st);
       setCatVis(uPts, st);
+      setRule(uPts, st);
       gl.uniform1f(uPts.filterOn, st.maskTex ? 1 : 0);
       gl.uniform1f(uPts.isolate, st.isolate ? 1 : 0);
       if (st.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, st.maskTex); gl.uniform1i(uPts.mask, 4); }
@@ -4174,6 +4222,7 @@ function createPickPipeline(gl) {
       const st = stateOf(id);
       setSec(uBlk, st);
       setCatVis(uBlk, st);
+      setRule(uBlk, st);
       gl.uniform1f(uBlk.filterOn, st.maskTex ? 1 : 0);
       gl.uniform1f(uBlk.isolate, st.isolate ? 1 : 0);
       if (st.maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, st.maskTex); gl.uniform1i(uBlk.mask, 4); }
@@ -4219,6 +4268,7 @@ function createPickPipeline(gl) {
       const st2 = stateOf(id);
       setSec(uStk, st2);
       setCatVis(uStk, st2);
+      setRule(uStk, st2);
       gl.uniform1f(uStk.radius, (st2 && st2.stickRadius) || 1);
       gl.uniform1f(uStk.filterOn, st2.maskTex ? 1 : 0);
       gl.uniform1f(uStk.isolate, st2.isolate ? 1 : 0);
@@ -4876,6 +4926,8 @@ uniform sampler2D uCatVis;              // 256x1 per-class visibility (layer pro
 uniform float uCatVisOn;
 uniform sampler2D uSel;                 // selection bitmask by record index (8192-wide)
 uniform float uSelOn;
+uniform sampler2D uRule;                // rule-code byte by record index (8192-wide)
+uniform float uRuleOn;                  // rule mode: the code REPLACES the class for palette + eyes
 out vec4 vColor;
 flat out float vCull;
 void main() {
@@ -4889,7 +4941,12 @@ void main() {
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
     if (uIsolate > 0.5 && m < 0.5) vCull = 1.0;
   }
-  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aClass) & 255, 0), 0).r < 0.5) vCull = 1.0;
+  float cls = aClass;
+  if (uRuleOn > 0.5) {
+    int rr = int(aRec & 0x1FFFFFFFu);
+    cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
+  }
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
   float selHit = 0.0;
   if (uSelOn > 0.5) {
     int rs = int(aRec & 0x1FFFFFFFu);
@@ -4902,7 +4959,7 @@ void main() {
     float t = clamp(aIntensity * uIntensityScale, 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
   } else if (uColorMode == 2) {
-    vColor = texture(uPalette, vec2((aClass + 0.5) / uPaletteN, 0.5));
+    vColor = texture(uPalette, vec2((cls + 0.5) / uPaletteN, 0.5));
   } else {
     vColor = vec4(aRgb, 1.0);
   }
@@ -5027,6 +5084,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), paletteN: U('uPaletteN'),
     catVis: U('uCatVis'), catVisOn: U('uCatVisOn'),
     sel: U('uSel'), selOn: U('uSelOn'),
+    rule: U('uRule'), ruleOn: U('uRuleOn'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
@@ -5052,7 +5110,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
             intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
-            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0, selTex: null, selH: 0 };
+            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0, selTex: null, selH: 0,
+            ruleTex: null, ruleH: 0, ruleOn: false };
       layers.set(id, l);
     }
     return l;
@@ -5215,6 +5274,40 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       }
       needClear = true;
     },
+    // per-layer RULE CODES (spec §10.4): one byte per record — which styling
+    // rule claimed it (0 = none/else, 1..255 = rule order). Same texture shape
+    // as the filter mask, but the byte is a VALUE, not a bit: in rule mode it
+    // substitutes for the class code, so the palette, the per-class eyes, and
+    // pick culling all compose without new machinery.
+    setLayerRuleCodes(layer, codes) {
+      const ls = layerOf(layer);
+      if (!codes) {
+        if (ls.ruleTex) { gl.deleteTexture(ls.ruleTex); ls.ruleTex = null; ls.ruleH = 0; }
+      } else {
+        const W = 8192, H = Math.max(1, Math.ceil(codes.length / W));
+        const padded = new Uint8Array(W * H);
+        padded.set(codes);
+        if (ls.ruleTex && H === ls.ruleH) {
+          gl.bindTexture(gl.TEXTURE_2D, ls.ruleTex);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, padded);
+        } else {
+          if (ls.ruleTex) gl.deleteTexture(ls.ruleTex);
+          ls.ruleTex = gl.createTexture(); ls.ruleH = H;
+          gl.bindTexture(gl.TEXTURE_2D, ls.ruleTex);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, W, H, 0, gl.RED, gl.UNSIGNED_BYTE, padded);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        }
+      }
+      needClear = true;
+    },
+    // rule mode on/off per layer — kept separate from the codes so switching
+    // categorized ⇄ rule-based is a flag flip, no re-upload
+    setLayerRuleMode(layer, on) {
+      const ls = layerOf(layer);
+      if (ls.ruleOn !== !!on) { ls.ruleOn = !!on; needClear = true; }
+    },
     // per-layer CATEGORY palette (legend colors/groups baked app-side).
     // pixels = Uint8Array(width*4) RGBA (width 256 for dict layers, 32 for LAS
     // classification — it must match what uPaletteN samples), null = built-ins.
@@ -5288,6 +5381,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       if (ls && ls.rampTex) gl.deleteTexture(ls.rampTex);
       if (ls && ls.paletteTex) gl.deleteTexture(ls.paletteTex);
       if (ls && ls.selTex) gl.deleteTexture(ls.selTex);
+      if (ls && ls.ruleTex) gl.deleteTexture(ls.ruleTex);
       layers.delete(layer);
       needClear = true;
     },
@@ -5349,7 +5443,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     clearChunks() {
       for (const c of chunks) freeChunk(c);
       chunks.length = 0; needClear = true;
-      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); if (ls.rampTex) gl.deleteTexture(ls.rampTex); if (ls.paletteTex) gl.deleteTexture(ls.paletteTex); if (ls.selTex) gl.deleteTexture(ls.selTex); }
+      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); if (ls.rampTex) gl.deleteTexture(ls.rampTex); if (ls.paletteTex) gl.deleteTexture(ls.paletteTex); if (ls.selTex) gl.deleteTexture(ls.selTex); if (ls.ruleTex) gl.deleteTexture(ls.ruleTex); }
       layers.clear();
     },
     resize() {
@@ -5486,7 +5580,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           gl.uniform1i(uni.colorMode, o.colorMode);
           gl.uniform2f(uni.zRange, zr[0], zr[1]);
           gl.uniform1f(uni.intensityScale, 65535 / (ls.intensityMax || 1));
-          gl.uniform1f(uni.paletteN, ls.catN || 32);
+          gl.uniform1f(uni.paletteN, ls.paletteTex ? ls.paletteW : (ls.catN || 32));
           gl.activeTexture(gl.TEXTURE1);
           gl.bindTexture(gl.TEXTURE_2D, ls.paletteTex || (ls.catN && catPalette ? catPalette : palette));
           gl.uniform1i(uni.palette, 1);
@@ -5497,6 +5591,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           if (ls.catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, ls.catVisTex); gl.uniform1i(uni.catVis, 5); }
           gl.uniform1f(uni.selOn, ls.selTex ? 1 : 0);
           if (ls.selTex) { gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, ls.selTex); gl.uniform1i(uni.sel, 6); }
+          gl.uniform1f(uni.ruleOn, ls.ruleOn && ls.ruleTex ? 1 : 0);
+          if (ls.ruleOn && ls.ruleTex) { gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, ls.ruleTex); gl.uniform1i(uni.rule, 7); }
           gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ls.rampTex || ramp); gl.uniform1i(uni.ramp, 0);
         };
         for (const [id, group] of ptsGroups) {
@@ -5553,7 +5649,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
-            catVisTex: ls.catVisTex, selTex: ls.selTex,
+            catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
           });
         };
         for (const [id, group] of blkGroups) {
@@ -5601,7 +5697,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
-            radius: ls.stickRadius, catVisTex: ls.catVisTex, selTex: ls.selTex,
+            radius: ls.stickRadius, catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
           });
         };
         for (const [id, group] of stkGroups) {

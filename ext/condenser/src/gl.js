@@ -41,6 +41,8 @@ uniform sampler2D uCatVis;              // 256x1 per-class visibility (layer pro
 uniform float uCatVisOn;
 uniform sampler2D uSel;                 // selection bitmask by record index (8192-wide)
 uniform float uSelOn;
+uniform sampler2D uRule;                // rule-code byte by record index (8192-wide)
+uniform float uRuleOn;                  // rule mode: the code REPLACES the class for palette + eyes
 out vec4 vColor;
 flat out float vCull;
 void main() {
@@ -54,7 +56,12 @@ void main() {
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
     if (uIsolate > 0.5 && m < 0.5) vCull = 1.0;
   }
-  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(aClass) & 255, 0), 0).r < 0.5) vCull = 1.0;
+  float cls = aClass;
+  if (uRuleOn > 0.5) {
+    int rr = int(aRec & 0x1FFFFFFFu);
+    cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
+  }
+  if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
   float selHit = 0.0;
   if (uSelOn > 0.5) {
     int rs = int(aRec & 0x1FFFFFFFu);
@@ -67,7 +74,7 @@ void main() {
     float t = clamp(aIntensity * uIntensityScale, 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
   } else if (uColorMode == 2) {
-    vColor = texture(uPalette, vec2((aClass + 0.5) / uPaletteN, 0.5));
+    vColor = texture(uPalette, vec2((cls + 0.5) / uPaletteN, 0.5));
   } else {
     vColor = vec4(aRgb, 1.0);
   }
@@ -194,6 +201,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), paletteN: U('uPaletteN'),
     catVis: U('uCatVis'), catVisOn: U('uCatVisOn'),
     sel: U('uSel'), selOn: U('uSelOn'),
+    rule: U('uRule'), ruleOn: U('uRuleOn'),
   };
   const ramp = lutTexture(gl, rampPixels(), 256);
   const palette = lutTexture(gl, palettePixels(), 32);   // LAS classification (points)
@@ -219,7 +227,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
             intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
-            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0, selTex: null, selH: 0 };
+            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0, selTex: null, selH: 0,
+            ruleTex: null, ruleH: 0, ruleOn: false };
       layers.set(id, l);
     }
     return l;
@@ -382,6 +391,40 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       }
       needClear = true;
     },
+    // per-layer RULE CODES (spec §10.4): one byte per record — which styling
+    // rule claimed it (0 = none/else, 1..255 = rule order). Same texture shape
+    // as the filter mask, but the byte is a VALUE, not a bit: in rule mode it
+    // substitutes for the class code, so the palette, the per-class eyes, and
+    // pick culling all compose without new machinery.
+    setLayerRuleCodes(layer, codes) {
+      const ls = layerOf(layer);
+      if (!codes) {
+        if (ls.ruleTex) { gl.deleteTexture(ls.ruleTex); ls.ruleTex = null; ls.ruleH = 0; }
+      } else {
+        const W = 8192, H = Math.max(1, Math.ceil(codes.length / W));
+        const padded = new Uint8Array(W * H);
+        padded.set(codes);
+        if (ls.ruleTex && H === ls.ruleH) {
+          gl.bindTexture(gl.TEXTURE_2D, ls.ruleTex);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, padded);
+        } else {
+          if (ls.ruleTex) gl.deleteTexture(ls.ruleTex);
+          ls.ruleTex = gl.createTexture(); ls.ruleH = H;
+          gl.bindTexture(gl.TEXTURE_2D, ls.ruleTex);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, W, H, 0, gl.RED, gl.UNSIGNED_BYTE, padded);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        }
+      }
+      needClear = true;
+    },
+    // rule mode on/off per layer — kept separate from the codes so switching
+    // categorized ⇄ rule-based is a flag flip, no re-upload
+    setLayerRuleMode(layer, on) {
+      const ls = layerOf(layer);
+      if (ls.ruleOn !== !!on) { ls.ruleOn = !!on; needClear = true; }
+    },
     // per-layer CATEGORY palette (legend colors/groups baked app-side).
     // pixels = Uint8Array(width*4) RGBA (width 256 for dict layers, 32 for LAS
     // classification — it must match what uPaletteN samples), null = built-ins.
@@ -455,6 +498,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       if (ls && ls.rampTex) gl.deleteTexture(ls.rampTex);
       if (ls && ls.paletteTex) gl.deleteTexture(ls.paletteTex);
       if (ls && ls.selTex) gl.deleteTexture(ls.selTex);
+      if (ls && ls.ruleTex) gl.deleteTexture(ls.ruleTex);
       layers.delete(layer);
       needClear = true;
     },
@@ -516,7 +560,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     clearChunks() {
       for (const c of chunks) freeChunk(c);
       chunks.length = 0; needClear = true;
-      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); if (ls.rampTex) gl.deleteTexture(ls.rampTex); if (ls.paletteTex) gl.deleteTexture(ls.paletteTex); if (ls.selTex) gl.deleteTexture(ls.selTex); }
+      for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); if (ls.rampTex) gl.deleteTexture(ls.rampTex); if (ls.paletteTex) gl.deleteTexture(ls.paletteTex); if (ls.selTex) gl.deleteTexture(ls.selTex); if (ls.ruleTex) gl.deleteTexture(ls.ruleTex); }
       layers.clear();
     },
     resize() {
@@ -653,7 +697,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           gl.uniform1i(uni.colorMode, o.colorMode);
           gl.uniform2f(uni.zRange, zr[0], zr[1]);
           gl.uniform1f(uni.intensityScale, 65535 / (ls.intensityMax || 1));
-          gl.uniform1f(uni.paletteN, ls.catN || 32);
+          gl.uniform1f(uni.paletteN, ls.paletteTex ? ls.paletteW : (ls.catN || 32));
           gl.activeTexture(gl.TEXTURE1);
           gl.bindTexture(gl.TEXTURE_2D, ls.paletteTex || (ls.catN && catPalette ? catPalette : palette));
           gl.uniform1i(uni.palette, 1);
@@ -664,6 +708,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           if (ls.catVisTex) { gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, ls.catVisTex); gl.uniform1i(uni.catVis, 5); }
           gl.uniform1f(uni.selOn, ls.selTex ? 1 : 0);
           if (ls.selTex) { gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, ls.selTex); gl.uniform1i(uni.sel, 6); }
+          gl.uniform1f(uni.ruleOn, ls.ruleOn && ls.ruleTex ? 1 : 0);
+          if (ls.ruleOn && ls.ruleTex) { gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, ls.ruleTex); gl.uniform1i(uni.rule, 7); }
           gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ls.rampTex || ramp); gl.uniform1i(uni.ramp, 0);
         };
         for (const [id, group] of ptsGroups) {
@@ -720,7 +766,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
-            catVisTex: ls.catVisTex, selTex: ls.selTex,
+            catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
           });
         };
         for (const [id, group] of blkGroups) {
@@ -768,7 +814,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
-            radius: ls.stickRadius, catVisTex: ls.catVisTex, selTex: ls.selTex,
+            radius: ls.stickRadius, catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
           });
         };
         for (const [id, group] of stkGroups) {
