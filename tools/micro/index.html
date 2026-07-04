@@ -160,6 +160,12 @@
   #lpRows .lp-row.dim .lp-name, #lpRows .lp-row.dim .lp-n { opacity: 0.45; }
   #lpRows .lp-group .lp-name { color: var(--text-hi); }
   #lpRows .lp-caret { color: var(--dim); cursor: pointer; width: 11px; flex: 0 0 auto; }
+  #lpRows .lp-grip { color: transparent; cursor: grab; width: 10px; flex: 0 0 auto; font-size: 9px; user-select: none; }
+  #lpRows .lp-row:hover .lp-grip { color: var(--dim); }
+  #lpRows .lp-grip:hover { color: var(--accent) !important; }
+  #lpRows .lp-drop-above { box-shadow: 0 -2px 0 var(--accent); }
+  #lpRows .lp-drop-below { box-shadow: 0 2px 0 var(--accent); }
+  #lpRows .lp-drop-into { outline: 1px solid var(--accent); outline-offset: -1px; }
   #lpRows .lp-row input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
   #lpRows .lp-row .lp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #lpRows .lp-row.off .lp-name { color: var(--dim); }
@@ -4008,6 +4014,7 @@ Tools → <b>Select through (volume)</b> flips the tools to the extruded tube: E
 <b>export rows</b> (Data → Export rows… / the layer context menu) — data leaves micro the way it came in, as rows: scope <b>all</b> · <b>filter matches</b> · <b>selection</b>; every column including ƒ calculated and ✎ painted ones (paint a DOMAIN, export it, feed the estimator); CSV with delimiter choice + decimal comma; streamed, so 1.8M rows is one sweep, and opening a .dm then exporting IS the .dm → CSV converter. In the attribute table, <code>Ctrl+C</code> copies the grid selection as TSV<br>
 <b>select by solid</b> (Tools menu / right-click a mesh layer) — a closed context mesh (.msh / .obj / small .ply) classifies records by winding number: <b>select inside/outside</b> sweeps any element layers into the ordinary selection (paint or export it — the solids → coded-model loop), a <b>flag column</b> writes a value (e.g. <code>IN</code>) into a NEW painted column on any table-backed layers — blocks, points, drillholes — which you can then touch up with the brush; or <b>fraction-inside column</b> probes each block of a regular model (any per-axis resolution — 3×3×2 for benches, 10×10×10 for 1 m blocklings) and writes a numeric 0–1 column (<code>%</code> badge) the filter, table, and export all see; all of it works with flipped solids and colors the layer by the result when done. OPEN SURFACES (topo, weathering horizons — the dialog reads the mesh topology and says which) classify <b>above / below / between</b> instead: the surface is CLOSED by a skirt to a far apex and the same winding containment applies — strong at any depth, and blocks beyond the surface's footprint honestly come back unclassified; <b>between</b> takes a second surface (below the first AND above the second)<br>
 <b>assign domains</b> (Tools menu) — the whole coded-model loop in one run: pick the domain solids (a multi-object .obj offers "split into N solids (as a group)" at open — each object becomes its own layer inside a layer GROUP), pick the model and a column name, and every block goes to the solid holding its largest fraction; unclaimed blocks stay unpainted and the result is an ordinary painted column — filter it, export it, touch it up with the brush<br>
+<b>layer groups</b> — the layers panel is a tree: a group's eye greys its children without touching THEIR eyes (re-enable and the pattern returns); <b>drag the ⠿ grip</b> (hover a row) between rows to reorder, ONTO a group to join it; right-click a layer → <b>Move to group…</b> (or New group…), right-click a group → rename / zoom / ungroup; groups persist in the project<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
 <b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; the <b>interval table</b> lists every band with an editable upper bound, a count from the scan, and (classed) a color chip per shell; quantile/equal auto-breaks from the scan<br><br>
@@ -4712,6 +4719,7 @@ function layerMenu(L, x, y) {
   menuXY(x, y, [
     { label: 'Zoom to layer', action: () => fitLayer(L) },
     { label: 'Rename layer…', action: () => { const v = prompt('layer name', L.label || L.name); if (v && v.trim()) { L.label = v.trim(); renderLayers(); markProjectDirty(); } } },
+    { label: 'Move to group…', action: () => setTimeout(() => moveLayerToGroupMenu(L, x, y), 0) },
     ...(L.dh ? [{ label: `Stick radius… (${renderer.layerStickRadius(L.id)} m)`, action: () => {
       const v = prompt('stick radius (metres)', String(renderer.layerStickRadius(L.id)));
       const r = parseFloat(v);
@@ -6532,6 +6540,66 @@ function treeFromManifest(tree, idAt) {
   treeSync();
   applyTreeVisibility();
 }
+// find a node's parent array + index (layer ids compare by value — unique)
+function treeFindParent(node, arr = _layerTree) {
+  for (let i = 0; i < arr.length; i++) {
+    const nd = arr[i];
+    if (nd === node) return { arr, i };
+    if (typeof nd !== 'number' && nd.group) {
+      const r = treeFindParent(node, nd.children);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+function treeContains(nd, target) {
+  if (nd === target) return true;
+  if (typeof nd === 'number' || !nd.group) return false;
+  return nd.children.some((c) => treeContains(c, target));
+}
+// move a node: before/after a sibling, or INTO a group (appended)
+function treeMove(node, target, where) {
+  if (node === target) return;
+  if (typeof node !== 'number' && treeContains(node, target)) return;   // no self-nesting
+  const src = treeFindParent(node);
+  if (!src) return;
+  src.arr.splice(src.i, 1);
+  if (where === 'into') {
+    target.children.push(node);
+    target.collapsed = false;
+  } else {
+    const dst = treeFindParent(target);
+    if (!dst) { _layerTree.push(node); }
+    else dst.arr.splice(dst.i + (where === 'after' ? 1 : 0), 0, node);
+  }
+  treeSync();
+  renderLayers();
+  markProjectDirty();
+}
+function moveLayerToGroupMenu(L, x, y) {
+  treeSync();
+  const groups = [];
+  const walk = (arr) => { for (const nd of arr) if (typeof nd !== 'number' && nd.group) { groups.push(nd); walk(nd.children); } };
+  walk(_layerTree);
+  const src = treeFindParent(L.id);
+  const inGroup = src && src.arr !== _layerTree;
+  menuXY(x, y, [
+    ...groups.map((g) => ({ label: `→ ${g.name}`, action: () => treeMove(L.id, g, 'into') })),
+    { label: 'New group…', action: () => {
+      const v = prompt('group name', 'group');
+      if (!v || !v.trim()) return;
+      const src2 = treeFindParent(L.id);
+      if (src2) src2.arr.splice(src2.i, 1);
+      _layerTree.push({ group: true, name: v.trim(), visible: true, collapsed: false, children: [L.id] });
+      treeSync(); renderLayers(); markProjectDirty();
+    } },
+    ...(inGroup ? [{ label: 'Panel root (leave the group)', action: () => {
+      const src2 = treeFindParent(L.id);
+      if (src2) { src2.arr.splice(src2.i, 1); _layerTree.push(L.id); }
+      treeSync(); renderLayers(); markProjectDirty();
+    } }] : []),
+  ]);
+}
 function groupMenu(nd, x, y) {
   menuXY(x, y, [
     { label: 'Rename group…', action: () => { const v = prompt('group name', nd.name); if (v && v.trim()) { nd.name = v.trim(); renderLayers(); markProjectDirty(); } } },
@@ -6557,6 +6625,43 @@ function renderLayers() {
   const rows = $('#lpRows'); if (!rows) return;
   rows.textContent = '';
   treeSync();
+  const visual = [];                                       // DOM-ordered rows for the drag targets
+  // drag: grip pointerdown → move over rows → drop between (reorder) or ONTO
+  // a group (join); trees stay honest (no dropping a group into itself)
+  const armDrag = (grip, row, node) => {
+    grip.onpointerdown = (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      try { grip.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      row.style.opacity = '0.45';
+      let target = null, where = null;
+      const clear = () => visual.forEach((v2) => v2.row.classList.remove('lp-drop-above', 'lp-drop-below', 'lp-drop-into'));
+      const move = (mv) => {
+        clear(); target = null; where = null;
+        for (const v2 of visual) {
+          const rc = v2.row.getBoundingClientRect();
+          if (mv.clientY < rc.top || mv.clientY > rc.bottom) continue;
+          const f = (mv.clientY - rc.top) / rc.height;
+          if (v2.isGroup && f > 0.3 && f < 0.7) { where = 'into'; v2.row.classList.add('lp-drop-into'); }
+          else if (f <= 0.5) { where = 'before'; v2.row.classList.add('lp-drop-above'); }
+          else { where = 'after'; v2.row.classList.add('lp-drop-below'); }
+          target = v2.node;
+          break;
+        }
+      };
+      const up = () => {
+        removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+        row.style.opacity = ''; clear();
+        if (target != null && target !== node) treeMove(node, target, where === 'into' ? 'into' : where);
+      };
+      addEventListener('pointermove', move); addEventListener('pointerup', up);
+    };
+  };
+  const mkGrip = () => {
+    const g = document.createElement('span');
+    g.className = 'lp-grip'; g.textContent = '⠿';
+    g.title = 'drag — between rows reorders, onto a group joins it';
+    return g;
+  };
   const layerRow = (L, depth, dim) => {
     const row = document.createElement('div');
     row.className = 'lp-row' + (L.id === _activeId ? ' active' : '') + (L.visible ? '' : ' off') + (dim ? ' dim' : '');
@@ -6569,11 +6674,14 @@ function renderLayers() {
     name.title = (L.label && L.label !== L.name ? `${L.label} (${L.name})` : L.name) + (L.storage === 'external' ? ' — linked from outside the project folder' : '');
     const n = document.createElement('span'); n.className = 'lp-n';
     n.textContent = (renderer.layerElementCount(L.id) || 0).toLocaleString();
-    row.append(eye, name, n);
+    const grip = mkGrip();
+    armDrag(grip, row, L.id);
+    row.append(grip, eye, name, n);
     row.onclick = () => setActiveLayer(L.id);
     row.ondblclick = () => fitLayer(L);
     row.oncontextmenu = (e) => { e.preventDefault(); layerMenu(L, e.clientX, e.clientY); };
     rows.appendChild(row);
+    visual.push({ row, node: L.id, isGroup: false });
   };
   const walk = (arr, depth, dim) => {
     for (const nd of arr) {
@@ -6592,10 +6700,13 @@ function renderLayers() {
       const ids = groupLayerIds(nd);
       const n = document.createElement('span'); n.className = 'lp-n';
       n.textContent = ids.length + (nd.collapsed ? ` · ${ids.reduce((t, id) => t + (renderer.layerElementCount(id) || 0), 0).toLocaleString()}` : '');
-      row.append(caret, eye, name, n);
+      const grip = mkGrip();
+      armDrag(grip, row, nd);
+      row.append(grip, caret, eye, name, n);
       row.onclick = () => { nd.collapsed = !nd.collapsed; renderLayers(); };
       row.oncontextmenu = (e) => { e.preventDefault(); groupMenu(nd, e.clientX, e.clientY); };
       rows.appendChild(row);
+      visual.push({ row, node: nd, isGroup: true });
       if (!nd.collapsed) walk(nd.children, depth + 1, dim || !nd.visible);
     }
   };
@@ -6713,7 +6824,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, openObjSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
