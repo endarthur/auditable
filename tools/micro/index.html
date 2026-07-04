@@ -2771,37 +2771,82 @@ function renderStyleTab(body, L) {
     }
     return;
   }
-  // element layers: color-by + clip mirror the toolbar (same active layer, one
-  // source of truth — the panel writes THROUGH the toolbar's handlers)
+  // element layers: MODE first, COLUMN second (the QGIS two-level selector).
+  // colorSel stays the single flat source of truth — the panel derives
+  // (mode, column) from it and writes back THROUGH the toolbar's select.
   const cb = $('#colorBy');
-  const sel = document.createElement('select');
-  sel.innerHTML = cb.innerHTML; sel.value = cb.value;
-  sel.onchange = () => { cb.value = sel.value; cb.dispatchEvent(new Event('change')); renderProps(); };
-  body.appendChild(mkRow('color by', sel));
-  // the mode decides the rest of the tab (QGIS renderer semantics):
-  // categorical → the class legend; solid/rgb → nothing to style;
-  // continuous (elevation / channel / intensity) → clip + ramp
+  const isTable = !!(L.docs.blockDoc || L.docs.dhDoc);
   const selv = colorSelOf(L);
-  if (selv === 'cat' || selv === '2') {
+  const mode = isTable
+    ? (selv === 'solid' ? 'solid' : selv === 'cat' ? 'categorized' : 'continuous')
+    : (selv === '2' ? 'categorized' : selv === '3' ? 'rgb' : 'continuous');
+  if (mode === 'continuous') L._lastCont = selv;           // return here when leaving solid/categorized
+  const setSel = (v) => {
+    if ([...cb.options].some((o) => o.value === v)) { cb.value = v; cb.dispatchEvent(new Event('change')); }
+    renderProps();
+  };
+  const mSel = document.createElement('select');
+  for (const m2 of (isTable ? ['continuous', 'categorized', 'solid'] : ['continuous', 'categorized', 'rgb'])) {
+    const o = document.createElement('option'); o.value = m2; o.textContent = m2; mSel.appendChild(o);
+  }
+  mSel.value = mode;
+  mSel.onchange = async () => {
+    const m2 = mSel.value;
+    if (m2 === 'solid') return setSel('solid');
+    if (m2 === 'rgb') return setSel('3');
+    if (m2 === 'continuous') {
+      if (!isTable) return setSel('0');
+      const h2 = layerTableHeader(L);
+      return setSel(L._lastCont || (h2 && h2.mapping.chan != null ? `chan:${h2.mapping.chan}` : 'elev'));
+    }
+    // categorized: needs a class column — re-key to the first text column
+    // when none is mapped yet (the use-as-category machinery)
+    if (!isTable) return setSel('2');
+    const h2 = layerTableHeader(L);
+    if (h2 && h2.categories && h2.categories.length) return setSel('cat');
+    const cand = h2 ? h2.columns.findIndex((_, i) => !colIsNumeric(L, h2, i)) : -1;
+    if (cand < 0) { $('#meta').textContent = 'categorized: no text column to class by — re-type one under columns'; renderProps(); return; }
+    await useAsCategory(L, cand);
+    setSel('cat');
+  };
+  body.appendChild(mkRow('mode', mSel));
+  if (mode === 'continuous') {
+    const colSel = document.createElement('select');
+    if (isTable) {
+      const h2 = layerTableHeader(L);
+      const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; colSel.appendChild(o); };
+      add('elev', 'elevation');
+      for (const c of (h2 && h2.numericColumns) || []) add(`chan:${c.i}`, c.name);
+    } else {
+      colSel.innerHTML = '<option value="0">elevation</option><option value="1">intensity</option>';
+    }
+    if ([...colSel.options].some((o) => o.value === selv)) colSel.value = selv;
+    colSel.onchange = () => setSel(colSel.value);
+    body.appendChild(mkRow('column', colSel));
+    const mkClip = (id) => {
+      const inp = document.createElement('input'); inp.type = 'number'; inp.style.width = '76px';
+      inp.value = $('#' + id).value; inp.placeholder = id === 'clipMin' ? 'min' : 'max';
+      inp.oninput = () => { $('#' + id).value = inp.value; $('#' + id).dispatchEvent(new Event('input')); requestRender(); };
+      return inp;
+    };
+    body.appendChild(mkRow('clip', mkClip('clipMin'), mkClip('clipMax')));
+    renderRampSection(body, L);
+  } else if (mode === 'categorized') {
+    if (isTable) {
+      const h2 = layerTableHeader(L);
+      const colSel = document.createElement('select');
+      h2.columns.forEach((c, i) => { const o = document.createElement('option'); o.value = String(i); o.textContent = c; colSel.appendChild(o); });
+      colSel.value = String(h2.mapping.cat != null ? h2.mapping.cat : -1);
+      colSel.title = 'the class column — changing re-reads the file (any column can class: zone codes included)';
+      colSel.onchange = async () => { await useAsCategory(L, +colSel.value); setSel('cat'); };
+      body.appendChild(mkRow('column', colSel));
+    }
     const info = layerClassInfo(L);
     if (info) renderClassList(body, L, info);
     else body.appendChild(ppNote('no category classes in this layer'));
-    if (L.dh && L.docs.dhDoc) renderStickRadius(body, L);
-    return;
+  } else {
+    body.appendChild(ppNote(mode === 'solid' ? 'solid — one color, nothing to map' : 'rgb — colors come from the file'));
   }
-  if (selv === 'solid' || selv === '3') {
-    body.appendChild(ppNote(selv === 'solid' ? 'solid — one color, nothing to map' : 'rgb — colors come from the file'));
-    if (L.dh && L.docs.dhDoc) renderStickRadius(body, L);
-    return;
-  }
-  const mkClip = (id) => {
-    const inp = document.createElement('input'); inp.type = 'number'; inp.style.width = '76px';
-    inp.value = $('#' + id).value; inp.placeholder = id === 'clipMin' ? 'min' : 'max';
-    inp.oninput = () => { $('#' + id).value = inp.value; $('#' + id).dispatchEvent(new Event('input')); requestRender(); };
-    return inp;
-  };
-  body.appendChild(mkRow('clip', mkClip('clipMin'), mkClip('clipMax')));
-  renderRampSection(body, L);
   if (L.dh && L.docs.dhDoc) renderStickRadius(body, L);
 }
 function renderStickRadius(body, L) {
