@@ -12,6 +12,7 @@ import { frustumPlanes, aabbInFrustum } from './camera.js';
 import { createBlocksPipeline, categoryPalettePixels } from './gl-blocks.js';
 import { createSticksPipeline } from './gl-sticks.js';
 import { createMeshPipeline } from './gl-mesh.js';
+import { createSoupPipeline } from './gl-soup.js';
 import { createPickPipeline } from './gl-pick.js';
 
 const VERT = `#version 300 es
@@ -187,6 +188,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   let blocksPipe = null;                                  // impostor pipeline, lazy
   let sticksPipe = null;                                  // capsule pipeline, lazy
   let meshPipe = null;                                    // context-mesh pipeline, lazy
+  let soupPipe = null;                                    // streaming-mesh (soup) pipeline, lazy
   let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
   const chunks = [];
   let docBbox = null;                                     // scene bbox (fit + the shared elevation ramp)
@@ -229,6 +231,10 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     gl,
     get chunkCount() { return chunks.reduce((s, c) => s + (activeChunk(c) ? 1 : 0), 0); },
     get elementCount() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.count : 0), 0); },
+    // ALL resident chunks (hidden layers + inactive sets included — they hold
+    // their buffers), so the number is what the GPU is actually carrying
+    get vramBytes() { return chunks.reduce((s, c) => s + (c.bytes || 0), 0); },
+    layerVramBytes(layer) { return chunks.reduce((s, c) => s + (c._layer === layer ? (c.bytes || 0) : 0), 0); },
     get accumulated() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.cursor : 0), 0); },   // elements in the current accumulation
     addChunk(chunk, set = 'base', layer = 0) {
       const ls = layerOf(layer);
@@ -236,18 +242,28 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         const base = (layer << 29) >>> 0, r = chunk.recIdx;
         for (let i = 0; i < r.length; i++) r[i] = (r[i] | base) >>> 0;
       }
+      // honest VRAM accounting: every typed array in the CPU chunk becomes a
+      // GPU buffer (bboxLocal's 48 B is noise) — summed here, read as vramBytes
+      let cb = 0;
+      for (const k in chunk) { const v = chunk[k]; if (v && v.buffer && v.byteLength) cb += v.byteLength; }
       if (chunk.kind === 'mesh') {                        // context tier: static, recordless, whole-draw
         if (!meshPipe) meshPipe = createMeshPipeline(gl);
-        const up = meshPipe.upload(chunk); up._set = set; up._layer = layer;
+        const up = meshPipe.upload(chunk); up._set = set; up._layer = layer; up.bytes = cb;
         chunks.push(up);
         needClear = true;                                 // draw it into a fresh accumulation
+        return;
+      }
+      if (chunk.kind === 'soup') {                        // streaming tier: budgeted like points
+        if (!soupPipe) soupPipe = createSoupPipeline(gl);
+        const up = soupPipe.upload(chunk); up._set = set; up._layer = layer; up.bytes = cb;
+        chunks.push(up);                                  // streams INTO the accumulation, no clear
         return;
       }
       if (chunk.kind === 'blocks' || chunk.kind === 'sticks') {
         if (chunk.kind === 'blocks' && !blocksPipe) blocksPipe = createBlocksPipeline(gl);
         if (chunk.kind === 'sticks' && !sticksPipe) sticksPipe = createSticksPipeline(gl);
         const up = (chunk.kind === 'blocks' ? blocksPipe : sticksPipe).upload(chunk);
-        up._set = set; up._layer = layer;
+        up._set = set; up._layer = layer; up.bytes = cb;
         chunks.push(up);                                   // GPU owns it now
         if (set === 'base') {                              // compact chunks never tighten the ramp
           if (chunk.chanRange[0] < ls.docChan[0]) ls.docChan[0] = chunk.chanRange[0];
@@ -255,7 +271,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         }
         return;
       }
-      const up = uploadChunk(gl, chunk); up._set = set; up._layer = layer;
+      const up = uploadChunk(gl, chunk); up._set = set; up._layer = layer; up.bytes = cb;
       chunks.push(up);                                     // GPU owns it now; CPU copy dies with the caller
       if (set === 'base') {
         let m = 0; const a = chunk.intensity;
@@ -474,6 +490,26 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             meshPipe.draw(c);
             c.cursor = c.count;
             drawn += c.count;
+          }
+        }
+        gl.bindVertexArray(null);
+      }
+
+      // streaming-tier meshes: budgeted prefixes like points (the shuffle makes
+      // any prefix a uniform subsample of the soup), drawn before points so the
+      // surface occludes early
+      const soup = visible.filter((c) => c.kind === 'soup');
+      if (soup.length) {
+        for (const [id, group] of byLayer(soup)) {
+          const ls = layerOf(id);
+          soupPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: ls.sectioned === false ? null : sec });
+          for (const c of group) {
+            const [first, k] = allot(c);
+            if (k > 0) {
+              soupPipe.drawSlice(c, first, k);
+              drawn += k; c.cursor = first + k;
+            }
+            if (c.cursor < c.count) converged = false;
           }
         }
         gl.bindVertexArray(null);

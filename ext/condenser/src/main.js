@@ -10,6 +10,8 @@ export { buildStickChunk, stickLocalCenter, createStickChunkBuilder } from './st
 export { createSticksPipeline } from './gl-sticks.js';
 export { openMsh, openObj, openPlyMesh, buildMeshChunk } from './mesh.js';
 export { createMeshPipeline } from './gl-mesh.js';
+export { buildSoupChunk, soupLocalCentroid, createSoupChunkBuilder, soupFromMesh, openPlySoup } from './soup.js';
+export { createSoupPipeline } from './gl-soup.js';
 export { categoryPalettePixels, createBlocksPipeline } from './gl-blocks.js';
 export { createPickPipeline } from './gl-pick.js';
 export { openDmModel, fetchDmRecord } from './dm-provider.js';

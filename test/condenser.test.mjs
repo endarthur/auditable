@@ -723,3 +723,106 @@ test('mesh: buildMeshChunk — frame rebase, bbox, element count = triangles', (
   assert.deepEqual([...c.bboxLocal], [0, 0, 0, 100, 100, 100]);
   assert.equal(c.idx.length, 12);
 });
+
+// ── streaming-tier soup (micro-layers §7 tier 2) ──
+import { buildSoupChunk, soupLocalCentroid, createSoupChunkBuilder, soupFromMesh, openPlySoup } from '../ext/condenser/src/soup.js';
+
+test('soup: chunk build — u16 quantize round-trips centroids to chunk-span precision', () => {
+  const frame = { origin: [612000, 7765000, 700] };
+  const n = 500, cols = { count: n };
+  for (const c of ['ax', 'ay', 'az', 'bx', 'by', 'bz', 'cx', 'cy', 'cz', 'x', 'y', 'z']) cols[c] = new Float64Array(n);
+  const rnd0 = mulberry32(9);
+  for (let i = 0; i < n; i++) {
+    const X = 612000 + rnd0() * 400, Y = 7765000 + rnd0() * 400, Z = 700 + rnd0() * 100;
+    cols.ax[i] = X; cols.ay[i] = Y; cols.az[i] = Z;
+    cols.bx[i] = X + 2; cols.by[i] = Y; cols.bz[i] = Z;
+    cols.cx[i] = X; cols.cy[i] = Y + 2; cols.cz[i] = Z + 1;
+    cols.x[i] = X + 2 / 3; cols.y[i] = Y + 2 / 3; cols.z[i] = Z + 1 / 3;
+  }
+  const chunk = buildSoupChunk(cols, frame, mulberry32(1));
+  assert.equal(chunk.kind, 'soup');
+  assert.equal(chunk.count, n);
+  assert.equal(chunk.tri.length, 9 * n);
+  // ~18 B/tri resident
+  assert.equal(chunk.tri.byteLength, 18 * n);
+  // centroids reconstruct to chunk-span/65535 precision (≈6 mm over 400 m)
+  const tol = Math.max(chunk.bboxLocal[3] - chunk.bboxLocal[0], chunk.bboxLocal[4] - chunk.bboxLocal[1]) / 65535 * 3;
+  let sum = [0, 0, 0], want = [0, 0, 0];
+  for (let k = 0; k < n; k++) { const c = soupLocalCentroid(chunk, k); sum[0] += c[0]; sum[1] += c[1]; sum[2] += c[2]; }
+  for (let i = 0; i < n; i++) { want[0] += cols.x[i] - 612000; want[1] += cols.y[i] - 7765000; want[2] += cols.z[i] - 700; }
+  for (let a = 0; a < 3; a++) assert.ok(Math.abs(sum[a] - want[a]) / n < tol, `axis ${a}: ${Math.abs(sum[a] - want[a]) / n} vs ${tol}`);
+});
+
+test('soup: builder — batch morton, doc totals + bbox', () => {
+  const frame = { origin: [612000, 7765000, 700] };
+  const got = [];
+  const cb = createSoupChunkBuilder({ frame, chunkSize: 64, batchSize: 256, seed: 3, onChunk: (c) => got.push(c) });
+  const mk = (count, xoff) => {
+    const raw = { count };
+    for (const c of ['ax', 'ay', 'az', 'bx', 'by', 'bz', 'cx', 'cy', 'cz', 'x', 'y', 'z']) raw[c] = new Float64Array(count);
+    for (let i = 0; i < count; i++) {
+      const X = 612000 + xoff + i, Y = 7765000, Z = 700;
+      raw.ax[i] = X; raw.ay[i] = Y; raw.az[i] = Z;
+      raw.bx[i] = X + 1; raw.by[i] = Y; raw.bz[i] = Z;
+      raw.cx[i] = X; raw.cy[i] = Y + 1; raw.cz[i] = Z;
+      raw.x[i] = X + 1 / 3; raw.y[i] = Y + 1 / 3; raw.z[i] = Z;
+    }
+    return raw;
+  };
+  cb.push(mk(300, 0));
+  cb.push(mk(100, 300));
+  const doc = cb.flush();
+  assert.equal(doc.count, 400);
+  assert.equal(got.reduce((s, c) => s + c.count, 0), 400);
+  assert.ok(got.every((c) => c.count <= 64));
+  assert.ok(doc.bboxLocal[3] >= 399 && doc.bboxLocal[3] <= 401);
+});
+
+test('soup: soupFromMesh — parity with the parsed mesh (fans, precision dance)', async () => {
+  const batches = [];
+  for await (const b of soupFromMesh({ vertices: Float64Array.from(TETRA_V), triangles: Uint32Array.from(TETRA_T) }, { batchTris: 3 })) batches.push(b);
+  const total = batches.reduce((s, b) => s + b.count, 0);
+  assert.equal(total, 4);
+  // corner coords come back world-exact (f32 local + f64 origin)
+  assert.equal(batches[0].ax[0], 612000);
+  assert.equal(batches[0].cy[0], 7765100);
+  // centroid of tri 0 (verts 0,1,2)
+  assert.ok(Math.abs(batches[0].x[0] - (612000 + 612100 + 612050) / 3) < 1e-6);
+});
+
+test('soup: openPlySoup binary — streamed parity with openPlyMesh (counts + centroid sums)', async () => {
+  // a 20×20 quad grid, binary_le, one quad per face record (fans to 2 tris)
+  const N = 20;
+  const nv = (N + 1) * (N + 1), nf = N * N;
+  const head = new TextEncoder().encode([
+    'ply', 'format binary_little_endian 1.0', `element vertex ${nv}`,
+    'property float x', 'property float y', 'property float z',
+    `element face ${nf}`, 'property list uchar int vertex_indices', 'end_header', '',
+  ].join('\n'));
+  const body = new ArrayBuffer(nv * 12 + nf * (1 + 16));
+  const dv = new DataView(body);
+  let off = 0;
+  for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
+    dv.setFloat32(off, i * 10, true); dv.setFloat32(off + 4, j * 10, true); dv.setFloat32(off + 8, Math.sin(i * 0.5) * 5, true);
+    off += 12;
+  }
+  const at = (i, j) => j * (N + 1) + i;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    dv.setUint8(off, 4); off += 1;
+    for (const ix of [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]) { dv.setInt32(off, ix, true); off += 4; }
+  }
+  const blob = new Blob([head, body]);
+  const whole = await openPlyMesh(blob);
+  const soup = await openPlySoup(blob);
+  assert.equal(soup.header.vertexCount, nv);
+  let tris = 0, cx = 0;
+  for await (const b of soup.streamChunks({ batchTris: 100 })) { tris += b.count; for (let i = 0; i < b.count; i++) cx += b.x[i]; }
+  assert.equal(tris, whole.header.triCount);               // fans agree (2 per quad)
+  assert.equal(soup.header.triCount, tris);                // header corrected post-stream
+  let wx = 0;
+  for (let t = 0; t < whole.header.triCount; t++) {
+    const [a, b2, c] = [whole.triangles[3 * t], whole.triangles[3 * t + 1], whole.triangles[3 * t + 2]];
+    wx += (whole.vertices[3 * a] + whole.vertices[3 * b2] + whole.vertices[3 * c]) / 3;
+  }
+  assert.ok(Math.abs(cx - wx) < 1e-3, `${cx} vs ${wx}`);
+});

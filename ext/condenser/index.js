@@ -3026,6 +3026,420 @@ function createMeshPipeline(gl) {
   return { upload, begin, draw };
 }
 
+// ── src/soup.js ──
+
+// @gcu/condenser — streaming-tier meshes (micro-layers §7, tier 2): TRIANGLE
+// SOUP under the full chunk discipline. Photogrammetry-scale meshes (10⁷–10⁸
+// tris) get what points get: batch-Morton on centroids, intra-chunk shuffle
+// (any prefix = a uniform subsample — valid because triangle size
+// anti-correlates with mesh size: a mesh is huge BECAUSE its triangles are
+// pixel-scale, and pixel-scale triangles subsample like points), per-chunk u16
+// quantization (~18 B/tri resident), budgeted progressive accumulation.
+// Flat shading needs no stored normals (screen-space derivatives in-shader).
+// Soup carries no records in v1 — context semantics at scale.
+//
+// Precision: streamed vertices are kept Float32 LOCAL to a provisional origin
+// (the first vertex) — world-f32 at UTM magnitudes loses ~1 m, local-f32 keeps
+// mm — and re-widened to world f64 on emit for the frame-local rebase.
+
+
+/**
+ * Build one SoupChunk from columnar world-space corners + centroids.
+ * raw = { ax..az, bx..bz, cx..cz (corners), x,y,z (centroids) }.
+ * Corners are u16-quantized against the chunk bbox (the points trick ×3).
+ */
+function buildSoupChunk(raw, frame, rnd, indices = null) {
+  const n = indices ? indices.length : raw.x.length;
+  const o = frame.origin;
+  const perm = indices ? shuffleInPlace(Uint32Array.from(indices), rnd) : shuffledIndices(n, rnd);
+  const C = [raw.ax, raw.ay, raw.az, raw.bx, raw.by, raw.bz, raw.cx, raw.cy, raw.cz];
+  const bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+  for (let k = 0; k < n; k++) {
+    const i = perm[k];
+    for (let c = 0; c < 9; c++) {
+      const a = c % 3, v = C[c][i] - o[a];
+      if (v < bb[a]) bb[a] = v;
+      if (v > bb[a + 3]) bb[a + 3] = v;
+    }
+  }
+  const sx = bb[3] > bb[0] ? 65535 / (bb[3] - bb[0]) : 0;
+  const sy = bb[4] > bb[1] ? 65535 / (bb[4] - bb[1]) : 0;
+  const sz = bb[5] > bb[2] ? 65535 / (bb[5] - bb[2]) : 0;
+  const S = [sx, sy, sz];
+  const tri = new Uint16Array(9 * n);
+  for (let k = 0; k < n; k++) {
+    const i = perm[k];
+    for (let c = 0; c < 9; c++) {
+      const a = c % 3;
+      tri[k * 9 + c] = ((C[c][i] - o[a] - bb[a]) * S[a] + 0.5) | 0;
+    }
+  }
+  return { kind: 'soup', count: n, tri, bboxLocal: Float64Array.from(bb) };
+}
+
+// Exact centroid of element k, frame-local (tests).
+function soupLocalCentroid(chunk, k) {
+  const b = chunk.bboxLocal, t = chunk.tri;
+  const d = (v, a) => (b[a + 3] > b[a] ? b[a] + (v / 65535) * (b[a + 3] - b[a]) : b[a]);
+  const out = [0, 0, 0];
+  for (let c = 0; c < 9; c++) out[c % 3] += d(t[k * 9 + c], c % 3) / 3;
+  return out;
+}
+
+/**
+ * SoupChunkBuilder — the sticks builder's shape over triangle RawChunks
+ * ({ count, ax..cz, x,y,z }). Batch-Morton on centroids, sliced, shuffled.
+ */
+function createSoupChunkBuilder({ frame, chunkSize = 1 << 17, batchSize = 0, seed = 1, onChunk }) {
+  const rnd = mulberry32(seed);
+  const batchN = batchSize || chunkSize * 4;
+  let pend = [], pendCount = 0;
+  const doc = {
+    count: 0,
+    bboxLocal: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity),
+  };
+  const concat = (Type, parts) => {
+    const out = new Type(parts.reduce((t, p) => t + p.length, 0));
+    let off = 0;
+    for (const p of parts) { out.set(p, off); off += p.length; }
+    return out;
+  };
+  const COLS = ['ax', 'ay', 'az', 'bx', 'by', 'bz', 'cx', 'cy', 'cz', 'x', 'y', 'z'];
+  const flushBatch = () => {
+    if (!pendCount) return;
+    const cols = {};
+    for (const c of COLS) cols[c] = concat(Float64Array, pend.map((p) => p[c]));
+    const n = pendCount;
+    pend = []; pendCount = 0;
+    const order = radixSortIndices(mortonKeys(cols.x, cols.y, cols.z, n), n);
+    for (let start = 0; start < n; start += chunkSize) {
+      const slice = order.subarray(start, Math.min(start + chunkSize, n));
+      const chunk = buildSoupChunk(cols, frame, rnd, slice);
+      doc.count += chunk.count;
+      const b = doc.bboxLocal, cb = chunk.bboxLocal;
+      for (let i = 0; i < 3; i++) { if (cb[i] < b[i]) b[i] = cb[i]; if (cb[i + 3] > b[i + 3]) b[i + 3] = cb[i + 3]; }
+      onChunk(chunk);
+    }
+  };
+  return {
+    push(raw) {
+      let taken = 0;
+      while (taken < raw.count) {
+        const room = batchN - pendCount;
+        const n = Math.min(room, raw.count - taken);
+        const part = {};
+        for (const c of COLS) part[c] = raw[c].subarray(taken, taken + n);
+        pend.push(part);
+        pendCount += n; taken += n;
+        if (pendCount >= batchN) flushBatch();
+      }
+    },
+    flush() { flushBatch(); return doc; },
+    get doc() { return doc; },
+  };
+}
+
+// world f64 corner columns from a resolved index triple against local-f32
+// vertices + their origin (the precision dance in the header comment)
+function emitBatch(verts, vo, ia, ib, ic, n) {
+  const out = { count: n };
+  for (const c of ['ax', 'ay', 'az', 'bx', 'by', 'bz', 'cx', 'cy', 'cz', 'x', 'y', 'z']) out[c] = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = ia[i] * 3, b = ib[i] * 3, c = ic[i] * 3;
+    const AX = vo[0] + verts[a], AY = vo[1] + verts[a + 1], AZ = vo[2] + verts[a + 2];
+    const BX = vo[0] + verts[b], BY = vo[1] + verts[b + 1], BZ = vo[2] + verts[b + 2];
+    const CX = vo[0] + verts[c], CY = vo[1] + verts[c + 1], CZ = vo[2] + verts[c + 2];
+    out.ax[i] = AX; out.ay[i] = AY; out.az[i] = AZ;
+    out.bx[i] = BX; out.by[i] = BY; out.bz[i] = BZ;
+    out.cx[i] = CX; out.cy[i] = CY; out.cz[i] = CZ;
+    out.x[i] = (AX + BX + CX) / 3; out.y[i] = (AY + BY + CY) / 3; out.z[i] = (AZ + BZ + CZ) / 3;
+  }
+  return out;
+}
+
+/**
+ * Soup-stream an ALREADY-PARSED mesh (oversized .msh/.obj — their formats are
+ * whole-file reads anyway; the vertices are transient, the soup is resident).
+ * Yields RawChunks for createSoupChunkBuilder.
+ */
+async function* soupFromMesh({ vertices, triangles }, { batchTris = 1 << 16 } = {}) {
+  const nv = (vertices.length / 3) | 0;
+  const vo = nv ? [vertices[0], vertices[1], vertices[2]] : [0, 0, 0];
+  const verts = new Float32Array(3 * nv);
+  for (let i = 0; i < nv; i++) {
+    verts[3 * i] = vertices[3 * i] - vo[0];
+    verts[3 * i + 1] = vertices[3 * i + 1] - vo[1];
+    verts[3 * i + 2] = vertices[3 * i + 2] - vo[2];
+  }
+  const nt = (triangles.length / 3) | 0;
+  const ia = new Uint32Array(batchTris), ib = new Uint32Array(batchTris), ic = new Uint32Array(batchTris);
+  let n = 0;
+  for (let t = 0; t < nt; t++) {
+    ia[n] = triangles[3 * t]; ib[n] = triangles[3 * t + 1]; ic[n] = triangles[3 * t + 2];
+    n++;
+    if (n === batchTris) { yield emitBatch(verts, vo, ia, ib, ic, n); n = 0; }
+  }
+  if (n) yield emitBatch(verts, vo, ia, ib, ic, n);
+}
+
+/**
+ * openPlySoup(blob) — the TRUE streaming provider (binary_le + ascii PLY, the
+ * formats photogrammetry exports). Two passes over the blob, neither holding
+ * the file: (1) the vertex block → local-f32 xyz (12 B/vertex transient RAM —
+ * the honest open-time cost; freed when streaming ends), (2) the face block
+ * walked in slabs, fanned, emitted as RawChunk batches.
+ * → { header, streamChunks } — header = { kind:'mesh', soup:true, format,
+ *    vertexCount, triCount(≈ faces, exact after stream), bbox }
+ */
+async function openPlySoup(blob, { onProgress } = {}) {
+  let sampleLen = 64 * 1024, ply = null;
+  for (;;) {
+    const text = new TextDecoder('latin1').decode(await blob.slice(0, Math.min(sampleLen, blob.size)).arrayBuffer());
+    ply = parsePlyHeader(text);
+    if (ply) break;
+    if (sampleLen >= blob.size) throw new Error('ply: no end_header');
+    sampleLen *= 4;
+  }
+  const face = ply.elements.find((e) => e.name === 'face');
+  if (!face || !face.count) throw new Error('ply: no face element');
+  const px = ply.props.find((p) => p.name.toLowerCase() === 'x');
+  const py = ply.props.find((p) => p.name.toLowerCase() === 'y');
+  const pz = ply.props.find((p) => p.name.toLowerCase() === 'z');
+  if (!px || !py || !pz) throw new Error('ply: vertex needs x/y/z');
+  const nv = ply.count, ascii = ply.format === 'ascii';
+  const SIZES = { char: 1, int8: 1, uchar: 1, uint8: 1, short: 2, int16: 2, ushort: 2, uint16: 2, int: 4, int32: 4, uint: 4, uint32: 4, float: 4, float32: 4, double: 8, float64: 8 };
+  const GETTERS = { 1: 'getUint8', 2: 'getUint16', 4: 'getUint32' };
+
+  // ── pass 1: vertices → local f32 (+ bbox in world f64) ──
+  const verts = new Float32Array(3 * nv);
+  const vo = [0, 0, 0];
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  let faceStart;                                            // byte offset where faces begin (binary) / line index (ascii)
+  let asciiLines = null;
+  if (!ascii) {
+    const SLAB = 1 << 23;                                   // 8 MB windows
+    let seen = 0;
+    while (seen < nv) {
+      const n = Math.min(Math.floor(SLAB / ply.stride) || 1, nv - seen);
+      const off = ply.dataOffset + seen * ply.stride;
+      const dv = new DataView(await blob.slice(off, off + n * ply.stride).arrayBuffer());
+      for (let i = 0; i < n; i++) {
+        const X = dv[px.getter](i * ply.stride + px.offset, true);
+        const Y = dv[py.getter](i * ply.stride + py.offset, true);
+        const Z = dv[pz.getter](i * ply.stride + pz.offset, true);
+        if (seen === 0 && i === 0) { vo[0] = X; vo[1] = Y; vo[2] = Z; }
+        const k = (seen + i) * 3;
+        verts[k] = X - vo[0]; verts[k + 1] = Y - vo[1]; verts[k + 2] = Z - vo[2];
+        if (X < min[0]) min[0] = X; if (X > max[0]) max[0] = X;
+        if (Y < min[1]) min[1] = Y; if (Y > max[1]) max[1] = Y;
+        if (Z < min[2]) min[2] = Z; if (Z > max[2]) max[2] = Z;
+      }
+      seen += n;
+      if (onProgress) onProgress(off + n * ply.stride, blob.size);
+    }
+    faceStart = ply.dataOffset + nv * ply.stride;
+  } else {
+    // ascii: one decode, line-split (ascii photogrammetry at soup scale is
+    // rare; the binary path is the load-bearing one)
+    const text = await blob.text();
+    asciiLines = text.slice(ply.dataOffset).split('\n');
+    const xi = ply.props.indexOf(px), yi = ply.props.indexOf(py), zi = ply.props.indexOf(pz);
+    let rec = 0, at = 0;
+    while (rec < nv && at < asciiLines.length) {
+      const t = asciiLines[at++].trim();
+      if (!t) continue;
+      const f = t.split(/\s+/);
+      const X = +f[xi], Y = +f[yi], Z = +f[zi];
+      if (rec === 0) { vo[0] = X; vo[1] = Y; vo[2] = Z; }
+      verts[rec * 3] = X - vo[0]; verts[rec * 3 + 1] = Y - vo[1]; verts[rec * 3 + 2] = Z - vo[2];
+      if (X < min[0]) min[0] = X; if (X > max[0]) max[0] = X;
+      if (Y < min[1]) min[1] = Y; if (Y > max[1]) max[1] = Y;
+      if (Z < min[2]) min[2] = Z; if (Z > max[2]) max[2] = Z;
+      rec++;
+    }
+    faceStart = at;
+  }
+
+  const header = {
+    kind: 'mesh', soup: true, format: ascii ? 'ply-ascii' : 'ply-binary',
+    vertexCount: nv, triCount: face.count, faces: face.count,
+    bbox: { min, max },
+  };
+
+  // ── pass 2: the face walk → RawChunk batches ──
+  async function* streamChunks({ batchTris = 1 << 16, signal, onProgress: op2 } = {}) {
+    const ia = new Uint32Array(batchTris), ib = new Uint32Array(batchTris), ic = new Uint32Array(batchTris);
+    let n = 0, tris = 0;
+    const flushTo = function* (force) {
+      if (n && (force || n === batchTris)) { const b = emitBatch(verts, vo, ia, ib, ic, n); tris += n; n = 0; yield b; }
+    };
+    const pushFan = function* (ix, k) {
+      for (let j = 2; j < k; j++) {
+        ia[n] = ix[0]; ib[n] = ix[j - 1]; ic[n] = ix[j];
+        n++;
+        if (n === batchTris) yield* flushTo(true);
+      }
+    };
+    if (!ascii) {
+      const MAXREC = 4 + 255 * 8;                           // count + a generous n-gon
+      const SLAB = 1 << 23;
+      let base = faceStart, carry = new Uint8Array(0), done = 0;
+      const ix = new Uint32Array(256);
+      while (done < face.count && base < blob.size) {
+        if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+        const take = Math.min(SLAB, blob.size - base);
+        const slab = new Uint8Array(carry.length + take);
+        slab.set(carry, 0);
+        slab.set(new Uint8Array(await blob.slice(base, base + take).arrayBuffer()), carry.length);
+        base += take;
+        const dv = new DataView(slab.buffer);
+        let off = 0;
+        const last = base >= blob.size;
+        while (done < face.count && (last ? off < slab.length : off + MAXREC <= slab.length)) {
+          let rOff = off, bad = false;
+          for (const pr of face.props) {
+            if (pr.list) {
+              const cs = SIZES[pr.countType] || 1, is = SIZES[pr.idxType] || 4;
+              if (rOff + cs > slab.length) { bad = true; break; }
+              const k = dv[GETTERS[cs]](rOff, true); rOff += cs;
+              if (rOff + k * is > slab.length) { bad = true; break; }
+              if (/vertex_ind/i.test(pr.name) || face.props.length === 1) {
+                for (let j = 0; j < k; j++) ix[j] = dv[GETTERS[is]](rOff + j * is, true);
+                rOff += k * is;
+                yield* pushFan(ix, k);
+              } else rOff += k * is;
+            } else {
+              rOff += SIZES[pr.type] || 4;
+              if (rOff > slab.length) { bad = true; break; }
+            }
+          }
+          if (bad) break;
+          off = rOff;
+          done++;
+        }
+        carry = slab.subarray(off);
+        if (op2) op2(base, blob.size);
+      }
+    } else {
+      let at = faceStart, fc = 0;
+      while (fc < face.count && at < asciiLines.length) {
+        if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+        const t = asciiLines[at++].trim();
+        if (!t) continue;
+        const f = t.split(/\s+/);
+        const k = +f[0];
+        const ix = new Uint32Array(k);
+        for (let j = 0; j < k; j++) ix[j] = +f[1 + j];
+        yield* pushFan(ix, k);
+        fc++;
+      }
+    }
+    yield* flushTo(true);
+    header.triCount = tris + n;                             // exact after the stream (fans expand quads)
+  }
+
+  return { header, streamChunks };
+}
+
+// ── src/gl-soup.js ──
+
+// @gcu/condenser — the streaming-mesh (triangle soup) pipeline (micro-layers
+// §7 tier 2). The points pipeline's shape over TRIANGLES: u16 positions
+// dequantized against the chunk bbox, prefix slices (first/k in TRIANGLE
+// units), budgeted accumulation. The fragment shader is gl-mesh's: derivative
+// flat shading, two-sided, Bayer screen-door opacity, per-pixel section cut.
+
+
+const VERT$gl_soup = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;        // u16 normalized against the chunk bbox
+uniform mat4 uViewProj;
+uniform vec3 uBoxMin;
+uniform vec3 uBoxSpan;
+uniform vec4 uSecPlane;
+out vec3 vWorldPos;
+out float vSecDist;
+void main() {
+  vec3 p = uBoxMin + aPos * uBoxSpan;
+  gl_Position = uViewProj * vec4(p, 1.0);
+  vWorldPos = p;
+  vSecDist = dot(p, uSecPlane.xyz) - uSecPlane.w;
+}`;
+
+const FRAG$gl_soup = `#version 300 es
+precision highp float;
+in vec3 vWorldPos;
+in float vSecDist;
+uniform vec2 uSecCfg;
+uniform vec4 uTint;
+uniform vec3 uLightDir;
+uniform vec3 uEye;
+out vec4 outColor;
+const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+void main() {
+  if (uSecCfg.x > 0.5 && abs(vSecDist) > uSecCfg.y) discard;
+  if (uTint.a < 0.999) {
+    int bi = (int(gl_FragCoord.x) & 3) + ((int(gl_FragCoord.y) & 3) << 2);
+    if (uTint.a < (BAYER[bi] + 0.5) / 16.0) discard;
+  }
+  vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
+  vec3 vd = normalize(uEye - vWorldPos);
+  if (dot(n, vd) < 0.0) n = -n;
+  float shade = 0.42 + 0.58 * max(dot(n, uLightDir), 0.0);
+  outColor = vec4(uTint.rgb * shade, 1.0);
+}`;
+
+function createSoupPipeline(gl) {
+  const prog = makeProgram(gl, VERT$gl_soup, FRAG$gl_soup);
+  const U = (n) => gl.getUniformLocation(prog, n);
+  const uni = {
+    viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
+    secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
+    tint: U('uTint'), lightDir: U('uLightDir'), eye: U('uEye'),
+  };
+
+  function upload(chunk) {
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const b = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, chunk.tri, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.UNSIGNED_SHORT, true, 0, 0);
+    gl.bindVertexArray(null);
+    return {
+      kind: 'soup', vao, buffers: [b],
+      count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0,
+    };
+  }
+
+  function begin(cam, { tint = [0.62, 0.64, 0.66], opacity = 1, section = null }) {
+    const s = cam.state;
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
+    gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
+    const v = s.view;
+    let lx = s.eye[0] - s.target[0], ly = s.eye[1] - s.target[1], lz = s.eye[2] - s.target[2];
+    const ll = Math.hypot(lx, ly, lz) || 1;
+    lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
+    const l2 = Math.hypot(lx, ly, lz) || 1;
+    gl.uniform3f(uni.lightDir, lx / l2, ly / l2, lz / l2);
+    gl.uniform4f(uni.tint, tint[0], tint[1], tint[2], Math.max(0.02, Math.min(1, opacity)));
+    gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
+    gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
+  }
+
+  // first/k in TRIANGLES — the prefix invariant rides the shuffled build order
+  function drawSlice(c, first, k) {
+    gl.bindVertexArray(c.vao);
+    gl.uniform3f(uni.boxMin, c.bboxLocal[0], c.bboxLocal[1], c.bboxLocal[2]);
+    gl.uniform3f(uni.boxSpan, c.bboxLocal[3] - c.bboxLocal[0], c.bboxLocal[4] - c.bboxLocal[1], c.bboxLocal[5] - c.bboxLocal[2]);
+    gl.drawArrays(gl.TRIANGLES, first * 3, k * 3);
+  }
+
+  return { upload, begin, drawSlice };
+}
+
 // ── src/gl-blocks.js ──
 
 // @gcu/condenser — box impostors for block models (micro-spec §2.3).
@@ -4518,6 +4932,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   let blocksPipe = null;                                  // impostor pipeline, lazy
   let sticksPipe = null;                                  // capsule pipeline, lazy
   let meshPipe = null;                                    // context-mesh pipeline, lazy
+  let soupPipe = null;                                    // streaming-mesh (soup) pipeline, lazy
   let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
   const chunks = [];
   let docBbox = null;                                     // scene bbox (fit + the shared elevation ramp)
@@ -4560,6 +4975,10 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     gl,
     get chunkCount() { return chunks.reduce((s, c) => s + (activeChunk(c) ? 1 : 0), 0); },
     get elementCount() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.count : 0), 0); },
+    // ALL resident chunks (hidden layers + inactive sets included — they hold
+    // their buffers), so the number is what the GPU is actually carrying
+    get vramBytes() { return chunks.reduce((s, c) => s + (c.bytes || 0), 0); },
+    layerVramBytes(layer) { return chunks.reduce((s, c) => s + (c._layer === layer ? (c.bytes || 0) : 0), 0); },
     get accumulated() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.cursor : 0), 0); },   // elements in the current accumulation
     addChunk(chunk, set = 'base', layer = 0) {
       const ls = layerOf(layer);
@@ -4567,18 +4986,28 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         const base = (layer << 29) >>> 0, r = chunk.recIdx;
         for (let i = 0; i < r.length; i++) r[i] = (r[i] | base) >>> 0;
       }
+      // honest VRAM accounting: every typed array in the CPU chunk becomes a
+      // GPU buffer (bboxLocal's 48 B is noise) — summed here, read as vramBytes
+      let cb = 0;
+      for (const k in chunk) { const v = chunk[k]; if (v && v.buffer && v.byteLength) cb += v.byteLength; }
       if (chunk.kind === 'mesh') {                        // context tier: static, recordless, whole-draw
         if (!meshPipe) meshPipe = createMeshPipeline(gl);
-        const up = meshPipe.upload(chunk); up._set = set; up._layer = layer;
+        const up = meshPipe.upload(chunk); up._set = set; up._layer = layer; up.bytes = cb;
         chunks.push(up);
         needClear = true;                                 // draw it into a fresh accumulation
+        return;
+      }
+      if (chunk.kind === 'soup') {                        // streaming tier: budgeted like points
+        if (!soupPipe) soupPipe = createSoupPipeline(gl);
+        const up = soupPipe.upload(chunk); up._set = set; up._layer = layer; up.bytes = cb;
+        chunks.push(up);                                  // streams INTO the accumulation, no clear
         return;
       }
       if (chunk.kind === 'blocks' || chunk.kind === 'sticks') {
         if (chunk.kind === 'blocks' && !blocksPipe) blocksPipe = createBlocksPipeline(gl);
         if (chunk.kind === 'sticks' && !sticksPipe) sticksPipe = createSticksPipeline(gl);
         const up = (chunk.kind === 'blocks' ? blocksPipe : sticksPipe).upload(chunk);
-        up._set = set; up._layer = layer;
+        up._set = set; up._layer = layer; up.bytes = cb;
         chunks.push(up);                                   // GPU owns it now
         if (set === 'base') {                              // compact chunks never tighten the ramp
           if (chunk.chanRange[0] < ls.docChan[0]) ls.docChan[0] = chunk.chanRange[0];
@@ -4586,7 +5015,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         }
         return;
       }
-      const up = uploadChunk(gl, chunk); up._set = set; up._layer = layer;
+      const up = uploadChunk(gl, chunk); up._set = set; up._layer = layer; up.bytes = cb;
       chunks.push(up);                                     // GPU owns it now; CPU copy dies with the caller
       if (set === 'base') {
         let m = 0; const a = chunk.intensity;
@@ -4805,6 +5234,26 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             meshPipe.draw(c);
             c.cursor = c.count;
             drawn += c.count;
+          }
+        }
+        gl.bindVertexArray(null);
+      }
+
+      // streaming-tier meshes: budgeted prefixes like points (the shuffle makes
+      // any prefix a uniform subsample of the soup), drawn before points so the
+      // surface occludes early
+      const soup = visible.filter((c) => c.kind === 'soup');
+      if (soup.length) {
+        for (const [id, group] of byLayer(soup)) {
+          const ls = layerOf(id);
+          soupPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: ls.sectioned === false ? null : sec });
+          for (const c of group) {
+            const [first, k] = allot(c);
+            if (k > 0) {
+              soupPipe.drawSlice(c, first, k);
+              drawn += k; c.cursor = first + k;
+            }
+            if (c.cursor < c.count) converged = false;
           }
         }
         gl.bindVertexArray(null);
@@ -5124,6 +5573,12 @@ export {
   openPlyMesh,
   buildMeshChunk,
   createMeshPipeline,
+  buildSoupChunk,
+  soupLocalCentroid,
+  createSoupChunkBuilder,
+  soupFromMesh,
+  openPlySoup,
+  createSoupPipeline,
   categoryPalettePixels,
   createBlocksPipeline,
   createPickPipeline,

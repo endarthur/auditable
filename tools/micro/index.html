@@ -298,7 +298,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, openMsh, openObj, openPlyMesh, buildMeshChunk, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
@@ -333,8 +333,9 @@ function loop(t) {
     fpsBuf.push(performance.now() - t0); if (fpsBuf.length > 30) fpsBuf.shift();
     const ms = fpsBuf.reduce((a, b) => a + b, 0) / fpsBuf.length;
     const total = renderer.elementCount, acc = renderer.accumulated;
+    const vram = renderer.vramBytes ? ` · vram ${fmtSize(renderer.vramBytes)}` : '';
     const heap = performance.memory ? ` · heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)} MB` : '';
-    $('#stats').textContent = `${total.toLocaleString()} pts · ${renderer.chunkCount} chunks (${r.visible} vis) · ${converged ? `converged ${acc.toLocaleString()}` : `accumulating ${(100 * acc / (total || 1)).toFixed(0)}%`} · ${ms.toFixed(1)} ms${heap}`;
+    $('#stats').textContent = `${total.toLocaleString()} pts · ${renderer.chunkCount} chunks (${r.visible} vis) · ${converged ? `converged ${acc.toLocaleString()}` : `accumulating ${(100 * acc / (total || 1)).toFixed(0)}%`} · ${ms.toFixed(1)} ms${vram}${heap}`;
     drawMeasure();                                         // the overlay rides the camera
     drawSectionPlane();
     drawCompass();
@@ -696,43 +697,82 @@ async function openPlyBlob(blob, name, opts = {}) {
 // Context meshes (micro-layers spec §7 tier 1): wireframes / solids / TINs —
 // whole-file read, one static chunk, scenery (no records: not pickable, not
 // filterable). Picks pass THROUGH a mesh to the elements behind it.
-const MESH_TRI_CAP = 3_000_000;
-async function plyHasFaces(blob) {
+const CONTEXT_TRI_CAP = 2_000_000;                        // above this → the streaming soup tier
+async function plyFaceCount(blob) {
   try {
     let sampleLen = 64 * 1024, h = null;
     for (;;) {
       h = parsePlyHeader(new TextDecoder('latin1').decode(await blob.slice(0, Math.min(sampleLen, blob.size)).arrayBuffer()));
       if (h) break;
-      if (sampleLen >= blob.size) return false;
+      if (sampleLen >= blob.size) return 0;
       sampleLen *= 4;
     }
     const face = h.elements.find((e) => e.name === 'face');
-    return !!(face && face.count);
-  } catch { return false; }
+    return face ? face.count : 0;
+  } catch { return 0; }
 }
+const plyHasFaces = async (blob) => (await plyFaceCount(blob)) > 0;
 function hexToRgb01(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; }
 async function openMeshDoc(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : _activeId;
   $('#meta').textContent = `${name} — reading mesh…`;
-  const open = /\.msh$/i.test(name) ? openMsh : /\.obj$/i.test(name) ? openObj : openPlyMesh;
-  const { header, vertices, triangles } = await open(blob);
-  if (header.triCount > MESH_TRI_CAP) throw new Error(`${header.triCount.toLocaleString()} triangles — beyond the context tier (${MESH_TRI_CAP / 1e6}M cap); the streaming mesh tier is roadmapped`);
   _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   const L = layerById(lid);
-  if (L) {
+  const setupLayer = (header) => {
+    if (!L) return;
     L.kind = 'mesh';
     L.docs = { meshDoc: { blob, name, header } };
     L.tint = opts.tint || '#9ea3a8';
     L.opacity = opts.opacity != null ? opts.opacity : 1;
+    renderer.setLayerMeshStyle(lid, { tint: hexToRgb01(L.tint), opacity: L.opacity });
+  };
+  // two tiers, chosen by triangle count (§7): ≤ cap → static indexed context
+  // mesh; above → the streaming soup (Morton chunks, u16, budgeted prefixes).
+  // A big PLY announces its face count in the header — it streams WITHOUT the
+  // file ever being held whole; .msh/.obj formats are whole-file reads anyway,
+  // so their vertices are transient and only the soup stays resident.
+  let header = null, soupSrc = null;
+  if (/\.ply$/i.test(name) && await plyFaceCount(blob) > CONTEXT_TRI_CAP) {
+    const doc = await openPlySoup(blob, { onProgress: (a, b2) => { $('#meta').textContent = `${name} — reading vertices… ${Math.round(100 * a / b2)}%`; } });
+    header = doc.header;
+    soupSrc = (o) => doc.streamChunks(o);
+  } else {
+    const open = /\.msh$/i.test(name) ? openMsh : /\.obj$/i.test(name) ? openObj : openPlyMesh;
+    const m = await open(blob);
+    header = m.header;
+    if (header.triCount > CONTEXT_TRI_CAP) {
+      header = { ...header, soup: true };
+      soupSrc = (o) => soupFromMesh(m, o);
+    } else {
+      setupLayer(header);
+      fitFromHeader(header, opts.first !== false);
+      const chunk = buildMeshChunk({ vertices: m.vertices, triangles: m.triangles, frame });
+      renderer.addChunk(chunk, 'base', lid);
+      if (L) L.bboxLocal = chunk.bboxLocal;
+      recomputeUnion();
+      setColorLabels(null);
+      $('#meta').textContent = `${name} — ${header.triCount.toLocaleString()} triangles · ${header.vertexCount.toLocaleString()} vertices · ${header.format}`;
+      requestRender();
+      return;
+    }
   }
+  // ── the soup path: stream → Morton chunks → budgeted accumulation ──
+  setupLayer(header);
   fitFromHeader(header, opts.first !== false);
-  const chunk = buildMeshChunk({ vertices, triangles, frame });
-  renderer.addChunk(chunk, 'base', lid);
-  if (L) L.bboxLocal = chunk.bboxLocal;
-  recomputeUnion();
-  renderer.setLayerMeshStyle(lid, { tint: hexToRgb01(L ? L.tint : '#9ea3a8'), opacity: L ? L.opacity : 1 });
   setColorLabels(null);
-  $('#meta').textContent = `${name} — ${header.triCount.toLocaleString()} triangles · ${header.vertexCount.toLocaleString()} vertices · ${header.format}`;
+  const cb = createSoupChunkBuilder({ frame, chunkSize: 1 << 17, batchSize: 1 << 19, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
+  let seen = 0;
+  for await (const rc of soupSrc({ batchTris: 1 << 16 })) {
+    cb.push(rc);
+    seen += rc.count;
+    $('#meta').textContent = `${name} — streaming ${seen.toLocaleString()} triangles…`;
+    await new Promise((r) => setTimeout(r));
+  }
+  const doc = cb.flush();
+  if (L) L.bboxLocal = doc.bboxLocal;
+  recomputeUnion();
+  L.docs.meshDoc.metaLine = `${name} — ${doc.count.toLocaleString()} triangles · ${header.vertexCount.toLocaleString()} vertices · ${header.format} · streamed`;
+  $('#meta').textContent = L.docs.meshDoc.metaLine;
   requestRender();
 }
 // Drillholes (micro-layers spec §5): collar + survey + intervals → desurveyed
@@ -1825,7 +1865,7 @@ function showFileInfo() {
   const rows = [];
   const row = (k, v) => rows.push(`<tr><td class="fi-k">${k}</td><td>${v}</td></tr>`);
   row('file', V(meshDoc ? meshDoc.name : _blockDoc ? _blockDoc.name : _plyDoc ? _plyDoc.name : 'point cloud'));
-  row('kind', V(meshDoc ? `context mesh (${h.format})` : _dhDoc ? `drillholes (${h.method === 'minimumCurvature' ? 'minimum curvature' : h.method}, dip ${h.dipConvention})` : _lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
+  row('kind', V(meshDoc ? `${h.soup ? 'streamed mesh' : 'context mesh'} (${h.format})` : _dhDoc ? `drillholes (${h.method === 'minimumCurvature' ? 'minimum curvature' : h.method}, dip ${h.dipConvention})` : _lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
   if (meshDoc) { row('triangles', num(h.triCount)); row('vertices', num(h.vertexCount)); }
   else row('records', num(h.count));
   if (_dhDoc) {
@@ -1839,6 +1879,7 @@ function showFileInfo() {
     }
   }
   if (frame) row('frame origin', frame.origin.map(num).join(sep(', ')) + (frame.crs ? ` ${sep('·')} ${V(frame.crs)}` : ''));
+  if (AL0 && renderer.layerVramBytes(AL0.id)) row('vram (layer)', V(fmtSize(renderer.layerVramBytes(AL0.id))));
   if (h.grid) {
     row('grid', [h.grid.x.count, h.grid.y.count, h.grid.z.count].map(num).join(sep(' × ')));
     row('block size', [h.grid.x.pitch, h.grid.y.pitch, h.grid.z.pitch].map(num).join(sep(' × ')));
