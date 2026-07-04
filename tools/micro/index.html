@@ -1526,7 +1526,9 @@ async function openRecent(entry) {
       const f = await h.getFile();
       addRecent(f, h);
       _fileHandles.set(f, h);
-      return openFilesDialog([f]);
+      // a RECENT is a known file — no interrogation: straight open (the
+      // compact add/replace menu only when layers already exist)
+      return openBlob(f, f.name, 'ask');
     } catch { $('#meta').textContent = `couldn't reopen “${entry.name}” — pick it again`; return openFilePicker(); }
   }
   $('#meta').textContent = `“${entry.name}” has no saved handle — pick it again`;
