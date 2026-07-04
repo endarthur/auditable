@@ -9,7 +9,8 @@
   "executes": {
     "runtime_codegen": false,
     "wasm": false,
-    "remote_import": false
+    "remote_import": false,
+    "workers": "blob compute workers (winding containment sweeps) — inherit this document CSP: connect-src none applies inside them"
   },
   "reach": {
     "network": "none",

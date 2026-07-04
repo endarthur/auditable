@@ -2,12 +2,13 @@
 // Worker blob inlines all evaluation code via Function.toString() + JSON.stringify()
 
 import { NODE_SIZE } from './bvh.js';
-import { solidAngle, windingBrute, windingBVH, evaluateCPU } from './cpu.js';
+import { solidAngle, windingBrute, windingBVH, evaluateCPU, WINDING_BETA2 } from './cpu.js';
 import { createGPUEvaluator, evaluateGPU, WGSL_SHADER, WGSL_FINALIZE } from './gpu.js';
 
 function createWindingWorker(opts = {}) {
   const source = `
 const NODE_SIZE = ${NODE_SIZE};
+const WINDING_BETA2 = ${WINDING_BETA2};
 const PI4 = 4 * Math.PI;
 
 // -- CPU path --

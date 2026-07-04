@@ -232,11 +232,16 @@ describe('winding: BVH-accelerated winding number', () => {
       [10, 0, 0],   // outside
     ];
 
+    // the BVH path carries Barill order-1 far-field dipoles (beta = 3):
+    // points deep inside/outside see well under 1% approximation error,
+    // never enough to cross the 0.5 classification threshold (near-surface
+    // queries stay on the exact path — nearby nodes fail the far-field test)
     for (const [px, py, pz] of points) {
       const brute = windingBrute(px, py, pz, vertices, triangles);
       const bvhW = windingBVH(px, py, pz, vertices, triangles, bvh.nodes, bvh.triIndices);
-      assert.ok(Math.abs(brute - bvhW) < 1e-6,
+      assert.ok(Math.abs(brute - bvhW) < 0.02,
         `Mismatch at (${px},${py},${pz}): brute=${brute}, bvh=${bvhW}`);
+      assert.equal(brute >= 0.5, bvhW >= 0.5, `classification flip at (${px},${py},${pz})`);
     }
   });
 });

@@ -48,7 +48,12 @@ function windingBrute(px, py, pz, vertices, triangles, triIndices) {
   return sum / PI4;
 }
 
-// BVH-accelerated winding number
+// BVH-accelerated winding number with Barill far-field dipoles (Fast Winding
+// Numbers for Soups and Clouds, SIGGRAPH 2018, order 1): a node whose whole
+// subtree is far away (dist > BETA × subtree radius) contributes as a single
+// dipole — Ω ≈ N·(c−p)/d³ — instead of an exact per-triangle descent. Turns
+// per-query cost from O(triangles) into ~O(log triangles).
+const WINDING_BETA2 = 9;                                   // β = 3 — order-1 dipole stays within ~0.5% of exact
 function windingBVH(px, py, pz, vertices, triangles, bvhNodes, triIndices) {
   let sum = 0;
   const stack = [0]; // start at root
@@ -57,11 +62,14 @@ function windingBVH(px, py, pz, vertices, triangles, bvhNodes, triIndices) {
     const nodeIdx = stack.pop();
     const off = nodeIdx * NODE_SIZE;
 
-    // AABB test — skip if point is far from this node
-    // (For winding number, we can't skip based on distance alone without
-    // the far-field approximation. For correctness, traverse all overlapping nodes.
-    // A simple optimization: skip if the solid angle contribution from the entire
-    // node's bounding box is negligible. For now, just traverse everything.)
+    // far field: the subtree as one dipole
+    const qx = bvhNodes[off + 8] - px, qy = bvhNodes[off + 9] - py, qz = bvhNodes[off + 10] - pz;
+    const d2 = qx * qx + qy * qy + qz * qz;
+    const r = bvhNodes[off + 14];
+    if (d2 > WINDING_BETA2 * r * r) {
+      sum += (bvhNodes[off + 11] * qx + bvhNodes[off + 12] * qy + bvhNodes[off + 13] * qz) / (d2 * Math.sqrt(d2));
+      continue;
+    }
 
     const data2 = bvhNodes[off + 7];
 
@@ -166,4 +174,4 @@ async function evaluateCPU(vertices, triangles, bvhNodes, triIndices, blockModel
   return { proportions, flags };
 }
 
-export { solidAngle, windingBrute, windingBVH, evaluateCPU };
+export { solidAngle, windingBrute, windingBVH, evaluateCPU, WINDING_BETA2 };

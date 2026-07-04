@@ -6,12 +6,19 @@
 // BVH (Bounding Volume Hierarchy) construction for triangle meshes
 // Flat array layout for GPU-friendly traversal
 
-// Node layout (8 floats per node):
+// (superseded — see the 16-float layout above)
 // [min_x, min_y, min_z, max_x, max_y, max_z, left_or_first, count_or_right]
 // Leaf: count > 0, first = index into reordered tri_indices
 // Internal: count = 0, left/right = child node indices
 
-const NODE_SIZE = 8;
+const NODE_SIZE = 16;
+// Node layout (16 floats):
+//   [0..5]  min/max bounds
+//   [6..7]  data1/data2 (leaf: first/count; internal: left/-(right)-1)
+//   [8..10] area-weighted centroid of the subtree's triangles
+//   [11..13] vector area (Σ ½·e1×e2 — the far-field dipole strength)
+//   [14]    conservative subtree radius (centroid → farthest bbox corner)
+//   [15]    pad
 
 function triCentroid(vertices, triangles, triIdx, axis) {
   const i0 = triangles[triIdx * 3] * 3 + axis;
@@ -101,6 +108,40 @@ function buildBVH(vertices, triangles, { maxLeafSize = 4, degenerateEpsilon = 1e
     const bounds = computeBounds(start, count);
     nodes[off] = bounds[0]; nodes[off + 1] = bounds[1]; nodes[off + 2] = bounds[2];
     nodes[off + 3] = bounds[3]; nodes[off + 4] = bounds[4]; nodes[off + 5] = bounds[5];
+
+    // Barill-style far-field data (Fast Winding Numbers, SIGGRAPH 2018):
+    // the subtree's triangles as one dipole — area-weighted centroid, vector
+    // area, and a conservative radius. Computed per node from its (contiguous,
+    // already-partitioned) triangle range.
+    {
+      let aw = 1e-30, cxs = 0, cys = 0, czs = 0, nxs = 0, nys = 0, nzs = 0;
+      for (let i = start; i < start + count; i++) {
+        const ti = triIdx[i];
+        const a = triangles[ti * 3] * 3, b = triangles[ti * 3 + 1] * 3, c = triangles[ti * 3 + 2] * 3;
+        const e1x = vertices[b] - vertices[a], e1y = vertices[b + 1] - vertices[a + 1], e1z = vertices[b + 2] - vertices[a + 2];
+        const e2x = vertices[c] - vertices[a], e2y = vertices[c + 1] - vertices[a + 1], e2z = vertices[c + 2] - vertices[a + 2];
+        const vx = (e1y * e2z - e1z * e2y) / 2, vy = (e1z * e2x - e1x * e2z) / 2, vz = (e1x * e2y - e1y * e2x) / 2;
+        const area = Math.sqrt(vx * vx + vy * vy + vz * vz);
+        aw += area;
+        cxs += area * (vertices[a] + vertices[b] + vertices[c]) / 3;
+        cys += area * (vertices[a + 1] + vertices[b + 1] + vertices[c + 1]) / 3;
+        czs += area * (vertices[a + 2] + vertices[b + 2] + vertices[c + 2]) / 3;
+        nxs += vx; nys += vy; nzs += vz;
+      }
+      const ccx = cxs / aw, ccy = cys / aw, ccz = czs / aw;
+      let r2 = 0;
+      for (let ci = 0; ci < 8; ci++) {
+        const px2 = bounds[(ci & 1) ? 3 : 0] - ccx;
+        const py2 = bounds[(ci & 2) ? 4 : 1] - ccy;
+        const pz2 = bounds[(ci & 4) ? 5 : 2] - ccz;
+        const d2 = px2 * px2 + py2 * py2 + pz2 * pz2;
+        if (d2 > r2) r2 = d2;
+      }
+      nodes[off + 8] = ccx; nodes[off + 9] = ccy; nodes[off + 10] = ccz;
+      nodes[off + 11] = nxs; nodes[off + 12] = nys; nodes[off + 13] = nzs;
+      nodes[off + 14] = Math.sqrt(r2);
+      nodes[off + 15] = 0;
+    }
 
     if (count <= maxLeafSize) {
       // Leaf node
@@ -232,7 +273,12 @@ function windingBrute(px, py, pz, vertices, triangles, triIndices) {
   return sum / PI4;
 }
 
-// BVH-accelerated winding number
+// BVH-accelerated winding number with Barill far-field dipoles (Fast Winding
+// Numbers for Soups and Clouds, SIGGRAPH 2018, order 1): a node whose whole
+// subtree is far away (dist > BETA × subtree radius) contributes as a single
+// dipole — Ω ≈ N·(c−p)/d³ — instead of an exact per-triangle descent. Turns
+// per-query cost from O(triangles) into ~O(log triangles).
+const WINDING_BETA2 = 9;                                   // β = 3 — order-1 dipole stays within ~0.5% of exact
 function windingBVH(px, py, pz, vertices, triangles, bvhNodes, triIndices) {
   let sum = 0;
   const stack = [0]; // start at root
@@ -241,11 +287,14 @@ function windingBVH(px, py, pz, vertices, triangles, bvhNodes, triIndices) {
     const nodeIdx = stack.pop();
     const off = nodeIdx * NODE_SIZE;
 
-    // AABB test — skip if point is far from this node
-    // (For winding number, we can't skip based on distance alone without
-    // the far-field approximation. For correctness, traverse all overlapping nodes.
-    // A simple optimization: skip if the solid angle contribution from the entire
-    // node's bounding box is negligible. For now, just traverse everything.)
+    // far field: the subtree as one dipole
+    const qx = bvhNodes[off + 8] - px, qy = bvhNodes[off + 9] - py, qz = bvhNodes[off + 10] - pz;
+    const d2 = qx * qx + qy * qy + qz * qz;
+    const r = bvhNodes[off + 14];
+    if (d2 > WINDING_BETA2 * r * r) {
+      sum += (bvhNodes[off + 11] * qx + bvhNodes[off + 12] * qy + bvhNodes[off + 13] * qz) / (d2 * Math.sqrt(d2));
+      continue;
+    }
 
     const data2 = bvhNodes[off + 7];
 
@@ -412,7 +461,7 @@ fn traverse_bvh(p: vec3<f32>) -> f32 {
   while (sp > 0u) {
     sp -= 1u;
     let node_idx = stack[sp];
-    let off = node_idx * 8u;
+    let off = node_idx * 16u;   // NODE_SIZE (bvh.js) — extra fields are the CPU far-field dipoles
 
     let data2 = bvh_nodes[off + 7u];
 
@@ -647,6 +696,7 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
 function createWindingWorker(opts = {}) {
   const source = `
 const NODE_SIZE = ${NODE_SIZE};
+const WINDING_BETA2 = ${WINDING_BETA2};
 const PI4 = 4 * Math.PI;
 
 // -- CPU path --

@@ -58,7 +58,7 @@ fn traverse_bvh(p: vec3<f32>) -> f32 {
   while (sp > 0u) {
     sp -= 1u;
     let node_idx = stack[sp];
-    let off = node_idx * 8u;
+    let off = node_idx * 16u;   // NODE_SIZE (bvh.js) — extra fields are the CPU far-field dipoles
 
     let data2 = bvh_nodes[off + 7u];
 
