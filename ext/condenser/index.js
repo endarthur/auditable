@@ -963,7 +963,45 @@ async function fetchDelimitedRecord(blob, header, rec) {
 
 const CAP_DISTINCT = 300000;                               // per-axis discovery cap
 
-async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, indexEvery = 1024, signal, onProgress } = {}) {
+// sweep 2 as a shared factory: the same cold-recipe stream whether the header
+// came from a live discovery or a cached `discovered` payload (sidecars)
+function makeDelimitedStream(blob, delim, hasHeaderRow, map, catCol, catCode) {
+  return async function* streamChunks({ chunkPoints = 1 << 18, signal: s2, onProgress: op2 } = {}) {
+    const alloc = () => ({ x: new Float64Array(chunkPoints), y: new Float64Array(chunkPoints), z: new Float64Array(chunkPoints), chan: new Float64Array(chunkPoints), cat: catCode ? new Uint8Array(chunkPoints) : null });
+    let buf = alloc(), fill = 0, recStart = 0;
+    for await (const batch of lineFields(blob, delim, hasHeaderRow, { signal: s2, onProgress: op2 })) {
+      for (const f of batch) {
+        const xv = +f[map.x], yv = +f[map.y], zv = +f[map.z];
+        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+        buf.x[fill] = xv; buf.y[fill] = yv; buf.z[fill] = zv;
+        buf.chan[fill] = map.chan != null ? +f[map.chan] : 0;
+        if (buf.cat) { const c = catCode.get((f[catCol] || '').trim()); buf.cat[fill] = c === undefined ? 0 : c; }
+        fill++;
+        if (fill === chunkPoints) {
+          yield { count: fill, x: buf.x, y: buf.y, z: buf.z, chan: buf.chan, cat: buf.cat, recStart };
+          recStart += fill; buf = alloc(); fill = 0;
+        }
+      }
+    }
+    if (fill) yield { count: fill, x: buf.x.subarray(0, fill), y: buf.y.subarray(0, fill), z: buf.z.subarray(0, fill), chan: buf.chan.subarray(0, fill), cat: buf.cat ? buf.cat.subarray(0, fill) : null, recStart };
+  };
+}
+
+async function openBlockModel(blob, { mapping = null, discovered = null, sample = 512 * 1024, indexEvery = 1024, signal, onProgress } = {}) {
+  // a cached discovery (project sidecars / channel re-streams): skip sweep 1
+  // entirely — the header is rebuilt from the payload, sweep 2 streams as usual
+  if (discovered) {
+    const header = {
+      ...discovered,
+      bbox: { min: [...discovered.bbox.min], max: [...discovered.bbox.max] },
+      index: discovered.index
+        ? { k: discovered.index.k, offsets: discovered.index.offsets instanceof Float64Array ? discovered.index.offsets : Float64Array.from(discovered.index.offsets) }
+        : undefined,
+    };
+    const map2 = header.mapping;
+    const catCode2 = header.categories ? new Map(header.categories.map((v, i) => [v, i])) : null;
+    return { header, streamChunks: makeDelimitedStream(blob, header.delim, header.hasHeaderRow, map2, map2.cat, catCode2) };
+  }
   const head = await blob.slice(0, Math.min(sample, blob.size)).text();
   const sniff = sniffDelimited(head);
   // headerless numeric files (XYZ dumps): columns 0/1/2 = x/y/z, a 4th numeric = the
@@ -1057,26 +1095,8 @@ async function openBlockModel(blob, { mapping = null, sample = 512 * 1024, index
     ],
   };
 
-  // ── sweep 2 (cold recipe): full RawChunks, yielded as buffers fill ──
-  async function* streamChunks({ chunkPoints = 1 << 18, signal: s2, onProgress: op2 } = {}) {
-    const alloc = () => ({ x: new Float64Array(chunkPoints), y: new Float64Array(chunkPoints), z: new Float64Array(chunkPoints), chan: new Float64Array(chunkPoints), cat: catCode ? new Uint8Array(chunkPoints) : null });
-    let buf = alloc(), fill = 0, recStart = 0;
-    for await (const batch of lineFields(blob, sniff.delim, hasHeaderRow, { signal: s2, onProgress: op2 })) {
-      for (const f of batch) {
-        const xv = +f[map.x], yv = +f[map.y], zv = +f[map.z];
-        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
-        buf.x[fill] = xv; buf.y[fill] = yv; buf.z[fill] = zv;
-        buf.chan[fill] = map.chan != null ? +f[map.chan] : 0;
-        if (buf.cat) { const c = catCode.get((f[catCol] || '').trim()); buf.cat[fill] = c === undefined ? 0 : c; }
-        fill++;
-        if (fill === chunkPoints) {
-          yield { count: fill, x: buf.x, y: buf.y, z: buf.z, chan: buf.chan, cat: buf.cat, recStart };
-          recStart += fill; buf = alloc(); fill = 0;
-        }
-      }
-    }
-    if (fill) yield { count: fill, x: buf.x.subarray(0, fill), y: buf.y.subarray(0, fill), z: buf.z.subarray(0, fill), chan: buf.chan.subarray(0, fill), cat: buf.cat ? buf.cat.subarray(0, fill) : null, recStart };
-  }
+  // ── sweep 2 (cold recipe): the shared stream factory ──
+  const streamChunks = makeDelimitedStream(blob, sniff.delim, hasHeaderRow, map, catCol, catCode);
 
   return { header, streamChunks };
 }

@@ -2009,8 +2009,8 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
     // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
     // so grid inference must not promote them to boxes.
-    else if (/\.(xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { forcePoints: true, layer: lid, first, mapping: over.mapping }); }
-    else if (/\.(csv|txt|dat|asc)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints: over.forcePoints, mapping: over.mapping }); }
+    else if (/\.(xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { forcePoints: true, layer: lid, first, mapping: over.mapping, discovered: over.discovered }); }
+    else if (/\.(csv|txt|dat|asc)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints: over.forcePoints, mapping: over.mapping, discovered: over.discovered }); }
     else if (/\.ply$/i.test(name)) { await openPlyBlob(blob, name, { layer: lid, first }); }
     else {
       const { header, streamChunks } = await openLas(blob);
@@ -2449,11 +2449,18 @@ let _blockDoc = null, _lasDoc = null, _dhDoc = null;
 async function openBlocksBlob(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : _activeId;
   _lasDoc = null; _plyDoc = null;
-  $('#meta').textContent = `${name} — discovering grid…`;
+  // a cached discovery skips sweep 1: project sidecars pass opts.discovered;
+  // a channel switch on the SAME blob reuses the live header (grid / index /
+  // categories are mapping-independent — only the chan pick changes)
+  const discovered = opts.discovered
+    || (opts.chan != null && _blockDoc && _blockDoc.header && _blockDoc.blob === blob
+      ? { ..._blockDoc.header, mapping: { ..._blockDoc.header.mapping, chan: opts.chan } }
+      : null);
+  $('#meta').textContent = `${name} — ${discovered ? 'reading…' : 'discovering grid…'}`;
   const mapping = opts.mapping
     || (opts.chan != null && _blockDoc && _blockDoc.header ? { ..._blockDoc.header.mapping, chan: opts.chan } : null);
   renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);
-  const { header, streamChunks } = await openBlockModel(blob, mapping ? { mapping } : {});
+  const { header, streamChunks } = await openBlockModel(blob, discovered ? { discovered } : (mapping ? { mapping } : {}));
   if (opts.forcePoints) header.grid = null;
   _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints };
   registerDocs(lid, header.grid ? 'blocks' : 'points');
@@ -2555,7 +2562,7 @@ $('#colorBy').addEventListener('change', () => {
   } else requestRender();
 });
 for (const id of ['clipMin', 'clipMax']) $('#' + id).addEventListener('input', () => {
-  const L = activeLayer(); if (L) { L.clip = [$('#clipMin').value, $('#clipMax').value]; if (rampCfgOf(L)) applyRamp(L, true); }
+  const L = activeLayer(); if (L) { L.clip = [$('#clipMin').value, $('#clipMax').value]; const pcR = paintActiveCol(L); if (rampCfgOf(L) || (pcR && pcR.kind === 'ratio')) applyRamp(L, true); }
   dispatchEvent(new Event('micro:project-dirty'));
 });
 
@@ -3116,6 +3123,30 @@ async function saveProject() {
     if (outside.length && await askCopyOutside(outside) === 'copy') {
       for (const L of outside) { $('#meta').textContent = `project: copying ${L.name}…`; await copyLayerIn(L, dir); }
     }
+    // derived-cache sidecars (spec section 12): the discovery header + column
+    // stats travel WITH the data — reopening skips the grid-discovery sweep
+    // and the columns tab wakes up already scanned. Best-effort, size-keyed.
+    for (const L of _layers) {
+      const doc = L.docs.blockDoc;
+      if (!doc || doc.header.dm || L.storage !== 'project') continue;
+      try {
+        const h = doc.header;
+        const meta = {
+          v: 1, size: doc.blob.size,
+          header: {
+            kind: h.kind, count: h.count, bbox: h.bbox, grid: h.grid,
+            columns: h.columns, mapping: h.mapping, delim: h.delim, hasHeaderRow: h.hasHeaderRow,
+            numericColumns: h.numericColumns, categories: h.categories, attributes: h.attributes,
+            index: h.index ? { k: h.index.k, offsets: [...h.index.offsets] } : undefined,
+          },
+          colStats: L._colStats || undefined,
+        };
+        const mh = await dir.getFileHandle(L.name + '.meta.json', { create: true });
+        const mw = await mh.createWritable();
+        await mw.write(JSON.stringify(meta));
+        await mw.close();
+      } catch { /* sidecars are a cache, never a failure */ }
+    }
     const fh = await dir.getFileHandle('project.json', { create: true });
     const w = await fh.createWritable();
     await w.write(JSON.stringify(projectManifest(), null, 2) + '\n');
@@ -3265,10 +3296,20 @@ async function openProjectDir(dir) {
       const overR = ls.kind === 'mesh'
         ? { tint: ls.tint, opacity: ls.opacity, forceSoup: !!ls.soup }
         : (/\.ply$/i.test(ls.source) ? { forcePoints: true } : (ls.mapping ? { mapping: ls.mapping } : {}));
+      // the sidecar cache: matching size → skip the discovery sweep entirely
+      let sidecar = null;
+      if (ls.kind !== 'mesh' && /\.(csv|txt|dat|asc|xyz|pts)$/i.test(ls.source)) {
+        try {
+          const mh = await dir.getFileHandle(ls.source + '.meta.json');
+          const mj = JSON.parse(await (await mh.getFile()).text());
+          if (mj && mj.v === 1 && mj.size === file.size) { sidecar = mj; overR.discovered = mj.header; }
+        } catch { /* no sidecar — full discovery as usual */ }
+      }
       await openBlob(file, ls.source, i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
       { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; } }
       const L = activeLayer();
       if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
+      if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the columns tab wakes up scanned
       // color channel first (may re-stream), then filter (sweeps), then the rest
       if (ls.colorSel && ls.colorSel !== $('#colorBy').value && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) {
         L.colorSel = ls.colorSel;
@@ -4523,11 +4564,7 @@ function renderStyleTab(body, L) {
     if ([...colSel.options].some((o) => o.value === selv)) colSel.value = selv;
     colSel.onchange = () => { if (colSel.value.startsWith('paint:')) addPaintColorOptions(L); setSel(colSel.value); };
     body.appendChild(mkRow('column', colSel));
-    if (selPaint && selPaint.kind === 'ratio') {           // fraction column: absolute 0–1, viridis-baked
-      body.appendChild(ppNote('fraction-inside column — values are 0–1 (code/255), colored through a fixed viridis ramp; recompute it from Tools → Select by solid…'));
-      if (L.dh && L.docs.dhDoc) renderStickRadius(body, L);
-      return;
-    }
+    if (selPaint && selPaint.kind === 'ratio') body.appendChild(ppNote('fraction-inside column — values are 0–1 (code/255); recompute from Tools → Select by solid…'));
     const mkClip = (id) => {
       const inp = document.createElement('input'); inp.type = 'number'; inp.style.width = '76px';
       inp.value = $('#' + id).value; inp.placeholder = id === 'clipMin' ? 'min' : 'max';
@@ -4753,8 +4790,9 @@ function renderRampSection(body, L) {
   body.appendChild(prev);
   const selv = colorSelOf(L);
   const isChan = String(selv).startsWith('chan:');
+  const isRatio = String(selv).startsWith('paint:');       // only ratio channels reach here
   const isElev = selv === 'elev' || selv === '0';
-  if (!isChan && !isElev) {
+  if (!isChan && !isElev && !isRatio) {
     body.appendChild(ppNote('breakpoints live on grade channels and elevation'));
     return;
   }
@@ -4779,7 +4817,7 @@ function renderRampSection(body, L) {
   }
   if (!isChan) return;                                     // the histogram is scan-fed and channel-only (for now)
   const h = layerTableHeader(L);
-  const colName = h && h.columns[+String(selv).slice(5)];
+  const colName = isRatio ? String(selv).slice(6) : (h && h.columns[+String(selv).slice(5)]);
   const stat = colName && L._colStats && L._colStats[colName];
   if (!stat || stat.kind !== 'num' || !stat.centroids) {
     const btn = document.createElement('button'); btn.className = 'pp-scan';
@@ -5209,8 +5247,22 @@ function paintActiveCol(L) {
 }
 const PAINT_BLANK = '#33373c';                             // unpainted recedes toward the background
 function applyPaintPalette(L, col) {
-  if (col.kind === 'ratio') {                              // 256 codes = a continuous 0..1 ramp
-    renderer.setLayerPalette(L.id, bakeRampPixels({ preset: 'viridis', classed: false, breaks: [] }, 0, 1), 256);
+  if (col.kind === 'ratio') {
+    // a ratio column is a full numeric channel: preset/classed/breakpoints and
+    // the clip window all apply, baked through the palette (codes are absolute
+    // v = code/255; the LUT covers the clip range, codes remap into it)
+    const cfg = (L.ramps && L.ramps['paint:' + col.name]) || { preset: 'viridis', classed: false, breaks: [] };
+    const clip = [parseFloat(L.clip && L.clip[0]), parseFloat(L.clip && L.clip[1])];
+    const lo = Number.isFinite(clip[0]) ? clip[0] : 0, hi = Number.isFinite(clip[1]) ? clip[1] : 1;
+    const lut = bakeRampPixels(cfg, lo, hi);
+    const px = new Uint8Array(256 * 4);
+    const span = Math.max(hi - lo, 1e-9);
+    for (let code = 0; code < 256; code++) {
+      const t = Math.max(0, Math.min(1, (code / 255 - lo) / span));
+      const s2 = Math.round(t * 255) * 4;
+      px[code * 4] = lut[s2]; px[code * 4 + 1] = lut[s2 + 1]; px[code * 4 + 2] = lut[s2 + 2]; px[code * 4 + 3] = 255;
+    }
+    renderer.setLayerPalette(L.id, px, 256);
     requestRender();
     return;
   }
@@ -5915,12 +5967,17 @@ function rampRangeFor(L) {
     const cr = renderer.layerChanRange(L.id) || [0, 1];
     return [Number.isFinite(clip[0]) ? clip[0] : cr[0], Number.isFinite(clip[1]) ? clip[1] : cr[1]];
   }
+  if (String(sel).startsWith('paint:')) {                  // ratio channels: absolute 0..1
+    return [Number.isFinite(clip[0]) ? clip[0] : 0, Number.isFinite(clip[1]) ? clip[1] : 1];
+  }
   const b = _docBbox || [0, 0, 0, 1, 1, 1];
   const o = frame ? frame.origin[2] : 0;
   return [Number.isFinite(clip[0]) ? clip[0] : b[2] + o, Number.isFinite(clip[1]) ? clip[1] : b[5] + o];
 }
 function applyRamp(L, force) {
   if (!force) return stageGate(L, () => applyRamp(L, true));
+  const pcR = paintActiveCol(L);
+  if (pcR && pcR.kind === 'ratio') { applyPaintPalette(L, pcR); return; }   // ramp+clip bake INTO the palette
   const cfg = rampCfgOf(L);
   if (!cfg || (cfg.preset === 'viridis' && !(cfg.breaks && cfg.breaks.length))) {
     renderer.setLayerRamp(L.id, null);
