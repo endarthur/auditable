@@ -256,6 +256,26 @@
   #propPanel .pp-foot button:enabled:hover { color: var(--accent); border-color: var(--accent); }
   #propPanel .pp-foot button:disabled { opacity: 0.4; cursor: default; }
   #propPanel .pp-foot .spacer { flex: 1; }
+  /* floating windows (attribute tables): layer-pinned — reading is stateful,
+     so a table never re-targets under your scroll; several may be open */
+  .fwin {
+    position: absolute; background: rgba(22, 22, 22, 0.98); border: 1px solid var(--border);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55); display: flex; flex-direction: column;
+    font-family: var(--mono); font-size: 12px; border-radius: 3px; overflow: hidden;
+  }
+  .fwin-head {
+    display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: grab;
+    border-bottom: 1px solid var(--border); color: var(--accent); user-select: none; flex: 0 0 auto;
+  }
+  .fwin-head .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fwin-head .sub { color: var(--dim); font-size: 11px; white-space: nowrap; }
+  .fwin-head button { background: none; border: none; color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; padding: 0 3px; }
+  .fwin-head button:hover { color: var(--text-hi); }
+  .fwin-head label { color: var(--muted); display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
+  .fwin-body { flex: 1; position: relative; overflow: hidden; min-height: 0; }
+  .fwin.min .fwin-body, .fwin.min .fwin-grip { display: none; }
+  .fwin-grip { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; z-index: 3; }
+  .fwin-grip::after { content: ''; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-right: 2px solid var(--dim); border-bottom: 2px solid var(--dim); }
   .pp-cat:hover { background: #242424; }
   .pp-cat input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
   .pp-cat .sw { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto; }
@@ -379,6 +399,7 @@
 import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, compileValue, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
+import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -623,6 +644,7 @@ const layerById = (id) => _layers.find((l) => l.id === id) || null;
 const activeLayer = () => layerById(_activeId);
 const allocLayerId = () => { for (let i = 0; i <= 6; i++) if (!layerById(i)) return i; return null; };
 function closeAllLayers() {
+  for (const [lid] of _attrTables) closeAttrTable(lid);
   renderer.clearChunks(); renderer.setPicked(null);
   _layers = []; _activeId = 0; frame = null; _docBbox = null;
   _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
@@ -1299,6 +1321,7 @@ async function applyBlockFilter(expr) {
   const epoch = ++_filterEpoch;
   if (!expr.trim()) {
     renderer.setFilter(null, {}, lid); renderer.clearCompact(lid); inp.classList.remove('err'); requestRender();
+    { const Lf = layerById(lid); if (Lf) { Lf._filterMask = null; attrTableFilterChanged(lid); } }
     $('#meta').textContent = (fBlockDoc || fDhDoc).metaLine; return;
   }
   // drillholes: the interval table is in memory — the sweep is a plain loop
@@ -1314,6 +1337,7 @@ async function applyBlockFilter(expr) {
     for (let i = 0; i < dh.header.count; i++) { if (fn2(extendRow(AL, dh.fetchRecord(i)))) { mask2[i] = 1; hits2++; } }
     renderer.setActiveSet('base', lid);
     renderer.setFilter(mask2, { isolate: true }, lid);
+    { const Lf = layerById(lid); if (Lf) { Lf._filterMask = mask2; attrTableFilterChanged(lid); } }
     requestRender();
     $('#meta').textContent = `${dh.metaLine} · filter: ${hits2.toLocaleString()} of ${dh.header.count.toLocaleString()} match`;
     return;
@@ -1398,8 +1422,11 @@ async function applyBlockFilter(expr) {
     renderer.setActiveSet('compact', lid);
   } else {
     renderer.setActiveSet('base', lid);
-    renderer.setFilter(mask, { isolate }, lid);            // default = isolate; context = dim the rest
+    renderer.setFilter(mask, { isolate }, lid);         // default = isolate; context = dim the rest
   }
+  // the attribute table's only-matches mode needs the mask EITHER WAY — the
+  // compact path renders matches as chunks, but the table reads rows
+  { const Lf = layerById(lid); if (Lf) { Lf._filterMask = mask; attrTableFilterChanged(lid); } }
   requestRender();
   $('#meta').textContent = `${fBlockDoc.metaLine} · filter: ${hits.toLocaleString()} of ${rec.toLocaleString()} match${cb2 ? ' · compacted' : ''}`;
 }
@@ -2106,6 +2133,8 @@ $('#mData').onclick = () => menuAt($('#mData'), [
     if (b) b.click();
   } },
   { sep: true },
+  { label: 'Attribute table', kbd: 't', action: () => { const L = activeLayer(); if (L && L.kind !== 'mesh') openAttrTable(L); } },
+  { sep: true },
   { label: 'Filter…', kbd: '/', action: () => $('#filter').focus() },
   { label: 'Clear filter', action: () => { $('#filter').value = ''; syncFilterClear(); applyBlockFilter(''); } },
 ]);
@@ -2136,6 +2165,7 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
+<b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
 <b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
@@ -2543,6 +2573,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'i') showFileInfo();
   else if (k === 'm') armMeasure();
   else if (k === 'p') toggleLayersPanel();
+  else if (k === 't') { const Lt = activeLayer(); if (Lt && Lt.kind !== 'mesh') openAttrTable(Lt); }
   else if ((k === ',' || k === '.') && _layers.length > 1) {   // step the active layer (wraps)
     const i = _layers.findIndex((L) => L.id === _activeId);
     const j = (i + (k === '.' ? 1 : -1) + _layers.length) % _layers.length;
@@ -2595,6 +2626,179 @@ $('#sampleBlocks').onclick = async () => {
   await openBlob(makeSampleBlockCsv(), 'sample_blockmodel.csv', 'replace');
 };
 
+// ── ATTRIBUTE TABLES (spec §11): floating, LAYER-PINNED windows — reading is
+// stateful, so a table never re-targets under your scroll; one per layer,
+// several open at once. A loom grid over the layer's O(1) fetchRecord
+// (windowed rows via the sparse line index / fixed records / in-memory
+// tables), ƒ columns included, an only-matches mode over the retained filter
+// mask, and pick↔row sync both ways. Read-only: micro edits nothing. ──
+let _fwinZ = 40;
+function floatWin({ title, sub, x = 90, y = 90, w = 560, h = 320, onClose }) {
+  const el = document.createElement('div'); el.className = 'fwin';
+  el.style.cssText += `left:${x}px;top:${y}px;width:${w}px;height:${h}px;z-index:${++_fwinZ};`;
+  const head = document.createElement('div'); head.className = 'fwin-head';
+  const t = document.createElement('span'); t.className = 't'; t.textContent = title;
+  const subEl = document.createElement('span'); subEl.className = 'sub'; subEl.textContent = sub || '';
+  const minB = document.createElement('button'); minB.textContent = '–'; minB.title = 'minimize';
+  const closeB = document.createElement('button'); closeB.textContent = '×';
+  head.append(t, subEl, minB, closeB);
+  const body = document.createElement('div'); body.className = 'fwin-body';
+  const grip = document.createElement('div'); grip.className = 'fwin-grip';
+  el.append(head, body, grip);
+  document.body.appendChild(el);
+  el.addEventListener('pointerdown', () => { el.style.zIndex = ++_fwinZ; });
+  let restoreH = h;
+  minB.onclick = () => {
+    if (el.classList.toggle('min')) { restoreH = el.offsetHeight; el.style.height = 'auto'; }
+    else el.style.height = restoreH + 'px';
+  };
+  closeB.onclick = () => { el.remove(); if (onClose) onClose(); };
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT' || e.target.tagName === 'LABEL') return;
+    e.preventDefault();
+    const sx = e.clientX - el.offsetLeft, sy = e.clientY - el.offsetTop;
+    const move = (ev) => { el.style.left = Math.max(0, ev.clientX - sx) + 'px'; el.style.top = Math.max(28, ev.clientY - sy) + 'px'; };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+  });
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const sw2 = el.offsetWidth - e.clientX, sh2 = el.offsetHeight - e.clientY;
+    const move = (ev) => { el.style.width = Math.max(300, ev.clientX + sw2) + 'px'; el.style.height = Math.max(120, ev.clientY + sh2) + 'px'; };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); if (el._onResized) el._onResized(); };
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+  });
+  return { el, body, head, sub: subEl, close: () => closeB.onclick() };
+}
+const _attrTables = new Map();                             // layerId → { win, grid, view }
+async function fetchLayerRow(L, rec) {
+  const d = L.docs;
+  if (d.dhDoc) return d.dhDoc.fetchRecord(rec);
+  if (d.blockDoc && d.blockDoc.header.dm) return await fetchDmRecord(d.blockDoc.blob, d.blockDoc.header.dm, rec);
+  if (d.blockDoc) return await fetchCsvRecord(rec, d.blockDoc);
+  if (d.plyDoc) return await d.plyDoc.fetchRecord(rec);
+  if (d.lasDoc) {
+    const { blob, header } = d.lasDoc;
+    const off = header.pointOffset + rec * header.recordLen;
+    const dv = new DataView(await blob.slice(off, off + header.recordLen).arrayBuffer());
+    const one = decodeLasRecords(dv, header, 1, rec);
+    return [+one.x[0].toFixed(3), +one.y[0].toFixed(3), +one.z[0].toFixed(3), one.intensity[0], one.classification[0]];
+  }
+  return null;
+}
+function attrColumnsOf(L) {
+  const h = layerTableHeader(L);
+  if (h) {
+    const cols = h.columns.map((name, i) => ({ name, num: colIsNumeric(L, h, i) }));
+    for (const c of L.calcCols || []) cols.push({ name: 'ƒ ' + c.name, num: (c.ty || 'number') === 'number' });
+    return cols;
+  }
+  if (L.docs.plyDoc) return L.docs.plyDoc.header.columns.map((name) => ({ name, num: true }));
+  if (L.docs.lasDoc) return [{ name: 'X', num: true }, { name: 'Y', num: true }, { name: 'Z', num: true }, { name: 'intensity', num: true }, { name: 'classification', num: true }];
+  return null;
+}
+function attrRowCountOf(L) {
+  const h = layerHeaderOf(L);
+  return (h && h.count) || renderer.layerElementCount(L.id) || 0;
+}
+function openAttrTable(L) {
+  if (_attrTables.has(L.id)) { const t2 = _attrTables.get(L.id); t2.win.el.style.zIndex = ++_fwinZ; t2.win.el.classList.remove('min'); return; }
+  const cols = attrColumnsOf(L);
+  if (!cols) { $('#meta').textContent = 'no table behind this layer'; return; }
+  const total = attrRowCountOf(L);
+  const view = { matches: null, only: false };
+  const cache = new Map();                                 // rec → extended fields
+  const queue = new Set();
+  let fetching = false, readyCbs = [];
+  const notify = () => { for (const cb of readyCbs) { try { cb(); } catch { /* gone */ } } };
+  const pump = async () => {
+    if (fetching) return;
+    fetching = true;
+    while (queue.size) {
+      const batch = [...queue].slice(0, 300);
+      for (const r of batch) queue.delete(r);
+      for (const r of batch) {
+        if (cache.has(r)) continue;
+        try { cache.set(r, extendRow(L, await fetchLayerRow(L, r)) || []); }
+        catch { cache.set(r, []); }
+      }
+      if (cache.size > 6000) { const it = cache.keys(); for (let i = 0; i < 2000; i++) cache.delete(it.next().value); }
+      notify();
+      await new Promise((r2) => setTimeout(r2));
+    }
+    fetching = false;
+  };
+  const recOf = (r) => (view.matches ? view.matches[r] : r);
+  const provider = {
+    dims: () => ({ rows: view.matches ? view.matches.length : total, cols: cols.length }),
+    header: (c) => ({ label: cols[c].name }),
+    rowHeader: (r) => String(recOf(r)),
+    cellAt(r, c) {
+      const rec = recOf(r);
+      const row = cache.get(rec);
+      if (row === undefined) { queue.add(rec); pump(); return PENDING; }
+      const v = row[c];
+      if (v == null || v === '') return null;
+      return { value: v, type: cols[c].num ? 'number' : 'text' };
+    },
+    onReady(cb) { readyCbs.push(cb); return () => { readyCbs = readyCbs.filter((x) => x !== cb); }; },
+  };
+  const win = floatWin({
+    title: L.label || L.name,
+    sub: `${total.toLocaleString()} rows`,
+    x: 80 + (_attrTables.size % 4) * 36, y: 80 + (_attrTables.size % 4) * 30,
+    onClose: () => { grid.destroy(); _attrTables.delete(L.id); },
+  });
+  // only-matches toggle rides the retained filter mask
+  const only = document.createElement('label');
+  const oc = document.createElement('input'); oc.type = 'checkbox';
+  only.append(oc, ' matches');
+  only.title = 'show only rows matching the current filter';
+  win.head.insertBefore(only, win.head.querySelector('button'));
+  const rebuildView = () => {
+    if (oc.checked && L._filterMask) {
+      const m = L._filterMask, out = [];
+      for (let i = 0; i < m.length; i++) if (m[i]) out.push(i);
+      view.matches = Uint32Array.from(out);
+    } else view.matches = null;
+    win.sub.textContent = `${(view.matches ? view.matches.length : total).toLocaleString()} rows${view.matches ? ` of ${total.toLocaleString()}` : ''}`;
+    grid.refresh();
+  };
+  oc.onchange = () => { view.only = oc.checked; rebuildView(); };
+  const grid = createGrid(win.body, provider, { readOnly: true, defaultColW: 96, rowH: 22, hdrH: 22, rowHdrW: 64, fontPx: 12 });
+  win.el._onResized = () => grid.refresh();
+  let syncing = false;
+  grid.onSelect((sel) => {
+    if (syncing || !sel) return;                           // loom sel = {r0,c0,r1,c1}
+    const rec = recOf(sel.r0);
+    if (rec == null) return;
+    renderer.setPicked(((L.id << 29) | rec) >>> 0);
+    showRecord(((L.id << 29) | rec) >>> 0);
+    requestRender();
+  });
+  _attrTables.set(L.id, {
+    win, grid, view,
+    revealRec(rec) {
+      let row = rec;
+      if (view.matches) {
+        let lo2 = 0, hi2 = view.matches.length - 1, at = -1;
+        while (lo2 <= hi2) { const mid = (lo2 + hi2) >> 1; if (view.matches[mid] === rec) { at = mid; break; } if (view.matches[mid] < rec) lo2 = mid + 1; else hi2 = mid - 1; }
+        if (at < 0) return;
+        row = at;
+      }
+      syncing = true;
+      grid.setSelection({ r0: row, c0: 0, r1: row, c1: cols.length - 1 });
+      grid.revealCell(row, 0);
+      syncing = false;
+      win.el.style.zIndex = ++_fwinZ;
+    },
+    filterChanged() { if (oc.checked) rebuildView(); },
+    close: () => win.close(),
+  });
+  rebuildView();
+}
+function attrTableFilterChanged(lid) { const t2 = _attrTables.get(lid); if (t2) t2.filterChanged(); }
+function closeAttrTable(lid) { const t2 = _attrTables.get(lid); if (t2) t2.close(); }
 // ── the layers panel: visibility eyes, active-layer routing, and the layer
 // context menu (zoom/info/filter/remove). Auto-shows at two layers; 'p' or
 // View → Layers toggles it any time. ──
@@ -2635,6 +2839,7 @@ $('#lpClose').onclick = () => toggleLayersPanel(false);
 function fitLayer(L) { if (L.bboxLocal) { cam.fit(L.bboxLocal); requestRender(); } }
 function removeLayerUI(id) {
   dispatchEvent(new Event('micro:project-dirty'));
+  closeAttrTable(id);
   renderer.removeLayer(id);
   _layers = _layers.filter((l) => l.id !== id);
   recomputeUnion();
@@ -2674,6 +2879,7 @@ function layerMenu(L, x, y) {
       return items;
     })() : []),
     { label: 'File info…', action: () => { setActiveLayer(L.id); showFileInfo(); } },
+    ...(L.kind !== 'mesh' ? [{ label: 'Attribute table…', kbd: 't', action: () => openAttrTable(L) }] : []),
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; renderer.setLayerVisible(L.id, L.visible); renderLayers(); requestRender(); } },
@@ -3797,6 +4003,7 @@ function renderCalcForm(body, L, h) {
 // unless the category itself changed
 async function reopenDh(L, patch, { clearCats = false } = {}) {
   const dh = L.docs.dhDoc; if (!dh) return;
+  closeAttrTable(L.id);
   const files = dh.blobs, cfg = { ...dh.config, ...patch };
   const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend };
   renderer.removeLayer(L.id);
@@ -3817,6 +4024,7 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
 // re-open a delimited layer with a patched column mapping (X/Y/Z/cat re-keys)
 async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
   const doc = L.docs.blockDoc; if (!doc || doc.header.dm) return;
+  closeAttrTable(L.id);
   const m = { ...doc.header.mapping, ...patch };
   const keep = { colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend };
   await openBlocksBlob(doc.blob, doc.name, {
@@ -4063,6 +4271,7 @@ async function fetchCsvRecord(rec, doc = _blockDoc) {
   }
   return null;
 }
+function attrTableReveal(lid, rec) { const t2 = _attrTables.get(lid); if (t2) t2.revealRec(rec); }
 function appendCalcRows(rows, L, f, h) {
   if (!L || !L.calcCols || !L.calcCols.length) return;
   const ext = extendRow(L, f);
@@ -4076,6 +4285,7 @@ async function showRecord(fullId) {
   // docs, not the active aliases: any visible layer is pickable
   const lid = fullId >>> 29, rec = fullId & 0x1FFFFFFF;
   const L = layerById(lid);
+  attrTableReveal(lid, rec);
   const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
   const tag = _layers.length > 1 && L ? `${L.label || L.name} · ` : '';
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
@@ -4134,7 +4344,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, openAttrTable, attrTables: _attrTables, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

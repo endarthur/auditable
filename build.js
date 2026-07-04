@@ -1693,11 +1693,13 @@ if (target === 'micro') {
     '../../ext/condenser/src/main.js': '#condenser',   // dev runs the src tree; the build ships the bundle
     '../../ext/expr/index.js': '#expr',
     '../../ext/sluice/index.js': '#sluice',
+    '../../ext/loom/index.js': '#loom',
   };
   const libs = [
     ['condenser', 'ext/condenser/index.js'],
     ['expr',      'ext/expr/index.js'],
     ['sluice',    'ext/sluice/index.js'],              // streaming column stats (the columns tab)
+    ['loom',      'ext/loom/index.js'],                // the attribute table's canvas grid
   ];
   const modules = [];
   for (const [name, rel] of libs) {
