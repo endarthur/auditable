@@ -225,8 +225,9 @@ await p2.waitForFunction(() => window._micro, null, { timeout: 20000 });
 await p2.waitForFunction(() => document.querySelector('#emptyProjects .er-chip'), null, { timeout: 5000 });
 await p2.evaluate(() => document.querySelector('#emptyProjects .er-chip').click());
 await p2.waitForFunction(() => /project “microsmoke”/.test(document.querySelector('#meta').textContent), null, { timeout: 120000 });
-const back = await p2.evaluate(() => { const L = window._micro.layers().find((x) => x.docs.blockDoc); const h = L && L.docs.blockDoc.header; return { n: L ? window._micro.renderer.layerElementCount(L.id) : 0, grid: h && h.grid && [h.grid.x.count, h.grid.y.count, h.grid.z.count].join(), parquet: !!(L && L.docs.blockDoc.parquet), name: L && L.name }; });
+const back = await p2.evaluate(() => { const L = window._micro.layers().find((x) => x.docs.blockDoc); const h = L && L.docs.blockDoc.header; return { n: L ? window._micro.renderer.layerElementCount(L.id) : 0, grid: h && h.grid && [h.grid.x.count, h.grid.y.count, h.grid.z.count].join(), parquet: !!(L && L.docs.blockDoc.parquet), name: L && L.name, linOp: L && L.lineage && L.lineage.op, linSrc: L && L.lineage && L.lineage.sources[0] && L.lineage.sources[0].op }; });
 chk(`project round trip: ${back.n} blocks back, grid ${back.grid}, auto-optimized to Parquet (${back.parquet}, “${back.name}”)`, back.n === NBLOCKS && back.grid === '30,20,2' && back.parquet && /\.parquet$/.test(back.name || ''));
+chk(`lineage survives round trip: optimize wrapping the opened file (${back.linOp}←${back.linSrc})`, back.linOp === 'optimize' && back.linSrc === 'open');
 
 console.log(ok && process.exitCode !== 1 ? '\nMICRO SMOKE: PASS' : '\nMICRO SMOKE: FAIL');
 await b.close(); server.close();

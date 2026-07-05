@@ -359,6 +359,10 @@
   .awin-ctrls select, .awin-btn { font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; cursor: pointer; }
   .awin-ctrls label { font: 11px monospace; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
   .awin-ctrls input[type=number] { width: 62px; font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; }
+  .lin-row { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; font-size: 12px; border-bottom: 1px solid rgba(140,145,150,0.08); }
+  .lin-op { color: var(--accent); font-weight: 600; min-width: 84px; }
+  .lin-sum { flex: 1; color: var(--fg, #ddd); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lin-when { color: var(--dim); font-size: 10px; font-family: monospace; white-space: nowrap; }
   .fwin.min .fwin-body, .fwin.min .fwin-grip { display: none; }
   .fwin-grip { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; z-index: 3; }
   .fwin-grip::after { content: ''; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-right: 2px solid var(--dim); border-bottom: 2px solid var(--dim); }
@@ -1362,7 +1366,11 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
       for (let k = 0; k < pqCols.length; k++) { const src = pqCols[k], dst = new Array(nr); for (let i = 0; i < nr; i++) dst[i] = src[order[i]]; pqCols[k] = dst; }
     }
     // stamp the document frame (origin + any CRS) so georeferencing round-trips
-    const kv = [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs || (L.docs.gridDoc && L.docs.gridDoc.grid.crs)) || null, spatial: !!(doSort && sx.length) }) }];
+    const expLin = mkLineage('export', { format: 'parquet', codec, scope, spatial: !!(doSort && sx.length), filter: (scope === 'filtered' && L.filterExpr) || undefined }, [L.lineage]);
+    const kv = [
+      { key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs || (L.docs.gridDoc && L.docs.gridDoc.grid.crs)) || null, spatial: !!(doSort && sx.length) }) },
+      { key: 'micro:lineage', value: JSON.stringify(expLin) },
+    ];
     const columnData = colIdx.map((i, k) => ({ name: cols[i].name, data: pqCols[k] }));
     const bytes = writeParquet({ columnData, codec, rowGroupSize: 1 << 16, kvMetadata: kv });
     blob = new Blob([bytes], { type: 'application/octet-stream' });
@@ -1417,7 +1425,8 @@ async function convertLayerToParquet(L) {
   $('#meta').textContent = 'materialize: spatial sort + write…';
   const order = radixSortIndices(mortonKeys(Float64Array.from(XC), Float64Array.from(YC), Float64Array.from(ZC), n), n);
   const columnData = names.map((nm, k) => { const src = colArr[k], dst = new Array(n); for (let i = 0; i < n; i++) dst[i] = src[order[i]]; return { name: nm, data: dst }; });
-  const kv = [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs) || null, spatial: true }) }];
+  const optLineage = mkLineage('optimize', { morton: true, format: 'parquet', blocks: n }, [L.lineage]);
+  const kv = [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs) || null, spatial: true }) }, { key: 'micro:lineage', value: JSON.stringify(optLineage) }];
   const bytes = writeParquet({ columnData, rowGroupSize: 1 << 16, codec: 'SNAPPY', kvMetadata: kv });
   // 4. replace the blockDoc IN PLACE (reuse the layer id, keep paint/calc/style)
   const base = (L.label || L.name).replace(/\.[^.]+$/, ''), keepLabel = L.label, keepColorSel = L.colorSel, keepFilter = L.filterExpr;
@@ -1426,6 +1435,7 @@ async function convertLayerToParquet(L) {
     await openParquetBlocks(new Blob([bytes]), `${base}.parquet`, { layer: L.id, first: false });
   } catch (e) { $('#meta').textContent = `materialize: reopen — ${e.message}`; setActiveLayer(savedActive); return; }
   L.name = `${base}.parquet`;                              // so save/reload routes to the parquet path
+  L.lineage = optLineage;                                  // provenance: this layer was optimized in place
   if (keepLabel) L.label = keepLabel;
   // 5. PERMUTE every per-record thing by the SAME order — paint stays editable
   for (const col of L.paintCols || []) { const nc = new Uint8Array(n); for (let i = 0; i < n; i++) nc[i] = col.codes[order[i]]; col.codes = nc; }
@@ -2686,6 +2696,75 @@ function clearSwathZebra(L) {
   const i = (L.paintCols || []).findIndex((c) => c.name === '_swath');
   if (i >= 0) { L.paintCols.splice(i, 1); if (paintSelOf(L) === '_swath') setLayerColorSel(L, 'elev'); addPaintColorOptions(L); requestRender(); }
 }
+// ── lineage inspector + report ────────────────────────────────────────────────
+const LINEAGE_LABEL = { open: 'opened', join: 'spatial join', reconcile: 'reconcile', optimize: 'optimize', keyjoin: 'key join', 'grid-cover': 'common grid', 'grid-new': 'new grid', export: 'export' };
+function lineageSummary(lin) {
+  const p = lin.params || {};
+  switch (lin.op) {
+    case 'open': return lin.origin ? `${lin.origin.file}${lin.origin.bytes ? ` · ${fmtSize(lin.origin.bytes)}` : ''}` : 'file';
+    case 'join': return `→ ${p.target || 'target'} grid · ${(p.columns || []).map((c) => c.out || c.name).join(', ')}`;
+    case 'reconcile': return `${p.of || ''} on ${p.grade || ''} · common ${p.target === 'common-finest' ? 'finest' : ''}`;
+    case 'optimize': return `→ Morton spatial Parquet${p.blocks ? ` · ${p.blocks.toLocaleString()} blocks` : ''}`;
+    case 'keyjoin': return `${p.leftKey} = ${p.rightKey} · +${(p.bring || []).join(', ')} · ${p.dup}`;
+    case 'grid-cover': return `${p.resolution} · ${(p.count || []).join('×')} @ ${(p.block || []).join('×')} m`;
+    case 'grid-new': return `${(p.count || []).join('×')} @ ${(p.block || []).join('×')} m`;
+    case 'export': return `${p.format}${p.codec ? ' ' + p.codec : ''}${p.filter ? ` · filter: ${p.filter}` : ''}${p.spatial ? ' · Morton' : ''}`;
+    default: return '';
+  }
+}
+function renderLineageTree(container, lin, depth) {
+  const row = document.createElement('div'); row.className = 'lin-row'; row.style.paddingLeft = (depth * 15 + 2) + 'px';
+  const op = document.createElement('span'); op.className = 'lin-op'; op.textContent = LINEAGE_LABEL[lin.op] || lin.op;
+  const sum = document.createElement('span'); sum.className = 'lin-sum'; sum.textContent = lineageSummary(lin);
+  const when = document.createElement('span'); when.className = 'lin-when'; when.textContent = lin.at ? new Date(lin.at).toLocaleString() : '';
+  when.title = lin.build ? `build ${lin.build}` : '';
+  row.append(op, sum, when); container.appendChild(row);
+  for (const s of lin.sources || []) renderLineageTree(container, s, depth + 1);
+}
+const _linWins = new Map();
+function openLineageWindow(L) {
+  if (!L || !L.lineage) { $('#meta').textContent = 'lineage: none recorded'; return; }
+  const ex = _linWins.get(L.id); if (ex) { ex.el.style.zIndex = ++_fwinZ; return; }
+  const win = floatWin({ title: `lineage · ${L.label || L.name}`, sub: '', x: 100, y: 110, w: 520, h: 320, onClose: () => _linWins.delete(L.id) });
+  win.body.style.cssText += 'display:flex;flex-direction:column';
+  const tree = document.createElement('div'); tree.className = 'lin-tree'; tree.style.cssText = 'flex:1;overflow:auto;padding:6px 4px';
+  renderLineageTree(tree, L.lineage, 0);
+  const foot = document.createElement('div'); foot.className = 'awin-ctrls';
+  const rep = document.createElement('button'); rep.className = 'awin-btn'; rep.textContent = 'Export report (HTML)…'; rep.onclick = () => exportLineageReport(L);
+  const cpy = document.createElement('button'); cpy.className = 'awin-btn'; cpy.textContent = 'Copy JSON'; cpy.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(L.lineage, null, 2)); $('#meta').textContent = 'lineage JSON copied'; };
+  foot.append(rep, cpy);
+  win.body.append(tree, foot);
+  _linWins.set(L.id, win);
+}
+function lineageReportHtml(L) {
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const rows = [];
+  const walk = (lin, depth) => {
+    rows.push(`<tr><td style="padding-left:${depth * 20 + 6}px"><b>${esc(LINEAGE_LABEL[lin.op] || lin.op)}</b></td><td>${esc(lineageSummary(lin))}</td><td class="w">${lin.at ? esc(new Date(lin.at).toLocaleString()) : ''}</td><td class="w">${esc(lin.build || '')}</td></tr>`);
+    for (const s of lin.sources || []) walk(s, depth + 1);
+  };
+  walk(L.lineage, 0);
+  return `<!doctype html><html><head><meta charset="utf-8"><title>micro lineage — ${esc(L.label || L.name)}</title>
+<style>body{font:13px/1.5 system-ui,sans-serif;color:#1a1a1a;max-width:900px;margin:2rem auto;padding:0 1rem}
+h1{font-size:18px;border-bottom:2px solid #c8722e;padding-bottom:4px}.meta{color:#666;font-size:12px}
+table{border-collapse:collapse;width:100%;margin-top:1rem;font-size:12px}td{border-bottom:1px solid #eee;padding:4px 8px;vertical-align:top}
+td.w{color:#888;white-space:nowrap;font-family:monospace;font-size:11px}
+details{margin-top:1.5rem}pre{background:#f6f6f4;padding:8px;overflow:auto;font-size:11px}</style></head>
+<body><h1>Provenance — ${esc(L.label || L.name)}</h1>
+<p class="meta">Derivation trail for a micro block model. Generated ${esc(new Date().toLocaleString())} · micro ${esc(__MICRO_BUILD__)}.</p>
+<table><thead><tr><td><b>step</b></td><td><b>detail</b></td><td class="w">when</td><td class="w">build</td></tr></thead><tbody>${rows.join('')}</tbody></table>
+<details><summary>machine-readable lineage (JSON)</summary><pre>${esc(JSON.stringify(L.lineage, null, 2))}</pre></details>
+</body></html>`;
+}
+function exportLineageReport(L) {
+  if (!L || !L.lineage) return;
+  const blob = new Blob([lineageReportHtml(L)], { type: 'text/html' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = (L.label || L.name).replace(/\.[^.]+$/, '') + '.lineage.html'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  window._lastReport = blob;
+  $('#meta').textContent = `lineage report → ${a.download}`;
+}
 // ── the assign-domains dialog ──
 let _adDlg = null;
 function openDomainsDialog() {
@@ -3280,13 +3359,16 @@ $('#ngGo').onclick = async () => {
   const btn = $('#ngGo'); btn.disabled = true;
   for (const el of $('#ngDlgBody').querySelectorAll('input, select')) el.disabled = true;
   try {
+    const gridLin = d.mode === 'compat'
+      ? mkLineage('grid-cover', { resolution: d.res, block: [dx, dy, dz], count: [nx, ny, nz] }, ngBlockLayers().filter((L2) => d.compatSel.has(L2.id)).map((L2) => L2.lineage))
+      : mkLineage('grid-new', { mode: d.mode, block: [dx, dy, dz], count: [nx, ny, nz], origin: [x0, y0, z0] }, d.mode === 'cover' && d.src && d.src[0] === 'L' ? [layerById(+d.src.slice(1)) && layerById(+d.src.slice(1)).lineage] : []);
     if (isBM) {
       $('#ngDlgMsg').textContent = 'building…';
       const blob = await buildEmptyBlockCsv({ x0, y0, z0, dx, dy, dz, nx, ny, nz, fill: d.fill, valName: d.valName, onProgress: (f) => { $('#ngDlgMsg').textContent = `building ${Math.round(f * 100)}%…`; } });
-      await openBlob(blob, d.mode === 'compat' ? 'common_model.csv' : 'new_model.csv', _layers.length ? 'add' : 'replace');
+      await openBlob(blob, d.mode === 'compat' ? 'common_model.csv' : 'new_model.csv', _layers.length ? 'add' : 'replace', null, { lineage: gridLin });
     } else {
       const grid = buildEmptyGrid({ x0, y0, dx, nx, ny, fill: d.fill });
-      await openBlob(new Blob([writeEsriAsc(grid)]), 'new_grid.asc', _layers.length ? 'add' : 'replace');
+      await openBlob(new Blob([writeEsriAsc(grid)]), 'new_grid.asc', _layers.length ? 'add' : 'replace', null, { lineage: gridLin });
     }
     $('#ngDlg').classList.remove('show'); _ngDlg = null;
   } catch (e) { $('#ngDlgMsg').textContent = e.message; }
@@ -3405,13 +3487,20 @@ async function openBlobs(files, mode = 'replace', at = null) {
   await openBlob(files[0], files[0].name, mode === 'add' ? 'add' : 'replace', at);
   for (let i = 1; i < files.length; i++) await openBlob(files[i], files[i].name, 'add');
 }
+// provenance: every layer carries a lineage tree — how it was made. Opened
+// files are leaves (op:'open'); derived ops (join/reconcile/optimize/keyjoin/
+// grid) wrap their sources. Embedded in Parquet exports (kvMetadata) + persisted
+// in the project; the inspector + report render it. Date.now is fine here (app,
+// not a workflow script).
+function mkLineage(op, params, sources) { return { op, at: Date.now(), build: __MICRO_BUILD__, params: params || {}, sources: (sources || []).filter(Boolean) }; }
+function openLineage(name, blob) { return { op: 'open', at: Date.now(), build: __MICRO_BUILD__, params: {}, origin: { file: name, bytes: (blob && blob.size) || 0 }, sources: [] }; }
 async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   if (mode !== 'add') closeAllLayers();
   const isMesh = /\.(msh|obj|lfm)$/i.test(name) || (/\.ply$/i.test(name) && !over.forcePoints && await plyHasFaces(blob));
   const lid = allocLayerId(isMesh ? 'mesh' : 'element');
   if (lid == null) { $('#meta').textContent = isMesh ? 'mesh layer limit reached — remove one first' : 'layer limit reached (7 element layers) — remove one first'; return; }
   const first = _layers.length === 0;
-  _layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: (typeof File !== 'undefined' && blob instanceof File && _fileHandles.get(blob)) || null, storage: 'loose' });
+  _layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: (typeof File !== 'undefined' && blob instanceof File && _fileHandles.get(blob)) || null, storage: 'loose', lineage: over.lineage || openLineage(name, blob) });
   _activeId = lid;
   _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null; _gridDoc = null;
   $('#meta').textContent = `${name} — reading…`;
@@ -5078,6 +5167,7 @@ function projectManifest() {
         ? L.paintCols.map((c) => ({ name: c.name, kind: c.kind, dict: c.dict, colors: c.colors, blankColor: c.blankColor, rle: rleEncodeBytes(c.codes) }))
         : undefined,
       sel: L._selMask && L._selCount ? rleEncode(L._selMask) : undefined,
+      lineage: L.lineage || undefined,                     // provenance chain (how this layer was made)
       // delimited parsing intent: the column mapping (incl. a re-keyed category)
       // — indices are stable because the file rides in the project
       mapping: L.docs.blockDoc && !L.docs.blockDoc.header.dm ? L.docs.blockDoc.header.mapping : undefined,
@@ -5246,6 +5336,7 @@ async function saveProject() {
 // rules + painted columns + selection restore — shared by the delimited and
 // drillhole project-restore branches (all three are per-record layer state)
 async function restoreStyleExtras(L, ls) {
+  if (ls.lineage) L.lineage = ls.lineage;                  // provenance survives project round trips
   if (ls.rules) {
     L.rules = ls.rules;
     L.ruleHidden = new Set(ls.ruleHidden || []);
@@ -6577,6 +6668,7 @@ function layerMenu(L, x, y) {
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
     ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }, { label: 'Swath plot…', action: () => openSwath(L) }] : []),
+    ...(L.lineage ? [{ label: 'Lineage…', action: () => openLineageWindow(L) }] : []),
     ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Optimize to spatial Parquet', action: () => convertLayerToParquet(L) }] : []),
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
@@ -8339,7 +8431,8 @@ async function runSpatialJoinUI(L, R, jf) {
     const columns = joinColumnsFromForm(jf, L, R);
     const name = `${shortName(L)}⋈${shortName(R)}.csv`;
     const { blob, cells } = await runSpatialJoin({ leftL: L, rightL: R, target: T, columns, label: 'join' });
-    await openBlob(blob, name, 'add');
+    const lin = mkLineage('join', { target: jf.target, columns: columns.map((c) => ({ src: c.src, name: c.name, out: c.out, op: c.op || undefined, weight: c.weight || undefined })) }, [L.lineage, R.lineage]);
+    await openBlob(blob, name, 'add', null, { lineage: lin });
     $('#meta').textContent = `joined ${cells.toLocaleString()} cells → ${name}`;
   } catch (e) { $('#meta').textContent = `join: ${e.message}`; }
 }
@@ -8366,7 +8459,8 @@ async function runReconcile(L, R, jf, grade) {
     // open ALREADY coloured by Δ (chan = the Δ column) — heads are
     // XC,YC,ZC, ...columns, ...derived, so Δ is at 3 + columns.length
     const dIdx = 3 + columns.length;
-    await openBlob(blob, name, 'add', null, { mapping: { x: 0, y: 1, z: 2, chan: dIdx, cat: null } });
+    const lin = mkLineage('reconcile', { grade, target: 'common-finest', of: `${shortName(L)}−${shortName(R)}` }, [L.lineage, R.lineage]);
+    await openBlob(blob, name, 'add', null, { mapping: { x: 0, y: 1, z: 2, chan: dIdx, cat: null }, lineage: lin });
     const J = activeLayer();
     if (J) {
       const jh = layerTableHeader(J);
@@ -8409,7 +8503,8 @@ function renderKeyJoinUI(body, L, R, jf) {
     try {
       const { blob, rows, matched } = await runKeyJoin({ leftL: L, rightL: R, leftKey: jf.keyL, rightKey: jf.keyR, bring: [...jf.bring], dup: jf.dup, prefix: shortName(R).replace(/\W+/g, '_') + '_', label: 'join' });
       const name = `${shortName(L)}+${shortName(R)}.csv`;
-      await openBlob(blob, name, 'add');
+      const lin = mkLineage('keyjoin', { leftKey: jf.keyL, rightKey: jf.keyR, bring: [...jf.bring], dup: jf.dup }, [L.lineage, R.lineage]);
+      await openBlob(blob, name, 'add', null, { lineage: lin });
       $('#meta').textContent = `key join: ${matched.toLocaleString()} of ${rows.toLocaleString()} rows matched → ${name}`;
     } catch (e) { $('#meta').textContent = `key join: ${e.message}`; }
   };
@@ -8918,7 +9013,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
