@@ -227,6 +227,16 @@ const lk = await p.evaluate(async () => {
 });
 chk(`linked brushing: selection restricts GT (min ${lk.allMin}→${lk.selMin}, tonnage ${lk.selT}==${lk.allT}/2)`, lk.allMin === 100 && lk.selMin === 300 && lk.selT === lk.allT / 2);
 
+// validation math: sample swath (gsjs declustering consumed) — clustered samples down-weighted, rising profile
+const vm = await p.evaluate(() => {
+  const m = window._micro;
+  const means = m.computeSampleSwath([[10, 0, 0, 1], [20, 0, 0, 2], [30, 0, 0, 3]], null, [1, 0, 0], 10, 5).map((p) => p.mean);
+  const w = m.declusterWeights([[0, 0, 0, 5], [1, 0, 0, 5], [100, 0, 0, 5]], 10).weights;
+  return { means, clustered: w[0] < w[2] && w[1] < w[2] };
+});
+chk(`validation: sample-swath rises [${vm.means.map((v) => Math.round(v)).join(',')}] + declustering down-weights the cluster (${vm.clustered})`,
+  vm.means.length === 3 && Math.abs(vm.means[0] - 1) < 1e-9 && Math.abs(vm.means[2] - 3) < 1e-9 && vm.clustered);
+
 // ── 8. project round trip (OPFS) + auto-optimize on save: the CSV model is
 //    reordered to spatial Parquet in place at save time, and reopens as Parquet ──
 await p.evaluate(() => { window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('microsmoke', { create: true }); });
