@@ -1372,16 +1372,57 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
 // through the existing parquet path (no manifest surgery, no in-place record
 // remap). A subsequent project save stores the optimized copy.
 async function convertLayerToParquet(L) {
-  if (!layerTableHeader(L) || (L.docs.blockDoc && L.docs.blockDoc.parquet)) { $('#meta').textContent = 'materialize: needs a non-Parquet block model'; return; }
-  $('#meta').textContent = `${L.label || L.name} — materializing spatial Parquet…`;
-  const cols = exportColumnsOf(L);
-  const n = await runExport(L, { scope: 'all', colIdx: cols.map((_, i) => i), format: 'parquet', codec: 'SNAPPY', spatialSort: true, download: false });
-  if (!(n >= 0) || !window._lastExport) { $('#meta').textContent = 'materialize: export failed'; return; }
-  const base = (L.label || L.name).replace(/\.[^.]+$/, '');
-  await openBlob(window._lastExport, `${base}.parquet`, 'add');
-  const nl = activeLayer(); if (nl) nl.label = `${base} (spatial)`;
-  renderLayers();
-  $('#meta').textContent = `materialized “${base}.parquet” — ${n.toLocaleString()} blocks, Morton-sorted (spatial index). Save the project to store it; remove the original if you like.`;
+  const h = layerTableHeader(L);
+  if (!h || (L.docs.blockDoc && L.docs.blockDoc.parquet)) { $('#meta').textContent = 'materialize: needs a non-Parquet block model'; return; }
+  const m = h.mapping || {};
+  if (m.x == null || m.y == null || m.z == null) { $('#meta').textContent = 'materialize: needs X/Y/Z columns'; return; }
+  $('#meta').textContent = `${L.label || L.name} — reading columns…`;
+  // 1. read the BASE data columns in record order (+ coords for the sort)
+  const names = h.columns, isNum = names.map((_, k) => colIsNumeric(L, h, k));
+  const colArr = names.map(() => []);
+  const XC = [], YC = [], ZC = [];
+  const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm), isDelim = !!(L.docs.blockDoc && !isDm);
+  let rc = 0;
+  try {
+    for await (const batch of layerRows(L, null)) {
+      for (const f0 of batch) {
+        if (isDelim) { const xv = +f0[m.x], yv = +f0[m.y], zv = +f0[m.z]; if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue; }
+        const f = isDm ? f0.map((v) => (v == null ? '' : v)) : f0;
+        for (let k = 0; k < names.length; k++) { const v = f[k]; colArr[k].push(isNum[k] ? (v == null || v === '' || Number.isNaN(+v) ? null : +v) : (v == null || v === '' ? null : String(v))); }
+        XC.push(+f[m.x]); YC.push(+f[m.y]); ZC.push(+f[m.z]);
+        rc++;
+      }
+      $('#meta').textContent = `materialize: ${rc.toLocaleString()} blocks read…`;
+      await new Promise((r) => setTimeout(r));
+    }
+  } catch (e) { $('#meta').textContent = `materialize: ${e.message}`; return; }
+  const n = XC.length;
+  if (!n) { $('#meta').textContent = 'materialize: empty model'; return; }
+  // 2. Morton order → 3. write the base columns Morton-sorted (spatial index)
+  $('#meta').textContent = 'materialize: spatial sort + write…';
+  const order = radixSortIndices(mortonKeys(Float64Array.from(XC), Float64Array.from(YC), Float64Array.from(ZC), n), n);
+  const columnData = names.map((nm, k) => { const src = colArr[k], dst = new Array(n); for (let i = 0; i < n; i++) dst[i] = src[order[i]]; return { name: nm, data: dst }; });
+  const kv = [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs) || null, spatial: true }) }];
+  const bytes = writeParquet({ columnData, rowGroupSize: 1 << 16, codec: 'SNAPPY', kvMetadata: kv });
+  // 4. replace the blockDoc IN PLACE (reuse the layer id, keep paint/calc/style)
+  const base = (L.label || L.name).replace(/\.[^.]+$/, ''), keepLabel = L.label, keepColorSel = L.colorSel, keepFilter = L.filterExpr;
+  const savedActive = _activeId; setActiveLayer(L.id);
+  try {
+    await openParquetBlocks(new Blob([bytes]), `${base}.parquet`, { layer: L.id, first: false });
+  } catch (e) { $('#meta').textContent = `materialize: reopen — ${e.message}`; setActiveLayer(savedActive); return; }
+  L.name = `${base}.parquet`;                              // so save/reload routes to the parquet path
+  if (keepLabel) L.label = keepLabel;
+  // 5. PERMUTE every per-record thing by the SAME order — paint stays editable
+  for (const col of L.paintCols || []) { const nc = new Uint8Array(n); for (let i = 0; i < n; i++) nc[i] = col.codes[order[i]]; col.codes = nc; }
+  if (L._selMask && L._selMask.length === n) { const nm = new Uint8Array(n); for (let i = 0; i < n; i++) nm[i] = L._selMask[order[i]]; L._selMask = nm; applyLayerSelection(L); }
+  L._colStats = null;                                      // aggregate — recomputed on demand
+  addPaintColorOptions(L);
+  if (keepColorSel && [...$('#colorBy').options].some((o) => o.value === keepColorSel)) { L.colorSel = keepColorSel; setLayerColorSel(L, keepColorSel); }
+  // calc columns recompute from the reordered base (no per-record cache); the
+  // filter re-sweeps (with pushdown) against the new order
+  if (keepFilter && keepFilter.trim()) { $('#filter').value = keepFilter; syncFilterClear(); await applyBlockFilter(keepFilter); }
+  renderLayers(); markProjectDirty();
+  $('#meta').textContent = `optimized “${base}.parquet” — ${n.toLocaleString()} blocks, Morton-sorted (spatial index) · painting stays editable. Save the project to store it.`;
 }
 // ── the export dialog ──
 let _exDlg = null;
@@ -6087,7 +6128,7 @@ function layerMenu(L, x, y) {
     ...(L.kind !== 'mesh' ? [{ label: 'Attribute table…', kbd: 't', action: () => openAttrTable(L) }] : []),
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
-    ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Materialize as spatial Parquet', action: () => convertLayerToParquet(L) }] : []),
+    ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Optimize to spatial Parquet', action: () => convertLayerToParquet(L) }] : []),
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
     { label: (renderer.layerSectioned(L.id) ? '✓ ' : '') + 'Cut by sections', action: () => { renderer.setLayerSectioned(L.id, !renderer.layerSectioned(L.id)); markProjectDirty(); requestRender(); } },
