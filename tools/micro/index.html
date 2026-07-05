@@ -529,7 +529,7 @@ import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../.
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
 import { readLFM, writeLFM } from '../../ext/lfm/lfm.js';   // Leapfrog model files (multi-mesh + colours)
-import { readGTiff, gridFromGTiff } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs (spec 7.1)
+import { readGTiff, gridFromGTiff, gridWindowFromGTiff, windowForWorldBbox, pickOverviewForCap } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs + windowed reads (spec 7.1)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -1687,8 +1687,7 @@ async function* layerPositions(L) {
 // so flag/ratio against it needs NO BVH and NO worker — a bilinear world
 // sample per block, footprint-averaged, is the integral of the surface over
 // the block and converges fast. O(1) per record: a 2M model in seconds. ──
-function gridSurfaceOf(gridL) {
-  const g = gridL.docs.gridDoc.grid;
+function surfaceFromGrid(g) {
   const nod = g.nodata;
   const isBad = (v) => Number.isNaN(v) || (nod != null && (nod >= 1.7e38 ? v >= 1.7014e38 : v === nod));
   // WORLD (x,y) → surface Z; NaN off-grid; bilinear, degrading to the mean of
@@ -1708,6 +1707,26 @@ function gridSurfaceOf(gridL) {
     return v00 * (1 - tx) * (1 - ty) + v10 * tx * (1 - ty) + v01 * (1 - tx) * ty + v11 * tx * ty;
   };
   return { grid: g, sampleZ };
+}
+function gridSurfaceOf(gridL) { return surfaceFromGrid(gridL.docs.gridDoc.grid); }
+// XY world bbox [minX, minY, maxX, maxY] over a set of layers
+function targetsXYBbox(list) {
+  let u = null;
+  for (const L of list) { const b = layerWorldBbox(L); if (!b) continue; const w = [b[0], b[1], b[3], b[4]]; if (!u) u = w; else { if (w[0] < u[0]) u[0] = w[0]; if (w[1] < u[1]) u[1] = w[1]; if (w[2] > u[2]) u[2] = w[2]; if (w[3] > u[3]) u[3] = w[3]; } }
+  return u;
+}
+// the grid used for EVALUATION: a display grid decoded from an overview is
+// coarse, so decode the FULL-RES window covering the targets (only the
+// overlapping tiles) — accurate flag/ratio without decoding the whole DEM
+async function residentGridForEval(gridL, bbox4) {
+  const gd = gridL.docs.gridDoc;
+  if (!gd || !gd.source || !gd.source.g || !gd.level || !bbox4) return gd.grid;
+  try {
+    const win = windowForWorldBbox(gd.source.g, 0, bbox4, 2);
+    if (win.width <= 0 || win.height <= 0) return gd.grid;
+    $('#meta').textContent = `${gridL.label || gridL.name} — reading full-res window ${win.width}×${win.height}…`;
+    return await gridWindowFromGTiff(gd.source.g, 0, win);
+  } catch { return gd.grid; }
 }
 // fraction of a block column [z−hz, z+hz] that lies BELOW the surface, averaged
 // over an rx×ry plan sub-sample of the footprint (±hx,±hy). hz=0 (points) → a
@@ -1746,13 +1765,14 @@ function blockHalfExtents(L) {
   return g && g.size ? [g.size[0] / 2, g.size[1] / 2, g.size[2] / 2] : [0, 0, 0];
 }
 async function selectByGridSurface(gridL, { mode = 'below', meshB = null, targets = null, combine = 'replace', onProgress = null } = {}) {
-  const surfA = gridSurfaceOf(gridL);
-  const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? gridSurfaceOf(meshB) : null;
-  if (mode === 'between' && !surfB) { $('#meta').textContent = 'select by surface: between needs a second grid'; return; }
   const epoch = ++_selEpoch;
   if (combine === 'replace') clearSelection({ silent: true });
   const v = combine === 'subtract' ? 0 : 1;
   const Ls = targets || _layers.filter((L) => L.visible && L.kind !== 'mesh' && !L.docs.gridDoc && attrRowCountOf(L) > 0);
+  const bbox4 = targetsXYBbox(Ls);
+  const surfA = surfaceFromGrid(await residentGridForEval(gridL, bbox4));
+  const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? surfaceFromGrid(await residentGridForEval(meshB, bbox4)) : null;
+  if (mode === 'between' && !surfB) { $('#meta').textContent = 'select by surface: between needs a second grid'; return; }
   for (let li = 0; li < Ls.length; li++) {
     const L = Ls[li];
     const n = attrRowCountOf(L);
@@ -1785,8 +1805,9 @@ async function ratioByGridSurface(gridL, L, { name, res = [2, 2, 1], mode = 'bel
   const doc = L.docs.blockDoc;
   const grid = doc && (doc.grid || (doc.header && doc.header.grid));
   if (!grid || !grid.size) { $('#meta').textContent = 'ratio by surface: needs a regular block model'; return null; }
-  const surfA = gridSurfaceOf(gridL);
-  const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? gridSurfaceOf(meshB) : null;
+  const bbox4 = targetsXYBbox([L]);
+  const surfA = surfaceFromGrid(await residentGridForEval(gridL, bbox4));
+  const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? surfaceFromGrid(await residentGridForEval(meshB, bbox4)) : null;
   if (mode === 'between' && !surfB) { $('#meta').textContent = 'ratio by surface: between needs a second grid'; return null; }
   const resolution = Array.isArray(res) ? res.map((v) => Math.max(1, v | 0)) : [res, res, 1];
   const [hx, hy, hz] = [grid.size[0] / 2, grid.size[1] / 2, grid.size[2] / 2];
@@ -1818,8 +1839,9 @@ async function ratioByGridSurface(gridL, L, { name, res = [2, 2, 1], mode = 'bel
   return col;
 }
 async function flagByGridSurface(gridL, targets, { name, label = 'IN', mode = 'below', meshB = null, onProgress = null } = {}) {
-  const surfA = gridSurfaceOf(gridL);
-  const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? gridSurfaceOf(meshB) : null;
+  const bbox4 = targetsXYBbox(targets);
+  const surfA = surfaceFromGrid(await residentGridForEval(gridL, bbox4));
+  const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? surfaceFromGrid(await residentGridForEval(meshB, bbox4)) : null;
   if (mode === 'between' && !surfB) { $('#meta').textContent = 'flag by surface: between needs a second grid'; return 0; }
   const epoch = ++_ratioEpoch;
   let made = 0;
@@ -2565,8 +2587,14 @@ $('#rgGo').onclick = async () => {
   finally { btn.disabled = false; for (const el of $('#rgDlgBody').querySelectorAll('input, select')) el.disabled = false; }
 };
 // export a grid layer as an ESRI ASCII .asc
-function exportGridAsc(L) {
-  const g = L.docs.gridDoc && L.docs.gridDoc.grid; if (!g) return;
+async function exportGridAsc(L) {
+  const gd = L.docs.gridDoc; if (!gd) return;
+  let g = gd.grid;
+  if (gd.source && gd.source.g && gd.level) {              // display is an overview — export FULL res
+    $('#meta').textContent = `${L.label || L.name} — decoding full resolution for export…`;
+    try { g = await gridFromGTiff(gd.source.g, 0); } catch { g = gd.grid; }
+  }
+  if (!g) return;
   if (Math.abs(g.dx - g.dy) > g.dx * 1e-3) $('#meta').textContent = `note: non-square grid exported at cellsize ${g.dx}`;
   const blob = new Blob([writeEsriAsc(g)], { type: 'text/plain' });
   const a = document.createElement('a');
@@ -2896,11 +2924,17 @@ const ascLooksLikeGrid = async (blob) => /^\s*ncols\b/i.test(await blob.slice(0,
 async function readAnyGrid(blob, name) {
   if (/\.(tif|tiff)$/i.test(name)) {
     const g = await readGTiff(blob);
-    const grid = await gridFromGTiff(g);
+    // decode an OVERVIEW within a decode budget for the display — a big COG
+    // paints instantly; the full-res data is read windowed, only for eval
+    const DISPLAY_DECODE_CAP = window.__gridDisplayCap || 8_000_000;   // test seam
+    const level = pickOverviewForCap(g, DISPLAY_DECODE_CAP);
+    const grid = await gridFromGTiff(g, level);
     if (grid.x0 == null) { grid.x0 = grid.dx / 2; grid.y0 = grid.ny * grid.dy - grid.dy / 2; }
     const img = g.images[0];
     grid.form = `GeoTIFF ${img.bitsPerSample}-bit${img.sampleFormat === 3 ? ' float' : img.sampleFormat === 2 ? ' int' : ''}` +
-      `${{ 1: '', 5: ', LZW', 8: ', deflate', 32946: ', deflate', 32773: ', PackBits' }[img.compression] ?? ''}${img.tiled ? ', tiled' : ''}`;
+      `${{ 1: '', 5: ', LZW', 8: ', deflate', 32946: ', deflate', 32773: ', PackBits' }[img.compression] ?? ''}${img.tiled ? ', tiled' : ''}` +
+      `${level > 0 ? ` · overview ${g.images[level].width}×${g.images[level].height} of ${img.width}×${img.height}` : ''}`;
+    grid._src = { g, level, name };                        // windowable full-res source (eval + export)
     return grid;
   }
   if (/\.grd$/i.test(name)) return readSurferGrd(blob);
@@ -3098,7 +3132,7 @@ async function openGridBlob(blob, name, opts = {}) {
       max: [grid.x0 + (nx - 1) * grid.dx, grid.y0, zmax],
     },
   };
-  _gridDoc = { blob, name, grid, stride };
+  _gridDoc = { blob, name, grid, stride, source: grid._src || null, level: grid._src ? grid._src.level : 0 };
   _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   registerDocs(lid, 'points');
   fitFromHeader(header, opts.first !== false);
@@ -7861,7 +7895,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, writeEsriAsc, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
