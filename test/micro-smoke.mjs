@@ -183,16 +183,18 @@ const sj = await p.evaluate(async () => {
   const m = window._micro, A = m.layers().find((L) => L.name === 'A.csv'), B = m.layers().find((L) => L.name === 'B.csv');
   const compat = m.gridsCompatible(m.gridAxesOf(A), m.gridAxesOf(B));
   const { blob, cells } = await m.runSpatialJoin({ leftL: B, rightL: A, target: m.gridAxesOf(A), label: 'sj',
-    columns: [{ src: 'left', name: 'FE', out: 'B_FE', num: true, op: 'mean' }, { src: 'right', name: 'FE', out: 'A_FE', num: true, op: 'mean' }] });
+    columns: [{ src: 'left', name: 'FE', out: 'B_FE', num: true, op: 'mean' }, { src: 'right', name: 'FE', out: 'A_FE', num: true, op: 'mean' }],
+    derived: [{ out: 'ΔFE', num: true, compute: (g) => { const a = g('A_FE'), b = g('B_FE'); return a != null && b != null ? b - a : null; } }] });
   const head = (await blob.text()).trim().split('\n')[0].split(',');
   const rows = (await blob.text()).trim().split('\n').slice(1).map((l) => l.split(','));
-  let dmax = 0; for (const r of rows) dmax = Math.max(dmax, Math.abs(+r[head.indexOf('B_FE')] - +r[head.indexOf('A_FE')]));
+  const iD = head.indexOf('ΔFE');
+  let dmax = 0; for (const r of rows) dmax = Math.max(dmax, Math.abs(+r[iD]));   // reconciliation Δ via a real derived column
   await m.openBlob(blob, 'join.csv', 'add');
   const J = m.layers().find((L) => L.name === 'join.csv');
-  return { compat: compat.ok && compat.nested, cells, dmax, isBM: !!(J && J.docs.blockDoc), blocks: J ? m.renderer.layerElementCount(J.id) : 0 };
+  return { compat: compat.ok && compat.nested, cells, dmax, hasD: iD >= 0, isBM: !!(J && J.docs.blockDoc), blocks: J ? m.renderer.layerElementCount(J.id) : 0 };
 });
-chk(`spatial join: compatible (${sj.compat}), aggregate B→A grid = ${sj.cells} cells, Δ≈0 (${sj.dmax.toExponential(1)}), new block model (${sj.isBM}, ${sj.blocks})`,
-  sj.compat && sj.cells === 4 && sj.dmax < 1e-3 && sj.isBM && sj.blocks === 4);
+chk(`spatial join: compatible (${sj.compat}), aggregate B→A grid = ${sj.cells} cells, derived ΔFE≈0 (${sj.hasD}, ${sj.dmax.toExponential(1)}), new block model (${sj.isBM}, ${sj.blocks})`,
+  sj.compat && sj.cells === 4 && sj.hasD && sj.dmax < 1e-3 && sj.isBM && sj.blocks === 4);
 
 // ── 8. project round trip (OPFS) + auto-optimize on save: the CSV model is
 //    reordered to spatial Parquet in place at save time, and reopens as Parquet ──

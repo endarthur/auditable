@@ -2320,7 +2320,7 @@ function gridAxesOf(L) {
 // target grid T, build a target block model (a CSV blob — real data columns),
 // and open it as a NEW layer. columns: [{ src:'left'|'right', name, out, op,
 // num, weight }]. op for numeric: 'mean'|'sum'|'count'; categorical → majority.
-async function runSpatialJoin({ leftL, rightL, target, columns, coverage = true, label = 'join', onProgress = null }) {
+async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], coverage = true, label = 'join', onProgress = null }) {
   const T = target;
   const nx = T.x.count, ny = T.y.count, nz = T.z.count, cells = nx * ny * nz;
   if (cells > 40_000_000) throw new Error(`target grid is ${cells.toLocaleString()} cells — too large`);
@@ -2370,7 +2370,12 @@ async function runSpatialJoin({ leftL, rightL, target, columns, coverage = true,
   if (!nPresent) throw new Error('no overlapping cells between the sources and the target grid');
   // coverage columns only where an aggregate actually lost coverage
   const covCols = coverage ? columns.filter((c) => c.num && c._cov && [...c._present].some((p, i) => p && c._cov[i] < 0.999)) : [];
-  const heads = ['XC', 'YC', 'ZC', ...columns.map((c) => c.out || c.name), ...covCols.map((c) => (c.out || c.name) + '_cov')];
+  // derived columns: a value computed per cell from the finalized columns
+  // (get(outName) → that column's cell value, or null if absent) — real,
+  // colourable base columns (e.g. reconciliation Δ)
+  const byOut = {}; for (const c of columns) byOut[c.out || c.name] = c;
+  const getAt = (idx) => (name) => { const c = byOut[name]; if (!c || !c._present[idx]) return null; return c.num ? c._out[idx] : (c._dict[c._codes[idx]] || null); };
+  const heads = ['XC', 'YC', 'ZC', ...columns.map((c) => c.out || c.name), ...derived.map((d) => d.out), ...covCols.map((c) => (c.out || c.name) + '_cov')];
   const ox = T.x.origin, oy = T.y.origin, oz = T.z.origin, px = T.x.pitch, py = T.y.pitch, pz = T.z.pitch;
   const parts = [heads.join(',') + '\n']; let buf = '';
   for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
@@ -2380,6 +2385,8 @@ async function runSpatialJoin({ leftL, rightL, target, columns, coverage = true,
       if (!c._present[idx]) { row.push(''); continue; }
       if (c.num) row.push(+c._out[idx].toFixed(6)); else row.push(csvCell(c._dict[c._codes[idx]] || ''));
     }
+    const get = getAt(idx);
+    for (const d of derived) { const v = d.compute(get); row.push(v == null ? '' : (d.num === false ? csvCell(v) : +(+v).toFixed(6))); }
     for (const c of covCols) row.push(c._present[idx] ? +c._cov[idx].toFixed(4) : '');
     buf += row.join(',') + '\n';
     if (buf.length > (1 << 22)) { parts.push(buf); buf = ''; }
@@ -8094,25 +8101,40 @@ function openReconcileMenu(L, R, jf, shared, anchor) {
 }
 async function runReconcile(L, R, jf, grade) {
   try {
-    const T = targetAxes(jf, L, R);
-    const aName = `A_${grade}`, bName = `B_${grade}`;
+    // reconcile on the COMMON lattice (finest) so it captures matched AND
+    // added/removed cells even when the two models' extents differ
+    const cl = commonLattice([gridAxesOf(L), gridAxesOf(R)], { resolution: 'finest' });
+    if (!cl.ok) throw new Error(cl.reason);
+    const T = cl;
+    // this (active/left) − reference (right); Δ is a REAL column → colourable
+    const aName = `ref_${grade}`, bName = `this_${grade}`, dName = `Δ${grade}`;
     const columns = [
       { src: 'left', name: grade, out: bName, num: true, op: 'mean', weight: jf.weights['left:' + grade] || null },
       { src: 'right', name: grade, out: aName, num: true, op: 'mean', weight: jf.weights['right:' + grade] || null },
     ];
+    const derived = [{ out: dName, num: true, compute: (g) => { const a = g(aName), b = g(bName); return a != null && b != null ? b - a : null; } }];
     const name = `reconcile_${shortName(L)}_vs_${shortName(R)}.csv`;
-    const { blob, cells } = await runSpatialJoin({ leftL: L, rightL: R, target: T, columns, label: 'reconcile' });
-    await openBlob(blob, name, 'add');
+    const { blob } = await runSpatialJoin({ leftL: L, rightL: R, target: T, columns, derived, label: 'reconcile' });
+    // open ALREADY coloured by Δ (chan = the Δ column) — heads are
+    // XC,YC,ZC, ...columns, ...derived, so Δ is at 3 + columns.length
+    const dIdx = 3 + columns.length;
+    await openBlob(blob, name, 'add', null, { mapping: { x: 0, y: 1, z: 2, chan: dIdx, cat: null } });
     const J = activeLayer();
     if (J) {
-      J.calcCols = J.calcCols || [];
-      J.calcCols.push({ name: 'Δ' + grade, expr: `${bName} - ${aName}`, ty: 'number' });
-      J._calcFns = null; J._colStats = null;
-      // summary
       const jh = layerTableHeader(J);
-      let sum = 0, n = 0, ai = jh.columns.indexOf(aName), bi = jh.columns.indexOf(bName);
-      for await (const batch of layerRows(J, null)) for (const f of batch) { const a = +f[ai], b = +f[bi]; if (Number.isFinite(a) && Number.isFinite(b)) { sum += b - a; n++; } }
-      $('#meta').textContent = `reconcile ${shortName(L)} vs ${shortName(R)}: ${cells.toLocaleString()} cells, ${n.toLocaleString()} matched, mean Δ${grade} = ${n ? (sum / n).toPrecision(3) : '—'} → ${name}`;
+      const ai = jh.columns.indexOf(aName), bi = jh.columns.indexOf(bName);
+      let sum = 0, sumAbs = 0, n = 0, refOnly = 0, thisOnly = 0, mx = 0;
+      for await (const batch of layerRows(J, null)) for (const f of batch) {
+        const aP = f[ai] !== '' && Number.isFinite(+f[ai]), bP = f[bi] !== '' && Number.isFinite(+f[bi]);
+        if (aP && bP) { const dv = +f[bi] - +f[ai]; sum += dv; sumAbs += Math.abs(dv); if (Math.abs(dv) > mx) mx = Math.abs(dv); n++; }
+        else if (aP) refOnly++; else if (bP) thisOnly++;
+      }
+      // the diverging spectral ramp, symmetric about 0 → yellow=no change, blue=under, red=over
+      if (mx > 0) { J.clip = [String(+(-mx).toPrecision(3)), String(+mx.toPrecision(3))]; if (J.id === _activeId) { $('#clipMin').value = J.clip[0]; $('#clipMax').value = J.clip[1]; } }
+      setRampCfg(J, { preset: 'spectral' });
+      applyRamp(J, true); requestRender();
+      const mean = n ? sum / n : 0, mabs = n ? sumAbs / n : 0;
+      $('#meta').textContent = `reconcile ${shortName(L)}−${shortName(R)} (${dName}): ${n.toLocaleString()} matched · mean Δ ${mean >= 0 ? '+' : ''}${mean.toPrecision(3)} · mean|Δ| ${mabs.toPrecision(3)}${thisOnly ? ` · ${thisOnly.toLocaleString()} added` : ''}${refOnly ? ` · ${refOnly.toLocaleString()} removed` : ''} → ${name}`;
     }
     renderLayers();
   } catch (e) { $('#meta').textContent = `reconcile: ${e.message}`; }
