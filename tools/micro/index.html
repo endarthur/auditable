@@ -5955,6 +5955,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
   { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
   { label: 'Decorations & figure…', action: () => decorationsMenu($('#mView')) },
+  { label: 'Windows…', action: () => windowsMenu($('#mView')) },
   { sep: true },
   ...(_views.length ? _views.map((v) => ({ label: `⤷ ${v.name}`, action: () => applyView(v) })) : []),
   { label: 'Save view…', action: saveViewAs },
@@ -6448,6 +6449,30 @@ function decorationsMenu(anchorEl) {
   ]);
 }
 applyBg();                                                 // restore the saved background at boot
+// ── window management: as the float windows multiply (GT · swath · validate ·
+// lineage · table · paint), a place to find, focus, tidy, and dismiss them. ──
+const openFloatWins = () => [...document.querySelectorAll('.fwin')];
+const winTitle = (el) => { const t = el.querySelector('.fwin-head .t'); return t ? t.textContent : 'window'; };
+function raiseWindow(el) { el.style.zIndex = ++_fwinZ; if (el.classList.contains('min')) { const mb = el.querySelector('.fwin-head button'); if (mb) mb.click(); } }
+function cascadeWindows() {
+  const ws = openFloatWins(); if (!ws.length) { $('#meta').textContent = 'no open windows'; return; }
+  ws.forEach((el, i) => { if (el.classList.contains('min')) { const mb = el.querySelector('.fwin-head button'); if (mb) mb.click(); } el.style.left = (44 + i * 30) + 'px'; el.style.top = (74 + i * 30) + 'px'; raiseWindow(el); });
+  $('#meta').textContent = `cascaded ${ws.length} window${ws.length > 1 ? 's' : ''}`;
+}
+function closeAllWindows() {
+  const ws = openFloatWins();
+  for (const el of ws) { const bts = el.querySelectorAll('.fwin-head button'); if (bts.length) bts[bts.length - 1].click(); }
+  $('#meta').textContent = ws.length ? `closed ${ws.length} window${ws.length > 1 ? 's' : ''}` : 'no open windows';
+}
+function windowsMenu(anchor) {
+  const r = (anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: anchor.x || 120, bottom: anchor.y || 60 });
+  const ws = openFloatWins();
+  const items = ws.length
+    ? ws.map((el) => ({ label: (el.classList.contains('min') ? '– ' : '') + winTitle(el), action: () => raiseWindow(el) }))
+    : [{ label: 'no open windows', action: () => {} }];
+  if (ws.length) items.push({ sep: true }, { label: 'Cascade', action: cascadeWindows }, { label: 'Close all', action: closeAllWindows });
+  menuXY(r.left, r.bottom + 2, items);
+}
 $('#compass').addEventListener('click', () => setView(-Math.PI / 2, PHI_MAX));   // plan, north up
 $('#compass').addEventListener('pointerdown', (e) => e.stopPropagation());       // don't start an orbit
 // corner + size, persisted; the same menu hangs off right-click and View → Compass…
@@ -6555,6 +6580,9 @@ const COMMANDS = [
   { id: 'decolegend', group: 'View', title: 'Toggle legend', kw: 'decoration ramp colours key', run: () => setDeco('legend', !_deco.legend) },
   { id: 'decotitle', group: 'View', title: 'Set figure title…', kw: 'decoration caption', run: async () => { const t = await microPrompt('figure title', _deco.titleText || ''); if (t != null) { _deco.titleText = t; _deco.title = !!t; saveDeco(); drawDecorations(); } } },
   { id: 'bg', group: 'View', title: 'Background colour…', kw: 'clear white black print paper', run: async () => { const v = ((await microPrompt('background (hex) — e.g. #ffffff for print', _bgColor)) || '').trim(); if (/^#?[0-9a-fA-F]{6}$/.test(v)) setBg(v.startsWith('#') ? v : '#' + v); } },
+  { id: 'windows', group: 'View', title: 'Windows…', kw: 'focus find list float', when: () => document.querySelector('.fwin'), run: () => windowsMenu({ x: innerWidth / 2 - 90, y: 60 }) },
+  { id: 'wincascade', group: 'View', title: 'Cascade windows', kw: 'arrange tidy tile', when: () => document.querySelector('.fwin'), run: () => cascadeWindows() },
+  { id: 'winclose', group: 'View', title: 'Close all windows', kw: 'dismiss tidy', when: () => document.querySelector('.fwin'), run: () => closeAllWindows() },
   { id: 'fit', group: 'View', title: 'Fit view', kw: 'zoom extent', run: () => $('#btnFit').click() },
   { id: 'plan', group: 'View', title: 'Plan view (looking down)', kw: 'top', run: () => setView(cam.state.theta, PHI_MAX) },
   { id: 'section', group: 'View', title: 'Section on / off', kw: 'slice clip', run: () => toggleSection() },
@@ -9358,7 +9386,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, exportFigure, drawDecorations, decorationsMenu, setBg, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

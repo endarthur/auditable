@@ -137,6 +137,20 @@ const bg = await p.evaluate(async () => {
 });
 chk(`background colour: white [${bg.w}] → basalt [${bg.d}]`, bg.w[0] > 240 && bg.d[0] < 40 && bg.bgApi);
 
+// ── 1d. window management: open windows → cascade → close all ──
+const wm = await p.evaluate(async () => {
+  const m = window._micro, L = m.layers()[0];
+  m.openGradeTonnage(L); m.openSwath(L);
+  await new Promise((r) => setTimeout(r, 300));
+  const opened = document.querySelectorAll('.fwin').length;
+  m.cascadeWindows();
+  const lefts = [...document.querySelectorAll('.fwin')].map((e) => e.style.left);
+  m.closeAllWindows();
+  await new Promise((r) => setTimeout(r, 100));
+  return { opened, cascadedDistinct: new Set(lefts).size === lefts.length && lefts.length === 2, closed: document.querySelectorAll('.fwin').length };
+});
+chk(`window management: opened ${wm.opened}, cascade offsets them (${wm.cascadedDistinct}), close-all → ${wm.closed}`, wm.opened === 2 && wm.cascadedDistinct && wm.closed === 0);
+
 // ── 2. pick reads a record ──
 await p.evaluate(() => { document.querySelector('#compass').dispatchEvent(new MouseEvent('click')); document.querySelector('#btnFit').click(); const px = document.querySelector('#ptPx'); px.value = 6; px.dispatchEvent(new Event('input')); });
 await p.waitForFunction(() => /converged/.test(document.querySelector('#stats').textContent), null, { timeout: 60000 });
