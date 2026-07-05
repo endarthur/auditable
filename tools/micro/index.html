@@ -2913,6 +2913,14 @@ function ngSourceBbox(d) {
   if (d.src && d.src[0] === 'G') { const g = ngGroups()[+d.src.slice(1)]; return g ? unionWorldBbox(groupLayerIds(g).map((id) => layerWorldBbox(layerById(id)))) : null; }
   return d.src ? layerWorldBbox(layerById(+d.src.slice(1))) : null;
 }
+// block-model layers eligible for the common-grid creator, and the common
+// lattice covering the selected ones at the chosen resolution.
+const ngBlockLayers = () => _layers.filter((L) => gridAxesOf(L));
+function compatAxes(d) {
+  const sel = ngBlockLayers().filter((L) => d.compatSel.has(L.id));
+  if (sel.length < 1) return { ok: false, reason: 'pick at least one model' };
+  return commonLattice(sel.map((L) => gridAxesOf(L)), { resolution: d.res });
+}
 function openNewDialog() {
   const bb = _docBbox && frame ? unionWorldBbox(_layers.map(layerWorldBbox)) : null;
   _ngDlg = {
@@ -2921,6 +2929,7 @@ function openNewDialog() {
     x0: bb ? +bb[0].toFixed(2) : 0, y0: bb ? +bb[4].toFixed(2) : 0, z0: bb ? +bb[2].toFixed(2) : 0,
     dx: 10, dy: 10, dz: 10, nx: 50, ny: 50, nz: 20, fill: 0, valName: 'VAL',
     align: false, ax: 0, ay: 0, az: 0,
+    res: 'finest', compatSel: new Set(),
   };
   renderNewDialog();
   $('#ngDlg').classList.add('show');
@@ -2928,14 +2937,30 @@ function openNewDialog() {
 function renderNewDialog() {
   const d = _ngDlg; if (!d) return;
   const body = $('#ngDlgBody'); body.textContent = '';
-  const isBM = d.type === 'block';
+  const isBM = d.type === 'block' || d.mode === 'compat';
   const row = (label, ...els) => { const r = document.createElement('div'); r.className = 'ex-row'; const b = document.createElement('b'); b.textContent = label; r.append(b, ...els); body.appendChild(r); return r; };
   const num = (key, w = 90) => { const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any'; inp.value = String(d[key]); inp.style.width = w + 'px'; inp.oninput = () => { d[key] = +inp.value; updTally(); }; return inp; };
   const radios = (r, group, pairs, cur, pick) => { for (const [k, lab] of pairs) { const l = document.createElement('label'); const rb = document.createElement('input'); rb.type = 'radio'; rb.name = group; rb.checked = cur === k; rb.onchange = () => { pick(k); }; l.append(rb, lab); r.appendChild(l); } };
-  radios(row('type'), 'ngtype', [['grid', 'grid (heightfield)'], ['block', 'block model']], d.type, (k) => { d.type = k; renderNewDialog(); });
-  const modes = _layers.length ? [['cover', 'cover a layer'], ['params', 'from parameters']] : [['params', 'from parameters']];
-  radios(row('extent'), 'ngmode', modes, d.mode, (k) => { d.mode = k; renderNewDialog(); });
-  if (d.mode === 'cover') {
+  if (d.mode !== 'compat') radios(row('type'), 'ngtype', [['grid', 'grid (heightfield)'], ['block', 'block model']], d.type, (k) => { d.type = k; renderNewDialog(); });
+  const modes = [...(_layers.length ? [['cover', 'cover a layer']] : []), ...(ngBlockLayers().length ? [['compat', 'cover compatible models']] : []), ['params', 'from parameters']];
+  radios(row('extent'), 'ngmode', modes, d.mode, (k) => { d.mode = k; if (k === 'compat') d.type = 'block'; renderNewDialog(); });
+  if (d.mode === 'compat') {
+    const list = document.createElement('div'); list.style.cssText = 'display:flex;flex-direction:column;gap:2px;margin:2px 0 6px';
+    for (const L of ngBlockLayers()) {
+      const l = document.createElement('label'); l.style.cssText = 'display:flex;gap:6px;font-size:12px';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = d.compatSel.has(L.id);
+      cb.onchange = () => { if (cb.checked) d.compatSel.add(L.id); else d.compatSel.delete(L.id); renderNewDialog(); };
+      const ax = gridAxesOf(L); const sz = document.createElement('span'); sz.style.color = 'var(--dim)'; sz.textContent = ` ${ax.x.pitch}×${ax.y.pitch}×${ax.z.pitch} m`;
+      l.append(cb, document.createTextNode(L.label || L.name), sz); list.appendChild(l);
+    }
+    body.appendChild(row('models')); body.appendChild(list);
+    radios(row('resolution'), 'ngres', [['finest', 'finest'], ['coarsest', 'coarsest'], ['gcd', 'common lattice']], d.res, (k) => { d.res = k; renderNewDialog(); });
+    const ca = compatAxes(d);
+    const ban = document.createElement('div');
+    if (ca.ok) { ban.className = 'pp-banner ok'; ban.textContent = `common ${ca.x.pitch}×${ca.y.pitch}×${ca.z.pitch} m, ${ca.x.count}×${ca.y.count}×${ca.z.count} = ${(ca.x.count * ca.y.count * ca.z.count).toLocaleString()} blocks`; }
+    else { ban.className = 'pp-banner bad'; ban.textContent = d.compatSel.size ? `incompatible — ${ca.reason}` : 'select the models to combine'; }
+    body.appendChild(ban);
+  } else if (d.mode === 'cover') {
     const sel = document.createElement('select');
     const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); };
     add('all', 'all layers');
@@ -2952,12 +2977,12 @@ function renderNewDialog() {
     row(isBM ? 'origin X,Y,Z' : 'origin X,Y', num('x0'), num('y0'), ...(isBM ? [num('z0')] : []));
     row(isBM ? 'counts' : 'counts', num('nx', 64), num('ny', 64), ...(isBM ? [num('nz', 64)] : []));
   }
-  if (isBM) row('block (m)', num('dx', 60), num('dy', 60), num('dz', 60));
-  else row('cell (m)', num('dx', 90));
+  if (d.mode !== 'compat') { if (isBM) row('block (m)', num('dx', 60), num('dy', 60), num('dz', 60)); else row('cell (m)', num('dx', 90)); }
   const fillRow = row(isBM ? 'fill VAL' : 'fill Z', num('fill'));
   if (isBM) { const nm = document.createElement('input'); nm.type = 'text'; nm.value = d.valName; nm.style.width = '80px'; nm.oninput = () => { d.valName = nm.value.trim() || 'VAL'; }; fillRow.append(document.createTextNode(' column '), nm); }
   const tally = document.createElement('div'); tally.className = 'pp-note'; tally.id = 'ngTally'; body.appendChild(tally);
   function dims() {
+    if (d.mode === 'compat') { const ca = compatAxes(d); return ca.ok ? { nx: ca.x.count, ny: ca.y.count, nz: ca.z.count } : null; }
     if (d.mode === 'cover') {
       const bb = ngSourceBbox(d);
       if (!bb) return null;
@@ -2968,9 +2993,10 @@ function renderNewDialog() {
   }
   function updTally() {
     const dd = dims();
-    if (!dd) { tally.textContent = 'this source has no bounding box yet'; $('#ngGo').disabled = true; return; }
+    if (!dd) { tally.textContent = d.mode === 'compat' ? '' : 'this source has no bounding box yet'; $('#ngGo').disabled = true; return; }
     $('#ngGo').disabled = false;
     const tot = dd.nx * dd.ny * dd.nz;
+    if (d.mode === 'compat') { tally.textContent = ''; return; }   // the banner shows the count
     tally.textContent = isBM
       ? `= ${dd.nx}×${dd.ny}×${dd.nz} = ${tot.toLocaleString()} blocks`
       : `= ${dd.nx}×${dd.ny} = ${tot.toLocaleString()} nodes`;
@@ -2981,9 +3007,14 @@ function renderNewDialog() {
 $('#ngCancel').onclick = () => { $('#ngDlg').classList.remove('show'); _ngDlg = null; };
 $('#ngGo').onclick = async () => {
   const d = _ngDlg; if (!d) return;
-  const isBM = d.type === 'block';
-  let x0, y0, z0, nx, ny, nz;
-  if (d.mode === 'cover') {
+  const isBM = d.type === 'block' || d.mode === 'compat';
+  let x0, y0, z0, nx, ny, nz, dx = d.dx, dy = d.dy, dz = d.dz;
+  if (d.mode === 'compat') {
+    const ca = compatAxes(d);
+    if (!ca.ok) { $('#ngDlgMsg').textContent = ca.reason; return; }
+    x0 = ca.x.origin; y0 = ca.y.origin; z0 = ca.z.origin; nx = ca.x.count; ny = ca.y.count; nz = ca.z.count;
+    dx = ca.x.pitch; dy = ca.y.pitch; dz = ca.z.pitch;
+  } else if (d.mode === 'cover') {
     const bb = ngSourceBbox(d);
     if (!bb) { $('#ngDlgMsg').textContent = 'no bounding box'; return; }
     const g = coverGeometry(d, bb);
@@ -2997,10 +3028,10 @@ $('#ngGo').onclick = async () => {
   try {
     if (isBM) {
       $('#ngDlgMsg').textContent = 'building…';
-      const blob = await buildEmptyBlockCsv({ x0, y0, z0, dx: d.dx, dy: d.dy, dz: d.dz, nx, ny, nz, fill: d.fill, valName: d.valName, onProgress: (f) => { $('#ngDlgMsg').textContent = `building ${Math.round(f * 100)}%…`; } });
-      await openBlob(blob, 'new_model.csv', _layers.length ? 'add' : 'replace');
+      const blob = await buildEmptyBlockCsv({ x0, y0, z0, dx, dy, dz, nx, ny, nz, fill: d.fill, valName: d.valName, onProgress: (f) => { $('#ngDlgMsg').textContent = `building ${Math.round(f * 100)}%…`; } });
+      await openBlob(blob, d.mode === 'compat' ? 'common_model.csv' : 'new_model.csv', _layers.length ? 'add' : 'replace');
     } else {
-      const grid = buildEmptyGrid({ x0, y0, dx: d.dx, nx, ny, fill: d.fill });
+      const grid = buildEmptyGrid({ x0, y0, dx, nx, ny, fill: d.fill });
       await openBlob(new Blob([writeEsriAsc(grid)]), 'new_grid.asc', _layers.length ? 'add' : 'replace');
     }
     $('#ngDlg').classList.remove('show'); _ngDlg = null;
