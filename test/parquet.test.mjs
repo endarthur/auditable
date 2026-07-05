@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { zstdCompressSync } from 'node:zlib';
-import { writeParquet, readParquet, readParquetColumns, parquetInfo, parquetWriteBuffer, writeCompressors } from '../ext/parquet/index.js';
+import { writeParquet, readParquet, readParquetColumns, parquetInfo, parquetWriteBuffer, writeCompressors, streamParquetColumns, readParquetRange, readParquetRow } from '../ext/parquet/index.js';
 
 // a little block-model-shaped table: XC,YC,ZC + FE + a LITO string
 const N = 5000;
@@ -83,6 +83,33 @@ test('zstd read path (fzstd) decodes a real zstd file', async () => {
   assert.equal(rows.length, N);
   assert.equal(rows[777].FE, 30 + (777 % 40));
   assert.equal(rows[3333].LITO, 'HEMATITE');              // 3333 % 3 === 0
+});
+
+test('streamParquetColumns yields a row group at a time (nothing held)', async () => {
+  const buf = writeParquet({ columnData, rowGroupSize: 1000 });   // 5000 rows → 5 groups
+  const seen = [];
+  let total = 0;
+  for await (const { start, count, cols } of streamParquetColumns(buf, ['XC', 'FE'])) {
+    seen.push([start, count]);
+    assert.equal(cols.XC.length, count);
+    assert.equal(cols.XC[0], XC[start]);            // first row of the group
+    assert.equal(cols.FE[count - 1], FE[start + count - 1]);
+    total += count;
+  }
+  assert.equal(total, N);
+  assert.equal(seen.length, 5);
+  assert.deepEqual(seen[0], [0, 1000]);
+});
+
+test('readParquetRange + readParquetRow are targeted (one group / one row)', async () => {
+  const buf = writeParquet({ columnData, rowGroupSize: 1000 });
+  const rng = await readParquetRange(buf, ['ZC', 'LITO'], 2500, 2510);
+  assert.equal(rng.ZC.length, 10);
+  assert.equal(rng.ZC[0], ZC[2500]);
+  assert.equal(rng.LITO[3], LITO[2503]);
+  const row = await readParquetRow(buf, 4321);
+  assert.equal(row.XC, XC[4321]);
+  assert.equal(row.LITO, LITO[4321]);
 });
 
 test('kvMetadata survives the round trip (a place to stamp micro geo/frame)', () => {

@@ -530,7 +530,7 @@ import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribut
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
 import { readLFM, writeLFM } from '../../ext/lfm/lfm.js';   // Leapfrog model files (multi-mesh + colours)
 import { readGTiff, gridFromGTiff, gridWindowFromGTiff, gridDecimatedFromGTiff, stepForCap, windowForWorldBbox, pickOverviewForCap } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs + windowed/decimated reads (spec 7.1)
-import { parquetInfo, readParquetColumnMap } from '../../ext/parquet/index.js';   // Apache Parquet block models (columnar, footer discovery)
+import { parquetInfo, streamParquetColumns, readParquetRow } from '../../ext/parquet/index.js';   // Apache Parquet block models (columnar, streamed row-group by row-group)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -1675,13 +1675,12 @@ async function* layerPositions(L) {
     return;
   }
   if (d.blockDoc && d.blockDoc.parquet) {
-    const { cols } = d.blockDoc.parquet, mp = d.blockDoc.header.mapping;
-    const X = cols[mp.x], Y = cols[mp.y], Z = cols[mp.z], N = X.length, B = 1 << 18;
-    for (let s2 = 0; s2 < N; s2 += B) {
-      const nn = Math.min(B, N - s2);
-      const x = new Float64Array(nn), y = new Float64Array(nn), z = new Float64Array(nn), recs = new Uint32Array(nn);
-      for (let i = 0; i < nn; i++) { x[i] = +X[s2 + i]; y[i] = +Y[s2 + i]; z[i] = +Z[s2 + i]; recs[i] = s2 + i; }
-      yield { x, y, z, recs, base: s2, count: nn };
+    const P = d.blockDoc.parquet, [xN, yN, zN] = P.coordNames;
+    for await (const { start, count, cols } of streamParquetColumns(P.buf, P.coordNames, P.rowGroups)) {
+      const X = cols[xN], Y = cols[yN], Z = cols[zN];
+      const x = new Float64Array(count), y = new Float64Array(count), z = new Float64Array(count), recs = new Uint32Array(count);
+      for (let i = 0; i < count; i++) { x[i] = +X[i]; y[i] = +Y[i]; z[i] = +Z[i]; recs[i] = start + i; }
+      yield { x, y, z, recs, base: start, count };
     }
     return;
   }
@@ -3804,50 +3803,61 @@ async function openParquetBlocks(blob, name, opts = {}) {
   if (mapping.x == null || mapping.y == null || mapping.z == null) throw new Error('parquet: could not identify X/Y/Z centroid columns');
   if (mapping.chan != null && !_pqNum(typeOf[names[mapping.chan]])) mapping.chan = null;   // demote a text auto-chan
   if (mapping.cat == null) for (let i = 0; i < names.length; i++) { if (i === mapping.x || i === mapping.y || i === mapping.z || i === mapping.chan) continue; if (!_pqNum(typeOf[names[i]])) { mapping.cat = i; break; } }
-  $('#meta').textContent = `${name} — reading ${names.length} columns…`;
-  const colMap = await readParquetColumnMap(buf, names);
-  const cols = names.map((n) => colMap[n]);
-  const N = cols[0] ? cols[0].length : 0;
+  const xN = names[mapping.x], yN = names[mapping.y], zN = names[mapping.z];
+  const chanN = mapping.chan != null ? names[mapping.chan] : null, catN = mapping.cat != null ? names[mapping.cat] : null;
+  const N = info.rowCount;
   if (!N) throw new Error('parquet: empty table');
-  const X = cols[mapping.x], Y = cols[mapping.y], Z = cols[mapping.z];
-  // bbox + axis distincts → regular-grid inference (same as the delimited path)
+  // ── discovery: ONE streamed pass over the coord (+ cat) columns — a row
+  // group resident at a time, nothing retained. bbox could come from the
+  // footer stats; the distinct axes (grid pitch) need the values. ──
   const CAP = 100000, r10 = (v) => Number(v.toPrecision(10));
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   const ax = [new Set(), new Set(), new Set()];
-  for (let i = 0; i < N; i++) {
-    const xv = +X[i], yv = +Y[i], zv = +Z[i];
-    if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
-    if (xv < min[0]) min[0] = xv; if (xv > max[0]) max[0] = xv;
-    if (yv < min[1]) min[1] = yv; if (yv > max[1]) max[1] = yv;
-    if (zv < min[2]) min[2] = zv; if (zv > max[2]) max[2] = zv;
-    if (ax[0].size < CAP) ax[0].add(r10(xv)); if (ax[1].size < CAP) ax[1].add(r10(yv)); if (ax[2].size < CAP) ax[2].add(r10(zv));
+  const catSet = catN ? new Set() : null;
+  const discCols = catN ? [xN, yN, zN, catN] : [xN, yN, zN];
+  $('#meta').textContent = `${name} — discovering grid…`;
+  for await (const { count, cols } of streamParquetColumns(buf, discCols, info.rowGroups)) {
+    const X = cols[xN], Y = cols[yN], Z = cols[zN], C = catN ? cols[catN] : null;
+    for (let i = 0; i < count; i++) {
+      const xv = +X[i], yv = +Y[i], zv = +Z[i];
+      if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+      if (xv < min[0]) min[0] = xv; if (xv > max[0]) max[0] = xv;
+      if (yv < min[1]) min[1] = yv; if (yv > max[1]) max[1] = yv;
+      if (zv < min[2]) min[2] = zv; if (zv > max[2]) max[2] = zv;
+      if (ax[0].size < CAP) ax[0].add(r10(xv)); if (ax[1].size < CAP) ax[1].add(r10(yv)); if (ax[2].size < CAP) ax[2].add(r10(zv));
+      if (catSet && catSet.size <= 256) { const v = C[i]; if (v != null && v !== '') catSet.add(String(v)); }
+    }
+    await new Promise((res) => setTimeout(res));
   }
   const axes = ax.map((set) => (set.size < CAP ? inferAxis([...set].sort((a, b) => a - b)) : null));
   const grid = !opts.forcePoints && axes.every(Boolean) ? { x: axes[0], y: axes[1], z: axes[2] } : null;
-  // category dictionary from the cat column
-  let categories = null;
-  if (mapping.cat != null) { const set = new Set(); for (let i = 0; i < N && set.size <= 256; i++) { const v = cols[mapping.cat][i]; if (v != null && v !== '') set.add(String(v)); } if (set.size > 0 && set.size <= 255) categories = [...set].sort(); }
+  const categories = catSet && catSet.size > 0 && catSet.size <= 255 ? [...catSet].sort() : null;
   const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
   const numericColumns = names.map((n, i) => ({ name: n, i })).filter(({ i }) => i !== mapping.x && i !== mapping.y && i !== mapping.z && _pqNum(typeOf[names[i]]));
   const attributes = names.filter((_, i) => i !== mapping.x && i !== mapping.y && i !== mapping.z);
   const header = { kind: 'blocks', count: N, bbox: { min, max }, grid, columns: names, mapping, delim: ',', hasHeaderRow: true, numericColumns, categories, attributes, parquet: true };
-  async function* streamChunks({ chunkPoints = 1 << 18 } = {}) {
-    for (let start = 0; start < N; start += chunkPoints) {
-      const n = Math.min(chunkPoints, N - start);
-      const x = new Float64Array(n), y = new Float64Array(n), z = new Float64Array(n), chan = new Float64Array(n);
-      const cat = catCode ? new Uint8Array(n) : null, recIdx = new Uint32Array(n);
-      for (let i = 0; i < n; i++) {
-        const r = start + i;
-        x[i] = +X[r]; y[i] = +Y[r]; z[i] = +Z[r];
-        chan[i] = mapping.chan != null ? +cols[mapping.chan][r] : 0;
-        if (cat) cat[i] = catCode.get(String(cols[mapping.cat][r] ?? '')) ?? 0;
-        recIdx[i] = r;
+  // ── display: stream the coord + chan + cat columns row-group by row-group
+  // into the chunk builder; nothing decoded is retained after the chunk. ──
+  async function* streamChunks() {
+    const cnames = [xN, yN, zN, ...(chanN ? [chanN] : []), ...(catN ? [catN] : [])];
+    for await (const { start, count, cols } of streamParquetColumns(buf, cnames, info.rowGroups)) {
+      const X = cols[xN], Y = cols[yN], Z = cols[zN], CH = chanN ? cols[chanN] : null, CA = catN ? cols[catN] : null;
+      const x = new Float64Array(count), y = new Float64Array(count), z = new Float64Array(count), chan = new Float64Array(count);
+      const cat = catCode ? new Uint8Array(count) : null, recIdx = new Uint32Array(count);
+      for (let i = 0; i < count; i++) {
+        x[i] = +X[i]; y[i] = +Y[i]; z[i] = +Z[i];
+        chan[i] = CH ? +CH[i] : 0;
+        if (cat) cat[i] = catCode.get(String(CA[i] ?? '')) ?? 0;
+        recIdx[i] = start + i;
       }
-      yield { count: n, x, y, z, chan, cat, recIdx, recStart: start };
+      yield { count, x, y, z, chan, cat, recIdx, recStart: start };
       await new Promise((res) => setTimeout(res));
     }
   }
-  await openBlocksBlob(blob, name, { ...opts, provider: async () => ({ header, streamChunks, parquet: { cols, names } }) });
+  // the layer holds NO decoded columns — just the bytes, schema, and row-group
+  // table; pick/filter/eval re-read the source, a group at a time (like CSV)
+  const pq = { buf, names, mapping, rowGroups: info.rowGroups, coordNames: [xN, yN, zN], catName: catN, catCode };
+  await openBlocksBlob(blob, name, { ...opts, provider: async () => ({ header, streamChunks, parquet: pq }) });
 }
 // Block-model path (.csv etc.): two-sweep provider → regular grid → box impostors.
 // Not a regular grid → the points pipeline still shows the centroids.
@@ -4061,20 +4071,24 @@ async function applyBlockFilter(expr) {
   };
 
   if (fBlockDoc.parquet) {
-    // parquet: the columns are already in memory — a plain loop, raw numbering
-    const { cols } = fBlockDoc.parquet;
-    for (let r = 0; r < header.count; r++) {
-      const f = cols.map((c) => { const v = c[r]; return v == null ? '' : v; });
-      const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
-      if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
-      if (fn(extendRow(AL, f, r))) {
-        mask[r] = 1; hits++;
-        const code = catCode ? (catCode.get(String(f[m.cat] ?? '').trim()) ?? 0) : 0;
-        collect(xv, yv, zv, m.chan != null ? +f[m.chan] : 0, code, r);
+    // parquet: stream the columns a row group at a time — one group resident,
+    // raw record numbering. (column pruning by predicate is the next step.)
+    const P = fBlockDoc.parquet;
+    for await (const { start, count, cols } of streamParquetColumns(P.buf, P.names, P.rowGroups)) {
+      for (let i = 0; i < count; i++) {
+        const r = start + i;
+        const f = P.names.map((n) => { const v = cols[n][i]; return v == null ? '' : v; });
+        const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
+        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+        if (fn(extendRow(AL, f, r))) {
+          mask[r] = 1; hits++;
+          const code = catCode ? (catCode.get(String(f[m.cat] ?? '').trim()) ?? 0) : 0;
+          collect(xv, yv, zv, m.chan != null ? +f[m.chan] : 0, code, r);
+        }
       }
-      if ((r & 0x1FFFF) === 0x1FFFF) { await new Promise((r2) => setTimeout(r2)); if (epoch !== _filterEpoch) return; }
+      rec = start + count;
+      await new Promise((r2) => setTimeout(r2)); if (epoch !== _filterEpoch) return;
     }
-    rec = header.count;
   } else if (header.dm) {
     // .dm: decoded record batches, RAW record numbering (matches recIdx exactly)
     const { recordBatches } = await openDmModel(blob);
@@ -5276,7 +5290,7 @@ async function recordPosition(fullId) {
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
   if (dd) return dd.recordPosition(rec);
   const m = bd && bd.header.mapping;
-  if (bd && bd.parquet) { const c = bd.parquet.cols; return [+c[m.x][rec], +c[m.y][rec], +c[m.z][rec]]; }
+  if (bd && bd.parquet) { const row = await readParquetRow(bd.parquet.buf, rec); const cn = bd.parquet.coordNames; return row ? [+row[cn[0]], +row[cn[1]], +row[cn[2]]] : null; }
   if (bd && bd.header.dm) {
     const vals = await fetchDmRecord(bd.blob, bd.header.dm, rec);
     return [vals[m.x], vals[m.y], vals[m.z]];
@@ -5679,7 +5693,7 @@ async function fetchLayerRow(L, rec) {
     return [+(g.grid.x0 + c * g.grid.dx).toFixed(3), +(g.grid.y0 - r * g.grid.dy).toFixed(3), +g.grid.data[i].toFixed(3), r, c];
   }
   if (d.dhDoc) return d.dhDoc.fetchRecord(rec);
-  if (d.blockDoc && d.blockDoc.parquet) return d.blockDoc.parquet.cols.map((c) => { const v = c[rec]; return v == null ? '' : v; });
+  if (d.blockDoc && d.blockDoc.parquet) { const row = await readParquetRow(d.blockDoc.parquet.buf, rec); return row ? d.blockDoc.parquet.names.map((n) => { const v = row[n]; return v == null ? '' : v; }) : null; }
   if (d.blockDoc && d.blockDoc.header.dm) return await fetchDmRecord(d.blockDoc.blob, d.blockDoc.header.dm, rec);
   if (d.blockDoc) return await fetchCsvRecord(rec, d.blockDoc);
   if (d.plyDoc) return await d.plyDoc.fetchRecord(rec);
@@ -8007,7 +8021,10 @@ async function showRecord(fullId) {
     return;
   }
   if (bd && bd.parquet) {
-    const f = bd.parquet.cols.map((c) => { const v = c[rec]; return v == null ? '—' : v; });
+    showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, [], 'fetching…');
+    const row = await readParquetRow(bd.parquet.buf, rec);
+    if (!row) { showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, [], 'row not found'); return; }
+    const f = bd.header.columns.map((n) => { const v = row[n]; return v == null ? '—' : v; });
     const rows = bd.header.columns.map((nm, i) => [nm, f[i]]);
     appendCalcRows(rows, L, f, bd.header, rec);
     showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, rows);

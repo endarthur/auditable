@@ -69,6 +69,29 @@ export async function readParquetColumnMap(input, columns) {
   }
   return out;
 }
+// named columns for a ROW RANGE (one row group) as arrays — the streaming
+// primitive: hold nothing, decode a group at a time, only the columns asked for
+export async function readParquetRange(input, columns, rowStart, rowEnd) {
+  const out = {};
+  for (const name of columns) {
+    const col = [];
+    await parquetRead({ file: toAsyncBuffer(input), compressors: readCompressors, columns: [name], rowStart, rowEnd, onComplete: (rows) => { for (const r of rows) col.push(r[0]); } });
+    out[name] = col;
+  }
+  return out;
+}
+// stream the given columns row-group by row-group → { start, count, cols } —
+// one group resident at a time. rowGroups (from parquetInfo) can be passed to
+// skip re-parsing the footer each call.
+export async function* streamParquetColumns(input, columns, rowGroups) {
+  const groups = rowGroups || parquetInfo(input).rowGroups;
+  let start = 0;
+  for (const rg of groups) {
+    const count = rg.rowCount;
+    yield { start, count, cols: await readParquetRange(input, columns, start, start + count) };
+    start += count;
+  }
+}
 // one row (all columns) as an object — the pick join; reads only its row group
 export async function readParquetRow(input, index) {
   const rows = await readParquet(input, { rowStart: index, rowEnd: index + 1 });
