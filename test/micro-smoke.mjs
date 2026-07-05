@@ -217,6 +217,16 @@ const an = await p.evaluate(async () => {
 chk(`analysis: GT mean-above-min = 250 (${an.gtMean}), swath along X rises [${an.swX.map((v) => Math.round(v)).join(',')}]`,
   Math.abs(an.gtMean - 250) < 1e-9 && an.swX.length === 2 && Math.abs(an.swX[0] - 200) < 1e-9 && Math.abs(an.swX[1] - 300) < 1e-9);
 
+// linked brushing: a selection restricts the compute (high-FE half → min 300, tonnage halved)
+const lk = await p.evaluate(async () => {
+  const m = window._micro, A = m.layers().find((L) => L.name === 'A.csv');
+  const all = await m.computeGT(A, ['FE'], '', 10);
+  const sel = new Uint8Array(4); sel[2] = 1; sel[3] = 1;   // FE 300, 400 (recs 2,3)
+  const s = await m.computeGT(A, ['FE'], '', 10, null, sel);
+  return { allMin: all.gmin, allT: all.gt[0][0].tonnage, selMin: s.gmin, selT: s.gt[0][0].tonnage };
+});
+chk(`linked brushing: selection restricts GT (min ${lk.allMin}→${lk.selMin}, tonnage ${lk.selT}==${lk.allT}/2)`, lk.allMin === 100 && lk.selMin === 300 && lk.selT === lk.allT / 2);
+
 // ── 8. project round trip (OPFS) + auto-optimize on save: the CSV model is
 //    reordered to spatial Parquet in place at save time, and reopens as Parquet ──
 await p.evaluate(() => { window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('microsmoke', { create: true }); });

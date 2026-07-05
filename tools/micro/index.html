@@ -763,7 +763,7 @@ function pipTest(x, y, poly) {
 function clearSelection({ silent } = {}) {
   let had = false;
   for (const L of _layers) {
-    if (L._selMask) { had = true; L._selMask = null; L._selCount = 0; renderer.setLayerSelection(L.id, null); attrTableSelChanged(L.id); }
+    if (L._selMask) { had = true; L._selMask = null; L._selCount = 0; renderer.setLayerSelection(L.id, null); attrTableSelChanged(L.id); refreshLinkedWindows(L); }
   }
   if (had) { markProjectDirty(); requestRender(); if (!silent) $('#meta').textContent = 'selection cleared'; }
   return had;
@@ -776,6 +776,7 @@ function applyLayerSelection(L) {
   if (!c) L._selMask = null;
   renderer.setLayerSelection(L.id, c ? L._selMask : null);
   attrTableSelChanged(L.id);
+  refreshLinkedWindows(L);                                 // GT/swath windows tracking the selection recompute
 }
 function selectionStatus() {
   let total = 0, nL = 0;
@@ -2519,13 +2520,15 @@ function reconcilePairs(cols) {
 function numericColsOf(L) { const h = layerTableHeader(L); if (!h) return []; const m = h.mapping || {}; return h.columns.filter((_, i) => colIsNumeric(L, h, i) && ![m.x, m.y, m.z].includes(i)); }
 function blockVolumeOf(L) { const a = gridAxesOf(L); return a ? (Math.abs((a.x.pitch || 1) * (a.y.pitch || 1) * (a.z.pitch || 1)) || 1) : 1; }
 // grade-tonnage: for each series column, cutoff → (tonnage above, mean grade above)
-async function computeGT(L, cols, weightCol, nCut, onProgress) {
+async function computeGT(L, cols, weightCol, nCut, onProgress, selMask) {
   const h = layerTableHeader(L), idx = cols.map((n) => h.columns.indexOf(n));
   const wi = weightCol ? h.columns.indexOf(weightCol) : -1, vol = blockVolumeOf(L);
   const ser = cols.map(() => ({ g: [], w: [] }));
-  let gmin = Infinity, gmax = -Infinity, rc = 0;
+  let gmin = Infinity, gmax = -Infinity, rc = 0, rec = 0;
   for await (const batch of layerRows(L, null)) {
     for (const f of batch) {
+      const inSel = !selMask || (rec < selMask.length && selMask[rec]); rec++;
+      if (!inSel) continue;
       const wt = (wi >= 0 ? (+f[wi] || 0) : 1) * vol;
       for (let s = 0; s < idx.length; s++) { const v = +f[idx[s]]; if (Number.isFinite(v)) { ser[s].g.push(v); ser[s].w.push(wt); if (v < gmin) gmin = v; if (v > gmax) gmax = v; } }
     }
@@ -2552,15 +2555,17 @@ function openGradeTonnage(L) {
   const ex = _gtWins.get(L.id); if (ex) { ex.win.el.style.zIndex = ++_fwinZ; return; }
   const nums = numericColsOf(L); if (!nums.length) { $('#meta').textContent = 'grade-tonnage: no numeric column'; return; }
   const pairs = reconcilePairs(nums);
-  const st = { cols: pairs.length ? [pairs[0].ref, pairs[0].self] : [nums[0]], weight: '', nCut: 40, last: null };
+  const st = { cols: pairs.length ? [pairs[0].ref, pairs[0].self] : [nums[0]], weight: '', nCut: 40, scope: 'all', last: null };
   const win = floatWin({ title: `grade-tonnage · ${L.label || L.name}`, sub: '', x: Math.max(12, innerWidth - 500), y: 100, w: 470, h: 360, onClose: () => _gtWins.delete(L.id) });
   win.body.style.cssText += 'display:flex;flex-direction:column;gap:0';
   const cv = document.createElement('canvas'); cv.style.cssText = 'width:100%;flex:1;min-height:80px;display:block';
   const ctrls = document.createElement('div'); ctrls.className = 'awin-ctrls';
   win.body.append(cv, ctrls);
   const redraw = async () => {
+    if (st.scope === 'selection' && !(L._selMask && L._selCount)) { win.sub.textContent = 'no selection — brush the 3D'; plotChart(cv, { series: [] }); win._spec = null; return; }
+    const selMask = st.scope === 'selection' ? L._selMask : null;
     win.sub.textContent = 'computing…';
-    const res = await computeGT(L, st.cols, st.weight, st.nCut, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; });
+    const res = await computeGT(L, st.cols, st.weight, st.nCut, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; }, selMask);
     if (!res) { win.sub.textContent = 'no data'; return; }
     st.last = res;
     const spec = { xLabel: 'cutoff', leftLabel: res.weighted ? 'tonnage' : 'volume (m³)', rightLabel: 'mean grade', series: [] };
@@ -2569,7 +2574,7 @@ function openGradeTonnage(L) {
       spec.series.push({ name: `${c} · t`, color: col, axis: 'left', kind: 'line', data: res.gt[i].map((p) => [p.cut, p.tonnage]) });
       spec.series.push({ name: `${c} · grade`, color: col, axis: 'right', kind: 'line', data: res.gt[i].map((p) => [p.cut, p.grade]) });
     });
-    win.sub.textContent = `${res.weighted ? 'tonnage-weighted' : 'count'} · ${st.nCut} cutoffs`;
+    win.sub.textContent = `${st.scope === 'selection' ? 'selection · ' : ''}${res.weighted ? 'tonnage-weighted' : 'count'} · ${st.nCut} cutoffs`;
     plotChart(cv, spec); win._spec = spec;
   };
   win.el._onResized = () => { if (win._spec) plotChart(cv, win._spec); };
@@ -2579,10 +2584,21 @@ function openGradeTonnage(L) {
     const seriesBtn = document.createElement('button'); seriesBtn.className = 'awin-btn'; seriesBtn.textContent = `series: ${st.cols.join(', ')}`;
     seriesBtn.onclick = (e) => menuXY(e.clientX, e.clientY, nums2.map((c) => ({ label: (st.cols.includes(c) ? '✓ ' : '') + c, action: () => { if (st.cols.includes(c)) { if (st.cols.length > 1) st.cols = st.cols.filter((x) => x !== c); } else if (st.cols.length < 4) st.cols.push(c); buildCtrls(); redraw(); } })));
     const wSel = document.createElement('select'); { const o = document.createElement('option'); o.value = ''; o.textContent = 'count'; wSel.appendChild(o); } for (const c of nums2) { const o = document.createElement('option'); o.value = c; o.textContent = '× ' + c; wSel.appendChild(o); } wSel.value = st.weight; wSel.title = 'weight (density) — tonnage = weight × block volume'; wSel.onchange = () => { st.weight = wSel.value; redraw(); };
-    ctrls.append(seriesBtn, wSel);
+    ctrls.append(seriesBtn, wSel, scopeSeg(st, redraw));
   };
-  _gtWins.set(L.id, { win, redraw });
+  _gtWins.set(L.id, { win, redraw, st });
   buildCtrls(); redraw();
+}
+// the linked-brushing scope toggle: whole layer vs the current 3D selection
+function scopeSeg(st, redraw) {
+  const seg = document.createElement('div'); seg.className = 'pp-seg'; seg.title = 'whole layer, or just the 3D selection (updates as you select)';
+  for (const [v, t] of [['all', 'all'], ['selection', 'sel']]) { const bt = document.createElement('button'); bt.className = 'pp-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; for (const b2 of seg.children) b2.classList.toggle('on', b2 === bt); redraw(); }; seg.appendChild(bt); }
+  return seg;
+}
+// redraw open GT/swath windows bound to L when they track the selection
+function refreshLinkedWindows(L) {
+  if (!L) return;
+  for (const map of [_gtWins, _swathWins]) { const e = map.get(L.id); if (e && e.st && e.st.scope === 'selection') e.redraw(); }
 }
 // ── swath (drift) analysis ────────────────────────────────────────────────────
 // small vector helpers
@@ -2617,12 +2633,14 @@ function projRange(L, dir) {
   return [lo, hi];
 }
 // per band along dir: tonnage-weighted mean grade for each series + count/tonnage
-async function computeSwath(L, cols, dir, bandWidth, offset, weightCol, onProgress) {
+async function computeSwath(L, cols, dir, bandWidth, offset, weightCol, onProgress, selMask) {
   const h = layerTableHeader(L), m = h.mapping, idx = cols.map((n) => h.columns.indexOf(n));
   const wi = weightCol ? h.columns.indexOf(weightCol) : -1, vol = blockVolumeOf(L);
-  const bands = new Map(); let rc = 0;
+  const bands = new Map(); let rc = 0, rec = 0;
   for await (const batch of layerRows(L, null)) {
     for (const f of batch) {
+      const inSel = !selMask || (rec < selMask.length && selMask[rec]); rec++;
+      if (!inSel) continue;
       const x = +f[m.x], y = +f[m.y], z = +f[m.z]; if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
       const t = x * dir[0] + y * dir[1] + z * dir[2], bi = Math.floor((t - offset) / bandWidth);
       let e = bands.get(bi); if (!e) { e = { w: new Float64Array(cols.length), wg: new Float64Array(cols.length), tw: 0, n: 0 }; bands.set(bi, e); }
@@ -2641,7 +2659,7 @@ function openSwath(L) {
   const ex = _swathWins.get(L.id); if (ex) { ex.win.el.style.zIndex = ++_fwinZ; return; }
   const nums = numericColsOf(L); if (!nums.length) { $('#meta').textContent = 'swath: no numeric column'; return; }
   const pairs = reconcilePairs(nums);
-  const st = { mode: 'axes', axis: 0, dd: 90, dip: 45, rake: 0, trend: 0, plunge: 0, bandWidth: null, offset: null, weight: '', cols: pairs.length ? [pairs[0].ref, pairs[0].self] : [nums[0]], bars: 'count', zebra: false };
+  const st = { mode: 'axes', axis: 0, dd: 90, dip: 45, rake: 0, trend: 0, plunge: 0, bandWidth: null, offset: null, weight: '', cols: pairs.length ? [pairs[0].ref, pairs[0].self] : [nums[0]], bars: 'count', zebra: false, scope: 'all' };
   const win = floatWin({ title: `swath · ${L.label || L.name}`, sub: '', x: Math.max(12, innerWidth - 520), y: 130, w: 490, h: 380, onClose: () => { _swathWins.delete(L.id); if (st.zebra) clearSwathZebra(L); } });
   win.body.style.cssText += 'display:flex;flex-direction:column;gap:0';
   const cv = document.createElement('canvas'); cv.style.cssText = 'width:100%;flex:1;min-height:80px;display:block';
@@ -2652,13 +2670,16 @@ function openSwath(L) {
   const effWidth = () => { const dir = swathDir(st); if (st.bandWidth) return st.bandWidth; const [lo, hi] = projRange(L, dir); return Math.max(blockAlong(dir), niceStep((hi - lo) / 25) || 1); };
   const effOffset = () => { if (st.offset != null) return st.offset; const [lo] = projRange(L, swathDir(st)); return lo; };
   const redraw = async () => {
+    if (st.scope === 'selection' && !(L._selMask && L._selCount)) { win.sub.textContent = 'no selection — brush the 3D'; plotChart(cv, { series: [] }); win._spec = null; return; }
     const dir = swathDir(st), bw = effWidth(), off = effOffset();
+    const selMask = st.scope === 'selection' ? L._selMask : null;
     win.sub.textContent = 'computing…';
-    const res = await computeSwath(L, st.cols, dir, bw, off, st.weight, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; });
+    const res = await computeSwath(L, st.cols, dir, bw, off, st.weight, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; }, selMask);
+    if (!res.profile.length) { win.sub.textContent = 'no data'; plotChart(cv, { series: [] }); return; }
     const spec = { xLabel: `distance along ${st.mode === 'axes' ? AXIS_NAMES.axes[st.axis] : st.mode === 'oriented' ? AXIS_NAMES.oriented[st.axis] : `trend ${st.trend}/${st.plunge}`}`, leftLabel: 'mean grade', rightLabel: st.bars === 'tonnage' ? 'tonnage' : 'count', series: [] };
     spec.series.push({ name: st.bars, color: '#6a6f75', axis: 'right', kind: 'bar', data: res.profile.map((p) => [p.center, st.bars === 'tonnage' ? p.tonnage : p.count]) });
     st.cols.forEach((c, i) => spec.series.push({ name: c, color: SERIES_COLORS[i % SERIES_COLORS.length], axis: 'left', kind: 'line', data: res.profile.map((p) => [p.center, p.mean[i]]) }));
-    win.sub.textContent = `${res.profile.length} bands · ${bw.toPrecision(3)} m · ${res.weighted ? 'tonnage-wtd' : 'count'}`;
+    win.sub.textContent = `${st.scope === 'selection' ? 'selection · ' : ''}${res.profile.length} bands · ${bw.toPrecision(3)} m · ${res.weighted ? 'tonnage-wtd' : 'count'}`;
     plotChart(cv, spec); win._spec = spec;
     if (st.zebra) applySwathZebra(L, dir, bw, off);
   };
@@ -2683,8 +2704,9 @@ function openSwath(L) {
     const offL = document.createElement('label'); offL.textContent = 'offset'; const offI = document.createElement('input'); offI.type = 'number'; offI.step = 'any'; offI.style.width = '72px'; offI.value = String(+effOffset().toPrecision(6)); offI.title = 'where band 0 aligns (along the direction)'; offI.onchange = () => { st.offset = bwI.value === '' ? null : +offI.value; redraw(); }; offL.appendChild(offI); ctrls.append(offL);
     const wSel = document.createElement('select'); { const o = document.createElement('option'); o.value = ''; o.textContent = 'count'; wSel.appendChild(o); } for (const c of nums2) { const o = document.createElement('option'); o.value = c; o.textContent = '× ' + c; wSel.appendChild(o); } wSel.value = st.weight; wSel.title = 'weight (density)'; wSel.onchange = () => { st.weight = wSel.value; redraw(); }; ctrls.append(wSel);
     const zL = document.createElement('label'); const zc = document.createElement('input'); zc.type = 'checkbox'; zc.checked = st.zebra; zc.onchange = () => { st.zebra = zc.checked; if (st.zebra) applySwathZebra(L, swathDir(st), effWidth(), effOffset()); else clearSwathZebra(L); }; zL.append(zc, document.createTextNode('zebra')); zL.title = 'stripe alternate bands on the 3D view'; ctrls.append(zL);
+    ctrls.append(scopeSeg(st, redraw));
   };
-  _swathWins.set(L.id, { win, redraw });
+  _swathWins.set(L.id, { win, redraw, st });
   buildCtrls(); redraw();
 }
 // zebra: paint alternate swath bands as a 2-value column, coloured on the 3D
