@@ -502,7 +502,7 @@
   <div id="propPanel"><div class="rp-grab" id="ppGrab"></div><div class="rp-head"><span id="ppTitle">properties</span><button class="rp-close" id="ppClose">×</button></div><div class="pp-sub" id="ppSub"></div><div class="pp-tabs" id="ppTabs"></div><div class="pp-body" id="ppBody"></div><div class="pp-foot"><label title="apply style edits as you make them — uncheck to batch changes (each apply restarts accumulation on huge layers)"><input type="checkbox" id="ppAuto" checked>auto</label><span class="spacer"></span><button id="ppApply" disabled>apply</button><button id="ppRevert">revert</button></div></div>
   <div id="dhDlg"><div class="box"><div class="hd"><span>import drillholes</span><button id="dhCancel">×</button></div><div class="bd" id="dhDlgBody"></div><div class="dh-foot"><span id="dhDlgMsg"></span><button id="dhImport">Import</button></div></div></div>
   <div id="ofDlg"><div class="box"><div class="hd"><span>open files</span><button id="ofCancel">×</button></div><div class="bd" id="ofDlgBody"></div><div class="dh-foot"><button id="ofOpen">Open</button></div></div></div>
-  <div id="exDlg"><div class="box"><div class="hd"><span>export rows</span><button id="exCancel">×</button></div><div class="bd" id="exDlgBody"></div><div class="dh-foot"><span id="exDlgMsg"></span><button id="exGo">Export</button></div></div></div>
+  <div id="exDlg"><div class="box"><div class="hd"><span>export rows (CSV / Parquet)</span><button id="exCancel">×</button></div><div class="bd" id="exDlgBody"></div><div class="dh-foot"><span id="exDlgMsg"></span><button id="exGo">Export</button></div></div></div>
   <div id="svDlg"><div class="box"><div class="hd"><span>save project</span><button id="svCancel">×</button></div><div class="bd" id="svDlgBody"></div><div class="dh-foot"><button id="svLink">Link without copying</button><button id="svCopy">Copy into project</button></div></div></div>
   <div id="plDlg"><div class="box"><div class="hd"><span>opening project</span><button id="plClose">×</button></div><div class="bd" id="plDlgBody"></div></div></div>
   <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
@@ -530,7 +530,7 @@ import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribut
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
 import { readLFM, writeLFM } from '../../ext/lfm/lfm.js';   // Leapfrog model files (multi-mesh + colours)
 import { readGTiff, gridFromGTiff, gridWindowFromGTiff, gridDecimatedFromGTiff, stepForCap, windowForWorldBbox, pickOverviewForCap } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs + windowed/decimated reads (spec 7.1)
-import { parquetInfo, parquetInfoAsync, streamParquetColumns, readParquetRange, readParquetRow } from '../../ext/parquet/index.js';   // Apache Parquet block models (columnar, streamed row-group by row-group)
+import { parquetInfo, parquetInfoAsync, streamParquetColumns, readParquetRange, readParquetRow, writeParquet } from '../../ext/parquet/index.js';   // Apache Parquet block models (columnar, streamed row-group by row-group)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -1278,7 +1278,7 @@ function exportColumnsOf(L) {
   return cols;
 }
 let _exportEpoch = 0;
-async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimalComma = false, filename = 'export.csv', download = true } = {}) {
+async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimalComma = false, filename = 'export.csv', download = true, format = 'csv', codec = 'SNAPPY' } = {}) {
   const h = layerTableHeader(L); if (!h) return -1;
   const cols = exportColumnsOf(L);
   if (!colIdx) colIdx = cols.map((_, i) => i);
@@ -1296,6 +1296,8 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
     if (decimalComma && isNum && NUMRE.test(s)) return esc(s.replace('.', ','));
     return esc(s);
   };
+  const isParquet = format === 'parquet';
+  const pqCols = isParquet ? colIdx.map(() => []) : null;   // one array per exported column
   const parts = [colIdx.map((i) => esc(cols[i].name)).join(sep) + '\r\n'];
   let buf = [];
   const m = h.mapping || {};
@@ -1311,18 +1313,36 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
       const rAt = rec++;
       if (mask && !mask[rAt]) continue;
       const f = extendRow(L, isDm ? f0.map((v) => (v == null ? '' : v)) : f0, rAt);
-      let line = '';
-      for (let k = 0; k < colIdx.length; k++) line += (k ? sep : '') + fmt(f[colIdx[k]], numAt[k]);
-      buf.push(line);
+      if (isParquet) {
+        for (let k = 0; k < colIdx.length; k++) {
+          const v = f[colIdx[k]];
+          pqCols[k].push(numAt[k]
+            ? (v == null || v === '' || Number.isNaN(+v) ? null : +v)
+            : (v == null || v === '' ? null : String(v)));
+        }
+      } else {
+        let line = '';
+        for (let k = 0; k < colIdx.length; k++) line += (k ? sep : '') + fmt(f[colIdx[k]], numAt[k]);
+        buf.push(line);
+        if (buf.length >= 65536) { parts.push(buf.join('\r\n') + '\r\n'); buf = []; }
+      }
       written++;
-      if (buf.length >= 65536) { parts.push(buf.join('\r\n') + '\r\n'); buf = []; }
     }
     $('#meta').textContent = `export: ${written.toLocaleString()} rows…`;
     await new Promise((r) => setTimeout(r));
     if (epoch !== _exportEpoch) return -1;                 // superseded
   }
-  if (buf.length) parts.push(buf.join('\r\n') + '\r\n');
-  const blob = new Blob(parts, { type: 'text/csv' });
+  let blob;
+  if (isParquet) {
+    // stamp the document frame (origin + any CRS) so georeferencing round-trips
+    const kv = [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs || (L.docs.gridDoc && L.docs.gridDoc.grid.crs)) || null }) }];
+    const columnData = colIdx.map((i, k) => ({ name: cols[i].name, data: pqCols[k] }));
+    const bytes = writeParquet({ columnData, codec, rowGroupSize: 1 << 16, kvMetadata: kv });
+    blob = new Blob([bytes], { type: 'application/octet-stream' });
+  } else {
+    if (buf.length) parts.push(buf.join('\r\n') + '\r\n');
+    blob = new Blob(parts, { type: 'text/csv' });
+  }
   if (download) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1340,13 +1360,13 @@ function openExportDialog(L0) {
   const layers = _layers.filter((L) => layerTableHeader(L));
   if (!layers.length) { $('#meta').textContent = 'export: no table-backed layers (blocks or drillholes)'; return; }
   const L = L0 && layerTableHeader(L0) ? L0 : (activeLayer() && layerTableHeader(activeLayer()) ? activeLayer() : layers[0]);
-  _exDlg = { lid: L.id, scope: 'all', off: new Set(), delim: ',', dec: false, name: null };
+  _exDlg = { lid: L.id, scope: 'all', off: new Set(), delim: ',', dec: false, name: null, format: 'csv', codec: 'SNAPPY' };
   renderExportDialog();
   $('#exDlg').classList.add('show');
 }
-function exDefaultName(L) {
+function exDefaultName(L, format = 'csv') {
   const base = (L.label || L.name).replace(/\.[^.]+$/, '').replace(/[^\wÀ-ɏ .-]+/g, '_');
-  return `${base}_export.csv`;
+  return `${base}_export.${format === 'parquet' ? 'parquet' : 'csv'}`;
 }
 function renderExportDialog() {
   const d = _exDlg; if (!d) return;
@@ -1423,20 +1443,32 @@ function renderExportDialog() {
   allA.onclick = () => { for (const i of shown) d.off.delete(i); rebuildCols(); };
   noneA.onclick = () => { for (const i of shown) d.off.add(i); rebuildCols(); };
   rebuildCols();
-  // format
-  const dSel = document.createElement('select');
-  for (const [v, t] of [[',', 'comma ,'], [';', 'semicolon ;'], ['tab', 'tab']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; dSel.appendChild(o); }
-  dSel.value = d.delim;
-  dSel.onchange = () => { d.delim = dSel.value; };
-  const decLab = document.createElement('label');
-  const decCb = document.createElement('input'); decCb.type = 'checkbox'; decCb.checked = d.dec;
-  decCb.onchange = () => { d.dec = decCb.checked; };
-  decLab.append(decCb, 'decimal comma');
-  decLab.title = 'write 61,4 instead of 61.4 in numeric columns (pt-BR Excel)';
-  mkRow2('format', dSel, decLab);
+  // format: CSV (text) or Parquet (columnar, compressed)
+  const fRow = mkRow2('as');
+  for (const [k, lab] of [['csv', 'CSV'], ['parquet', 'Parquet']]) {
+    const l = document.createElement('label'); const rb = document.createElement('input'); rb.type = 'radio'; rb.name = 'exfmt'; rb.checked = d.format === k;
+    rb.onchange = () => { d.format = k; d.name = null; renderExportDialog(); };
+    l.append(rb, lab); fRow.appendChild(l);
+  }
+  if (d.format === 'parquet') {
+    const cSel = document.createElement('select');
+    for (const [v, t] of [['SNAPPY', 'snappy (fast)'], ['GZIP', 'gzip (smaller)'], ['UNCOMPRESSED', 'none']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; cSel.appendChild(o); }
+    cSel.value = d.codec; cSel.onchange = () => { d.codec = cSel.value; };
+    mkRow2('compression', cSel);
+  } else {
+    const dSel = document.createElement('select');
+    for (const [v, t] of [[',', 'comma ,'], [';', 'semicolon ;'], ['tab', 'tab']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; dSel.appendChild(o); }
+    dSel.value = d.delim; dSel.onchange = () => { d.delim = dSel.value; };
+    const decLab = document.createElement('label');
+    const decCb = document.createElement('input'); decCb.type = 'checkbox'; decCb.checked = d.dec;
+    decCb.onchange = () => { d.dec = decCb.checked; };
+    decLab.append(decCb, 'decimal comma');
+    decLab.title = 'write 61,4 instead of 61.4 in numeric columns (pt-BR Excel)';
+    mkRow2('delimiter', dSel, decLab);
+  }
   // filename
   const nameIn = document.createElement('input'); nameIn.type = 'text';
-  nameIn.value = d.name != null ? d.name : exDefaultName(L);
+  nameIn.value = d.name != null ? d.name : exDefaultName(L, d.format);
   nameIn.onchange = () => { d.name = nameIn.value; };
   mkRow2('file', nameIn);
   $('#exDlgMsg').textContent = '';
@@ -1452,7 +1484,7 @@ $('#exGo').onclick = async () => {
   btn.disabled = true;
   $('#exDlgMsg').textContent = 'sweeping…';
   try {
-    const n = await runExport(L, { scope: d.scope, colIdx, delim: d.delim, decimalComma: d.dec, filename: (d.name || exDefaultName(L)).trim() || exDefaultName(L) });
+    const n = await runExport(L, { scope: d.scope, colIdx, delim: d.delim, decimalComma: d.dec, format: d.format, codec: d.codec, filename: (d.name || exDefaultName(L, d.format)).trim() || exDefaultName(L, d.format) });
     if (n >= 0) { $('#exDlg').classList.remove('show'); _exDlg = null; }
   } finally { btn.disabled = false; }
 };
@@ -7277,6 +7309,16 @@ async function* layerRows(L, onProgress) {
     for await (const { rows } of recordBatches()) {
       yield rows;
       done += rows.length;
+      if (onProgress) onProgress(done, d.blockDoc.header.count);
+    }
+  } else if (d.blockDoc && d.blockDoc.parquet) {
+    const P = d.blockDoc.parquet;
+    let done = 0;
+    for await (const { count, cols } of streamParquetColumns(P.buf, P.names, P.rowGroups)) {
+      const rows = [];
+      for (let i = 0; i < count; i++) rows.push(P.names.map((n) => { const v = cols[n][i]; return v == null ? '' : v; }));
+      yield rows;
+      done += count;
       if (onProgress) onProgress(done, d.blockDoc.header.count);
     }
   } else if (d.blockDoc) {

@@ -25,7 +25,8 @@ export const writeCompressors = {
 // nulls). No page decode: this is the free "discovery" + the spatial-index
 // substrate. Returns typed columns + a row-group summary.
 export function parquetInfo(input) {
-  return infoFromMeta(parquetMetadata(input));
+  const ab = input instanceof Uint8Array ? input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength) : input;
+  return infoFromMeta(parquetMetadata(ab));
 }
 // like parquetInfo but RANGE-READS the footer from a File/Blob (or AsyncBuffer)
 // — for a census without pulling the whole file into memory (drag-drop preview)

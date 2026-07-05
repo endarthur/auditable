@@ -16,7 +16,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { writeParquet } from '../ext/parquet/index.js';
+import { writeParquet, parquetInfo } from '../ext/parquet/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -148,6 +148,14 @@ await p.waitForFunction(() => window._micro.layers().find((L) => L.name === 'mod
 const pqFilt = await p.evaluate(() => { const L = window._micro.layers().find((x) => x.name === 'model.parquet'); let h = 0; for (const m of L._filterMask || []) if (m) h++; return { h, skipped: window.__pqFilterSkipped || 0, groups: L.docs.blockDoc.parquet.rowGroups.length }; });
 chk(`Parquet filter ZC>655 → ${pqFilt.h} hits, ${pqFilt.skipped}/${pqFilt.groups} groups skipped by the footer`, pqFilt.h === 600 && pqFilt.skipped > 0);
 await p.evaluate(() => { const i = document.querySelector('#filter'); i.value = ''; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); });
+
+// ── 6b. export the model AS Parquet (compact, columnar) + read it back ──
+await p.evaluate(async () => { const m = window._micro; await m.runExport(m.layers().find((L) => L.name === 'model.csv'), { scope: 'all', format: 'parquet', codec: 'SNAPPY', download: false }); });
+const exBytes = await p.evaluate(async () => { const u = new Uint8Array(await window._lastExport.arrayBuffer()); let s = ''; for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s); });
+const exInfo = parquetInfo(Uint8Array.from(atob(exBytes), (c) => c.charCodeAt(0)));
+// includes the base columns AND the INBOX painted column from the flag step
+const exNames = exInfo.columns.map((c) => c.name);
+chk(`export as Parquet: ${exInfo.rowCount} rows, ${exInfo.codec}, cols [${exNames}]`, exInfo.rowCount === NBLOCKS && exInfo.codec === 'SNAPPY' && exNames.includes('XC') && exNames.includes('LITO') && exNames.includes('INBOX'));
 
 // ── 7. XYZ points fall through to the points pipeline ──
 await p.evaluate(() => { let s = ''; for (let i = 0; i < 200; i++) s += `${612000 + i} ${7765000 + i} ${650 + (i % 10)}\n`; return window._micro.openBlob(new Blob([s]), 'cloud.xyz', 'add'); });
