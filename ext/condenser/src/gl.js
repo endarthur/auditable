@@ -251,6 +251,11 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
 
   return {
     gl,
+    // background clear colour (also the figure/screenshot backdrop, since EDL
+    // passes through background pixels untouched). rgba 0-1; a moving frame
+    // re-clears so it takes effect next redraw.
+    setBackground(rgba) { if (rgba && rgba.length >= 3) { background[0] = rgba[0]; background[1] = rgba[1]; background[2] = rgba[2]; background[3] = rgba[3] != null ? rgba[3] : 1; needClear = true; } },
+    get background() { return [background[0], background[1], background[2], background[3]]; },
     get chunkCount() { return chunks.reduce((s, c) => s + (activeChunk(c) ? 1 : 0), 0); },
     get elementCount() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.count : 0), 0); },
     // ALL resident chunks (hidden layers + inactive sets included — they hold

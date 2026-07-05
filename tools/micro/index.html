@@ -6338,6 +6338,13 @@ function drawCompass() {
 // serves both (the live #decoCv and the export canvas). ──
 let _deco = (() => { try { return Object.assign({ scale: false, north: false, legend: false, title: false, titleText: '' }, JSON.parse(localStorage.getItem('micro.deco') || '{}')); } catch { return { scale: false, north: false, legend: false, title: false, titleText: '' }; } })();
 function saveDeco() { try { localStorage.setItem('micro.deco', JSON.stringify(_deco)); } catch { /* private mode */ } }
+// background colour (renderer clear + the figure backdrop). Decorations pick a
+// contrasting ink from its luminance, so white-bg report figures stay readable.
+let _bgColor = (() => { try { return localStorage.getItem('micro.bg') || '#121212'; } catch { return '#121212'; } })();
+let _deInk = { fg: '#fff', bg: 'rgba(0,0,0,0.6)' };
+function decoInk() { const c = hexToRgb01(_bgColor), lum = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]; return lum > 0.55 ? { fg: '#151515', bg: 'rgba(255,255,255,0.7)' } : { fg: '#fff', bg: 'rgba(0,0,0,0.6)' }; }
+function applyBg() { if (renderer && renderer.setBackground) { renderer.setBackground(hexToRgb01(_bgColor)); requestRender(); } }
+function setBg(hex) { if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return; _bgColor = hex; try { localStorage.setItem('micro.bg', hex); } catch { /* ignore */ } applyBg(); drawDecorations(); }
 function niceNum(x) { if (!(x > 0)) return 1; const e = Math.pow(10, Math.floor(Math.log10(x))), f = x / e; return (f >= 5 ? 5 : f >= 2 ? 2 : 1) * e; }
 function fmtLen(m) { return m >= 1000 ? +(m / 1000).toPrecision(3) + ' km' : (m < 1 ? +m.toPrecision(2) : +m.toFixed(m < 10 ? 1 : 0)) + ' m'; }
 function worldPerPixel() {
@@ -6349,8 +6356,8 @@ function worldPerPixel() {
   const px = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
   return px > 1e-6 ? 1 / px : null;
 }
-const _stroked = (g, fn, lw) => { g.lineWidth = lw + 2; g.strokeStyle = 'rgba(0,0,0,0.6)'; fn(); g.lineWidth = lw; g.strokeStyle = '#fff'; fn(); };
-const _label = (g, txt, x, y) => { g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,0.65)'; g.strokeText(txt, x, y); g.fillStyle = '#fff'; g.fillText(txt, x, y); };
+const _stroked = (g, fn, lw) => { g.lineWidth = lw + 2; g.strokeStyle = _deInk.bg; fn(); g.lineWidth = lw; g.strokeStyle = _deInk.fg; fn(); };
+const _label = (g, txt, x, y) => { g.lineWidth = 3; g.strokeStyle = _deInk.bg; g.strokeText(txt, x, y); g.fillStyle = _deInk.fg; g.fillText(txt, x, y); };
 function drawScaleBar(g, W, H) {
   const wpp = worldPerPixel(); if (!wpp || !Number.isFinite(wpp)) return;
   const barWorld = niceNum(W * 0.18 * wpp), barPx = barWorld / wpp, x = 16, y = H - 22;
@@ -6390,6 +6397,7 @@ function drawLegendDeco(g, W, H) {
   }
 }
 function renderDeco(g, W, H) {
+  _deInk = decoInk();
   if (_deco.scale) drawScaleBar(g, W, H);
   if (_deco.north) drawNorthArrow(g, W, H);
   if (_deco.legend) drawLegendDeco(g, W, H);
@@ -6427,10 +6435,19 @@ function decorationsMenu(anchorEl) {
     { label: (_deco.title ? '✓ ' : '') + 'Title', action: () => setDeco('title', !_deco.title) },
     { sep: true },
     { label: 'Set title…', action: async () => { const t = await microPrompt('figure title', _deco.titleText || ''); if (t != null) { _deco.titleText = t; _deco.title = !!t; saveDeco(); drawDecorations(); } } },
+    { label: `Background ▸`, action: () => setTimeout(() => menuXY(r.left + 150, r.bottom + 2, [
+      { label: (_bgColor === '#121212' ? '✓ ' : '') + 'Basalt (default)', action: () => setBg('#121212') },
+      { label: (_bgColor === '#000000' ? '✓ ' : '') + 'Black', action: () => setBg('#000000') },
+      { label: (_bgColor === '#ffffff' ? '✓ ' : '') + 'White (print)', action: () => setBg('#ffffff') },
+      { label: (_bgColor === '#f4f2ec' ? '✓ ' : '') + 'Paper', action: () => setBg('#f4f2ec') },
+      { sep: true },
+      { label: 'Custom…', action: async () => { const v = ((await microPrompt('background (hex)', _bgColor)) || '').trim(); if (/^#?[0-9a-fA-F]{6}$/.test(v)) setBg(v.startsWith('#') ? v : '#' + v); } },
+    ]), 0) },
     { sep: true },
     { label: 'Export figure (PNG)…', action: () => exportFigure() },
   ]);
 }
+applyBg();                                                 // restore the saved background at boot
 $('#compass').addEventListener('click', () => setView(-Math.PI / 2, PHI_MAX));   // plan, north up
 $('#compass').addEventListener('pointerdown', (e) => e.stopPropagation());       // don't start an orbit
 // corner + size, persisted; the same menu hangs off right-click and View → Compass…
@@ -6537,6 +6554,7 @@ const COMMANDS = [
   { id: 'deconorth', group: 'View', title: 'Toggle north arrow', kw: 'decoration compass', run: () => setDeco('north', !_deco.north) },
   { id: 'decolegend', group: 'View', title: 'Toggle legend', kw: 'decoration ramp colours key', run: () => setDeco('legend', !_deco.legend) },
   { id: 'decotitle', group: 'View', title: 'Set figure title…', kw: 'decoration caption', run: async () => { const t = await microPrompt('figure title', _deco.titleText || ''); if (t != null) { _deco.titleText = t; _deco.title = !!t; saveDeco(); drawDecorations(); } } },
+  { id: 'bg', group: 'View', title: 'Background colour…', kw: 'clear white black print paper', run: async () => { const v = ((await microPrompt('background (hex) — e.g. #ffffff for print', _bgColor)) || '').trim(); if (/^#?[0-9a-fA-F]{6}$/.test(v)) setBg(v.startsWith('#') ? v : '#' + v); } },
   { id: 'fit', group: 'View', title: 'Fit view', kw: 'zoom extent', run: () => $('#btnFit').click() },
   { id: 'plan', group: 'View', title: 'Plan view (looking down)', kw: 'top', run: () => setView(cam.state.theta, PHI_MAX) },
   { id: 'section', group: 'View', title: 'Section on / off', kw: 'slice clip', run: () => toggleSection() },
@@ -9340,7 +9358,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, exportFigure, drawDecorations, decorationsMenu, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, exportFigure, drawDecorations, decorationsMenu, setBg, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

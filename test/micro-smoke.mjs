@@ -129,6 +129,13 @@ const deco = await p.evaluate(async () => {
   return { drawn, painted, png: !!buf && buf[0] === 0x89 && buf[1] === 0x50, size: fb ? fb.size : 0 };
 });
 chk(`decorations overlay draws (${deco.painted} px) + figure export → PNG (${deco.size} bytes)`, deco.drawn && deco.painted > 100 && deco.png && deco.size > 1000);
+// background colour: clears to white then back to basalt (flows through EDL)
+const bg = await p.evaluate(async () => {
+  const sample = async () => { await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); const cv = document.querySelector('#cv'), c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0); const d = g.getImageData(2, 2, 1, 1).data; return [d[0], d[1], d[2]]; };
+  window._micro.setBg('#ffffff'); const w = await sample(); window._micro.setBg('#121212'); const d = await sample();
+  return { w, d, bgApi: window._micro.renderer.background[0] < 0.2 };
+});
+chk(`background colour: white [${bg.w}] → basalt [${bg.d}]`, bg.w[0] > 240 && bg.d[0] < 40 && bg.bgApi);
 
 // ── 2. pick reads a record ──
 await p.evaluate(() => { document.querySelector('#compass').dispatchEvent(new MouseEvent('click')); document.querySelector('#btnFit').click(); const px = document.querySelector('#ptPx'); px.value = 6; px.dispatchEvent(new Event('input')); });
