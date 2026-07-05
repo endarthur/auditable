@@ -182,26 +182,26 @@
   #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: calc(var(--recw, 280px) + 12px); }
   #propPanel.show ~ #compass.se, #propPanel.show ~ #compass.ne { right: calc(var(--ppw, 272px) + 12px); }
   #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: calc(var(--lpw, 224px) + 12px); }
-  #dhDlg, #ofDlg, #exDlg, #sbDlg, #svDlg, #plDlg, #adDlg, #rgDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
-  #dhDlg.show, #ofDlg.show, #exDlg.show, #sbDlg.show, #svDlg.show, #plDlg.show, #adDlg.show, #rgDlg.show { display: flex; }
-  #exDlg .box, #sbDlg .box, #svDlg .box, #plDlg .box, #adDlg .box, #rgDlg .box { width: min(480px, 94vw); max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
-  #exDlg .hd, #sbDlg .hd, #svDlg .hd, #plDlg .hd, #adDlg .hd, #rgDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
-  #exDlg .hd button, #sbDlg .hd button, #svDlg .hd button, #plDlg .hd button, #adDlg .hd button, #rgDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
-  #exDlg .bd, #sbDlg .bd, #svDlg .bd, #plDlg .bd, #adDlg .bd, #rgDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
-  #exDlg .ex-row, #sbDlg .ex-row, #adDlg .ex-row, #rgDlg .ex-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-  #exDlg .ex-row > b, #sbDlg .ex-row > b, #adDlg .ex-row > b, #rgDlg .ex-row > b { color: var(--text-hi); width: 66px; font-weight: normal; flex: 0 0 auto; }
-  #exDlg .ex-row label, #sbDlg .ex-row label, #adDlg .ex-row label, #rgDlg .ex-row label { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+  #dhDlg, #ofDlg, #exDlg, #sbDlg, #svDlg, #plDlg, #adDlg, #rgDlg, #ngDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
+  #dhDlg.show, #ofDlg.show, #exDlg.show, #sbDlg.show, #svDlg.show, #plDlg.show, #adDlg.show, #rgDlg.show, #ngDlg.show { display: flex; }
+  #exDlg .box, #sbDlg .box, #svDlg .box, #plDlg .box, #adDlg .box, #rgDlg .box, #ngDlg .box { width: min(480px, 94vw); max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #exDlg .hd, #sbDlg .hd, #svDlg .hd, #plDlg .hd, #adDlg .hd, #rgDlg .hd, #ngDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #exDlg .hd button, #sbDlg .hd button, #svDlg .hd button, #plDlg .hd button, #adDlg .hd button, #rgDlg .hd button, #ngDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #exDlg .bd, #sbDlg .bd, #svDlg .bd, #plDlg .bd, #adDlg .bd, #rgDlg .bd, #ngDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  #exDlg .ex-row, #sbDlg .ex-row, #adDlg .ex-row, #rgDlg .ex-row, #ngDlg .ex-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  #exDlg .ex-row > b, #sbDlg .ex-row > b, #adDlg .ex-row > b, #rgDlg .ex-row > b, #ngDlg .ex-row > b { color: var(--text-hi); width: 66px; font-weight: normal; flex: 0 0 auto; }
+  #exDlg .ex-row label, #sbDlg .ex-row label, #adDlg .ex-row label, #rgDlg .ex-row label, #ngDlg .ex-row label { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
   #exDlg .ex-row label.dis, #sbDlg .ex-row label.dis, #adDlg .ex-row label.dis, #adDlg label.dis { opacity: 0.45; }
-  #exDlg select, #exDlg input[type="text"], #sbDlg select, #sbDlg input[type="text"], #adDlg select, #adDlg input[type="text"], #rgDlg input { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
+  #exDlg select, #exDlg input[type="text"], #sbDlg select, #sbDlg input[type="text"], #adDlg select, #adDlg input[type="text"], #rgDlg input, #ngDlg input, #ngDlg select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
   #exDlg input[type="text"], #sbDlg input[type="text"] { flex: 1; min-width: 120px; }
   #exDlg .ex-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; margin: 4px 0 10px 76px; max-height: 180px; overflow-y: auto; }
   #exDlg .ex-cols label { color: var(--muted); display: flex; align-items: center; gap: 5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   #exDlg .ex-cols .bdg { color: var(--accent); flex: 0 0 auto; font-size: 11px; }
   #exDlg .ex-links { margin-left: 76px; margin-bottom: 4px; }
   #exDlg .ex-links a { color: var(--accent); cursor: pointer; margin-right: 12px; }
-  #exDlg .dh-foot, #sbDlg .dh-foot, #svDlg .dh-foot, #adDlg .dh-foot, #rgDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
-  #exDlg .dh-foot #exDlgMsg, #sbDlg .dh-foot #sbDlgMsg, #adDlg .dh-foot #adDlgMsg, #rgDlg .dh-foot #rgDlgMsg { color: var(--muted); font-family: var(--mono); font-size: 12px; }
-  #exDlg .dh-foot button, #sbDlg .dh-foot button, #svDlg .dh-foot button, #adDlg .dh-foot button, #rgDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
+  #exDlg .dh-foot, #sbDlg .dh-foot, #svDlg .dh-foot, #adDlg .dh-foot, #rgDlg .dh-foot, #ngDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
+  #exDlg .dh-foot #exDlgMsg, #sbDlg .dh-foot #sbDlgMsg, #adDlg .dh-foot #adDlgMsg, #rgDlg .dh-foot #rgDlgMsg, #ngDlg .dh-foot #ngDlgMsg { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  #exDlg .dh-foot button, #sbDlg .dh-foot button, #svDlg .dh-foot button, #adDlg .dh-foot button, #rgDlg .dh-foot button, #ngDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
   #svDlg #svLink { border-color: var(--bd2); color: var(--text); }
   .pl-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
   .pl-row .nm { flex: 0 0 auto; color: var(--text-hi); max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -507,6 +507,7 @@
   <div id="plDlg"><div class="box"><div class="hd"><span>opening project</span><button id="plClose">×</button></div><div class="bd" id="plDlgBody"></div></div></div>
   <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
   <div id="adDlg"><div class="box"><div class="hd"><span>assign domains</span><button id="adCancel">×</button></div><div class="bd" id="adDlgBody"></div><div id="adProg" style="display:none"><div id="adProgFill"></div></div><div class="dh-foot"><span id="adDlgMsg"></span><button id="adGo">Assign</button></div></div></div>
+  <div id="ngDlg"><div class="box"><div class="hd"><span>new grid / block model</span><button id="ngCancel">×</button></div><div class="bd" id="ngDlgBody"></div><div class="dh-foot"><span id="ngDlgMsg"></span><button id="ngGo">Create</button></div></div></div>
   <div id="rgDlg"><div class="box"><div class="hd"><span>mesh → grid</span><button id="rgCancel">×</button></div><div class="bd" id="rgDlgBody"></div><div class="dh-foot"><span id="rgDlgMsg"></span><button id="rgGo">Rasterize</button></div></div></div>
   <div id="pmDlg"><div class="box"><div class="hd"><span id="pmTitle">name</span><button id="pmCancel">×</button></div><div class="bd"><div id="pmMsg" style="display:none"></div><input id="pmInput" type="text" spellcheck="false" autocomplete="off"></div><div class="dh-foot"><button id="pmOk">OK</button></div></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
@@ -2435,6 +2436,39 @@ $('#sbGo').onclick = async () => {
   }
 };
 
+// ── an empty grid or block model — a canvas to domain / rasterize into, from
+// parameters or covering existing layers ──
+function layerWorldBbox(L) {
+  if (!L || !L.bboxLocal || !frame) return null;
+  const b = L.bboxLocal, o = frame.origin;
+  return [b[0] + o[0], b[1] + o[1], b[2] + o[2], b[3] + o[0], b[4] + o[1], b[5] + o[2]];
+}
+function unionWorldBbox(list) {
+  let u = null;
+  for (const b of list) { if (!b) continue; if (!u) u = b.slice(); else for (let i = 0; i < 3; i++) { if (b[i] < u[i]) u[i] = b[i]; if (b[i + 3] > u[i + 3]) u[i + 3] = b[i + 3]; } }
+  return u;
+}
+function buildEmptyGrid({ x0, y0, dx, nx, ny, fill = 0 }) {
+  return { nx, ny, x0, y0, dx, dy: dx, data: new Float32Array(nx * ny).fill(fill), nodata: -9999, crs: null, form: 'empty' };
+}
+// an empty regular block model as a CSV blob (XC,YC,ZC + one constant column);
+// x0/y0/z0 are the block-0 CENTRE. Chunked so a big lattice keeps the UI alive.
+async function buildEmptyBlockCsv({ x0, y0, z0, dx, dy, dz, nx, ny, nz, fill = 0, valName = 'VAL', onProgress = null }) {
+  const parts = [`XC,YC,ZC,${valName}\n`];
+  let buf = '';
+  const total = nz;
+  for (let k = 0; k < nz; k++) {
+    const z = z0 + k * dz;
+    for (let j = 0; j < ny; j++) {
+      const y = y0 + j * dy;
+      for (let i = 0; i < nx; i++) buf += `${x0 + i * dx},${y},${z},${fill}\n`;
+    }
+    if (buf.length > (1 << 22)) { parts.push(buf); buf = ''; }
+    if (onProgress && (k & 7) === 0) { onProgress((k + 1) / total); await new Promise((r) => setTimeout(r)); }
+  }
+  if (buf) parts.push(buf);
+  return new Blob(parts, { type: 'text/csv' });
+}
 // mesh → grid dialog: pick a cell size (default from the mesh bbox), see the
 // resulting node count live, choose the top or bottom surface, rasterize
 let _rgDlg = null;
@@ -2496,6 +2530,116 @@ function exportGridAsc(L) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   $('#meta').textContent = `exported ${a.download} (${g.nx}×${g.ny})`;
 }
+// New grid / block model dialog: type + extent (parameters or cover a layer /
+// group / all layers) + cell/block size + fill; live count tally
+let _ngDlg = null;
+function ngGroups() {
+  const gs = [];
+  const walk = (arr) => { for (const nd of arr) if (typeof nd !== 'number' && nd.group) { gs.push(nd); walk(nd.children); } };
+  walk(_layerTree);
+  return gs;
+}
+function ngSourceBbox(d) {
+  if (d.src === 'all') return unionWorldBbox(_layers.map(layerWorldBbox));
+  if (d.src && d.src[0] === 'G') { const g = ngGroups()[+d.src.slice(1)]; return g ? unionWorldBbox(groupLayerIds(g).map((id) => layerWorldBbox(layerById(id)))) : null; }
+  return d.src ? layerWorldBbox(layerById(+d.src.slice(1))) : null;
+}
+function openNewDialog() {
+  const bb = _docBbox && frame ? unionWorldBbox(_layers.map(layerWorldBbox)) : null;
+  _ngDlg = {
+    type: 'grid', mode: _layers.length ? 'cover' : 'params',
+    src: _layers.length ? 'all' : null,
+    x0: bb ? +bb[0].toFixed(2) : 0, y0: bb ? +bb[4].toFixed(2) : 0, z0: bb ? +bb[2].toFixed(2) : 0,
+    dx: 10, dy: 10, dz: 10, nx: 50, ny: 50, nz: 20, fill: 0, valName: 'VAL',
+  };
+  renderNewDialog();
+  $('#ngDlg').classList.add('show');
+}
+function renderNewDialog() {
+  const d = _ngDlg; if (!d) return;
+  const body = $('#ngDlgBody'); body.textContent = '';
+  const isBM = d.type === 'block';
+  const row = (label, ...els) => { const r = document.createElement('div'); r.className = 'ex-row'; const b = document.createElement('b'); b.textContent = label; r.append(b, ...els); body.appendChild(r); return r; };
+  const num = (key, w = 90) => { const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any'; inp.value = String(d[key]); inp.style.width = w + 'px'; inp.oninput = () => { d[key] = +inp.value; updTally(); }; return inp; };
+  const radios = (r, group, pairs, cur, pick) => { for (const [k, lab] of pairs) { const l = document.createElement('label'); const rb = document.createElement('input'); rb.type = 'radio'; rb.name = group; rb.checked = cur === k; rb.onchange = () => { pick(k); }; l.append(rb, lab); r.appendChild(l); } };
+  radios(row('type'), 'ngtype', [['grid', 'grid (heightfield)'], ['block', 'block model']], d.type, (k) => { d.type = k; renderNewDialog(); });
+  const modes = _layers.length ? [['cover', 'cover a layer'], ['params', 'from parameters']] : [['params', 'from parameters']];
+  radios(row('extent'), 'ngmode', modes, d.mode, (k) => { d.mode = k; renderNewDialog(); });
+  if (d.mode === 'cover') {
+    const sel = document.createElement('select');
+    const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); };
+    add('all', 'all layers');
+    ngGroups().forEach((g, i) => add('G' + i, `▸ group: ${g.name}`));
+    for (const L of _layers) add('L' + L.id, L.label || L.name);
+    sel.value = d.src || 'all';
+    sel.onchange = () => { d.src = sel.value; updTally(); };
+    row('source', sel);
+  } else {
+    row(isBM ? 'origin X,Y,Z' : 'origin X,Y', num('x0'), num('y0'), ...(isBM ? [num('z0')] : []));
+    row(isBM ? 'counts' : 'counts', num('nx', 64), num('ny', 64), ...(isBM ? [num('nz', 64)] : []));
+  }
+  if (isBM) row('block (m)', num('dx', 60), num('dy', 60), num('dz', 60));
+  else row('cell (m)', num('dx', 90));
+  const fillRow = row(isBM ? 'fill VAL' : 'fill Z', num('fill'));
+  if (isBM) { const nm = document.createElement('input'); nm.type = 'text'; nm.value = d.valName; nm.style.width = '80px'; nm.oninput = () => { d.valName = nm.value.trim() || 'VAL'; }; fillRow.append(document.createTextNode(' column '), nm); }
+  const tally = document.createElement('div'); tally.className = 'pp-note'; tally.id = 'ngTally'; body.appendChild(tally);
+  function dims() {
+    if (d.mode === 'cover') {
+      const bb = ngSourceBbox(d);
+      if (!bb) return null;
+      const nx = Math.max(1, Math.floor((bb[3] - bb[0]) / d.dx) + 1);
+      const ny = Math.max(1, Math.floor((bb[4] - bb[1]) / (isBM ? d.dy : d.dx)) + 1);
+      const nz = isBM ? Math.max(1, Math.floor((bb[5] - bb[2]) / d.dz) + 1) : 1;
+      return { nx, ny, nz, bb };
+    }
+    return { nx: Math.max(1, d.nx | 0), ny: Math.max(1, d.ny | 0), nz: isBM ? Math.max(1, d.nz | 0) : 1 };
+  }
+  function updTally() {
+    const dd = dims();
+    if (!dd) { tally.textContent = 'this source has no bounding box yet'; $('#ngGo').disabled = true; return; }
+    $('#ngGo').disabled = false;
+    const tot = dd.nx * dd.ny * dd.nz;
+    tally.textContent = isBM
+      ? `= ${dd.nx}×${dd.ny}×${dd.nz} = ${tot.toLocaleString()} blocks`
+      : `= ${dd.nx}×${dd.ny} = ${tot.toLocaleString()} nodes`;
+  }
+  updTally();
+  $('#ngDlgMsg').textContent = '';
+}
+$('#ngCancel').onclick = () => { $('#ngDlg').classList.remove('show'); _ngDlg = null; };
+$('#ngGo').onclick = async () => {
+  const d = _ngDlg; if (!d) return;
+  const isBM = d.type === 'block';
+  let x0, y0, z0, nx, ny, nz;
+  if (d.mode === 'cover') {
+    const bb = ngSourceBbox(d);
+    if (!bb) { $('#ngDlgMsg').textContent = 'no bounding box'; return; }
+    nx = Math.max(1, Math.floor((bb[3] - bb[0]) / d.dx) + 1);
+    ny = Math.max(1, Math.floor((bb[4] - bb[1]) / (isBM ? d.dy : d.dx)) + 1);
+    nz = isBM ? Math.max(1, Math.floor((bb[5] - bb[2]) / d.dz) + 1) : 1;
+    // grid: node 0 at the min corner; block model: block-0 CENTRE = min + size/2
+    x0 = isBM ? bb[0] + d.dx / 2 : bb[0];
+    y0 = isBM ? bb[1] + d.dy / 2 : bb[4];               // grid y0 = top (max Y)
+    z0 = bb[2] + d.dz / 2;
+  } else {
+    nx = Math.max(1, d.nx | 0); ny = Math.max(1, d.ny | 0); nz = isBM ? Math.max(1, d.nz | 0) : 1;
+    x0 = d.x0; y0 = d.y0; z0 = d.z0;
+  }
+  const btn = $('#ngGo'); btn.disabled = true;
+  for (const el of $('#ngDlgBody').querySelectorAll('input, select')) el.disabled = true;
+  try {
+    if (isBM) {
+      $('#ngDlgMsg').textContent = 'building…';
+      const blob = await buildEmptyBlockCsv({ x0, y0, z0, dx: d.dx, dy: d.dy, dz: d.dz, nx, ny, nz, fill: d.fill, valName: d.valName, onProgress: (f) => { $('#ngDlgMsg').textContent = `building ${Math.round(f * 100)}%…`; } });
+      await openBlob(blob, 'new_model.csv', _layers.length ? 'add' : 'replace');
+    } else {
+      const grid = buildEmptyGrid({ x0, y0, dx: d.dx, nx, ny, fill: d.fill });
+      await openBlob(new Blob([writeEsriAsc(grid)]), 'new_grid.asc', _layers.length ? 'add' : 'replace');
+    }
+    $('#ngDlg').classList.remove('show'); _ngDlg = null;
+  } catch (e) { $('#ngDlgMsg').textContent = e.message; }
+  finally { btn.disabled = false; for (const el of $('#ngDlgBody').querySelectorAll('input, select')) el.disabled = false; }
+};
 // screenshot: the canvas is the export surface (preserveDrawingBuffer is on)
 $('#btnShot').onclick = () => {
   cv.toBlob((blob) => {
@@ -2809,7 +2953,7 @@ async function meshToGridLayer(meshL, { cell, keep = 'top' } = {}) {
   });
   const base = (meshL.label || meshL.name).replace(/\.[^.]+$/, '');
   const blob = new Blob([writeEsriAsc(grid)]);
-  await openGridBlob(blob, `${base}.asc`, { first: _layers.length === 0 });
+  await openBlob(blob, `${base}.asc`, _layers.length ? 'add' : 'replace');
   return grid;
 }
 async function openGridBlob(blob, name, opts = {}) {
@@ -4639,6 +4783,7 @@ const openPropsTab = (tab) => {
 };
 $('#mData').onclick = () => menuAt($('#mData'), [
   { label: 'Import drillholes…', action: () => openDhDialog(null) },
+  { label: 'New grid / block model…', action: () => openNewDialog() },
   { sep: true },
   { label: 'Layer properties…', action: () => { if (_layers.length) openProps(); } },
   { label: 'Source (mapping / desurvey)…', action: () => openPropsTab('source') },
@@ -7598,7 +7743,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, writeEsriAsc, exportGridAsc, openMeshGridDialog, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, writeEsriAsc, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, openGridBlob, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
