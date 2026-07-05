@@ -1,0 +1,8 @@
+{
+  "name": "@gcu/gtiff",
+  "version": "0.1.0",
+  "description": "Minimal WASM-free GeoTIFF reader — classic TIFF, strips+tiles, none/LZW/deflate/PackBits, predictors 2+3, overview pyramid, geo identity (scale+tiepoint+EPSG, never reprojection)",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT"
+}
