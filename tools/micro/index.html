@@ -2604,6 +2604,21 @@ async function exportGridAsc(L) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   $('#meta').textContent = `exported ${a.download} (${g.nx}×${g.ny})`;
 }
+// write the decimated display grid + a size-key as sidecars next to a
+// project-stored tiff, so reopening skips re-decimating the source. Returns a
+// reason string on skip, null on success.
+async function writeGridDisplayCache(L, dir) {
+  const gd = L.docs.gridDoc;
+  if (!gd || !gd.source || gd.fullRes) return 'no decimated display to cache';
+  if (L.storage !== 'project') return 'grid must be copied into the project first';
+  const g = gd.grid;
+  if (g.nx > 32767 || g.ny > 32767) return 'display too large for the Surfer cache';
+  const gh = await dir.getFileHandle(L.name + '.disp.grd', { create: true });
+  let w = await gh.createWritable(); await w.write(writeSurferGrd(g)); await w.close();
+  const jh = await dir.getFileHandle(L.name + '.disp.json', { create: true });
+  w = await jh.createWritable(); await w.write(JSON.stringify({ v: 1, size: gd.blob.size, nx: g.nx, ny: g.ny })); await w.close();
+  return null;
+}
 // New grid / block model dialog: type + extent (parameters or cover a layer /
 // group / all layers) + cell/block size + fill; live count tally
 let _ngDlg = null;
@@ -2842,7 +2857,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
     // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
     // so grid inference must not promote them to boxes.
-    else if (/\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first }); }
+    else if (/\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache }); }
     else if (/\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first }); }
     else if (/\.(xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { forcePoints: true, layer: lid, first, mapping: over.mapping, discovered: over.discovered }); }
     else if (/\.(csv|txt|dat|asc)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints: over.forcePoints, mapping: over.mapping, discovered: over.discovered }); }
@@ -2881,6 +2896,25 @@ function registerDocs(lid, kind) {
 // { nx, ny, data, x0, y0, dx, dy, nodata, crs, form } — row 0 is the NORTH
 // row, x0/y0 are SAMPLE CENTERS, dy positive (row r's centre = y0 − r·dy).
 const SURFER_BLANK = 1.70141e38;
+// Surfer 6 binary (DSBB) writer — the compact, self-contained grid format we
+// already read; 4 B/value + a 56 B header. Used for the display-cache sidecar.
+function writeSurferGrd(g) {
+  const { nx, ny, x0, y0, dx, dy, data, nodata } = g;
+  const isBad = (v) => Number.isNaN(v) || (nodata != null && (nodata >= 1.7e38 ? v >= 1.7014e38 : v === nodata));
+  let zmin = Infinity, zmax = -Infinity;
+  for (const v of data) { if (isBad(v)) continue; if (v < zmin) zmin = v; if (v > zmax) zmax = v; }
+  if (!(zmin <= zmax)) { zmin = 0; zmax = 0; }
+  const buf = new ArrayBuffer(56 + nx * ny * 4);
+  const v = new DataView(buf);
+  v.setUint8(0, 0x44); v.setUint8(1, 0x53); v.setUint8(2, 0x42); v.setUint8(3, 0x42);   // 'DSBB'
+  v.setInt16(4, nx, true); v.setInt16(6, ny, true);
+  v.setFloat64(8, x0, true); v.setFloat64(16, x0 + (nx - 1) * dx, true);                // xlo, xhi
+  v.setFloat64(24, y0 - (ny - 1) * dy, true); v.setFloat64(32, y0, true);               // ylo, yhi
+  v.setFloat64(40, zmin, true); v.setFloat64(48, zmax, true);
+  let o = 56;                                                                            // Surfer is SOUTH-first
+  for (let r = ny - 1; r >= 0; r--) for (let c = 0; c < nx; c++) { const val = data[r * nx + c]; v.setFloat32(o, isBad(val) ? SURFER_BLANK : val, true); o += 4; }
+  return buf;
+}
 async function readSurferGrd(blob) {
   const tag = new TextDecoder('latin1').decode(await blob.slice(0, 4).arrayBuffer());
   if (tag === 'DSRB') throw new Error('Surfer 7 .grd not supported yet — save as Surfer 6 grid');
@@ -2921,9 +2955,18 @@ async function readEsriAsc(blob) {
   return { nx, ny, data, x0, y0: yll + (ny - 1) * cs, dx: cs, dy: cs, nodata: hdr.nodata_value != null ? hdr.nodata_value : null, crs: null, form: 'ESRI ASCII' };
 }
 const ascLooksLikeGrid = async (blob) => /^\s*ncols\b/i.test(await blob.slice(0, 64).text());
-async function readAnyGrid(blob, name) {
+async function readAnyGrid(blob, name, displayCache = null) {
   if (/\.(tif|tiff)$/i.test(name)) {
     const g = await readGTiff(blob);
+    if (displayCache) {
+      // a project display-cache sidecar: reuse the parsed IFDs for windowed
+      // eval, but take the DISPLAY straight from the cache (no re-decimation)
+      const grid = displayCache;
+      grid.crs = grid.crs || g.geo.crs;
+      grid.form = `GeoTIFF ${g.images[0].width}×${g.images[0].height} · display cache`;
+      grid._src = { g, level: 0, name, step: 2 };          // step>1 → not fullRes → eval windows
+      return grid;
+    }
     // decode an OVERVIEW within a decode budget for the display — a big COG
     // paints instantly; the full-res data is read windowed, only for eval
     const DISPLAY_DECODE_CAP = window.__gridDisplayCap || 8_000_000;   // test seam
@@ -3116,7 +3159,7 @@ async function meshToGridLayer(meshL, { cell, keep = 'top', extend = 'none', hol
 async function openGridBlob(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : _activeId;
   $('#meta').textContent = `${name} — reading grid…`;
-  const grid = await readAnyGrid(blob, name);
+  const grid = await readAnyGrid(blob, name, opts.displayCache || null);
   const { nx, ny, data, nodata } = grid;
   const stride = Math.max(1, Math.ceil(Math.sqrt((nx * ny) / GRID_DISPLAY_CAP)));
   // one sweep: z range + displayed-node census (nodata and NaN sit out)
@@ -4414,6 +4457,10 @@ async function saveProject() {
     if (outside.length && await askCopyOutside(outside) === 'copy') {
       for (const L of outside) { $('#meta').textContent = `project: copying ${L.name}…`; await copyLayerIn(L, dir); }
     }
+    // grid display-cache sidecars: the decimated/overview DISPLAY grid, stored
+    // as compact Surfer binary so a huge DEM's project reopens WITHOUT
+    // re-decimating the source (eval still windows the source at full res)
+    for (const L of _layers) { try { await writeGridDisplayCache(L, dir); } catch { /* cache, never a failure */ } }
     // derived-cache sidecars (spec section 12): the discovery header + column
     // stats travel WITH the data — reopening skips the grid-discovery sweep
     // and the columns tab wakes up already scanned. Best-effort, size-keyed.
@@ -4589,6 +4636,17 @@ async function openProjectDir(dir) {
       const overR = ls.kind === 'mesh'
         ? { tint: ls.tint, opacity: ls.opacity, forceSoup: !!ls.soup }
         : (/\.ply$/i.test(ls.source) ? { forcePoints: true } : (ls.mapping ? { mapping: ls.mapping } : {}));
+      // grid display-cache: matching source size → display from the sidecar,
+      // skipping the re-decimation (eval still windows the source full res)
+      if (ls.kind !== 'mesh' && /\.(tif|tiff)$/i.test(ls.source)) {
+        try {
+          const jj = JSON.parse(await (await (await dir.getFileHandle(ls.source + '.disp.json')).getFile()).text());
+          if (jj && jj.v === 1 && jj.size === file.size) {
+            const grd = await readSurferGrd(await (await dir.getFileHandle(ls.source + '.disp.grd')).getFile());
+            overR.displayCache = grd;
+          }
+        } catch { /* no cache — decimate as usual */ }
+      }
       // the sidecar cache: matching size → skip the discovery sweep entirely
       let sidecar = null;
       if (ls.kind !== 'mesh' && /\.(csv|txt|dat|asc|xyz|pts)$/i.test(ls.source)) {
@@ -5734,6 +5792,7 @@ function layerMenu(L, x, y) {
     { label: 'Move to group…', action: () => setTimeout(() => moveLayerToGroupMenu(L, x, y), 0) },
     ...(L.docs.gridDoc ? [{ label: 'Flag / ratio by this surface…', action: () => openSolidDialog(L) }] : []),
     ...(L.docs.gridDoc ? [{ label: 'Export as ESRI ASCII grid…', action: () => exportGridAsc(L) }] : []),
+    ...(L.docs.gridDoc && L.docs.gridDoc.source && !L.docs.gridDoc.fullRes && _project ? [{ label: 'Build display cache', action: async () => { try { const why = await writeGridDisplayCache(L, _project.dir); $('#meta').textContent = why ? `display cache: ${why}` : `display cache written · ${L.name}.disp.grd`; } catch (e) { $('#meta').textContent = `display cache — ${e.message}`; } } }] : []),
     ...(L.dh ? [{ label: `Stick radius… (${renderer.layerStickRadius(L.id)} m)`, action: async () => {
       const v = await microPrompt('stick radius (metres)', String(renderer.layerStickRadius(L.id)));
       const r = parseFloat(v);
@@ -7900,7 +7959,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
