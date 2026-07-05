@@ -89,12 +89,24 @@ const parquet = new Uint8Array(writeParquet({ columnData: (() => {
 
 const b = await chromium.launch({ args: ['--use-gl=angle'] });
 const ctx = await b.newContext({ viewport: { width: 1000, height: 700 } });
+let ok = true;
+const chk = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`); ok = ok && cond; };
+
+// ── 0. the BUILT micro.html (deploy artifact) boots — catches bundling bugs the
+//    dev-tree tests below can't (a lib import not wired into the registry build) ──
+if (fs.existsSync(path.join(root, 'micro.html'))) {
+  const bp = await ctx.newPage(); const bootErrs = [];
+  bp.on('pageerror', (e) => bootErrs.push(e.message));
+  await bp.goto(`http://127.0.0.1:${PORT}/micro.html`, { waitUntil: 'load' });
+  let booted = true; try { await bp.waitForFunction(() => window._micro && window._micro.declusterWeights, null, { timeout: 20000 }); } catch { booted = false; }
+  chk(`built micro.html boots (no bundling errors: ${bootErrs.length ? bootErrs.join(' ; ') : 'none'})`, booted && bootErrs.length === 0);
+  await bp.close();
+} else { console.log('note: micro.html not built — skipping the built-boot guard (run: node build.js --target=micro)'); }
+
 const p = await ctx.newPage();
 p.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); process.exitCode = 1; });
 await p.goto(`http://127.0.0.1:${PORT}/tools/micro/index.html`, { waitUntil: 'load' });
 await p.waitForFunction(() => window._micro, null, { timeout: 20000 });
-let ok = true;
-const chk = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`); ok = ok && cond; };
 const layerReady = (name) => p.waitForFunction((n) => { const L = window._micro.layers().find((x) => x.name === n); return L && window._micro.renderer.layerElementCount(L.id) > 0; }, name, { timeout: 60000 });
 
 // ── 1. CSV block model → regular grid inferred ──

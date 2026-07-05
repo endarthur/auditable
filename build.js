@@ -1698,6 +1698,7 @@ if (target === 'micro') {
     '../../ext/lfm/lfm.js': '#lfm',
     '../../ext/gtiff/index.js': '#gtiff',
     '../../ext/parquet/index.js': '#parquet',
+    '../../ext/gsjs/src/decluster.js': '#gsjs-decluster',
   };
   const libs = [
     ['condenser', 'ext/condenser/index.js'],
@@ -1708,6 +1709,7 @@ if (target === 'micro') {
     ['lfm',       'ext/lfm/lfm.js'],                   // Leapfrog model files (multi-mesh, colours)
     ['gtiff',     'ext/gtiff/index.js'],               // GeoTIFF DEMs (spec 7.1)
     ['parquet',   'ext/parquet/index.js'],             // Apache Parquet block models
+    ['gsjs-decluster', 'ext/gsjs/src/decluster.js'],   // @gcu/gsjs cell declustering (validation) — zero-import module
   ];
   const modules = [];
   for (const [name, rel] of libs) {
