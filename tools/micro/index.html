@@ -157,6 +157,7 @@
     border-left: 2px solid transparent; cursor: default; color: var(--text); user-select: none;
   }
   #lpRows .lp-row:hover { background: #242424; }
+  #lpRows .lp-row.sel { border-left-color: #9d8ce0; background: rgba(157, 140, 224, 0.13); }
   #lpRows .lp-row.active { border-left-color: var(--accent); background: #202020; }
   #lpRows .lp-row.dim .lp-name, #lpRows .lp-row.dim .lp-n { opacity: 0.45; }
   #lpRows .lp-group .lp-name { color: var(--text-hi); }
@@ -4146,7 +4147,7 @@ The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Sel
 <b>export rows</b> (Data → Export rows… / the layer context menu) — data leaves micro the way it came in, as rows: scope <b>all</b> · <b>filter matches</b> · <b>selection</b>; every column including ƒ calculated and ✎ painted ones (paint a DOMAIN, export it, feed the estimator); CSV with delimiter choice + decimal comma; streamed, so 1.8M rows is one sweep, and opening a .dm then exporting IS the .dm → CSV converter. In the attribute table, <code>Ctrl+C</code> copies the grid selection as TSV<br>
 <b>select by solid</b> (Tools menu / right-click a mesh layer) — a closed context mesh (.msh / .obj / small .ply) classifies records by winding number: <b>select inside/outside</b> sweeps any element layers into the ordinary selection (paint or export it — the solids → coded-model loop), a <b>flag column</b> writes a value (e.g. <code>IN</code>) into a NEW painted column on any table-backed layers — blocks, points, drillholes — which you can then touch up with the brush; or <b>fraction-inside column</b> probes each block of a regular model (any per-axis resolution — 3×3×2 for benches, 10×10×10 for 1 m blocklings) and writes a numeric 0–1 column (<code>%</code> badge) the filter, table, and export all see; all of it works with flipped solids and colors the layer by the result when done. OPEN SURFACES (topo, weathering horizons — the dialog reads the mesh topology and says which) classify <b>above / below / between</b> instead: the surface is CLOSED by a skirt to a far apex and the same winding containment applies — strong at any depth, and blocks beyond the surface's footprint honestly come back unclassified; <b>between</b> takes a second surface (below the first AND above the second)<br>
 <b>assign domains</b> (Tools menu) — the whole coded-model loop in one run: pick the domain solids (a multi-object .obj or Leapfrog .lfm offers "split into N solids (as a group)" at open — .lfm solids arrive with their Leapfrog colours as tints — each object becomes its own layer inside a layer GROUP), pick the model and a column name, and every block goes to the solid holding its largest fraction; unclaimed blocks stay unpainted and the result is an ordinary painted column — filter it, export it, touch it up with the brush<br>
-<b>layer groups</b> — the layers panel is a tree: a group's eye greys its children without touching THEIR eyes (re-enable and the pattern returns); <b>drag a row</b> between rows to reorder, ONTO a group to join it (touch: long-press the row → Move up / down / to group); right-click a layer → <b>Move to group…</b> (or New group…), right-click a group → rename / zoom / ungroup; groups persist in the project<br>
+<b>layer groups</b> — the layers panel is a tree: a group's eye greys its children without touching THEIR eyes (re-enable and the pattern returns); <b>drag a row</b> between rows to reorder, ONTO a group to join it (touch: long-press the row → Move up / down / to group); <b>ctrl+click</b> multi-selects rows (shift+click = a range) — right-click → <b>Group N selected…</b>; right-click a layer → Move to group… (or New group…), right-click a group → rename / zoom / ungroup; groups persist in the project<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
 <b>ramps + breakpoints</b> (style tab): pick a ramp per layer (viridis · spectral · magma · turbo · greys); on a grade channel, <b>double-click the histogram</b> to add breakpoints (drag moves, right-click removes), <b>classed</b> turns them into a solid-color legend — the grade-shell view; the <b>interval table</b> lists every band with an editable upper bound, a count from the scan, and (classed) a color chip per shell; quantile/equal auto-breaks from the scan<br><br>
@@ -4852,7 +4853,18 @@ function removeLayerUI(id) {
   renderLayers(); requestRender();
 }
 function layerMenu(L, x, y) {
+  const selN = _lpSel.size;
   menuXY(x, y, [
+    ...(selN >= 2 && _lpSel.has(L.id) ? [
+      { label: `Group ${selN} selected…`, action: async () => {
+        const v = await microPrompt('group name', 'group');
+        if (!v || !v.trim()) return;
+        const ids = lpSelIds();
+        _lpSel.clear();
+        createLayerGroup(v.trim(), ids, { collapsed: false });
+      } },
+      { sep: true },
+    ] : []),
     { label: 'Zoom to layer', action: () => fitLayer(L) },
     { label: 'Rename layer…', action: async () => { const v = await microPrompt('layer name', L.label || L.name); if (v && v.trim()) { L.label = v.trim(); renderLayers(); markProjectDirty(); } } },
     { label: 'Move up', action: () => treeMoveStep(L.id, -1) },
@@ -6651,13 +6663,25 @@ function groupLayerIds(nd, out = []) {
 // nest the given root-level layers into a new (collapsed) group
 function createLayerGroup(name, layerIds, { collapsed = true } = {}) {
   treeSync();
-  const set = new Set(layerIds);
   const node = { group: true, name, visible: true, collapsed, children: [] };
-  _layerTree = _layerTree.filter((nd) => {
-    if (typeof nd === 'number' && set.has(nd)) { node.children.push(nd); return false; }
-    return true;
-  });
-  if (node.children.length) _layerTree.push(node);
+  // pull each member from WHEREVER it sits (root or inside another group).
+  // Siblings regroup in place (the new group takes the first member's slot);
+  // members from DIFFERENT containers meet at the root — predictable, and it
+  // never buries the new group inside a container you only half-selected.
+  let insert = null, sameParent = true;
+  for (const id of layerIds) {
+    const src = treeFindParent(id);
+    if (!src) continue;
+    src.arr.splice(src.i, 1);
+    node.children.push(id);
+    if (!insert) insert = { arr: src.arr, i: src.i };
+    else if (insert.arr !== src.arr) sameParent = false;
+    else if (src.i < insert.i) insert.i--;
+  }
+  if (node.children.length) {
+    if (insert && sameParent) insert.arr.splice(Math.min(insert.i, insert.arr.length), 0, node);
+    else _layerTree.push(node);
+  }
   renderLayers();
   markProjectDirty();
   return node;
@@ -6713,6 +6737,19 @@ function treeMove(node, target, where) {
   treeSync();
   renderLayers();
   markProjectDirty();
+}
+// multi-selected rows (layer ids): ctrl/cmd+click toggles, shift+click
+// ranges over the visible rows, plain click clears — right-click a selected
+// row offers "Group N selected…"
+const _lpSel = new Set();
+function lpSelIds() { return _layers.filter((L) => _lpSel.has(L.id)).map((L) => L.id); }
+function lpSelRange(toId) {
+  const lids = [...document.querySelectorAll('#lpRows .lp-row')].map((r) => (r.dataset.lid != null ? +r.dataset.lid : null));
+  const a = lids.indexOf(_activeId), b2 = lids.indexOf(toId);
+  if (a < 0 || b2 < 0) return;
+  _lpSel.clear();
+  for (let i = Math.min(a, b2); i <= Math.max(a, b2); i++) if (lids[i] != null) _lpSel.add(lids[i]);
+  renderLayers();
 }
 // step a node among its SIBLINGS (the long-press reorder — no drag needed)
 function treeMoveStep(node, dir) {
@@ -6775,6 +6812,7 @@ function renderLayers() {
   const rows = $('#lpRows'); if (!rows) return;
   rows.textContent = '';
   treeSync();
+  for (const id of [..._lpSel]) if (!layerById(id)) _lpSel.delete(id);
   const visual = [];                                       // DOM-ordered rows for the drag targets
   // drag: grip pointerdown → move over rows → drop between (reorder) or ONTO
   // a group (join); trees stay honest (no dropping a group into itself)
@@ -6819,7 +6857,8 @@ function renderLayers() {
   };
   const layerRow = (L, depth, dim) => {
     const row = document.createElement('div');
-    row.className = 'lp-row' + (L.id === _activeId ? ' active' : '') + (L.visible ? '' : ' off') + (dim ? ' dim' : '');
+    row.className = 'lp-row' + (L.id === _activeId ? ' active' : '') + (_lpSel.has(L.id) ? ' sel' : '') + (L.visible ? '' : ' off') + (dim ? ' dim' : '');
+    row.dataset.lid = L.id;
     row.style.paddingLeft = `${6 + depth * 14}px`;
     const eye = document.createElement('input');
     eye.type = 'checkbox'; eye.checked = L.visible; eye.title = 'visible (a disabled group greys the row — the eye stays yours)';
@@ -6835,7 +6874,12 @@ function renderLayers() {
     // and its children land one indent to the RIGHT of it, not the left
     const slot = document.createElement('span'); slot.className = 'lp-caret';
     row.append(slot, eye, name, n);
-    row.onclick = () => setActiveLayer(L.id);
+    row.onclick = (e) => {
+      if (e.ctrlKey || e.metaKey) { if (!_lpSel.delete(L.id)) _lpSel.add(L.id); renderLayers(); return; }
+      if (e.shiftKey) { lpSelRange(L.id); return; }
+      if (_lpSel.size) _lpSel.clear();
+      setActiveLayer(L.id);
+    };
     row.ondblclick = () => fitLayer(L);
     row.oncontextmenu = (e) => { e.preventDefault(); layerMenu(L, e.clientX, e.clientY); };
     rows.appendChild(row);
@@ -6860,7 +6904,7 @@ function renderLayers() {
       n.textContent = ids.length + (nd.collapsed ? ` · ${ids.reduce((t, id) => t + (renderer.layerElementCount(id) || 0), 0).toLocaleString()}` : '');
       armDrag(row, nd);
       row.append(caret, eye, name, n);
-      row.onclick = () => { nd.collapsed = !nd.collapsed; renderLayers(); };
+      row.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey) return; nd.collapsed = !nd.collapsed; renderLayers(); };
       row.oncontextmenu = (e) => { e.preventDefault(); groupMenu(nd, e.clientX, e.clientY); };
       rows.appendChild(row);
       visual.push({ row, node: nd, isGroup: true });
