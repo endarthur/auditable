@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { zstdCompressSync } from 'node:zlib';
-import { writeParquet, readParquet, readParquetColumns, parquetInfo, parquetWriteBuffer, writeCompressors, streamParquetColumns, readParquetRange, readParquetRow } from '../ext/parquet/index.js';
+import { writeParquet, readParquet, readParquetColumns, parquetInfo, parquetInfoAsync, parquetWriteBuffer, writeCompressors, streamParquetColumns, readParquetRange, readParquetRow } from '../ext/parquet/index.js';
 
 // a little block-model-shaped table: XC,YC,ZC + FE + a LITO string
 const N = 5000;
@@ -110,6 +110,26 @@ test('readParquetRange + readParquetRow are targeted (one group / one row)', asy
   const row = await readParquetRow(buf, 4321);
   assert.equal(row.XC, XC[4321]);
   assert.equal(row.LITO, LITO[4321]);
+});
+
+test('parquetInfoAsync censuses from the footer via range reads (no full load)', async () => {
+  // high-entropy columns → a genuinely LARGE file (parquet reads a bounded
+  // ~512 KB tail for the footer, so a big file is read only fractionally)
+  const M = 100000, k = 1103515245 >>> 0; let seed = 7;
+  const rnd = () => { seed = (Math.imul(seed, k) + 12345) >>> 0; return seed / 4294967296 * 1e6; };
+  const big = writeParquet({ columnData: [
+    { name: 'A', data: Array.from({ length: M }, rnd) },
+    { name: 'B', data: Array.from({ length: M }, rnd) },
+    { name: 'C', data: Array.from({ length: M }, rnd) },
+  ], rowGroupSize: 8000 });
+  let fetched = 0;
+  const ab = new Uint8Array(big);
+  assert.ok(ab.byteLength > 1_500_000, `fixture should be big (${ab.byteLength} bytes)`);
+  const src = { byteLength: ab.byteLength, async slice(s, e) { const end = e == null ? ab.byteLength : e; fetched += end - s; return ab.buffer.slice(ab.byteOffset + s, ab.byteOffset + end); } };
+  const info = await parquetInfoAsync(src);
+  assert.equal(info.rowCount, M);
+  assert.deepEqual(info.columns.map((c) => c.name), ['A', 'B', 'C']);
+  assert.ok(fetched < ab.byteLength / 2, `range-read ${fetched} of ${ab.byteLength} bytes — should be a bounded tail`);
 });
 
 test('kvMetadata survives the round trip (a place to stamp micro geo/frame)', () => {

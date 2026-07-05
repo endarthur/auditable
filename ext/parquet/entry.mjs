@@ -25,7 +25,14 @@ export const writeCompressors = {
 // nulls). No page decode: this is the free "discovery" + the spatial-index
 // substrate. Returns typed columns + a row-group summary.
 export function parquetInfo(input) {
-  const meta = parquetMetadata(input);
+  return infoFromMeta(parquetMetadata(input));
+}
+// like parquetInfo but RANGE-READS the footer from a File/Blob (or AsyncBuffer)
+// — for a census without pulling the whole file into memory (drag-drop preview)
+export async function parquetInfoAsync(input) {
+  return infoFromMeta(await parquetMetadataAsync(toAsyncBuffer(input)));
+}
+function infoFromMeta(meta) {
   const rg0 = meta.row_groups && meta.row_groups[0];
   const colName = (c) => (c.meta_data && c.meta_data.path_in_schema || []).join('.');
   const columns = ((rg0 && rg0.columns) || []).map((c) => ({
@@ -108,7 +115,10 @@ export function writeParquet({ columnData, rowGroupSize = 65536, codec = 'SNAPPY
 // Uint8Array is wrapped. (A future streaming source can implement slice() to
 // range-read a File without loading it whole.)
 function toAsyncBuffer(input) {
-  if (input && typeof input.slice === 'function' && typeof input.byteLength === 'number' && !(input instanceof Uint8Array)) return input;
+  if (input && typeof input.slice === 'function' && typeof input.byteLength === 'number' && !(input instanceof Uint8Array)) return input;   // already an AsyncBuffer
+  if (typeof Blob !== 'undefined' && input instanceof Blob) {   // File / Blob → range-read via slice().arrayBuffer(), no full load
+    return { byteLength: input.size, async slice(s, e) { return input.slice(s, e == null ? input.size : e).arrayBuffer(); } };
+  }
   const ab = input instanceof Uint8Array ? input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength) : input;
   return { byteLength: ab.byteLength, async slice(s, e) { return ab.slice(s, e); } };
 }
