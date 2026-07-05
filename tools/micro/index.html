@@ -355,6 +355,10 @@
   .fwin-head button:hover { color: var(--text-hi); }
   .fwin-head label { color: var(--muted); display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
   .fwin-body { flex: 1; position: relative; overflow: hidden; min-height: 0; }
+  .awin-ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 5px 7px; border-top: 1px solid var(--border); background: var(--panel); }
+  .awin-ctrls select, .awin-btn { font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; cursor: pointer; }
+  .awin-ctrls label { font: 11px monospace; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
+  .awin-ctrls input[type=number] { width: 62px; font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; }
   .fwin.min .fwin-body, .fwin.min .fwin-grip { display: none; }
   .fwin-grip { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; z-index: 3; }
   .fwin-grip::after { content: ''; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-right: 2px solid var(--dim); border-bottom: 2px solid var(--dim); }
@@ -2438,6 +2442,125 @@ async function runKeyJoin({ leftL, rightL, leftKey, rightKey, bring, dup = 'firs
   }
   if (buf) parts.push(buf);
   return { blob: new Blob(parts, { type: 'text/csv' }), rows: total, matched };
+}
+// ── analysis windows (grade-tonnage, swath) ──────────────────────────────────
+// GCU accent palette for overlaid series (blue=info, orange=action, green, violet)
+const SERIES_COLORS = ['#5b7fa6', '#c8722e', '#5c8a5a', '#8a6fae', '#b0563a'];
+// a compact canvas chart: line + bar series over one x-axis and up to two y-axes.
+// spec: { series:[{name,color,axis:'left'|'right',kind:'line'|'bar',data:[[x,y]]}],
+//   xLabel, leftLabel, rightLabel, xRange?, title? }
+function plotChart(cv, spec) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = cv.clientWidth || 400, H = cv.clientHeight || 240;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const cs = getComputedStyle(document.documentElement);
+  const ink = (cs.getPropertyValue('--au-fg') || '#dcdcdc').trim() || '#dcdcdc', dim = '#8a8f95', grid = 'rgba(140,145,150,0.16)';
+  const hasRight = spec.series.some((s) => s.axis === 'right');
+  const mL = 52, mR = hasRight ? 50 : 12, mT = 14 + (spec.series.length > 1 ? 12 : 0), mB = 30;
+  const px0 = mL, px1 = W - mR, py0 = H - mB, py1 = mT;
+  const allX = spec.series.flatMap((s) => s.data.map((d) => d[0]));
+  if (!allX.length) { g.fillStyle = dim; g.font = '12px monospace'; g.textAlign = 'center'; g.fillText('no data', W / 2, H / 2); return; }
+  const xr = spec.xRange || [Math.min(...allX), Math.max(...allX)]; if (xr[0] === xr[1]) xr[1] = xr[0] + 1;
+  const yrOf = (axis) => { const ys = spec.series.filter((s) => s.axis === axis).flatMap((s) => s.data.map((d) => d[1])).filter(Number.isFinite); if (!ys.length) return [0, 1]; let lo = Math.min(...ys), hi = Math.max(...ys); if (lo > 0) lo = 0; if (lo === hi) hi = lo + 1; return [lo, hi]; };
+  const lr = yrOf('left'), rr = yrOf('right');
+  const sx = (x) => px0 + (px1 - px0) * (x - xr[0]) / (xr[1] - xr[0]);
+  const syL = (y) => py0 + (py1 - py0) * (y - lr[0]) / (lr[1] - lr[0]);
+  const syR = (y) => py0 + (py1 - py0) * (y - rr[0]) / (rr[1] - rr[0]);
+  const ticks = (lo, hi, n = 4) => { const step = niceStep((hi - lo) / n) || 1; const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-6; v += step) out.push(v); return out; };
+  g.font = '10px monospace'; g.lineWidth = 1;
+  g.strokeStyle = grid; g.textAlign = 'center'; g.fillStyle = dim;
+  for (const tx of ticks(xr[0], xr[1])) { const X = sx(tx); g.beginPath(); g.moveTo(X, py0); g.lineTo(X, py1); g.stroke(); g.fillText(fmtStat(tx), X, py0 + 12); }
+  g.textAlign = 'right';
+  for (const ty of ticks(lr[0], lr[1])) { const Y = syL(ty); g.strokeStyle = grid; g.beginPath(); g.moveTo(px0, Y); g.lineTo(px1, Y); g.stroke(); g.fillStyle = dim; g.fillText(fmtStat(ty), px0 - 4, Y + 3); }
+  if (hasRight) { g.textAlign = 'left'; g.fillStyle = dim; for (const ty of ticks(rr[0], rr[1])) g.fillText(fmtStat(ty), px1 + 4, syR(ty) + 3); }
+  for (const s of spec.series) {
+    const sy = s.axis === 'right' ? syR : syL; g.strokeStyle = s.color; g.fillStyle = s.color; g.lineWidth = 1.6;
+    if (s.kind === 'bar') { const bw = Math.max(1, (px1 - px0) / Math.max(1, s.data.length) * 0.7); g.globalAlpha = 0.22; for (const [x, y] of s.data) { if (!Number.isFinite(y)) continue; const X = sx(x), Y = sy(y); g.fillRect(X - bw / 2, Y, bw, py0 - Y); } g.globalAlpha = 1; }
+    else { g.beginPath(); let started = false; for (const [x, y] of s.data) { if (!Number.isFinite(y)) { started = false; continue; } const X = sx(x), Y = sy(y); if (!started) { g.moveTo(X, Y); started = true; } else g.lineTo(X, Y); } g.stroke(); }
+  }
+  g.fillStyle = dim; g.textAlign = 'center'; g.font = '10px monospace';
+  if (spec.xLabel) g.fillText(spec.xLabel, (px0 + px1) / 2, H - 4);
+  const rot = (txt, x, dir) => { g.save(); g.translate(x, (py0 + py1) / 2); g.rotate(dir * Math.PI / 2); g.fillText(txt, 0, 0); g.restore(); };
+  if (spec.leftLabel) rot(spec.leftLabel, 10, -1);
+  if (spec.rightLabel && hasRight) rot(spec.rightLabel, W - 8, 1);
+  // legend
+  let lx = px0 + 2; g.textAlign = 'left';
+  for (const s of spec.series) { g.fillStyle = s.color; g.fillRect(lx, 4, 9, 3); g.fillStyle = ink; g.fillText(s.name, lx + 12, 8); lx += 16 + g.measureText(s.name).width + 8; }
+}
+// reconcile columns come as ref_<g>/this_<g>; detect the pairs for auto-series
+function reconcilePairs(cols) {
+  const out = [];
+  for (const c of cols) if (c.startsWith('this_') && cols.includes('ref_' + c.slice(5))) out.push({ base: c.slice(5), ref: 'ref_' + c.slice(5), self: c });
+  return out;
+}
+function numericColsOf(L) { const h = layerTableHeader(L); if (!h) return []; const m = h.mapping || {}; return h.columns.filter((_, i) => colIsNumeric(L, h, i) && ![m.x, m.y, m.z].includes(i)); }
+function blockVolumeOf(L) { const a = gridAxesOf(L); return a ? (Math.abs((a.x.pitch || 1) * (a.y.pitch || 1) * (a.z.pitch || 1)) || 1) : 1; }
+// grade-tonnage: for each series column, cutoff → (tonnage above, mean grade above)
+async function computeGT(L, cols, weightCol, nCut, onProgress) {
+  const h = layerTableHeader(L), idx = cols.map((n) => h.columns.indexOf(n));
+  const wi = weightCol ? h.columns.indexOf(weightCol) : -1, vol = blockVolumeOf(L);
+  const ser = cols.map(() => ({ g: [], w: [] }));
+  let gmin = Infinity, gmax = -Infinity, rc = 0;
+  for await (const batch of layerRows(L, null)) {
+    for (const f of batch) {
+      const wt = (wi >= 0 ? (+f[wi] || 0) : 1) * vol;
+      for (let s = 0; s < idx.length; s++) { const v = +f[idx[s]]; if (Number.isFinite(v)) { ser[s].g.push(v); ser[s].w.push(wt); if (v < gmin) gmin = v; if (v > gmax) gmax = v; } }
+    }
+    rc += batch.length; if (onProgress) onProgress(rc);
+    await new Promise((r) => setTimeout(r));
+  }
+  if (!Number.isFinite(gmin)) return null;
+  const cuts = []; for (let i = 0; i <= nCut; i++) cuts.push(gmin + (gmax - gmin) * i / nCut);
+  const gt = ser.map((d) => {
+    const ord = [...d.g.keys()].sort((a, b) => d.g[b] - d.g[a]);   // grade desc
+    const cw = new Float64Array(ord.length + 1), cwg = new Float64Array(ord.length + 1);
+    for (let k = 0; k < ord.length; k++) { cw[k + 1] = cw[k] + d.w[ord[k]]; cwg[k + 1] = cwg[k] + d.w[ord[k]] * d.g[ord[k]]; }
+    const gsorted = ord.map((i) => d.g[i]);
+    return cuts.map((c) => {
+      let lo = 0, hi = gsorted.length; while (lo < hi) { const md = (lo + hi) >> 1; if (gsorted[md] >= c) lo = md + 1; else hi = md; }
+      return { cut: c, tonnage: cw[lo], grade: cw[lo] > 0 ? cwg[lo] / cw[lo] : NaN };
+    });
+  });
+  return { cuts, gt, gmin, gmax, weighted: wi >= 0 };
+}
+const _gtWins = new Map();
+function openGradeTonnage(L) {
+  if (!L || !gridAxesOf(L)) { $('#meta').textContent = 'grade-tonnage: needs a regular block model'; return; }
+  const ex = _gtWins.get(L.id); if (ex) { ex.win.el.style.zIndex = ++_fwinZ; return; }
+  const nums = numericColsOf(L); if (!nums.length) { $('#meta').textContent = 'grade-tonnage: no numeric column'; return; }
+  const pairs = reconcilePairs(nums);
+  const st = { cols: pairs.length ? [pairs[0].ref, pairs[0].self] : [nums[0]], weight: '', nCut: 40, last: null };
+  const win = floatWin({ title: `grade-tonnage · ${L.label || L.name}`, sub: '', x: Math.max(12, innerWidth - 500), y: 100, w: 470, h: 360, onClose: () => _gtWins.delete(L.id) });
+  win.body.style.cssText += 'display:flex;flex-direction:column;gap:0';
+  const cv = document.createElement('canvas'); cv.style.cssText = 'width:100%;flex:1;min-height:80px;display:block';
+  const ctrls = document.createElement('div'); ctrls.className = 'awin-ctrls';
+  win.body.append(cv, ctrls);
+  const redraw = async () => {
+    win.sub.textContent = 'computing…';
+    const res = await computeGT(L, st.cols, st.weight, st.nCut, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; });
+    if (!res) { win.sub.textContent = 'no data'; return; }
+    st.last = res;
+    const spec = { xLabel: 'cutoff', leftLabel: res.weighted ? 'tonnage' : 'volume (m³)', rightLabel: 'mean grade', series: [] };
+    st.cols.forEach((c, i) => {
+      const col = SERIES_COLORS[i % SERIES_COLORS.length];
+      spec.series.push({ name: `${c} · t`, color: col, axis: 'left', kind: 'line', data: res.gt[i].map((p) => [p.cut, p.tonnage]) });
+      spec.series.push({ name: `${c} · grade`, color: col, axis: 'right', kind: 'line', data: res.gt[i].map((p) => [p.cut, p.grade]) });
+    });
+    win.sub.textContent = `${res.weighted ? 'tonnage-weighted' : 'count'} · ${st.nCut} cutoffs`;
+    plotChart(cv, spec); win._spec = spec;
+  };
+  win.el._onResized = () => { if (win._spec) plotChart(cv, win._spec); };
+  const buildCtrls = () => {
+    ctrls.textContent = '';
+    const nums2 = numericColsOf(L);
+    const seriesBtn = document.createElement('button'); seriesBtn.className = 'awin-btn'; seriesBtn.textContent = `series: ${st.cols.join(', ')}`;
+    seriesBtn.onclick = (e) => menuXY(e.clientX, e.clientY, nums2.map((c) => ({ label: (st.cols.includes(c) ? '✓ ' : '') + c, action: () => { if (st.cols.includes(c)) { if (st.cols.length > 1) st.cols = st.cols.filter((x) => x !== c); } else if (st.cols.length < 4) st.cols.push(c); buildCtrls(); redraw(); } })));
+    const wSel = document.createElement('select'); { const o = document.createElement('option'); o.value = ''; o.textContent = 'count'; wSel.appendChild(o); } for (const c of nums2) { const o = document.createElement('option'); o.value = c; o.textContent = '× ' + c; wSel.appendChild(o); } wSel.value = st.weight; wSel.title = 'weight (density) — tonnage = weight × block volume'; wSel.onchange = () => { st.weight = wSel.value; redraw(); };
+    ctrls.append(seriesBtn, wSel);
+  };
+  _gtWins.set(L.id, { win, redraw });
+  buildCtrls(); redraw();
 }
 // ── the assign-domains dialog ──
 let _adDlg = null;
@@ -6329,6 +6452,7 @@ function layerMenu(L, x, y) {
     ...(L.kind !== 'mesh' ? [{ label: 'Attribute table…', kbd: 't', action: () => openAttrTable(L) }] : []),
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
+    ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }] : []),
     ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Optimize to spatial Parquet', action: () => convertLayerToParquet(L) }] : []),
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
@@ -8670,7 +8794,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
