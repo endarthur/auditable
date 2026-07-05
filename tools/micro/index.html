@@ -36,6 +36,7 @@
   #bar2 input[type="range"] { width: 90px; accent-color: var(--accent); }
   #bar2 .spacer { flex: 1; }
   #bar .title { font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #btnBurger { display: none; }                            /* phones only */
   #bar button, #bar select {
     font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-btn);
     border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 10px; cursor: pointer;
@@ -399,26 +400,31 @@
      sideways, panels/windows clamp to the viewport, hit targets fatten ── */
   .fwin { max-width: calc(100vw - 8px); }
   @media (max-width: 720px) {
-    #bar, #bar2 { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-    #bar::-webkit-scrollbar, #bar2::-webkit-scrollbar { display: none; }
-    #bar > *, #bar2 > * { flex: 0 0 auto; }
-    #bar .title { display: none; }
-    #bar #filterWrap { flex: 0 0 150px; min-width: 150px; }
+    /* the bar collapses to burger + filter + fit; the instrument row hides
+       (color lives in the props panel, section in Tools) — 32px back */
+    #btnBurger { display: inline-flex; }
+    #bar .title, #bar .mb, #btnSelRect, #btnSelLasso, #btnSelThrough, #btnPaint, #btnMeasure, #btnSection, #btnShot { display: none; }
+    #bar #filterWrap { flex: 1 1 auto; min-width: 0; }
+    #bar .spacer { display: none; }
     #bar button { padding: 6px 8px; }
     #bar button svg { width: 17px; height: 17px; }
+    #bar2 { display: none; }
+    #view, #empty { inset: 36px 0 24px 0; }
+    #recPanel, #layersPanel, #propPanel { top: 36px; }
+    #compass.ne, #compass.nw { top: 46px; }
     #layersPanel { width: min(var(--lpw, 224px), 78vw); }
     #recPanel { width: min(var(--recw, 280px), 86vw); }
     #propPanel { width: min(var(--ppw, 272px), 86vw); }
     #empty { padding: 0 16px; }
     footer { gap: 10px; }
-    footer #meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    footer #stats { white-space: nowrap; }
-    footer #camTP { display: none; }
+    footer #meta { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    footer #stats, footer #camTP { display: none; }
   }
 </style>
 </head>
 <body>
   <div id="bar">
+    <button id="btnBurger" title="menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg></button>
     <span class="title">micro</span>
     <button class="mb" id="mFile">File</button>
     <button class="mb" id="mData">Data</button>
@@ -3934,7 +3940,8 @@ function menuXY(x, y, items, onCancel) {
   }, 0);
 }
 function menuAt(anchor, items) {
-  const r = anchor.getBoundingClientRect();
+  let r = anchor.getBoundingClientRect();
+  if (!r.width && !r.height) r = $('#btnBurger').getBoundingClientRect();   // phone: the menubar lives behind the burger
   menuXY(r.left, r.bottom + 2, items);
 }
 // the header panel: everything the providers learned about the open file.
@@ -4053,6 +4060,15 @@ async function showMemoryInfo() {
   row('', '<span class="fi-x">vram = geometry buffers held by layers (hidden layers included). Convert big meshes to streamed, or remove layers, to shed it.</span>');
   showHelp('memory', `<table class="fi">${rows.join('')}</table>`);
 }
+$('#btnBurger').onclick = () => menuAt($('#btnBurger'), [
+  { label: 'File', action: () => setTimeout(() => $('#mFile').click(), 0) },
+  { label: 'Data', action: () => setTimeout(() => $('#mData').click(), 0) },
+  { label: 'Tools', action: () => setTimeout(() => $('#mTools').click(), 0) },
+  { label: 'View', action: () => setTimeout(() => $('#mView').click(), 0) },
+  { label: 'Help', action: () => setTimeout(() => $('#mHelp').click(), 0) },
+  { sep: true },
+  { label: 'Layers panel', action: () => toggleLayersPanel() },
+]);
 $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Fit', kbd: 'f', action: () => $('#btnFit').click() },
   { sep: true },
