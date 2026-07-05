@@ -386,6 +386,17 @@
   #recPanel .rp-row .k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #recPanel .rp-row .v { color: var(--text-hi); text-align: right; white-space: nowrap; }
   #recPanel .rp-note { color: var(--dim); font-size: 11px; padding: 6px 0; }
+  /* in-app prompt — micro never speaks through the browser's "says" box */
+  #pmDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 31; }
+  #pmDlg.show { display: flex; }
+  #pmDlg .box { width: min(340px, 94vw); background: #1a1a1a; border: 1px solid var(--bd2); }
+  #pmDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #pmDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #pmDlg .bd { padding: 14px 16px; }
+  #pmDlg input { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 5px 8px; }
+  #pmDlg input:focus { outline: none; border-color: var(--accent); }
+  #pmDlg .dh-foot { display: flex; justify-content: flex-end; padding: 10px 16px; border-top: 1px solid var(--border); }
+  #pmDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
   /* ── narrow screens (phones): the SAME UI, no reflow — the two bars scroll
      sideways, panels/windows clamp to the viewport, hit targets fatten ── */
   .fwin { max-width: calc(100vw - 8px); }
@@ -483,6 +494,7 @@
   <div id="plDlg"><div class="box"><div class="hd"><span>opening project</span><button id="plClose">×</button></div><div class="bd" id="plDlgBody"></div></div></div>
   <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
   <div id="adDlg"><div class="box"><div class="hd"><span>assign domains</span><button id="adCancel">×</button></div><div class="bd" id="adDlgBody"></div><div id="adProg" style="display:none"><div id="adProgFill"></div></div><div class="dh-foot"><span id="adDlgMsg"></span><button id="adGo">Assign</button></div></div></div>
+  <div id="pmDlg"><div class="box"><div class="hd"><span id="pmTitle">name</span><button id="pmCancel">×</button></div><div class="bd"><input id="pmInput" type="text" spellcheck="false" autocomplete="off"></div><div class="dh-foot"><button id="pmOk">OK</button></div></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
     <circle cx="37" cy="37" r="33" fill="rgba(18,18,18,0.55)" stroke="#4a4a4a" stroke-width="2"/>
     <rect x="35.5" y="0" width="3" height="7" fill="#4a4a4a"/>
@@ -3829,9 +3841,34 @@ async function openProjectPicker() {
   try { await openProjectDir(await window.showDirectoryPicker({ mode: 'readwrite' })); } catch { /* cancelled */ }
 }
 function closeProject() { _project = null; _views = []; updateProjectTitle(); }
+// the in-app prompt — same grammar as window.prompt (null on cancel), but
+// it's OUR dialog: Enter accepts, Esc/backdrop cancel, text pre-selected
+let _pmResolve = null;
+function microPrompt(title, initial = '') {
+  return new Promise((resolve) => {
+    _pmResolve = resolve;
+    $('#pmTitle').textContent = title;
+    const inp = $('#pmInput');
+    inp.value = initial;
+    $('#pmDlg').classList.add('show');
+    inp.focus(); inp.select();
+  });
+}
+function pmClose(v) {
+  if (!_pmResolve) return;
+  $('#pmDlg').classList.remove('show');
+  const r = _pmResolve; _pmResolve = null; r(v);
+}
+$('#pmOk').onclick = () => pmClose($('#pmInput').value);
+$('#pmCancel').onclick = () => pmClose(null);
+$('#pmDlg').addEventListener('pointerdown', (e) => { if (e.target === $('#pmDlg')) pmClose(null); });
+$('#pmInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); pmClose($('#pmInput').value); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); pmClose(null); }
+});
 // saved views: named camera + section bookmarks, kept in project.json
-function saveViewAs() {
-  const name = prompt('view name', `view ${_views.length + 1}`);
+async function saveViewAs() {
+  const name = await microPrompt('view name', `view ${_views.length + 1}`);
   if (!name) return;
   _views = _views.filter((v) => v.name !== name).concat([{ name, camera: captureCamera(), section: captureSection() }]);
   markProjectDirty();
@@ -4820,10 +4857,10 @@ function removeLayerUI(id) {
 function layerMenu(L, x, y) {
   menuXY(x, y, [
     { label: 'Zoom to layer', action: () => fitLayer(L) },
-    { label: 'Rename layer…', action: () => { const v = prompt('layer name', L.label || L.name); if (v && v.trim()) { L.label = v.trim(); renderLayers(); markProjectDirty(); } } },
+    { label: 'Rename layer…', action: async () => { const v = await microPrompt('layer name', L.label || L.name); if (v && v.trim()) { L.label = v.trim(); renderLayers(); markProjectDirty(); } } },
     { label: 'Move to group…', action: () => setTimeout(() => moveLayerToGroupMenu(L, x, y), 0) },
-    ...(L.dh ? [{ label: `Stick radius… (${renderer.layerStickRadius(L.id)} m)`, action: () => {
-      const v = prompt('stick radius (metres)', String(renderer.layerStickRadius(L.id)));
+    ...(L.dh ? [{ label: `Stick radius… (${renderer.layerStickRadius(L.id)} m)`, action: async () => {
+      const v = await microPrompt('stick radius (metres)', String(renderer.layerStickRadius(L.id)));
       const r = parseFloat(v);
       if (Number.isFinite(r) && r > 0) {
         renderer.setLayerStickRadius(L.id, r);             // the context-menu path stays live (no panel involved)
@@ -4893,8 +4930,8 @@ function meshTintMenu(L, x, y) {
   menuXY(x, y, [
     ...MESH_TINTS.map(([label, hex]) => ({ label: (L.tint === hex ? '✓ ' : '') + label, action: () => setMeshTint(L, hex) })),
     { sep: true },
-    { label: 'Custom…', action: () => {
-      const v = (prompt('tint (hex)', L.tint || '#9ea3a8') || '').trim();
+    { label: 'Custom…', action: async () => {
+      const v = ((await microPrompt('tint (hex)', L.tint || '#9ea3a8')) || '').trim();
       if (/^#?[0-9a-fA-F]{6}$/.test(v)) setMeshTint(L, v.startsWith('#') ? v : '#' + v);
     } },
   ]);
@@ -5968,7 +6005,7 @@ function renderClassList(body, L, info) {
         return;
       }
       menuXY(ev.clientX, ev.clientY, [
-        { label: 'Rename…', action: () => { const v = prompt('legend label', e.label); if (v && v.trim()) { const l2 = legS(); const me = l2.entries.find((x) => x.label === e.label); if (me) me.label = v.trim(); touch(); renderProps(); } } },
+        { label: 'Rename…', action: async () => { const v = await microPrompt('legend label', e.label); if (v && v.trim()) { const l2 = legS(); const me = l2.entries.find((x) => x.label === e.label); if (me) me.label = v.trim(); touch(); renderProps(); } } },
         ...(leg.entries.length > 1 ? [{ label: 'Merge into ▸', action: () => setTimeout(() => menuXY(ev.clientX + 16, ev.clientY + 8,
           leg.entries.filter((x) => x !== e).map((t2) => ({ label: t2.label, action: () => {
             const l2 = legS();
@@ -6687,8 +6724,8 @@ function moveLayerToGroupMenu(L, x, y) {
   const inGroup = src && src.arr !== _layerTree;
   menuXY(x, y, [
     ...groups.map((g) => ({ label: `→ ${g.name}`, action: () => treeMove(L.id, g, 'into') })),
-    { label: 'New group…', action: () => {
-      const v = prompt('group name', 'group');
+    { label: 'New group…', action: async () => {
+      const v = await microPrompt('group name', 'group');
       if (!v || !v.trim()) return;
       const src2 = treeFindParent(L.id);
       if (src2) src2.arr.splice(src2.i, 1);
@@ -6704,7 +6741,7 @@ function moveLayerToGroupMenu(L, x, y) {
 }
 function groupMenu(nd, x, y) {
   menuXY(x, y, [
-    { label: 'Rename group…', action: () => { const v = prompt('group name', nd.name); if (v && v.trim()) { nd.name = v.trim(); renderLayers(); markProjectDirty(); } } },
+    { label: 'Rename group…', action: async () => { const v = await microPrompt('group name', nd.name); if (v && v.trim()) { nd.name = v.trim(); renderLayers(); markProjectDirty(); } } },
     { label: 'Zoom to group', action: () => {
       let u = null;
       for (const id of groupLayerIds(nd)) {
