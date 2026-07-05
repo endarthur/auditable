@@ -1696,6 +1696,7 @@ if (target === 'micro') {
     '../../ext/loom/index.js': '#loom',
     '../../ext/winding/index.js': '#winding',
     '../../ext/lfm/lfm.js': '#lfm',
+    '../../ext/gtiff/index.js': '#gtiff',
   };
   const libs = [
     ['condenser', 'ext/condenser/index.js'],
@@ -1704,6 +1705,7 @@ if (target === 'micro') {
     ['loom',      'ext/loom/index.js'],                // the attribute table's canvas grid
     ['winding',   'ext/winding/index.js'],             // select-by-solid containment (spec 17)
     ['lfm',       'ext/lfm/lfm.js'],                   // Leapfrog model files (multi-mesh, colours)
+    ['gtiff',     'ext/gtiff/index.js'],               // GeoTIFF DEMs (spec 7.1)
   ];
   const modules = [];
   for (const [name, rel] of libs) {

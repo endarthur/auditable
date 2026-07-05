@@ -493,7 +493,7 @@
   </div>
   <div id="barTools"></div>
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
-  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj / .lfm anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
+  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj / .lfm / .tif / .grd anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
@@ -527,6 +527,7 @@ import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../.
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
 import { readLFM, writeLFM } from '../../ext/lfm/lfm.js';   // Leapfrog model files (multi-mesh + colours)
+import { readGTiff, gridFromGTiff } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs (spec 7.1)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -2327,7 +2328,7 @@ function closeAllLayers() {
   for (const [lid] of _attrTables) closeAttrTable(lid);
   renderer.clearChunks(); renderer.setPicked(null);
   _layers = []; _activeId = 0; frame = null; _docBbox = null;
-  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
+  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null; _gridDoc = null;
   _filterExpr = ''; _filterEpoch++;
   $('#filter').value = ''; syncFilterClear();
   $('#recPanel').classList.remove('show');
@@ -2370,7 +2371,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   const first = _layers.length === 0;
   _layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: (typeof File !== 'undefined' && blob instanceof File && _fileHandles.get(blob)) || null, storage: 'loose' });
   _activeId = lid;
-  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
+  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null; _gridDoc = null;
   $('#meta').textContent = `${name} — reading…`;
   $('#empty').style.display = 'none';
   try {
@@ -2379,6 +2380,8 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
     // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
     // so grid inference must not promote them to boxes.
+    else if (/\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first }); }
+    else if (/\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first }); }
     else if (/\.(xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { forcePoints: true, layer: lid, first, mapping: over.mapping, discovered: over.discovered }); }
     else if (/\.(csv|txt|dat|asc)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints: over.forcePoints, mapping: over.mapping, discovered: over.discovered }); }
     else if (/\.ply$/i.test(name)) { await openPlyBlob(blob, name, { layer: lid, first }); }
@@ -2410,7 +2413,137 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
 function registerDocs(lid, kind) {
   const L = layerById(lid); if (!L) return;
   L.kind = kind;
-  L.docs = { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc, dhDoc: _dhDoc };
+  L.docs = { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc, dhDoc: _dhDoc, gridDoc: _gridDoc };
+}
+// ── grids (§7.1): GeoTIFF / Surfer .grd / ESRI ASCII → ONE gridDoc shape ──
+// { nx, ny, data, x0, y0, dx, dy, nodata, crs, form } — row 0 is the NORTH
+// row, x0/y0 are SAMPLE CENTERS, dy positive (row r's centre = y0 − r·dy).
+const SURFER_BLANK = 1.70141e38;
+async function readSurferGrd(blob) {
+  const tag = new TextDecoder('latin1').decode(await blob.slice(0, 4).arrayBuffer());
+  if (tag === 'DSRB') throw new Error('Surfer 7 .grd not supported yet — save as Surfer 6 grid');
+  if (tag === 'DSBB') {
+    const v = new DataView(await blob.arrayBuffer());
+    const nx = v.getInt16(4, true), ny = v.getInt16(6, true);
+    const xlo = v.getFloat64(8, true), xhi = v.getFloat64(16, true);
+    const ylo = v.getFloat64(24, true), yhi = v.getFloat64(32, true);
+    const data = new Float32Array(nx * ny);
+    for (let r = 0; r < ny; r++) for (let c = 0; c < nx; c++) {
+      // Surfer stores south-first — flip to north-first
+      data[(ny - 1 - r) * nx + c] = v.getFloat32(56 + (r * nx + c) * 4, true);
+    }
+    return { nx, ny, data, x0: xlo, y0: yhi, dx: nx > 1 ? (xhi - xlo) / (nx - 1) : 1, dy: ny > 1 ? (yhi - ylo) / (ny - 1) : 1, nodata: SURFER_BLANK, crs: null, form: 'Surfer 6 binary' };
+  }
+  if (tag === 'DSAA') {
+    const toks = (await blob.text()).trim().split(/\s+/);
+    const nx = +toks[1], ny = +toks[2];
+    const xlo = +toks[3], xhi = +toks[4], ylo = +toks[5], yhi = +toks[6];
+    const data = new Float32Array(nx * ny);
+    for (let r = 0; r < ny; r++) for (let c = 0; c < nx; c++) data[(ny - 1 - r) * nx + c] = +toks[9 + r * nx + c];
+    return { nx, ny, data, x0: xlo, y0: yhi, dx: nx > 1 ? (xhi - xlo) / (nx - 1) : 1, dy: ny > 1 ? (yhi - ylo) / (ny - 1) : 1, nodata: SURFER_BLANK, crs: null, form: 'Surfer 6 ascii' };
+  }
+  throw new Error('not a Surfer grid (no DSAA/DSBB magic)');
+}
+async function readEsriAsc(blob) {
+  const text = await blob.text();
+  const toks = text.trim().split(/\s+/);
+  let i = 0;
+  const hdr = {};
+  while (i < toks.length && /^[a-z_]/i.test(toks[i])) { hdr[toks[i].toLowerCase()] = +toks[i + 1]; i += 2; }
+  const nx = hdr.ncols, ny = hdr.nrows, cs = hdr.cellsize;
+  if (!nx || !ny || !cs) throw new Error('not an ESRI ASCII grid (missing ncols/nrows/cellsize)');
+  const x0 = hdr.xllcenter != null ? hdr.xllcenter : hdr.xllcorner + cs / 2;
+  const yll = hdr.yllcenter != null ? hdr.yllcenter : hdr.yllcorner + cs / 2;
+  const data = new Float32Array(nx * ny);
+  for (let k = 0; k < nx * ny; k++) data[k] = +toks[i + k];   // already north-first
+  return { nx, ny, data, x0, y0: yll + (ny - 1) * cs, dx: cs, dy: cs, nodata: hdr.nodata_value != null ? hdr.nodata_value : null, crs: null, form: 'ESRI ASCII' };
+}
+const ascLooksLikeGrid = async (blob) => /^\s*ncols\b/i.test(await blob.slice(0, 64).text());
+async function readAnyGrid(blob, name) {
+  if (/\.(tif|tiff)$/i.test(name)) {
+    const g = await readGTiff(blob);
+    const grid = await gridFromGTiff(g);
+    if (grid.x0 == null) { grid.x0 = grid.dx / 2; grid.y0 = grid.ny * grid.dy - grid.dy / 2; }
+    const img = g.images[0];
+    grid.form = `GeoTIFF ${img.bitsPerSample}-bit${img.sampleFormat === 3 ? ' float' : img.sampleFormat === 2 ? ' int' : ''}` +
+      `${{ 1: '', 5: ', LZW', 8: ', deflate', 32946: ', deflate', 32773: ', PackBits' }[img.compression] ?? ''}${img.tiled ? ', tiled' : ''}`;
+    return grid;
+  }
+  if (/\.grd$/i.test(name)) return readSurferGrd(blob);
+  return readEsriAsc(blob);
+}
+// grid → the POINTS pipeline (spec §7.1 v1: heightfield cells as records,
+// zero new GL). The FULL grid stays on the layer for the coming
+// surface-flag/ratio evaluation; display decimates by stride to a cap.
+let _gridDoc = null;
+const GRID_DISPLAY_CAP = 4_000_000;
+async function openGridBlob(blob, name, opts = {}) {
+  const lid = opts.layer != null ? opts.layer : _activeId;
+  $('#meta').textContent = `${name} — reading grid…`;
+  const grid = await readAnyGrid(blob, name);
+  const { nx, ny, data, nodata } = grid;
+  const stride = Math.max(1, Math.ceil(Math.sqrt((nx * ny) / GRID_DISPLAY_CAP)));
+  // one sweep: z range + displayed-node census (nodata and NaN sit out)
+  const isBad = (v2) => Number.isNaN(v2) || (nodata != null && (nodata === SURFER_BLANK ? v2 >= 1.7014e38 : v2 === nodata));
+  let zmin = Infinity, zmax = -Infinity, shown = 0;
+  for (let r = 0; r < ny; r += stride) for (let c = 0; c < nx; c += stride) {
+    const v2 = data[r * nx + c];
+    if (isBad(v2)) continue;
+    if (v2 < zmin) zmin = v2;
+    if (v2 > zmax) zmax = v2;
+    shown++;
+  }
+  if (!shown) throw new Error('grid is all nodata');
+  const header = {
+    count: shown,
+    bbox: {
+      min: [grid.x0, grid.y0 - (ny - 1) * grid.dy, zmin],
+      max: [grid.x0 + (nx - 1) * grid.dx, grid.y0, zmax],
+    },
+  };
+  _gridDoc = { blob, name, grid, stride };
+  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
+  registerDocs(lid, 'points');
+  fitFromHeader(header, opts.first !== false);
+  setColorLabels(null);
+  const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
+  // records are SEQUENTIAL displayed indices (the 29-bit partition can't hold
+  // raw node indices of a huge DEM); dispIdx joins a record back to its node
+  const dispIdx = new Uint32Array(shown);
+  const B = 1 << 18;
+  let bx = new Float64Array(B), by = new Float64Array(B), bz = new Float64Array(B), bi = new Uint16Array(B), bcl = new Uint8Array(B), br = new Uint32Array(B);
+  let fill = 0, rec = 0, pushed = 0;
+  const flush = () => {
+    if (!fill) return;
+    cb.push({ count: fill, x: bx.subarray(0, fill), y: by.subarray(0, fill), z: bz.subarray(0, fill), intensity: bi.subarray(0, fill), classification: bcl.subarray(0, fill), recIdx: br.subarray(0, fill) });
+    pushed += fill; fill = 0;
+    bx = new Float64Array(B); by = new Float64Array(B); bz = new Float64Array(B); bi = new Uint16Array(B); bcl = new Uint8Array(B); br = new Uint32Array(B);
+  };
+  for (let r = 0; r < ny; r += stride) {
+    for (let c = 0; c < nx; c += stride) {
+      const v2 = data[r * nx + c];
+      if (isBad(v2)) continue;
+      bx[fill] = grid.x0 + c * grid.dx;
+      by[fill] = grid.y0 - r * grid.dy;
+      bz[fill] = v2;
+      br[fill] = rec;
+      dispIdx[rec++] = r * nx + c;
+      if (++fill === B) flush();
+    }
+    if ((r / stride | 0) % 64 === 0) {
+      $('#meta').textContent = `${name} — building ${Math.round(100 * r / ny)}%`;
+      await new Promise((res) => setTimeout(res));
+    }
+  }
+  flush();
+  const doc = cb.flush();
+  _gridDoc.dispIdx = dispIdx;
+  const L = layerById(lid);
+  if (L) { L.bboxLocal = doc.bboxLocal; L.docs.gridDoc = _gridDoc; }
+  recomputeUnion();
+  $('#meta').textContent = `${name} — ${nx.toLocaleString()}×${ny.toLocaleString()} ${grid.form}${grid.crs ? ` · ${grid.crs}` : ''}` +
+    `${stride > 1 ? ` · showing every ${stride}ᵗʰ node (${shown.toLocaleString()})` : ` · ${shown.toLocaleString()} nodes`}`;
+  requestRender();
 }
 // PLY path: discovery sweep (no header bbox) → the points pipeline. The
 // provider owns fetchRecord (O(1) binary / sweep ascii) for the pick join.
@@ -2680,6 +2813,18 @@ async function describeFile(f) {
       d.plyFaces = face ? face.count : 0;
       d.kind = 'ply';
       d.desc = h ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary'} · ${h.count.toLocaleString()} vertices${d.plyFaces ? ` · ${d.plyFaces.toLocaleString()} faces → mesh` : ''}` : 'PLY';
+    } else if (/\.(tif|tiff)$/i.test(name)) {
+      d.kind = 'grid';
+      try {
+        const g = await readGTiff(f);
+        const img = g.images[0];
+        d.desc = `GeoTIFF · ${img.width.toLocaleString()}×${img.height.toLocaleString()} ${img.bitsPerSample}-bit${img.sampleFormat === 3 ? ' float' : ''}` +
+          `${g.images.length > 1 ? ` · ${g.images.length - 1} overview${g.images.length > 2 ? 's' : ''}` : ''}${g.geo.crs ? ` · ${g.geo.crs}` : ''}`;
+      } catch (e2) { d.desc = `GeoTIFF — ${e2.message}`; }
+    } else if (/\.grd$/i.test(name)) {
+      d.kind = 'grid';
+      const tag = new TextDecoder('latin1').decode(await f.slice(0, 4).arrayBuffer());
+      d.desc = tag === 'DSAA' ? 'Surfer grid (ascii)' : tag === 'DSBB' ? 'Surfer grid (binary)' : 'Surfer grid';
     } else if (/\.lfm$/i.test(name)) {
       d.kind = 'mesh';
       // the descriptor is XML before the binary — a head slice yields the
@@ -3551,7 +3696,7 @@ async function saveProjectAs() {
 // on reopen. One compact menu covers all outside layers per save.
 const fmtSize = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + ' GB' : b >= 1 << 20 ? (b / (1 << 20)).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
 const layerBytes = (L) => layerFiles(L).reduce((t, fd) => t + (fd.blob && fd.blob.size || 0), 0);
-const layerBlob = (L) => { const d = L.docs.blockDoc || L.docs.plyDoc || L.docs.lasDoc || L.docs.meshDoc; return d && d.blob || null; };
+const layerBlob = (L) => { const d = L.docs.blockDoc || L.docs.plyDoc || L.docs.lasDoc || L.docs.meshDoc || L.docs.gridDoc; return d && d.blob || null; };
 // every file a layer depends on — one for most kinds, three for drillholes
 function layerFiles(L) {
   if (L.dh && L.docs.dhDoc) {
@@ -4219,7 +4364,7 @@ The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Sel
 <b>paint to column</b> (<code>b</code> / the brush button / Data menu) — interactive domaining: a PAINTED column is a category column you fill by hand. The palette window (layer-pinned, like tables) picks the column + the value; while a value is armed, the <code>r</code> / <code>v</code> gestures PAINT it onto whatever they cross (<b>alt</b> erases, Tools → Select through paints the whole tube, <code>Esc</code> puts the brush down, <code>Ctrl+Z</code> undoes a stroke); or build a careful selection first and <b>apply to selection</b>. While painting the layer colors by the column (unpainted recedes dark); painted values are REAL columns — the filter (<code>DOMAIN = "HW_OXIDE"</code>), the scan, the attribute table, and the record panel all see them; they persist in the project<br>
 <b>export rows</b> (Data → Export rows… / the layer context menu) — data leaves micro the way it came in, as rows: scope <b>all</b> · <b>filter matches</b> · <b>selection</b>; every column including ƒ calculated and ✎ painted ones (paint a DOMAIN, export it, feed the estimator); CSV with delimiter choice + decimal comma; streamed, so 1.8M rows is one sweep, and opening a .dm then exporting IS the .dm → CSV converter. In the attribute table, <code>Ctrl+C</code> copies the grid selection as TSV<br>
 <b>select by solid</b> (Tools menu / right-click a mesh layer) — a closed context mesh (.msh / .obj / small .ply) classifies records by winding number: <b>select inside/outside</b> sweeps any element layers into the ordinary selection (paint or export it — the solids → coded-model loop), a <b>flag column</b> writes a value (e.g. <code>IN</code>) into a NEW painted column on any table-backed layers — blocks, points, drillholes — which you can then touch up with the brush; or <b>fraction-inside column</b> probes each block of a regular model (any per-axis resolution — 3×3×2 for benches, 10×10×10 for 1 m blocklings) and writes a numeric 0–1 column (<code>%</code> badge) the filter, table, and export all see; all of it works with flipped solids and colors the layer by the result when done. OPEN SURFACES (topo, weathering horizons — the dialog reads the mesh topology and says which) classify <b>above / below / between</b> instead: the surface is CLOSED by a skirt to a far apex and the same winding containment applies — strong at any depth, and blocks beyond the surface's footprint honestly come back unclassified; <b>between</b> takes a second surface (below the first AND above the second)<br>
-<b>assign domains</b> (Tools menu) — the whole coded-model loop in one run: pick the domain solids (a multi-object .obj or Leapfrog .lfm offers "split into N solids (as a group)" at open — .lfm solids arrive with their Leapfrog colours as tints — each object becomes its own layer inside a layer GROUP), pick the model and a column name, and every block goes to the solid holding its largest fraction; unclaimed blocks stay unpainted and the result is an ordinary painted column — filter it, export it, touch it up with the brush<br>
+<b>assign domains</b> (Tools menu) — the whole coded-model loop in one run: pick the domain solids (a multi-object .obj or Leapfrog .lfm offers "split into N solids (as a group)" at open; GeoTIFF / Surfer .grd / ESRI .asc grids open as heightfield layers (cells are pickable records; huge DEMs decimate for display, the full grid stays for evaluation) — .lfm solids arrive with their Leapfrog colours as tints — each object becomes its own layer inside a layer GROUP), pick the model and a column name, and every block goes to the solid holding its largest fraction; unclaimed blocks stay unpainted and the result is an ordinary painted column — filter it, export it, touch it up with the brush<br>
 <b>layer groups</b> — the layers panel is a tree: a group's eye greys its children without touching THEIR eyes (re-enable and the pattern returns); <b>drag a row</b> between rows to reorder, ONTO a group to join it (touch: long-press the row → Move up / down / to group); <b>ctrl+click</b> multi-selects rows (shift+click = a range) — right-click → <b>Group N selected…</b>; right-click a layer → Move to group… (or New group…), right-click a group → rename / zoom / ungroup; groups persist in the project<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
@@ -4739,6 +4884,12 @@ function floatWin({ title, sub, x = 90, y = 90, w = 560, h = 320, onClose }) {
 const _attrTables = new Map();                             // layerId → { win, grid, view }
 async function fetchLayerRow(L, rec) {
   const d = L.docs;
+  if (d.gridDoc) {
+    const g = d.gridDoc;
+    const i = g.dispIdx ? g.dispIdx[rec] : rec;
+    const r = (i / g.grid.nx) | 0, c = i % g.grid.nx;
+    return [+(g.grid.x0 + c * g.grid.dx).toFixed(3), +(g.grid.y0 - r * g.grid.dy).toFixed(3), +g.grid.data[i].toFixed(3), r, c];
+  }
   if (d.dhDoc) return d.dhDoc.fetchRecord(rec);
   if (d.blockDoc && d.blockDoc.header.dm) return await fetchDmRecord(d.blockDoc.blob, d.blockDoc.header.dm, rec);
   if (d.blockDoc) return await fetchCsvRecord(rec, d.blockDoc);
@@ -4760,6 +4911,7 @@ function attrColumnsOf(L) {
     for (const c of L.paintCols || []) cols.push({ name: (c.kind === 'ratio' ? '% ' : '✎ ') + c.name, num: c.kind === 'ratio' });
     return cols;
   }
+  if (L.docs.gridDoc) return [{ name: 'X', num: true }, { name: 'Y', num: true }, { name: 'Z', num: true }, { name: 'row', num: true }, { name: 'col', num: true }];
   if (L.docs.plyDoc) return L.docs.plyDoc.header.columns.map((name) => ({ name, num: true }));
   if (L.docs.lasDoc) return [{ name: 'X', num: true }, { name: 'Y', num: true }, { name: 'Z', num: true }, { name: 'intensity', num: true }, { name: 'classification', num: true }];
   return null;
@@ -7043,6 +7195,16 @@ async function showRecord(fullId) {
   const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
   const tag = _layers.length > 1 && L ? `${L.label || L.name} · ` : '';
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
+  if (docs.gridDoc) {
+    const gd = docs.gridDoc, g = gd.grid;
+    const i = gd.dispIdx ? gd.dispIdx[rec] : rec;
+    const r = (i / g.nx) | 0, c = i % g.nx;
+    showRecPanel(`${tag}cell · ${r},${c}`, [
+      ['X', +(g.x0 + c * g.dx).toFixed(3)], ['Y', +(g.y0 - r * g.dy).toFixed(3)],
+      ['Z', +g.data[i].toFixed(3)], ['row', r], ['col', c],
+    ]);
+    return;
+  }
   if (dd) {
     const f = dd.fetchRecord(rec);
     if (!f) { showRecPanel(`${tag}interval · row ${rec.toLocaleString()}`, [], 'row not found'); return; }
