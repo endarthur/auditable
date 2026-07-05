@@ -1,0 +1,13 @@
+{
+  "name": "auditable-parquet-bundle",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "vendored hyparquet (read) + hyparquet-writer + WASM-free codecs (snappyjs, fzstd) → @gcu/parquet",
+  "dependencies": {
+    "hyparquet": "^1.26.2",
+    "hyparquet-writer": "^0.16.1",
+    "snappyjs": "^0.7.0",
+    "fzstd": "^0.1.1"
+  }
+}
