@@ -2448,6 +2448,37 @@ function unionWorldBbox(list) {
   for (const b of list) { if (!b) continue; if (!u) u = b.slice(); else for (let i = 0; i < 3; i++) { if (b[i] < u[i]) u[i] = b[i]; if (b[i + 3] > u[i + 3]) u[i + 3] = b[i + 3]; } }
   return u;
 }
+// grid phasing (the "rotation origin" of Datamine/Vulcan): the lattice
+// anchor + k·step must PASS THROUGH the anchor while covering [lo, hi]. half =
+// step/2 for a block centre (the block reaches ±half), 0 for a grid node.
+function alignAxis(anchor, lo, hi, step, half) {
+  let o = anchor + Math.round((lo - anchor) / step) * step;   // in-phase, nearest lo
+  while (o - half > lo + 1e-6) o -= step;                     // step out until it covers lo
+  let n = 1;
+  while (o + (n - 1) * step + half < hi - 1e-6) n++;          // grow until it covers hi
+  return { min: o, n: Math.max(1, n) };
+}
+// origin + counts for a grid / block model covering bbox bb, optionally phased
+// to d.ax/d.ay/d.az. Shared by the tally and the builder so they never drift.
+function coverGeometry(d, bb) {
+  const isBM = d.type === 'block';
+  const sx = d.dx, sy = isBM ? d.dy : d.dx, sz = d.dz;
+  if (d.align) {
+    const hx = isBM ? sx / 2 : 0, hy = isBM ? sy / 2 : 0, hz = sz / 2;
+    const X = alignAxis(d.ax, bb[0], bb[3], sx, hx);
+    const Y = alignAxis(d.ay, bb[1], bb[4], sy, hy);
+    const nx = X.n, ny = Y.n;
+    // grid rows descend from y0=top; the node set is the same either way, so
+    // y0 = the highest in-phase node (Y.min + (ny−1)·sy)
+    const x0 = X.min, y0 = isBM ? Y.min : Y.min + (ny - 1) * sy;
+    if (isBM) { const Z = alignAxis(d.az, bb[2], bb[5], sz, hz); return { x0, y0, z0: Z.min, nx, ny, nz: Z.n }; }
+    return { x0, y0, z0: 0, nx, ny, nz: 1 };
+  }
+  const nx = Math.max(1, Math.floor((bb[3] - bb[0]) / sx) + 1);
+  const ny = Math.max(1, Math.floor((bb[4] - bb[1]) / sy) + 1);
+  const nz = isBM ? Math.max(1, Math.floor((bb[5] - bb[2]) / sz) + 1) : 1;
+  return { x0: isBM ? bb[0] + sx / 2 : bb[0], y0: isBM ? bb[1] + sy / 2 : bb[4], z0: bb[2] + sz / 2, nx, ny, nz };
+}
 function buildEmptyGrid({ x0, y0, dx, nx, ny, fill = 0 }) {
   return { nx, ny, x0, y0, dx, dy: dx, data: new Float32Array(nx * ny).fill(fill), nodata: -9999, crs: null, form: 'empty' };
 }
@@ -2551,6 +2582,7 @@ function openNewDialog() {
     src: _layers.length ? 'all' : null,
     x0: bb ? +bb[0].toFixed(2) : 0, y0: bb ? +bb[4].toFixed(2) : 0, z0: bb ? +bb[2].toFixed(2) : 0,
     dx: 10, dy: 10, dz: 10, nx: 50, ny: 50, nz: 20, fill: 0, valName: 'VAL',
+    align: false, ax: 0, ay: 0, az: 0,
   };
   renderNewDialog();
   $('#ngDlg').classList.add('show');
@@ -2574,6 +2606,10 @@ function renderNewDialog() {
     sel.value = d.src || 'all';
     sel.onchange = () => { d.src = sel.value; updTally(); };
     row('source', sel);
+    const alignRow = row('align');
+    const cbl = document.createElement('label'); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = d.align; cb.onchange = () => { d.align = cb.checked; renderNewDialog(); }; cbl.append(cb, 'to a point'); alignRow.appendChild(cbl);
+    if (d.align) alignRow.append(num('ax'), num('ay'), ...(isBM ? [num('az')] : []));
+    if (d.align) body.appendChild(ppNote(`the lattice passes through (${d.ax}, ${d.ay}${isBM ? `, ${d.az}` : ''}) as a ${isBM ? 'block centre' : 'node'}, while still covering the extent`));
   } else {
     row(isBM ? 'origin X,Y,Z' : 'origin X,Y', num('x0'), num('y0'), ...(isBM ? [num('z0')] : []));
     row(isBM ? 'counts' : 'counts', num('nx', 64), num('ny', 64), ...(isBM ? [num('nz', 64)] : []));
@@ -2587,10 +2623,8 @@ function renderNewDialog() {
     if (d.mode === 'cover') {
       const bb = ngSourceBbox(d);
       if (!bb) return null;
-      const nx = Math.max(1, Math.floor((bb[3] - bb[0]) / d.dx) + 1);
-      const ny = Math.max(1, Math.floor((bb[4] - bb[1]) / (isBM ? d.dy : d.dx)) + 1);
-      const nz = isBM ? Math.max(1, Math.floor((bb[5] - bb[2]) / d.dz) + 1) : 1;
-      return { nx, ny, nz, bb };
+      const g = coverGeometry(d, bb);
+      return { nx: g.nx, ny: g.ny, nz: g.nz, bb };
     }
     return { nx: Math.max(1, d.nx | 0), ny: Math.max(1, d.ny | 0), nz: isBM ? Math.max(1, d.nz | 0) : 1 };
   }
@@ -2614,13 +2648,8 @@ $('#ngGo').onclick = async () => {
   if (d.mode === 'cover') {
     const bb = ngSourceBbox(d);
     if (!bb) { $('#ngDlgMsg').textContent = 'no bounding box'; return; }
-    nx = Math.max(1, Math.floor((bb[3] - bb[0]) / d.dx) + 1);
-    ny = Math.max(1, Math.floor((bb[4] - bb[1]) / (isBM ? d.dy : d.dx)) + 1);
-    nz = isBM ? Math.max(1, Math.floor((bb[5] - bb[2]) / d.dz) + 1) : 1;
-    // grid: node 0 at the min corner; block model: block-0 CENTRE = min + size/2
-    x0 = isBM ? bb[0] + d.dx / 2 : bb[0];
-    y0 = isBM ? bb[1] + d.dy / 2 : bb[4];               // grid y0 = top (max Y)
-    z0 = bb[2] + d.dz / 2;
+    const g = coverGeometry(d, bb);
+    x0 = g.x0; y0 = g.y0; z0 = g.z0; nx = g.nx; ny = g.ny; nz = g.nz;
   } else {
     nx = Math.max(1, d.nx | 0); ny = Math.max(1, d.ny | 0); nz = isBM ? Math.max(1, d.nz | 0) : 1;
     x0 = d.x0; y0 = d.y0; z0 = d.z0;
@@ -7743,7 +7772,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, writeEsriAsc, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, openGridBlob, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, writeEsriAsc, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
