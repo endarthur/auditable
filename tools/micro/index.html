@@ -363,6 +363,17 @@
   .lin-op { color: var(--accent); font-weight: 600; min-width: 84px; }
   .lin-sum { flex: 1; color: var(--fg, #ddd); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .lin-when { color: var(--dim); font-size: 10px; font-family: monospace; white-space: nowrap; }
+  #palOverlay { position: fixed; inset: 0; z-index: 200; display: none; align-items: flex-start; justify-content: center; background: rgba(0,0,0,0.32); }
+  #palBox { margin-top: 12vh; width: min(560px, 92vw); background: var(--panel, #1c1c1c); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,0.5); overflow: hidden; }
+  #palInput { width: 100%; box-sizing: border-box; padding: 12px 14px; font: 15px/1.2 system-ui, sans-serif; background: transparent; color: var(--fg, #eee); border: none; border-bottom: 1px solid var(--border); outline: none; }
+  #palList { max-height: 52vh; overflow: auto; padding: 4px; }
+  .pal-item { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px; border-radius: 5px; cursor: pointer; }
+  .pal-item.sel { background: var(--accent); }
+  .pal-item.sel .pal-g { color: rgba(255,255,255,0.75); }
+  .pal-item.sel .pal-t { color: #fff; }
+  .pal-g { font: 10px monospace; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); min-width: 62px; }
+  .pal-t { font-size: 13px; color: var(--fg, #ddd); }
+  .pal-empty { padding: 12px; color: var(--dim); font-size: 12px; text-align: center; }
   .fwin.min .fwin-body, .fwin.min .fwin-grip { display: none; }
   .fwin-grip { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; z-index: 3; }
   .fwin-grip::after { content: ''; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-right: 2px solid var(--dim); border-bottom: 2px solid var(--dim); }
@@ -458,6 +469,7 @@
     <button class="mb" id="mTools">Tools</button>
     <button class="mb" id="mView">View</button>
     <button class="mb" id="mHelp">Help</button>
+    <button class="mb" id="btnCmd" title="command palette (Ctrl/⌘K) — search every action">⌘K</button>
     <span id="filterWrap"><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
     <span class="spacer"></span>
     <button id="btnSelRect" title="select — rectangle (r) · shift adds, alt subtracts · the layers toggle flips to through/volume"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/><path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/></svg></button>
@@ -6291,9 +6303,97 @@ function scrubSection(dir) {
   $('#secPos').value = Math.max(0, Math.min(1, +$('#secPos').value + dir * step));
   requestRender();
 }
+// ── command palette (GCU noun-first model): one searchable registry over every
+// verb, context-aware via when(ctx). The discoverability surface that ties the
+// menubar / context menus / keyboard together. Ctrl/⌘K or the ⌘K button. ──
+const COMMANDS = [
+  { id: 'open', group: 'File', title: 'Open file…', kw: 'load import csv las ply parquet dm tif grd xyz obj msh', run: () => openFilePicker() },
+  { id: 'new', group: 'File', title: 'New grid / block model…', kw: 'create empty cover common lattice', run: () => openNewDialog() },
+  { id: 'newproj', group: 'File', title: 'New project (clear)', kw: 'reset slate', run: () => newProject() },
+  { id: 'save', group: 'File', title: 'Save project', kw: 'store', when: () => hasFSAA, run: () => saveProject() },
+  { id: 'png', group: 'File', title: 'Save viewport PNG', kw: 'screenshot image capture figure', run: () => $('#btnShot').click() },
+  { id: 'fit', group: 'View', title: 'Fit view', kw: 'zoom extent', run: () => $('#btnFit').click() },
+  { id: 'plan', group: 'View', title: 'Plan view (looking down)', kw: 'top', run: () => setView(cam.state.theta, PHI_MAX) },
+  { id: 'section', group: 'View', title: 'Section on / off', kw: 'slice clip', run: () => toggleSection() },
+  { id: 'along', group: 'View', title: 'Look along the section', kw: 'face on', run: () => viewAlongSection() },
+  { id: 'ortho', group: 'View', title: 'Toggle orthographic', kw: 'perspective parallel', run: () => { cam.setOrtho(!cam.state.ortho); requestRender(); } },
+  { id: 'panel', group: 'View', title: 'Toggle layers panel', kw: 'tree', run: () => toggleLayersPanel() },
+  { id: 'selrect', group: 'Select', title: 'Select — rectangle', kw: 'box pick', run: () => armSelect('rect') },
+  { id: 'sellasso', group: 'Select', title: 'Select — lasso', kw: 'freehand pick', run: () => armSelect('lasso') },
+  { id: 'selthrough', group: 'Select', title: 'Toggle select-through (volume)', kw: 'occluded tube', run: () => setSelThrough(!_selThrough) },
+  { id: 'selclear', group: 'Select', title: 'Clear selection', kw: 'deselect', run: () => clearSelection() },
+  { id: 'solid', group: 'Select', title: 'Select by solid / surface…', kw: 'winding flag ratio fraction inside', when: () => _layers.some((L) => L.kind === 'mesh'), run: () => openSolidDialog(null) },
+  { id: 'domains', group: 'Select', title: 'Assign domains…', kw: 'coded model solids', when: () => _layers.some((L) => L.kind === 'mesh'), run: () => openDomainsDialog() },
+  { id: 'gt', group: 'Analyse', title: 'Grade-tonnage…', kw: 'cutoff tonnes curve reserve', when: (c) => c.L && gridAxesOf(c.L), run: (c) => openGradeTonnage(c.L) },
+  { id: 'swath', group: 'Analyse', title: 'Swath plot…', kw: 'drift bias direction trend plunge dip rake', when: (c) => c.L && gridAxesOf(c.L), run: (c) => openSwath(c.L) },
+  { id: 'join', group: 'Analyse', title: 'Join / reconcile…', kw: 'merge compare delta reconciliation spatial key', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); _propTab = 'join'; openProps(); } },
+  { id: 'table', group: 'Analyse', title: 'Attribute table…', kw: 'rows data grid', when: (c) => c.L && c.L.kind !== 'mesh', run: (c) => openAttrTable(c.L) },
+  { id: 'filter', group: 'Analyse', title: 'Filter…', kw: 'query where expression', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); $('#filter').focus(); } },
+  { id: 'scan', group: 'Analyse', title: 'Scan columns (stats)', kw: 'histogram quantiles mean', when: (c) => c.L && layerTableHeader(c.L), run: (c) => scanColumns(c.L).then(() => { if (_propOpen) renderProps(); }).catch(() => {}) },
+  { id: 'measure', group: 'Analyse', title: 'Measure…', kw: 'distance ruler', run: () => armMeasure() },
+  { id: 'props', group: 'Layer', title: 'Properties…', kw: 'style colour clip', when: (c) => c.L, run: (c) => { setActiveLayer(c.L.id); openProps(); } },
+  { id: 'lineage', group: 'Layer', title: 'Lineage…', kw: 'provenance audit report history derivation', when: (c) => c.L && c.L.lineage, run: (c) => openLineageWindow(c.L) },
+  { id: 'optimize', group: 'Layer', title: 'Optimize to spatial Parquet', kw: 'morton index materialize', when: (c) => c.L && c.L.docs.blockDoc && !c.L.docs.blockDoc.parquet, run: (c) => convertLayerToParquet(c.L) },
+  { id: 'paint', group: 'Layer', title: 'Paint column…', kw: 'brush domain category', when: (c) => c.L && layerTableHeader(c.L), run: (c) => openPaintPalette(c.L) },
+  { id: 'export', group: 'Layer', title: 'Export rows…', kw: 'csv parquet save out', when: (c) => c.L && layerTableHeader(c.L), run: (c) => openExportDialog(c.L) },
+  { id: 'hide', group: 'Layer', title: 'Hide / show layer', kw: 'visible toggle', when: (c) => c.L, run: (c) => { c.L.visible = !c.L.visible; applyTreeVisibility(); renderLayers(); } },
+  { id: 'remove', group: 'Layer', title: 'Remove layer', kw: 'delete close', when: (c) => c.L, run: (c) => removeLayerUI(c.L.id) },
+  { id: 'memory', group: 'Tools', title: 'Memory…', kw: 'vram usage ram', run: () => showMemoryInfo() },
+];
+let _palOpen = false, _palSel = 0, _palItems = [];
+const palCtx = () => ({ L: activeLayer(), layers: _layers, project: _project });
+function openPalette() {
+  if (_palOpen) return; _palOpen = true;
+  let ov = $('#palOverlay');
+  if (!ov) {
+    ov = document.createElement('div'); ov.id = 'palOverlay';
+    ov.innerHTML = '<div id="palBox"><input id="palInput" placeholder="Type a command…  (↑↓ to move · Enter to run · Esc to close)" autocomplete="off" spellcheck="false"><div id="palList"></div></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('pointerdown', (e) => { if (e.target === ov) closePalette(); });
+    $('#palInput').addEventListener('input', () => { _palSel = 0; renderPalette(); });
+    $('#palInput').addEventListener('keydown', palKeydown);
+  }
+  ov.style.display = 'flex'; $('#palInput').value = ''; _palSel = 0; renderPalette(); $('#palInput').focus();
+}
+function closePalette() { _palOpen = false; const ov = $('#palOverlay'); if (ov) ov.style.display = 'none'; }
+function renderPalette() {
+  const q = $('#palInput').value.trim().toLowerCase(), ctx = palCtx();
+  const toks = q.split(/\s+/).filter(Boolean);
+  const scored = [];
+  for (const c of COMMANDS) {
+    if (c.when && !c.when(ctx)) continue;
+    const hay = (c.title + ' ' + c.group + ' ' + (c.kw || '')).toLowerCase();
+    if (toks.every((t) => hay.includes(t))) scored.push({ c, score: c.title.toLowerCase().startsWith(q) ? 0 : c.title.toLowerCase().includes(q) ? 1 : 2 });
+  }
+  scored.sort((a, b) => a.score - b.score);
+  _palItems = scored.map((s) => s.c);
+  if (_palSel >= _palItems.length) _palSel = Math.max(0, _palItems.length - 1);
+  const list = $('#palList'); list.textContent = '';
+  _palItems.forEach((c, i) => {
+    const d = document.createElement('div'); d.className = 'pal-item' + (i === _palSel ? ' sel' : '');
+    const g = document.createElement('span'); g.className = 'pal-g'; g.textContent = c.group;
+    const t = document.createElement('span'); t.className = 'pal-t'; t.textContent = c.title;
+    d.append(g, t); d.onmousemove = () => { if (_palSel !== i) { _palSel = i; renderPalette(); } }; d.onclick = () => runPalette(i);
+    list.appendChild(d);
+    if (i === _palSel) d.scrollIntoView({ block: 'nearest' });
+  });
+  if (!_palItems.length) { const d = document.createElement('div'); d.className = 'pal-empty'; d.textContent = 'no matching command'; list.appendChild(d); }
+}
+function palKeydown(e) {
+  if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); _palSel = Math.min(_palItems.length - 1, _palSel + 1); renderPalette(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); _palSel = Math.max(0, _palSel - 1); renderPalette(); }
+  else if (e.key === 'Enter') { e.preventDefault(); runPalette(_palSel); }
+}
+function runPalette(i) { const c = _palItems[i]; if (!c) return; closePalette(); try { c.run(palCtx()); } catch (err) { $('#meta').textContent = `${c.title}: ${err.message}`; } }
+$('#btnCmd').onclick = () => (_palOpen ? closePalette() : openPalette());
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); _palOpen ? closePalette() : openPalette(); }
+}, true);
 window.addEventListener('keydown', (e) => {
   if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // typing, not commanding
   const k = e.key;
+  if (e.ctrlKey || e.metaKey) return;                     // reserved combos (⌘K palette, ⌘S save…) handled elsewhere
   if (k === 'f') $('#btnFit').click();
   else if (k === 'k') { $('#secMode').value = 'knife'; $('#secMode').dispatchEvent(new Event('input')); }
   else if (k === 'Escape' && _knifeArm) { armKnife(false); $('#secMode').value = 'off'; $('#secMode').dispatchEvent(new Event('input')); }
@@ -9013,7 +9113,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

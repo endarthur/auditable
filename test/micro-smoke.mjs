@@ -103,6 +103,17 @@ await layerReady('model.csv');
 const csvInfo = await p.evaluate(() => { const h = window._micro.layers()[0].docs.blockDoc.header; return { n: window._micro.renderer.layerElementCount(window._micro.layers()[0].id), grid: h.grid && [h.grid.x.count, h.grid.y.count, h.grid.z.count].join(), cats: (h.categories || []).length }; });
 chk(`CSV block model: ${csvInfo.n} blocks, grid ${csvInfo.grid}, ${csvInfo.cats} categories`, csvInfo.n === NBLOCKS && csvInfo.grid === '30,20,2' && csvInfo.cats === 3);
 
+// ── 1b. command palette: opens, filters, context-aware, runs ──
+const pal = await p.evaluate(() => {
+  window._micro.openPalette();
+  const type = (q) => { const i = document.querySelector('#palInput'); i.value = q; i.dispatchEvent(new Event('input')); };
+  type('swath'); const swath = [...document.querySelectorAll('#palList .pal-item .pal-t')].some((e) => /Swath/.test(e.textContent));
+  type('reconcile'); const rec = [...document.querySelectorAll('#palList .pal-item .pal-t')].some((e) => /reconcile/i.test(e.textContent));
+  window._micro.closePalette();
+  return { open: !!document.querySelector('#palOverlay'), swath, rec };
+});
+chk(`command palette: filters to Swath (${pal.swath}) + Join/reconcile (${pal.rec}) on a block model`, pal.swath && pal.rec);
+
 // ── 2. pick reads a record ──
 await p.evaluate(() => { document.querySelector('#compass').dispatchEvent(new MouseEvent('click')); document.querySelector('#btnFit').click(); const px = document.querySelector('#ptPx'); px.value = 6; px.dispatchEvent(new Event('input')); });
 await p.waitForFunction(() => /converged/.test(document.querySelector('#stats').textContent), null, { timeout: 60000 });
