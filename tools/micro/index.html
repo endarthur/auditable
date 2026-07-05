@@ -4526,6 +4526,27 @@ const PROJECTS_KEY = '__projects__';
 function markProjectDirty() {
   if (_project && !_project.dirty) { _project.dirty = true; updateProjectTitle(); }
 }
+// "Parquet is the project store": on save, non-Parquet block models get
+// reordered to Morton-sorted spatial Parquet (the same in-place op as the
+// layer-menu "Optimize to spatial Parquet"), behind a one-time remembered
+// confirm. Painting stays editable. The manual menu action is the per-layer
+// escape hatch; the remembered choice is resettable from Tools → Settings.
+let _autoOptimize = (() => { try { return localStorage.getItem('micro.autoOptimize'); } catch { return null; } })();   // 'on' | 'off' | null (unasked)
+function setAutoOptimize(v) { _autoOptimize = v; try { localStorage.setItem('micro.autoOptimize', v); } catch { /* private mode */ } }
+async function maybeAutoOptimize() {
+  const cands = _layers.filter((L) => L.docs.blockDoc && !L.docs.blockDoc.parquet && layerTableHeader(L) && (layerTableHeader(L).mapping || {}).x != null);
+  if (!cands.length) return;
+  let choice = _autoOptimize;
+  if (choice == null) {
+    const total = cands.reduce((t, L) => t + (layerBlob(L) ? layerBlob(L).size : 0), 0);
+    const yes = await microConfirm('Store block models as spatial Parquet?',
+      `${cands.length} block model${cands.length > 1 ? 's' : ''} (${fmtSize(total)}) can be reordered to Morton-sorted Parquet — faster spatial queries, smaller files, painting stays editable. Apply on every save?`,
+      'Optimize', 'Keep original');
+    choice = yes ? 'on' : 'off'; setAutoOptimize(choice);
+  }
+  if (choice !== 'on') return;
+  for (const L of cands) { $('#meta').textContent = `optimizing ${L.name}…`; try { await convertLayerToParquet(L); } catch (e) { $('#meta').textContent = `optimize ${L.name}: ${e.message}`; } }
+}
 function updateProjectTitle() {
   document.title = _project ? `micro — ${_project.name}${_project.dirty ? ' •' : ''}` : 'micro';
 }
@@ -4734,6 +4755,7 @@ async function saveProject() {
   const dir = _project.dir;
   try {
     if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'project: write permission denied'; return; }
+    await maybeAutoOptimize();                              // reorder block models to spatial Parquet BEFORE triage, so the parquet is what's referenced/copied
     const outside = [];
     for (const L of _layers) {
       const flist = layerFiles(L);
@@ -5036,13 +5058,15 @@ function microPrompt(title, initial = '') {
 }
 // confirm rides the same dialog — the input yields to a message; resolves
 // true on OK, false on Esc / × / backdrop
-function microConfirm(title, msg) {
+function microConfirm(title, msg, okLabel, cancelLabel) {
   return new Promise((resolve) => {
     _pmResolve = (v) => resolve(v !== null);
     $('#pmTitle').textContent = title;
     const m = $('#pmMsg');
     m.textContent = msg; m.style.display = '';
     $('#pmInput').style.display = 'none';
+    $('#pmOk').textContent = okLabel || 'OK';
+    $('#pmCancel').textContent = cancelLabel || 'Cancel';
     $('#pmDlg').classList.add('show');
     $('#pmOk').focus();
   });
@@ -5050,6 +5074,7 @@ function microConfirm(title, msg) {
 function pmClose(v) {
   if (!_pmResolve) return;
   $('#pmDlg').classList.remove('show');
+  $('#pmOk').textContent = 'OK'; $('#pmCancel').textContent = 'Cancel';   // restore defaults for other dialogs
   const r = _pmResolve; _pmResolve = null; r(v);
 }
 $('#pmOk').onclick = () => pmClose($('#pmInput').value);
@@ -5335,6 +5360,7 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
   { label: 'Scrub section back', kbd: '[', action: () => scrubSection(-1) },
   { label: 'Scrub section forward', kbd: ']', action: () => scrubSection(1) },
   { sep: true },
+  { label: (_autoOptimize === 'on' ? '✓ ' : '') + 'Auto-optimize block models to spatial Parquet on save', action: () => setAutoOptimize(_autoOptimize === 'on' ? 'off' : 'on') },
   { label: 'Memory…', action: showMemoryInfo },
 ]);
 const HELP_KEYS = `
@@ -8282,7 +8308,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

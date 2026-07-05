@@ -163,12 +163,14 @@ await layerReady('cloud.xyz');
 const xyzN = await p.evaluate(() => window._micro.renderer.layerElementCount(window._micro.layers().find((L) => L.name === 'cloud.xyz').id));
 chk(`XYZ points: ${xyzN} points`, xyzN === 200);
 
-// ── 8. project round trip (OPFS): save → reopen → grid + filter survive ──
+// ── 8. project round trip (OPFS) + auto-optimize on save: the CSV model is
+//    reordered to spatial Parquet in place at save time, and reopens as Parquet ──
 await p.evaluate(() => { window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('microsmoke', { create: true }); });
 // keep only the CSV model for a clean round trip
 await p.evaluate(() => { const m = window._micro; for (const L of [...m.layers()]) if (L.name !== 'model.csv') m.renderer.removeLayer(L.id); m.layers().length = 0; });
 await p.evaluate((csv) => window._micro.openBlob(new Blob([csv]), 'model.csv', 'replace'), blockCsv());
 await layerReady('model.csv');
+await p.evaluate(() => window._micro.setAutoOptimize('on'));    // "Parquet is the project store": optimize on save, no confirm
 p.evaluate(() => window._micro.saveProjectAs());
 await p.waitForFunction(() => document.querySelector('#svDlg').classList.contains('show') || /project saved/.test(document.querySelector('#meta').textContent), null, { timeout: 30000 });
 await p.evaluate(() => { if (document.querySelector('#svDlg').classList.contains('show')) document.querySelector('#svCopy').click(); });
@@ -180,8 +182,8 @@ await p2.waitForFunction(() => window._micro, null, { timeout: 20000 });
 await p2.waitForFunction(() => document.querySelector('#emptyProjects .er-chip'), null, { timeout: 5000 });
 await p2.evaluate(() => document.querySelector('#emptyProjects .er-chip').click());
 await p2.waitForFunction(() => /project “microsmoke”/.test(document.querySelector('#meta').textContent), null, { timeout: 120000 });
-const back = await p2.evaluate(() => { const L = window._micro.layers().find((x) => x.docs.blockDoc); const h = L && L.docs.blockDoc.header; return { n: L ? window._micro.renderer.layerElementCount(L.id) : 0, grid: h && h.grid && [h.grid.x.count, h.grid.y.count, h.grid.z.count].join() }; });
-chk(`project round trip: ${back.n} blocks back, grid ${back.grid}`, back.n === NBLOCKS && back.grid === '30,20,2');
+const back = await p2.evaluate(() => { const L = window._micro.layers().find((x) => x.docs.blockDoc); const h = L && L.docs.blockDoc.header; return { n: L ? window._micro.renderer.layerElementCount(L.id) : 0, grid: h && h.grid && [h.grid.x.count, h.grid.y.count, h.grid.z.count].join(), parquet: !!(L && L.docs.blockDoc.parquet), name: L && L.name }; });
+chk(`project round trip: ${back.n} blocks back, grid ${back.grid}, auto-optimized to Parquet (${back.parquet}, “${back.name}”)`, back.n === NBLOCKS && back.grid === '30,20,2' && back.parquet && /\.parquet$/.test(back.name || ''));
 
 console.log(ok && process.exitCode !== 1 ? '\nMICRO SMOKE: PASS' : '\nMICRO SMOKE: FAIL');
 await b.close(); server.close();
