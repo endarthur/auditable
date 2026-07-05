@@ -529,7 +529,7 @@ import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../.
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
 import { readLFM, writeLFM } from '../../ext/lfm/lfm.js';   // Leapfrog model files (multi-mesh + colours)
-import { readGTiff, gridFromGTiff, gridWindowFromGTiff, windowForWorldBbox, pickOverviewForCap } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs + windowed reads (spec 7.1)
+import { readGTiff, gridFromGTiff, gridWindowFromGTiff, gridDecimatedFromGTiff, stepForCap, windowForWorldBbox, pickOverviewForCap } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs + windowed/decimated reads (spec 7.1)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -1720,7 +1720,7 @@ function targetsXYBbox(list) {
 // overlapping tiles) — accurate flag/ratio without decoding the whole DEM
 async function residentGridForEval(gridL, bbox4) {
   const gd = gridL.docs.gridDoc;
-  if (!gd || !gd.source || !gd.source.g || !gd.level || !bbox4) return gd.grid;
+  if (!gd || !gd.source || !gd.source.g || gd.fullRes || !bbox4) return gd.grid;
   try {
     const win = windowForWorldBbox(gd.source.g, 0, bbox4, 2);
     if (win.width <= 0 || win.height <= 0) return gd.grid;
@@ -2928,13 +2928,18 @@ async function readAnyGrid(blob, name) {
     // paints instantly; the full-res data is read windowed, only for eval
     const DISPLAY_DECODE_CAP = window.__gridDisplayCap || 8_000_000;   // test seam
     const level = pickOverviewForCap(g, DISPLAY_DECODE_CAP);
-    const grid = await gridFromGTiff(g, level);
+    // even the coarsest overview may exceed the budget (or there are NO
+    // overviews) — decimate that level to fit, one segment resident at a time.
+    // Bounded memory for ANY-size TIFF; eval still reads full res windowed.
+    const step = stepForCap(g, level, DISPLAY_DECODE_CAP);
+    const grid = step > 1 ? await gridDecimatedFromGTiff(g, level, step) : await gridFromGTiff(g, level);
     if (grid.x0 == null) { grid.x0 = grid.dx / 2; grid.y0 = grid.ny * grid.dy - grid.dy / 2; }
-    const img = g.images[0];
+    const img = g.images[0], lvl = g.images[level];
     grid.form = `GeoTIFF ${img.bitsPerSample}-bit${img.sampleFormat === 3 ? ' float' : img.sampleFormat === 2 ? ' int' : ''}` +
       `${{ 1: '', 5: ', LZW', 8: ', deflate', 32946: ', deflate', 32773: ', PackBits' }[img.compression] ?? ''}${img.tiled ? ', tiled' : ''}` +
-      `${level > 0 ? ` · overview ${g.images[level].width}×${g.images[level].height} of ${img.width}×${img.height}` : ''}`;
-    grid._src = { g, level, name };                        // windowable full-res source (eval + export)
+      `${level > 0 ? ` · overview ${lvl.width}×${lvl.height} of ${img.width}×${img.height}` : ''}` +
+      `${step > 1 ? ` · display ÷${step} (${grid.nx}×${grid.ny})` : ''}`;
+    grid._src = { g, level, name, step };                  // windowable full-res source (eval + export)
     return grid;
   }
   if (/\.grd$/i.test(name)) return readSurferGrd(blob);
@@ -3132,7 +3137,7 @@ async function openGridBlob(blob, name, opts = {}) {
       max: [grid.x0 + (nx - 1) * grid.dx, grid.y0, zmax],
     },
   };
-  _gridDoc = { blob, name, grid, stride, source: grid._src || null, level: grid._src ? grid._src.level : 0 };
+  _gridDoc = { blob, name, grid, stride, source: grid._src || null, level: grid._src ? grid._src.level : 0, fullRes: !grid._src || (grid._src.level === 0 && grid._src.step === 1) };
   _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   registerDocs(lid, 'points');
   fitFromHeader(header, opts.first !== false);
