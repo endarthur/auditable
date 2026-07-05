@@ -6778,7 +6778,11 @@ function renderLayers() {
     n.textContent = (renderer.layerElementCount(L.id) || 0).toLocaleString();
     const grip = mkGrip();
     armDrag(grip, row, L.id);
-    row.append(grip, eye, name, n);
+    // every row carries the caret SLOT (leaves get it empty) so checkboxes
+    // column-align per depth — a group's eye sits level with its siblings,
+    // and its children land one indent to the RIGHT of it, not the left
+    const slot = document.createElement('span'); slot.className = 'lp-caret';
+    row.append(grip, slot, eye, name, n);
     row.onclick = () => setActiveLayer(L.id);
     row.ondblclick = () => fitLayer(L);
     row.oncontextmenu = (e) => { e.preventDefault(); layerMenu(L, e.clientX, e.clientY); };
