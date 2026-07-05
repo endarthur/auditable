@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { deflateSync } from 'node:zlib';
-import { readGTiff, gridFromGTiff, gridWindowFromGTiff, levelGeo, pickOverviewForCap, windowForWorldBbox, lzwDecode, packbitsDecode } from '../ext/gtiff/src/main.js';
+import { readGTiff, gridFromGTiff, gridWindowFromGTiff, gridDecimatedFromGTiff, stepForCap, levelGeo, pickOverviewForCap, windowForWorldBbox, lzwDecode, packbitsDecode } from '../ext/gtiff/src/main.js';
 
 // ── a tiny classic-TIFF writer ──────────────────────────────────────────
 function lzwEncode(src) {
@@ -170,6 +170,15 @@ test('big-endian file on a little-endian platform', async () => {
   assert.equal(data[W + 1], 111);
 });
 
+test('a segment decoded twice is stable (no in-place source mutation)', async () => {
+  // big-endian + windowed: the swap/predictor must not corrupt the file bytes
+  const g = await readGTiff(demTiff({ le: false, data: demBytes(false) }));
+  const a = await g.images[0].readWindow({ x: 1, y: 1, width: 3, height: 2 });
+  const b = await g.images[0].readWindow({ x: 1, y: 1, width: 3, height: 2 });
+  for (let i = 0; i < a.data.length; i++) assert.equal(a.data[i], b.data[i], `reread ${i}`);
+  assert.equal(a.data[0], dem[1 * W + 1]);                 // and still correct
+});
+
 test('predictor 2 (horizontal differencing, int16)', async () => {
   const vals = Int16Array.from({ length: W * H }, (_, i) => 500 + (i % W) * 3 + (i / W | 0));
   const diff = Int16Array.from(vals);
@@ -295,6 +304,36 @@ test('windowForWorldBbox maps a world bbox to a padded pixel window', () => {
   const win = windowForWorldBbox(g, 0, bb, 1);
   assert.ok(win.x <= 2 && win.x + win.width >= 5, `x window ${JSON.stringify(win)}`);
   assert.ok(win.y <= 1 && win.y + win.height >= 4, `y window ${JSON.stringify(win)}`);
+});
+
+test('readDecimated subsamples the whole image (bounded memory)', async () => {
+  const { tif, val, W2 } = tiledDem();                     // 8×8 in 4×4 tiles
+  const g = await readGTiff(tif);
+  const r = await g.images[0].readDecimated(2);            // → 4×4 on the even lattice
+  assert.equal(r.dnx, 4); assert.equal(r.dny, 4); assert.equal(r.step, 2);
+  for (let dr = 0; dr < 4; dr++) for (let dc = 0; dc < 4; dc++) assert.equal(r.data[dr * 4 + dc], val(dr * 2, dc * 2), `dec ${dr},${dc}`);
+  const one = await g.images[0].readDecimated(1);          // step 1 == full read
+  assert.equal(one.dnx, W2);
+  assert.equal(one.data[W2 + 1], val(1, 1));
+});
+
+test('gridDecimatedFromGTiff: cell size scales, origin holds', async () => {
+  const { tif } = tiledDem();
+  const g = await readGTiff(tif);
+  const full = await gridFromGTiff(g);
+  const dec = await gridDecimatedFromGTiff(g, 0, 2);
+  assert.equal(dec.nx, 4); assert.equal(dec.ny, 4);
+  assert.equal(dec.dx, full.dx * 2);                       // coarser cells
+  assert.equal(dec.x0, full.x0);                           // sample (0,0) unchanged
+  assert.equal(dec.y0, full.y0);
+  assert.equal(dec.data[0], full.data[0]);
+});
+
+test('stepForCap picks a bounded decimation', () => {
+  const g = { images: [{ width: 4000, height: 4000 }], geo: {} };   // 16M px
+  assert.equal(stepForCap(g, 0, 16_000_000), 1);           // already fits
+  assert.equal(stepForCap(g, 0, 4_000_000), 2);            // /2 → 4M
+  assert.equal(stepForCap(g, 0, 1_000_000), 4);            // /4 → 1M
 });
 
 test('levelGeo + pickOverviewForCap over a fake pyramid', () => {

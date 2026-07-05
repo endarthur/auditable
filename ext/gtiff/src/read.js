@@ -203,6 +203,34 @@ export async function readGTiff(input) {
         return { data, x: w.x, y: w.y, width: w.width, height: w.height };
       },
       async read() { return (await this.readWindow(null)).data; },
+      // decode the WHOLE image at 1/step resolution, one segment at a time —
+      // bounded memory (one tile/strip + the coarse output), so ANY size TIFF
+      // (overview or not, tiled or stripped) yields a display grid. Nodes are
+      // taken on the step lattice (rows/cols ≡ 0 mod step); band 0 of chunky.
+      async readDecimated(step) {
+        step = Math.max(1, step | 0);
+        if (step === 1) return { data: await this.read(), width, height, step: 1, dnx: width, dny: height };
+        if (planar !== 1) throw new Error('gtiff: planar (band-separate) layout not supported');
+        if (![8, 16, 32, 64].includes(bps)) throw new Error(`gtiff: ${bps}-bit samples not supported`);
+        if (fmt === 3 && bps < 32) throw new Error('gtiff: half-float not supported');
+        const bytesPer = bps / 8;
+        const dnx = Math.ceil(width / step), dny = Math.ceil(height / step);
+        const outBytes = new Uint8Array(dnx * dny * bytesPer);
+        const outView = typedView(outBytes.buffer, fmt, bps);
+        const segs = this.segments(null);
+        if (!segs.length) throw new Error('gtiff: no strip/tile offsets');
+        for (const s of segs) {
+          const seg = await this.decodeSeg(s, bytesPer);
+          const segView = typedView(seg.buffer, fmt, bps);   // native-endian samples
+          const r0 = Math.ceil(s.y0 / step) * step, r1 = Math.min(s.y0 + s.rows, height);
+          const c0 = Math.ceil(s.x0 / step) * step, c1 = Math.min(s.x0 + s.w, width);
+          for (let r = r0; r < r1; r += step) {
+            const segRow = (r - s.y0) * s.w * spp, outRow = (r / step) * dnx;
+            for (let c = c0; c < c1; c += step) outView[outRow + c / step] = segView[segRow + (c - s.x0) * spp];
+          }
+        }
+        return { data: outView, width, height, step, dnx, dny };
+      },
     };
     return img;
   };
@@ -273,4 +301,21 @@ export async function gridWindowFromGTiff(g, level, win) {
   const r = await img.readWindow(win);
   const lg = levelGeo(g, level);
   return { nx: r.width, ny: r.height, data: r.data, x0: lg.x0 + r.x * lg.dx, y0: lg.y0 - r.y * lg.dy, dx: lg.dx, dy: lg.dy, nodata: g.geo.nodata, crs: g.geo.crs, pixelIsPoint: g.geo.pixelIsPoint };
+}
+
+// the decimation step so a level fits a pixel cap (bounded-memory display of a
+// huge non-overview raster). 1 if it already fits.
+export function stepForCap(g, level, cap) {
+  const img = g.images[level];
+  return Math.max(1, Math.ceil(Math.sqrt((img.width * img.height) / Math.max(1, cap))));
+}
+
+// decode a WHOLE level at 1/step resolution → a north-up grid (cell size ×
+// step, origin unchanged — sample (0,0) is on the step lattice). One segment
+// resident at a time; the display path for any-size TIFFs.
+export async function gridDecimatedFromGTiff(g, level, step) {
+  const img = g.images[level];
+  const r = await img.readDecimated(step);
+  const lg = levelGeo(g, level);
+  return { nx: r.dnx, ny: r.dny, data: r.data, x0: lg.x0, y0: lg.y0, dx: lg.dx * r.step, dy: lg.dy * r.step, nodata: g.geo.nodata, crs: g.geo.crs, pixelIsPoint: g.geo.pixelIsPoint };
 }

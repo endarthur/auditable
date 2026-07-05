@@ -36,7 +36,9 @@ async function inflate(src, format) {
 // COMPRESSION tag → decoder. 8 and 32946 are both zlib-wrapped deflate.
 export async function decodeSegment(compression, src, dstLen) {
   switch (compression) {
-    case 1: return src.length >= dstLen ? src.subarray(0, dstLen) : (() => { const o = new Uint8Array(dstLen); o.set(src); return o; })();
+    // COPY (never a view into the file) — downstream undoes predictors and
+    // swaps endianness IN PLACE, and segments may be decoded more than once
+    case 1: { const o = new Uint8Array(dstLen); o.set(src.subarray(0, Math.min(dstLen, src.length))); return o; }
     case 5: return lzwDecode(src, dstLen);
     case 8: case 32946: return inflate(src, 'deflate');
     case 32773: return packbitsDecode(src, dstLen);
