@@ -114,6 +114,22 @@ const pal = await p.evaluate(() => {
 });
 chk(`command palette: filters to Swath (${pal.swath}) + Join/reconcile (${pal.rec}) on a block model`, pal.swath && pal.rec);
 
+// ── 1c. viewport decorations + figure export ──
+await new Promise((r) => setTimeout(r, 300));
+const deco = await p.evaluate(async () => {
+  window._micro.setDeco('scale', true); window._micro.setDeco('legend', true);
+  const dc = document.querySelector('#decoCv');
+  const drawn = dc.width > 0;
+  const g = dc.getContext('2d'); const d = g.getImageData(0, 0, dc.width, dc.height).data;
+  let painted = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) painted++;
+  window._lastFigure = null; window._micro.exportFigure();
+  await new Promise((r) => setTimeout(r, 400));
+  const fb = window._lastFigure, buf = fb ? new Uint8Array(await fb.arrayBuffer()) : null;
+  window._micro.setDeco('scale', false); window._micro.setDeco('legend', false);
+  return { drawn, painted, png: !!buf && buf[0] === 0x89 && buf[1] === 0x50, size: fb ? fb.size : 0 };
+});
+chk(`decorations overlay draws (${deco.painted} px) + figure export → PNG (${deco.size} bytes)`, deco.drawn && deco.painted > 100 && deco.png && deco.size > 1000);
+
 // ── 2. pick reads a record ──
 await p.evaluate(() => { document.querySelector('#compass').dispatchEvent(new MouseEvent('click')); document.querySelector('#btnFit').click(); const px = document.querySelector('#ptPx'); px.value = 6; px.dispatchEvent(new Event('input')); });
 await p.waitForFunction(() => /converged/.test(document.querySelector('#stats').textContent), null, { timeout: 60000 });

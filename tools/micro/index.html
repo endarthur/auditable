@@ -527,7 +527,7 @@
     <label id="secPlaneW" title="outline the section plane in the view" style="display:none"><input id="secPlaneVis" type="checkbox">plane</label>
   </div>
   <div id="barTools"></div>
-  <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
+  <div id="view"><canvas id="cv"></canvas><canvas id="decoCv" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj / .lfm / .tif / .grd / .parquet anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
@@ -606,6 +606,7 @@ function loop(t) {
     drawMeasure();                                         // the overlay rides the camera
     drawSectionPlane();
     drawCompass();
+    drawDecorations();                                     // scale bar / north / legend / title overlay
   }
   requestAnimationFrame(loop);
 }
@@ -5953,6 +5954,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
   { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
+  { label: 'Decorations & figure…', action: () => decorationsMenu($('#mView')) },
   { sep: true },
   ...(_views.length ? _views.map((v) => ({ label: `⤷ ${v.name}`, action: () => applyView(v) })) : []),
   { label: 'Save view…', action: saveViewAs },
@@ -6331,6 +6333,104 @@ function drawCompass() {
     T.setAttribute('y', cyp + (ny / m) * 24);
   }
 }
+// ── viewport decorations (scale bar · north · legend · title) — a 2D overlay
+// that shows LIVE and is captured verbatim by figure export. One draw routine
+// serves both (the live #decoCv and the export canvas). ──
+let _deco = (() => { try { return Object.assign({ scale: false, north: false, legend: false, title: false, titleText: '' }, JSON.parse(localStorage.getItem('micro.deco') || '{}')); } catch { return { scale: false, north: false, legend: false, title: false, titleText: '' }; } })();
+function saveDeco() { try { localStorage.setItem('micro.deco', JSON.stringify(_deco)); } catch { /* private mode */ } }
+function niceNum(x) { if (!(x > 0)) return 1; const e = Math.pow(10, Math.floor(Math.log10(x))), f = x / e; return (f >= 5 ? 5 : f >= 2 ? 2 : 1) * e; }
+function fmtLen(m) { return m >= 1000 ? +(m / 1000).toPrecision(3) + ' km' : (m < 1 ? +m.toPrecision(2) : +m.toFixed(m < 10 ? 1 : 0)) + ' m'; }
+function worldPerPixel() {
+  const vp = cam.state.viewProj, v = cam.state.view, t = cam.state.target; if (!vp || !v || !t) return null;
+  let Rw = [v[0], v[4], v[8]]; const rl = Math.hypot(Rw[0], Rw[1], Rw[2]) || 1; Rw = [Rw[0] / rl, Rw[1] / rl, Rw[2] / rl];
+  const r = cv.getBoundingClientRect();
+  const proj = (p) => { const cx = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12], cy = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13], cw = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15]; return [((cx / cw) * 0.5 + 0.5) * r.width, (0.5 - (cy / cw) * 0.5) * r.height]; };
+  const p0 = proj(t), p1 = proj([t[0] + Rw[0], t[1] + Rw[1], t[2] + Rw[2]]);
+  const px = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+  return px > 1e-6 ? 1 / px : null;
+}
+const _stroked = (g, fn, lw) => { g.lineWidth = lw + 2; g.strokeStyle = 'rgba(0,0,0,0.6)'; fn(); g.lineWidth = lw; g.strokeStyle = '#fff'; fn(); };
+const _label = (g, txt, x, y) => { g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,0.65)'; g.strokeText(txt, x, y); g.fillStyle = '#fff'; g.fillText(txt, x, y); };
+function drawScaleBar(g, W, H) {
+  const wpp = worldPerPixel(); if (!wpp || !Number.isFinite(wpp)) return;
+  const barWorld = niceNum(W * 0.18 * wpp), barPx = barWorld / wpp, x = 16, y = H - 22;
+  _stroked(g, () => { g.beginPath(); g.moveTo(x, y - 5); g.lineTo(x, y + 5); g.moveTo(x, y); g.lineTo(x + barPx, y); g.moveTo(x + barPx, y - 5); g.lineTo(x + barPx, y + 5); g.stroke(); }, 2);
+  g.font = '12px monospace'; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  _label(g, (cam.state.ortho ? '' : '~') + fmtLen(barWorld), x, y - 9);
+}
+function drawNorthArrow(g, W, H) {
+  const v = cam.state.view; if (!v) return;
+  let nx = v[4], ny = -v[9]; const m = Math.hypot(nx, ny); if (m < 1e-3) return; nx /= m; ny /= m;
+  const cx = W - 42, cy = 52, Ln = 22;
+  const arrow = () => { g.beginPath(); g.moveTo(cx - nx * Ln, cy - ny * Ln); g.lineTo(cx + nx * Ln, cy + ny * Ln); const px = -ny, py = nx; g.moveTo(cx + nx * Ln, cy + ny * Ln); g.lineTo(cx + nx * (Ln - 8) + px * 5, cy + ny * (Ln - 8) + py * 5); g.moveTo(cx + nx * Ln, cy + ny * Ln); g.lineTo(cx + nx * (Ln - 8) - px * 5, cy + ny * (Ln - 8) - py * 5); g.stroke(); };
+  _stroked(g, arrow, 2);
+  g.font = 'bold 12px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  _label(g, 'N', cx + nx * (Ln + 9), cy + ny * (Ln + 9));
+}
+function drawTitleDeco(g, W, H) {
+  if (!_deco.titleText) return;
+  g.font = 'bold 16px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'top';
+  _label(g, _deco.titleText, W / 2, 12);
+}
+function drawLegendDeco(g, W, H) {
+  const L = activeLayer(); if (!L) return; const sel = colorSelOf(L);
+  const bx = W - 148, by = 84, bw = 15;
+  if (String(sel).startsWith('chan:')) {
+    const cfg = rampCfgOf(L) || { preset: 'viridis' }, stops = RAMP_PRESETS[cfg.preset] || RAMP_PRESETS.viridis, rng = rampRangeFor(L);
+    if (!rng) return; const [lo, hi] = rng, bh = 118;
+    for (let i = 0; i < bh; i++) { const c = rampSample(stops, 1 - i / bh); g.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`; g.fillRect(bx, by + i, bw, 1); }
+    g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 1; g.strokeRect(bx, by, bw, bh);
+    g.font = '11px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
+    _label(g, fmtStat(hi), bx + bw + 5, by); _label(g, fmtStat((lo + hi) / 2), bx + bw + 5, by + bh / 2); _label(g, fmtStat(lo), bx + bw + 5, by + bh);
+    const h = layerTableHeader(L), nm = h && h.columns[+sel.slice(5)]; if (nm) { g.textBaseline = 'alphabetic'; _label(g, nm, bx, by - 7); }
+  } else {
+    const info = layerClassInfo(L); if (!info) return; const leg = ensureLegend(L, info); if (!leg || !leg.entries) return;
+    g.font = '11px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
+    let y = by; for (const e of leg.entries.slice(0, 12)) { g.fillStyle = e.color; g.fillRect(bx, y - 6, 12, 12); g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 1; g.strokeRect(bx, y - 6, 12, 12); _label(g, String(e.values ? e.values[0] : e.label || ''), bx + 17, y); y += 17; }
+  }
+}
+function renderDeco(g, W, H) {
+  if (_deco.scale) drawScaleBar(g, W, H);
+  if (_deco.north) drawNorthArrow(g, W, H);
+  if (_deco.legend) drawLegendDeco(g, W, H);
+  if (_deco.title) drawTitleDeco(g, W, H);
+}
+function drawDecorations() {
+  const dc = $('#decoCv'), r = cv.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+  if (!_deco.scale && !_deco.north && !_deco.legend && !_deco.title) { if (dc.width) { dc.width = 0; dc.height = 0; } return; }
+  dc.width = Math.round(r.width * dpr); dc.height = Math.round(r.height * dpr);
+  const g = dc.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, r.width, r.height);
+  renderDeco(g, r.width, r.height);
+}
+function setDeco(key, val) { _deco[key] = val; saveDeco(); drawDecorations(); }
+// export the viewport + decorations as a PNG (cv already has preserveDrawingBuffer)
+function exportFigure() {
+  const out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
+  const g = out.getContext('2d');
+  g.drawImage(cv, 0, 0);
+  const sx = cv.width / cv.getBoundingClientRect().width;   // logical → device scale
+  g.setTransform(sx, 0, 0, sx, 0, 0);
+  renderDeco(g, cv.getBoundingClientRect().width, cv.getBoundingClientRect().height);
+  out.toBlob((blob) => {
+    if (!blob) return; window._lastFigure = blob;
+    const a = document.createElement('a'); const stem = (activeLayer() && (activeLayer().label || activeLayer().name) || 'micro').replace(/\.[^.]*$/, '').replace(/[^\w.-]+/g, '_');
+    a.href = URL.createObjectURL(blob); a.download = `figure_${stem}.png`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+    $('#meta').textContent = `figure → ${a.download}`;
+  }, 'image/png');
+}
+function decorationsMenu(anchorEl) {
+  const r = anchorEl.getBoundingClientRect();
+  menuXY(r.left, r.bottom + 2, [
+    { label: (_deco.scale ? '✓ ' : '') + 'Scale bar', action: () => setDeco('scale', !_deco.scale) },
+    { label: (_deco.north ? '✓ ' : '') + 'North arrow', action: () => setDeco('north', !_deco.north) },
+    { label: (_deco.legend ? '✓ ' : '') + 'Legend', action: () => setDeco('legend', !_deco.legend) },
+    { label: (_deco.title ? '✓ ' : '') + 'Title', action: () => setDeco('title', !_deco.title) },
+    { sep: true },
+    { label: 'Set title…', action: async () => { const t = await microPrompt('figure title', _deco.titleText || ''); if (t != null) { _deco.titleText = t; _deco.title = !!t; saveDeco(); drawDecorations(); } } },
+    { sep: true },
+    { label: 'Export figure (PNG)…', action: () => exportFigure() },
+  ]);
+}
 $('#compass').addEventListener('click', () => setView(-Math.PI / 2, PHI_MAX));   // plan, north up
 $('#compass').addEventListener('pointerdown', (e) => e.stopPropagation());       // don't start an orbit
 // corner + size, persisted; the same menu hangs off right-click and View → Compass…
@@ -6431,7 +6531,12 @@ const COMMANDS = [
   { id: 'new', group: 'File', title: 'New grid / block model…', kw: 'create empty cover common lattice', run: () => openNewDialog() },
   { id: 'newproj', group: 'File', title: 'New project (clear)', kw: 'reset slate', run: () => newProject() },
   { id: 'save', group: 'File', title: 'Save project', kw: 'store', when: () => hasFSAA, run: () => saveProject() },
-  { id: 'png', group: 'File', title: 'Save viewport PNG', kw: 'screenshot image capture figure', run: () => $('#btnShot').click() },
+  { id: 'png', group: 'File', title: 'Save viewport PNG', kw: 'screenshot image capture', run: () => $('#btnShot').click() },
+  { id: 'figure', group: 'File', title: 'Export figure (PNG)…', kw: 'decorations scale bar north legend title report', run: () => exportFigure() },
+  { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
+  { id: 'deconorth', group: 'View', title: 'Toggle north arrow', kw: 'decoration compass', run: () => setDeco('north', !_deco.north) },
+  { id: 'decolegend', group: 'View', title: 'Toggle legend', kw: 'decoration ramp colours key', run: () => setDeco('legend', !_deco.legend) },
+  { id: 'decotitle', group: 'View', title: 'Set figure title…', kw: 'decoration caption', run: async () => { const t = await microPrompt('figure title', _deco.titleText || ''); if (t != null) { _deco.titleText = t; _deco.title = !!t; saveDeco(); drawDecorations(); } } },
   { id: 'fit', group: 'View', title: 'Fit view', kw: 'zoom extent', run: () => $('#btnFit').click() },
   { id: 'plan', group: 'View', title: 'Plan view (looking down)', kw: 'top', run: () => setView(cam.state.theta, PHI_MAX) },
   { id: 'section', group: 'View', title: 'Section on / off', kw: 'slice clip', run: () => toggleSection() },
@@ -9235,7 +9340,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, exportFigure, drawDecorations, decorationsMenu, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
