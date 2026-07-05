@@ -1681,7 +1681,180 @@ async function* layerPositions(L) {
     yield { x: rc2.x, y: rc2.y, z: rc2.z, recs: rc2.recIdx || null, base: rc2.recStart || 0, count: rc2.count };
   }
 }
+// ── gridded surfaces (§7.1 → §17): a 2D grid IS a single-valued heightfield,
+// so flag/ratio against it needs NO BVH and NO worker — a bilinear world
+// sample per block, footprint-averaged, is the integral of the surface over
+// the block and converges fast. O(1) per record: a 2M model in seconds. ──
+function gridSurfaceOf(gridL) {
+  const g = gridL.docs.gridDoc.grid;
+  const nod = g.nodata;
+  const isBad = (v) => Number.isNaN(v) || (nod != null && (nod >= 1.7e38 ? v >= 1.7014e38 : v === nod));
+  // WORLD (x,y) → surface Z; NaN off-grid; bilinear, degrading to the mean of
+  // the valid corners at a nodata edge
+  const sampleZ = (x, y) => {
+    const fc = (x - g.x0) / g.dx, fr = (g.y0 - y) / g.dy;
+    if (fc < 0 || fr < 0 || fc > g.nx - 1 || fr > g.ny - 1) return NaN;
+    const c0 = Math.floor(fc), r0 = Math.floor(fr);
+    const c1 = Math.min(c0 + 1, g.nx - 1), r1 = Math.min(r0 + 1, g.ny - 1);
+    const tx = fc - c0, ty = fr - r0;
+    const v00 = g.data[r0 * g.nx + c0], v10 = g.data[r0 * g.nx + c1], v01 = g.data[r1 * g.nx + c0], v11 = g.data[r1 * g.nx + c1];
+    if (isBad(v00) || isBad(v10) || isBad(v01) || isBad(v11)) {
+      let sum = 0, k = 0;
+      for (const v of [v00, v10, v01, v11]) if (!isBad(v)) { sum += v; k++; }
+      return k ? sum / k : NaN;
+    }
+    return v00 * (1 - tx) * (1 - ty) + v10 * tx * (1 - ty) + v01 * (1 - tx) * ty + v11 * tx * ty;
+  };
+  return { grid: g, sampleZ };
+}
+// fraction of a block column [z−hz, z+hz] that lies BELOW the surface, averaged
+// over an rx×ry plan sub-sample of the footprint (±hx,±hy). hz=0 (points) → a
+// step. NaN = footprint entirely off-grid (leave the record untouched).
+function gridFracBelow(surf, x, y, z, hx, hy, hz, rx, ry) {
+  let sum = 0, n = 0;
+  for (let a = 0; a < rx; a++) {
+    const sx = rx === 1 ? x : x - hx + (2 * hx) * (a + 0.5) / rx;
+    for (let b = 0; b < ry; b++) {
+      const sy = ry === 1 ? y : y - hy + (2 * hy) * (b + 0.5) / ry;
+      const zs = surf.sampleZ(sx, sy);
+      if (Number.isNaN(zs)) continue;
+      sum += hz > 0 ? Math.max(0, Math.min(1, (zs - (z - hz)) / (2 * hz))) : (z < zs ? 1 : 0);
+      n++;
+    }
+  }
+  return n ? sum / n : NaN;
+}
+// per-record classifier: { hit, frac } for below / above / between (below A ∧
+// above B). frac is the proportion for the ratio column.
+function gridClassify(surfA, surfB, mode, hx, hy, hz, rx, ry) {
+  return (x, y, z) => {
+    const pA = gridFracBelow(surfA, x, y, z, hx, hy, hz, rx, ry);
+    if (Number.isNaN(pA)) return { hit: false, frac: NaN };
+    if (mode === 'below') return { hit: pA >= 0.5, frac: pA };
+    if (mode === 'above') return { hit: (1 - pA) >= 0.5, frac: 1 - pA };
+    const pbB = gridFracBelow(surfB, x, y, z, hx, hy, hz, rx, ry);   // between
+    if (Number.isNaN(pbB)) return { hit: false, frac: NaN };
+    const pAboveB = 1 - pbB;
+    return { hit: pA >= 0.5 && pAboveB >= 0.5, frac: Math.max(0, pA + pAboveB - 1) };
+  };
+}
+function blockHalfExtents(L) {
+  const doc = L.docs.blockDoc;
+  const g = doc && (doc.grid || (doc.header && doc.header.grid));
+  return g && g.size ? [g.size[0] / 2, g.size[1] / 2, g.size[2] / 2] : [0, 0, 0];
+}
+async function selectByGridSurface(gridL, { mode = 'below', meshB = null, targets = null, combine = 'replace', onProgress = null } = {}) {
+  const surfA = gridSurfaceOf(gridL);
+  const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? gridSurfaceOf(meshB) : null;
+  if (mode === 'between' && !surfB) { $('#meta').textContent = 'select by surface: between needs a second grid'; return; }
+  const epoch = ++_selEpoch;
+  if (combine === 'replace') clearSelection({ silent: true });
+  const v = combine === 'subtract' ? 0 : 1;
+  const Ls = targets || _layers.filter((L) => L.visible && L.kind !== 'mesh' && !L.docs.gridDoc && attrRowCountOf(L) > 0);
+  for (let li = 0; li < Ls.length; li++) {
+    const L = Ls[li];
+    const n = attrRowCountOf(L);
+    if (!n || L.kind === 'mesh' || L.docs.gridDoc) continue;
+    if (!L._selMask || L._selMask.length !== n) L._selMask = new Uint8Array(n);
+    const m = L._selMask;
+    const [hx, hy, hz] = blockHalfExtents(L);
+    const rr = hz > 0 ? 2 : 1;
+    const cls = gridClassify(surfA, surfB, mode, hx, hy, hz, rr, rr);
+    let done = 0;
+    $('#meta').textContent = `select by surface: sampling ${L.label || L.name}…`;
+    try {
+      for await (const ch of layerPositions(L)) {
+        if (epoch !== _selEpoch) return;
+        for (let i = 0; i < ch.count; i++) {
+          if (cls(ch.x[i], ch.y[i], ch.z[i]).hit) { const r = ch.recs ? (ch.recs[i] & 0x1FFFFFFF) : ch.base + i; if (r < n) m[r] = v; }
+          if ((i & 0x3FFF) === 0x3FFF) { if (onProgress) onProgress((li + (done + i) / n) / Ls.length, `sampling · ${L.label || L.name}`); await new Promise((r2) => setTimeout(r2)); if (epoch !== _selEpoch) return; }
+        }
+        done += ch.count;
+        if (onProgress) onProgress((li + Math.min(1, done / n)) / Ls.length, `sampling · ${L.label || L.name}`);
+        await new Promise((r2) => setTimeout(r2));
+      }
+    } catch (e) { if (e.message !== 'cancelled') $('#meta').textContent = `select by surface: ${L.name} — ${e.message}`; return; }
+    applyLayerSelection(L);
+  }
+  if (epoch !== _selEpoch) return;
+  selectionStatus(); markProjectDirty(); requestRender();
+}
+async function ratioByGridSurface(gridL, L, { name, res = [2, 2, 1], mode = 'below', meshB = null, onProgress = null } = {}) {
+  const doc = L.docs.blockDoc;
+  const grid = doc && (doc.grid || (doc.header && doc.header.grid));
+  if (!grid || !grid.size) { $('#meta').textContent = 'ratio by surface: needs a regular block model'; return null; }
+  const surfA = gridSurfaceOf(gridL);
+  const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? gridSurfaceOf(meshB) : null;
+  if (mode === 'between' && !surfB) { $('#meta').textContent = 'ratio by surface: between needs a second grid'; return null; }
+  const resolution = Array.isArray(res) ? res.map((v) => Math.max(1, v | 0)) : [res, res, 1];
+  const [hx, hy, hz] = [grid.size[0] / 2, grid.size[1] / 2, grid.size[2] / 2];
+  const epoch = ++_ratioEpoch;
+  const col = createPaintCol(L, name, 'ratio'); if (!col) return null;
+  const n = attrRowCountOf(L), codes = col.codes;
+  const cls = gridClassify(surfA, surfB, mode, hx, hy, hz, resolution[0], resolution[1]);
+  let done = 0, touched = 0;
+  try {
+    for await (const ch of layerPositions(L)) {
+      if (epoch !== _ratioEpoch) return null;
+      for (let i = 0; i < ch.count; i++) {
+        const { frac } = cls(ch.x[i], ch.y[i], ch.z[i]);
+        if (Number.isNaN(frac) || !frac) continue;
+        const r = ch.recs ? (ch.recs[i] & 0x1FFFFFFF) : ch.base + i;
+        if (r < n) { codes[r] = Math.round(255 * frac); touched++; }
+      }
+      done += ch.count;
+      if (onProgress) onProgress(Math.min(1, done / n), 'sampling');
+      $('#meta').textContent = `ratio by surface: sampling ${done.toLocaleString()} records…`;
+      await new Promise((r2) => setTimeout(r2));
+    }
+  } catch (e) { if (e.message !== 'cancelled') $('#meta').textContent = `ratio by surface: ${e.message}`; return null; }
+  paintRecount(col); L._colStats = null; addPaintColorOptions(L);
+  setLayerColorSel(L, 'paint:' + col.name);
+  const t2 = _attrTables.get(L.id); if (t2 && t2.invalidate) t2.invalidate();
+  $('#meta').textContent = `ratio by surface: ${touched.toLocaleString()} of ${n.toLocaleString()} blocks vs “${gridL.label || gridL.name}” → ${col.name}`;
+  markProjectDirty(); requestRender();
+  return col;
+}
+async function flagByGridSurface(gridL, targets, { name, label = 'IN', mode = 'below', meshB = null, onProgress = null } = {}) {
+  const surfA = gridSurfaceOf(gridL);
+  const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? gridSurfaceOf(meshB) : null;
+  if (mode === 'between' && !surfB) { $('#meta').textContent = 'flag by surface: between needs a second grid'; return 0; }
+  const epoch = ++_ratioEpoch;
+  let made = 0;
+  for (let li = 0; li < targets.length; li++) {
+    const L = targets[li];
+    if (!layerTableHeader(L)) continue;
+    const col = createPaintCol(L, name); if (!col) continue;
+    const code = addPaintValue(L, col, label);
+    const n = attrRowCountOf(L), codes = col.codes;
+    const [hx, hy, hz] = blockHalfExtents(L);
+    const rr = hz > 0 ? 2 : 1;
+    const cls = gridClassify(surfA, surfB, mode, hx, hy, hz, rr, rr);
+    let done = 0, cnt = 0;
+    $('#meta').textContent = `flag by surface: sampling ${L.label || L.name}…`;
+    try {
+      for await (const ch of layerPositions(L)) {
+        if (epoch !== _ratioEpoch) return made;
+        for (let i = 0; i < ch.count; i++) {
+          if (cls(ch.x[i], ch.y[i], ch.z[i]).hit) { const r = ch.recs ? (ch.recs[i] & 0x1FFFFFFF) : ch.base + i; if (r < n) { codes[r] = code; cnt++; } }
+          if ((i & 0x3FFF) === 0x3FFF) { if (onProgress) onProgress((li + (done + i) / n) / targets.length, `sampling · ${L.label || L.name}`); await new Promise((r2) => setTimeout(r2)); if (epoch !== _ratioEpoch) return made; }
+        }
+        done += ch.count;
+        if (onProgress) onProgress((li + Math.min(1, done / n)) / targets.length, `sampling · ${L.label || L.name}`);
+        await new Promise((r2) => setTimeout(r2));
+      }
+    } catch (e) { if (e.message !== 'cancelled') $('#meta').textContent = `flag by surface: ${L.name} — ${e.message}`; return made; }
+    paintRecount(col); L._colStats = null; addPaintColorOptions(L);
+    const t2 = _attrTables.get(L.id); if (t2 && t2.invalidate) t2.invalidate();
+    setLayerColorSel(L, 'paint:' + name);
+    made++;
+    $('#meta').textContent = `flag by surface: ${cnt.toLocaleString()} of ${n.toLocaleString()} → ${name} = ${label} · ${L.label || L.name}`;
+  }
+  markProjectDirty(); requestRender();
+  return made;
+}
 async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = null, combine = 'replace', onProgress = null } = {}) {
+  if (meshL.docs.gridDoc) return selectByGridSurface(meshL, { mode, meshB, targets, combine, onProgress });
   const between = mode === 'between';
   const variant = between ? 'below' : (SB_VARIANT[mode] || 'solid');
   const want = mode !== 'outside';
@@ -1758,6 +1931,7 @@ async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = n
 // filter / scan / table / export see a plain numeric column.
 let _ratioEpoch = 0;
 async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = null, onProgress = null } = {}) {
+  if (meshL.docs.gridDoc) return ratioByGridSurface(meshL, L, { name, res, mode, meshB, onProgress });
   const doc = L.docs.blockDoc;
   const grid = doc && (doc.grid || (doc.header && doc.header.grid));
   if (!grid || !grid.size) { $('#meta').textContent = 'ratio by solid: needs a regular block model'; return null; }
@@ -1821,6 +1995,7 @@ async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = 
 // IS a painted column you can touch it up with the brush afterwards. Works
 // on any table-backed layer (blocks, xyz points, drillholes).
 async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside', meshB = null, onProgress = null } = {}) {
+  if (meshL.docs.gridDoc) return flagByGridSurface(meshL, targets, { name, label, mode, meshB, onProgress });
   const between = mode === 'between';
   const variant = between ? 'below' : (SB_VARIANT[mode] || 'solid');
   const want = mode !== 'outside';
@@ -2045,11 +2220,13 @@ $('#adGo').onclick = async () => {
 let _sbDlg = null;
 function openSolidDialog(meshL0) {
   const solids = _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
-  if (!solids.length) { $('#meta').textContent = 'select by solid: open a context-tier mesh first (.msh / .obj / small .ply)'; return; }
-  const elements = _layers.filter((L) => L.kind !== 'mesh' && attrRowCountOf(L) > 0);
-  if (!elements.length) { $('#meta').textContent = 'select by solid: no element layers to classify'; return; }
+  const gridsG = _layers.filter((L) => L.docs.gridDoc);
+  const geoms = [...solids, ...gridsG];
+  if (!geoms.length) { $('#meta').textContent = 'select by solid / surface: open a context-tier mesh (.msh / .obj / small .ply) or a grid (.tif / .grd / .asc) first'; return; }
+  const elements = _layers.filter((L) => L.kind !== 'mesh' && !L.docs.gridDoc && attrRowCountOf(L) > 0);
+  if (!elements.length) { $('#meta').textContent = 'select by solid / surface: no element layers to classify'; return; }
   _sbDlg = {
-    solid: (meshL0 && solids.includes(meshL0) ? meshL0 : solids[0]).id,
+    solid: (meshL0 && geoms.includes(meshL0) ? meshL0 : geoms[0]).id,
     act: 'select', side: null, combine: 'replace',
     res: [3, 3, 3], name: null, flagName: null, flagLabel: 'IN',
     targets: new Set(elements.filter((L) => L.visible).map((L) => L.id)),
@@ -2064,7 +2241,7 @@ function openSolidDialog(meshL0) {
 async function sbEnsureTopology() {
   const d = _sbDlg; if (!d) return;
   const meshL = layerById(d.solid);
-  if (!meshL || meshL._solidMesh) return;
+  if (!meshL || meshL.docs.gridDoc || meshL._solidMesh) return;
   await solidOrientedMesh(meshL);
   if (_sbDlg === d) renderSolidDialog();
 }
@@ -2095,19 +2272,23 @@ function renderSolidDialog() {
     }
   };
   const solids = _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
+  const gridsG = _layers.filter((L) => L.docs.gridDoc);
+  const geoms = [...solids, ...gridsG];
   const sSel = document.createElement('select');
-  for (const L of solids) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; sSel.appendChild(o); }
+  for (const L of geoms) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = (L.docs.gridDoc ? '▦ ' : '') + (L.label || L.name); sSel.appendChild(o); }
   sSel.value = String(d.solid);
   sSel.onchange = () => { d.solid = +sSel.value; d.name = null; d.flagName = null; d.side = null; renderSolidDialog(); sbEnsureTopology(); };
   mkRow2('geometry', sSel);
   const meshSel = layerById(d.solid);
+  const geomIsGrid = meshSel && !!meshSel.docs.gridDoc;
   const topo = meshSel && meshSel._solidMesh;
   const tNote = document.createElement('div'); tNote.className = 'pp-note';
-  tNote.textContent = !topo ? 'reading mesh topology…'
+  tNote.textContent = geomIsGrid ? `gridded surface (${meshSel.docs.gridDoc.grid.nx.toLocaleString()}×${meshSel.docs.gridDoc.grid.ny.toLocaleString()} heightfield) — above / below / between; a bilinear sample, no winding`
+    : !topo ? 'reading mesh topology…'
     : topo.closed ? 'closed solid — inside / outside apply'
     : `open surface (${topo.boundaryEdges.toLocaleString()} boundary edges) — above / below / between apply, via winding closures`;
   body.appendChild(tNote);
-  const isSurf = topo && !topo.closed;
+  const isSurf = geomIsGrid || (topo && !topo.closed);
   const sides = isSurf ? [['below', 'below'], ['above', 'above'], ['between', 'between']] : [['inside', 'inside'], ['outside', 'outside']];
   if (!d.side || !sides.some(([k]) => k === d.side)) d.side = sides[0][0];
   mkRadios(mkRow2('do'), 'sbact',
@@ -2117,17 +2298,19 @@ function renderSolidDialog() {
     mkRadios(mkRow2('which'), 'sbside', sides, d.side, (k) => { d.side = k; renderSolidDialog(); });
   }
   if (isSurf && d.side === 'between') {
-    const others = _layers.filter((L) => L.kind === 'mesh' && L.id !== d.solid && L.docs.meshDoc && !L.docs.meshDoc.header.soup && L._solidMesh && !L._solidMesh.closed);
+    const others = geomIsGrid
+      ? _layers.filter((L) => L.docs.gridDoc && L.id !== d.solid)
+      : _layers.filter((L) => L.kind === 'mesh' && L.id !== d.solid && L.docs.meshDoc && !L.docs.meshDoc.header.soup && L._solidMesh && !L._solidMesh.closed);
     if (!others.length) {
-      body.appendChild(ppNote('between needs a SECOND open surface layer (open one, or wait for topology reads)'));
-      _layers.filter((L) => L.kind === 'mesh' && L.id !== d.solid && L.docs.meshDoc && !L.docs.meshDoc.header.soup && !L._solidMesh)
+      body.appendChild(ppNote(geomIsGrid ? 'between needs a SECOND grid surface layer' : 'between needs a SECOND open surface layer (open one, or wait for topology reads)'));
+      if (!geomIsGrid) _layers.filter((L) => L.kind === 'mesh' && L.id !== d.solid && L.docs.meshDoc && !L.docs.meshDoc.header.soup && !L._solidMesh)
         .forEach((L) => solidOrientedMesh(L).then(() => { if (_sbDlg === d) renderSolidDialog(); }));
       $('#sbGo').disabled = true;
     } else {
       $('#sbGo').disabled = false;
       if (d.surfB == null || !others.some((L) => L.id === d.surfB)) d.surfB = others[0].id;
       const bSel = document.createElement('select');
-      for (const L of others) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; bSel.appendChild(o); }
+      for (const L of others) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = (L.docs.gridDoc ? '▦ ' : '') + (L.label || L.name); bSel.appendChild(o); }
       bSel.value = String(d.surfB);
       bSel.onchange = () => { d.surfB = +bSel.value; };
       mkRow2('lower', bSel);
@@ -2179,7 +2362,7 @@ function renderSolidDialog() {
       mkRadios(mkRow2('combine'), 'sbcomb', [['replace', 'replace'], ['add', 'add'], ['subtract', 'subtract']], d.combine, (k) => { d.combine = k; });
     }
     const tRow = mkRow2('layers');
-    for (const L of _layers.filter((x) => x.kind !== 'mesh' && attrRowCountOf(x) > 0)) {
+    for (const L of _layers.filter((x) => x.kind !== 'mesh' && !x.docs.gridDoc && attrRowCountOf(x) > 0)) {
       const flaggable = d.act !== 'flag' || !!layerTableHeader(L);
       const lab = document.createElement('label');
       if (!flaggable) { lab.className = 'dis'; lab.title = 'flag columns need a table-backed layer'; }
@@ -2225,8 +2408,9 @@ $('#sbGo').onclick = async () => {
   sbProgress(0.001, 'starting');
   try {
     const meshB = d.side === 'between' ? layerById(d.surfB) : null;
-    const topo2 = layerById(d.solid) && layerById(d.solid)._solidMesh;
-    const rMode = topo2 && !topo2.closed ? d.side : 'inside';
+    const geomL = layerById(d.solid);
+    const topo2 = geomL && geomL._solidMesh;
+    const rMode = (geomL && geomL.docs.gridDoc) || (topo2 && !topo2.closed) ? d.side : 'inside';
     if (d.act === 'ratio') {
       const L = layerById(d.ratioLid); if (!L) return;
       const defName = sbDefaultName(d);
@@ -4331,7 +4515,7 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
   { label: 'Select — rectangle', kbd: 'r', action: () => armSelect('rect') },
   { label: 'Select — lasso', kbd: 'v', action: () => armSelect('lasso') },
   { label: (_selThrough ? '✓ ' : '') + 'Select through (volume)', action: () => setSelThrough(!_selThrough) },
-  { label: 'Select by solid…', action: () => openSolidDialog(null) },
+  { label: 'Select by solid / surface…', action: () => openSolidDialog(null) },
   { label: 'Assign domains…', action: () => openDomainsDialog() },
   { label: 'Clear selection', kbd: 'Esc', action: () => clearSelection() },
   { sep: true },
@@ -5095,6 +5279,7 @@ function layerMenu(L, x, y) {
     { label: 'Move up', action: () => treeMoveStep(L.id, -1) },
     { label: 'Move down', action: () => treeMoveStep(L.id, 1) },
     { label: 'Move to group…', action: () => setTimeout(() => moveLayerToGroupMenu(L, x, y), 0) },
+    ...(L.docs.gridDoc ? [{ label: 'Flag / ratio by this surface…', action: () => openSolidDialog(L) }] : []),
     ...(L.dh ? [{ label: `Stick radius… (${renderer.layerStickRadius(L.id)} m)`, action: async () => {
       const v = await microPrompt('stick radius (metres)', String(renderer.layerStickRadius(L.id)));
       const r = parseFloat(v);
@@ -7260,7 +7445,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
