@@ -163,6 +163,37 @@ await layerReady('cloud.xyz');
 const xyzN = await p.evaluate(() => window._micro.renderer.layerElementCount(window._micro.layers().find((L) => L.name === 'cloud.xyz').id));
 chk(`XYZ points: ${xyzN} points`, xyzN === 200);
 
+// ── 7b. spatial join: resample a compatible fine model onto a coarse grid →
+//    a new block-model layer; reconcile Δ preset. A = 10 m (2×2), B = 5 m (4×4)
+//    whose grade averages back to A per parent cell (aggregate mean == A, Δ==0).
+await p.evaluate(() => { const m = window._micro; for (const L of [...m.layers()]) m.renderer.removeLayer(L.id); m.layers().length = 0; });
+await p.evaluate(() => {
+  const Aval = (i, j) => 100 * (i + 2 * j + 1);
+  let s = 'XC,YC,ZC,FE\n'; for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) s += `${5 + i * 10},${5 + j * 10},650,${Aval(i, j)}\n`;
+  return window._micro.openBlob(new Blob([s]), 'A.csv', 'replace');
+});
+await layerReady('A.csv');
+await p.evaluate(() => {
+  const Aval = (i, j) => 100 * (i + 2 * j + 1), bump = (bi, bj) => [-3, -1, 1, 3][(bi % 2) + 2 * (bj % 2)];
+  let s = 'XC,YC,ZC,FE\n'; for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) s += `${2.5 + i * 5},${2.5 + j * 5},650,${Aval(i >> 1, j >> 1) + bump(i, j)}\n`;
+  return window._micro.openBlob(new Blob([s]), 'B.csv', 'add');
+});
+await layerReady('B.csv');
+const sj = await p.evaluate(async () => {
+  const m = window._micro, A = m.layers().find((L) => L.name === 'A.csv'), B = m.layers().find((L) => L.name === 'B.csv');
+  const compat = m.gridsCompatible(m.gridAxesOf(A), m.gridAxesOf(B));
+  const { blob, cells } = await m.runSpatialJoin({ leftL: B, rightL: A, target: m.gridAxesOf(A), label: 'sj',
+    columns: [{ src: 'left', name: 'FE', out: 'B_FE', num: true, op: 'mean' }, { src: 'right', name: 'FE', out: 'A_FE', num: true, op: 'mean' }] });
+  const head = (await blob.text()).trim().split('\n')[0].split(',');
+  const rows = (await blob.text()).trim().split('\n').slice(1).map((l) => l.split(','));
+  let dmax = 0; for (const r of rows) dmax = Math.max(dmax, Math.abs(+r[head.indexOf('B_FE')] - +r[head.indexOf('A_FE')]));
+  await m.openBlob(blob, 'join.csv', 'add');
+  const J = m.layers().find((L) => L.name === 'join.csv');
+  return { compat: compat.ok && compat.nested, cells, dmax, isBM: !!(J && J.docs.blockDoc), blocks: J ? m.renderer.layerElementCount(J.id) : 0 };
+});
+chk(`spatial join: compatible (${sj.compat}), aggregate B→A grid = ${sj.cells} cells, Δ≈0 (${sj.dmax.toExponential(1)}), new block model (${sj.isBM}, ${sj.blocks})`,
+  sj.compat && sj.cells === 4 && sj.dmax < 1e-3 && sj.isBM && sj.blocks === 4);
+
 // ── 8. project round trip (OPFS) + auto-optimize on save: the CSV model is
 //    reordered to spatial Parquet in place at save time, and reopens as Parquet ──
 await p.evaluate(() => { window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('microsmoke', { create: true }); });

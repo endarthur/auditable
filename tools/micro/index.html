@@ -259,6 +259,17 @@
   }
   #propPanel.show { display: flex; }
   #propPanel .pp-sub { padding: 2px 12px 6px; color: var(--dim); font-size: 11px; border-bottom: 1px solid var(--border); }
+  #propPanel .pp-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
+  #propPanel .pp-segbtn { background: none; border: none; color: var(--muted); font: inherit; padding: 3px 12px; cursor: pointer; }
+  #propPanel .pp-segbtn.on { background: var(--accent); color: #fff; }
+  #propPanel .pp-segbtn:disabled { opacity: .4; cursor: default; }
+  #propPanel .pp-banner { margin: 6px 0; padding: 5px 8px; border-radius: 3px; font-size: 11px; line-height: 1.35; border: 1px solid var(--border); }
+  #propPanel .pp-banner.ok { border-color: var(--go, #5c8a5a); color: var(--go, #7fb47c); }
+  #propPanel .pp-banner.bad { border-color: var(--fault, #b0563a); color: var(--fault, #d07a5c); }
+  #propPanel .pp-jcol { display: flex; align-items: center; gap: 5px; padding: 2px 0; font-size: 12px; }
+  #propPanel .pp-jcol .nm { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #propPanel .pp-jcol select { font-size: 11px; }
+  #propPanel .pp-jhead { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; margin: 8px 0 2px; }
   #propPanel .pp-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 10px 0; }
   #propPanel .pp-tab {
     background: none; border: 1px solid var(--border); border-bottom: none; border-radius: 3px 3px 0 0;
@@ -2378,6 +2389,49 @@ async function runSpatialJoin({ leftL, rightL, target, columns, coverage = true,
 }
 // quote a CSV cell if it holds a comma/quote/newline
 function csvCell(s) { s = String(s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+// Regular (key) join: hash the right table by its key column, probe left, and
+// emit left's rows + the brought right columns as a NEW layer (openBlob re-
+// detects the kind, so a block model stays a block model). Duplicate right keys
+// resolve by first / error / aggregate (mean of numerics). bring: [names];
+// prefix: applied to brought names that collide with a left column.
+async function runKeyJoin({ leftL, rightL, leftKey, rightKey, bring, dup = 'first', prefix = '', label = 'join' }) {
+  const lh = layerTableHeader(leftL), rh = layerTableHeader(rightL);
+  const lki = lh.columns.indexOf(leftKey), rki = rh.columns.indexOf(rightKey);
+  if (lki < 0 || rki < 0) throw new Error('key column not found');
+  const bringIdx = bring.map((n) => rh.columns.indexOf(n)).filter((i) => i >= 0);
+  const rNum = bringIdx.map((i) => colIsNumeric(rightL, rh, i));
+  const map = new Map();
+  let rc = 0, dupSeen = false;
+  for await (const batch of layerRows(rightL, null)) {
+    for (const f of batch) {
+      const k = f[rki] == null ? '' : String(f[rki]);
+      const vals = bringIdx.map((i) => f[i]);
+      const e = map.get(k);
+      if (!e) map.set(k, { vals, n: 1 });
+      else { dupSeen = true; e.n++; if (dup === 'aggregate') for (let b = 0; b < vals.length; b++) { if (rNum[b]) { const nv = +vals[b], cur = +e.vals[b]; if (Number.isFinite(nv)) e.vals[b] = Number.isFinite(cur) ? (cur * (e.n - 1) + nv) / e.n : nv; } } }
+      rc++;
+    }
+    $('#meta').textContent = `${label}: indexing right ${rc.toLocaleString()}…`;
+    await new Promise((r) => setTimeout(r));
+  }
+  if (dup === 'error' && dupSeen) throw new Error(`right key “${rightKey}” has duplicate values — pick first/aggregate or a unique key`);
+  const outNames = bring.map((n) => (lh.columns.includes(n) ? (prefix || 'r_') + n : n));
+  const heads = [...lh.columns, ...outNames];
+  const parts = [heads.map(csvCell).join(',') + '\n']; let buf = '', matched = 0, total = 0;
+  for await (const batch of layerRows(leftL, null)) {
+    for (const f of batch) {
+      const k = f[lki] == null ? '' : String(f[lki]);
+      const e = map.get(k); if (e) matched++; total++;
+      const row = f.map(csvCell).concat((e ? e.vals : bringIdx.map(() => '')).map(csvCell));
+      buf += row.join(',') + '\n';
+      if (buf.length > (1 << 22)) { parts.push(buf); buf = ''; }
+    }
+    $('#meta').textContent = `${label}: joining left ${total.toLocaleString()}…`;
+    await new Promise((r) => setTimeout(r));
+  }
+  if (buf) parts.push(buf);
+  return { blob: new Blob(parts, { type: 'text/csv' }), rows: total, matched };
+}
 // ── the assign-domains dialog ──
 let _adDlg = null;
 function openDomainsDialog() {
@@ -6320,7 +6374,7 @@ function renderProps() {
   const L = activeLayer();
   if (!L) { closeProps(); return; }
   if (_propFor !== L.id) {
-    _calcForm = null;                                      // the form belongs to one layer
+    _calcForm = null; _joinForm = null;                    // the forms belong to one layer
     if (!L._stagePend) L._styleSnap = styleSnap(L);        // revert's baseline
   }
   _propFor = L.id;
@@ -6328,7 +6382,9 @@ function renderProps() {
   $('#ppTitle').textContent = L.label || L.name;
   $('#ppSub').textContent = propKindLine(L);
   const tabs = $('#ppTabs'); tabs.textContent = '';
-  for (const t of ['style', 'classes', 'columns', 'source']) {
+  const tabList = ['style', 'classes', 'columns', ...(layerTableHeader(L) ? ['join'] : []), 'source'];
+  if (!tabList.includes(_propTab)) _propTab = 'style';
+  for (const t of tabList) {
     const b = document.createElement('button');
     b.className = 'pp-tab' + (t === _propTab ? ' active' : '');
     b.textContent = t;
@@ -6338,6 +6394,7 @@ function renderProps() {
   const body = $('#ppBody'); body.textContent = '';
   if (_propTab === 'classes') renderClassesTab(body, L);
   else if (_propTab === 'columns') renderColumnsTab(body, L);
+  else if (_propTab === 'join') renderJoinTab(body, L);
   else if (_propTab === 'source') renderSourceTab(body, L);
   else renderStyleTab(body, L);
 }
@@ -7885,10 +7942,179 @@ function setRampCfg(L, patch) {
 }
 // ── the source tab: where the layer's positions come from + what it spans.
 // Per kind: delimited get LIVE X/Y/Z mapping selects (re-reads the file, like
-// use-as-category); drillholes get the three tables + desurvey method/dip
-// (changing re-desurveys) + the validation report; everything shows extent,
-// grids their parameters. File info ('i') stays the copyable dump — this is
-// the ACTIONABLE per-layer home.
+// ── join tab (§ join-spec): the active layer is the LEFT. Spatial mode
+// resamples a compatible right model onto a target grid; key mode hash-joins by
+// a key column. Both emit a NEW layer. Reconcile is a spatial preset (Δ column).
+let _joinForm = null;
+const joinTableLayers = (L) => _layers.filter((x) => x.id !== L.id && layerTableHeader(x));
+const joinBlockLayers = (L) => _layers.filter((x) => x.id !== L.id && gridAxesOf(x));
+const shortName = (L) => (L.label || L.name || '').replace(/\.[^.]+$/, '');
+function renderJoinTab(body, L) {
+  if (!layerTableHeader(L)) { body.appendChild(ppNote('join needs a table-backed layer')); return; }
+  if (!_joinForm) _joinForm = { mode: gridAxesOf(L) ? 'spatial' : 'key', rightId: null, target: 'left', cols: [], ops: {}, weights: {}, keyL: '', keyR: '', bring: new Set(), dup: 'first' };
+  const jf = _joinForm;
+  const seg = document.createElement('div'); seg.className = 'pp-seg';
+  for (const md of ['spatial', 'key']) {
+    const bt = document.createElement('button'); bt.className = 'pp-segbtn' + (jf.mode === md ? ' on' : '');
+    bt.textContent = md === 'spatial' ? 'Spatial' : 'By key';
+    if (md === 'spatial' && !gridAxesOf(L)) bt.disabled = true;
+    bt.onclick = () => { jf.mode = md; renderProps(); };
+    seg.appendChild(bt);
+  }
+  body.appendChild(mkRow('mode', seg));
+  const rights = jf.mode === 'spatial' ? joinBlockLayers(L) : joinTableLayers(L);
+  if (!rights.length) { body.appendChild(ppNote(jf.mode === 'spatial' ? 'open another block model to join against' : 'open another table layer to join against')); return; }
+  const rSel = document.createElement('select');
+  { const o = document.createElement('option'); o.value = ''; o.textContent = '— pick a layer —'; rSel.appendChild(o); }
+  for (const r of rights) { const o = document.createElement('option'); o.value = String(r.id); o.textContent = r.label || r.name; rSel.appendChild(o); }
+  rSel.value = jf.rightId != null && rights.some((r) => r.id === jf.rightId) ? String(jf.rightId) : '';
+  rSel.onchange = () => { jf.rightId = rSel.value ? +rSel.value : null; jf.cols = []; jf.bring = new Set(); jf.keyL = ''; jf.keyR = ''; renderProps(); };
+  body.appendChild(mkRow('right', rSel));
+  const R = jf.rightId != null ? layerById(jf.rightId) : null;
+  if (!R) return;
+  if (jf.mode === 'spatial') renderSpatialJoinUI(body, L, R, jf); else renderKeyJoinUI(body, L, R, jf);
+}
+function renderSpatialJoinUI(body, L, R, jf) {
+  const c = gridsCompatible(gridAxesOf(L), gridAxesOf(R));
+  const ban = document.createElement('div');
+  if (c.ok) { ban.className = 'pp-banner ok'; ban.textContent = c.nested ? `compatible — clean replicate / aggregate` : `compatible — common lattice (mixed weights)`; }
+  else { ban.className = 'pp-banner bad'; ban.textContent = `incompatible — ${c.reason}`; }
+  body.appendChild(ban);
+  if (!c.ok) return;
+  // target grid
+  const tSel = document.createElement('select');
+  for (const [v, lab] of [['left', `${shortName(L)} (this)`], ['right', shortName(R)], ['finest', 'common — finest'], ['coarsest', 'common — coarsest']]) { const o = document.createElement('option'); o.value = v; o.textContent = lab; tSel.appendChild(o); }
+  tSel.value = jf.target; tSel.onchange = () => { jf.target = tSel.value; };
+  body.appendChild(mkRow('target grid', tSel));
+  // per-source column pickers
+  const lh = layerTableHeader(L), rh = layerTableHeader(R);
+  const addSourceCols = (side, srcL, h) => {
+    const head = document.createElement('div'); head.className = 'pp-jhead'; head.textContent = `${side === 'left' ? shortName(L) : shortName(R)} columns`; body.appendChild(head);
+    const m = h.mapping || {};
+    for (let i = 0; i < h.columns.length; i++) {
+      if (i === m.x || i === m.y || i === m.z) continue;      // coords define the grid, not joined
+      const name = h.columns[i], num = colIsNumeric(srcL, h, i), key = side + ':' + name;
+      const row = document.createElement('div'); row.className = 'pp-jcol';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = jf.cols.includes(key);
+      cb.onchange = () => { if (cb.checked) jf.cols.push(key); else jf.cols = jf.cols.filter((k) => k !== key); renderProps(); };
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = name; nm.title = name + (num ? ' · number' : ' · text');
+      row.append(cb, nm);
+      if (jf.cols.includes(key)) {
+        if (num) {
+          const opSel = document.createElement('select'); for (const op of ['mean', 'sum', 'count']) { const o = document.createElement('option'); o.value = op; o.textContent = op; opSel.appendChild(o); } opSel.value = jf.ops[key] || 'mean'; opSel.onchange = () => { jf.ops[key] = opSel.value; }; row.appendChild(opSel);
+          const wSel = document.createElement('select'); { const o = document.createElement('option'); o.value = ''; o.textContent = 'unweighted'; wSel.appendChild(o); }
+          for (let w = 0; w < h.columns.length; w++) if (colIsNumeric(srcL, h, w) && w !== i && w !== m.x && w !== m.y && w !== m.z) { const o = document.createElement('option'); o.value = h.columns[w]; o.textContent = '× ' + h.columns[w]; wSel.appendChild(o); }
+          wSel.value = jf.weights[key] || ''; wSel.onchange = () => { jf.weights[key] = wSel.value; }; row.appendChild(wSel);
+        } else { const t = document.createElement('span'); t.style.cssText = 'font-size:11px;color:var(--dim)'; t.textContent = 'majority'; row.appendChild(t); }
+      }
+      body.appendChild(row);
+    }
+  };
+  addSourceCols('left', L, lh); addSourceCols('right', R, rh);
+  // run + reconcile
+  const btns = document.createElement('div'); btns.style.cssText = 'display:flex;gap:6px;margin-top:10px';
+  const run = document.createElement('button'); run.className = 'pp-scan'; run.style.flex = '1'; run.textContent = `Join → new layer`;
+  run.disabled = !jf.cols.length;
+  run.onclick = () => runSpatialJoinUI(L, R, jf);
+  btns.appendChild(run);
+  // reconcile enabled when a numeric column exists in BOTH
+  const shared = lh.columns.filter((n) => colIsNumeric(L, lh, lh.columns.indexOf(n)) && rh.columns.includes(n) && colIsNumeric(R, rh, rh.columns.indexOf(n)) && ![lh.mapping.x, lh.mapping.y, lh.mapping.z].includes(lh.columns.indexOf(n)));
+  const rec = document.createElement('button'); rec.className = 'pp-scan'; rec.textContent = 'Reconcile…'; rec.disabled = !shared.length;
+  rec.title = shared.length ? `Δ on ${shared.join(', ')}` : 'needs a numeric column present in both models';
+  rec.onclick = () => openReconcileMenu(L, R, jf, shared, rec);
+  btns.appendChild(rec);
+  body.appendChild(btns);
+  body.appendChild(ppNote('a new block-model layer on the target grid, carrying the chosen columns as real (filter/colour/export-able) columns'));
+}
+function joinColumnsFromForm(jf, L, R) {
+  const lh = layerTableHeader(L), rh = layerTableHeader(R);
+  const leftNames = new Set(), out = [];
+  for (const key of jf.cols) {
+    const side = key.slice(0, key.indexOf(':')), name = key.slice(key.indexOf(':') + 1);
+    const h = side === 'left' ? lh : rh, srcL = side === 'left' ? L : R;
+    const num = colIsNumeric(srcL, h, h.columns.indexOf(name));
+    // prefix on cross-source collision
+    let outName = name;
+    if (jf.cols.some((k2) => k2 !== key && k2.slice(k2.indexOf(':') + 1) === name)) outName = (side === 'left' ? shortName(L) : shortName(R)).replace(/\W+/g, '_') + '_' + name;
+    out.push({ src: side, name, out: outName, num, op: num ? (jf.ops[key] || 'mean') : undefined, weight: num ? (jf.weights[key] || null) : null });
+  }
+  return out;
+}
+function targetAxes(jf, L, R) {
+  if (jf.target === 'left') return gridAxesOf(L);
+  if (jf.target === 'right') return gridAxesOf(R);
+  const c = commonLattice([gridAxesOf(L), gridAxesOf(R)], { resolution: jf.target === 'coarsest' ? 'coarsest' : 'finest' });
+  if (!c.ok) throw new Error(c.reason);
+  return c;
+}
+async function runSpatialJoinUI(L, R, jf) {
+  try {
+    const T = targetAxes(jf, L, R);
+    const columns = joinColumnsFromForm(jf, L, R);
+    const name = `${shortName(L)}⋈${shortName(R)}.csv`;
+    const { blob, cells } = await runSpatialJoin({ leftL: L, rightL: R, target: T, columns, label: 'join' });
+    await openBlob(blob, name, 'add');
+    $('#meta').textContent = `joined ${cells.toLocaleString()} cells → ${name}`;
+  } catch (e) { $('#meta').textContent = `join: ${e.message}`; }
+}
+function openReconcileMenu(L, R, jf, shared, anchor) {
+  const r = anchor.getBoundingClientRect();
+  menuXY(r.left - 40, r.bottom + 2, shared.map((g) => ({ label: `Δ on ${g}`, action: () => runReconcile(L, R, jf, g) })));
+}
+async function runReconcile(L, R, jf, grade) {
+  try {
+    const T = targetAxes(jf, L, R);
+    const aName = `A_${grade}`, bName = `B_${grade}`;
+    const columns = [
+      { src: 'left', name: grade, out: bName, num: true, op: 'mean', weight: jf.weights['left:' + grade] || null },
+      { src: 'right', name: grade, out: aName, num: true, op: 'mean', weight: jf.weights['right:' + grade] || null },
+    ];
+    const name = `reconcile_${shortName(L)}_vs_${shortName(R)}.csv`;
+    const { blob, cells } = await runSpatialJoin({ leftL: L, rightL: R, target: T, columns, label: 'reconcile' });
+    await openBlob(blob, name, 'add');
+    const J = activeLayer();
+    if (J) {
+      J.calcCols = J.calcCols || [];
+      J.calcCols.push({ name: 'Δ' + grade, expr: `${bName} - ${aName}`, ty: 'number' });
+      J._calcFns = null; J._colStats = null;
+      // summary
+      const jh = layerTableHeader(J);
+      let sum = 0, n = 0, ai = jh.columns.indexOf(aName), bi = jh.columns.indexOf(bName);
+      for await (const batch of layerRows(J, null)) for (const f of batch) { const a = +f[ai], b = +f[bi]; if (Number.isFinite(a) && Number.isFinite(b)) { sum += b - a; n++; } }
+      $('#meta').textContent = `reconcile ${shortName(L)} vs ${shortName(R)}: ${cells.toLocaleString()} cells, ${n.toLocaleString()} matched, mean Δ${grade} = ${n ? (sum / n).toPrecision(3) : '—'} → ${name}`;
+    }
+    renderLayers();
+  } catch (e) { $('#meta').textContent = `reconcile: ${e.message}`; }
+}
+function renderKeyJoinUI(body, L, R, jf) {
+  const lh = layerTableHeader(L), rh = layerTableHeader(R);
+  const colSel = (cols, val, on) => { const s = document.createElement('select'); { const o = document.createElement('option'); o.value = ''; o.textContent = '— key —'; s.appendChild(o); } for (const n of cols) { const o = document.createElement('option'); o.value = n; o.textContent = n; s.appendChild(o); } s.value = val || ''; s.onchange = () => on(s.value); return s; };
+  body.appendChild(mkRow('left key', colSel(lh.columns, jf.keyL, (v) => { jf.keyL = v; })));
+  body.appendChild(mkRow('right key', colSel(rh.columns, jf.keyR, (v) => { jf.keyR = v; })));
+  const head = document.createElement('div'); head.className = 'pp-jhead'; head.textContent = 'bring columns'; body.appendChild(head);
+  for (const n of rh.columns) {
+    if (n === jf.keyR) continue;
+    const row = document.createElement('div'); row.className = 'pp-jcol';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = jf.bring.has(n);
+    cb.onchange = () => { if (cb.checked) jf.bring.add(n); else jf.bring.delete(n); };
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = n;
+    row.append(cb, nm); body.appendChild(row);
+  }
+  const dupSel = document.createElement('select'); for (const [v, lab] of [['first', 'first match'], ['aggregate', 'average dups'], ['error', 'error on dups']]) { const o = document.createElement('option'); o.value = v; o.textContent = lab; dupSel.appendChild(o); } dupSel.value = jf.dup; dupSel.onchange = () => { jf.dup = dupSel.value; };
+  body.appendChild(mkRow('duplicate keys', dupSel));
+  const run = document.createElement('button'); run.className = 'pp-scan'; run.style.marginTop = '8px'; run.textContent = 'Join → new layer';
+  run.disabled = !(jf.keyL && jf.keyR && jf.bring.size);
+  run.onclick = async () => {
+    try {
+      const { blob, rows, matched } = await runKeyJoin({ leftL: L, rightL: R, leftKey: jf.keyL, rightKey: jf.keyR, bring: [...jf.bring], dup: jf.dup, prefix: shortName(R).replace(/\W+/g, '_') + '_', label: 'join' });
+      const name = `${shortName(L)}+${shortName(R)}.csv`;
+      await openBlob(blob, name, 'add');
+      $('#meta').textContent = `key join: ${matched.toLocaleString()} of ${rows.toLocaleString()} rows matched → ${name}`;
+    } catch (e) { $('#meta').textContent = `key join: ${e.message}`; }
+  };
+  body.appendChild(run);
+  body.appendChild(ppNote('a new layer = this layer’s rows + the brought columns (matched by key; unmatched → blank)'));
+}
 function renderSourceTab(body, L) {
   const d = L.docs || {};
   const h = layerHeaderOf(L);
@@ -8391,7 +8617,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, gridsCompatible, commonLattice, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
