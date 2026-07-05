@@ -4877,31 +4877,74 @@ function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
 // Wire standard mouse/touch input onto an orbit camera. Returns a detach fn.
 // left-drag orbit · right-drag / shift-drag pan · wheel dolly.
 function attachOrbitInput(canvas, cam, { onChange } = {}) {
+  // pointers tracked by id: one = orbit (or pan with right-button/shift),
+  // two = the touch grammar — pinch dollies, the centroid pans, twist orbits
+  // theta. touch-action:none or the browser eats the gestures first.
+  canvas.style.touchAction = 'none';
+  const pts = new Map();
   let mode = null, lx = 0, ly = 0;
+  let pinch = null;                                        // { span, cx, cy, angle }
+  const pinchState = () => {
+    const [a, b] = [...pts.values()];
+    return {
+      span: Math.hypot(b.x - a.x, b.y - a.y) || 1,
+      cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2,
+      angle: Math.atan2(b.y - a.y, b.x - a.x),
+    };
+  };
   const down = (e) => {
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+    if (pts.size === 2) { pinch = pinchState(); mode = 'pinch'; return; }
+    if (pts.size > 2) return;                              // third finger: ignore
     mode = (e.button === 2 || e.shiftKey) ? 'pan' : 'orbit';
     lx = e.clientX; ly = e.clientY;
-    canvas.setPointerCapture(e.pointerId);
   };
   const move = (e) => {
-    if (!mode) return;
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (mode === 'pinch' && pts.size >= 2) {
+      const now = pinchState();
+      cam.dolly(pinch.span / now.span > 0 ? pinch.span / now.span : 1);
+      cam.pan(now.cx - pinch.cx, now.cy - pinch.cy, canvas.clientHeight);
+      let dA = now.angle - pinch.angle;
+      if (dA > Math.PI) dA -= 2 * Math.PI;
+      if (dA < -Math.PI) dA += 2 * Math.PI;
+      cam.orbit(-dA, 0);                                   // twist: grab-the-world
+      pinch = now;
+      if (onChange) onChange();
+      return;
+    }
+    if (!mode || mode === 'pinch') return;
     const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY;
     if (mode === 'orbit') cam.orbit(-dx * 0.006, dy * 0.006);
     else cam.pan(dx, dy, canvas.clientHeight);
     if (onChange) onChange();
   };
-  const up = (e) => { mode = null; try { canvas.releasePointerCapture(e.pointerId); } catch { /* gone */ } };
+  const up = (e) => {
+    pts.delete(e.pointerId);
+    try { canvas.releasePointerCapture(e.pointerId); } catch { /* gone */ }
+    if (pts.size >= 2) { pinch = pinchState(); return; }   // still pinching with others
+    if (pts.size === 1) {                                  // pinch → single: re-anchor, no jump
+      const rest = [...pts.values()][0];
+      mode = 'orbit'; lx = rest.x; ly = rest.y; pinch = null;
+      return;
+    }
+    mode = null; pinch = null;
+  };
   const wheel = (e) => { e.preventDefault(); cam.dolly(Math.pow(1.0015, e.deltaY)); if (onChange) onChange(); };
   const ctx = (e) => e.preventDefault();
   canvas.addEventListener('pointerdown', down);
   canvas.addEventListener('pointermove', move);
   canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointercancel', up);
   canvas.addEventListener('wheel', wheel, { passive: false });
   canvas.addEventListener('contextmenu', ctx);
   return () => {
     canvas.removeEventListener('pointerdown', down);
     canvas.removeEventListener('pointermove', move);
     canvas.removeEventListener('pointerup', up);
+    canvas.removeEventListener('pointercancel', up);
     canvas.removeEventListener('wheel', wheel);
     canvas.removeEventListener('contextmenu', ctx);
   };
