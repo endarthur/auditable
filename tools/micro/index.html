@@ -2562,6 +2562,130 @@ function openGradeTonnage(L) {
   _gtWins.set(L.id, { win, redraw });
   buildCtrls(); redraw();
 }
+// ── swath (drift) analysis ────────────────────────────────────────────────────
+// small vector helpers
+const v3 = { dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s], add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], norm: (a) => { const n = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / n, a[1] / n, a[2] / n]; } };
+// trend (azimuth, clockwise from north) + plunge (below horizontal) → unit vector
+// in world (X=east, Y=north, Z=up)
+function dirTrendPlunge(trendDeg, plungeDeg) {
+  const T = trendDeg * Math.PI / 180, P = plungeDeg * Math.PI / 180;
+  return v3.norm([Math.cos(P) * Math.sin(T), Math.cos(P) * Math.cos(T), -Math.sin(P)]);
+}
+// dip-direction / dip / rake → an orthonormal TRIO [rakeLine, inPlanePerp, pole]
+function frameDipDirDipRake(ddDeg, dipDeg, rakeDeg) {
+  const DD = ddDeg * Math.PI / 180, D = dipDeg * Math.PI / 180, R = rakeDeg * Math.PI / 180;
+  const ddVec = [Math.cos(D) * Math.sin(DD), Math.cos(D) * Math.cos(DD), -Math.sin(D)];   // down-dip (steepest)
+  const strike = [-Math.cos(DD), Math.sin(DD), 0];                                        // horizontal in-plane (trend DD−90)
+  const rakeLine = v3.norm(v3.add(v3.scale(strike, Math.cos(R)), v3.scale(ddVec, Math.sin(R))));
+  const inPlane = v3.norm(v3.add(v3.scale(strike, -Math.sin(R)), v3.scale(ddVec, Math.cos(R))));
+  const pole = v3.norm(v3.cross(strike, ddVec));
+  return [rakeLine, inPlane, pole];
+}
+function swathDir(st) {
+  if (st.mode === 'axes') return [[1, 0, 0], [0, 1, 0], [0, 0, 1]][st.axis];
+  if (st.mode === 'oriented') return frameDipDirDipRake(st.dd, st.dip, st.rake)[st.axis];
+  return dirTrendPlunge(st.trend, st.plunge);
+}
+const AXIS_NAMES = { axes: ['X (east)', 'Y (north)', 'Z (elev)'], oriented: ['rake line', 'in-plane ⟂', 'pole'] };
+// projected extent along dir from the layer bbox corners
+function projRange(L, dir) {
+  const bb = layerWorldBbox(L); if (!bb) return [0, 1];
+  let lo = Infinity, hi = -Infinity;
+  for (const x of [bb[0], bb[3]]) for (const y of [bb[1], bb[4]]) for (const z of [bb[2], bb[5]]) { const t = x * dir[0] + y * dir[1] + z * dir[2]; if (t < lo) lo = t; if (t > hi) hi = t; }
+  return [lo, hi];
+}
+// per band along dir: tonnage-weighted mean grade for each series + count/tonnage
+async function computeSwath(L, cols, dir, bandWidth, offset, weightCol, onProgress) {
+  const h = layerTableHeader(L), m = h.mapping, idx = cols.map((n) => h.columns.indexOf(n));
+  const wi = weightCol ? h.columns.indexOf(weightCol) : -1, vol = blockVolumeOf(L);
+  const bands = new Map(); let rc = 0;
+  for await (const batch of layerRows(L, null)) {
+    for (const f of batch) {
+      const x = +f[m.x], y = +f[m.y], z = +f[m.z]; if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+      const t = x * dir[0] + y * dir[1] + z * dir[2], bi = Math.floor((t - offset) / bandWidth);
+      let e = bands.get(bi); if (!e) { e = { w: new Float64Array(cols.length), wg: new Float64Array(cols.length), tw: 0, n: 0 }; bands.set(bi, e); }
+      const wt = (wi >= 0 ? (+f[wi] || 0) : 1) * vol; e.tw += wt; e.n++;
+      for (let s = 0; s < idx.length; s++) { const v = +f[idx[s]]; if (Number.isFinite(v)) { e.w[s] += wt; e.wg[s] += wt * v; } }
+    }
+    rc += batch.length; if (onProgress) onProgress(rc); await new Promise((r) => setTimeout(r));
+  }
+  const keys = [...bands.keys()].sort((a, b) => a - b);
+  const profile = keys.map((bi) => { const e = bands.get(bi); return { band: bi, center: offset + (bi + 0.5) * bandWidth, mean: cols.map((_, s) => (e.w[s] > 0 ? e.wg[s] / e.w[s] : NaN)), tonnage: e.tw, count: e.n }; });
+  return { profile, weighted: wi >= 0 };
+}
+const _swathWins = new Map();
+function openSwath(L) {
+  if (!L || !gridAxesOf(L)) { $('#meta').textContent = 'swath: needs a regular block model'; return; }
+  const ex = _swathWins.get(L.id); if (ex) { ex.win.el.style.zIndex = ++_fwinZ; return; }
+  const nums = numericColsOf(L); if (!nums.length) { $('#meta').textContent = 'swath: no numeric column'; return; }
+  const pairs = reconcilePairs(nums);
+  const st = { mode: 'axes', axis: 0, dd: 90, dip: 45, rake: 0, trend: 0, plunge: 0, bandWidth: null, offset: null, weight: '', cols: pairs.length ? [pairs[0].ref, pairs[0].self] : [nums[0]], bars: 'count', zebra: false };
+  const win = floatWin({ title: `swath · ${L.label || L.name}`, sub: '', x: Math.max(12, innerWidth - 520), y: 130, w: 490, h: 380, onClose: () => { _swathWins.delete(L.id); if (st.zebra) clearSwathZebra(L); } });
+  win.body.style.cssText += 'display:flex;flex-direction:column;gap:0';
+  const cv = document.createElement('canvas'); cv.style.cssText = 'width:100%;flex:1;min-height:80px;display:block';
+  const ctrls = document.createElement('div'); ctrls.className = 'awin-ctrls';
+  win.body.append(cv, ctrls);
+  // the block's extent along dir — bands narrower than this are meaningless
+  const blockAlong = (dir) => { const a = gridAxesOf(L); return a ? (Math.abs((a.x.pitch || 0) * dir[0]) + Math.abs((a.y.pitch || 0) * dir[1]) + Math.abs((a.z.pitch || 0) * dir[2])) || 1 : 1; };
+  const effWidth = () => { const dir = swathDir(st); if (st.bandWidth) return st.bandWidth; const [lo, hi] = projRange(L, dir); return Math.max(blockAlong(dir), niceStep((hi - lo) / 25) || 1); };
+  const effOffset = () => { if (st.offset != null) return st.offset; const [lo] = projRange(L, swathDir(st)); return lo; };
+  const redraw = async () => {
+    const dir = swathDir(st), bw = effWidth(), off = effOffset();
+    win.sub.textContent = 'computing…';
+    const res = await computeSwath(L, st.cols, dir, bw, off, st.weight, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; });
+    const spec = { xLabel: `distance along ${st.mode === 'axes' ? AXIS_NAMES.axes[st.axis] : st.mode === 'oriented' ? AXIS_NAMES.oriented[st.axis] : `trend ${st.trend}/${st.plunge}`}`, leftLabel: 'mean grade', rightLabel: st.bars === 'tonnage' ? 'tonnage' : 'count', series: [] };
+    spec.series.push({ name: st.bars, color: '#6a6f75', axis: 'right', kind: 'bar', data: res.profile.map((p) => [p.center, st.bars === 'tonnage' ? p.tonnage : p.count]) });
+    st.cols.forEach((c, i) => spec.series.push({ name: c, color: SERIES_COLORS[i % SERIES_COLORS.length], axis: 'left', kind: 'line', data: res.profile.map((p) => [p.center, p.mean[i]]) }));
+    win.sub.textContent = `${res.profile.length} bands · ${bw.toPrecision(3)} m · ${res.weighted ? 'tonnage-wtd' : 'count'}`;
+    plotChart(cv, spec); win._spec = spec;
+    if (st.zebra) applySwathZebra(L, dir, bw, off);
+  };
+  win.el._onResized = () => { if (win._spec) plotChart(cv, win._spec); };
+  const buildCtrls = () => {
+    ctrls.textContent = '';
+    const nums2 = numericColsOf(L);
+    const sBtn = document.createElement('button'); sBtn.className = 'awin-btn'; sBtn.textContent = `series: ${st.cols.join(', ')}`;
+    sBtn.onclick = (e) => menuXY(e.clientX, e.clientY, nums2.map((c) => ({ label: (st.cols.includes(c) ? '✓ ' : '') + c, action: () => { if (st.cols.includes(c)) { if (st.cols.length > 1) st.cols = st.cols.filter((x) => x !== c); } else if (st.cols.length < 4) st.cols.push(c); buildCtrls(); redraw(); } })));
+    ctrls.append(sBtn);
+    const modeSel = document.createElement('select'); for (const [v, t] of [['axes', 'axes X/Y/Z'], ['oriented', 'dip-dir/dip/rake'], ['direction', 'trend/plunge']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; modeSel.appendChild(o); } modeSel.value = st.mode; modeSel.onchange = () => { st.mode = modeSel.value; st.axis = 0; st.bandWidth = null; st.offset = null; buildCtrls(); redraw(); };
+    ctrls.append(modeSel);
+    if (st.mode === 'axes' || st.mode === 'oriented') {
+      const seg = document.createElement('div'); seg.className = 'pp-seg';
+      AXIS_NAMES[st.mode].forEach((nm, i) => { const bt = document.createElement('button'); bt.className = 'pp-segbtn' + (st.axis === i ? ' on' : ''); bt.textContent = nm.split(' ')[0]; bt.title = nm; bt.onclick = () => { st.axis = i; st.bandWidth = null; st.offset = null; buildCtrls(); redraw(); }; seg.appendChild(bt); });
+      ctrls.append(seg);
+    }
+    const numIn = (key, label, w = 54) => { const l = document.createElement('label'); l.textContent = label; const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any'; inp.style.width = w + 'px'; inp.value = String(st[key]); inp.onchange = () => { st[key] = +inp.value; st.bandWidth = null; st.offset = null; redraw(); }; l.appendChild(inp); return l; };
+    if (st.mode === 'oriented') ctrls.append(numIn('dd', 'DD'), numIn('dip', 'dip'), numIn('rake', 'rake'));
+    if (st.mode === 'direction') ctrls.append(numIn('trend', 'trend'), numIn('plunge', 'plunge'));
+    const bwL = document.createElement('label'); bwL.textContent = 'band'; const bwI = document.createElement('input'); bwI.type = 'number'; bwI.step = 'any'; bwI.style.width = '62px'; bwI.value = String(+effWidth().toPrecision(4)); bwI.title = 'band width (m)'; bwI.onchange = () => { st.bandWidth = +bwI.value || null; redraw(); }; bwL.appendChild(bwI); ctrls.append(bwL);
+    const offL = document.createElement('label'); offL.textContent = 'offset'; const offI = document.createElement('input'); offI.type = 'number'; offI.step = 'any'; offI.style.width = '72px'; offI.value = String(+effOffset().toPrecision(6)); offI.title = 'where band 0 aligns (along the direction)'; offI.onchange = () => { st.offset = bwI.value === '' ? null : +offI.value; redraw(); }; offL.appendChild(offI); ctrls.append(offL);
+    const wSel = document.createElement('select'); { const o = document.createElement('option'); o.value = ''; o.textContent = 'count'; wSel.appendChild(o); } for (const c of nums2) { const o = document.createElement('option'); o.value = c; o.textContent = '× ' + c; wSel.appendChild(o); } wSel.value = st.weight; wSel.title = 'weight (density)'; wSel.onchange = () => { st.weight = wSel.value; redraw(); }; ctrls.append(wSel);
+    const zL = document.createElement('label'); const zc = document.createElement('input'); zc.type = 'checkbox'; zc.checked = st.zebra; zc.onchange = () => { st.zebra = zc.checked; if (st.zebra) applySwathZebra(L, swathDir(st), effWidth(), effOffset()); else clearSwathZebra(L); }; zL.append(zc, document.createTextNode('zebra')); zL.title = 'stripe alternate bands on the 3D view'; ctrls.append(zL);
+  };
+  _swathWins.set(L.id, { win, redraw });
+  buildCtrls(); redraw();
+}
+// zebra: paint alternate swath bands as a 2-value column, coloured on the 3D
+async function applySwathZebra(L, dir, bandWidth, offset) {
+  const h = layerTableHeader(L), m = h.mapping;
+  let col = paintColByName(L, '_swath'); if (!col) { col = createPaintCol(L, '_swath'); if (!col) return; }
+  while (col.dict.length < 3) addPaintValue(L, col, col.dict.length === 1 ? 'band A' : 'band B');
+  col.colors[1] = '#3a3f45'; col.colors[2] = '#c8c2b0';
+  const codes = col.codes; let rec = 0;
+  for await (const batch of layerRows(L, null)) for (const f of batch) {
+    const x = +f[m.x], y = +f[m.y], z = +f[m.z];
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) && rec < codes.length) { const bi = Math.floor((x * dir[0] + y * dir[1] + z * dir[2] - offset) / bandWidth); codes[rec] = (bi & 1) ? 1 : 2; }
+    rec++;
+  }
+  paintRecount(col); col._swathParity = true;
+  applyPaintPalette && setLayerColorSel(L, 'paint:_swath');
+  const t2 = _attrTables.get(L.id); if (t2 && t2.invalidate) t2.invalidate();
+  requestRender();
+}
+function clearSwathZebra(L) {
+  const i = (L.paintCols || []).findIndex((c) => c.name === '_swath');
+  if (i >= 0) { L.paintCols.splice(i, 1); if (paintSelOf(L) === '_swath') setLayerColorSel(L, 'elev'); addPaintColorOptions(L); requestRender(); }
+}
 // ── the assign-domains dialog ──
 let _adDlg = null;
 function openDomainsDialog() {
@@ -6452,7 +6576,7 @@ function layerMenu(L, x, y) {
     ...(L.kind !== 'mesh' ? [{ label: 'Attribute table…', kbd: 't', action: () => openAttrTable(L) }] : []),
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
-    ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }] : []),
+    ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }, { label: 'Swath plot…', action: () => openSwath(L) }] : []),
     ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Optimize to spatial Parquet', action: () => convertLayerToParquet(L) }] : []),
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
@@ -8794,7 +8918,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

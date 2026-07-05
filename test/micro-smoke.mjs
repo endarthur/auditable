@@ -196,6 +196,16 @@ const sj = await p.evaluate(async () => {
 chk(`spatial join: compatible (${sj.compat}), aggregate B→A grid = ${sj.cells} cells, derived ΔFE≈0 (${sj.hasD}, ${sj.dmax.toExponential(1)}), new block model (${sj.isBM}, ${sj.blocks})`,
   sj.compat && sj.cells === 4 && sj.hasD && sj.dmax < 1e-3 && sj.isBM && sj.blocks === 4);
 
+// grade-tonnage + swath analysis on A (FE = 100,200,300,400)
+const an = await p.evaluate(async () => {
+  const m = window._micro, A = m.layers().find((L) => L.name === 'A.csv');
+  const gt = await m.computeGT(A, ['FE'], '', 10);            // cutoff at gmin → mean of all = 250
+  const swX = await m.computeSwath(A, ['FE'], [1, 0, 0], 10, 0, '');   // along X: col x=5 → mean 200, x=15 → mean 300
+  return { gtMean: gt.gt[0][0].grade, swX: swX.profile.map((p) => p.mean[0]) };
+});
+chk(`analysis: GT mean-above-min = 250 (${an.gtMean}), swath along X rises [${an.swX.map((v) => Math.round(v)).join(',')}]`,
+  Math.abs(an.gtMean - 250) < 1e-9 && an.swX.length === 2 && Math.abs(an.swX[0] - 200) < 1e-9 && Math.abs(an.swX[1] - 300) < 1e-9);
+
 // ── 8. project round trip (OPFS) + auto-optimize on save: the CSV model is
 //    reordered to spatial Parquet in place at save time, and reopens as Parquet ──
 await p.evaluate(() => { window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('microsmoke', { create: true }); });
