@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>micro — documentation</title>
+<style>
+  :root { --ink:#1d2129; --dim:#5b6470; --orange:#b25a1e; --line:#ddd7cc; --code-bg:#f4f1ea; --paper:#fbfaf6; --go:#3f7d4e; --fault:#b04a3a; }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { font:16px/1.6 -apple-system,"Segoe UI",system-ui,sans-serif; color:var(--ink); background:var(--paper); margin:0; }
+  .wrap { max-width:860px; margin:0 auto; padding:0 20px 120px; }
+  a { color:var(--orange); }
+  code,pre { font-family:"Cascadia Mono",Consolas,ui-monospace,monospace; font-size:.86em; background:var(--code-bg); border-radius:3px; }
+  code { padding:.06em .38em; }
+  pre { padding:.8em 1em; overflow-x:auto; border-left:3px solid var(--orange); line-height:1.5; }
+  h1 { font-size:2em; margin:0; letter-spacing:.01em; }
+  h2 { font-size:1.45em; color:var(--orange); margin:2.4em 0 .5em; padding-bottom:.15em; border-bottom:2px solid var(--orange); scroll-margin-top:12px; }
+  h2 .n { color:var(--dim); font-weight:400; margin-right:.4em; }
+  h3 { font-size:1.12em; margin:1.5em 0 .3em; }
+  p { margin:.6em 0; }
+  ul,ol { margin:.5em 0 .8em; padding-left:1.5em; }
+  li { margin:.28em 0; }
+  figure { margin:1.2em 0; }
+  figure img { width:100%; border:1px solid var(--line); border-radius:6px; display:block; box-shadow:0 2px 14px rgba(0,0,0,.08); }
+  figcaption { font-size:.84em; color:var(--dim); margin-top:.4em; }
+  .kbd { border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:.05em .4em; font-family:Consolas,monospace; font-size:.82em; background:#fff; white-space:nowrap; }
+  .note,.tip { border:1px solid var(--line); border-left:4px solid var(--orange); border-radius:4px; padding:.6em .9em; margin:1em 0; font-size:.94em; background:#fff; }
+  .note { border-left-color:var(--fault); }
+  .tip b:first-child { color:var(--orange); } .note b:first-child { color:var(--fault); }
+  table { border-collapse:collapse; width:100%; margin:.9em 0; font-size:.9em; }
+  th,td { border:1px solid var(--line); padding:.4em .6em; text-align:left; vertical-align:top; }
+  th { background:var(--code-bg); }
+  header.hero { padding:52px 0 26px; border-bottom:1px solid var(--line); margin-bottom:8px; }
+  header.hero .sub { color:var(--dim); font-size:1.15em; margin-top:.5em; }
+  header.hero .badges { margin-top:1em; font-size:.85em; color:var(--dim); }
+  header.hero .badges b { color:var(--go); }
+  nav.toc { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px 20px; margin:1.6em 0; column-count:2; column-gap:32px; font-size:.92em; }
+  nav.toc a { display:block; color:var(--ink); text-decoration:none; padding:2px 0; break-inside:avoid; }
+  nav.toc a:hover { color:var(--orange); }
+  nav.toc a .n { color:var(--dim); display:inline-block; width:1.6em; }
+  .lead { font-size:1.08em; color:#333; }
+  footer { border-top:1px solid var(--line); margin-top:3em; padding-top:1.4em; color:var(--dim); font-size:.86em; }
+  @media (max-width:640px){ nav.toc{column-count:1;} h1{font-size:1.6em;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>micro</h1>
+  <div class="sub">A streaming, offline workbench for massive point clouds and block models.</div>
+  <div class="badges"><b>🔒 Sealed</b> — no network, nothing leaves your machine · single self-contained HTML file · <a href="../micro.html" download>download micro.html</a> · <a href="../">open the app ↗</a></div>
+</header>
+
+<p class="lead">micro opens a point cloud, block model, grid, or set of drillholes — however large — in about a second, with no import step, and lets you view, query, join, reconcile, validate, and produce report-ready figures from it. Every derived result carries a provenance trail, and nothing ever touches the network.</p>
+
+<nav class="toc" aria-label="Contents">
+  <a href="#what"><span class="n">1</span>What micro is</a>
+  <a href="#start"><span class="n">2</span>Getting started</a>
+  <a href="#view"><span class="n">3</span>Viewing &amp; querying</a>
+  <a href="#domain"><span class="n">4</span>Selection &amp; domaining</a>
+  <a href="#join"><span class="n">5</span>Join &amp; reconcile</a>
+  <a href="#gt"><span class="n">6</span>Grade–tonnage</a>
+  <a href="#swath"><span class="n">7</span>Swath / drift</a>
+  <a href="#validate"><span class="n">8</span>Validate vs drillholes</a>
+  <a href="#linked"><span class="n">9</span>Linked brushing</a>
+  <a href="#lineage"><span class="n">10</span>Lineage &amp; provenance</a>
+  <a href="#grids"><span class="n">11</span>Grids</a>
+  <a href="#parquet"><span class="n">12</span>The Parquet project store</a>
+  <a href="#figures"><span class="n">13</span>Figures &amp; decorations</a>
+  <a href="#projects"><span class="n">14</span>Projects &amp; export</a>
+  <a href="#windows"><span class="n">15</span>Windows</a>
+  <a href="#sealed"><span class="n">16</span>Security: Sealed</a>
+  <a href="#install"><span class="n">17</span>Install &amp; offline</a>
+  <a href="#ref"><span class="n">A</span>Reference</a>
+</nav>
+
+<figure>
+  <img src="shots/overview.png" alt="A block model in micro, coloured by iron grade, showing a high-grade shoot.">
+  <figcaption>A 12,800-block iron model coloured by grade — the high-grade shoot in yellow. Loaded, inferred, and rendered from a plain CSV with no import step.</figcaption>
+</figure>
+
+<h2 id="what"><span class="n">1</span>What micro is</h2>
+<p>micro is a single self-contained HTML file — a <b>viewer that grew into a workbench</b>. It streams massive spatial-element files (never holding them fully in memory), so the first look is near-instant at any size and the picture densifies while you orbit.</p>
+<p>It reads:</p>
+<ul>
+  <li><b>Point clouds</b> — LAS, PLY, XYZ / PTS / DAT dumps</li>
+  <li><b>Block models</b> — CSV / TXT, Datamine <code>.dm</code>, and <b>Parquet</b></li>
+  <li><b>Grids</b> — GeoTIFF, Surfer <code>.grd</code>, ESRI ASCII <code>.asc</code></li>
+  <li><b>Meshes</b> — <code>.msh</code> (Leapfrog), OBJ, PLY-with-faces, LFM</li>
+  <li><b>Drillholes</b> — collar + survey + interval tables (desurveyed on load)</li>
+</ul>
+<p>Beyond viewing, it does the everyday resource-geology work: filter and section, domain by a solid, join and reconcile model versions, grade–tonnage and swath analysis, validation against drillholes, and figure export — all against the source file, all with a provenance trail, all offline.</p>
+<p class="tip"><b>Tip —</b> The fastest way to reach anything is the <b>command palette</b>: <span class="kbd">Ctrl/⌘K</span> (or the <span class="kbd">⌘K</span> button). It searches every action and shows only what applies to the layer you have selected.</p>
+
+<h2 id="start"><span class="n">2</span>Getting started</h2>
+<h3>Opening data</h3>
+<p>Drag a file (or several) anywhere onto the window, or use <b>File → Open…</b>. Several files at once become separate <b>layers</b>. No data handy? <b>File → Sample bench scan</b> or <b>Sample block model</b> generate a dataset locally.</p>
+<h3>The layers panel</h3>
+<p><span class="kbd">p</span> toggles the layers panel. Each opened dataset is a layer with its own colour, filter, and visibility; right-click a layer for its actions (zoom, info, attribute table, filter, analysis tools, remove). Layers can be grouped and reordered. <span class="kbd">,</span> / <span class="kbd">.</span> step the active layer.</p>
+<h3>Getting around</h3>
+<p>Drag to orbit, right-drag (or shift-drag) to pan, wheel to zoom. <span class="kbd">f</span> fits the data. <span class="kbd">n s e w</span> look level that way, <span class="kbd">d</span> is plan, <span class="kbd">o</span> toggles orthographic (needed for a true scale bar). Click a block or point to <b>pick</b> it — the record panel shows its full source row.</p>
+
+<h2 id="view"><span class="n">3</span>Viewing &amp; querying</h2>
+<h3>Colour</h3>
+<p>The <b>colour</b> dropdown drives the active layer: by elevation, a numeric <b>channel</b> (a grade), or a <b>category</b> (a rock type). Pick a ramp per layer (viridis · spectral · magma · turbo · greys) in <b>Properties → style</b>; the <b>min/max</b> boxes clip the scale so outliers stop eating the ramp. On a grade channel, double-click the histogram to add <b>breakpoints</b> — <b>classed</b> turns them into a solid-colour grade-shell legend.</p>
+<h3>Filter</h3>
+<p><span class="kbd">/</span> focuses the filter box. It speaks a familiar expression language over every column: <code>FE &gt; 55 and LITO = "HEMATITE"</code>, <code>between</code>, <code>in (…)</code>. Matching elements isolate; everything else drops out of the render, the table, and any analysis. <span class="kbd">Enter</span> applies, <span class="kbd">Esc</span> clears.</p>
+<h3>Calculated columns &amp; the scan</h3>
+<p><b>Properties → columns</b> defines ƒ <b>calculated columns</b> (<code>FE + 0.4 * MN</code>) that the filter, scan, table, and record panel all see, and <b>scan columns</b> streams the whole table once to fill n · mean · std · quantiles · histogram per column.</p>
+<h3>Sections &amp; measure</h3>
+<p>A section is a live cut — everything hidden is neither drawn nor pickable. Pick a preset (plan · N–S · E–W), press <span class="kbd">k</span> and drag a line, or type a plane's dip-direction + dip. <span class="kbd">x</span> toggles it; <span class="kbd">[</span> <span class="kbd">]</span> step slabs. <span class="kbd">m</span> then two clicks <b>measures</b> 3D · plan · Δz between records.</p>
+<h3>The attribute table</h3>
+<p><span class="kbd">t</span> opens the layer's rows as a draggable, layer-pinned window — windowed reads, so a 1.8M-row model scrolls cold. <b>matches</b> shows only the filtered rows; click a row to pick it in the scene.</p>
+
+<h2 id="domain"><span class="n">4</span>Selection &amp; domaining</h2>
+<p><b>Select</b> with <span class="kbd">r</span> (rectangle) or <span class="kbd">v</span> (lasso): what you <i>see</i> gets selected (occlusion-honest, all visible layers), tinted gold — <b>shift</b> adds, <b>alt</b> subtracts, <span class="kbd">Esc</span> clears. The <b>select-through</b> toolbar toggle flips to the extruded tube: everything whose position falls inside the shape, occluded included.</p>
+<p><b>Select by solid / surface</b> (Tools menu, or right-click a mesh) classifies records against a closed mesh by winding number: <b>select</b> inside/outside, write a <b>flag column</b>, or a <b>fraction-inside</b> 0–1 column. Open surfaces (topo, weathering horizons) classify <b>above / below / between</b>. <b>Assign domains</b> runs the whole coded-model loop — pick the domain solids and a column name, and every block goes to the solid holding its largest fraction.</p>
+<p><b>Paint a column</b> (<span class="kbd">b</span>) is interactive domaining by hand: a category column you fill by brushing over the scene. Painted values are real columns the filter, table, and export all see.</p>
+
+<h2 id="join"><span class="n">5</span>Join &amp; reconcile</h2>
+<p>Two model versions? The <b>join tab</b> (Properties → <b>join</b>) compares them. A <b>spatial join</b> resamples a <i>compatible</i> model onto a target grid — a banner tells you whether the grids share a lattice (clean replicate / aggregate) or why they can't. A <b>key join</b> matches rows by a key column (e.g. a block ID, or a domain→density lookup).</p>
+<p><b>Reconcile</b> is the preset: it produces a coloured <b>Δ map</b> (this model − reference) on a common lattice, with a diverging ramp centred on zero — blue where the new estimate is lower, red where it's higher, neutral where they agree. The summary reads <b>matched · mean Δ · mean|Δ| · added · removed</b>.</p>
+<figure>
+  <img src="shots/reconcile.png" alt="A reconciliation Δ map in plan view: blue in the north, red in the south.">
+  <figcaption>Reconciling two model versions. Global mean Δ is ≈ 0, but the Δ map exposes a clear <b>conditional bias</b> — the new estimate runs low in the north (blue) and high in the south (red). A global check would have missed it entirely.</figcaption>
+</figure>
+<p class="tip"><b>Tip —</b> The Δ ramp auto-clips to the full range, which extreme blocks can widen. Tighten the <b>min/max</b> boxes (e.g. ±2× the mean|Δ|) to make the local pattern read, as above.</p>
+
+<h2 id="gt"><span class="n">6</span>Grade–tonnage</h2>
+<p><b>Grade-tonnage…</b> (right-click a model, or the palette) draws tonnage and mean grade above cutoff as a draggable plot. It is <b>tonnage-weighted</b> when you pick a density column (× block volume), else block count. Pick up to four grade columns; on a reconcile layer it auto-overlays reference vs new so you see how the grade–tonnage relationship shifted.</p>
+<figure>
+  <img src="shots/gradetonnage.png" alt="A grade-tonnage plot: tonnage and mean grade above cutoff.">
+  <figcaption>Grade–tonnage: tonnage (left axis) falls and mean grade (right axis) rises as the cutoff climbs — the recoverable-resource trade-off at a glance.</figcaption>
+</figure>
+
+<h2 id="swath"><span class="n">7</span>Swath / drift</h2>
+<p><b>Swath plot…</b> shows mean grade per slab along a direction — the classic drift check for local bias. The direction can be the grid <b>axes</b> X/Y/Z, an oriented trio from <b>dip-direction / dip / rake</b> (across-structure · along-strike · down-dip), or a single <b>trend / plunge</b>. Band width and offset set the slabs; the count/tonnage bars sit behind the profile.</p>
+<p><b>Zebra</b> paints the alternate bands onto the 3D, so the slabs you see in space <i>are</i> the bins in the plot.</p>
+<figure>
+  <img src="shots/swath.png" alt="A swath plot with alternating bands striped onto the 3D model.">
+  <figcaption>A swath along easting, with the bands zebra-striped onto the model. Because the plot and the stripes share one direction / width / offset, you read the profile against the deposit it came from.</figcaption>
+</figure>
+
+<h2 id="validate"><span class="n">8</span>Validate vs drillholes</h2>
+<p>Is the model consistent with the samples it was built from? <b>Validate vs drillholes…</b> takes a block model and a drillhole layer, <b>declusters</b> the sample grades (spatial sampling over-drills high grade, so a naïve sample mean is inflated), and reports the <b>global bias</b> (model mean vs declustered sample mean) plus a <b>model-vs-sample swath</b> along X/Y/Z.</p>
+<figure>
+  <img src="shots/validation.png" alt="The validation window: model vs declustered-sample swath, with a global bias readout.">
+  <figcaption>Validation. The naïve sample mean (40.1) is inflated by clustered infill drilling; <b>declustered</b> it's 35.9, essentially matching the model (36.1) — a <b>+0.7% global bias</b>. The swath compares model (blue) and sample (orange) grade along easting, slab by slab.</figcaption>
+</figure>
+<p class="note"><b>Note —</b> Samples are point support, blocks are block support, so a <i>global</i> grade offset between them can be real (change of support), not an error. The swaths are what flag <i>local</i>, conditional bias.</p>
+
+<h2 id="linked"><span class="n">9</span>Linked brushing</h2>
+<p>The grade-tonnage and swath windows carry an <b>all / selection</b> toggle. Set it to <b>selection</b>, then rubber-band a bench, a domain, or a suspect zone in the 3D — the plot recomputes for just those blocks, live, as you brush. The analysis becomes interactive regional exploration, not a whole-model summary.</p>
+
+<h2 id="lineage"><span class="n">10</span>Lineage &amp; provenance</h2>
+<p>Every derived layer remembers <i>how it was made</i>. Opening a file is a leaf; a join, reconcile, or optimize wraps its source layers with the operation, its parameters, the build, and a timestamp — a tree. <b>Lineage…</b> shows that tree and exports a readable HTML <b>report</b> you can attach to a sign-off. Parquet exports carry the lineage embedded in the file, so the provenance travels <i>inside</i> the data.</p>
+<figure>
+  <img src="shots/lineage.png" alt="The lineage window showing a derivation tree.">
+  <figcaption>The provenance tree for a reconciliation: the result wraps the two opened models. Export it as an HTML report, or read it back from any Parquet micro wrote.</figcaption>
+</figure>
+
+<h2 id="grids"><span class="n">11</span>Grids</h2>
+<p>GeoTIFF / Surfer <code>.grd</code> / ESRI <code>.asc</code> open as heightfield layers (cells are pickable records; huge DEMs decimate for display while the full grid stays for evaluation). A mesh right-click → <b>Rasterize to grid…</b> renders it onto a DEM (the surface↔grid converter, with fill / extrapolation for gaps). <b>New… → grid / block model</b> creates empty grids from parameters, covering a layer's bounds, or — <b>cover compatible models</b> — on a lattice that covers and is compatible with several models at once (the reconcile target). Grid layers export as ESRI ASCII.</p>
+
+<h2 id="parquet"><span class="n">12</span>The Parquet project store</h2>
+<p><b>Optimize to spatial Parquet</b> reorders a model Morton-sorted, so each row-group's footer becomes a tight spatial index and queries skip whole row-groups they can't match. This runs <b>automatically when you save a project</b> — Parquet is micro's project store. Painting stays editable through the reorder, and the whole thing round-trips. Parquet block models also open <b>streamed</b>, holding nothing decoded, with predicate and spatial push-down on the filter.</p>
+
+<h2 id="figures"><span class="n">13</span>Figures &amp; decorations</h2>
+<p><b>View → Decorations &amp; figure…</b> toggles a <b>scale bar</b>, <b>north arrow</b>, colour <b>legend</b>, and <b>title</b> onto the viewport — they show live and are captured verbatim by <b>Export figure</b>. Set a <b>background</b> (white or paper for print; the decorations flip to dark ink to stay readable). The exported PNG is what you see, ready for a report — and it pairs with the lineage report for a fully auditable figure.</p>
+<figure>
+  <img src="shots/figure.png" alt="The model on a white background with a scale bar, north arrow, legend, and title.">
+  <figcaption>A report-ready figure: white background, scale bar, north arrow, grade legend, and title — composited onto the export exactly as shown.</figcaption>
+</figure>
+
+<h2 id="projects"><span class="n">14</span>Projects &amp; export</h2>
+<p>In a Chromium browser, <b>File → Open project folder</b> keeps your layers, styling, filters, camera, section, and saved views in a plain folder (<code>project.json</code> + the data files). <span class="kbd">Ctrl+S</span> saves. <b>Export rows…</b> writes any layer back out — scope <b>all</b> / <b>filter matches</b> / <b>selection</b>, every column including calculated and painted ones, as CSV or Parquet. Opening a <code>.dm</code> and exporting <i>is</i> the <code>.dm</code>→CSV converter.</p>
+
+<h2 id="windows"><span class="n">15</span>Windows</h2>
+<p>The analysis, table, and paint windows are all draggable and pinned to their layer (open several at once). <b>View → Windows…</b> lists every open window — click to focus, or <b>Cascade</b> and <b>Close all</b> to tidy up.</p>
+
+<h2 id="sealed"><span class="n">16</span>Security: Sealed</h2>
+<p>micro is <b>Sealed</b>: it makes <b>no network requests</b> — a browser security policy (<code>connect-src 'none'</code>) blocks every connection, so there is no telemetry, no cloud, and no auto-update. Your data — point clouds, block models, drillholes — stays on your device. The build is <b>WASM-free</b> with the runtime in the clear, so the code is readable and auditable rather than opaque binary.</p>
+<figure>
+  <img src="shots/sealed.png" alt="The Sealed badge popover explaining the no-network posture.">
+  <figcaption>The <b>Sealed</b> badge (top-left) explains the posture and links to the verifier. For confidential resource data, this is the point: nothing leaves the machine.</figcaption>
+</figure>
+<p>Verify the build and read how to bring it through approval at <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a>.</p>
+
+<h2 id="install"><span class="n">17</span>Install &amp; offline</h2>
+<p>micro runs at <a href="../">gentropic.org/micro</a> — install it as an app from the browser, or <a href="../micro.html" download>download <code>micro.html</code></a>: one file, no installer, that you can keep, e-mail, drop on a shared drive, or run fully offline by double-clicking. There is nothing to set up and nothing that phones home. Works in current Chrome / Edge / Firefox; project folders and mounts need a Chromium browser.</p>
+
+<h2 id="ref"><span class="n">A</span>Reference</h2>
+<h3>Keyboard</h3>
+<table>
+  <tr><th>Key</th><th>Action</th><th>Key</th><th>Action</th></tr>
+  <tr><td><span class="kbd">⌘/Ctrl K</span></td><td>command palette</td><td><span class="kbd">/</span></td><td>focus the filter</td></tr>
+  <tr><td><span class="kbd">f</span></td><td>fit the data</td><td><span class="kbd">p</span></td><td>layers panel</td></tr>
+  <tr><td><span class="kbd">n s e w</span></td><td>look level that way</td><td><span class="kbd">d</span> / <span class="kbd">u</span></td><td>plan / from below</td></tr>
+  <tr><td><span class="kbd">o</span></td><td>ortho / perspective</td><td><span class="kbd">x</span></td><td>section on/off</td></tr>
+  <tr><td><span class="kbd">k</span></td><td>knife (drag a section)</td><td><span class="kbd">l</span></td><td>face the section</td></tr>
+  <tr><td><span class="kbd">[</span> <span class="kbd">]</span></td><td>step section slabs</td><td><span class="kbd">m</span></td><td>measure</td></tr>
+  <tr><td><span class="kbd">r</span> / <span class="kbd">v</span></td><td>select rectangle / lasso</td><td><span class="kbd">b</span></td><td>paint a column</td></tr>
+  <tr><td><span class="kbd">t</span></td><td>attribute table</td><td><span class="kbd">,</span> <span class="kbd">.</span></td><td>step the active layer</td></tr>
+  <tr><td><span class="kbd">Ctrl S</span></td><td>save project</td><td><span class="kbd">Esc</span></td><td>clear selection / cancel</td></tr>
+</table>
+<h3>The filter language</h3>
+<p>Comparisons <code>&gt; &gt;= &lt; &lt;= = !=</code>, boolean <code>and</code> / <code>or</code> / <code>not</code>, <code>between a and b</code>, <code>in (a, b, c)</code>, over any column (text values in quotes). The same expressions define calculated columns. Autocomplete offers columns, functions, and category values — <span class="kbd">Tab</span> / <span class="kbd">Enter</span> accepts.</p>
+
+<footer>
+  <b>micro</b> — part of the Auditable project, <a href="https://gentropic.org" target="_blank" rel="noopener">Geoscientific Chaos Union</a>. Engine: <code>@gcu/condenser</code>; declustering: <code>@gcu/gsjs</code>. MIT.<br>
+  Screenshots are generated from the app by an automated harness, so they track the current build. Docs for micro — see the in-app <b>Help</b> menu for the terse quick reference.
+</footer>
+
+</div>
+</body>
+</html>
