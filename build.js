@@ -1697,6 +1697,7 @@ if (target === 'micro') {
     '../../ext/winding/index.js': '#winding',
     '../../ext/lfm/lfm.js': '#lfm',
     '../../ext/gtiff/index.js': '#gtiff',
+    '../../ext/parquet/index.js': '#parquet',
   };
   const libs = [
     ['condenser', 'ext/condenser/index.js'],
@@ -1706,6 +1707,7 @@ if (target === 'micro') {
     ['winding',   'ext/winding/index.js'],             // select-by-solid containment (spec 17)
     ['lfm',       'ext/lfm/lfm.js'],                   // Leapfrog model files (multi-mesh, colours)
     ['gtiff',     'ext/gtiff/index.js'],               // GeoTIFF DEMs (spec 7.1)
+    ['parquet',   'ext/parquet/index.js'],             // Apache Parquet block models
   ];
   const modules = [];
   for (const [name, rel] of libs) {

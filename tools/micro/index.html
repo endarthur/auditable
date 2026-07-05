@@ -493,7 +493,7 @@
   </div>
   <div id="barTools"></div>
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
-  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj / .lfm / .tif / .grd anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
+  <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj / .lfm / .tif / .grd / .parquet anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
@@ -523,13 +523,14 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, compileValue, validate, complete } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
 import { readLFM, writeLFM } from '../../ext/lfm/lfm.js';   // Leapfrog model files (multi-mesh + colours)
 import { readGTiff, gridFromGTiff, gridWindowFromGTiff, gridDecimatedFromGTiff, stepForCap, windowForWorldBbox, pickOverviewForCap } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs + windowed/decimated reads (spec 7.1)
+import { parquetInfo, readParquetColumnMap } from '../../ext/parquet/index.js';   // Apache Parquet block models (columnar, footer discovery)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -1671,6 +1672,17 @@ async function* layerPositions(L) {
       if (pos) { x[count] = pos[0]; y[count] = pos[1]; z[count] = pos[2]; recs[count] = r; count++; }
     }
     yield { x, y, z, recs, base: 0, count };
+    return;
+  }
+  if (d.blockDoc && d.blockDoc.parquet) {
+    const { cols } = d.blockDoc.parquet, mp = d.blockDoc.header.mapping;
+    const X = cols[mp.x], Y = cols[mp.y], Z = cols[mp.z], N = X.length, B = 1 << 18;
+    for (let s2 = 0; s2 < N; s2 += B) {
+      const nn = Math.min(B, N - s2);
+      const x = new Float64Array(nn), y = new Float64Array(nn), z = new Float64Array(nn), recs = new Uint32Array(nn);
+      for (let i = 0; i < nn; i++) { x[i] = +X[s2 + i]; y[i] = +Y[s2 + i]; z[i] = +Z[s2 + i]; recs[i] = s2 + i; }
+      yield { x, y, z, recs, base: s2, count: nn };
+    }
     return;
   }
   let streamChunks = null;
@@ -2860,6 +2872,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     else if (/\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache }); }
     else if (/\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first }); }
     else if (/\.(xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { forcePoints: true, layer: lid, first, mapping: over.mapping, discovered: over.discovered }); }
+    else if (/\.(parquet|pq)$/i.test(name)) { await openParquetBlocks(blob, name, { layer: lid, first, forcePoints: over.forcePoints, mapping: over.mapping }); }
     else if (/\.(csv|txt|dat|asc)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints: over.forcePoints, mapping: over.mapping, discovered: over.discovered }); }
     else if (/\.ply$/i.test(name)) { await openPlyBlob(blob, name, { layer: lid, first }); }
     else {
@@ -3773,6 +3786,69 @@ $('#dhImport').onclick = async () => {
 };
 $('#dhCancel').onclick = () => $('#dhDlg').classList.remove('show');
 
+// Parquet block model (columnar): the FOOTER gives columns + types + row count
+// for free (no text sniff), coord columns come from the schema, and the whole
+// table is read as in-memory column arrays that the shared block pipeline (grid
+// inference, chunks, pick, filter, eval) consumes via a provider hook. Native
+// row-group streaming + the footer's per-group bbox as a spatial index are the
+// next step; this is the working opener.
+const _pqNum = (t) => /INT|FLOAT|DOUBLE|DECIMAL/.test(t || '');
+async function openParquetBlocks(blob, name, opts = {}) {
+  const buf = await blob.arrayBuffer();
+  $('#meta').textContent = `${name} — reading parquet footer…`;
+  const info = parquetInfo(buf);
+  const names = info.columns.map((c) => c.name);
+  const typeOf = {}; info.columns.forEach((c) => { typeOf[c.name] = c.type; });
+  if (names.length < 3) throw new Error('parquet: need at least 3 columns (X, Y, Z)');
+  const mapping = opts.mapping || mapColumns(names) || { x: 0, y: 1, z: 2, chan: names.length > 3 ? 3 : null, cat: null };
+  if (mapping.x == null || mapping.y == null || mapping.z == null) throw new Error('parquet: could not identify X/Y/Z centroid columns');
+  if (mapping.chan != null && !_pqNum(typeOf[names[mapping.chan]])) mapping.chan = null;   // demote a text auto-chan
+  if (mapping.cat == null) for (let i = 0; i < names.length; i++) { if (i === mapping.x || i === mapping.y || i === mapping.z || i === mapping.chan) continue; if (!_pqNum(typeOf[names[i]])) { mapping.cat = i; break; } }
+  $('#meta').textContent = `${name} — reading ${names.length} columns…`;
+  const colMap = await readParquetColumnMap(buf, names);
+  const cols = names.map((n) => colMap[n]);
+  const N = cols[0] ? cols[0].length : 0;
+  if (!N) throw new Error('parquet: empty table');
+  const X = cols[mapping.x], Y = cols[mapping.y], Z = cols[mapping.z];
+  // bbox + axis distincts → regular-grid inference (same as the delimited path)
+  const CAP = 100000, r10 = (v) => Number(v.toPrecision(10));
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  const ax = [new Set(), new Set(), new Set()];
+  for (let i = 0; i < N; i++) {
+    const xv = +X[i], yv = +Y[i], zv = +Z[i];
+    if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+    if (xv < min[0]) min[0] = xv; if (xv > max[0]) max[0] = xv;
+    if (yv < min[1]) min[1] = yv; if (yv > max[1]) max[1] = yv;
+    if (zv < min[2]) min[2] = zv; if (zv > max[2]) max[2] = zv;
+    if (ax[0].size < CAP) ax[0].add(r10(xv)); if (ax[1].size < CAP) ax[1].add(r10(yv)); if (ax[2].size < CAP) ax[2].add(r10(zv));
+  }
+  const axes = ax.map((set) => (set.size < CAP ? inferAxis([...set].sort((a, b) => a - b)) : null));
+  const grid = !opts.forcePoints && axes.every(Boolean) ? { x: axes[0], y: axes[1], z: axes[2] } : null;
+  // category dictionary from the cat column
+  let categories = null;
+  if (mapping.cat != null) { const set = new Set(); for (let i = 0; i < N && set.size <= 256; i++) { const v = cols[mapping.cat][i]; if (v != null && v !== '') set.add(String(v)); } if (set.size > 0 && set.size <= 255) categories = [...set].sort(); }
+  const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
+  const numericColumns = names.map((n, i) => ({ name: n, i })).filter(({ i }) => i !== mapping.x && i !== mapping.y && i !== mapping.z && _pqNum(typeOf[names[i]]));
+  const attributes = names.filter((_, i) => i !== mapping.x && i !== mapping.y && i !== mapping.z);
+  const header = { kind: 'blocks', count: N, bbox: { min, max }, grid, columns: names, mapping, delim: ',', hasHeaderRow: true, numericColumns, categories, attributes, parquet: true };
+  async function* streamChunks({ chunkPoints = 1 << 18 } = {}) {
+    for (let start = 0; start < N; start += chunkPoints) {
+      const n = Math.min(chunkPoints, N - start);
+      const x = new Float64Array(n), y = new Float64Array(n), z = new Float64Array(n), chan = new Float64Array(n);
+      const cat = catCode ? new Uint8Array(n) : null, recIdx = new Uint32Array(n);
+      for (let i = 0; i < n; i++) {
+        const r = start + i;
+        x[i] = +X[r]; y[i] = +Y[r]; z[i] = +Z[r];
+        chan[i] = mapping.chan != null ? +cols[mapping.chan][r] : 0;
+        if (cat) cat[i] = catCode.get(String(cols[mapping.cat][r] ?? '')) ?? 0;
+        recIdx[i] = r;
+      }
+      yield { count: n, x, y, z, chan, cat, recIdx, recStart: start };
+      await new Promise((res) => setTimeout(res));
+    }
+  }
+  await openBlocksBlob(blob, name, { ...opts, provider: async () => ({ header, streamChunks, parquet: { cols, names } }) });
+}
 // Block-model path (.csv etc.): two-sweep provider → regular grid → box impostors.
 // Not a regular grid → the points pipeline still shows the centroids.
 let _blockDoc = null, _lasDoc = null, _dhDoc = null;
@@ -3790,9 +3866,10 @@ async function openBlocksBlob(blob, name, opts = {}) {
   const mapping = opts.mapping
     || (opts.chan != null && _blockDoc && _blockDoc.header ? { ..._blockDoc.header.mapping, chan: opts.chan } : null);
   renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);
-  const { header, streamChunks } = await openBlockModel(blob, discovered ? { discovered } : (mapping ? { mapping } : {}));
+  const prov = opts.provider ? await opts.provider() : null;
+  const { header, streamChunks } = prov || await openBlockModel(blob, discovered ? { discovered } : (mapping ? { mapping } : {}));
   if (opts.forcePoints) header.grid = null;
-  _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints };
+  _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints, parquet: prov ? prov.parquet : null };
   registerDocs(lid, header.grid ? 'blocks' : 'points');
   fitFromHeader(header, opts.first !== false && opts.chan == null);
   renderer.setCategories(header.categories ? header.categories.length : 0);
@@ -3983,7 +4060,22 @@ async function applyBlockFilter(expr) {
     if (cfill === CB) cflush();
   };
 
-  if (header.dm) {
+  if (fBlockDoc.parquet) {
+    // parquet: the columns are already in memory — a plain loop, raw numbering
+    const { cols } = fBlockDoc.parquet;
+    for (let r = 0; r < header.count; r++) {
+      const f = cols.map((c) => { const v = c[r]; return v == null ? '' : v; });
+      const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
+      if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+      if (fn(extendRow(AL, f, r))) {
+        mask[r] = 1; hits++;
+        const code = catCode ? (catCode.get(String(f[m.cat] ?? '').trim()) ?? 0) : 0;
+        collect(xv, yv, zv, m.chan != null ? +f[m.chan] : 0, code, r);
+      }
+      if ((r & 0x1FFFF) === 0x1FFFF) { await new Promise((r2) => setTimeout(r2)); if (epoch !== _filterEpoch) return; }
+    }
+    rec = header.count;
+  } else if (header.dm) {
     // .dm: decoded record batches, RAW record numbering (matches recIdx exactly)
     const { recordBatches } = await openDmModel(blob);
     for await (const { recStart, rows } of recordBatches()) {
@@ -5059,7 +5151,7 @@ The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Sel
 <b>paint to column</b> (<code>b</code> / the brush button / Data menu) — interactive domaining: a PAINTED column is a category column you fill by hand. The palette window (layer-pinned, like tables) picks the column + the value; while a value is armed, the <code>r</code> / <code>v</code> gestures PAINT it onto whatever they cross (<b>alt</b> erases, Tools → Select through paints the whole tube, <code>Esc</code> puts the brush down, <code>Ctrl+Z</code> undoes a stroke); or build a careful selection first and <b>apply to selection</b>. While painting the layer colors by the column (unpainted recedes dark); painted values are REAL columns — the filter (<code>DOMAIN = "HW_OXIDE"</code>), the scan, the attribute table, and the record panel all see them; they persist in the project<br>
 <b>export rows</b> (Data → Export rows… / the layer context menu) — data leaves micro the way it came in, as rows: scope <b>all</b> · <b>filter matches</b> · <b>selection</b>; every column including ƒ calculated and ✎ painted ones (paint a DOMAIN, export it, feed the estimator); CSV with delimiter choice + decimal comma; streamed, so 1.8M rows is one sweep, and opening a .dm then exporting IS the .dm → CSV converter. In the attribute table, <code>Ctrl+C</code> copies the grid selection as TSV<br>
 <b>select by solid</b> (Tools menu / right-click a mesh layer) — a closed context mesh (.msh / .obj / small .ply) classifies records by winding number: <b>select inside/outside</b> sweeps any element layers into the ordinary selection (paint or export it — the solids → coded-model loop), a <b>flag column</b> writes a value (e.g. <code>IN</code>) into a NEW painted column on any table-backed layers — blocks, points, drillholes — which you can then touch up with the brush; or <b>fraction-inside column</b> probes each block of a regular model (any per-axis resolution — 3×3×2 for benches, 10×10×10 for 1 m blocklings) and writes a numeric 0–1 column (<code>%</code> badge) the filter, table, and export all see; all of it works with flipped solids and colors the layer by the result when done. OPEN SURFACES (topo, weathering horizons — the dialog reads the mesh topology and says which) classify <b>above / below / between</b> instead: the surface is CLOSED by a skirt to a far apex and the same winding containment applies — strong at any depth, and blocks beyond the surface's footprint honestly come back unclassified; <b>between</b> takes a second surface (below the first AND above the second)<br>
-<b>assign domains</b> (Tools menu) — the whole coded-model loop in one run: pick the domain solids (a multi-object .obj or Leapfrog .lfm offers "split into N solids (as a group)" at open; GeoTIFF / Surfer .grd / ESRI .asc grids open as heightfield layers (cells are pickable records; huge DEMs decimate for display, the full grid stays for evaluation); a mesh right-click → <b>Rasterize to grid…</b> renders it onto a DEM (the two-way surface↔grid converter); grid layers export as ESRI ASCII — .lfm solids arrive with their Leapfrog colours as tints — each object becomes its own layer inside a layer GROUP), pick the model and a column name, and every block goes to the solid holding its largest fraction; unclaimed blocks stay unpainted and the result is an ordinary painted column — filter it, export it, touch it up with the brush<br>
+<b>assign domains</b> (Tools menu) — the whole coded-model loop in one run: pick the domain solids (Parquet block models (.parquet) open columnar — the footer gives the schema for free (no sniff)<br>a multi-object .obj or Leapfrog .lfm offers "split into N solids (as a group)" at open; GeoTIFF / Surfer .grd / ESRI .asc grids open as heightfield layers (cells are pickable records; huge DEMs decimate for display, the full grid stays for evaluation); a mesh right-click → <b>Rasterize to grid…</b> renders it onto a DEM (the two-way surface↔grid converter); grid layers export as ESRI ASCII — .lfm solids arrive with their Leapfrog colours as tints — each object becomes its own layer inside a layer GROUP), pick the model and a column name, and every block goes to the solid holding its largest fraction; unclaimed blocks stay unpainted and the result is an ordinary painted column — filter it, export it, touch it up with the brush<br>
 <b>layer groups</b> — the layers panel is a tree: a group's eye greys its children without touching THEIR eyes (re-enable and the pattern returns); <b>drag a row</b> between rows to reorder, ONTO a group to join it (touch: long-press the row → Move up / down / to group); <b>ctrl+click</b> multi-selects rows (shift+click = a range) — right-click → <b>Group N selected…</b>; right-click a layer → Move to group… (or New group…), right-click a group → rename / zoom / ungroup; groups persist in the project<br>
 <b>category legend</b> (categorized mode / classes tab): the color chip edits each class in place; <b>⠿ drag</b> reorders entries; right-click an entry to <b>rename</b>, <b>merge into</b> another (grouped classes share one color and one eye — BIF + ITABIRITE → "Iron Fm"), <b>ungroup</b>, or <b>remove</b> (values fall into a grey <i>other</i> bucket; split it back out any time; <b>reset legend</b> returns to the raw values)<br>
 <b>auto / apply / revert</b> (the panel footer): style edits apply live by default; uncheck <b>auto</b> to batch them (one reconvergence instead of one per edit on a 100M layer) — <b>apply •</b> pushes everything, <b>revert</b> returns to the panel-open snapshot<br>
@@ -5184,6 +5276,7 @@ async function recordPosition(fullId) {
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
   if (dd) return dd.recordPosition(rec);
   const m = bd && bd.header.mapping;
+  if (bd && bd.parquet) { const c = bd.parquet.cols; return [+c[m.x][rec], +c[m.y][rec], +c[m.z][rec]]; }
   if (bd && bd.header.dm) {
     const vals = await fetchDmRecord(bd.blob, bd.header.dm, rec);
     return [vals[m.x], vals[m.y], vals[m.z]];
@@ -5586,6 +5679,7 @@ async function fetchLayerRow(L, rec) {
     return [+(g.grid.x0 + c * g.grid.dx).toFixed(3), +(g.grid.y0 - r * g.grid.dy).toFixed(3), +g.grid.data[i].toFixed(3), r, c];
   }
   if (d.dhDoc) return d.dhDoc.fetchRecord(rec);
+  if (d.blockDoc && d.blockDoc.parquet) return d.blockDoc.parquet.cols.map((c) => { const v = c[rec]; return v == null ? '' : v; });
   if (d.blockDoc && d.blockDoc.header.dm) return await fetchDmRecord(d.blockDoc.blob, d.blockDoc.header.dm, rec);
   if (d.blockDoc) return await fetchCsvRecord(rec, d.blockDoc);
   if (d.plyDoc) return await d.plyDoc.fetchRecord(rec);
@@ -7912,6 +8006,13 @@ async function showRecord(fullId) {
     showRecPanel(`${tag}interval · row ${rec.toLocaleString()}`, rows);
     return;
   }
+  if (bd && bd.parquet) {
+    const f = bd.parquet.cols.map((c) => { const v = c[rec]; return v == null ? '—' : v; });
+    const rows = bd.header.columns.map((nm, i) => [nm, f[i]]);
+    appendCalcRows(rows, L, f, bd.header, rec);
+    showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, rows);
+    return;
+  }
   if (bd && bd.header.dm) {
     const vals = await fetchDmRecord(bd.blob, bd.header.dm, rec);
     const rows = bd.header.columns.map((name, i) => [name, vals[i] == null ? '—' : vals[i]]);
@@ -7959,7 +8060,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

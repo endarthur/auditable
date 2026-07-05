@@ -55,6 +55,26 @@ export async function readParquetColumns(input, opts = {}) {
   });
   return out;
 }
+// read named columns AS ARRAYS ({ name: array }) — memory-light vs. millions
+// of row objects, and columnar is what micro's chunk builder wants. Each
+// column decodes once; hyparquet skips the column chunks it isn't asked for.
+export async function readParquetColumnMap(input, columns) {
+  const info = parquetInfo(input);
+  const names = columns || info.columns.map((c) => c.name);
+  const out = {};
+  for (const name of names) {
+    const col = [];
+    await parquetRead({ file: toAsyncBuffer(input), compressors: readCompressors, columns: [name], onComplete: (rows) => { for (const r of rows) col.push(r[0]); } });
+    out[name] = col;
+  }
+  return out;
+}
+// one row (all columns) as an object — the pick join; reads only its row group
+export async function readParquetRow(input, index) {
+  const rows = await readParquet(input, { rowStart: index, rowEnd: index + 1 });
+  return rows[0] || null;
+}
+
 // write columnar data → parquet bytes. columnData: [{ name, data:Array, type? }].
 // rowGroupSize defaults to 1<<16 (micro's spatial-index granularity).
 export function writeParquet({ columnData, rowGroupSize = 65536, codec = 'SNAPPY', kvMetadata } = {}) {
