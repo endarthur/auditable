@@ -523,7 +523,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, compileValue, validate, complete, parse, deps } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
@@ -2295,6 +2295,89 @@ async function assignDomains(solids, L, { name = 'DOMAIN', res = [2, 2, 2], onPr
   markProjectDirty(); requestRender();
   return col;
 }
+// ── join & regularize ────────────────────────────────────────────────────────
+// A regular block model's grid axes { x, y, z } = { origin, pitch, count } in
+// WORLD coords (origin = block-0 centroid), from the header. The spatial-join
+// engine (@gcu/condenser grid-join) resamples any compatible source onto a
+// target lattice.
+function gridAxesOf(L) {
+  const g = L && L.docs && L.docs.blockDoc && L.docs.blockDoc.header && L.docs.blockDoc.header.grid;
+  if (!g || !g.x || g.x.pitch == null) return null;
+  return { x: { origin: g.x.origin, pitch: g.x.pitch, count: g.x.count }, y: { origin: g.y.origin, pitch: g.y.pitch, count: g.y.count }, z: { origin: g.z.origin, pitch: g.z.pitch, count: g.z.count } };
+}
+// Run a spatial join: resample the requested columns from left/right onto the
+// target grid T, build a target block model (a CSV blob — real data columns),
+// and open it as a NEW layer. columns: [{ src:'left'|'right', name, out, op,
+// num, weight }]. op for numeric: 'mean'|'sum'|'count'; categorical → majority.
+async function runSpatialJoin({ leftL, rightL, target, columns, coverage = true, label = 'join', onProgress = null }) {
+  const T = target;
+  const nx = T.x.count, ny = T.y.count, nz = T.z.count, cells = nx * ny * nz;
+  if (cells > 40_000_000) throw new Error(`target grid is ${cells.toLocaleString()} cells — too large`);
+  const sides = { left: leftL, right: rightL };
+  const perSource = {};
+  for (const side of ['left', 'right']) {
+    const L = sides[side]; if (!L) continue;
+    const sa = gridAxesOf(L); if (!sa) throw new Error(`${side} is not a regular block model`);
+    const R = makeResampler(sa, T); if (!R.ok) throw new Error(`${side}: ${R.reason}`);
+    perSource[side] = { L, sa, R, cols: [] };
+  }
+  for (const c of columns) { if (!perSource[c.src]) throw new Error(`no ${c.src} layer for column ${c.name}`); perSource[c.src].cols.push(c); }
+  // stream each source, scatter its columns
+  for (const side of Object.keys(perSource)) {
+    const ps = perSource[side]; if (!ps.cols.length) continue;
+    const { L, sa, R } = ps, h = layerTableHeader(L), m = h.mapping;
+    for (const c of ps.cols) {
+      c._i = h.columns.indexOf(c.name); c._w = c.weight ? h.columns.indexOf(c.weight) : -1;
+      if (c.num) c._acc = R.newAcc(); else { c._acc = R.newCatAcc(); c._dict = ['']; c._codeOf = new Map(); }
+    }
+    let rc = 0;
+    for await (const batch of layerRows(L, null)) {
+      for (const f of batch) {
+        const wx = +f[m.x], wy = +f[m.y], wz = +f[m.z];
+        if (!Number.isFinite(wx) || !Number.isFinite(wy) || !Number.isFinite(wz)) continue;
+        const si = Math.round((wx - sa.x.origin) / (sa.x.pitch || 1)), sj = Math.round((wy - sa.y.origin) / (sa.y.pitch || 1)), sk = sa.z.pitch ? Math.round((wz - sa.z.origin) / sa.z.pitch) : 0;
+        if (si < 0 || si >= sa.x.count || sj < 0 || sj >= sa.y.count || sk < 0 || sk >= sa.z.count) continue;
+        for (const c of ps.cols) {
+          const wt = c._w >= 0 ? (+f[c._w] || 0) : 1; if (wt <= 0 && c._w >= 0) continue;
+          if (c.num) { const v = +f[c._i]; if (Number.isFinite(v)) R.scatter(si, sj, sk, v, wt, c._acc); }
+          else { const lbl = f[c._i] == null ? '' : String(f[c._i]); let code = c._codeOf.get(lbl); if (code == null) { code = c._dict.length; c._dict.push(lbl); c._codeOf.set(lbl, code); } R.scatterCat(si, sj, sk, code, wt, c._acc); }
+        }
+        rc++;
+      }
+      if (onProgress) onProgress(Math.min(0.9, rc / 1e6), `${side}: ${rc.toLocaleString()} rows`);
+      $('#meta').textContent = `${label}: ${side} ${rc.toLocaleString()} rows…`;
+      await new Promise((r) => setTimeout(r));
+    }
+    for (const c of ps.cols) {
+      if (c.num) { const r = R.finalize(c._acc, c.op || 'mean'); c._out = r.out; c._cov = r.coverage; c._present = r.present; }
+      else { const r = R.finalizeCat(c._acc); c._codes = r.out; c._present = new Uint8Array(cells); for (let i = 0; i < cells; i++) if (r.out[i] >= 0) c._present[i] = 1; }
+    }
+  }
+  // cells present in ANY column
+  const present = new Uint8Array(cells); let nPresent = 0;
+  for (let i = 0; i < cells; i++) { let any = 0; for (const c of columns) if (c._present[i]) { any = 1; break; } if (any) { present[i] = 1; nPresent++; } }
+  if (!nPresent) throw new Error('no overlapping cells between the sources and the target grid');
+  // coverage columns only where an aggregate actually lost coverage
+  const covCols = coverage ? columns.filter((c) => c.num && c._cov && [...c._present].some((p, i) => p && c._cov[i] < 0.999)) : [];
+  const heads = ['XC', 'YC', 'ZC', ...columns.map((c) => c.out || c.name), ...covCols.map((c) => (c.out || c.name) + '_cov')];
+  const ox = T.x.origin, oy = T.y.origin, oz = T.z.origin, px = T.x.pitch, py = T.y.pitch, pz = T.z.pitch;
+  const parts = [heads.join(',') + '\n']; let buf = '';
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const idx = i + nx * (j + ny * k); if (!present[idx]) continue;
+    const row = [ox + i * px, oy + j * py, oz + k * pz];
+    for (const c of columns) {
+      if (!c._present[idx]) { row.push(''); continue; }
+      if (c.num) row.push(+c._out[idx].toFixed(6)); else row.push(csvCell(c._dict[c._codes[idx]] || ''));
+    }
+    for (const c of covCols) row.push(c._present[idx] ? +c._cov[idx].toFixed(4) : '');
+    buf += row.join(',') + '\n';
+    if (buf.length > (1 << 22)) { parts.push(buf); buf = ''; }
+  }
+  if (buf) parts.push(buf);
+  return { blob: new Blob(parts, { type: 'text/csv' }), cells: nPresent };
+}
+// quote a CSV cell if it holds a comma/quote/newline
+function csvCell(s) { s = String(s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
 // ── the assign-domains dialog ──
 let _adDlg = null;
 function openDomainsDialog() {
@@ -8308,7 +8391,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, gridsCompatible, commonLattice, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
