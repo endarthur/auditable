@@ -151,6 +151,16 @@ const wm = await p.evaluate(async () => {
 });
 chk(`window management: opened ${wm.opened}, cascade offsets them (${wm.cascadedDistinct}), close-all → ${wm.closed}`, wm.opened === 2 && wm.cascadedDistinct && wm.closed === 0);
 
+// ── 1e. Sealed badge: visible + the security popover ──
+const seal = await p.evaluate(() => {
+  const badge = document.querySelector('#sealBadge'); const visible = !!badge && /Sealed/.test(badge.textContent);
+  badge.click(); const pop = document.querySelector('#sealPop');
+  const info = pop ? { net: /No network access/.test(pop.textContent), link: !!pop.querySelector('a[href*="gentropic.org/security"]') } : {};
+  badge.click(); const closed = !document.querySelector('#sealPop');
+  return { visible, ...info, closed };
+});
+chk(`Sealed badge: visible, popover states no-network + verifier link, toggles closed`, seal.visible && seal.net && seal.link && seal.closed);
+
 // ── 2. pick reads a record ──
 await p.evaluate(() => { document.querySelector('#compass').dispatchEvent(new MouseEvent('click')); document.querySelector('#btnFit').click(); const px = document.querySelector('#ptPx'); px.value = 6; px.dispatchEvent(new Event('input')); });
 await p.waitForFunction(() => /converged/.test(document.querySelector('#stats').textContent), null, { timeout: 60000 });
