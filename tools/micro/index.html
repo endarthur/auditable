@@ -37,12 +37,13 @@
   #bar2 .spacer { flex: 1; }
   #bar .title { font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #btnBurger { display: none; }                            /* phones only */
-  #bar button, #bar select {
+  #barTools { display: none; }                             /* phones only — the tool icons move here */
+  #bar button, #bar select, #barTools button {
     font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-btn);
     border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 10px; cursor: pointer;
   }
-  #bar button:hover { background: #2e2e2e; }
-  #bar button.on { color: var(--accent); border-color: var(--accent); }
+  #bar button:hover, #barTools button:hover { background: #2e2e2e; }
+  #bar button.on, #barTools button.on { color: var(--accent); border-color: var(--accent); }
   #bar .mb { background: transparent; border-color: transparent; padding: 4px 9px; }
   #bar .mb:hover { background: var(--border); border-color: var(--bd2); }
   .menu {
@@ -274,7 +275,7 @@
   .pp-note { color: var(--dim); margin: 8px 0; line-height: 1.5; }
   .pp-cat { display: flex; align-items: center; gap: 7px; padding: 3px 2px; border-radius: 2px; }
   /* toolbar instrument icons — vendored Lucide v0.462.0 strokes (ISC) */
-  #bar button svg { width: 15px; height: 15px; display: block; }
+  #bar button svg, #barTools button svg { width: 15px; height: 15px; display: block; }
   .pp-cat .grip { color: var(--dim); cursor: grab; user-select: none; flex: 0 0 auto; font-size: 10px; }
   .pp-band { display: grid; grid-template-columns: 16px minmax(56px, max-content) 8px 72px 1fr; align-items: center; gap: 5px; padding: 3px 2px; border-radius: 2px; }
   .pp-band:hover { background: #242424; }
@@ -400,18 +401,24 @@
      sideways, panels/windows clamp to the viewport, hit targets fatten ── */
   .fwin { max-width: calc(100vw - 8px); }
   @media (max-width: 720px) {
-    /* the bar collapses to burger + filter + fit; the instrument row hides
-       (color lives in the props panel, section in Tools) — 32px back */
+    /* row 1 = burger + filter; row 2 = the TOOL icons (the same elements,
+       moved by layoutBars); the instrument row hides — color lives in the
+       props panel, section in Tools, budget in View → Point budget */
     #btnBurger { display: inline-flex; }
-    #bar .title, #bar .mb, #btnSelRect, #btnSelLasso, #btnSelThrough, #btnPaint, #btnMeasure, #btnSection, #btnShot { display: none; }
+    #bar .title, #bar .mb { display: none; }
     #bar #filterWrap { flex: 1 1 auto; min-width: 0; }
     #bar .spacer { display: none; }
-    #bar button { padding: 6px 8px; }
-    #bar button svg { width: 17px; height: 17px; }
+    #bar button, #barTools button { padding: 6px 10px; }
+    #bar button svg, #barTools button svg { width: 17px; height: 17px; }
     #bar2 { display: none; }
-    #view, #empty { inset: 36px 0 24px 0; }
-    #recPanel, #layersPanel, #propPanel { top: 36px; }
-    #compass.ne, #compass.nw { top: 46px; }
+    #barTools {
+      display: flex; position: absolute; left: 0; right: 0; top: 36px; height: 36px; z-index: 2;
+      align-items: center; justify-content: space-evenly; padding: 0 6px;
+      border-bottom: 1px solid var(--border); background: #171717;
+    }
+    #view, #empty { inset: 72px 0 24px 0; }
+    #recPanel, #layersPanel, #propPanel { top: 72px; }
+    #compass.ne, #compass.nw { top: 82px; }
     #layersPanel { width: min(var(--lpw, 224px), 78vw); }
     #recPanel { width: min(var(--recw, 280px), 86vw); }
     #propPanel { width: min(var(--ppw, 272px), 86vw); }
@@ -483,6 +490,7 @@
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
     <label id="secPlaneW" title="outline the section plane in the view" style="display:none"><input id="secPlaneVis" type="checkbox">plane</label>
   </div>
+  <div id="barTools"></div>
   <div id="view"><canvas id="cv"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj / .lfm anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
@@ -2256,6 +2264,16 @@ $('#btnShot').onclick = () => {
 try { const b = localStorage.getItem('micro.budget'); if (b && [...$('#budget').options].some((o) => o.value === b)) $('#budget').value = b; } catch { /* private mode */ }
 $('#budget').addEventListener('change', () => { try { localStorage.setItem('micro.budget', $('#budget').value); } catch { /* ignore */ } });
 $('#btnFit').onclick = () => { if (renderer.chunkCount) { cam.fit(rendererDocBbox()); requestRender(); } };
+// phones: the tool icons live on their OWN row — the same elements move, so
+// ids, listeners, and lit states travel with them; desktop puts them back
+const _mqPhone = matchMedia('(max-width: 720px)');
+const _TOOLROW = ['#btnSelRect', '#btnSelLasso', '#btnSelThrough', '#btnPaint', '#btnMeasure', '#btnSection', '#btnShot', '#btnFit'];
+function layoutBars() {
+  const host = _mqPhone.matches ? $('#barTools') : $('#bar');
+  for (const sel of _TOOLROW) host.appendChild($(sel));
+}
+_mqPhone.addEventListener('change', layoutBars);
+layoutBars();
 let _docBbox = null;
 const rendererDocBbox = () => _docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
 
@@ -4084,6 +4102,10 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   { label: (_viewMode === 'boxes' ? '✓ ' : '') + 'Blocks as boxes', action: () => { _viewMode = 'boxes'; requestRender(); } },
   { label: (_viewMode === 'points' ? '✓ ' : '') + 'Blocks as points', action: () => { _viewMode = 'points'; requestRender(); } },
+  { label: `Point budget (${$('#budget').selectedOptions[0].textContent}) ▸`, action: () => setTimeout(() => menuXY(innerWidth / 2 - 90, 120, [...$('#budget').options].map((o) => ({
+    label: (o.selected ? '✓ ' : '') + o.textContent,
+    action: () => { const b2 = $('#budget'); b2.value = o.value; b2.dispatchEvent(new Event('input')); b2.dispatchEvent(new Event('change')); },
+  }))), 0) },
   { sep: true },
   { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
   { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
