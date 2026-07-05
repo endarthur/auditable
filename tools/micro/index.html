@@ -47,6 +47,7 @@
   .menu {
     position: absolute; z-index: 20; min-width: 180px; background: #1d1d1d; border: 1px solid var(--bd2);
     border-radius: 4px; padding: 4px 0; font-family: var(--mono); font-size: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+    max-height: 82vh; overflow-y: auto;
   }
   .menu .item { padding: 5px 14px; cursor: pointer; color: var(--text); display: flex; justify-content: space-between; gap: 18px; }
   .menu .item:hover { background: var(--bg-btn); color: var(--text-hi); }
@@ -183,7 +184,7 @@
   #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: calc(var(--lpw, 224px) + 12px); }
   #dhDlg, #ofDlg, #exDlg, #sbDlg, #svDlg, #plDlg, #adDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
   #dhDlg.show, #ofDlg.show, #exDlg.show, #sbDlg.show, #svDlg.show, #plDlg.show, #adDlg.show { display: flex; }
-  #exDlg .box, #sbDlg .box, #svDlg .box, #plDlg .box, #adDlg .box { width: 480px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #exDlg .box, #sbDlg .box, #svDlg .box, #plDlg .box, #adDlg .box { width: min(480px, 94vw); max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
   #exDlg .hd, #sbDlg .hd, #svDlg .hd, #plDlg .hd, #adDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #exDlg .hd button, #sbDlg .hd button, #svDlg .hd button, #plDlg .hd button, #adDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
   #exDlg .bd, #sbDlg .bd, #svDlg .bd, #plDlg .bd, #adDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
@@ -213,7 +214,7 @@
   #sbProg, #adProg { height: 3px; background: #242424; margin: 0 16px; border-radius: 2px; overflow: hidden; }
   #sbProgFill, #adProgFill { height: 100%; width: 0%; background: var(--accent); transition: width 0.15s linear; }
   #exDlg .dh-foot button:disabled, #sbDlg .dh-foot button:disabled, #adDlg .dh-foot button:disabled { opacity: 0.5; cursor: default; }
-  #ofDlg .box { width: 620px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #ofDlg .box { width: min(620px, 94vw); max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
   #ofDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #ofDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
   #ofDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
@@ -230,7 +231,7 @@
   #ofDlg .dh-foot { display: flex; justify-content: flex-end; padding: 10px 16px; border-top: 1px solid var(--border); }
   #ofDlg .dh-foot button, #ofDlg .of-mode input { font-family: var(--mono); }
   #ofDlg .dh-foot button { font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
-  #dhDlg .box { width: 560px; max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #dhDlg .box { width: min(560px, 94vw); max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
   #dhDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
   #dhDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
   #dhDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
@@ -385,6 +386,26 @@
   #recPanel .rp-row .k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #recPanel .rp-row .v { color: var(--text-hi); text-align: right; white-space: nowrap; }
   #recPanel .rp-note { color: var(--dim); font-size: 11px; padding: 6px 0; }
+  /* ── narrow screens (phones): the SAME UI, no reflow — the two bars scroll
+     sideways, panels/windows clamp to the viewport, hit targets fatten ── */
+  .fwin { max-width: calc(100vw - 8px); }
+  @media (max-width: 720px) {
+    #bar, #bar2 { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+    #bar::-webkit-scrollbar, #bar2::-webkit-scrollbar { display: none; }
+    #bar > *, #bar2 > * { flex: 0 0 auto; }
+    #bar .title { display: none; }
+    #bar #filterWrap { flex: 0 0 150px; min-width: 150px; }
+    #bar button { padding: 6px 8px; }
+    #bar button svg { width: 17px; height: 17px; }
+    #layersPanel { width: min(var(--lpw, 224px), 78vw); }
+    #recPanel { width: min(var(--recw, 280px), 86vw); }
+    #propPanel { width: min(var(--ppw, 272px), 86vw); }
+    #empty { padding: 0 16px; }
+    footer { gap: 10px; }
+    footer #meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    footer #stats { white-space: nowrap; }
+    footer #camTP { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -397,8 +418,9 @@
     <button class="mb" id="mHelp">Help</button>
     <span id="filterWrap"><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
     <span class="spacer"></span>
-    <button id="btnSelRect" title="select — rectangle (r) · shift adds, alt subtracts · Tools → Select through flips to volume"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/><path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/></svg></button>
+    <button id="btnSelRect" title="select — rectangle (r) · shift adds, alt subtracts · the layers toggle flips to through/volume"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/><path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/></svg></button>
     <button id="btnSelLasso" title="select — lasso (v) · shift adds, alt subtracts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 22a5 5 0 0 1-2-4"/><path d="M3.3 14A6.8 6.8 0 0 1 2 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 0 1-5-1"/><path d="M5 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></button>
+    <button id="btnSelThrough" title="select through (volume) — the r / v shapes take EVERYTHING in the extruded tube, occluded included; off = the visible surface only"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16.02 12 5.48 3.13a1 1 0 0 1 0 1.74L13 21.74a2 2 0 0 1-2 0l-8.5-4.87a1 1 0 0 1 0-1.74L7.98 12"/><path d="M13 13.74a2 2 0 0 1-2 0L2.5 8.87a1 1 0 0 1 0-1.74L11 2.26a2 2 0 0 1 2 0l8.5 4.87a1 1 0 0 1 0 1.74Z"/></svg></button>
     <button id="btnPaint" title="paint to column (b) — the palette window; armed values paint through the r / v gestures"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/></svg></button>
     <button id="btnMeasure" title="measure between two picked points/blocks (m)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2"/><path d="m11.5 9.5 2-2"/><path d="m8.5 6.5 2-2"/><path d="m17.5 15.5 2-2"/></svg></button>
     <button id="btnSection" title="section on/off (x) — mode and scrub live on the row below"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg></button>
@@ -832,6 +854,12 @@ function disarmSelect() {
 }
 $('#btnSelRect').onclick = () => { if (_selArm === 'rect') disarmSelect(); else armSelect('rect'); };
 $('#btnSelLasso').onclick = () => { if (_selArm === 'lasso') disarmSelect(); else armSelect('lasso'); };
+function setSelThrough(v) {
+  _selThrough = !!v;
+  $('#btnSelThrough').classList.toggle('on', _selThrough);
+  if (_selArm) armSelect(_selArm);                         // refresh the armed hint
+}
+$('#btnSelThrough').onclick = () => setSelThrough(!_selThrough);
 const selModeOf = (e) => (e.shiftKey ? 'add' : e.altKey ? 'subtract' : 'replace');
 function drawSelShape() {
   const el = $('#selShape');
@@ -1196,7 +1224,7 @@ function openPaintPalette(L) {
     body.appendChild(tools);
     const hint = document.createElement('div'); hint.className = 'pp-note';
     hint.textContent = _paintArm && _paintArm.lid === L.id
-      ? 'drag r / v gestures to paint · alt erases · Tools → Select through paints the whole tube · Esc stops'
+      ? 'drag r / v gestures to paint · alt erases · the select-through toggle paints the whole tube · Esc stops'
       : 'click a value to arm the brush';
     body.appendChild(hint);
   };
@@ -4049,7 +4077,7 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
   { sep: true },
   { label: 'Select — rectangle', kbd: 'r', action: () => armSelect('rect') },
   { label: 'Select — lasso', kbd: 'v', action: () => armSelect('lasso') },
-  { label: (_selThrough ? '✓ ' : '') + 'Select through (volume)', action: () => { _selThrough = !_selThrough; } },
+  { label: (_selThrough ? '✓ ' : '') + 'Select through (volume)', action: () => setSelThrough(!_selThrough) },
   { label: 'Select by solid…', action: () => openSolidDialog(null) },
   { label: 'Assign domains…', action: () => openDomainsDialog() },
   { label: 'Clear selection', kbd: 'Esc', action: () => clearSelection() },
@@ -4076,7 +4104,7 @@ pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line<
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
 <b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br>
-Tools → <b>Select through (volume)</b> flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
+The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Select through) flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
 <b>layer properties</b> — right-click a layer → Properties… (or View menu): <b>style</b> (color-by, clip, stick radius, mesh tint/opacity/tier) · <b>classes</b> (per-class eyes over the category column — hide lithologies with a click; all · none · invert; hidden classes don't draw or pick; counts fill in as they're swept) · <b>columns</b> (per-column types — number/text drives the filter and color-by; right-click a column to re-type it, make it the category, or the color channel; <b>scan columns</b> streams the whole table once and fills n · mean · std · quantiles · histogram per column; <b>add calculated column…</b> defines ƒ columns (<code>FE + 0.4 * MN</code>) that the filter, the scan, and the record panel all see) · <b>source</b> (X/Y/Z column mapping — change re-reads the file; drillhole tables + desurvey method/dip — change re-desurveys; extent, grid parameters)<br>
 <b>rule-based styling</b> — style mode <b>rule-based</b> (block models + drillholes): ordered rules, each an expression (<code>FE > 60 and LITO = "HEM"</code>) with a name + color; ONE sweep over the table paints each record with its first matching rule (drag to re-prioritize), everything unmatched wears the <b>else</b> color; per-rule eyes hide a rule's records (draw + pick, GPU-side); counts per rule after the sweep; rules persist in the project and re-sweep on load<br>
@@ -4560,6 +4588,10 @@ $('#sampleBlocks').onclick = async () => {
 // mask, and pick↔row sync both ways. Read-only: micro edits nothing. ──
 let _fwinZ = 40;
 function floatWin({ title, sub, x = 90, y = 90, w = 560, h = 320, onClose }) {
+  // open ON the screen whatever the screen is — a phone gets the same window,
+  // clamped (CSS max-width backs this up against later resizes)
+  w = Math.min(w, innerWidth - 12); h = Math.min(h, innerHeight - 72);
+  x = Math.max(0, Math.min(x, innerWidth - w - 6)); y = Math.max(28, Math.min(y, innerHeight - h - 30));
   const el = document.createElement('div'); el.className = 'fwin';
   el.style.cssText += `left:${x}px;top:${y}px;width:${w}px;height:${h}px;z-index:${++_fwinZ};`;
   const head = document.createElement('div'); head.className = 'fwin-head';
@@ -6894,7 +6926,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough: (v) => { _selThrough = !!v; }, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
