@@ -292,51 +292,76 @@ async function readGTiff(input) {
       compression, predictor, tiled: tileW > 0,
       tileWidth: tileW || undefined, tileHeight: tileH || undefined,
       reduced: (one(254, 0) & 1) === 1,
-      async read() {
-        if (planar !== 1) throw new Error('gtiff: planar (band-separate) layout not supported');
-        if (![8, 16, 32, 64].includes(bps)) throw new Error(`gtiff: ${bps}-bit samples not supported`);
-        if (fmt === 3 && bps < 32) throw new Error('gtiff: half-float not supported');
-        const bytesPer = bps / 8;
-        const out = new Uint8Array(width * height * spp * bytesPer);
-        const segments = [];
+      // the strip/tile segments overlapping a pixel window (all of them if no
+      // window) — each { off, len, x0, y0, w, rows } in image pixel space
+      segments(win) {
+        const list = [];
+        const hit = (x0, y0, w, rows) => !win || (x0 < win.x + win.width && x0 + w > win.x && y0 < win.y + win.height && y0 + rows > win.y);
         if (tileW > 0) {
           const offs = tags.get(324) || [], counts = tags.get(325) || [];
           const across = Math.ceil(width / tileW);
           for (let i = 0; i < offs.length; i++) {
-            segments.push({ off: offs[i], len: counts[i], x0: (i % across) * tileW, y0: Math.floor(i / across) * tileH, w: tileW, rows: tileH });
+            const x0 = (i % across) * tileW, y0 = Math.floor(i / across) * tileH;
+            if (hit(x0, y0, tileW, tileH)) list.push({ off: offs[i], len: counts[i], x0, y0, w: tileW, rows: tileH });
           }
         } else {
           const offs = tags.get(273) || [], counts = tags.get(279) || [];
           const rps = one(278, height);
           for (let i = 0; i < offs.length; i++) {
-            segments.push({ off: offs[i], len: counts[i], x0: 0, y0: i * rps, w: width, rows: Math.min(rps, height - i * rps) });
+            const y0 = i * rps, rows = Math.min(rps, height - y0);
+            if (hit(0, y0, width, rows)) list.push({ off: offs[i], len: counts[i], x0: 0, y0, w: width, rows });
           }
         }
-        if (!segments.length) throw new Error('gtiff: no strip/tile offsets');
-        const rowOut = width * spp * bytesPer;
-        for (const s of segments) {
-          const raw = bytes.subarray(s.off, s.off + s.len);
-          const segBytes = await decodeSegment(compression, raw, s.w * s.rows * spp * bytesPer);
-          if (predictor === 2) undoPredictor2(segBytes, s.w, s.rows, bytesPer, spp, le);
-          else if (predictor === 3) undoPredictor3(segBytes, s.w, s.rows, bytesPer, spp, le);
-          else if (predictor !== 1) throw new Error(`gtiff: predictor ${predictor} not supported`);
+        return list;
+      },
+      // decode one segment → native-endian bytes, predictor undone
+      async decodeSeg(s, bytesPer) {
+        const raw = bytes.subarray(s.off, s.off + s.len);
+        const seg = await decodeSegment(compression, raw, s.w * s.rows * spp * bytesPer);
+        if (predictor === 2) undoPredictor2(seg, s.w, s.rows, bytesPer, spp, le);
+        else if (predictor === 3) undoPredictor3(seg, s.w, s.rows, bytesPer, spp, le);
+        else if (predictor !== 1) throw new Error(`gtiff: predictor ${predictor} not supported`);
+        if (le !== PLATFORM_LE && bytesPer > 1) swapBytes(seg, bytesPer);
+        return seg;
+      },
+      // assemble a pixel window [x,y,width,height] (default = the whole image)
+      // by decoding ONLY the overlapping segments. Cheap random-access on a
+      // tiled image / COG overview; strips still decode a whole strip-row.
+      async readWindow(win) {
+        if (planar !== 1) throw new Error('gtiff: planar (band-separate) layout not supported');
+        if (![8, 16, 32, 64].includes(bps)) throw new Error(`gtiff: ${bps}-bit samples not supported`);
+        if (fmt === 3 && bps < 32) throw new Error('gtiff: half-float not supported');
+        const bytesPer = bps / 8;
+        const w = win ? { x: Math.max(0, win.x | 0), y: Math.max(0, win.y | 0) } : { x: 0, y: 0 };
+        w.width = win ? Math.min((win.width | 0), width - w.x) : width;
+        w.height = win ? Math.min((win.height | 0), height - w.y) : height;
+        if (w.width <= 0 || w.height <= 0) throw new Error('gtiff: empty window');
+        const out = new Uint8Array(w.width * w.height * spp * bytesPer);
+        const rowOut = w.width * spp * bytesPer;
+        const segs = this.segments(win ? w : null);
+        if (!segs.length) throw new Error('gtiff: no strip/tile offsets');
+        for (const s of segs) {
+          const seg = await this.decodeSeg(s, bytesPer);
           const rowSeg = s.w * spp * bytesPer;
-          const copyW = Math.min(s.w, width - s.x0) * spp * bytesPer;
-          const copyRows = Math.min(s.rows, height - s.y0);
-          for (let r = 0; r < copyRows; r++) {
-            out.set(segBytes.subarray(r * rowSeg, r * rowSeg + copyW), (s.y0 + r) * rowOut + s.x0 * spp * bytesPer);
+          const oc0 = Math.max(s.x0, w.x), oc1 = Math.min(s.x0 + s.w, Math.min(w.x + w.width, width));
+          const or0 = Math.max(s.y0, w.y), or1 = Math.min(s.y0 + s.rows, Math.min(w.y + w.height, height));
+          const copyW = (oc1 - oc0) * spp * bytesPer;
+          if (copyW <= 0) continue;
+          for (let r = or0; r < or1; r++) {
+            const srcOff = (r - s.y0) * rowSeg + (oc0 - s.x0) * spp * bytesPer;
+            out.set(seg.subarray(srcOff, srcOff + copyW), (r - w.y) * rowOut + (oc0 - w.x) * spp * bytesPer);
           }
         }
-        if (le !== PLATFORM_LE && bytesPer > 1) swapBytes(out, bytesPer);
         let data = typedView(out.buffer, fmt, bps);
         if (spp > 1) {                                     // band 0 of chunky interleave
           warnings.push(`multi-band image (${spp} samples/pixel) — reading band 0`);
-          const band = typedView(new ArrayBuffer(width * height * bytesPer), fmt, bps);
-          for (let i = 0; i < width * height; i++) band[i] = data[i * spp];
+          const band = typedView(new ArrayBuffer(w.width * w.height * bytesPer), fmt, bps);
+          for (let i = 0; i < w.width * w.height; i++) band[i] = data[i * spp];
           data = band;
         }
-        return data;
+        return { data, x: w.x, y: w.y, width: w.width, height: w.height };
       },
+      async read() { return (await this.readWindow(null)).data; },
     };
     return img;
   };
@@ -364,6 +389,51 @@ async function gridFromGTiff(g, level = 0) {
   return { nx: img.width, ny: img.height, data, x0, y0, dx, dy, nodata: g.geo.nodata, crs: g.geo.crs, pixelIsPoint: g.geo.pixelIsPoint };
 }
 
+// geo of a level as functions (no pixel decode): world ↔ pixel, cell size
+function levelGeo(g, level = 0) {
+  const img = g.images[level];
+  const f = g.images[0].width / img.width;
+  const dx = (g.geo.scale ? g.geo.scale[0] : 1) * f, dy = (g.geo.scale ? g.geo.scale[1] : 1) * f;
+  const half = g.geo.pixelIsPoint ? 0 : 0.5;
+  const x0 = g.geo.origin ? g.geo.origin[0] + half * dx : half * dx;         // sample (0,0) CENTRE
+  const y0 = g.geo.origin ? g.geo.origin[1] - half * dy : -half * dy;
+  return { nx: img.width, ny: img.height, x0, y0, dx, dy };
+}
+
+// the FINEST IFD level whose pixel count ≤ cap (fall back to the coarsest) —
+// pick a display resolution within a decode budget. images[0] is full res;
+// [1..n] are the overview pyramid (coarser as index grows), if present.
+function pickOverviewForCap(g, cap) {
+  let fin = -1;                                            // finest level whose pixels ≤ cap
+  for (let i = 0; i < g.images.length; i++) {
+    const px = g.images[i].width * g.images[i].height;
+    if (px <= cap && (fin < 0 || g.images[i].width > g.images[fin].width)) fin = i;
+  }
+  // none fits → the coarsest (smallest) level, the best we can do within budget
+  return fin >= 0 ? fin : g.images.reduce((c, im, i, a) => im.width * im.height < a[c].width * a[c].height ? i : c, 0);
+}
+
+// a WORLD bbox [minX, minY, maxX, maxY] → the level-`level` pixel window
+// covering it (clamped), padded by `pad` cells for bilinear edges
+function windowForWorldBbox(g, level, bbox, pad = 1) {
+  const lg = levelGeo(g, level);
+  const c0 = Math.floor((bbox[0] - lg.x0) / lg.dx) - pad;
+  const c1 = Math.ceil((bbox[2] - lg.x0) / lg.dx) + pad;
+  const r0 = Math.floor((lg.y0 - bbox[3]) / lg.dy) - pad;   // maxY → smallest row
+  const r1 = Math.ceil((lg.y0 - bbox[1]) / lg.dy) + pad;
+  const x = Math.max(0, c0), y = Math.max(0, r0);
+  return { x, y, width: Math.min(lg.nx, c1 + 1) - x, height: Math.min(lg.ny, r1 + 1) - y };
+}
+
+// decode a pixel window of a level → a north-up grid (origin shifted to the
+// window's sample (0,0) CENTRE). Only the overlapping tiles are decoded.
+async function gridWindowFromGTiff(g, level, win) {
+  const img = g.images[level];
+  const r = await img.readWindow(win);
+  const lg = levelGeo(g, level);
+  return { nx: r.width, ny: r.height, data: r.data, x0: lg.x0 + r.x * lg.dx, y0: lg.y0 - r.y * lg.dy, dx: lg.dx, dy: lg.dy, nodata: g.geo.nodata, crs: g.geo.crs, pixelIsPoint: g.geo.pixelIsPoint };
+}
+
 // ── src/main.js ──
 
 // @gcu/gtiff — module manifest (build concat order).
@@ -376,4 +446,8 @@ export {
   undoPredictor3,
   readGTiff,
   gridFromGTiff,
+  levelGeo,
+  pickOverviewForCap,
+  windowForWorldBbox,
+  gridWindowFromGTiff,
 };

@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { deflateSync } from 'node:zlib';
-import { readGTiff, gridFromGTiff, lzwDecode, packbitsDecode } from '../ext/gtiff/src/main.js';
+import { readGTiff, gridFromGTiff, gridWindowFromGTiff, levelGeo, pickOverviewForCap, windowForWorldBbox, lzwDecode, packbitsDecode } from '../ext/gtiff/src/main.js';
 
 // ── a tiny classic-TIFF writer ──────────────────────────────────────────
 function lzwEncode(src) {
@@ -230,4 +230,81 @@ test('structural failures throw plainly', async () => {
   const bad = demTiff({});
   bad[2] = 43; bad[3] = 0;                                 // fake BigTIFF magic
   await assert.rejects(() => readGTiff(bad), /BigTIFF/);
+});
+
+// ── windowed reads ──────────────────────────────────────────────────────
+// an 8×8 float32 DEM in 4×4 tiles (4 tiles), value = 100 + 10·r + c, with geo
+function tiledDem() {
+  const W2 = 8, H2 = 8, T = 4;
+  const val = (r, c) => 100 + 10 * r + c;
+  const across = W2 / T;
+  const tiles = [];
+  for (let ty = 0; ty < H2 / T; ty++) for (let tx = 0; tx < across; tx++) {
+    const b = new Uint8Array(T * T * 4), v = new DataView(b.buffer);
+    for (let r = 0; r < T; r++) for (let c = 0; c < T; c++) v.setFloat32((r * T + c) * 4, val(ty * T + r, tx * T + c), true);
+    tiles.push(b);
+  }
+  const entries = [
+    [256, 3, 1, [W2]], [257, 3, 1, [H2]], [258, 3, 1, [32]], [259, 3, 1, [1]], [262, 3, 1, [1]],
+    [277, 3, 1, [1]], [339, 3, 1, [3]], [322, 3, 1, [T]], [323, 3, 1, [T]],
+    [325, 4, tiles.length, tiles.map((t) => t.length)],
+    [33550, 12, 3, [10, 10, 0]], [33922, 12, 6, [0, 0, 0, 612000, 7765080, 0]],
+  ];
+  const probe = writeTiff({ le: true, entries: [...entries, [324, 4, tiles.length, tiles.map(() => 0)]].sort((a, b) => a[0] - b[0]), imageData: [] });
+  let off = probe.length; const offs = tiles.map((t) => { const o = off; off += t.length; return o; });
+  return { tif: writeTiff({ le: true, entries: [...entries, [324, 4, tiles.length, offs]].sort((a, b) => a[0] - b[0]), imageData: tiles }), val, W2, H2 };
+}
+
+test('readWindow decodes a sub-region across tiles', async () => {
+  const { tif, val } = tiledDem();
+  const g = await readGTiff(tif);
+  // window straddling all four tiles: cols 2..5, rows 3..5
+  const r = await g.images[0].readWindow({ x: 2, y: 3, width: 4, height: 3 });
+  assert.equal(r.width, 4); assert.equal(r.height, 3); assert.equal(r.x, 2); assert.equal(r.y, 3);
+  for (let rr = 0; rr < 3; rr++) for (let cc = 0; cc < 4; cc++) assert.equal(r.data[rr * 4 + cc], val(3 + rr, 2 + cc), `win ${rr},${cc}`);
+});
+
+test('readWindow clamps to the image + full read matches', async () => {
+  const { tif, val, W2, H2 } = tiledDem();
+  const g = await readGTiff(tif);
+  const clamped = await g.images[0].readWindow({ x: 6, y: 6, width: 10, height: 10 });   // runs off the edge
+  assert.equal(clamped.width, 2); assert.equal(clamped.height, 2);
+  assert.equal(clamped.data[0], val(6, 6));
+  const full = await g.images[0].read();                   // read() === readWindow(null)
+  for (let i = 0; i < W2 * H2; i++) assert.equal(full[i], val((i / W2) | 0, i % W2));
+});
+
+test('gridWindowFromGTiff shifts the origin to the window', async () => {
+  const { tif, val } = tiledDem();
+  const g = await readGTiff(tif);
+  const win = { x: 3, y: 2, width: 3, height: 3 };
+  const gw = await gridWindowFromGTiff(g, 0, win);
+  const full = await gridFromGTiff(g);
+  assert.equal(gw.nx, 3); assert.equal(gw.ny, 3);
+  // window origin = full origin shifted by the pixel offset
+  assert.equal(gw.x0, full.x0 + 3 * full.dx);
+  assert.equal(gw.y0, full.y0 - 2 * full.dy);
+  assert.equal(gw.dx, full.dx);
+  assert.equal(gw.data[0], val(2, 3));                     // top-left of the window
+});
+
+test('windowForWorldBbox maps a world bbox to a padded pixel window', () => {
+  const g = { images: [{ width: 8, height: 8 }], geo: { origin: [612000, 7765080], scale: [10, 10], pixelIsPoint: false, nodata: -9999, crs: null } };
+  // sample (0,0) centre is at (612005, 7765075); a bbox around cols 2-4, rows 1-3
+  const bb = [612025, 7765045, 612045, 7765065];
+  const win = windowForWorldBbox(g, 0, bb, 1);
+  assert.ok(win.x <= 2 && win.x + win.width >= 5, `x window ${JSON.stringify(win)}`);
+  assert.ok(win.y <= 1 && win.y + win.height >= 4, `y window ${JSON.stringify(win)}`);
+});
+
+test('levelGeo + pickOverviewForCap over a fake pyramid', () => {
+  // full 800×800, overviews 400×400, 200×200, 100×100
+  const g = { images: [{ width: 800, height: 800 }, { width: 400, height: 400 }, { width: 200, height: 200 }, { width: 100, height: 100 }], geo: { origin: [1000, 5000], scale: [1, 1], pixelIsPoint: false } };
+  const l2 = levelGeo(g, 2);
+  assert.equal(l2.nx, 200); assert.equal(l2.dx, 4);        // 800/200 = 4× coarser
+  assert.equal(l2.x0, 1000 + 2);                           // half a 4 m cell in
+  // cap 50k px → finest level ≤ 50k is 200×200 (40k); 400×400 = 160k > cap
+  assert.equal(pickOverviewForCap(g, 50000), 2);
+  assert.equal(pickOverviewForCap(g, 200000), 1);          // 400×400 fits
+  assert.equal(pickOverviewForCap(g, 5000), 3);            // only the coarsest 100×100 (10k)... falls back
 });

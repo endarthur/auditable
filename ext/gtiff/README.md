@@ -51,4 +51,7 @@ files (int32 + float32 LZW, deflate).
 
 windowed reads (`readWindow` — decode only the tiles a view touches),
 BigTIFF, a writer (mesh→grid rasterize export wants ESRI ASCII first,
-GeoTIFF later).
+GeoTIFF later). JPEG-in-TIFF (orthophotos) without a JS JPEG decoder:
+stitch JPEGTables (tag 347) + each tile's bytes into a JFIF blob and let
+the BROWSER decode it (`createImageBitmap`) — the platform already ships
+the codec, same move as deflate-via-DecompressionStream.
