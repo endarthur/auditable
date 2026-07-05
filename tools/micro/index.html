@@ -523,7 +523,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { compileBool, compileValue, validate, complete, parse, deps } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
@@ -1278,7 +1278,7 @@ function exportColumnsOf(L) {
   return cols;
 }
 let _exportEpoch = 0;
-async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimalComma = false, filename = 'export.csv', download = true, format = 'csv', codec = 'SNAPPY' } = {}) {
+async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimalComma = false, filename = 'export.csv', download = true, format = 'csv', codec = 'SNAPPY', spatialSort = false } = {}) {
   const h = layerTableHeader(L); if (!h) return -1;
   const cols = exportColumnsOf(L);
   if (!colIdx) colIdx = cols.map((_, i) => i);
@@ -1298,6 +1298,8 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
   };
   const isParquet = format === 'parquet';
   const pqCols = isParquet ? colIdx.map(() => []) : null;   // one array per exported column
+  const doSort = isParquet && spatialSort;
+  const sx = doSort ? [] : null, sy = doSort ? [] : null, sz = doSort ? [] : null;   // coords → Morton order (spatial index)
   const parts = [colIdx.map((i) => esc(cols[i].name)).join(sep) + '\r\n'];
   let buf = [];
   const m = h.mapping || {};
@@ -1320,6 +1322,7 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
             ? (v == null || v === '' || Number.isNaN(+v) ? null : +v)
             : (v == null || v === '' ? null : String(v)));
         }
+        if (doSort) { sx.push(+f[m.x]); sy.push(+f[m.y]); sz.push(+f[m.z]); }
       } else {
         let line = '';
         for (let k = 0; k < colIdx.length; k++) line += (k ? sep : '') + fmt(f[colIdx[k]], numAt[k]);
@@ -1334,8 +1337,17 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
   }
   let blob;
   if (isParquet) {
+    // Morton-sort by centroid → consecutive row groups are spatially contiguous,
+    // so each row group's footer X/Y/Z min/max is a TIGHT box (a spatial index
+    // for free). rowGroupSize 1<<16 = a sub-multiple of the render chunk.
+    if (doSort && sx.length && Number.isFinite(sx[0])) {
+      $('#meta').textContent = 'export: spatial sort…';
+      const nr = sx.length;
+      const order = radixSortIndices(mortonKeys(Float64Array.from(sx), Float64Array.from(sy), Float64Array.from(sz), nr), nr);
+      for (let k = 0; k < pqCols.length; k++) { const src = pqCols[k], dst = new Array(nr); for (let i = 0; i < nr; i++) dst[i] = src[order[i]]; pqCols[k] = dst; }
+    }
     // stamp the document frame (origin + any CRS) so georeferencing round-trips
-    const kv = [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs || (L.docs.gridDoc && L.docs.gridDoc.grid.crs)) || null }) }];
+    const kv = [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs || (L.docs.gridDoc && L.docs.gridDoc.grid.crs)) || null, spatial: !!(doSort && sx.length) }) }];
     const columnData = colIdx.map((i, k) => ({ name: cols[i].name, data: pqCols[k] }));
     const bytes = writeParquet({ columnData, codec, rowGroupSize: 1 << 16, kvMetadata: kv });
     blob = new Blob([bytes], { type: 'application/octet-stream' });
@@ -1360,7 +1372,7 @@ function openExportDialog(L0) {
   const layers = _layers.filter((L) => layerTableHeader(L));
   if (!layers.length) { $('#meta').textContent = 'export: no table-backed layers (blocks or drillholes)'; return; }
   const L = L0 && layerTableHeader(L0) ? L0 : (activeLayer() && layerTableHeader(activeLayer()) ? activeLayer() : layers[0]);
-  _exDlg = { lid: L.id, scope: 'all', off: new Set(), delim: ',', dec: false, name: null, format: 'csv', codec: 'SNAPPY' };
+  _exDlg = { lid: L.id, scope: 'all', off: new Set(), delim: ',', dec: false, name: null, format: 'csv', codec: 'SNAPPY', spatialSort: true };
   renderExportDialog();
   $('#exDlg').classList.add('show');
 }
@@ -1454,7 +1466,12 @@ function renderExportDialog() {
     const cSel = document.createElement('select');
     for (const [v, t] of [['SNAPPY', 'snappy (fast)'], ['GZIP', 'gzip (smaller)'], ['UNCOMPRESSED', 'none']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; cSel.appendChild(o); }
     cSel.value = d.codec; cSel.onchange = () => { d.codec = cSel.value; };
-    mkRow2('compression', cSel);
+    const ssLab = document.createElement('label');
+    const ssCb = document.createElement('input'); ssCb.type = 'checkbox'; ssCb.checked = d.spatialSort;
+    ssCb.onchange = () => { d.spatialSort = ssCb.checked; };
+    ssLab.append(ssCb, 'spatial sort');
+    ssLab.title = 'Morton-order by centroid → the footer becomes a 3D spatial index (skip row groups outside a solid/section on eval)';
+    mkRow2('compression', cSel, ssLab);
   } else {
     const dSel = document.createElement('select');
     for (const [v, t] of [[',', 'comma ,'], [';', 'semicolon ;'], ['tab', 'tab']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; dSel.appendChild(o); }
@@ -1484,7 +1501,7 @@ $('#exGo').onclick = async () => {
   btn.disabled = true;
   $('#exDlgMsg').textContent = 'sweeping…';
   try {
-    const n = await runExport(L, { scope: d.scope, colIdx, delim: d.delim, decimalComma: d.dec, format: d.format, codec: d.codec, filename: (d.name || exDefaultName(L, d.format)).trim() || exDefaultName(L, d.format) });
+    const n = await runExport(L, { scope: d.scope, colIdx, delim: d.delim, decimalComma: d.dec, format: d.format, codec: d.codec, spatialSort: d.spatialSort, filename: (d.name || exDefaultName(L, d.format)).trim() || exDefaultName(L, d.format) });
     if (n >= 0) { $('#exDlg').classList.remove('show'); _exDlg = null; }
   } finally { btn.disabled = false; }
 };
@@ -1664,6 +1681,7 @@ async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgr
   const values = mode === 'proportion' ? result.proportions : result.flags;
   return {
     engine: W.hasWorker ? (W.hasGPU ? 'worker+gpu' : 'worker') : 'cpu',
+    bbox: m.bbox,                                          // world; the spatial-pushdown filter for the sweep
     lookup(x, y, z) {
       const ii = Math.round((x - corner[0]) / dx - 0.5);
       const jj = Math.round((y - corner[1]) / dy - 0.5);
@@ -1692,7 +1710,18 @@ function solidHit(S) {
 }
 // stream world positions for an element layer — dh resolves O(1), providers
 // re-stream (the cold-recipe spine the volume gestures already walk)
-async function* layerPositions(L) {
+// world 3D bbox [minX,minY,minZ,maxX,maxY,maxZ] intersects a row group's footer
+// X/Y/Z stats? (no stats → keep). The spatial-pushdown test for the eval sweep.
+let _pqPosSkipped = 0;
+function pqGroupBboxIntersects(rg, coordNames, bb) {
+  const [xN, yN, zN] = coordNames;
+  const rx = rg.columns[xN], ry = rg.columns[yN], rz = rg.columns[zN];
+  if (!rx || !ry || !rz || typeof rx.min !== 'number') return true;
+  return !(Number(rx.max) < bb[0] || Number(rx.min) > bb[3]
+        || Number(ry.max) < bb[1] || Number(ry.min) > bb[4]
+        || Number(rz.max) < bb[2] || Number(rz.min) > bb[5]);
+}
+async function* layerPositions(L, bbox = null) {
   const d = L.docs;
   const n = attrRowCountOf(L);
   if (d.dhDoc && d.dhDoc.recordPosition) {
@@ -1707,13 +1736,25 @@ async function* layerPositions(L) {
     return;
   }
   if (d.blockDoc && d.blockDoc.parquet) {
+    // spatial pushdown: a Morton-sorted parquet has tight per-group bboxes, so a
+    // solid's bbox skips the row groups it can't touch (never decoded). Iterate
+    // the FULL group list with a running FILE offset (skipped groups advance the
+    // cursor but aren't read) — recs are raw file record indices. (Mirrors the
+    // filter pushdown; NOT streamParquetColumns, whose cumulative start is wrong
+    // for a filtered subset.)
     const P = d.blockDoc.parquet, [xN, yN, zN] = P.coordNames;
-    for await (const { start, count, cols } of streamParquetColumns(P.buf, P.coordNames, P.rowGroups)) {
+    let start = 0, skipped = 0;
+    for (const rg of P.rowGroups) {
+      const count = rg.rowCount;
+      if (bbox && !pqGroupBboxIntersects(rg, P.coordNames, bbox)) { start += count; skipped++; continue; }
+      const cols = await readParquetRange(P.buf, P.coordNames, start, start + count);
       const X = cols[xN], Y = cols[yN], Z = cols[zN];
       const x = new Float64Array(count), y = new Float64Array(count), z = new Float64Array(count), recs = new Uint32Array(count);
       for (let i = 0; i < count; i++) { x[i] = +X[i]; y[i] = +Y[i]; z[i] = +Z[i]; recs[i] = start + i; }
       yield { x, y, z, recs, base: start, count };
+      start += count;
     }
+    _pqPosSkipped = skipped; try { window.__pqPosSkipped = skipped; } catch { /* headless */ }
     return;
   }
   let streamChunks = null;
@@ -1944,7 +1985,7 @@ async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = n
       const denseB = dense && between ? await evalSolidOnGrid(meshB, L, { mode: 'flag', variant: 'above', onProgress: (f) => prog(0.4 + f * 0.4, 'winding B') }) : null;
       if (dense && (!between || denseB)) {
         let done = 0;
-        for await (const ch of layerPositions(L)) {
+        for await (const ch of layerPositions(L, dense.bbox)) {
           if (epoch !== _selEpoch) return;
           for (let i = 0; i < ch.count; i++) {
             const hitA = dense.lookup(ch.x[i], ch.y[i], ch.z[i]) >= 1;
@@ -1965,7 +2006,7 @@ async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = n
         const inA = solidHit(S);
         const inB = between ? solidHit(SB) : null;
         let done = 0;
-        for await (const ch of layerPositions(L)) {
+        for await (const ch of layerPositions(L, S.bbox)) {
           if (epoch !== _selEpoch) return;
           for (let i = 0; i < ch.count; i++) {
             const hitA = inA(ch.x[i], ch.y[i], ch.z[i]);
@@ -2031,7 +2072,7 @@ async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = 
   const n = attrRowCountOf(L);
   const codes = col.codes;
   let done = 0, touched = 0;
-  for await (const ch of layerPositions(L)) {
+  for await (const ch of layerPositions(L, dense.bbox)) {
     if (epoch !== _ratioEpoch) return null;
     for (let i = 0; i < ch.count; i++) {
       let p2 = dense.lookup(ch.x[i], ch.y[i], ch.z[i]);
@@ -2085,7 +2126,7 @@ async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside'
       const denseB = dense && between ? await evalSolidOnGrid(meshB, L, { mode: 'flag', variant: 'above', onProgress: (f) => prog(0.4 + f * 0.4, 'winding B') }) : null;
       if (epoch !== _ratioEpoch) return made;
       if (dense && (!between || denseB)) {
-        for await (const ch of layerPositions(L)) {
+        for await (const ch of layerPositions(L, dense.bbox)) {
           if (epoch !== _ratioEpoch) return made;
           for (let i = 0; i < ch.count; i++) {
             const hitA = dense.lookup(ch.x[i], ch.y[i], ch.z[i]) >= 1;
@@ -2105,7 +2146,7 @@ async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside'
         if (!S || (between && !SB)) { $('#meta').textContent = 'flag by solid: needs context-tier meshes'; return made; }
         const inA = solidHit(S);
         const inB = between ? solidHit(SB) : null;
-        for await (const ch of layerPositions(L)) {
+        for await (const ch of layerPositions(L, S.bbox)) {
           if (epoch !== _ratioEpoch) return made;
           for (let i = 0; i < ch.count; i++) {
             const hitA = inA(ch.x[i], ch.y[i], ch.z[i]);
@@ -2168,7 +2209,8 @@ async function assignDomains(solids, L, { name = 'DOMAIN', res = [2, 2, 2], onPr
   const n = attrRowCountOf(L);
   const codes = col.codes;
   let done = 0, assigned = 0;
-  for await (const ch of layerPositions(L)) {
+  const uBbox = fields.reduce((u, d2) => { if (!d2 || !d2.bbox) return u; if (!u) return [...d2.bbox]; for (let a = 0; a < 3; a++) { if (d2.bbox[a] < u[a]) u[a] = d2.bbox[a]; if (d2.bbox[a + 3] > u[a + 3]) u[a + 3] = d2.bbox[a + 3]; } return u; }, null);
+  for await (const ch of layerPositions(L, uBbox)) {
     if (epoch !== _ratioEpoch) return null;
     for (let i = 0; i < ch.count; i++) {
       let best = 0, bi = -1;
