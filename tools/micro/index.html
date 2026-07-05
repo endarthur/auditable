@@ -6021,6 +6021,7 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
   { label: 'Memory…', action: showMemoryInfo },
 ]);
 const HELP_KEYS = `
+<b>command palette</b> — <code>⌘K</code> / <code>Ctrl+K</code> (or the <b>⌘K</b> button) searches EVERY action and shows only what applies right now — the fastest way to reach anything, including the analysis tools (Help → <b>Analysis & workbench</b> for those)<br><br>
 <b>mouse</b><br>
 drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
@@ -6055,10 +6056,12 @@ matching elements isolate — everything else drops out of the render<br><br>
 <b>knobs</b><br>
 <b>min/max</b> boxes clip the color scale (outliers stop eating the ramp; empty = auto) · View menu: <b>boxes</b> = true block faces · <b>points</b> = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
 const HELP_ABOUT = `
-<b>micro</b> — a viewer for massive spatial-element files: LiDAR point clouds (.las, .ply, .xyz) and
-block models (.csv, Datamine .dm). Streaming, no import step — first look in about a
-second at any size, densifying while you orbit. Filter, section, and pick against the
-source file. Nothing leaves your machine.<br><br>
+<b>micro</b> — a streaming workbench for massive spatial-element files: LiDAR point clouds
+(.las, .ply, .xyz), block models (.csv, .dm, .parquet), grids, and drillholes. No import step —
+first look in about a second at any size, densifying while you orbit. Beyond viewing:
+filter · section · domain by solid · join &amp; reconcile models · grade-tonnage · swath ·
+validate against drillholes · figure export — all against the source file, all with a
+provenance trail (Help → <b>Analysis &amp; workbench</b>). Nothing leaves your machine.<br><br>
 Engine: <code>@gcu/condenser</code>. Part of the Auditable project — Geoscientific Chaos
 Union, <code>gentropic.org</code>. MIT. All code in this file is GCU's own,
 implemented from the published methods below.<br><br>
@@ -6081,6 +6084,18 @@ Surfaces</i>. Eurographics Symp. on Point-Based Graphics, 59–65, 2006 — the 
 impostor technique behind the exact block rendering.<br><br>
 toolbar icons: <a href="https://lucide.dev" target="_blank" rel="noopener">Lucide</a> v0.462.0, ISC license.<br><br>
 build <code>${__MICRO_BUILD__}</code>`;
+const HELP_ANALYSIS = `
+Everything here is on a block model's <b>right-click menu</b> and in the <b>command palette</b> (<code>⌘K</code>) — the palette only shows what applies to the active layer.<br><br>
+<b>grade-tonnage</b> — a draggable plot of <b>tonnage</b> + <b>mean grade</b> above cutoff; tonnage-weighted when you pick a density column (else block count). Pick 1–4 grade columns; a reconcile layer auto-overlays reference vs new<br>
+<b>swath (drift)</b> — mean grade per slab along a <b>direction</b>: the grid <b>axes</b> X/Y/Z, an oriented trio from <b>dip-direction / dip / rake</b> (across · along-strike · down-dip), or a single <b>trend / plunge</b>. Band width + offset set the slabs; <b>zebra</b> paints the alternate bands onto the 3D so you see what the plot bins<br>
+<b>join &amp; reconcile</b> (Properties → <b>join</b> tab) — <b>spatial join</b> resamples a <i>compatible</i> model onto a target grid (a banner shows compatibility: clean replicate/aggregate, or the reason it can't); <b>key join</b> matches by a key column. <b>Reconcile</b> two model versions → a coloured <b>Δ map</b> (this − reference, diverging ramp about 0) on a common lattice, with <b>matched · mean Δ · added · removed</b> — the change-control record<br>
+<b>validate vs drillholes</b> — is the model consistent with the samples? Declusters the drillhole grades (spatial sampling over-drills high grade), then reports the <b>global bias</b> (model mean vs declustered sample mean) and a <b>model-vs-sample swath</b>. (Point vs block support: a global offset can be real; the swaths flag <i>local</i> bias)<br>
+<b>common grid</b> (New… → <b>cover compatible models</b>) — an empty model on a lattice that covers <i>and</i> is compatible with several models at once — the natural reconcile target<br>
+<b>optimize to spatial Parquet</b> — reorders a model Morton-sorted (a footer spatial index; queries skip whole row-groups). Runs automatically when you save a project — Parquet is the project store<br>
+<b>lineage</b> — every derived layer remembers <i>how it was made</i>: open → join / reconcile / optimize wraps its sources with the params + build + time. <b>Lineage…</b> shows the tree + exports a readable HTML <b>report</b>; Parquet exports carry it embedded. Provenance you can attach to a sign-off<br>
+<b>linked brushing</b> — the grade-tonnage &amp; swath windows have an <b>all / selection</b> toggle: rubber-band a bench, a domain, or a suspect zone in 3D and read its curve live<br><br>
+<b>figures</b> (View → <b>Decorations &amp; figure…</b>) — toggle a <b>scale bar</b>, <b>north arrow</b>, colour <b>legend</b>, and <b>title</b> on the viewport; set a <b>background</b> (white/paper for print — the decorations flip to dark ink). <b>Export figure</b> captures exactly what you see as a report-ready PNG<br>
+<b>windows</b> (View → <b>Windows…</b>) — the analysis + table + paint windows are all draggable and layer-pinned; list / focus / <b>cascade</b> / <b>close all</b> from here<br>`;
 function showHelp(title, html) {
   $('#helpTitle').textContent = title;
   $('#helpBody').innerHTML = html;
@@ -6088,6 +6103,8 @@ function showHelp(title, html) {
 }
 $('#mHelp').onclick = () => menuAt($('#mHelp'), [
   { label: 'Keyboard & mouse…', action: () => showHelp('keyboard & mouse', HELP_KEYS) },
+  { label: 'Analysis & workbench…', action: () => showHelp('analysis & workbench', HELP_ANALYSIS) },
+  { label: 'Why it’s Sealed (security)…', action: () => sealedInfo() },
   { label: 'About micro', action: () => showHelp('about micro', HELP_ABOUT) },
 ]);
 $('#helpClose').onclick = () => $('#help').classList.remove('show');
@@ -6639,6 +6656,8 @@ const COMMANDS = [
   { id: 'remove', group: 'Layer', title: 'Remove layer', kw: 'delete close', when: (c) => c.L, run: (c) => removeLayerUI(c.L.id) },
   { id: 'memory', group: 'Tools', title: 'Memory…', kw: 'vram usage ram', run: () => showMemoryInfo() },
   { id: 'sealed', group: 'Help', title: 'Why it\'s Sealed (security)…', kw: 'network privacy offline trust connect-src wasm verify', run: () => sealedInfo() },
+  { id: 'helpwork', group: 'Help', title: 'Analysis & workbench help…', kw: 'grade tonnage swath reconcile join validate lineage figure docs guide', run: () => showHelp('analysis & workbench', HELP_ANALYSIS) },
+  { id: 'helpkeys', group: 'Help', title: 'Keyboard & mouse help…', kw: 'shortcuts docs guide', run: () => showHelp('keyboard & mouse', HELP_KEYS) },
 ];
 let _palOpen = false, _palSel = 0, _palItems = [];
 const palCtx = () => ({ L: activeLayer(), layers: _layers, project: _project });
