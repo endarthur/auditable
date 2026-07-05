@@ -2509,7 +2509,7 @@ function openMeshGridDialog(meshL0) {
   const meshL = meshL0 && meshes.includes(meshL0) ? meshL0 : meshes[0];
   const bb = meshL.bboxLocal ? { min: [meshL.bboxLocal[0] + frame.origin[0], meshL.bboxLocal[1] + frame.origin[1]], max: [meshL.bboxLocal[3] + frame.origin[0], meshL.bboxLocal[4] + frame.origin[1]] } : null;
   const ext = bb ? Math.max(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1]) : 100;
-  _rgDlg = { mesh: meshL.id, cell: niceStep(ext / 400), keep: 'top', ext, meshes };
+  _rgDlg = { mesh: meshL.id, cell: niceStep(ext / 400), keep: 'top', extentSrc: 'mesh', extend: 'none', holesOnly: false, ext, meshes };
   renderMeshGridDialog();
   $('#rgDlg').classList.add('show');
 }
@@ -2525,16 +2525,30 @@ function renderMeshGridDialog() {
   mSel.value = String(d.mesh);
   mSel.onchange = () => { d.mesh = +mSel.value; renderMeshGridDialog(); };
   row('surface', mSel);
-  const cellIn = document.createElement('input'); cellIn.type = 'number'; cellIn.min = '0'; cellIn.step = 'any'; cellIn.value = String(d.cell); cellIn.style.width = '90px';
+  const gridLayers = _layers.filter((L) => L.docs.gridDoc);
+  const eSel = document.createElement('select');
+  { const o = document.createElement('option'); o.value = 'mesh'; o.textContent = 'the mesh bounds'; eSel.appendChild(o); }
+  for (const L of gridLayers) { const o = document.createElement('option'); o.value = 'G' + L.id; o.textContent = `match: ${L.label || L.name}`; eSel.appendChild(o); }
+  eSel.value = d.extentSrc; eSel.onchange = () => { d.extentSrc = eSel.value; renderMeshGridDialog(); };
+  row('extent', eSel);
+  const rgGeom = () => { if (d.extentSrc === 'mesh') return null; const L = layerById(+d.extentSrc.slice(1)); const g = L && L.docs.gridDoc && L.docs.gridDoc.grid; return g ? { x0: g.x0, y0: g.y0, dx: g.dx, nx: g.nx, ny: g.ny } : null; };
+  const geom = rgGeom();
+  const cellIn = document.createElement('input'); cellIn.type = 'number'; cellIn.min = '0'; cellIn.step = 'any'; cellIn.value = String(geom ? geom.dx : d.cell); cellIn.style.width = '90px'; cellIn.disabled = !!geom;
   const tally = document.createElement('span'); tally.style.color = 'var(--muted)';
-  const upd = () => { const nx = Math.max(1, Math.floor(wx / d.cell) + 1), ny = Math.max(1, Math.floor(wy / d.cell) + 1); tally.textContent = `= ${nx.toLocaleString()} × ${ny.toLocaleString()} nodes (${(nx * ny).toLocaleString()})`; };
+  const upd = () => { const g2 = rgGeom(); const nx = g2 ? g2.nx : Math.max(1, Math.floor(wx / d.cell) + 1), ny = g2 ? g2.ny : Math.max(1, Math.floor(wy / d.cell) + 1); tally.textContent = `= ${nx.toLocaleString()} × ${ny.toLocaleString()} nodes (${(nx * ny).toLocaleString()})`; };
   cellIn.oninput = () => { d.cell = Math.max(1e-9, +cellIn.value || d.cell); upd(); };
   row('cell (m)', cellIn, tally); upd();
   const kRow = row('keep');
   for (const [k, lab] of [['top', 'top surface'], ['bottom', 'bottom surface']]) {
     const l = document.createElement('label'); const rb = document.createElement('input'); rb.type = 'radio'; rb.name = 'rgkeep'; rb.checked = d.keep === k; rb.onchange = () => { d.keep = k; }; l.append(rb, lab); kRow.appendChild(l);
   }
-  body.appendChild(ppNote('renders the mesh onto a regular grid — overhangs keep the chosen side; off-mesh nodes are nodata. A real .asc layer you can flag/ratio a model against or export.'));
+  const exRow = row('empties');
+  const exSel = document.createElement('select');
+  for (const [v, t] of [['none', 'leave nodata'], ['nearest', 'nearest (flat extension)'], ['trend', 'planar trend (continue dip)']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; exSel.appendChild(o); }
+  exSel.value = d.extend; exSel.onchange = () => { d.extend = exSel.value; renderMeshGridDialog(); };
+  exRow.appendChild(exSel);
+  if (d.extend !== 'none') { const l = document.createElement('label'); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = d.holesOnly; cb.onchange = () => { d.holesOnly = cb.checked; }; l.append(cb, 'holes only'); exRow.appendChild(l); }
+  body.appendChild(ppNote('renders the mesh onto a regular grid (overhangs keep the chosen side). Match an existing grid to rasterize a small mesh onto a bigger DEM\'s lattice; empty nodes fill by nearest (flat) or planar trend (continue the dip) — “holes only” patches interior gaps but leaves beyond-the-edge nodata.'));
   $('#rgDlgMsg').textContent = '';
 }
 $('#rgCancel').onclick = () => { $('#rgDlg').classList.remove('show'); _rgDlg = null; };
@@ -2544,7 +2558,8 @@ $('#rgGo').onclick = async () => {
   const btn = $('#rgGo'); btn.disabled = true;
   for (const el of $('#rgDlgBody').querySelectorAll('input, select')) el.disabled = true;
   try {
-    await meshToGridLayer(meshL, { cell: d.cell, keep: d.keep });
+    const geom = d.extentSrc === 'mesh' ? null : (() => { const L = layerById(+d.extentSrc.slice(1)); const g = L && L.docs.gridDoc && L.docs.gridDoc.grid; return g ? { x0: g.x0, y0: g.y0, dx: g.dx, nx: g.nx, ny: g.ny } : null; })();
+    await meshToGridLayer(meshL, { cell: d.cell, keep: d.keep, extend: d.extend, holesOnly: d.holesOnly, geom });
     $('#rgDlg').classList.remove('show'); _rgDlg = null;
   } catch (e) { $('#rgDlgMsg').textContent = e.message; }
   finally { btn.disabled = false; for (const el of $('#rgDlgBody').querySelectorAll('input, select')) el.disabled = false; }
@@ -2961,28 +2976,102 @@ async function rasterizeMeshToGrid(V, T, { x0, y0, dx, dy, nx, ny, nodata = -999
   }
   return { nx, ny, data, x0, y0, dx, dy, nodata, crs: null, form: 'rasterized' };
 }
+// mark EXTERIOR nodata (reachable from the grid border through nodata) so
+// "holes only" can leave beyond-the-edge unfilled. 4-connected BFS.
+function markGridExterior(data, nx, ny, isNodata) {
+  const ext = new Uint8Array(nx * ny);
+  const q = new Int32Array(nx * ny);
+  let head = 0, tail = 0;
+  const push = (i) => { if (!ext[i] && isNodata(data[i])) { ext[i] = 1; q[tail++] = i; } };
+  for (let c = 0; c < nx; c++) { push(c); push((ny - 1) * nx + c); }
+  for (let r = 0; r < ny; r++) { push(r * nx); push(r * nx + nx - 1); }
+  while (head < tail) {
+    const i = q[head++], r = (i / nx) | 0, c = i % nx;
+    if (c > 0) push(i - 1); if (c < nx - 1) push(i + 1);
+    if (r > 0) push(i - nx); if (r < ny - 1) push(i + nx);
+  }
+  return ext;
+}
+// NEAREST fill: multi-source BFS (grassfire) — each empty node inherits its
+// nearest filled node's value (flat / Voronoi extension). target restricts.
+function fillGridNearest(grid, isNodata, target) {
+  const { nx, ny, data } = grid, N = nx * ny;
+  const src = new Int32Array(N).fill(-1);
+  const q = new Int32Array(N);
+  let head = 0, tail = 0;
+  for (let i = 0; i < N; i++) if (!isNodata(data[i])) { src[i] = i; q[tail++] = i; }
+  const want = (j) => src[j] < 0 && isNodata(data[j]) && (!target || target[j]);
+  while (head < tail) {
+    const i = q[head++], r = (i / nx) | 0, c = i % nx;
+    if (c > 0 && want(i - 1)) { src[i - 1] = src[i]; q[tail++] = i - 1; }
+    if (c < nx - 1 && want(i + 1)) { src[i + 1] = src[i]; q[tail++] = i + 1; }
+    if (r > 0 && want(i - nx)) { src[i - nx] = src[i]; q[tail++] = i - nx; }
+    if (r < ny - 1 && want(i + nx)) { src[i + nx] = src[i]; q[tail++] = i + nx; }
+  }
+  const out = Float32Array.from(data);
+  for (let i = 0; i < N; i++) if (isNodata(data[i]) && src[i] >= 0) out[i] = data[src[i]];
+  return out;
+}
+// PLANAR TREND fill: least-squares plane z = a·x + b·y + c through the filled
+// nodes (LOCAL indices, well-conditioned), evaluated at the empties — continues
+// the regional dip outward.
+function fillGridTrend(grid, isNodata, target) {
+  const { nx, ny, data } = grid;
+  let n = 0, Sx = 0, Sy = 0, Sz = 0, Sxx = 0, Sxy = 0, Syy = 0, Sxz = 0, Syz = 0;
+  for (let r = 0; r < ny; r++) for (let c = 0; c < nx; c++) {
+    const v = data[r * nx + c]; if (isNodata(v)) continue;
+    n++; Sx += c; Sy += r; Sz += v; Sxx += c * c; Sxy += c * r; Syy += r * r; Sxz += c * v; Syz += r * v;
+  }
+  if (n < 3) return data;
+  const det = Sxx * (Syy * n - Sy * Sy) - Sxy * (Sxy * n - Sy * Sx) + Sx * (Sxy * Sy - Syy * Sx);
+  if (Math.abs(det) < 1e-9) return data;
+  const a = (Sxz * (Syy * n - Sy * Sy) - Sxy * (Syz * n - Sy * Sz) + Sx * (Syz * Sy - Syy * Sz)) / det;
+  const b = (Sxx * (Syz * n - Sy * Sz) - Sxz * (Sxy * n - Sy * Sx) + Sx * (Sxy * Sz - Syz * Sx)) / det;
+  const cc = (Sxx * (Syy * Sz - Syz * Sy) - Sxy * (Sxy * Sz - Syz * Sx) + Sxz * (Sxy * Sy - Syy * Sx)) / det;
+  const out = Float32Array.from(data);
+  for (let r = 0; r < ny; r++) for (let c = 0; c < nx; c++) { const i = r * nx + c; if (isNodata(data[i]) && (!target || target[i])) out[i] = a * c + b * r + cc; }
+  return out;
+}
+function applyGridExtend(grid, method, holesOnly) {
+  if (!method || method === 'none') return grid;
+  const { nx, ny, data, nodata } = grid;
+  const isNodata = (v) => Number.isNaN(v) || v === nodata;
+  let target = null;
+  if (holesOnly) {
+    const ext = markGridExterior(data, nx, ny, isNodata);
+    target = new Uint8Array(nx * ny);
+    for (let i = 0; i < nx * ny; i++) target[i] = isNodata(data[i]) && !ext[i] ? 1 : 0;
+  }
+  grid.data = method === 'trend' ? fillGridTrend(grid, isNodata, target) : fillGridNearest(grid, isNodata, target);
+  return grid;
+}
 // the mesh → grid action: parse the mesh's triangles, default a square grid
 // from its plan bbox, rasterize, then hand the ESRI-ASCII blob to openGridBlob
 // (so the new layer round-trips through the same reader + persists for free)
-async function meshToGridLayer(meshL, { cell, keep = 'top' } = {}) {
+// geom (optional) matches an existing grid's LATTICE, so a mesh can be
+// rasterized onto the same nodes as a bigger DEM ("mesh smaller than grid" →
+// the outside fills by `extend`). Without geom the grid == the mesh bbox.
+async function meshToGridLayer(meshL, { cell, keep = 'top', extend = 'none', holesOnly = false, geom = null } = {}) {
   const md = meshL.docs && meshL.docs.meshDoc;
   if (!md) { $('#meta').textContent = 'mesh → grid: needs a context-tier mesh'; return null; }
   $('#meta').textContent = `${meshL.label || meshL.name} — reading mesh…`;
   const open = /\.msh$/i.test(md.name) ? openMsh : /\.obj$/i.test(md.name) ? openObj : /\.lfm$/i.test(md.name) ? openLfmMesh : openPlyMesh;
   const m = await open(md.blob);
   const bb = m.header.bbox;
-  const ext = Math.max(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1]);
-  const dx = cell && cell > 0 ? cell : niceStep(ext / 400);
-  const nx = Math.max(1, Math.floor((bb.max[0] - bb.min[0]) / dx) + 1);
-  const ny = Math.max(1, Math.floor((bb.max[1] - bb.min[1]) / dx) + 1);
+  const extent = Math.max(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1]);
+  const dx = geom ? geom.dx : (cell && cell > 0 ? cell : niceStep(extent / 400));
+  const x0 = geom ? geom.x0 : bb.min[0];
+  const y0 = geom ? geom.y0 : bb.max[1];
+  const nx = geom ? geom.nx : Math.max(1, Math.floor((bb.max[0] - bb.min[0]) / dx) + 1);
+  const ny = geom ? geom.ny : Math.max(1, Math.floor((bb.max[1] - bb.min[1]) / dx) + 1);
   $('#meta').textContent = `${meshL.label || meshL.name} — rasterizing ${nx}×${ny}…`;
   const grid = await rasterizeMeshToGrid(m.vertices, m.triangles, {
-    x0: bb.min[0], y0: bb.max[1], dx, dy: dx, nx, ny, keep,
+    x0, y0, dx, dy: dx, nx, ny, keep,
     onProgress: (f) => { $('#meta').textContent = `${meshL.label || meshL.name} — rasterizing ${Math.round(f * 100)}%…`; },
   });
+  if (extend && extend !== 'none') { $('#meta').textContent = `${meshL.label || meshL.name} — extending (${extend})…`; applyGridExtend(grid, extend, holesOnly); }
   const base = (meshL.label || meshL.name).replace(/\.[^.]+$/, '');
-  const blob = new Blob([writeEsriAsc(grid)]);
-  await openBlob(blob, `${base}.asc`, _layers.length ? 'add' : 'replace');
+  await openBlob(new Blob([writeEsriAsc(grid)]), `${base}.asc`, _layers.length ? 'add' : 'replace');
   return grid;
 }
 async function openGridBlob(blob, name, opts = {}) {
@@ -7772,7 +7861,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, writeEsriAsc, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, writeEsriAsc, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
