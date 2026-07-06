@@ -1,0 +1,63 @@
+name: Publish @gcu package to npm
+
+# Monorepo trusted publishing (OIDC — no NPM_TOKEN). Publish ONE @gcu package by
+# pushing a tag `<pkg>@<version>`, where <pkg> is its ext/ directory name:
+#     git tag adder@0.3.1 && git push origin adder@0.3.1
+# The workflow parses the tag, checks ext/<pkg>/package.json matches, builds the
+# package, and publishes via the run's OIDC id-token — matched against each
+# package's trusted-publisher config on npm (gentropic/auditable · npm-publish.yml).
+# App-release tags (v1.2.3) have no '@' and never trigger this; see release.yml.
+
+on:
+  push:
+    tags:
+      - '*@*'
+
+permissions:
+  contents: read
+  id-token: write          # OIDC trusted publishing + provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Parse tag → package + version
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          pkg="${tag%@*}"        # everything before the last '@'
+          ver="${tag##*@}"       # everything after it
+          echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "Publishing ext/$pkg @ $ver"
+
+      - name: Verify package + version match the tag
+        run: |
+          dir="ext/${{ steps.tag.outputs.pkg }}"
+          test -f "$dir/package.json" || { echo "::error::$dir/package.json not found"; exit 1; }
+          have="$(node -p "require('./$dir/package.json').version")"
+          if [ "$have" != "${{ steps.tag.outputs.ver }}" ]; then
+            echo "::error::tag says ${{ steps.tag.outputs.ver }} but $dir/package.json is $have"; exit 1
+          fi
+          priv="$(node -p "require('./$dir/package.json').private === true")"
+          if [ "$priv" = "true" ]; then
+            echo "::error::$dir is marked private — not publishable from this repo"; exit 1
+          fi
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - run: npm install -g npm@latest      # trusted publishing needs npm >= 11.5.1 (node 22 ships npm 10)
+
+      - name: Build the package (if it has a build step)
+        run: |
+          pkg="${{ steps.tag.outputs.pkg }}"
+          if [ -f "ext/$pkg/build.js" ]; then node "ext/$pkg/build.js"; else echo "no build.js — publishing committed artifact"; fi
+
+      - name: Publish
+        working-directory: ext/${{ steps.tag.outputs.pkg }}
+        run: npm publish --provenance --access public
