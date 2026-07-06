@@ -7482,16 +7482,23 @@ function renderRuleList(body, L) {
   else if (L._rulesDirty || !L._ruleCodes) body.appendChild(ppNote('rules edited — run (or apply) to re-sweep'));
 }
 function renderStickRadius(body, L) {
-  const r = document.createElement('input'); r.type = 'range'; r.min = 0.2; r.max = 8; r.step = 0.1;
-  r.value = renderer.layerStickRadius(L.id);
-  const rv = document.createElement('span'); rv.className = 'pp-val'; rv.textContent = r.value + ' m';
-  r.oninput = () => {
-    rv.textContent = (+r.value).toFixed(1) + ' m';
-    L.docs.dhDoc.config.radius = +r.value;
-    stageGate(L, () => { renderer.setLayerStickRadius(L.id, +r.value); requestRender(); });
+  const sec = document.createElement('div'); sec.className = 'pp-sec'; sec.textContent = 'style';
+  body.appendChild(sec);
+  const cur = renderer.layerStickRadius(L.id);
+  // slider covers the common range; the number box types exact / beyond-slider
+  // values (no hard cap — deposit-scale views can want fat sticks).
+  const r = document.createElement('input'); r.type = 'range'; r.min = 0.2; r.max = 25; r.step = 0.1;
+  r.value = Math.min(cur, 25);
+  const num = document.createElement('input'); num.type = 'number'; num.min = 0.05; num.step = 0.1; num.value = String(cur); num.style.width = '58px';
+  const apply = (v) => {
+    if (!Number.isFinite(v) || v <= 0) return;
+    L.docs.dhDoc.config.radius = v;
+    stageGate(L, () => { renderer.setLayerStickRadius(L.id, v); requestRender(); });
     markProjectDirty();
   };
-  body.appendChild(mkRow('stick radius', r, rv));
+  r.oninput = () => { num.value = (+r.value).toFixed(1); apply(+r.value); };
+  num.onchange = () => { const v = +num.value; r.value = Math.min(Math.max(v, +r.min), +r.max); apply(v); };
+  body.appendChild(mkRow('stick radius (m)', r, num));
 }
 function renderRampSection(body, L) {
   const cfg = rampCfgOf(L) || { preset: 'viridis', classed: false, breaks: [] };
