@@ -8973,6 +8973,30 @@ function renderSourceTab(body, L) {
     line(`survey <span class="v">${bn(dh.blobs.survey)}</span>`);
     line(`intervals <span class="v">${bn(dh.blobs.intervals)}</span> · <span class="v">${h.placed.toLocaleString()}</span> of <span class="v">${h.count.toLocaleString()}</span> placed`);
     for (const c of h.report.checks) line(`⚠ ${escS(c.label)} · <span class="v">${c.count}</span>${c.bhids && c.bhids.length ? ` <span class="fi-x">(${escS(c.bhids.slice(0, 4).join(', '))}${c.bhids.length > 4 ? '…' : ''})</span>` : ''}`);
+    // collar + survey geometry mapping — re-map a column and re-desurvey.
+    // (The interval table's grade/category columns live in the columns tab.)
+    const mapSec = (title, cols, mapping, role, fields) => {
+      if (!cols || !cols.length) return;
+      sec(title);
+      const row = document.createElement('div'); row.className = 'pp-row'; row.style.flexWrap = 'wrap';
+      for (const [key, label, optional] of fields) {
+        const wrap = document.createElement('label'); wrap.textContent = label + ' '; wrap.style.minWidth = '0';
+        const selE = document.createElement('select'); selE.style.maxWidth = '84px';
+        if (optional) { const o = document.createElement('option'); o.value = '-1'; o.textContent = '—'; selE.appendChild(o); }
+        cols.forEach((c, i) => { const o = document.createElement('option'); o.value = String(i); o.textContent = c; selE.appendChild(o); });
+        selE.value = String(mapping && mapping[key] != null ? mapping[key] : (optional ? -1 : 0));
+        selE.onchange = () => {
+          const full = { collar: { ...h.collarMapping }, survey: { ...h.surveyMapping }, intervals: { ...h.intervalMapping } };
+          full[role][key] = +selE.value;
+          reopenDh(L, { mappings: full });
+        };
+        wrap.appendChild(selE); row.appendChild(wrap);
+      }
+      body.appendChild(row);
+    };
+    mapSec('collar — column mapping', h.collarColumns, h.collarMapping, 'collar', [['bhid', 'hole id', false], ['x', 'X', false], ['y', 'Y', false], ['z', 'Z', false], ['eoh', 'EOH', true]]);
+    mapSec('survey — column mapping', h.surveyColumns, h.surveyMapping, 'survey', [['bhid', 'hole id', false], ['at', 'depth', true], ['az', 'azimuth', false], ['dip', 'dip', false]]);
+    if (h.collarColumns && h.collarColumns.length) line('<span class="fi-x">re-mapping a column re-desurveys the holes</span>');
     sec('desurvey');
     const mRow = document.createElement('div'); mRow.className = 'pp-row';
     const mLab = document.createElement('label'); mLab.textContent = 'method';

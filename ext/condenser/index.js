@@ -1886,6 +1886,10 @@ async function openDrillholes({ collar, survey, intervals }, opts = {}) {
     columns: tIv.columns,
     mapping: { x: -1, y: -1, z: -1, chan, cat: categories ? catCol : null },
     intervalMapping: m.intervals,                          // resolved bhid/from/to (role badges + joins)
+    // the collar/survey tables, so a host can re-map their columns and
+    // re-desurvey — the interval table above is only a third of the mapping
+    collarColumns: tCollar.columns, surveyColumns: tSurvey.columns,
+    collarMapping: m.collar, surveyMapping: m.survey,
     numericColumns: numericCols,
     categories,
     attributes: [
