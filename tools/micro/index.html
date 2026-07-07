@@ -4418,7 +4418,7 @@ async function loadDrillholeSet(set, cfg, replaceFirst) {
   }
   // multiple interval tables → nest the siblings under a parent group (the set);
   // reopen restores it via the saved tree, so only group at initial load
-  if (ids.length >= 2) createLayerGroup(dhGroupName(set.collar.name), ids, { collapsed: false });
+  if (ids.length >= 2) createLayerGroup(dhGroupName(set.collar.name), ids, { collapsed: false, dhSet: true });
 }
 // a readable set/group name from the collar filename (drop a trailing _collar(s))
 const dhGroupName = (collarName) => basename(String(collarName)).replace(/\.[^.]+$/, '').replace(/[_-]?collars?$/i, '') || 'drillholes';
@@ -5953,7 +5953,7 @@ async function scanFolderForNewData() {
           await openDrillholeLayer({ collar, survey, intervals }, s.desc.config || {}, _layers.length ? 'add' : 'replace');
           const L = activeLayer(); if (L) { L.storage = 'project'; L._setPath = s.e.path; L._setKey = s.e.path; L._intervalName = iv; ids.push(L.id); }
         }
-        if (ids.length >= 2) createLayerGroup(dhGroupName(s.desc.collar), ids, { collapsed: false });
+        if (ids.length >= 2) createLayerGroup(dhGroupName(s.desc.collar), ids, { collapsed: false, dhSet: true });
       } catch (err) { $('#meta').textContent = `scan: “${s.e.name}” — ${err.message}`; }
     }
     if (looseFiles.length) await openFilesDialog(looseFiles);   // the dialog is the confirmation for loose files
@@ -7354,6 +7354,7 @@ function layerMenu(L, x, y) {
         markProjectDirty(); requestRender();
       }
     } }] : []),
+    ...(L.dh && L.docs.dhDoc ? [{ label: 'Add interval table…', action: () => addIntervalToLayer(L) }] : []),
     ...(L.kind === 'mesh' ? (() => {
       const items = [
         { label: 'Tint…', action: () => setTimeout(() => meshTintMenu(L, x, y), 0) },
@@ -9396,9 +9397,9 @@ function groupLayerIds(nd, out = []) {
   return out;
 }
 // nest the given root-level layers into a new (collapsed) group
-function createLayerGroup(name, layerIds, { collapsed = true } = {}) {
+function createLayerGroup(name, layerIds, { collapsed = true, dhSet = false } = {}) {
   treeSync();
-  const node = { group: true, name, visible: true, collapsed, children: [] };
+  const node = { group: true, name, visible: true, collapsed, children: [], ...(dhSet ? { dhSet: true } : {}) };
   // pull each member from WHEREVER it sits (root or inside another group).
   // Siblings regroup in place (the new group takes the first member's slot);
   // members from DIFFERENT containers meet at the root — predictable, and it
@@ -9425,13 +9426,13 @@ function createLayerGroup(name, layerIds, { collapsed = true } = {}) {
 function treeToManifest(idOf) {
   const conv = (arr) => arr.map((nd) => (typeof nd === 'number'
     ? (idOf.has(nd) ? idOf.get(nd) : null)
-    : { g: nd.name, v: nd.visible, c: nd.collapsed, ch: conv(nd.children) })).filter((x) => x !== null);
+    : { g: nd.name, v: nd.visible, c: nd.collapsed, ch: conv(nd.children), d: nd.dhSet ? 1 : undefined })).filter((x) => x !== null);
   return conv(_layerTree);
 }
 function treeFromManifest(tree, idAt) {
   const conv = (arr) => arr.map((nd) => (typeof nd === 'number'
     ? (idAt[nd] != null ? idAt[nd] : null)
-    : { group: true, name: nd.g, visible: nd.v !== false, collapsed: !!nd.c, children: conv(nd.ch || []) }))
+    : { group: true, name: nd.g, visible: nd.v !== false, collapsed: !!nd.c, children: conv(nd.ch || []), ...(nd.d ? { dhSet: true } : {}) }))
     .filter((x) => x !== null && (typeof x === 'number' || x.children.length));
   _layerTree = conv(tree || []);
   treeSync();
@@ -9520,8 +9521,79 @@ function moveLayerToGroupMenu(L, x, y) {
     } }] : []),
   ]);
 }
-function groupMenu(nd, x, y) {
+// a drillhole set's collar/survey/config come from any member interval layer
+function dhSetInfo(nd) {
+  for (const id of groupLayerIds(nd)) { const L = layerById(id); if (L && L.dh && L.docs.dhDoc) return { blobs: L.docs.dhDoc.blobs, config: L.docs.dhDoc.config, setKey: L._setKey }; }
+  return null;
+}
+// the dhSet group a layer sits in (or null if it's at the root / a plain group)
+function dhSetGroupOf(id) {
+  const walk = (arr, grp) => { for (const nd of arr) { if (nd === id) return grp; if (typeof nd !== 'number' && nd.group) { const r = walk(nd.children, nd); if (r !== undefined) return r; } } return undefined; };
+  const g = walk(_layerTree, null);
+  return g && g.dhSet ? g : null;
+}
+async function pickIntervalFile() {
+  try {
+    if (window.showOpenFilePicker) { const [h] = await window.showOpenFilePicker(); const f = await h.getFile(); _fileHandles.set(f, h); return f; }
+    return await new Promise((res) => { const i = document.createElement('input'); i.type = 'file'; i.onchange = () => res(i.files[0]); i.click(); });
+  } catch { return null; }
+}
+// add another interval table to an existing set — desurvey vs its collar+survey
+async function addIntervalToSet(nd) {
+  const info = dhSetInfo(nd); if (!info) return;
+  const file = await pickIntervalFile(); if (!file) return;
+  await openDrillholeLayer({ collar: info.blobs.collar, survey: info.blobs.survey, intervals: file }, { ...info.config }, 'add');
+  const L2 = activeLayer(); if (L2) { L2._setKey = info.setKey; L2._intervalName = file.name; treeMove(L2.id, nd, 'into'); }
+  markProjectDirty();
+}
+// promote a lone dh layer into a set by adding a second interval table
+async function addIntervalToLayer(L) {
+  const dh = L.docs.dhDoc; if (!dh) return;
+  const file = await pickIntervalFile(); if (!file) return;
+  const key = L._setKey || ('dhset:' + (++_dhSetSeq)); L._setKey = key; if (!L._intervalName) L._intervalName = basename(layerFiles(L)[2].name);
+  await openDrillholeLayer({ collar: dh.blobs.collar, survey: dh.blobs.survey, intervals: file }, { ...dh.config }, 'add');
+  const L2 = activeLayer(); if (!L2) return;
+  L2._setKey = key; L2._intervalName = file.name;
+  const grp = dhSetGroupOf(L.id);
+  if (grp) treeMove(L2.id, grp, 'into');
+  else createLayerGroup(dhGroupName(basename(dh.blobs.collar.name || 'holes')), [L.id, L2.id], { collapsed: false, dhSet: true });
+  markProjectDirty();
+}
+// re-desurvey every interval table in a set together (they share geometry) —
+// reopenDh keeps _setKey, so the reopened layers stay in the group
+async function redesurveySet(nd, patch) {
+  for (const id of groupLayerIds(nd).slice()) {
+    const L = layerById(id); if (!L || !L.dh) continue;
+    await reopenDh(L, patch);
+    const L2 = activeLayer(); if (L2) treeMove(L2.id, nd, 'into');
+  }
+  renderLayers(); markProjectDirty();
+}
+function redesurveyMenu(nd, x, y) {
   menuXY(x, y, [
+    { label: 'method: minimum curvature', action: () => redesurveySet(nd, { method: 'minimumCurvature' }) },
+    { label: 'method: balanced tangential', action: () => redesurveySet(nd, { method: 'balancedTangential' }) },
+    { label: 'method: tangential', action: () => redesurveySet(nd, { method: 'tangential' }) },
+    { sep: true },
+    { label: 'dip: auto-detect', action: () => redesurveySet(nd, { dipConvention: 'auto' }) },
+    { label: 'dip: positive down', action: () => redesurveySet(nd, { dipConvention: 'pos-down' }) },
+    { label: 'dip: negative down', action: () => redesurveySet(nd, { dipConvention: 'neg-down' }) },
+  ]);
+}
+function groupMenu(nd, x, y) {
+  const items = [];
+  if (nd.dhSet) {
+    const info = dhSetInfo(nd);
+    if (info) {
+      items.push({ label: `collar · ${basename(info.blobs.collar.name)}`, action: () => { $('#meta').textContent = `set collar: ${info.blobs.collar.name} · survey: ${info.blobs.survey.name}`; } });
+      items.push({ label: `survey · ${basename(info.blobs.survey.name)}`, action: () => { $('#meta').textContent = `set collar: ${info.blobs.collar.name} · survey: ${info.blobs.survey.name}`; } });
+    }
+    items.push({ label: 'Add interval table…', action: () => addIntervalToSet(nd) });
+    items.push({ label: 'Re-desurvey set…', action: () => setTimeout(() => redesurveyMenu(nd, x, y), 0) });
+    items.push({ sep: true });
+  }
+  menuXY(x, y, [
+    ...items,
     { label: 'Move up', action: () => treeMoveStep(nd, -1) },
     { label: 'Move down', action: () => treeMoveStep(nd, 1) },
     { label: 'Rename group…', action: async () => { const v = await microPrompt('group name', nd.name); if (v && v.trim()) { nd.name = v.trim(); renderLayers(); markProjectDirty(); } } },
@@ -9786,7 +9858,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
