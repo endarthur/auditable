@@ -4408,14 +4408,20 @@ const dhSetComplete = (s) => !!(s.collar && s.survey && s.intervals.length);
 // Column mappings are sniffed here and editable afterward in the source tab.
 async function loadDrillholeSet(set, cfg, replaceFirst) {
   const key = 'dhset:' + (++_dhSetSeq);
+  const ids = [];
   let first = replaceFirst;
   for (const iv of set.intervals) {
     await openDrillholeLayer({ collar: set.collar.file, survey: set.survey.file, intervals: iv.file }, { method: cfg.method || 'minimumCurvature', dipConvention: cfg.dip || 'auto' }, first ? 'replace' : 'add');
     const L = activeLayer();
-    if (L) { L._setKey = key; L._intervalName = iv.name; }
+    if (L) { L._setKey = key; L._intervalName = iv.name; ids.push(L.id); }
     first = false;
   }
+  // multiple interval tables → nest the siblings under a parent group (the set);
+  // reopen restores it via the saved tree, so only group at initial load
+  if (ids.length >= 2) createLayerGroup(dhGroupName(set.collar.name), ids, { collapsed: false });
 }
+// a readable set/group name from the collar filename (drop a trailing _collar(s))
+const dhGroupName = (collarName) => basename(String(collarName)).replace(/\.[^.]+$/, '').replace(/[_-]?collars?$/i, '') || 'drillholes';
 async function openFilesDialog(files) {
   const rows = [];
   for (const f of files) rows.push(await describeFile(f));
@@ -5893,9 +5899,14 @@ async function scanFolderForNewData() {
   const dir = _project.dir;
   try {
     if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'scan: permission denied'; return; }
-    // what current layers already use (name:size — micro's file identity)
-    const referenced = new Set();
-    for (const L of _layers) for (const fd of layerFiles(L)) if (fd.blob) referenced.add(basename(fd.name) + ':' + fd.blob.size);
+    // what current layers already use: name:size (file identity) + the resolved
+    // path of each layer's handle (set at push time, so it holds even while a
+    // block model is still discovering and its blob isn't populated yet)
+    const referenced = new Set(), refPaths = new Set();
+    for (const L of _layers) {
+      for (const fd of layerFiles(L)) if (fd.blob) referenced.add(basename(fd.name) + ':' + fd.blob.size);
+      if (L.handle && dir.resolve) { try { const pp = await dir.resolve(L.handle); if (pp) refPaths.add(pp.join('/')); } catch { /* not a descendant */ } }
+    }
     const found = [];
     const walk = async (d, prefix) => {
       for await (const [name, h] of d.entries()) {
@@ -5925,7 +5936,7 @@ async function scanFolderForNewData() {
     // loose data files not referenced by a layer and not part of a descriptor
     const looseFiles = [];
     for (const e of found) {
-      if (!isData(e.name) || isSidecar(e.name) || claimed.has(e.path)) continue;
+      if (!isData(e.name) || isSidecar(e.name) || claimed.has(e.path) || refPaths.has(e.path)) continue;
       const file = await e.handle.getFile();
       if (referenced.has(basename(e.name) + ':' + file.size)) continue;
       _fileHandles.set(file, e.handle);                       // so opened layers ride the folder handle (no re-copy)
@@ -5936,11 +5947,13 @@ async function scanFolderForNewData() {
       try {
         const collar = await (await resolveFileHandle(dir, joinPath(s.setDir, s.desc.collar))).getFile();
         const survey = await (await resolveFileHandle(dir, joinPath(s.setDir, s.desc.survey))).getFile();
+        const ids = [];
         for (const iv of s.ivs) {                            // one dh layer per interval table, sharing the set
           const intervals = await (await resolveFileHandle(dir, joinPath(s.setDir, iv))).getFile();
           await openDrillholeLayer({ collar, survey, intervals }, s.desc.config || {}, _layers.length ? 'add' : 'replace');
-          const L = activeLayer(); if (L) { L.storage = 'project'; L._setPath = s.e.path; L._setKey = s.e.path; L._intervalName = iv; }
+          const L = activeLayer(); if (L) { L.storage = 'project'; L._setPath = s.e.path; L._setKey = s.e.path; L._intervalName = iv; ids.push(L.id); }
         }
+        if (ids.length >= 2) createLayerGroup(dhGroupName(s.desc.collar), ids, { collapsed: false });
       } catch (err) { $('#meta').textContent = `scan: “${s.e.name}” — ${err.message}`; }
     }
     if (looseFiles.length) await openFilesDialog(looseFiles);   // the dialog is the confirmation for loose files
