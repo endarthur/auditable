@@ -4565,24 +4565,24 @@ $('#ofCancel').onclick = () => { $('#ofDlg').classList.remove('show'); _ofDlg = 
 // drillholes…, or offered when a dropped batch sniffs as a trio ──
 let _dhDlg = null;
 function openDhDialog(trio) {
-  _dhDlg = { slots: {}, method: 'minimumCurvature', dip: 'auto' };
-  if (trio) for (const role of ['collar', 'survey', 'intervals']) _dhDlg.slots[role] = trio[role];
+  _dhDlg = { collar: (trio && trio.collar) || null, survey: (trio && trio.survey) || null, intervals: trio && trio.intervals ? [trio.intervals] : [], method: 'minimumCurvature', dip: 'auto' };
   renderDhDialog();
   $('#dhDlg').classList.add('show');
 }
-async function dhPickSlot(role) {
+async function dhPickFile(defaultRole) {
   try {
     let file;
     if (window.showOpenFilePicker) { const [h] = await window.showOpenFilePicker(); file = await h.getFile(); _fileHandles.set(file, h); }
     else { file = await new Promise((res) => { const i = document.createElement('input'); i.type = 'file'; i.onchange = () => res(i.files[0]); i.click(); }); }
-    if (!file) return;
+    if (!file) return null;
     const sniff = sniffDelimitedSafe(await file.slice(0, 64 * 1024).text());
     const columns = sniff && sniff.header ? sniff.header.map((c) => String(c).trim()) : [];
     const cls = classifyDrillholeHeader(columns);
-    _dhDlg.slots[role] = { blob: file, name: file.name, columns, mapping: cls && cls.role === role ? { ...cls.mapping } : {} };
-    renderDhDialog();
-  } catch { /* cancelled */ }
+    return { blob: file, name: file.name, columns, mapping: cls && cls.role === defaultRole ? { ...cls.mapping } : {} };
+  } catch { return null; }
 }
+async function dhPickSlot(role) { const s = await dhPickFile(role); if (s) { _dhDlg[role] = s; renderDhDialog(); } }
+async function dhPickInterval(idx) { const s = await dhPickFile('intervals'); if (s) { _dhDlg.intervals[idx] = s; renderDhDialog(); } }
 function sniffDelimitedSafe(text) { try { return sniffDelimited(text); } catch { return null; } }
 const DH_FIELDS = {
   collar: [['bhid', 'hole id'], ['x', 'X'], ['y', 'Y'], ['z', 'Z'], ['eoh', 'EOH (optional)']],
@@ -4601,20 +4601,20 @@ function renderDhDialog() {
     sel.onchange = onchange;
     return sel;
   };
-  for (const role of ['collar', 'survey', 'intervals']) {
-    const slot = _dhDlg.slots[role];
+  const slotRow = (labelText, slot, fieldRole, onPick, onRemove) => {
     const row = document.createElement('div'); row.className = 'dh-row';
     const head = document.createElement('div'); head.className = 'dh-head';
-    const lab = document.createElement('b'); lab.textContent = role;
+    const lab = document.createElement('b'); lab.textContent = labelText;
     const fname = document.createElement('span'); fname.className = 'dh-file';
     fname.textContent = slot ? slot.name : '— no file —';
     const pick = document.createElement('button'); pick.textContent = slot ? 'change…' : 'pick…';
-    pick.onclick = () => dhPickSlot(role);
+    pick.onclick = onPick;
     head.append(lab, fname, pick);
+    if (onRemove) { const rm = document.createElement('button'); rm.textContent = '×'; rm.title = 'remove this interval table'; rm.onclick = onRemove; head.appendChild(rm); }
     row.appendChild(head);
     if (slot && slot.columns.length) {
       const maps = document.createElement('div'); maps.className = 'dh-maps';
-      for (const [key, label] of DH_FIELDS[role]) {
+      for (const [key, label] of DH_FIELDS[fieldRole]) {
         if (slot.mapping[key] == null && key !== 'eoh') slot.mapping[key] = 0;   // what the select shows IS the mapping
         const wrap = document.createElement('label');
         wrap.append(label + ' ');
@@ -4624,7 +4624,21 @@ function renderDhDialog() {
       row.appendChild(maps);
     }
     body.appendChild(row);
-  }
+  };
+  slotRow('collar', _dhDlg.collar, 'collar', () => dhPickSlot('collar'));
+  slotRow('survey', _dhDlg.survey, 'survey', () => dhPickSlot('survey'));
+  const ivs = _dhDlg.intervals.length ? _dhDlg.intervals : [null];   // always show at least one interval slot
+  ivs.forEach((slot, idx) => {
+    slotRow(ivs.length > 1 ? `intervals ${idx + 1}` : 'intervals', slot, 'intervals',
+      () => dhPickInterval(idx),
+      idx > 0 ? () => { _dhDlg.intervals.splice(idx, 1); renderDhDialog(); } : null);
+  });
+  const addRow = document.createElement('div'); addRow.className = 'dh-row';
+  const addBtn = document.createElement('button'); addBtn.textContent = '+ add interval table';
+  addBtn.title = 'log more than one interval table (assay, geology, geotech…) against the same holes';
+  addBtn.onclick = () => dhPickInterval(_dhDlg.intervals.length);
+  addRow.appendChild(addBtn);
+  body.appendChild(addRow);
   const cfg = document.createElement('div'); cfg.className = 'dh-maps';
   const mW = document.createElement('label'); mW.append('desurvey ');
   const mSel = document.createElement('select');
@@ -4644,20 +4658,26 @@ function renderDhDialog() {
   body.appendChild(cfg);
 }
 $('#dhImport').onclick = async () => {
-  const sl = _dhDlg && _dhDlg.slots;
-  if (!sl || !sl.collar || !sl.survey || !sl.intervals) { $('#dhDlgMsg').textContent = 'all three tables are needed'; return; }
+  const d = _dhDlg;
+  const intervals = (d && d.intervals || []).filter(Boolean);
+  if (!d || !d.collar || !d.survey || !intervals.length) { $('#dhDlgMsg').textContent = 'need collar, survey, and at least one interval table'; return; }
   $('#dhDlg').classList.remove('show');
-  const mappings = {};
-  for (const role of ['collar', 'survey', 'intervals']) {
-    if (sl[role].mapping && sl[role].mapping.bhid != null) mappings[role] = { ...sl[role].mapping };
+  const roleMap = (slot) => (slot.mapping && slot.mapping.bhid != null ? { ...slot.mapping } : null);
+  const collarMap = roleMap(d.collar), surveyMap = roleMap(d.survey);
+  // one dh layer per interval table, all sharing collar + survey (a set)
+  const key = 'dhset:' + (++_dhSetSeq);
+  const ids = [];
+  let first = !_layers.length;
+  for (const iv of intervals) {
+    const mappings = {};
+    if (collarMap) mappings.collar = collarMap;
+    if (surveyMap) mappings.survey = surveyMap;
+    const ivm = roleMap(iv); if (ivm) mappings.intervals = ivm;
+    await openDrillholeLayer({ collar: d.collar.blob, survey: d.survey.blob, intervals: iv.blob }, { mappings, method: d.method, dipConvention: d.dip }, first ? 'replace' : 'add');
+    const L = activeLayer(); if (L) { L._setKey = key; L._intervalName = iv.name; ids.push(L.id); }
+    first = false;
   }
-  await openDrillholeLayer(
-    { collar: sl.collar.blob, survey: sl.survey.blob, intervals: sl.intervals.blob },
-    {
-      mappings,                                             // per-role; the provider sniffs any missing role
-      method: _dhDlg.method, dipConvention: _dhDlg.dip,     // presentation (color/category) is post-load — the toolbar owns it
-    },
-    _layers.length ? 'add' : 'replace');
+  if (ids.length >= 2) createLayerGroup(dhGroupName(basename(d.collar.name)), ids, { collapsed: false, dhSet: true });
 };
 $('#dhCancel').onclick = () => $('#dhDlg').classList.remove('show');
 
@@ -9890,7 +9910,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
