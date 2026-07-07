@@ -107,6 +107,31 @@ a browser already is):
 - Signing (reuse auditable's Ed25519 `sign.js`?), Zenodo DOI automation, the
   PR-to-`gentropic/security` Action (v1 = manual copy from `dist/seal/`).
 - Browser/`@gcu/vfs` path (Web Crypto) for in-shell provisioning verification.
+- **A FOURTH profile — networkless + WASM-allowed (planned, Arthur 2026-07-07).**
+  "Sealed" bundles TWO separable guarantees: *networkless* (`connect-src 'none'` —
+  the enterprise "data never leaves" claim) and *auditable/clear-runtime* (WASM-free
+  → a reviewer can read every line). WASM is orthogonal to the network seal — a WASM
+  decoder can't open a socket CSP forbids — so a build can keep the network guarantee
+  while allowing WASM, trading only *source auditability* (readable JS → a pinned,
+  hash-attested binary of a named OSS lib) for *speed*. The profile table has an
+  EMPTY cell for it: `network: none · codegen: forbidden · wasm: declared ·
+  remoteImport: forbidden` (Sealed but wasm-allowed; Connected already allows wasm
+  but ALSO allows network, so it doesn't cover this). **Why:** native SIMD Parquet
+  decode (the "compression can beat uncompressed / beat memcpy" win — lightweight
+  dict/RLE/bit-pack encodings decoded vectorized, cache-resident; pure-JS hyparquet
+  can't), WASM codecs (lamina could read `.xz` again — the decoder it had to DROP to
+  stay Sealed), and atra/wgpu compute kernels for heavy ops. seal already treats
+  `wasm` as a *declared* capability (it caught lamina's `wasm:false`-while-bundling-
+  WASM-xz mis-declaration), so this edition just declares `wasm:true` and seal
+  attests it HONESTLY instead of forgoing the perf. **Name TBD** (Weir-desk doctrine
+  — "Sealed"/"Connected"/"Full"; this one wants a name for networkless-native — e.g.
+  "Forged" / "Cast" / "Foundry", Arthur's call). **Sequence it AFTER the no-WASM
+  win:** uncompressed-Parquet-with-dict/RLE encoding (`codec:'UNCOMPRESSED'`) gets
+  much of the in-memory decode speedup while keeping the PURE Sealed build intact
+  (columnar + column-prune + row-group-skip at near-raw decode, no block-decompress)
+  — try that first; the WASM profile is the escape hatch for when a tool is genuinely
+  ceiling-bound on the largest files. Consumers would be micro + lamina (Sealed
+  today). See the format benchmark discussion + [[project_seal_planned]].
 
 ## Versioning
 
