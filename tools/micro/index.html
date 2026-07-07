@@ -3640,7 +3640,16 @@ function mkLineage(op, params, sources) { return { op, at: Date.now(), build: __
 function openLineage(name, blob) { return { op: 'open', at: Date.now(), build: __MICRO_BUILD__, params: {}, origin: { file: name, bytes: (blob && blob.size) || 0 }, sources: [] }; }
 async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   if (mode !== 'add') closeAllLayers();
-  const isMesh = /\.(msh|obj|lfm)$/i.test(name) || (/\.ply$/i.test(name) && !over.forcePoints && await plyHasFaces(blob));
+  // interpretation: honor an explicit asKind override ('points' | 'blocks' |
+  // 'mesh'), else sniff by extension/content. grid-from-table isn't a provider
+  // yet, so 'grid' stays extension-driven (tif/grd/asc).
+  let forcePoints = over.forcePoints;
+  if (over.asKind === 'points') forcePoints = true;
+  else if (over.asKind === 'blocks') forcePoints = false;
+  else if (over.asKind == null && /\.(xyz|pts)$/i.test(name)) forcePoints = true;   // point dumps default to points
+  const isMesh = over.asKind === 'mesh'
+    ? /\.(msh|obj|lfm|ply)$/i.test(name)
+    : (over.asKind == null && (/\.(msh|obj|lfm)$/i.test(name) || (/\.ply$/i.test(name) && !forcePoints && await plyHasFaces(blob))));
   const lid = allocLayerId(isMesh ? 'mesh' : 'element');
   if (lid == null) { $('#meta').textContent = isMesh ? 'mesh layer limit reached — remove one first' : 'layer limit reached (7 element layers) — remove one first'; return; }
   const first = _layers.length === 0;
@@ -3650,16 +3659,15 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   $('#meta').textContent = `${name} — reading…`;
   $('#empty').style.display = 'none';
   try {
-    if (/\.(msh|obj|lfm)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
-    else if (/\.ply$/i.test(name) && isMesh) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
+    if (isMesh && /\.(msh|obj|lfm|ply)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
     else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
-    // .xyz/.pts are POINT dumps: 2-decimal survey coords form a fake fine lattice,
-    // so grid inference must not promote them to boxes.
-    else if (/\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache }); }
-    else if (/\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first }); }
-    else if (/\.(xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { forcePoints: true, layer: lid, first, mapping: over.mapping, discovered: over.discovered }); }
-    else if (/\.(parquet|pq)$/i.test(name)) { await openParquetBlocks(blob, name, { layer: lid, first, forcePoints: over.forcePoints, mapping: over.mapping }); }
-    else if (/\.(csv|txt|dat|asc)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints: over.forcePoints, mapping: over.mapping, discovered: over.discovered }); }
+    // grid stays extension-driven (no table→grid provider yet); asKind never forces it.
+    else if (over.asKind == null && /\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache }); }
+    else if (over.asKind == null && /\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first }); }
+    else if (/\.(parquet|pq)$/i.test(name)) { await openParquetBlocks(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping }); }
+    // .xyz/.pts default to POINTS (2-decimal coords form a fake lattice); a
+    // block/points asKind override rides forcePoints for every delimited file.
+    else if (/\.(csv|txt|dat|asc|xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping, discovered: over.discovered }); }
     else if (/\.ply$/i.test(name)) { await openPlyBlob(blob, name, { layer: lid, first }); }
     else {
       const { header, streamChunks } = await openLas(blob);
@@ -7230,6 +7238,7 @@ function layerMenu(L, x, y) {
     ] : []),
     { label: 'Zoom to layer', action: () => fitLayer(L) },
     { label: 'Rename layer…', action: async () => { const v = await microPrompt('layer name', L.label || L.name); if (v && v.trim()) { L.label = v.trim(); renderLayers(); markProjectDirty(); } } },
+    ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
     { label: 'Move up', action: () => treeMoveStep(L.id, -1) },
     { label: 'Move down', action: () => treeMoveStep(L.id, 1) },
     { label: 'Move to group…', action: () => setTimeout(() => moveLayerToGroupMenu(L, x, y), 0) },
@@ -8833,6 +8842,29 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
   markProjectDirty();
   if (_propOpen) { _propFor = null; renderProps(); }
 }
+// reinterpret a loaded layer as a different kind (block model ↔ points, ply
+// points ↔ mesh) — re-open its source blob through openBlob with an asKind
+// override. Grid-from-table isn't a provider yet, so it's not offered.
+function reinterpretOptions(L) {
+  if (!L || L.dh) return [];
+  const d = L.docs || {};
+  if (d.blockDoc && !d.blockDoc.header.dm) return d.blockDoc.forcePoints ? [{ kind: 'blocks', label: 'block model' }] : [{ kind: 'points', label: 'points' }];
+  if (d.plyDoc) return [{ kind: 'mesh', label: 'mesh' }];
+  if (d.meshDoc && /\.ply$/i.test(L.name)) return [{ kind: 'points', label: 'points' }];
+  return [];
+}
+async function reopenAs(L, kind) {
+  const blob = layerBlob(L); if (!blob) { $('#meta').textContent = 'reinterpret: no source for this layer'; return; }
+  const name = L.name, keepLabel = L.label, keepHandle = L.handle, keepStorage = L.storage;
+  renderer.removeLayer(L.id);
+  _layers = _layers.filter((l) => l.id !== L.id);
+  if (keepHandle && typeof File !== 'undefined' && blob instanceof File) _fileHandles.set(blob, keepHandle);
+  await openBlob(blob, name, 'add', null, { asKind: kind });
+  const L2 = activeLayer();
+  if (L2) { if (keepLabel) L2.label = keepLabel; if (keepHandle) L2.handle = keepHandle; L2.storage = keepStorage; }
+  renderLayers(); markProjectDirty();
+}
+function reinterpretMenu(L, x, y) { menuXY(x, y, reinterpretOptions(L).map((o) => ({ label: `→ ${o.label}`, action: () => reopenAs(L, o.kind) }))); }
 // re-key the class column: the same re-open machinery as re-channeling
 async function useAsCategory(L, i) {
   if (L.dh && L.docs.dhDoc) return reopenDh(L, { cat: i }, { clearCats: true });
@@ -9653,7 +9685,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
