@@ -5638,6 +5638,7 @@ async function openProjectDir(dir) {
         const Ld = activeLayer();
         if (Ld) {
           Ld.storage = 'project';
+          if (ls.dh.set) Ld._setPath = ls.dh.set;            // so a folder rescan doesn't re-offer this set
           if (ls.label) Ld.label = ls.label;
           if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
           if (ls.visible === false) { Ld.visible = false; renderer.setLayerVisible(Ld.id, false); }
@@ -5791,6 +5792,67 @@ async function tidyProject() {
     await saveProject();                                            // rewrites project.json + writes descriptors at the new paths
     $('#meta').textContent = moved ? `project tidied — ${moved} file${moved === 1 ? '' : 's'} moved into kind folders` : 'project already tidy';
   } catch (e) { $('#meta').textContent = `tidy failed — ${e.message}`; }
+}
+// Folder-as-inbox: rescan the project folder for data files dropped in by hand
+// or by another tool, and add the ones not already loaded. A .holes.json is a
+// complete drillhole set (loaded directly); other data files go through the
+// normal open dialog (header detection + mapping + loose-trio sniff). The
+// containing kind folder is the intended type hint; open-dispatch is by content.
+async function scanFolderForNewData() {
+  if (!_project) { $('#meta').textContent = 'scan: open or save a project first'; return; }
+  const dir = _project.dir;
+  try {
+    if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'scan: permission denied'; return; }
+    // what current layers already use (name:size — micro's file identity)
+    const referenced = new Set();
+    for (const L of _layers) for (const fd of layerFiles(L)) if (fd.blob) referenced.add(basename(fd.name) + ':' + fd.blob.size);
+    const found = [];
+    const walk = async (d, prefix) => {
+      for await (const [name, h] of d.entries()) {
+        const p = prefix ? prefix + '/' + name : name;
+        if (h.kind === 'directory') await walk(h, p);
+        else found.push({ path: p, name, handle: h });
+      }
+    };
+    await walk(dir, '');
+    const isSidecar = (n) => n === 'project.json' || /(\.meta\.json|\.disp\.grd|\.disp\.json)$/i.test(n);
+    const isData = (n) => /\.(las|ply|xyz|pts|csv|txt|dat|parquet|pq|dm|obj|msh|lfm|tif|tiff|grd|asc)$/i.test(n);
+    // new drillhole-set descriptors (claim their member CSVs so they don't also
+    // show up as loose files)
+    const claimed = new Set();
+    const newSets = [];
+    for (const e of found) {
+      if (!/\.holes\.json$/i.test(e.name)) continue;
+      let desc; try { desc = JSON.parse(await (await e.handle.getFile()).text()); } catch { continue; }
+      if (!desc || desc.kind !== 'drillholes') continue;
+      const setDir = e.path.split('/').slice(0, -1).join('/');
+      for (const role of ['collar', 'survey', 'intervals']) claimed.add(joinPath(setDir, desc[role]));
+      if (_layers.some((L) => L.dh && L._setPath === e.path)) continue;   // already loaded
+      newSets.push({ e, desc, setDir });
+    }
+    // loose data files not referenced by a layer and not part of a descriptor
+    const looseFiles = [];
+    for (const e of found) {
+      if (!isData(e.name) || isSidecar(e.name) || claimed.has(e.path)) continue;
+      const file = await e.handle.getFile();
+      if (referenced.has(basename(e.name) + ':' + file.size)) continue;
+      _fileHandles.set(file, e.handle);                       // so opened layers ride the folder handle (no re-copy)
+      looseFiles.push(file);
+    }
+    // load complete drillhole sets directly (no decisions needed)
+    for (const s of newSets) {
+      try {
+        const files = {};
+        for (const role of ['collar', 'survey', 'intervals']) files[role] = await (await resolveFileHandle(dir, joinPath(s.setDir, s.desc[role]))).getFile();
+        await openDrillholeLayer(files, s.desc.config || {}, _layers.length ? 'add' : 'replace');
+        const L = activeLayer(); if (L) { L.storage = 'project'; L._setPath = s.e.path; }
+      } catch (err) { $('#meta').textContent = `scan: “${s.e.name}” — ${err.message}`; }
+    }
+    if (looseFiles.length) await openFilesDialog(looseFiles);   // the dialog is the confirmation for loose files
+    const total = newSets.length + looseFiles.length;
+    if (!total) $('#meta').textContent = 'scan: no new data files in the folder';
+    else { markProjectDirty(); if (!looseFiles.length) $('#meta').textContent = `scan: added ${newSets.length} drillhole set${newSets.length === 1 ? '' : 's'}`; }
+  } catch (e) { $('#meta').textContent = `scan failed — ${e.message}`; }
 }
 // File → New project: back to the empty slate. Confirmed — it closes every
 // layer and drops the project link; nothing on disk is touched.
@@ -6005,6 +6067,7 @@ $('#mFile').onclick = () => {
       { label: 'Open project folder…', action: openProjectPicker },
       { label: _project ? `Save project${_project.dirty ? ' •' : ''}` : 'Save project', kbd: 'Ctrl+S', action: saveProject },
       { label: 'Save project as…', action: saveProjectAs },
+      { label: 'Scan folder for new data…', action: scanFolderForNewData },
       { label: 'Tidy project folder…', action: tidyProject });
     if (_project) items.push({ label: `Close project (${_project.name})`, action: closeProject });
   }
@@ -6736,6 +6799,7 @@ const COMMANDS = [
   { id: 'newproj', group: 'File', title: 'New project (clear)', kw: 'reset slate', run: () => newProject() },
   { id: 'save', group: 'File', title: 'Save project', kw: 'store', when: () => hasFSAA, run: () => saveProject() },
   { id: 'tidy', group: 'File', title: 'Tidy project folder', kw: 'organize subfolders kind reorganize move drillholes models clouds meshes grids', when: () => hasFSAA && !!_project, run: () => tidyProject() },
+  { id: 'scan', group: 'File', title: 'Scan folder for new data', kw: 'import inbox dropped rescan pick up new files refresh', when: () => hasFSAA && !!_project, run: () => scanFolderForNewData() },
   { id: 'png', group: 'File', title: 'Save viewport PNG', kw: 'screenshot image capture', run: () => $('#btnShot').click() },
   { id: 'figure', group: 'File', title: 'Export figure (PNG)…', kw: 'decorations scale bar north legend title report', run: () => exportFigure() },
   { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
@@ -9589,7 +9653,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
