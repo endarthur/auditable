@@ -109,7 +109,19 @@ export async function readParquetRow(input, index) {
 // write columnar data → parquet bytes. columnData: [{ name, data:Array, type? }].
 // rowGroupSize defaults to 1<<16 (micro's spatial-index granularity).
 export function writeParquet({ columnData, rowGroupSize = 65536, codec = 'SNAPPY', kvMetadata } = {}) {
-  return parquetWriteBuffer({ columnData, rowGroupSize, codec, compressors: writeCompressors, statistics: true, kvMetadata });
+  // hyparquet-writer fixes a column's physical type from the FIRST row group.
+  // A numeric column that happens to be all whole numbers there commits to INT,
+  // then throws on a later fractional value ("expected integer value, got 8.15")
+  // — e.g. a grade column that's 0 across an early band of waste blocks. Guard:
+  // pre-scan the WHOLE column (not just row group 1); any finite non-integer
+  // number in an untyped column → declare DOUBLE up front.
+  const cd = columnData.map((c) => {
+    if (c.type) return c;
+    const d = c.data;
+    for (let i = 0; i < d.length; i++) { const v = d[i]; if (typeof v === 'number' && Number.isFinite(v) && !Number.isInteger(v)) return { ...c, type: 'DOUBLE' }; }
+    return c;
+  });
+  return parquetWriteBuffer({ columnData: cd, rowGroupSize, codec, compressors: writeCompressors, statistics: true, kvMetadata });
 }
 
 // hyparquet wants an AsyncBuffer ({ byteLength, slice }); a raw ArrayBuffer /

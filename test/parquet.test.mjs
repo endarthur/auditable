@@ -31,6 +31,26 @@ test('snappy round-trip (default codec) — columns + values', async () => {
   assert.equal(rows[1].LITO, 'ITABIRITE');
 });
 
+test('int-then-float column across row groups → DOUBLE, no type-lock throw (regr)', async () => {
+  // hyparquet-writer fixes a column's physical type from the FIRST row group;
+  // a grade that's all whole numbers there (an early band of waste) then
+  // fractional later used to throw "expected integer value, got 8.15".
+  // writeParquet pre-scans the whole column → declares DOUBLE up front.
+  const M = 70000;
+  const grade = [];
+  for (let i = 0; i < M; i++) grade.push(0);   // whole numbers fill row group 1
+  grade.push(8.15);                            // fractional grade in a later row group
+  const buf = writeParquet({ columnData: [{ name: 'FE', data: grade }], rowGroupSize: 1 << 16 });
+  const rows = await readParquet(buf);
+  assert.equal(rows.length, M + 1);
+  assert.equal(rows[M].FE, 8.15);
+  // an all-integer column is NOT forced wide — stays integer-typed
+  const ints = []; for (let i = 0; i < 2000; i++) ints.push(i);
+  const b2 = writeParquet({ columnData: [{ name: 'idx', data: ints }], rowGroupSize: 1024 });
+  const r2 = await readParquet(b2);
+  assert.equal(r2[1999].idx, 1999);
+});
+
 test('parquetInfo: discovery from the footer, no data decode', () => {
   const buf = writeParquet({ columnData, rowGroupSize: 1024 });
   const info = parquetInfo(buf);
