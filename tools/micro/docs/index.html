@@ -122,6 +122,13 @@
 <h2 id="start"><span class="n">2</span>Getting started</h2>
 <h3>Opening data</h3>
 <p>Drag a file (or several) anywhere onto the window, or use <b>File → Open…</b>. Several files at once become separate <b>layers</b>. No data handy? <b>File → Sample bench scan</b> or <b>Sample block model</b> generate a dataset locally.</p>
+<h3>Sub-blocked models</h3>
+<p>micro reads <b>sub-blocked</b> (octree) block models — where cells are refined into smaller boxes near a boundary or a high-grade zone — and renders <b>each block at its true size</b>, straight from the file. CSV/Parquet models with per-block <code>dX/dY/dZ</code> columns and Datamine <code>.dm</code> models with per-record <code>XINC/YINC/ZINC</code> are detected automatically; the model streams, picks, filters, and colours like any other. Join and reconcile handle them by <b>volume</b> — see <a href="#join">Join &amp; reconcile</a>.</p>
+<figure>
+  <img src="shots/subblocks.png" alt="A sub-blocked block model: coarse parent boxes away from the shoot, refined into small boxes through the high-grade core.">
+  <figcaption>A sub-blocked (octree) model — coarse parent blocks away from the shoot, refined into progressively smaller boxes through the high-grade core, each drawn at its own size.</figcaption>
+</figure>
+<p class="note"><b>Note —</b> Detection assumes an <b>axis-aligned</b> model with power-of-two (octree) refinement — the standard export. A <b>rotated</b> model currently opens as its centroids (points); interpreting a rotated model as boxes (enter or measure its azimuth) is on the roadmap.</p>
 <h3>The layers panel</h3>
 <p><span class="kbd">p</span> toggles the layers panel. Each opened dataset is a layer with its own colour, filter, and visibility; right-click a layer for its actions (zoom, info, attribute table, filter, analysis tools, remove). Layers can be grouped and reordered. <span class="kbd">,</span> / <span class="kbd">.</span> step the active layer.</p>
 <h3>Getting around</h3>
@@ -147,6 +154,7 @@
 <h2 id="join"><span class="n">5</span>Join &amp; reconcile</h2>
 <p>Two model versions? The <b>join tab</b> (Properties → <b>join</b>) compares them. A <b>spatial join</b> resamples a <i>compatible</i> model onto a target grid — a banner tells you whether the grids share a lattice (clean replicate / aggregate) or why they can't. A <b>key join</b> matches rows by a key column (e.g. a block ID, or a domain→density lookup).</p>
 <p><b>Reconcile</b> is the preset: it produces a coloured <b>Δ map</b> (this model − reference) on a common lattice, with a diverging ramp centred on zero — blue where the new estimate is lower, red where it's higher, neutral where they agree. The summary reads <b>matched · mean Δ · mean|Δ| · added · removed</b>.</p>
+<p><b>Sub-blocked models</b> reconcile by <b>volume</b>: each variable-size block is aggregated onto the reference (parent) grid weighted by the space it fills — a big parent and its small sub-blocks each contribute in proportion — so a sub-blocked estimate compares cleanly against a regular one at the parent resolution.</p>
 <figure>
   <img src="shots/reconcile.png" alt="A reconciliation Δ map in plan view: blue in the north, red in the south.">
   <figcaption>Reconciling two model versions. Global mean Δ is ≈ 0, but the Δ map exposes a clear <b>conditional bias</b> — the new estimate runs low in the north (blue) and high in the south (red). A global check would have missed it entirely.</figcaption>

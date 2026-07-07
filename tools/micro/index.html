@@ -6407,7 +6407,7 @@ matching elements isolate — everything else drops out of the render<br><br>
 <b>min/max</b> boxes clip the color scale (outliers stop eating the ramp; empty = auto) · View menu: <b>boxes</b> = true block faces · <b>points</b> = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
 const HELP_ABOUT = `
 <b>micro</b> — a streaming workbench for massive spatial-element files: LiDAR point clouds
-(.las, .ply, .xyz), block models (.csv, .dm, .parquet), grids, and drillholes. No import step —
+(.las, .ply, .xyz), block models (.csv, .dm, .parquet — regular or variable-size sub-blocked), grids, and drillholes. No import step —
 first look in about a second at any size, densifying while you orbit. Beyond viewing:
 filter · section · domain by solid · join &amp; reconcile models · grade-tonnage · swath ·
 validate against drillholes · figure export — all against the source file, all with a
@@ -6439,6 +6439,7 @@ Everything here is on a block model's <b>right-click menu</b> and in the <b>comm
 <b>grade-tonnage</b> — a draggable plot of <b>tonnage</b> + <b>mean grade</b> above cutoff; tonnage-weighted when you pick a density column (else block count). Pick 1–4 grade columns; a reconcile layer auto-overlays reference vs new<br>
 <b>swath (drift)</b> — mean grade per slab along a <b>direction</b>: the grid <b>axes</b> X/Y/Z, an oriented trio from <b>dip-direction / dip / rake</b> (across · along-strike · down-dip), or a single <b>trend / plunge</b>. Band width + offset set the slabs; <b>zebra</b> paints the alternate bands onto the 3D so you see what the plot bins<br>
 <b>join &amp; reconcile</b> (Properties → <b>join</b> tab) — <b>spatial join</b> resamples a <i>compatible</i> model onto a target grid (a banner shows compatibility: clean replicate/aggregate, or the reason it can't); <b>key join</b> matches by a key column. <b>Reconcile</b> two model versions → a coloured <b>Δ map</b> (this − reference, diverging ramp about 0) on a common lattice, with <b>matched · mean Δ · added · removed</b> — the change-control record<br>
+<b>sub-blocked models</b> — variable-size (octree) block models open as their <b>true boxes</b>, each block at its own size. Join &amp; reconcile aggregate them to the reference grid by <b>volume</b> — a big parent and its small sub-blocks weighted by the space each fills — so a sub-blocked model compares cleanly against a regular one at the parent resolution<br>
 <b>validate vs drillholes</b> — is the model consistent with the samples? Declusters the drillhole grades (spatial sampling over-drills high grade), then reports the <b>global bias</b> (model mean vs declustered sample mean) and a <b>model-vs-sample swath</b>. (Point vs block support: a global offset can be real; the swaths flag <i>local</i> bias)<br>
 <b>common grid</b> (New… → <b>cover compatible models</b>) — an empty model on a lattice that covers <i>and</i> is compatible with several models at once — the natural reconcile target<br>
 <b>optimize to spatial Parquet</b> — reorders a model Morton-sorted (a footer spatial index; queries skip whole row-groups). Runs automatically when you save a project — Parquet is the project store<br>

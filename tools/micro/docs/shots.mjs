@@ -45,6 +45,30 @@ function genDeposit() {
 }
 const D = genDeposit();
 
+// an octree sub-blocked model: 20 m parents, refined to 10 m then 5 m where the
+// high-grade shoot passes through → variable-size boxes (the sub-block feature)
+function genSubblocks() {
+  const r = rng(11);
+  const P = 20, nx = 12, ny = 12, nz = 4, o = 10;
+  const cx = 6 * P, cy = 5 * P;
+  const gradeAt = (x, y, z) => {
+    const dz = (nz * P - z) / P;
+    const d2 = ((x - cx - dz * 12) ** 2 + (y - cy - dz * 9) ** 2) / 4200;
+    return Math.max(4, 12 + 52 * Math.exp(-d2));             // ~12 in the margins → ~64 in the core
+  };
+  let csv = 'X,Y,Z,dX,dY,dZ,FE\n';
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const px = o + i * P, py = o + j * P, pz = o + k * P, g = gradeAt(px, py, pz);
+    const s = g > 46 ? 5 : g > 24 ? 10 : 20;                  // octree refine toward the shoot: 20 → 10 → 5 m
+    const n = P / s, cnr = [px - P / 2, py - P / 2, pz - P / 2];
+    for (let c = 0; c < n; c++) for (let b = 0; b < n; b++) for (let a = 0; a < n; a++) {
+      const x = cnr[0] + (a + 0.5) * s, y = cnr[1] + (b + 0.5) * s, z = cnr[2] + (c + 0.5) * s;
+      csv += `${x},${y},${z},${s},${s},${s},${(gradeAt(x, y, z) + (r() - 0.5) * 2).toFixed(2)}\n`;
+    }
+  }
+  return csv;
+}
+
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json' };
 const server = http.createServer(async (req, res) => {
   try { const path = decodeURIComponent(new URL(req.url, 'http://x').pathname); const data = await readFile('.' + path); res.writeHead(200, { 'content-type': MIME[extname(path)] || 'application/octet-stream' }); res.end(data); }
@@ -65,6 +89,12 @@ const settle = (ms = 1400) => p.waitForTimeout(ms);
 const shot = async (name, opts = {}) => { await settle(opts.wait || 1200); await (opts.el ? p.locator(opts.el) : p).screenshot({ path: join(OUT, name + '.png') }); console.log('shot:', name); };
 const layerReady = (nm) => p.waitForFunction((n) => { const L = window._micro.layers().find((x) => x.name === n); return L && window._micro.renderer.layerElementCount(L.id) > 0; }, nm, { timeout: 60000 });
 const openModel = (csv, name, mode = 'replace') => p.evaluate(([c, n, m]) => window._micro.openBlob(new Blob([c]), n, m), [csv, name, mode]);
+
+// 0 ── sub-blocked model: octree boxes at their true sizes, coloured by grade
+await openModel(genSubblocks(), 'subblocks.csv', 'replace');
+await layerReady('subblocks.csv');
+await p.evaluate(() => { const cb = document.querySelector('#colorBy'); const o = [...cb.options].find((x) => /FE/.test(x.textContent) && x.value.startsWith('chan:')); if (o) { cb.value = o.value; cb.dispatchEvent(new Event('change')); } window._micro.cam.fit(window._micro.docBbox()); window._micro.requestRender(); });
+await shot('subblocks', { wait: 2200 });
 
 // 1 ── overview: the reference model, coloured by grade
 await openModel(D.A, 'model_A.csv', 'replace');

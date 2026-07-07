@@ -202,3 +202,6 @@ micro.html
 moncad.html
 tools/micro/docs/shots/
 tools/micro/docs/micro-manual.pdf
+
+# real test datasets (not committed)
+testdata/
