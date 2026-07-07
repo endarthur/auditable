@@ -4370,6 +4370,20 @@ async function describeFile(f) {
       }
     }
   } catch (e) { d.desc = `unreadable — ${e.message}`; d.load = false; }
+  // valid "Open as" interpretations (grid-from-table isn't a provider yet, so
+  // delimited/parquet don't offer grid). Drillhole roles arrive in stage 2b.
+  d.interps = d.kind === 'ply' ? [['mesh', 'mesh'], ['points', 'points']]
+    : d.kind === 'mesh' ? [['mesh', 'mesh']]
+    : d.kind === 'grid' ? [['grid', 'grid']]
+    : d.kind === 'dm' ? [['blocks', 'block model']]
+    : d.kind === 'las' ? [['points', 'points']]
+    : (d.kind === 'blocks' || d.kind === 'delimited') ? [['blocks', 'block model'], ['points', 'points']]
+    : [['points', 'points']];
+  d.asKind = d.kind === 'ply' ? (d.plyFaces ? 'mesh' : 'points')
+    : d.kind === 'mesh' ? 'mesh' : d.kind === 'grid' ? 'grid' : d.kind === 'dm' ? 'blocks'
+    : d.kind === 'las' ? 'points'
+    : (d.kind === 'blocks' || d.kind === 'delimited') ? (d.forcePoints ? 'points' : 'blocks')
+    : 'points';
   return d;
 }
 async function openFilesDialog(files) {
@@ -4408,6 +4422,15 @@ function renderOfDialog() {
     desc.textContent = inDh ? `${r.dhRole} → drillholes` : r.desc;
     head.append(eye, nm, sz, desc);
     row.appendChild(head);
+    if (!inDh && r.interps && r.interps.length > 1) {
+      const asRow = document.createElement('div'); asRow.className = 'dh-maps';
+      const wrap = document.createElement('label'); wrap.append('Open as ');
+      const sel = document.createElement('select');
+      for (const [v, lbl] of r.interps) { const o = document.createElement('option'); o.value = v; o.textContent = lbl; sel.appendChild(o); }
+      sel.value = r.asKind;
+      sel.onchange = () => { r.asKind = sel.value; r.forcePoints = sel.value === 'points'; renderOfDialog(); };
+      wrap.appendChild(sel); asRow.appendChild(wrap); row.appendChild(asRow);
+    }
     if (!inDh && r.kind === 'delimited' && r.columns) {
       const maps = document.createElement('div'); maps.className = 'dh-maps';
       const mkSel = (key, label, allowNone) => {
@@ -4424,21 +4447,6 @@ function renderOfDialog() {
         return wrap;
       };
       maps.append(mkSel('x', 'X'), mkSel('y', 'Y'), mkSel('z', 'Z'));
-      const fp = document.createElement('label');
-      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!r.forcePoints;
-      cb.onchange = () => { r.forcePoints = cb.checked; };
-      fp.append(cb, ' load as points');
-      maps.appendChild(fp);
-      row.appendChild(maps);
-    }
-    if (!inDh && r.kind === 'ply' && r.plyFaces) {
-      // a mesh-bearing PLY can still open as a point cloud (vertices only)
-      const maps = document.createElement('div'); maps.className = 'dh-maps';
-      const fp = document.createElement('label');
-      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!r.forcePoints;
-      cb.onchange = () => { r.forcePoints = cb.checked; };
-      fp.append(cb, ' load as points (vertices only)');
-      maps.appendChild(fp);
       row.appendChild(maps);
     }
     { const st2 = mkSplitToggle(r); if (st2) { const w2 = document.createElement('div'); w2.className = 'dh-maps'; w2.appendChild(st2); row.appendChild(w2); } }
@@ -4476,7 +4484,7 @@ $('#ofOpen').onclick = async () => {
   for (const r of toLoad) {
     const over = {};
     if (r.mapping && r.kind === 'delimited') over.mapping = { x: r.mapping.x ?? 0, y: r.mapping.y ?? 1, z: r.mapping.z ?? 2, chan: r.mapping.chan ?? null, cat: r.mapping.cat ?? null };
-    if (r.forcePoints) over.forcePoints = true;
+    if (r.asKind) over.asKind = r.asKind;
     if (r.objGroups && r.objGroups.length > 1 && r.split !== false) {
       if (/\.lfm$/i.test(r.name)) await openLfmSplit(r.file, r.name, first ? 'replace' : 'add');
       else await openObjSplit(r.file, r.name, first ? 'replace' : 'add');
