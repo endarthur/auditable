@@ -4377,27 +4377,59 @@ async function describeFile(f) {
     : d.kind === 'grid' ? [['grid', 'grid']]
     : d.kind === 'dm' ? [['blocks', 'block model']]
     : d.kind === 'las' ? [['points', 'points']]
-    : (d.kind === 'blocks' || d.kind === 'delimited') ? [['blocks', 'block model'], ['points', 'points']]
+    : d.kind === 'blocks' ? [['blocks', 'block model'], ['points', 'points']]
+    : d.kind === 'delimited' ? [['blocks', 'block model'], ['points', 'points'], ['collar', 'DH collar'], ['survey', 'DH survey'], ['intervals', 'DH intervals']]
     : [['points', 'points']];
   d.asKind = d.kind === 'ply' ? (d.plyFaces ? 'mesh' : 'points')
     : d.kind === 'mesh' ? 'mesh' : d.kind === 'grid' ? 'grid' : d.kind === 'dm' ? 'blocks'
     : d.kind === 'las' ? 'points'
-    : (d.kind === 'blocks' || d.kind === 'delimited') ? (d.forcePoints ? 'points' : 'blocks')
+    : d.kind === 'delimited' ? (d.dhRole || (d.forcePoints ? 'points' : 'blocks'))
+    : d.kind === 'blocks' ? (d.forcePoints ? 'points' : 'blocks')
     : 'points';
   return d;
+}
+let _dhSetSeq = 0;
+// assemble drillhole sets from the open-dialog rows: group role-assigned files
+// by set index → { collar, survey, intervals[] }. Multi-interval + multi-set.
+function assembleDhSets(rows) {
+  const bySet = new Map();
+  for (const r of rows) {
+    if (!r.load || !['collar', 'survey', 'intervals'].includes(r.asKind)) continue;
+    const s = r.setIdx || 0;
+    if (!bySet.has(s)) bySet.set(s, { idx: s, collar: null, survey: null, intervals: [] });
+    const set = bySet.get(s);
+    if (r.asKind === 'intervals') set.intervals.push(r); else set[r.asKind] = r;
+  }
+  return [...bySet.values()].sort((a, b) => a.idx - b.idx);
+}
+const dhSetComplete = (s) => !!(s.collar && s.survey && s.intervals.length);
+// load a set as one dh layer per interval table, all sharing the same collar +
+// survey (a _setKey groups them → one .holes.json with intervals[] at save).
+// Column mappings are sniffed here and editable afterward in the source tab.
+async function loadDrillholeSet(set, cfg, replaceFirst) {
+  const key = 'dhset:' + (++_dhSetSeq);
+  let first = replaceFirst;
+  for (const iv of set.intervals) {
+    await openDrillholeLayer({ collar: set.collar.file, survey: set.survey.file, intervals: iv.file }, { method: cfg.method || 'minimumCurvature', dipConvention: cfg.dip || 'auto' }, first ? 'replace' : 'add');
+    const L = activeLayer();
+    if (L) { L._setKey = key; L._intervalName = iv.name; }
+    first = false;
+  }
 }
 async function openFilesDialog(files) {
   const rows = [];
   for (const f of files) rows.push(await describeFile(f));
-  const dh = await sniffDrillholeFiles(files);
-  _ofDlg = { rows, dh, dhOn: !!dh, mode: _layers.length ? 'add' : 'replace' };
+  _ofDlg = { rows, dhCfg: {}, mode: _layers.length ? 'add' : 'replace' };
   renderOfDialog();
   $('#ofDlg').classList.add('show');
 }
 function renderOfDialog() {
   const body = $('#ofDlgBody');
   body.textContent = '';
-  const dhBlobs = _ofDlg.dh && _ofDlg.dhOn ? new Set([_ofDlg.dh.collar.blob, _ofDlg.dh.survey.blob, _ofDlg.dh.intervals.blob]) : new Set();
+  const rows = _ofDlg.rows;
+  const isRole = (k) => k === 'collar' || k === 'survey' || k === 'intervals';
+  const collarCount = rows.filter((r) => r.load && r.asKind === 'collar').length;
+  const showSets = collarCount >= 2;                       // reveal set selectors only when 2+ collars
   const mkSplitToggle = (r) => {
     if (!r.objGroups || r.objGroups.length < 2) return null;
     const lab = document.createElement('label');
@@ -4407,41 +4439,49 @@ function renderOfDialog() {
     lab.title = r.objGroups.join(' · ');
     return lab;
   };
-  for (const r of _ofDlg.rows) {
-    const inDh = dhBlobs.has(r.file);
-    const row = document.createElement('div'); row.className = 'dh-row' + (inDh ? ' of-dh' : '');
+  for (const r of rows) {
+    const row = document.createElement('div'); row.className = 'dh-row' + (r.load && isRole(r.asKind) ? ' of-dh' : '');
     const head = document.createElement('div'); head.className = 'dh-head';
-    const eye = document.createElement('input'); eye.type = 'checkbox';
-    eye.checked = inDh ? true : r.load; eye.disabled = inDh;
-    eye.onchange = () => { r.load = eye.checked; };
+    const eye = document.createElement('input'); eye.type = 'checkbox'; eye.checked = r.load;
+    eye.onchange = () => { r.load = eye.checked; renderOfDialog(); };
     const nm = document.createElement('b'); nm.textContent = r.name; nm.style.width = 'auto'; nm.style.flex = '1';
     nm.style.overflow = 'hidden'; nm.style.textOverflow = 'ellipsis'; nm.style.whiteSpace = 'nowrap';
     const sz = document.createElement('span'); sz.className = 'dh-file'; sz.style.flex = '0 0 auto';
     sz.textContent = fmtSize(r.file.size);
     const desc = document.createElement('span'); desc.className = 'dh-file'; desc.style.flex = '0 1 auto';
-    desc.textContent = inDh ? `${r.dhRole} → drillholes` : r.desc;
+    desc.textContent = r.desc;
     head.append(eye, nm, sz, desc);
     row.appendChild(head);
-    if (!inDh && r.interps && r.interps.length > 1) {
+    if (r.load && r.interps && r.interps.length > 1) {
       const asRow = document.createElement('div'); asRow.className = 'dh-maps';
       const wrap = document.createElement('label'); wrap.append('Open as ');
       const sel = document.createElement('select');
       for (const [v, lbl] of r.interps) { const o = document.createElement('option'); o.value = v; o.textContent = lbl; sel.appendChild(o); }
       sel.value = r.asKind;
       sel.onchange = () => { r.asKind = sel.value; r.forcePoints = sel.value === 'points'; renderOfDialog(); };
-      wrap.appendChild(sel); asRow.appendChild(wrap); row.appendChild(asRow);
+      wrap.appendChild(sel); asRow.appendChild(wrap);
+      if (showSets && isRole(r.asKind)) {                  // which drillhole set this role belongs to
+        const setW = document.createElement('label'); setW.append(' set ');
+        const ss = document.createElement('select');
+        for (let i = 0; i < Math.max(collarCount, (r.setIdx || 0) + 1); i++) { const o = document.createElement('option'); o.value = String(i); o.textContent = String(i + 1); ss.appendChild(o); }
+        ss.value = String(r.setIdx || 0);
+        ss.onchange = () => { r.setIdx = +ss.value; renderOfDialog(); };
+        setW.appendChild(ss); asRow.appendChild(setW);
+      }
+      row.appendChild(asRow);
     }
-    if (!inDh && r.kind === 'delimited' && r.columns) {
+    // X/Y/Z mapping only for a delimited file opened as blocks/points (drillhole
+    // role mappings are sniffed and editable afterward in the source tab)
+    if (r.load && r.kind === 'delimited' && r.columns && (r.asKind === 'blocks' || r.asKind === 'points')) {
       const maps = document.createElement('div'); maps.className = 'dh-maps';
-      const mkSel = (key, label, allowNone) => {
+      const mkSel = (key, label) => {
         const wrap = document.createElement('label');
         wrap.append(label + ' ');
         const sel = document.createElement('select');
-        if (allowNone) { const o = document.createElement('option'); o.value = '-1'; o.textContent = '—'; sel.appendChild(o); }
         r.columns.forEach((c, i) => { const o = document.createElement('option'); o.value = String(i); o.textContent = c; sel.appendChild(o); });
-        const cur = r.mapping && r.mapping[key] != null && r.mapping[key] >= 0 ? r.mapping[key] : -1;
-        sel.value = String(cur >= 0 ? cur : (allowNone ? -1 : 0));
-        if (!allowNone && cur < 0) { r.mapping = r.mapping || {}; r.mapping[key] = 0; }
+        const cur = r.mapping && r.mapping[key] != null && r.mapping[key] >= 0 ? r.mapping[key] : 0;
+        sel.value = String(cur);
+        r.mapping = r.mapping || {}; if (r.mapping[key] == null || r.mapping[key] < 0) r.mapping[key] = 0;
         sel.onchange = () => { r.mapping = r.mapping || {}; r.mapping[key] = +sel.value; };
         wrap.appendChild(sel);
         return wrap;
@@ -4452,13 +4492,30 @@ function renderOfDialog() {
     { const st2 = mkSplitToggle(r); if (st2) { const w2 = document.createElement('div'); w2.className = 'dh-maps'; w2.appendChild(st2); row.appendChild(w2); } }
     body.appendChild(row);
   }
-  if (_ofDlg.dh) {
+  // drillhole set summary — one banner per assembled set (collar + survey + N
+  // interval tables), with the desurvey config right there
+  for (const set of assembleDhSets(rows)) {
     const banner = document.createElement('div'); banner.className = 'of-banner';
-    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = _ofDlg.dhOn;
-    cb.onchange = () => { _ofDlg.dhOn = cb.checked; renderOfDialog(); };
-    const t = document.createElement('span');
-    t.textContent = ' collar + survey + intervals detected — import as drillholes (opens the import dialog)';
-    banner.append(cb, t);
+    const complete = dhSetComplete(set), ivN = set.intervals.length, tag = assembleDhSets(rows).length > 1 ? ` ${set.idx + 1}` : '';
+    const label = document.createElement('span');
+    label.textContent = complete
+      ? ` drillhole set${tag}: collar + survey + ${ivN} interval table${ivN > 1 ? 's' : ''}`
+      : ` drillhole set${tag} incomplete — need ${!set.collar ? 'collar ' : ''}${!set.survey ? 'survey ' : ''}${!set.intervals.length ? 'intervals' : ''}`;
+    banner.appendChild(label);
+    if (complete) {
+      const cfg = _ofDlg.dhCfg[set.idx] = _ofDlg.dhCfg[set.idx] || { method: 'minimumCurvature', dip: 'auto' };
+      const mW = document.createElement('label'); mW.append(' desurvey ');
+      const mSel = document.createElement('select');
+      for (const [v, t] of [['minimumCurvature', 'min-curv'], ['balancedTangential', 'bal-tan'], ['tangential', 'tangential']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; mSel.appendChild(o); }
+      mSel.value = cfg.method; mSel.onchange = () => { cfg.method = mSel.value; };
+      mW.appendChild(mSel);
+      const dW = document.createElement('label'); dW.append(' dip ');
+      const dSel = document.createElement('select');
+      for (const [v, t] of [['auto', 'auto'], ['pos-down', 'pos-down'], ['neg-down', 'neg-down']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; dSel.appendChild(o); }
+      dSel.value = cfg.dip; dSel.onchange = () => { cfg.dip = dSel.value; };
+      dW.appendChild(dSel);
+      banner.append(mW, dW);
+    }
     body.appendChild(banner);
   }
   const modeRow = document.createElement('div'); modeRow.className = 'of-mode';
@@ -4476,11 +4533,13 @@ $('#ofOpen').onclick = async () => {
   const st = _ofDlg;
   $('#ofDlg').classList.remove('show');
   if (!st) return;
-  const dhBlobs = st.dh && st.dhOn ? new Set([st.dh.collar.blob, st.dh.survey.blob, st.dh.intervals.blob]) : new Set();
-  const toLoad = st.rows.filter((r) => r.load && !dhBlobs.has(r.file));
-  let mode = st.mode === 'replace' ? 'replace' : 'add';
-  if (mode === 'replace') { closeAllLayers(); mode = 'replace'; }
-  let first = mode === 'replace' || !_layers.length;
+  const sets = assembleDhSets(st.rows).filter(dhSetComplete);
+  const inSet = new Set();                                 // files consumed by a drillhole set
+  for (const s of sets) { inSet.add(s.collar.file); inSet.add(s.survey.file); for (const iv of s.intervals) inSet.add(iv.file); }
+  // non-drillhole rows: everything loaded that isn't a role-assigned file in a set
+  const toLoad = st.rows.filter((r) => r.load && !inSet.has(r.file) && !['collar', 'survey', 'intervals'].includes(r.asKind));
+  if (st.mode === 'replace') closeAllLayers();
+  let first = st.mode === 'replace' || !_layers.length;
   for (const r of toLoad) {
     const over = {};
     if (r.mapping && r.kind === 'delimited') over.mapping = { x: r.mapping.x ?? 0, y: r.mapping.y ?? 1, z: r.mapping.z ?? 2, chan: r.mapping.chan ?? null, cat: r.mapping.cat ?? null };
@@ -4491,7 +4550,7 @@ $('#ofOpen').onclick = async () => {
     } else await openBlob(r.file, r.name, first ? 'replace' : 'add', null, over);
     first = false;
   }
-  if (st.dh && st.dhOn) openDhDialog(st.dh);
+  for (const set of sets) { await loadDrillholeSet(set, st.dhCfg[set.idx] || {}, first); first = false; }
   _ofDlg = null;
 };
 $('#ofCancel').onclick = () => { $('#ofDlg').classList.remove('show'); _ofDlg = null; };
@@ -5302,7 +5361,7 @@ function projectManifest() {
     app: 'micro', version: 1, name: _project.name,
     layers: _layers.map((L) => ({
       source: L._relpath || L.name,
-      dh: L.dh && L.docs.dhDoc ? (L._setPath ? { set: L._setPath } : {
+      dh: L.dh && L.docs.dhDoc ? (L._setPath ? { set: L._setPath, interval: L._intervalName } : {
         collar: basename(layerFiles(L)[0].name), survey: basename(layerFiles(L)[1].name), intervals: basename(layerFiles(L)[2].name),
         config: L.docs.dhDoc.config,
       }) : undefined,
@@ -5500,14 +5559,27 @@ async function saveProject() {
       L._relpath = undefined; L._setPath = undefined;
       if (L.storage === 'external') { L._relpath = basename(L.name); continue; }
       if (L.storage !== 'project') continue;
-      if (L.dh && L.docs.dhDoc) {
-        const files = layerFiles(L);
-        const setRel = joinPath('drillholes', dhSetName(L));
-        const desc = { app: 'micro', kind: 'drillholes', collar: basename(files[0].name), survey: basename(files[1].name), intervals: basename(files[2].name), config: L.docs.dhDoc.config };
-        try { const dh2 = await resolveFileHandle(dir, setRel, { create: true }); const w = await dh2.createWritable(); await w.write(JSON.stringify(desc, null, 2) + '\n'); await w.close(); L._setPath = setRel; } catch { /* fall back to inline manifest */ }
-      } else {
-        L._relpath = await layerRelpath(L, dir);
-      }
+      if (!L.dh) L._relpath = await layerRelpath(L, dir);
+    }
+    // drillhole sets: group dh layers by _setKey → ONE .holes.json per set with
+    // an intervals[] array (multiple interval tables share one collar+survey)
+    const dhGroups = new Map();
+    for (const L of _layers) {
+      if (!(L.dh && L.docs.dhDoc && L.storage === 'project')) continue;
+      const key = L._setKey || ('solo:' + L.id);
+      if (!dhGroups.has(key)) dhGroups.set(key, []);
+      dhGroups.get(key).push(L);
+    }
+    for (const members of dhGroups.values()) {
+      const rep = members[0], files = layerFiles(rep);
+      const setRel = joinPath('drillholes', dhSetName(rep));
+      const intervals = members.map((L) => L._intervalName || basename(layerFiles(L)[2].name));
+      const desc = { app: 'micro', kind: 'drillholes', collar: basename(files[0].name), survey: basename(files[1].name), intervals, config: rep.docs.dhDoc.config };
+      try {
+        const dh2 = await resolveFileHandle(dir, setRel, { create: true });
+        const w = await dh2.createWritable(); await w.write(JSON.stringify(desc, null, 2) + '\n'); await w.close();
+        for (const L of members) { L._setPath = setRel; L._intervalName = L._intervalName || basename(layerFiles(L)[2].name); }
+      } catch { /* inline fallback in the manifest */ }
     }
     // grid display-cache sidecars: the decimated/overview DISPLAY grid, stored
     // as compact Surfer binary so a huge DEM's project reopens WITHOUT
@@ -5635,12 +5707,14 @@ async function openProjectDir(dir) {
       if (ls.dh) {
         // drillholes restore from the three files + config — via the .holes.json
         // descriptor (paths relative to its folder) or the legacy inline form
-        let dhRef = ls.dh, setDir = '';
+        let dhRef = ls.dh, setDir = '', ivName = null;
         if (ls.dh.set) {
           try {
             setDir = ls.dh.set.split('/').slice(0, -1).join('/');
             const desc = JSON.parse(await (await (await resolveFileHandle(dir, ls.dh.set)).getFile()).text());
-            dhRef = { collar: desc.collar, survey: desc.survey, intervals: desc.intervals, config: desc.config };
+            const ivs = Array.isArray(desc.intervals) ? desc.intervals : [desc.intervals];   // multi-interval sets
+            ivName = ls.dh.interval && ivs.includes(ls.dh.interval) ? ls.dh.interval : ivs[0];
+            dhRef = { collar: desc.collar, survey: desc.survey, intervals: ivName, config: desc.config };
           } catch { $('#meta').textContent = `project: drillhole set “${ls.dh.set}” missing/invalid — layer skipped`; plRow(i, 'skipped — set missing', 'skip'); continue; }
         }
         const dhFiles = {};
@@ -5654,7 +5728,7 @@ async function openProjectDir(dir) {
         const Ld = activeLayer();
         if (Ld) {
           Ld.storage = 'project';
-          if (ls.dh.set) Ld._setPath = ls.dh.set;            // so a folder rescan doesn't re-offer this set
+          if (ls.dh.set) { Ld._setPath = ls.dh.set; Ld._setKey = ls.dh.set; Ld._intervalName = ivName; }   // group siblings; rescan won't re-offer
           if (ls.label) Ld.label = ls.label;
           if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
           if (ls.visible === false) { Ld.visible = false; renderer.setLayerVisible(Ld.id, false); }
@@ -5842,9 +5916,11 @@ async function scanFolderForNewData() {
       let desc; try { desc = JSON.parse(await (await e.handle.getFile()).text()); } catch { continue; }
       if (!desc || desc.kind !== 'drillholes') continue;
       const setDir = e.path.split('/').slice(0, -1).join('/');
-      for (const role of ['collar', 'survey', 'intervals']) claimed.add(joinPath(setDir, desc[role]));
+      const ivs = Array.isArray(desc.intervals) ? desc.intervals : [desc.intervals];
+      claimed.add(joinPath(setDir, desc.collar)); claimed.add(joinPath(setDir, desc.survey));
+      for (const iv of ivs) claimed.add(joinPath(setDir, iv));
       if (_layers.some((L) => L.dh && L._setPath === e.path)) continue;   // already loaded
-      newSets.push({ e, desc, setDir });
+      newSets.push({ e, desc, setDir, ivs });
     }
     // loose data files not referenced by a layer and not part of a descriptor
     const looseFiles = [];
@@ -5858,10 +5934,13 @@ async function scanFolderForNewData() {
     // load complete drillhole sets directly (no decisions needed)
     for (const s of newSets) {
       try {
-        const files = {};
-        for (const role of ['collar', 'survey', 'intervals']) files[role] = await (await resolveFileHandle(dir, joinPath(s.setDir, s.desc[role]))).getFile();
-        await openDrillholeLayer(files, s.desc.config || {}, _layers.length ? 'add' : 'replace');
-        const L = activeLayer(); if (L) { L.storage = 'project'; L._setPath = s.e.path; }
+        const collar = await (await resolveFileHandle(dir, joinPath(s.setDir, s.desc.collar))).getFile();
+        const survey = await (await resolveFileHandle(dir, joinPath(s.setDir, s.desc.survey))).getFile();
+        for (const iv of s.ivs) {                            // one dh layer per interval table, sharing the set
+          const intervals = await (await resolveFileHandle(dir, joinPath(s.setDir, iv))).getFile();
+          await openDrillholeLayer({ collar, survey, intervals }, s.desc.config || {}, _layers.length ? 'add' : 'replace');
+          const L = activeLayer(); if (L) { L.storage = 'project'; L._setPath = s.e.path; L._setKey = s.e.path; L._intervalName = iv; }
+        }
       } catch (err) { $('#meta').textContent = `scan: “${s.e.name}” — ${err.message}`; }
     }
     if (looseFiles.length) await openFilesDialog(looseFiles);   // the dialog is the confirmation for loose files
@@ -8808,13 +8887,14 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
   const dh = L.docs.dhDoc; if (!dh) return;
   closeAttrTable(L.id);
   const files = dh.blobs, cfg = { ...dh.config, ...patch };
-  const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend, rules: L.rules, ruleHidden: L.ruleHidden, paintCols: L.paintCols };
+  const keep = { label: L.label, colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps, catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend, rules: L.rules, ruleHidden: L.ruleHidden, paintCols: L.paintCols, setKey: L._setKey, intervalName: L._intervalName };
   renderer.removeLayer(L.id);
   _layers = _layers.filter((l) => l.id !== L.id);
   await openDrillholeLayer(files, cfg, 'add');
   const L2 = activeLayer();
   if (L2) {
     L2.label = keep.label;
+    L2._setKey = keep.setKey; L2._intervalName = keep.intervalName;   // stay in the same drillhole set
     L2.colTypes = keep.colTypes; applyColTypes(L2);
     L2.calcCols = keep.calcCols;
     L2.ramps = keep.ramps; if (rampCfgOf(L2)) applyRamp(L2, true);
