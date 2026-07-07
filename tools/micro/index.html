@@ -3660,7 +3660,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   $('#empty').style.display = 'none';
   try {
     if (isMesh && /\.(msh|obj|lfm|ply)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
-    else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first }); }
+    else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first, forcePoints }); }
     // grid stays extension-driven (no table→grid provider yet); asKind never forces it.
     else if (over.asKind == null && /\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache }); }
     else if (over.asKind == null && /\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first }); }
@@ -4375,7 +4375,7 @@ async function describeFile(f) {
   d.interps = d.kind === 'ply' ? [['mesh', 'mesh'], ['points', 'points']]
     : d.kind === 'mesh' ? [['mesh', 'mesh']]
     : d.kind === 'grid' ? [['grid', 'grid']]
-    : d.kind === 'dm' ? [['blocks', 'block model']]
+    : d.kind === 'dm' ? [['blocks', 'block model'], ['points', 'points']]
     : d.kind === 'las' ? [['points', 'points']]
     : d.kind === 'blocks' ? [['blocks', 'block model'], ['points', 'points']]
     : d.kind === 'delimited' ? [['blocks', 'block model'], ['points', 'points'], ['collar', 'DH collar'], ['survey', 'DH survey'], ['intervals', 'DH intervals']]
@@ -4854,17 +4854,38 @@ async function openDmBlob(blob, name, opts = {}) {
   $('#meta').textContent = `${name} — reading DD…`;
   const mapping = opts.chan != null && _blockDoc && _blockDoc.header ? { chan: opts.chan } : null;
   renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);
-  const { header, streamChunks } = await openDmModel(blob, mapping ? { mapping } : {});
-  _blockDoc = { blob, name, header, metaLine: '' };
-  registerDocs(lid, 'blocks');
+  const { header, streamChunks } = await openDmModel(blob, { ...(mapping ? { mapping } : {}), forcePoints: opts.forcePoints });
+  _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints };
+  registerDocs(lid, header.grid ? 'blocks' : 'points');
   fitFromHeader(header, opts.first !== false && opts.chan == null);
   renderer.setCategories(header.categories ? 1 : 0);
   setColorLabels(header);
-  const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
-  _blockDoc.grid = grid;
-  const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
-  const doc = await streamInto(cb, streamChunks, header, name, 1 << 18, lid);
-  _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} blocks · .dm grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
+  if (header.grid) {
+    const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
+    _blockDoc.grid = grid;
+    const cb = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
+    const doc = await streamInto(cb, streamChunks, header, name, 1 << 18, lid);
+    _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} blocks · .dm grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
+  } else {
+    // sub-blocked / forced points: centroids as points (grade → intensity slot),
+    // RAW record numbers preserved so a picked centroid fetches its .dm record
+    const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
+    let done = 0;
+    for await (const rc of streamChunks({ chunkPoints: 1 << 18 })) {
+      let cMin = Infinity, cMax = -Infinity;
+      for (let i = 0; i < rc.count; i++) { const v = rc.chan[i]; if (Number.isFinite(v)) { if (v < cMin) cMin = v; if (v > cMax) cMax = v; } }
+      const s = cMax > cMin ? 65535 / (cMax - cMin) : 0;
+      const intensity = new Uint16Array(rc.count);
+      for (let i = 0; i < rc.count; i++) intensity[i] = Number.isFinite(rc.chan[i]) ? ((rc.chan[i] - cMin) * s) | 0 : 0;
+      cb.push({ count: rc.count, x: rc.x, y: rc.y, z: rc.z, intensity, classification: rc.cat || new Uint8Array(rc.count), rgb: null, recIdx: rc.recIdx });
+      done += rc.count;
+      await new Promise((r) => setTimeout(r));
+    }
+    const doc = cb.flush();
+    const L2 = layerById(lid); if (L2) L2.bboxLocal = doc.bboxLocal;
+    recomputeUnion();
+    _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} centroids (sub-blocked .dm — points view)${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
+  }
   $('#meta').textContent = _blockDoc.metaLine;
   if (_filterExpr.trim() && opts.keepFilter) applyBlockFilter(_filterExpr);
   requestRender();
@@ -8970,7 +8991,7 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
 function reinterpretOptions(L) {
   if (!L || L.dh) return [];
   const d = L.docs || {};
-  if (d.blockDoc && !d.blockDoc.header.dm) return d.blockDoc.forcePoints ? [{ kind: 'blocks', label: 'block model' }] : [{ kind: 'points', label: 'points' }];
+  if (d.blockDoc) return d.blockDoc.forcePoints ? [{ kind: 'blocks', label: 'block model' }] : [{ kind: 'points', label: 'points' }];
   if (d.plyDoc) return [{ kind: 'mesh', label: 'mesh' }];
   if (d.meshDoc && /\.ply$/i.test(L.name)) return [{ kind: 'points', label: 'points' }];
   return [];

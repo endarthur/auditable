@@ -4882,7 +4882,7 @@ function readDM(buffer) {
 
 const DEF_NAMES = new Set(['IJK', 'XC', 'YC', 'ZC', 'XINC', 'YINC', 'ZINC', 'XMORIG', 'YMORIG', 'ZMORIG', 'NX', 'NY', 'NZ']);
 
-async function openDmModel(blob, { mapping = null } = {}) {
+async function openDmModel(blob, { mapping = null, forcePoints = false } = {}) {
   const head = new Uint8Array(await blob.slice(0, Math.min(8192, blob.size)).arrayBuffer());
   const fmt = detectDM(head);
   if (!fmt) throw new Error('dm: not a recognizable .dm file');
@@ -4896,21 +4896,57 @@ async function openDmModel(blob, { mapping = null } = {}) {
   const zc = idx('ZC') >= 0 ? idx('ZC') : idx('Z');
   if (xc < 0 || yc < 0 || zc < 0) throw new Error('dm: no XC/YC/ZC centroid fields — not a block model export');
 
-  // the grid, straight from the DD (corner origin → centroid convention)
+  // Decoded-record batches (a cold recipe — call again for the filter sweep or
+  // the sub-blocked bbox sweep). Reads ~4 MB page runs sequentially; yields
+  // { recStart, rows } with RAW record numbering (recStart + k, no skips here).
+  async function* recordBatches({ signal } = {}) {
+    const pagesPer = Math.max(1, Math.floor((4 << 20) / h.pageSize));
+    for (let page = 2; page <= h.lastPage; page += pagesPer) {
+      if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      const pEnd = Math.min(page + pagesPer - 1, h.lastPage);
+      const bytes = new Uint8Array(await blob.slice((page - 1) * h.pageSize, pEnd * h.pageSize).arrayBuffer());
+      const rows = [];
+      for (let pg = page; pg <= pEnd; pg++) {
+        const nRec = pg === h.lastPage ? h.lastRec : h.recordsPerPage;
+        const base = (pg - page) * h.pageSize;
+        for (let r = 0; r < nRec; r++) {
+          rows.push(decodeRecord(bytes.subarray(base + r * h.maxLen * h.wordSize, base + (r + 1) * h.maxLen * h.wordSize), h));
+        }
+      }
+      yield { recStart: (page - 2) * h.recordsPerPage, rows };
+    }
+  }
+
+  // the grid, straight from the DD (corner origin → centroid convention).
+  // Sub-blocked / non-model .dm has no DD grid constants → render its centroids
+  // as POINTS (grid:null); bbox comes from a quick XC/YC/ZC sweep. Variable-size
+  // boxes (per-record XINC/YINC/ZINC) are a later milestone.
   const mor = [constVal('XMORIG'), constVal('YMORIG'), constVal('ZMORIG')];
   const inc = [constVal('XINC'), constVal('YINC'), constVal('ZINC')];
   const cnt = [constVal('NX'), constVal('NY'), constVal('NZ')];
-  const regular = mor.every(Number.isFinite) && inc.every((v) => Number.isFinite(v) && v > 0) && cnt.every((v) => Number.isFinite(v) && v >= 1);
-  if (!regular) throw new Error('dm: no regular grid definition (XMORIG/XINC/NX as constants) — sub-blocked / non-model files land in a later milestone');
-  const grid = {
-    x: { origin: mor[0] + inc[0] / 2, pitch: inc[0], count: Math.round(cnt[0]) },
-    y: { origin: mor[1] + inc[1] / 2, pitch: inc[1], count: Math.round(cnt[1]) },
-    z: { origin: mor[2] + inc[2] / 2, pitch: inc[2], count: Math.round(cnt[2]) },
-  };
-  const bbox = {
-    min: [mor[0], mor[1], mor[2]],
-    max: [mor[0] + inc[0] * cnt[0], mor[1] + inc[1] * cnt[1], mor[2] + inc[2] * cnt[2]],
-  };
+  const regular = !forcePoints && mor.every(Number.isFinite) && inc.every((v) => Number.isFinite(v) && v > 0) && cnt.every((v) => Number.isFinite(v) && v >= 1);
+  let grid = null, bbox;
+  if (regular) {
+    grid = {
+      x: { origin: mor[0] + inc[0] / 2, pitch: inc[0], count: Math.round(cnt[0]) },
+      y: { origin: mor[1] + inc[1] / 2, pitch: inc[1], count: Math.round(cnt[1]) },
+      z: { origin: mor[2] + inc[2] / 2, pitch: inc[2], count: Math.round(cnt[2]) },
+    };
+    bbox = { min: [mor[0], mor[1], mor[2]], max: [mor[0] + inc[0] * cnt[0], mor[1] + inc[1] * cnt[1], mor[2] + inc[2] * cnt[2]] };
+  } else {
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for await (const { rows } of recordBatches({})) {
+      for (const vals of rows) {
+        const xv = vals[xc], yv = vals[yc], zv = vals[zc];
+        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+        if (xv < min[0]) min[0] = xv; if (xv > max[0]) max[0] = xv;
+        if (yv < min[1]) min[1] = yv; if (yv > max[1]) max[1] = yv;
+        if (zv < min[2]) min[2] = zv; if (zv > max[2]) max[2] = zv;
+      }
+    }
+    if (!Number.isFinite(min[0])) throw new Error('dm: no finite XC/YC/ZC centroids');
+    bbox = { min, max };
+  }
 
   // channels: every per-record numeric non-definition column; first alpha = category
   const numericColumns = h.columns
@@ -4931,27 +4967,6 @@ async function openDmModel(blob, { mapping = null } = {}) {
     attributes: [...(chan != null ? [names[chan]] : []), ...(catIdx >= 0 ? [names[catIdx]] : [])],
     dm: h,                                                  // the @gcu/dm header: O(1) record fetch + the filter sweep
   };
-
-  // Decoded-record batches (a cold recipe — call again for the filter sweep).
-  // Reads ~4 MB page runs sequentially; yields { recStart, rows } with RAW
-  // record numbering (recStart + k, no skips at this layer).
-  async function* recordBatches({ signal } = {}) {
-    const pagesPer = Math.max(1, Math.floor((4 << 20) / h.pageSize));
-    for (let page = 2; page <= h.lastPage; page += pagesPer) {
-      if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-      const pEnd = Math.min(page + pagesPer - 1, h.lastPage);
-      const bytes = new Uint8Array(await blob.slice((page - 1) * h.pageSize, pEnd * h.pageSize).arrayBuffer());
-      const rows = [];
-      for (let pg = page; pg <= pEnd; pg++) {
-        const nRec = pg === h.lastPage ? h.lastRec : h.recordsPerPage;
-        const base = (pg - page) * h.pageSize;
-        for (let r = 0; r < nRec; r++) {
-          rows.push(decodeRecord(bytes.subarray(base + r * h.maxLen * h.wordSize, base + (r + 1) * h.maxLen * h.wordSize), h));
-        }
-      }
-      yield { recStart: (page - 2) * h.recordsPerPage, rows };
-    }
-  }
 
   async function* streamChunks({ chunkPoints = 1 << 18, signal, onProgress } = {}) {
     const alloc = () => ({
