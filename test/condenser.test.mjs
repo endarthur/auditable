@@ -250,6 +250,51 @@ test('blocks: provider round-trip — grid inferred, categories coded, IJK exact
   assert.ok(doc.chanRange[0] >= 50 && doc.chanRange[1] <= 61, `chan range ${doc.chanRange}`);
 });
 
+test('blocks: sub-blocked model → fine lattice + size-code palette, exact centroids', async () => {
+  // parent grid 10×10×5. Four full parents (dx=10) + one parent split into 8
+  // octants (dx=5,dy=5,dz=2.5). Fine pitch = minDim/2 = [2.5, 2.5, 1.25].
+  const rows = [];
+  // full parents at centroids (5,5,2.5),(15,5,2.5),(5,15,2.5),(15,15,2.5)
+  for (const [x, y] of [[5, 5], [15, 5], [5, 15], [15, 15]]) rows.push({ x, y, z: 2.5, dx: 10, dy: 10, dz: 5, fe: 40 });
+  // one parent centred at (25,5,2.5) split into 8 sub-blocks (5×5×2.5)
+  for (const oz of [1.25, 3.75]) for (const oy of [2.5, 7.5]) for (const ox of [22.5, 27.5]) rows.push({ x: ox, y: oy, z: oz, dx: 5, dy: 5, dz: 2.5, fe: 55 });
+  const rnd = mulberry32(9);
+  for (let i = rows.length - 1; i > 0; i--) { const j = (rnd() * (i + 1)) | 0; const t = rows[i]; rows[i] = rows[j]; rows[j] = t; }
+  const csv = 'XC,YC,ZC,DX,DY,DZ,FE\n' + rows.map((r) => `${r.x},${r.y},${r.z},${r.dx},${r.dy},${r.dz},${r.fe}`).join('\n') + '\n';
+  const { header, streamChunks } = await openBlockModel(new Blob([csv]));
+  assert.equal(header.count, 12);
+  assert.ok(header.subBlocked, 'sub-blocked detected');
+  assert.deepEqual([header.grid.x.pitch, header.grid.y.pitch, header.grid.z.pitch], [2.5, 2.5, 1.25], 'fine pitch = minDim/2');
+  assert.equal(header.dimPalette.length, 2, 'two distinct box sizes');
+  // palette carries half-dims; both [5,5,2.5] and [2.5,2.5,1.25] present
+  const halves = header.dimPalette.map((h) => h.join(','));
+  assert.ok(halves.includes('5,5,2.5') && halves.includes('2.5,2.5,1.25'), `palette ${JSON.stringify(header.dimPalette)}`);
+  const frame = documentFrame(header);
+  const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
+  const chunks = [];
+  const cb = createBlockChunkBuilder({ frame, grid, dimPalette: header.dimPalette, chunkSize: 8, seed: 1, onChunk: (c) => chunks.push(c) });
+  for await (const rc of streamChunks({ chunkPoints: 8 })) cb.push(rc);
+  cb.flush();
+  let checked = 0, total = 0;
+  for (const c of chunks) {
+    assert.ok(c.dim, 'chunk carries per-block size codes');
+    assert.ok(c.dimPalette, 'chunk carries the palette');
+    for (let k = 0; k < c.count; k++) {
+      total++;
+      const ctr = blockLocalCenter(c, k);
+      const world = [ctr[0] + frame.origin[0], ctr[1] + frame.origin[1], ctr[2] + frame.origin[2]];
+      // match the source row exactly
+      const src = rows.find((r) => Math.abs(r.x - world[0]) < 1e-9 && Math.abs(r.y - world[1]) < 1e-9 && Math.abs(r.z - world[2]) < 1e-9);
+      assert.ok(src, `centroid ${world} matches a source block`);
+      const half = c.dimPalette[c.dim[k]];
+      assert.deepEqual(half, [src.dx / 2, src.dy / 2, src.dz / 2], 'size code → correct half-dims');
+      checked++;
+    }
+  }
+  assert.equal(total, 12);
+  assert.equal(checked, 12);
+});
+
 test('blocks: irregular coordinates → header.grid is null (points fallback signal)', async () => {
   const csv = 'XC,YC,ZC,FE\n0,0,0,1\n10,0,0,2\n15.5,0,0,3\n25.5,10,5,4\n';
   const { header } = await openBlockModel(new Blob([csv]));

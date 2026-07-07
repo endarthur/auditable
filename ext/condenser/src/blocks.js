@@ -5,8 +5,9 @@
 // block (0,0,0) — the centroid convention throughout. Chunks store raw uint16 IJK
 // (not bbox-normalized lattice positions), so reconstruction is EXACT — and IJK is
 // itself useful for the grid-view join. Half-dims are a chunk-level uniform (all
-// blocks one size). Sub-blocked models don't fit this scheme; they render via the
-// points pipeline until the fine-lattice (IJK + size-code) upgrade.
+// blocks one size) for a REGULAR grid. SUB-BLOCKED models use the same IJK scheme
+// against a FINE lattice (pitch = min dim /2) plus a per-block u8 size code into a
+// shared half-dim palette (chunk.dim + chunk.dimPalette); centroids stay exact.
 //
 // Attributes per block: one SCALAR channel (grade — f32 in, quantized u16 against
 // the chunk's min/max, range carried per chunk) + one CATEGORY channel (u8 codes
@@ -67,19 +68,23 @@ export function makeBlockGrid(axes, frame) {
  * IJK is computed against the grid; anything off-lattice snaps to the nearest
  * cell (the provider validated regularity during discovery).
  */
-export function buildBlockChunk({ x, y, z, chan, cat, recIdx }, grid, frame, rnd, indices = null) {
+export function buildBlockChunk({ x, y, z, chan, cat, recIdx, dim }, grid, frame, rnd, indices = null, dimPalette = null) {
   const n = indices ? indices.length : x.length;
   const o = frame.origin;
   const [gx, gy, gz] = grid.originLocal, [sx, sy, sz] = grid.size;
   const perm = indices ? shuffleInPlace(Uint32Array.from(indices), rnd) : shuffledIndices(n, rnd);
   const ijk = new Uint16Array(3 * n);
   const outChan = new Uint16Array(n), outCat = new Uint8Array(n), outR = new Uint32Array(n);
+  const sub = !!(dim && dimPalette);                        // sub-blocked → per-block size code
+  const outDim = sub ? new Uint8Array(n) : null;
   // chan range over this chunk (quantize against it — per-chunk min/max, §2.1.2)
   let cMin = Infinity, cMax = -Infinity;
   for (let k = 0; k < n; k++) { const v = chan[perm[k]]; if (Number.isFinite(v)) { if (v < cMin) cMin = v; if (v > cMax) cMax = v; } }
   if (!Number.isFinite(cMin)) { cMin = 0; cMax = 0; }
   const cScale = cMax > cMin ? 65535 / (cMax - cMin) : 0;
   let minI = 65535, minJ = 65535, minK = 65535, maxI = 0, maxJ = 0, maxK = 0;
+  // sub-blocked: track actual box faces (variable half-dims) for the cull bbox
+  let fx0 = Infinity, fy0 = Infinity, fz0 = Infinity, fx1 = -Infinity, fy1 = -Infinity, fz1 = -Infinity;
   for (let k = 0; k < n; k++) {
     const i = perm[k];
     const bi = Math.max(0, Math.round((x[i] - o[0] - gx) / sx));
@@ -93,13 +98,25 @@ export function buildBlockChunk({ x, y, z, chan, cat, recIdx }, grid, frame, rnd
     outChan[k] = Number.isFinite(cv) ? ((cv - cMin) * cScale + 0.5) | 0 : 0;
     outCat[k] = cat ? cat[i] : 0;
     outR[k] = recIdx[i];
+    if (sub) {
+      const dc = dim[i]; outDim[k] = dc;
+      const h = dimPalette[dc] || [sx / 2, sy / 2, sz / 2];
+      const cx = gx + bi * sx, cy = gy + bj * sy, cz = gz + bk * sz;
+      if (cx - h[0] < fx0) fx0 = cx - h[0]; if (cx + h[0] > fx1) fx1 = cx + h[0];
+      if (cy - h[1] < fy0) fy0 = cy - h[1]; if (cy + h[1] > fy1) fy1 = cy + h[1];
+      if (cz - h[2] < fz0) fz0 = cz - h[2]; if (cz + h[2] > fz1) fz1 = cz + h[2];
+    }
   }
-  // culling bbox = outer faces of the extreme blocks
-  const bboxLocal = Float64Array.of(
-    gx + minI * sx - sx / 2, gy + minJ * sy - sy / 2, gz + minK * sz - sz / 2,
-    gx + maxI * sx + sx / 2, gy + maxJ * sy + sy / 2, gz + maxK * sz + sz / 2,
-  );
-  return { kind: 'blocks', count: n, grid, ijk, chan: outChan, chanRange: [cMin, cMax], cat: outCat, recIdx: outR, bboxLocal };
+  // culling bbox = outer faces of the extreme blocks (variable-size when sub-blocked)
+  const bboxLocal = sub
+    ? Float64Array.of(fx0, fy0, fz0, fx1, fy1, fz1)
+    : Float64Array.of(
+        gx + minI * sx - sx / 2, gy + minJ * sy - sy / 2, gz + minK * sz - sz / 2,
+        gx + maxI * sx + sx / 2, gy + maxJ * sy + sy / 2, gz + maxK * sz + sz / 2,
+      );
+  const chunk = { kind: 'blocks', count: n, grid, ijk, chan: outChan, chanRange: [cMin, cMax], cat: outCat, recIdx: outR, bboxLocal };
+  if (sub) { chunk.dim = outDim; chunk.dimPalette = dimPalette; }
+  return chunk;
 }
 
 // Exact centroid of element k, frame-local (tests + picking).
@@ -118,7 +135,7 @@ export function blockLocalCenter(chunk, k) {
  * recStart }). Batch-Morton, sliced, shuffled. Tracks the document chan range
  * (for the color ramp) alongside the local bbox.
  */
-export function createBlockChunkBuilder({ frame, grid, chunkSize = 1 << 20, batchSize = 0, seed = 1, onChunk }) {
+export function createBlockChunkBuilder({ frame, grid, dimPalette = null, chunkSize = 1 << 20, batchSize = 0, seed = 1, onChunk }) {
   const rnd = mulberry32(seed);
   const batchN = batchSize || chunkSize * 4;
   let pend = [], pendCount = 0;
@@ -141,6 +158,7 @@ export function createBlockChunkBuilder({ frame, grid, chunkSize = 1 << 20, batc
       z: concat(Float64Array, pend.map((p) => p.z)),
       chan: concat(Float64Array, pend.map((p) => p.chan)),
       cat: pend.every((p) => p.cat) ? concat(Uint8Array, pend.map((p) => p.cat)) : null,
+      dim: dimPalette && pend.every((p) => p.dim) ? concat(Uint8Array, pend.map((p) => p.dim)) : null,
       recIdx: concat(Uint32Array, pend.map((p) => p.recIdx)),
     };
     const n = pendCount;
@@ -148,7 +166,7 @@ export function createBlockChunkBuilder({ frame, grid, chunkSize = 1 << 20, batc
     const order = radixSortIndices(mortonKeys(cols.x, cols.y, cols.z, n), n);
     for (let start = 0; start < n; start += chunkSize) {
       const slice = order.subarray(start, Math.min(start + chunkSize, n));
-      const chunk = buildBlockChunk(cols, grid, frame, rnd, slice);
+      const chunk = buildBlockChunk(cols, grid, frame, rnd, slice, dimPalette);
       doc.count += chunk.count;
       const b = doc.bboxLocal, cb = chunk.bboxLocal;
       for (let i = 0; i < 3; i++) { if (cb[i] < b[i]) b[i] = cb[i]; if (cb[i + 3] > b[i + 3]) b[i + 3] = cb[i + 3]; }
@@ -172,7 +190,7 @@ export function createBlockChunkBuilder({ frame, grid, chunkSize = 1 << 20, batc
         const room = batchN - pendCount;
         const n = Math.min(room, raw.count - taken);
         const s = (a) => (a ? a.subarray(taken, taken + n) : null);
-        pend.push({ x: s(raw.x), y: s(raw.y), z: s(raw.z), chan: s(raw.chan), cat: s(raw.cat), recIdx: recIdx.subarray(taken, taken + n) });
+        pend.push({ x: s(raw.x), y: s(raw.y), z: s(raw.z), chan: s(raw.chan), cat: s(raw.cat), dim: s(raw.dim), recIdx: recIdx.subarray(taken, taken + n) });
         pendCount += n; taken += n;
         if (pendCount >= batchN) flushBatch();
       }

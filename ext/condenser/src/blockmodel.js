@@ -19,6 +19,9 @@ const X_RE = /^(x|xc|xcent(er|re)?|xmid|east(ing)?|xworld|centroid_?x)$/i;
 const Y_RE = /^(y|yc|ycent(er|re)?|ymid|north(ing)?|yworld|centroid_?y)$/i;
 const Z_RE = /^(z|zc|zcent(er|re)?|zmid|elev(ation)?|rl|level|zworld|centroid_?z)$/i;
 const DIM_RE = /^(d[xyz]|[xyz]inc|[xyz]size|[xyz]dim|dim_?[xyz])$/i;
+const DIMX_RE = /^(dx|xinc|xsize|xdim|dim_?x)$/i;
+const DIMY_RE = /^(dy|yinc|ysize|ydim|dim_?y)$/i;
+const DIMZ_RE = /^(dz|zinc|zsize|zdim|dim_?z)$/i;
 const NONGRADE_RE = /^(ijk|id|index|row|i|j|k|dens|density|sg|topo|pct|proportion)$/i;
 
 const WS = 'ws';                                           // whitespace-delimiter sentinel ('\s' in a string is just 's')
@@ -168,9 +171,10 @@ const CAP_DISTINCT = 300000;                               // per-axis discovery
 
 // sweep 2 as a shared factory: the same cold-recipe stream whether the header
 // came from a live discovery or a cached `discovered` payload (sidecars)
-function makeDelimitedStream(blob, delim, hasHeaderRow, map, catCol, catCode) {
+function makeDelimitedStream(blob, delim, hasHeaderRow, map, catCol, catCode, dimInfo = null) {
+  const r10 = (v) => Number(v.toPrecision(10));
   return async function* streamChunks({ chunkPoints = 1 << 18, signal: s2, onProgress: op2 } = {}) {
-    const alloc = () => ({ x: new Float64Array(chunkPoints), y: new Float64Array(chunkPoints), z: new Float64Array(chunkPoints), chan: new Float64Array(chunkPoints), cat: catCode ? new Uint8Array(chunkPoints) : null });
+    const alloc = () => ({ x: new Float64Array(chunkPoints), y: new Float64Array(chunkPoints), z: new Float64Array(chunkPoints), chan: new Float64Array(chunkPoints), cat: catCode ? new Uint8Array(chunkPoints) : null, dim: dimInfo ? new Uint8Array(chunkPoints) : null });
     let buf = alloc(), fill = 0, recStart = 0;
     for await (const batch of lineFields(blob, delim, hasHeaderRow, { signal: s2, onProgress: op2 })) {
       for (const f of batch) {
@@ -179,14 +183,15 @@ function makeDelimitedStream(blob, delim, hasHeaderRow, map, catCol, catCode) {
         buf.x[fill] = xv; buf.y[fill] = yv; buf.z[fill] = zv;
         buf.chan[fill] = map.chan != null ? +f[map.chan] : 0;
         if (buf.cat) { const c = catCode.get((f[catCol] || '').trim()); buf.cat[fill] = c === undefined ? 0 : c; }
+        if (buf.dim) { const key = `${r10(+f[dimInfo.cols.x])},${r10(+f[dimInfo.cols.y])},${r10(+f[dimInfo.cols.z])}`; const c = dimInfo.code.get(key); buf.dim[fill] = c === undefined ? 0 : c; }
         fill++;
         if (fill === chunkPoints) {
-          yield { count: fill, x: buf.x, y: buf.y, z: buf.z, chan: buf.chan, cat: buf.cat, recStart };
+          yield { count: fill, x: buf.x, y: buf.y, z: buf.z, chan: buf.chan, cat: buf.cat, dim: buf.dim, recStart };
           recStart += fill; buf = alloc(); fill = 0;
         }
       }
     }
-    if (fill) yield { count: fill, x: buf.x.subarray(0, fill), y: buf.y.subarray(0, fill), z: buf.z.subarray(0, fill), chan: buf.chan.subarray(0, fill), cat: buf.cat ? buf.cat.subarray(0, fill) : null, recStart };
+    if (fill) yield { count: fill, x: buf.x.subarray(0, fill), y: buf.y.subarray(0, fill), z: buf.z.subarray(0, fill), chan: buf.chan.subarray(0, fill), cat: buf.cat ? buf.cat.subarray(0, fill) : null, dim: buf.dim ? buf.dim.subarray(0, fill) : null, recStart };
   };
 }
 
@@ -203,7 +208,12 @@ export async function openBlockModel(blob, { mapping = null, discovered = null, 
     };
     const map2 = header.mapping;
     const catCode2 = header.categories ? new Map(header.categories.map((v, i) => [v, i])) : null;
-    return { header, streamChunks: makeDelimitedStream(blob, header.delim, header.hasHeaderRow, map2, map2.cat, catCode2) };
+    // sub-blocked: rebuild the size-code map from the persisted half-dim palette (×2)
+    const r10b = (v) => Number(v.toPrecision(10));
+    const dimInfo2 = header.subBlocked && header.dimCols && header.dimPalette
+      ? { cols: header.dimCols, code: new Map(header.dimPalette.map((hd, i) => [`${r10b(hd[0] * 2)},${r10b(hd[1] * 2)},${r10b(hd[2] * 2)}`, i])) }
+      : null;
+    return { header, streamChunks: makeDelimitedStream(blob, header.delim, header.hasHeaderRow, map2, map2.cat, catCode2, dimInfo2) };
   }
   const head = await blob.slice(0, Math.min(sample, blob.size)).text();
   const sniff = sniffDelimited(head);
@@ -240,6 +250,14 @@ export async function openBlockModel(blob, { mapping = null, discovered = null, 
     }
   }
 
+  // per-block dimension columns (DX/DY/DZ, XINC…) → the model may be SUB-BLOCKED
+  // (variable box size). Discovery tracks the fine pitch (min dim/axis) + the
+  // distinct (dx,dy,dz) triples that become the size-code palette.
+  const dimCols = sniff.header ? { x: sniff.header.findIndex((h) => DIMX_RE.test(h.trim())), y: sniff.header.findIndex((h) => DIMY_RE.test(h.trim())), z: sniff.header.findIndex((h) => DIMZ_RE.test(h.trim())) } : { x: -1, y: -1, z: -1 };
+  const hasDims = dimCols.x >= 0 && dimCols.y >= 0 && dimCols.z >= 0;
+  const minDim = [Infinity, Infinity, Infinity];
+  const dimSet = new Set();
+
   // ── sweep 1: discovery — axis distincts + extents + category dictionary ──
   const ax = [new Set(), new Set(), new Set()];
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
@@ -262,11 +280,43 @@ export async function openBlockModel(blob, { mapping = null, discovered = null, 
       if (ax[1].size < CAP_DISTINCT) ax[1].add(round10(yv));
       if (ax[2].size < CAP_DISTINCT) ax[2].add(round10(zv));
       if (catCol != null && catCounts.size <= 256) { const v = (f[catCol] || '').trim(); if (v) catCounts.set(v, (catCounts.get(v) || 0) + 1); }
+      if (hasDims) {
+        const dx = +f[dimCols.x], dy = +f[dimCols.y], dz = +f[dimCols.z];
+        if (dx > 0 && dy > 0 && dz > 0) {
+          if (dx < minDim[0]) minDim[0] = dx; if (dy < minDim[1]) minDim[1] = dy; if (dz < minDim[2]) minDim[2] = dz;
+          if (dimSet.size <= 300) dimSet.add(`${round10(dx)},${round10(dy)},${round10(dz)}`);
+        }
+      }
     }
   }
 
   const axes = ax.map((s) => (s.size < CAP_DISTINCT ? inferAxis([...s].sort((a, b) => a - b)) : null));
-  const grid = axes.every(Boolean) ? { x: axes[0], y: axes[1], z: axes[2] } : null;
+  let grid = axes.every(Boolean) ? { x: axes[0], y: axes[1], z: axes[2] } : null;
+
+  // ── sub-blocked detection ── dims vary → fine-lattice IJK (pitch = min dim /2,
+  // so every power-of-2 sub-block centroid lands on it) + a size-code palette.
+  // Off the fine lattice (non-power-of-2 splits) → leave it null → points fallback.
+  let subBlocked = false, dimPalette = null, dimInfo = null;
+  if (hasDims && dimSet.size > 1 && Number.isFinite(minDim[0])) {
+    const finePitch = [minDim[0] / 2, minDim[1] / 2, minDim[2] / 2];
+    const fineAxes = [0, 1, 2].map((a) => {
+      if (ax[a].size >= CAP_DISTINCT || !(finePitch[a] > 0)) return null;
+      const vals = [...ax[a]].sort((u, v) => u - v);
+      const origin = vals[0], pitch = finePitch[a];
+      const cnt = Math.round((vals[vals.length - 1] - origin) / pitch) + 1;
+      if (cnt > 65535) return null;
+      const eps = Math.max(pitch * 1e-3, Math.abs(origin) * 1e-6);
+      for (const v of vals) if (Math.abs(origin + Math.round((v - origin) / pitch) * pitch - v) > eps) return null;
+      return { origin, pitch, count: cnt };
+    });
+    if (fineAxes.every(Boolean)) {
+      subBlocked = true;
+      const dims = [...dimSet].slice(0, 256).map((k) => k.split(',').map(Number));
+      dimPalette = dims.map(([dx, dy, dz]) => [dx / 2, dy / 2, dz / 2]);       // half-dims (box radius)
+      dimInfo = { cols: dimCols, code: new Map(dims.map((d, i) => [`${round10(d[0])},${round10(d[1])},${round10(d[2])}`, i])) };
+      grid = { x: fineAxes[0], y: fineAxes[1], z: fineAxes[2] };                // fine lattice → IJK
+    }
+  }
   const categories = catCol != null && catCounts.size > 0 && catCounts.size <= 255
     ? [...catCounts.keys()].sort() : null;
   const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
@@ -287,6 +337,7 @@ export async function openBlockModel(blob, { mapping = null, discovered = null, 
     kind: 'blockmodel', count,
     bbox: { min, max },
     grid,                                                   // null → not a regular grid (points fallback)
+    subBlocked, dimPalette, dimCols: subBlocked ? dimCols : null,   // variable-size boxes: half-dim palette + size-code per block
     columns: sniff.header, mapping: { ...map, cat: categories ? catCol : null },
     delim: sniff.delim, hasHeaderRow,                       // for external sweeps (the filter mask)
     index: { k: indexEvery, offsets: Float64Array.from(anchors) },   // sparse line-offset index (fetchDelimitedRecord)
@@ -299,7 +350,7 @@ export async function openBlockModel(blob, { mapping = null, discovered = null, 
   };
 
   // ── sweep 2 (cold recipe): the shared stream factory ──
-  const streamChunks = makeDelimitedStream(blob, sniff.delim, hasHeaderRow, map, catCol, catCode);
+  const streamChunks = makeDelimitedStream(blob, sniff.delim, hasHeaderRow, map, catCol, catCode, dimInfo);
 
   return { header, streamChunks };
 }

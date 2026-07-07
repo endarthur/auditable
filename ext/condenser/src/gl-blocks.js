@@ -26,9 +26,12 @@ layout(location=0) in vec3 aIjk;        // uint16 raw (integer lattice)
 layout(location=1) in float aChan;      // uint16 normalized (per-chunk range)
 layout(location=2) in float aCat;       // uint8 raw
 layout(location=3) in uint aRec;        // uint32 record index (the join key)
+layout(location=4) in uint aDim;        // uint8 size code → uDimPalette (sub-blocked)
 uniform mat4 uViewProj;
 uniform vec3 uEye, uRight, uUp;
 uniform vec3 uGridOrigin, uGridSize;
+uniform sampler2D uDimPalette;          // Nx1 RGBA32F: per-code half-dims (box radius)
+uniform float uSubBlock;                // 1 = variable-size boxes (read aDim → palette)
 uniform float uPerspScale;              // persp: px/world at distance 1; ortho: px/world flat
 uniform float uOrtho;                   // 1 = orthographic (skip the /dist)
 uniform float uDemotePx, uPointPx;
@@ -61,7 +64,7 @@ out vec2 vCorner;
 out vec3 vWorldPos;
 void main() {
   vec3 center = uGridOrigin + aIjk * uGridSize;
-  vec3 half_ = uGridSize * 0.5;
+  vec3 half_ = uSubBlock > 0.5 ? texelFetch(uDimPalette, ivec2(int(aDim), 0), 0).rgb : uGridSize * 0.5;
   float r = length(half_);
   float dist = max(distance(uEye, center), 1e-3);
   float distEff = uOrtho > 0.5 ? 1.0 : dist;              // ortho: size is distance-free
@@ -197,6 +200,7 @@ export function createBlocksPipeline(gl) {
     return { prog, uni: {
       viewProj: U('uViewProj'), eye: U('uEye'), right: U('uRight'), up: U('uUp'),
       gridOrigin: U('uGridOrigin'), gridSize: U('uGridSize'),
+      dimPalette: U('uDimPalette'), subBlock: U('uSubBlock'),
       perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'),
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
@@ -218,10 +222,24 @@ export function createBlocksPipeline(gl) {
     const mkBuf = (data) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return b; };
     const bIjk = mkBuf(chunk.ijk), bChan = mkBuf(chunk.chan), bCat = mkBuf(chunk.cat);
     const bRec = mkBuf(chunk.recIdx);                      // filter-mask lookup + pick pass
+    const sub = !!(chunk.dim && chunk.dimPalette);
+    const bDim = sub ? mkBuf(chunk.dim) : null;            // per-block u8 size code
     gl.bindVertexArray(null);
+    // sub-blocked: a small Nx1 RGBA32F palette of half-dims (box radii). NEAREST
+    // sampling of a float texture is core WebGL2 (only float RENDER needs an ext).
+    let dimTex = null;
+    if (sub) {
+      const pal = chunk.dimPalette, data = new Float32Array(pal.length * 4);
+      for (let i = 0; i < pal.length; i++) { data[i * 4] = pal[i][0]; data[i * 4 + 1] = pal[i][1]; data[i * 4 + 2] = pal[i][2]; }
+      dimTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, dimTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, pal.length, 1, 0, gl.RGBA, gl.FLOAT, data);
+      for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, p, gl.NEAREST);
+      for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE);
+    }
     return {
-      kind: 'blocks', vao, buffers: [bIjk, bChan, bCat, bRec],
-      bIjk, bChan, bCat, bRec,
+      kind: 'blocks', vao, buffers: sub ? [bIjk, bChan, bCat, bRec, bDim] : [bIjk, bChan, bCat, bRec],
+      bIjk, bChan, bCat, bRec, bDim, dimTex, dimPalette: sub ? chunk.dimPalette : null,
       count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0,
       grid: chunk.grid, chanRange: chunk.chanRange,
     };
@@ -252,6 +270,17 @@ export function createBlocksPipeline(gl) {
     gl.enableVertexAttribArray(3);
     gl.vertexAttribIPointer(3, 1, gl.UNSIGNED_INT, 0, first * 4);
     gl.vertexAttribDivisor(3, 1);
+    if (c.dimTex) {                                         // sub-blocked: per-block size code + palette
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.bDim);
+      gl.enableVertexAttribArray(4);
+      gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_BYTE, 0, first);
+      gl.vertexAttribDivisor(4, 1);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, c.dimTex);
+      gl.uniform1f(uni.subBlock, 1);
+    } else {
+      gl.disableVertexAttribArray(4);
+      gl.uniform1f(uni.subBlock, 0);
+    }
     gl.uniform3f(uni.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
     gl.uniform3f(uni.gridSize, c.grid.size[0], c.grid.size[1], c.grid.size[2]);
     const span = c.chanRange[1] - c.chanRange[0];
@@ -293,6 +322,8 @@ export function createBlocksPipeline(gl) {
       gl.uniform2f(uni.chanDoc, chanDoc[0], chanDoc[1]);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.dimPalette, 2);   // unit 2 = per-chunk sub-block half-dims; a complete default so regular draws never sample incomplete
+      gl.uniform1f(uni.subBlock, 0);
       gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
       gl.uniform1ui(uni.picked, picked >>> 0);
       gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);

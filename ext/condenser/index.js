@@ -619,8 +619,9 @@ function createChunkBuilder({ frame, chunkSize = 1 << 20, batchSize = 0, morton 
 // block (0,0,0) — the centroid convention throughout. Chunks store raw uint16 IJK
 // (not bbox-normalized lattice positions), so reconstruction is EXACT — and IJK is
 // itself useful for the grid-view join. Half-dims are a chunk-level uniform (all
-// blocks one size). Sub-blocked models don't fit this scheme; they render via the
-// points pipeline until the fine-lattice (IJK + size-code) upgrade.
+// blocks one size) for a REGULAR grid. SUB-BLOCKED models use the same IJK scheme
+// against a FINE lattice (pitch = min dim /2) plus a per-block u8 size code into a
+// shared half-dim palette (chunk.dim + chunk.dimPalette); centroids stay exact.
 //
 // Attributes per block: one SCALAR channel (grade — f32 in, quantized u16 against
 // the chunk's min/max, range carried per chunk) + one CATEGORY channel (u8 codes
@@ -679,19 +680,23 @@ function makeBlockGrid(axes, frame) {
  * IJK is computed against the grid; anything off-lattice snaps to the nearest
  * cell (the provider validated regularity during discovery).
  */
-function buildBlockChunk({ x, y, z, chan, cat, recIdx }, grid, frame, rnd, indices = null) {
+function buildBlockChunk({ x, y, z, chan, cat, recIdx, dim }, grid, frame, rnd, indices = null, dimPalette = null) {
   const n = indices ? indices.length : x.length;
   const o = frame.origin;
   const [gx, gy, gz] = grid.originLocal, [sx, sy, sz] = grid.size;
   const perm = indices ? shuffleInPlace(Uint32Array.from(indices), rnd) : shuffledIndices(n, rnd);
   const ijk = new Uint16Array(3 * n);
   const outChan = new Uint16Array(n), outCat = new Uint8Array(n), outR = new Uint32Array(n);
+  const sub = !!(dim && dimPalette);                        // sub-blocked → per-block size code
+  const outDim = sub ? new Uint8Array(n) : null;
   // chan range over this chunk (quantize against it — per-chunk min/max, §2.1.2)
   let cMin = Infinity, cMax = -Infinity;
   for (let k = 0; k < n; k++) { const v = chan[perm[k]]; if (Number.isFinite(v)) { if (v < cMin) cMin = v; if (v > cMax) cMax = v; } }
   if (!Number.isFinite(cMin)) { cMin = 0; cMax = 0; }
   const cScale = cMax > cMin ? 65535 / (cMax - cMin) : 0;
   let minI = 65535, minJ = 65535, minK = 65535, maxI = 0, maxJ = 0, maxK = 0;
+  // sub-blocked: track actual box faces (variable half-dims) for the cull bbox
+  let fx0 = Infinity, fy0 = Infinity, fz0 = Infinity, fx1 = -Infinity, fy1 = -Infinity, fz1 = -Infinity;
   for (let k = 0; k < n; k++) {
     const i = perm[k];
     const bi = Math.max(0, Math.round((x[i] - o[0] - gx) / sx));
@@ -705,13 +710,25 @@ function buildBlockChunk({ x, y, z, chan, cat, recIdx }, grid, frame, rnd, indic
     outChan[k] = Number.isFinite(cv) ? ((cv - cMin) * cScale + 0.5) | 0 : 0;
     outCat[k] = cat ? cat[i] : 0;
     outR[k] = recIdx[i];
+    if (sub) {
+      const dc = dim[i]; outDim[k] = dc;
+      const h = dimPalette[dc] || [sx / 2, sy / 2, sz / 2];
+      const cx = gx + bi * sx, cy = gy + bj * sy, cz = gz + bk * sz;
+      if (cx - h[0] < fx0) fx0 = cx - h[0]; if (cx + h[0] > fx1) fx1 = cx + h[0];
+      if (cy - h[1] < fy0) fy0 = cy - h[1]; if (cy + h[1] > fy1) fy1 = cy + h[1];
+      if (cz - h[2] < fz0) fz0 = cz - h[2]; if (cz + h[2] > fz1) fz1 = cz + h[2];
+    }
   }
-  // culling bbox = outer faces of the extreme blocks
-  const bboxLocal = Float64Array.of(
-    gx + minI * sx - sx / 2, gy + minJ * sy - sy / 2, gz + minK * sz - sz / 2,
-    gx + maxI * sx + sx / 2, gy + maxJ * sy + sy / 2, gz + maxK * sz + sz / 2,
-  );
-  return { kind: 'blocks', count: n, grid, ijk, chan: outChan, chanRange: [cMin, cMax], cat: outCat, recIdx: outR, bboxLocal };
+  // culling bbox = outer faces of the extreme blocks (variable-size when sub-blocked)
+  const bboxLocal = sub
+    ? Float64Array.of(fx0, fy0, fz0, fx1, fy1, fz1)
+    : Float64Array.of(
+        gx + minI * sx - sx / 2, gy + minJ * sy - sy / 2, gz + minK * sz - sz / 2,
+        gx + maxI * sx + sx / 2, gy + maxJ * sy + sy / 2, gz + maxK * sz + sz / 2,
+      );
+  const chunk = { kind: 'blocks', count: n, grid, ijk, chan: outChan, chanRange: [cMin, cMax], cat: outCat, recIdx: outR, bboxLocal };
+  if (sub) { chunk.dim = outDim; chunk.dimPalette = dimPalette; }
+  return chunk;
 }
 
 // Exact centroid of element k, frame-local (tests + picking).
@@ -730,7 +747,7 @@ function blockLocalCenter(chunk, k) {
  * recStart }). Batch-Morton, sliced, shuffled. Tracks the document chan range
  * (for the color ramp) alongside the local bbox.
  */
-function createBlockChunkBuilder({ frame, grid, chunkSize = 1 << 20, batchSize = 0, seed = 1, onChunk }) {
+function createBlockChunkBuilder({ frame, grid, dimPalette = null, chunkSize = 1 << 20, batchSize = 0, seed = 1, onChunk }) {
   const rnd = mulberry32(seed);
   const batchN = batchSize || chunkSize * 4;
   let pend = [], pendCount = 0;
@@ -753,6 +770,7 @@ function createBlockChunkBuilder({ frame, grid, chunkSize = 1 << 20, batchSize =
       z: concat(Float64Array, pend.map((p) => p.z)),
       chan: concat(Float64Array, pend.map((p) => p.chan)),
       cat: pend.every((p) => p.cat) ? concat(Uint8Array, pend.map((p) => p.cat)) : null,
+      dim: dimPalette && pend.every((p) => p.dim) ? concat(Uint8Array, pend.map((p) => p.dim)) : null,
       recIdx: concat(Uint32Array, pend.map((p) => p.recIdx)),
     };
     const n = pendCount;
@@ -760,7 +778,7 @@ function createBlockChunkBuilder({ frame, grid, chunkSize = 1 << 20, batchSize =
     const order = radixSortIndices(mortonKeys(cols.x, cols.y, cols.z, n), n);
     for (let start = 0; start < n; start += chunkSize) {
       const slice = order.subarray(start, Math.min(start + chunkSize, n));
-      const chunk = buildBlockChunk(cols, grid, frame, rnd, slice);
+      const chunk = buildBlockChunk(cols, grid, frame, rnd, slice, dimPalette);
       doc.count += chunk.count;
       const b = doc.bboxLocal, cb = chunk.bboxLocal;
       for (let i = 0; i < 3; i++) { if (cb[i] < b[i]) b[i] = cb[i]; if (cb[i + 3] > b[i + 3]) b[i + 3] = cb[i + 3]; }
@@ -784,7 +802,7 @@ function createBlockChunkBuilder({ frame, grid, chunkSize = 1 << 20, batchSize =
         const room = batchN - pendCount;
         const n = Math.min(room, raw.count - taken);
         const s = (a) => (a ? a.subarray(taken, taken + n) : null);
-        pend.push({ x: s(raw.x), y: s(raw.y), z: s(raw.z), chan: s(raw.chan), cat: s(raw.cat), recIdx: recIdx.subarray(taken, taken + n) });
+        pend.push({ x: s(raw.x), y: s(raw.y), z: s(raw.z), chan: s(raw.chan), cat: s(raw.cat), dim: s(raw.dim), recIdx: recIdx.subarray(taken, taken + n) });
         pendCount += n; taken += n;
         if (pendCount >= batchN) flushBatch();
       }
@@ -1000,6 +1018,9 @@ const X_RE$blockmodel = /^(x|xc|xcent(er|re)?|xmid|east(ing)?|xworld|centroid_?x
 const Y_RE$blockmodel = /^(y|yc|ycent(er|re)?|ymid|north(ing)?|yworld|centroid_?y)$/i;
 const Z_RE$blockmodel = /^(z|zc|zcent(er|re)?|zmid|elev(ation)?|rl|level|zworld|centroid_?z)$/i;
 const DIM_RE = /^(d[xyz]|[xyz]inc|[xyz]size|[xyz]dim|dim_?[xyz])$/i;
+const DIMX_RE = /^(dx|xinc|xsize|xdim|dim_?x)$/i;
+const DIMY_RE = /^(dy|yinc|ysize|ydim|dim_?y)$/i;
+const DIMZ_RE = /^(dz|zinc|zsize|zdim|dim_?z)$/i;
 const NONGRADE_RE = /^(ijk|id|index|row|i|j|k|dens|density|sg|topo|pct|proportion)$/i;
 
 const WS = 'ws';                                           // whitespace-delimiter sentinel ('\s' in a string is just 's')
@@ -1149,9 +1170,10 @@ const CAP_DISTINCT = 300000;                               // per-axis discovery
 
 // sweep 2 as a shared factory: the same cold-recipe stream whether the header
 // came from a live discovery or a cached `discovered` payload (sidecars)
-function makeDelimitedStream(blob, delim, hasHeaderRow, map, catCol, catCode) {
+function makeDelimitedStream(blob, delim, hasHeaderRow, map, catCol, catCode, dimInfo = null) {
+  const r10 = (v) => Number(v.toPrecision(10));
   return async function* streamChunks({ chunkPoints = 1 << 18, signal: s2, onProgress: op2 } = {}) {
-    const alloc = () => ({ x: new Float64Array(chunkPoints), y: new Float64Array(chunkPoints), z: new Float64Array(chunkPoints), chan: new Float64Array(chunkPoints), cat: catCode ? new Uint8Array(chunkPoints) : null });
+    const alloc = () => ({ x: new Float64Array(chunkPoints), y: new Float64Array(chunkPoints), z: new Float64Array(chunkPoints), chan: new Float64Array(chunkPoints), cat: catCode ? new Uint8Array(chunkPoints) : null, dim: dimInfo ? new Uint8Array(chunkPoints) : null });
     let buf = alloc(), fill = 0, recStart = 0;
     for await (const batch of lineFields(blob, delim, hasHeaderRow, { signal: s2, onProgress: op2 })) {
       for (const f of batch) {
@@ -1160,14 +1182,15 @@ function makeDelimitedStream(blob, delim, hasHeaderRow, map, catCol, catCode) {
         buf.x[fill] = xv; buf.y[fill] = yv; buf.z[fill] = zv;
         buf.chan[fill] = map.chan != null ? +f[map.chan] : 0;
         if (buf.cat) { const c = catCode.get((f[catCol] || '').trim()); buf.cat[fill] = c === undefined ? 0 : c; }
+        if (buf.dim) { const key = `${r10(+f[dimInfo.cols.x])},${r10(+f[dimInfo.cols.y])},${r10(+f[dimInfo.cols.z])}`; const c = dimInfo.code.get(key); buf.dim[fill] = c === undefined ? 0 : c; }
         fill++;
         if (fill === chunkPoints) {
-          yield { count: fill, x: buf.x, y: buf.y, z: buf.z, chan: buf.chan, cat: buf.cat, recStart };
+          yield { count: fill, x: buf.x, y: buf.y, z: buf.z, chan: buf.chan, cat: buf.cat, dim: buf.dim, recStart };
           recStart += fill; buf = alloc(); fill = 0;
         }
       }
     }
-    if (fill) yield { count: fill, x: buf.x.subarray(0, fill), y: buf.y.subarray(0, fill), z: buf.z.subarray(0, fill), chan: buf.chan.subarray(0, fill), cat: buf.cat ? buf.cat.subarray(0, fill) : null, recStart };
+    if (fill) yield { count: fill, x: buf.x.subarray(0, fill), y: buf.y.subarray(0, fill), z: buf.z.subarray(0, fill), chan: buf.chan.subarray(0, fill), cat: buf.cat ? buf.cat.subarray(0, fill) : null, dim: buf.dim ? buf.dim.subarray(0, fill) : null, recStart };
   };
 }
 
@@ -1184,7 +1207,12 @@ async function openBlockModel(blob, { mapping = null, discovered = null, sample 
     };
     const map2 = header.mapping;
     const catCode2 = header.categories ? new Map(header.categories.map((v, i) => [v, i])) : null;
-    return { header, streamChunks: makeDelimitedStream(blob, header.delim, header.hasHeaderRow, map2, map2.cat, catCode2) };
+    // sub-blocked: rebuild the size-code map from the persisted half-dim palette (×2)
+    const r10b = (v) => Number(v.toPrecision(10));
+    const dimInfo2 = header.subBlocked && header.dimCols && header.dimPalette
+      ? { cols: header.dimCols, code: new Map(header.dimPalette.map((hd, i) => [`${r10b(hd[0] * 2)},${r10b(hd[1] * 2)},${r10b(hd[2] * 2)}`, i])) }
+      : null;
+    return { header, streamChunks: makeDelimitedStream(blob, header.delim, header.hasHeaderRow, map2, map2.cat, catCode2, dimInfo2) };
   }
   const head = await blob.slice(0, Math.min(sample, blob.size)).text();
   const sniff = sniffDelimited(head);
@@ -1221,6 +1249,14 @@ async function openBlockModel(blob, { mapping = null, discovered = null, sample 
     }
   }
 
+  // per-block dimension columns (DX/DY/DZ, XINC…) → the model may be SUB-BLOCKED
+  // (variable box size). Discovery tracks the fine pitch (min dim/axis) + the
+  // distinct (dx,dy,dz) triples that become the size-code palette.
+  const dimCols = sniff.header ? { x: sniff.header.findIndex((h) => DIMX_RE.test(h.trim())), y: sniff.header.findIndex((h) => DIMY_RE.test(h.trim())), z: sniff.header.findIndex((h) => DIMZ_RE.test(h.trim())) } : { x: -1, y: -1, z: -1 };
+  const hasDims = dimCols.x >= 0 && dimCols.y >= 0 && dimCols.z >= 0;
+  const minDim = [Infinity, Infinity, Infinity];
+  const dimSet = new Set();
+
   // ── sweep 1: discovery — axis distincts + extents + category dictionary ──
   const ax = [new Set(), new Set(), new Set()];
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
@@ -1243,11 +1279,43 @@ async function openBlockModel(blob, { mapping = null, discovered = null, sample 
       if (ax[1].size < CAP_DISTINCT) ax[1].add(round10(yv));
       if (ax[2].size < CAP_DISTINCT) ax[2].add(round10(zv));
       if (catCol != null && catCounts.size <= 256) { const v = (f[catCol] || '').trim(); if (v) catCounts.set(v, (catCounts.get(v) || 0) + 1); }
+      if (hasDims) {
+        const dx = +f[dimCols.x], dy = +f[dimCols.y], dz = +f[dimCols.z];
+        if (dx > 0 && dy > 0 && dz > 0) {
+          if (dx < minDim[0]) minDim[0] = dx; if (dy < minDim[1]) minDim[1] = dy; if (dz < minDim[2]) minDim[2] = dz;
+          if (dimSet.size <= 300) dimSet.add(`${round10(dx)},${round10(dy)},${round10(dz)}`);
+        }
+      }
     }
   }
 
   const axes = ax.map((s) => (s.size < CAP_DISTINCT ? inferAxis([...s].sort((a, b) => a - b)) : null));
-  const grid = axes.every(Boolean) ? { x: axes[0], y: axes[1], z: axes[2] } : null;
+  let grid = axes.every(Boolean) ? { x: axes[0], y: axes[1], z: axes[2] } : null;
+
+  // ── sub-blocked detection ── dims vary → fine-lattice IJK (pitch = min dim /2,
+  // so every power-of-2 sub-block centroid lands on it) + a size-code palette.
+  // Off the fine lattice (non-power-of-2 splits) → leave it null → points fallback.
+  let subBlocked = false, dimPalette = null, dimInfo = null;
+  if (hasDims && dimSet.size > 1 && Number.isFinite(minDim[0])) {
+    const finePitch = [minDim[0] / 2, minDim[1] / 2, minDim[2] / 2];
+    const fineAxes = [0, 1, 2].map((a) => {
+      if (ax[a].size >= CAP_DISTINCT || !(finePitch[a] > 0)) return null;
+      const vals = [...ax[a]].sort((u, v) => u - v);
+      const origin = vals[0], pitch = finePitch[a];
+      const cnt = Math.round((vals[vals.length - 1] - origin) / pitch) + 1;
+      if (cnt > 65535) return null;
+      const eps = Math.max(pitch * 1e-3, Math.abs(origin) * 1e-6);
+      for (const v of vals) if (Math.abs(origin + Math.round((v - origin) / pitch) * pitch - v) > eps) return null;
+      return { origin, pitch, count: cnt };
+    });
+    if (fineAxes.every(Boolean)) {
+      subBlocked = true;
+      const dims = [...dimSet].slice(0, 256).map((k) => k.split(',').map(Number));
+      dimPalette = dims.map(([dx, dy, dz]) => [dx / 2, dy / 2, dz / 2]);       // half-dims (box radius)
+      dimInfo = { cols: dimCols, code: new Map(dims.map((d, i) => [`${round10(d[0])},${round10(d[1])},${round10(d[2])}`, i])) };
+      grid = { x: fineAxes[0], y: fineAxes[1], z: fineAxes[2] };                // fine lattice → IJK
+    }
+  }
   const categories = catCol != null && catCounts.size > 0 && catCounts.size <= 255
     ? [...catCounts.keys()].sort() : null;
   const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
@@ -1268,6 +1336,7 @@ async function openBlockModel(blob, { mapping = null, discovered = null, sample 
     kind: 'blockmodel', count,
     bbox: { min, max },
     grid,                                                   // null → not a regular grid (points fallback)
+    subBlocked, dimPalette, dimCols: subBlocked ? dimCols : null,   // variable-size boxes: half-dim palette + size-code per block
     columns: sniff.header, mapping: { ...map, cat: categories ? catCol : null },
     delim: sniff.delim, hasHeaderRow,                       // for external sweeps (the filter mask)
     index: { k: indexEvery, offsets: Float64Array.from(anchors) },   // sparse line-offset index (fetchDelimitedRecord)
@@ -1280,7 +1349,7 @@ async function openBlockModel(blob, { mapping = null, discovered = null, sample 
   };
 
   // ── sweep 2 (cold recipe): the shared stream factory ──
-  const streamChunks = makeDelimitedStream(blob, sniff.delim, hasHeaderRow, map, catCol, catCode);
+  const streamChunks = makeDelimitedStream(blob, sniff.delim, hasHeaderRow, map, catCol, catCode, dimInfo);
 
   return { header, streamChunks };
 }
@@ -3790,9 +3859,12 @@ layout(location=0) in vec3 aIjk;        // uint16 raw (integer lattice)
 layout(location=1) in float aChan;      // uint16 normalized (per-chunk range)
 layout(location=2) in float aCat;       // uint8 raw
 layout(location=3) in uint aRec;        // uint32 record index (the join key)
+layout(location=4) in uint aDim;        // uint8 size code → uDimPalette (sub-blocked)
 uniform mat4 uViewProj;
 uniform vec3 uEye, uRight, uUp;
 uniform vec3 uGridOrigin, uGridSize;
+uniform sampler2D uDimPalette;          // Nx1 RGBA32F: per-code half-dims (box radius)
+uniform float uSubBlock;                // 1 = variable-size boxes (read aDim → palette)
 uniform float uPerspScale;              // persp: px/world at distance 1; ortho: px/world flat
 uniform float uOrtho;                   // 1 = orthographic (skip the /dist)
 uniform float uDemotePx, uPointPx;
@@ -3825,7 +3897,7 @@ out vec2 vCorner;
 out vec3 vWorldPos;
 void main() {
   vec3 center = uGridOrigin + aIjk * uGridSize;
-  vec3 half_ = uGridSize * 0.5;
+  vec3 half_ = uSubBlock > 0.5 ? texelFetch(uDimPalette, ivec2(int(aDim), 0), 0).rgb : uGridSize * 0.5;
   float r = length(half_);
   float dist = max(distance(uEye, center), 1e-3);
   float distEff = uOrtho > 0.5 ? 1.0 : dist;              // ortho: size is distance-free
@@ -3961,6 +4033,7 @@ function createBlocksPipeline(gl) {
     return { prog, uni: {
       viewProj: U('uViewProj'), eye: U('uEye'), right: U('uRight'), up: U('uUp'),
       gridOrigin: U('uGridOrigin'), gridSize: U('uGridSize'),
+      dimPalette: U('uDimPalette'), subBlock: U('uSubBlock'),
       perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'),
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
@@ -3982,10 +4055,24 @@ function createBlocksPipeline(gl) {
     const mkBuf = (data) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return b; };
     const bIjk = mkBuf(chunk.ijk), bChan = mkBuf(chunk.chan), bCat = mkBuf(chunk.cat);
     const bRec = mkBuf(chunk.recIdx);                      // filter-mask lookup + pick pass
+    const sub = !!(chunk.dim && chunk.dimPalette);
+    const bDim = sub ? mkBuf(chunk.dim) : null;            // per-block u8 size code
     gl.bindVertexArray(null);
+    // sub-blocked: a small Nx1 RGBA32F palette of half-dims (box radii). NEAREST
+    // sampling of a float texture is core WebGL2 (only float RENDER needs an ext).
+    let dimTex = null;
+    if (sub) {
+      const pal = chunk.dimPalette, data = new Float32Array(pal.length * 4);
+      for (let i = 0; i < pal.length; i++) { data[i * 4] = pal[i][0]; data[i * 4 + 1] = pal[i][1]; data[i * 4 + 2] = pal[i][2]; }
+      dimTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, dimTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, pal.length, 1, 0, gl.RGBA, gl.FLOAT, data);
+      for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, p, gl.NEAREST);
+      for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE);
+    }
     return {
-      kind: 'blocks', vao, buffers: [bIjk, bChan, bCat, bRec],
-      bIjk, bChan, bCat, bRec,
+      kind: 'blocks', vao, buffers: sub ? [bIjk, bChan, bCat, bRec, bDim] : [bIjk, bChan, bCat, bRec],
+      bIjk, bChan, bCat, bRec, bDim, dimTex, dimPalette: sub ? chunk.dimPalette : null,
       count: chunk.count, bboxLocal: chunk.bboxLocal, cursor: 0,
       grid: chunk.grid, chanRange: chunk.chanRange,
     };
@@ -4016,6 +4103,17 @@ function createBlocksPipeline(gl) {
     gl.enableVertexAttribArray(3);
     gl.vertexAttribIPointer(3, 1, gl.UNSIGNED_INT, 0, first * 4);
     gl.vertexAttribDivisor(3, 1);
+    if (c.dimTex) {                                         // sub-blocked: per-block size code + palette
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.bDim);
+      gl.enableVertexAttribArray(4);
+      gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_BYTE, 0, first);
+      gl.vertexAttribDivisor(4, 1);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, c.dimTex);
+      gl.uniform1f(uni.subBlock, 1);
+    } else {
+      gl.disableVertexAttribArray(4);
+      gl.uniform1f(uni.subBlock, 0);
+    }
     gl.uniform3f(uni.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
     gl.uniform3f(uni.gridSize, c.grid.size[0], c.grid.size[1], c.grid.size[2]);
     const span = c.chanRange[1] - c.chanRange[0];
@@ -4057,6 +4155,8 @@ function createBlocksPipeline(gl) {
       gl.uniform2f(uni.chanDoc, chanDoc[0], chanDoc[1]);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.dimPalette, 2);   // unit 2 = per-chunk sub-block half-dims; a complete default so regular draws never sample incomplete
+      gl.uniform1f(uni.subBlock, 0);
       gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
       gl.uniform1ui(uni.picked, picked >>> 0);
       gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
@@ -4158,9 +4258,12 @@ precision highp float;
 layout(location=0) in vec3 aIjk;
 layout(location=2) in float aCat;
 layout(location=3) in uint aRec;
+layout(location=4) in uint aDim;
 uniform mat4 uViewProj;
 uniform vec3 uEye, uRight, uUp;
 uniform vec3 uGridOrigin, uGridSize;
+uniform sampler2D uDimPalette;
+uniform float uSubBlock;
 uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat, uOrtho;
 uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
@@ -4179,7 +4282,7 @@ out vec2 vCorner;
 out vec3 vWorldPos;
 void main() {
   vec3 center = uGridOrigin + aIjk * uGridSize;
-  vec3 half_ = uGridSize * 0.5;
+  vec3 half_ = uSubBlock > 0.5 ? texelFetch(uDimPalette, ivec2(int(aDim), 0), 0).rgb : uGridSize * 0.5;
   float r = length(half_);
   float dist = max(distance(uEye, center), 1e-3);
   float distEff = uOrtho > 0.5 ? 1.0 : dist;
@@ -4380,6 +4483,7 @@ function createPickPipeline(gl) {
   const uBlk = {
     viewProj: U(blk, 'uViewProj'), eye: U(blk, 'uEye'), right: U(blk, 'uRight'), up: U(blk, 'uUp'),
     gridOrigin: U(blk, 'uGridOrigin'), gridSize: U(blk, 'uGridSize'),
+    dimPalette: U(blk, 'uDimPalette'), subBlock: U(blk, 'uSubBlock'),
     perspScale: U(blk, 'uPerspScale'), demotePx: U(blk, 'uDemotePx'), pointPx: U(blk, 'uPointPx'), fixedSplat: U(blk, 'uFixedSplat'),
     ortho: U(blk, 'uOrtho'), fwd: U(blk, 'uFwd'), orthoRay: U(blk, 'uOrthoRay'), backoff: U(blk, 'uBackoff'),
     mask: U(blk, 'uMask'), filterOn: U(blk, 'uFilterOn'), isolate: U(blk, 'uIsolate'),
@@ -4503,6 +4607,7 @@ function createPickPipeline(gl) {
       gl.uniform1f(uBlk.demotePx, 2.0);
       gl.uniform1f(uBlk.pointPx, dpp);
       gl.uniform1f(uBlk.fixedSplat, blocksAsPoints ? 1 : 0);
+      gl.uniform1i(uBlk.dimPalette, 2);                     // unit 2 = sub-block half-dims (per-chunk below)
       for (const [id, group] of byLayer(blkChunks)) {
       const st = stateOf(id);
       setSec(uBlk, st);
@@ -4525,6 +4630,17 @@ function createPickPipeline(gl) {
         gl.enableVertexAttribArray(3);
         gl.vertexAttribIPointer(3, 1, gl.UNSIGNED_INT, 0, 0);
         gl.vertexAttribDivisor(3, 1);
+        if (c.dimTex) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, c.bDim);
+          gl.enableVertexAttribArray(4);
+          gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_BYTE, 0, 0);
+          gl.vertexAttribDivisor(4, 1);
+          gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, c.dimTex);
+          gl.uniform1f(uBlk.subBlock, 1);
+        } else {
+          gl.disableVertexAttribArray(4);
+          gl.uniform1f(uBlk.subBlock, 0);
+        }
         gl.uniform3f(uBlk.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
         gl.uniform3f(uBlk.gridSize, c.grid.size[0], c.grid.size[1], c.grid.size[2]);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.cursor);
@@ -5983,7 +6099,10 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           // (no gl_FragDepth → early-z stays on): the far-field perf lever
           const b = c.bboxLocal;
           const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
-          const rBlock = Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
+          // sub-blocked: fine grid.size is the min pitch — use the largest box radius
+          const rBlock = c.dimPalette
+            ? Math.max(...c.dimPalette.map((h) => Math.hypot(h[0], h[1], h[2])))
+            : Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
           const distNear = Math.max(cam.state.near, c._dist - bboxR);
           return blocksAsPoints || rBlock * perspScale / distNear < 2.0;
         };

@@ -757,7 +757,10 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           // (no gl_FragDepth → early-z stays on): the far-field perf lever
           const b = c.bboxLocal;
           const bboxR = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
-          const rBlock = Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
+          // sub-blocked: fine grid.size is the min pitch — use the largest box radius
+          const rBlock = c.dimPalette
+            ? Math.max(...c.dimPalette.map((h) => Math.hypot(h[0], h[1], h[2])))
+            : Math.hypot(c.grid.size[0], c.grid.size[1], c.grid.size[2]) / 2;
           const distNear = Math.max(cam.state.near, c._dist - bboxR);
           return blocksAsPoints || rBlock * perspScale / distNear < 2.0;
         };

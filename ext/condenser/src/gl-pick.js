@@ -69,9 +69,12 @@ precision highp float;
 layout(location=0) in vec3 aIjk;
 layout(location=2) in float aCat;
 layout(location=3) in uint aRec;
+layout(location=4) in uint aDim;
 uniform mat4 uViewProj;
 uniform vec3 uEye, uRight, uUp;
 uniform vec3 uGridOrigin, uGridSize;
+uniform sampler2D uDimPalette;
+uniform float uSubBlock;
 uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat, uOrtho;
 uniform sampler2D uMask;
 uniform float uFilterOn, uIsolate;
@@ -90,7 +93,7 @@ out vec2 vCorner;
 out vec3 vWorldPos;
 void main() {
   vec3 center = uGridOrigin + aIjk * uGridSize;
-  vec3 half_ = uGridSize * 0.5;
+  vec3 half_ = uSubBlock > 0.5 ? texelFetch(uDimPalette, ivec2(int(aDim), 0), 0).rgb : uGridSize * 0.5;
   float r = length(half_);
   float dist = max(distance(uEye, center), 1e-3);
   float distEff = uOrtho > 0.5 ? 1.0 : dist;
@@ -291,6 +294,7 @@ export function createPickPipeline(gl) {
   const uBlk = {
     viewProj: U(blk, 'uViewProj'), eye: U(blk, 'uEye'), right: U(blk, 'uRight'), up: U(blk, 'uUp'),
     gridOrigin: U(blk, 'uGridOrigin'), gridSize: U(blk, 'uGridSize'),
+    dimPalette: U(blk, 'uDimPalette'), subBlock: U(blk, 'uSubBlock'),
     perspScale: U(blk, 'uPerspScale'), demotePx: U(blk, 'uDemotePx'), pointPx: U(blk, 'uPointPx'), fixedSplat: U(blk, 'uFixedSplat'),
     ortho: U(blk, 'uOrtho'), fwd: U(blk, 'uFwd'), orthoRay: U(blk, 'uOrthoRay'), backoff: U(blk, 'uBackoff'),
     mask: U(blk, 'uMask'), filterOn: U(blk, 'uFilterOn'), isolate: U(blk, 'uIsolate'),
@@ -414,6 +418,7 @@ export function createPickPipeline(gl) {
       gl.uniform1f(uBlk.demotePx, 2.0);
       gl.uniform1f(uBlk.pointPx, dpp);
       gl.uniform1f(uBlk.fixedSplat, blocksAsPoints ? 1 : 0);
+      gl.uniform1i(uBlk.dimPalette, 2);                     // unit 2 = sub-block half-dims (per-chunk below)
       for (const [id, group] of byLayer(blkChunks)) {
       const st = stateOf(id);
       setSec(uBlk, st);
@@ -436,6 +441,17 @@ export function createPickPipeline(gl) {
         gl.enableVertexAttribArray(3);
         gl.vertexAttribIPointer(3, 1, gl.UNSIGNED_INT, 0, 0);
         gl.vertexAttribDivisor(3, 1);
+        if (c.dimTex) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, c.bDim);
+          gl.enableVertexAttribArray(4);
+          gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_BYTE, 0, 0);
+          gl.vertexAttribDivisor(4, 1);
+          gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, c.dimTex);
+          gl.uniform1f(uBlk.subBlock, 1);
+        } else {
+          gl.disableVertexAttribArray(4);
+          gl.uniform1f(uBlk.subBlock, 0);
+        }
         gl.uniform3f(uBlk.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
         gl.uniform3f(uBlk.gridSize, c.grid.size[0], c.grid.size[1], c.grid.size[2]);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.cursor);
