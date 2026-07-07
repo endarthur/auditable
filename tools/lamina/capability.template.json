@@ -12,8 +12,15 @@
     "remote_import": false
   },
   "reach": {
-    "network": "none",
-    "telemetry": false
+    "network": "none — the verified lamina.html artifact (this file) makes zero network requests; connect-src 'none' enforces it",
+    "telemetry": false,
+    "hosted_pwa": {
+      "note": "gentropic.org/lamina (and the MS Store package) wraps this artifact in a PWA shell (index.html + a service worker) that is OUTSIDE this sealed file. The SW runs in its own context (not bound by the page's connect-src) and fetches ONLY same-origin app assets (offline shell cache) + an update check ('is there a newer build?'). It never accesses opened file data — that stays in the page's memory, never handed to the SW — so data confidentiality is unaffected. For provable zero-network, run this downloaded lamina.html from file:// (no SW). Update UI in the app drives the SW via postMessage, not a page fetch, so connect-src none still holds.",
+      "service_worker": true,
+      "network": "same-origin app assets + update check only",
+      "data_egress": false,
+      "third_party": false
+    }
   },
   "filesystem": {
     "reads": "user-opened files only (picker / drag-drop / a recent, which re-grants permission)",

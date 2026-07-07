@@ -60,6 +60,34 @@ never on load) — the doctrine line made executable.
   proven by the injected smoke. Without a `runSmoke`, those claims are reported
   UNVERIFIED, never silently passed.
 
+## The verified unit is the ARTIFACT, not the hosting wrapper (2026-07-07)
+
+seal verifies **the built file** (`micro.html` / `lamina.html`) — the thing it
+hashes, attests, and that a user downloads and runs from `file://`. That file has
+`connect-src 'none'` and **no service worker** → provably zero network. The hosted
+PWA is a SEPARATE layer: the deploy wrapper (`../micro/publish.mjs` etc.) produces
+an `index.html` = the sealed file + an injected `<link manifest>` + a service-worker
+registration. The SW is **outside the sealed artifact** and runs in its own context
+that the page's CSP does not govern, so it CAN reach the network — but only for the
+app's OWN same-origin assets (cache the shell, check "is there a newer build?"). It
+never sees user data (the opened file lives in the PAGE's memory as a Blob, never
+handed to the SW), so the confidentiality guarantee Sealed is *about* is intact.
+
+**Implication for the capability declaration:** state this split explicitly so the
+"Sealed" claim is precisely scoped — the badge is exact for the file, and the hosted
+PWA adds *same-origin app-asset caching + update checks, no data egress, no third
+parties*. Two honest lines: `artifact: { network: none, serviceWorker: false }` +
+`hostedPwa: { serviceWorker: true, network: "same-origin app assets + update check
+only" }`. A user who wants provable zero-network uses the downloaded file.
+
+**SW-mediated updates DON'T break the seal.** A "check for updates" action or an
+update toast in the app work by **`postMessage` to the SW** (the `gcu-sw:*` protocol
+in `@gcu/sw`), not a page `fetch` — the SW does the network, the page never does. So
+`connect-src 'none'` holds, and the code is INERT where there's no SW (the offline
+`file://` download). The seal smoke still sees 0 page requests on load (no controller
+at loopback → the update code no-ops). So the sealed page may CONTAIN update UI; it
+just can't itself fetch.
+
 ## The `runSmoke` contract
 
 Injected by the consumer (seal stays browser-free):

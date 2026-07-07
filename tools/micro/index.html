@@ -6484,11 +6484,26 @@ function showHelp(title, html) {
   $('#helpBody').innerHTML = html;
   $('#help').classList.add('show');
 }
+// Check for a new build. Seal-safe: the page never fetches — it asks the service
+// worker (via the deploy-injected __microCheckUpdate → a gcu-sw postMessage), and
+// the SW does the network. Inert on the offline file:// download (no SW → no global).
+function checkForUpdates() {
+  const fn = window.__microCheckUpdate;
+  if (!fn) { $('#meta').textContent = 'updates: this is the offline file — the hosted app (gentropic.org/micro) auto-updates via its service worker'; return; }
+  $('#meta').textContent = 'checking for updates…';
+  fn().then((r) => {
+    if (r && r.changed) $('#meta').textContent = 'a new version is available — reload to apply (see the banner)';
+    else if (r && r.noSw) $('#meta').textContent = 'updates: no service worker present — nothing to check';
+    else if (r && r.timeout) $('#meta').textContent = 'update check timed out — try again';
+    else $('#meta').textContent = 'micro is up to date';
+  }).catch(() => { $('#meta').textContent = 'update check failed'; });
+}
 $('#mHelp').onclick = () => menuAt($('#mHelp'), [
   { label: 'Keyboard & mouse…', action: () => showHelp('keyboard & mouse', HELP_KEYS) },
   { label: 'Analysis & workbench…', action: () => showHelp('analysis & workbench', HELP_ANALYSIS) },
   { label: 'Full documentation ↗', action: () => window.open('https://gentropic.org/micro/docs/', '_blank', 'noopener') },
   { label: 'Why it’s Sealed (security)…', action: () => sealedInfo() },
+  { label: 'Check for updates…', action: () => checkForUpdates() },
   { label: 'About micro', action: () => showHelp('about micro', HELP_ABOUT) },
 ]);
 $('#helpClose').onclick = () => $('#help').classList.remove('show');
@@ -6891,9 +6906,10 @@ function sealedInfo() {
   const badge = $('#sealBadge'), r = badge.getBoundingClientRect();
   const pop = document.createElement('div'); pop.id = 'sealPop';
   pop.innerHTML = '<h4><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Sealed — nothing leaves this machine</h4>'
-    + '<ul><li><b>No network access.</b> The page policy blocks every connection (<code>connect-src \'none\'</code>) — no telemetry, no cloud, no auto-update.</li>'
+    + '<ul><li><b>No network access from the page.</b> The page policy blocks every connection (<code>connect-src \'none\'</code>) — no telemetry, no cloud, no data egress.</li>'
     + '<li>Your data — point clouds, block models, drillholes — stays on this device (memory / local disk), never uploaded.</li>'
-    + '<li><b>WASM-free</b>, runtime in the clear — the code is readable and auditable, not opaque binary.</li></ul>'
+    + '<li><b>WASM-free</b>, runtime in the clear — the code is readable and auditable, not opaque binary.</li>'
+    + '<li><b>File vs hosted app.</b> The downloadable <code>micro.html</code> is what\'s sealed: zero network, no service worker. The hosted app (gentropic.org/micro) adds a service worker <i>outside</i> the sealed page that caches it for offline use + checks for a newer build — fetching only micro\'s own files, never your data. Run the downloaded file for provable zero-network.</li></ul>'
     + '<div class="dim">Verify the build + how to bring it through approval → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a></div>';
   document.body.appendChild(pop);
   pop.style.left = Math.max(6, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + 'px';
@@ -7043,6 +7059,7 @@ const COMMANDS = [
   { id: 'remove', group: 'Layer', title: 'Remove layer', kw: 'delete close', when: (c) => c.L, run: (c) => removeLayerUI(c.L.id) },
   { id: 'memory', group: 'Tools', title: 'Memory…', kw: 'vram usage ram', run: () => showMemoryInfo() },
   { id: 'sealed', group: 'Help', title: 'Why it\'s Sealed (security)…', kw: 'network privacy offline trust connect-src wasm verify', run: () => sealedInfo() },
+  { id: 'update', group: 'Help', title: 'Check for updates…', kw: 'version new build reload service worker', run: () => checkForUpdates() },
   { id: 'helpwork', group: 'Help', title: 'Analysis & workbench help…', kw: 'grade tonnage swath reconcile join validate lineage figure docs guide', run: () => showHelp('analysis & workbench', HELP_ANALYSIS) },
   { id: 'helpkeys', group: 'Help', title: 'Keyboard & mouse help…', kw: 'shortcuts docs guide', run: () => showHelp('keyboard & mouse', HELP_KEYS) },
 ];
