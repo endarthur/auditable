@@ -3369,9 +3369,10 @@ async function writeGridDisplayCache(L, dir) {
   if (L.storage !== 'project') return 'grid must be copied into the project first';
   const g = gd.grid;
   if (g.nx > 32767 || g.ny > 32767) return 'display too large for the Surfer cache';
-  const gh = await dir.getFileHandle(L.name + '.disp.grd', { create: true });
+  const rel = await layerRelpath(L, dir);
+  const gh = await resolveFileHandle(dir, rel + '.disp.grd', { create: true });
   let w = await gh.createWritable(); await w.write(writeSurferGrd(g)); await w.close();
-  const jh = await dir.getFileHandle(L.name + '.disp.json', { create: true });
+  const jh = await resolveFileHandle(dir, rel + '.disp.json', { create: true });
   w = await jh.createWritable(); await w.write(JSON.stringify({ v: 1, size: gd.blob.size, nx: g.nx, ny: g.ny })); await w.close();
   return null;
 }
@@ -5284,11 +5285,11 @@ function projectManifest() {
   return {
     app: 'micro', version: 1, name: _project.name,
     layers: _layers.map((L) => ({
-      source: L.name,
-      dh: L.dh && L.docs.dhDoc ? {
-        collar: layerFiles(L)[0].name, survey: layerFiles(L)[1].name, intervals: layerFiles(L)[2].name,
+      source: L._relpath || L.name,
+      dh: L.dh && L.docs.dhDoc ? (L._setPath ? { set: L._setPath } : {
+        collar: basename(layerFiles(L)[0].name), survey: basename(layerFiles(L)[1].name), intervals: basename(layerFiles(L)[2].name),
         config: L.docs.dhDoc.config,
-      } : undefined,
+      }) : undefined,
       label: L.label && L.label !== L.name ? L.label : undefined,
       external: L.storage === 'external' || undefined,
       colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible,
@@ -5362,12 +5363,53 @@ function layerFiles(L) {
   const blob = layerBlob(L);
   return blob ? [{ role: 'source', name: L.name, blob }] : [];
 }
+// ── project folder layout: kind subfolders (mirror the layer taxonomy) ──────
+// Files live in a folder named for their layer kind; resolution walks
+// subfolders and stays backward-compatible with flat (bare-name) projects.
+// Drillholes — the one compound load — get a `.holes.json` descriptor binding
+// their three CSVs + desurvey config into one loadable set.
+const basename = (p) => String(p).split('/').pop();
+const joinPath = (a, b) => (a ? a.replace(/\/$/, '') + '/' + b : b);
+function kindDir(L) {
+  if (L.dh) return 'drillholes';
+  const d = L.docs || {};
+  if (d.meshDoc) return 'meshes';
+  if (d.gridDoc) return 'grids';
+  if (d.blockDoc) return 'models';
+  if (d.lasDoc || d.plyDoc) return 'clouds';
+  return '';
+}
+const relPathFor = (L, name) => joinPath(kindDir(L), basename(name));
+async function resolveFileHandle(dir, relpath, { create = false } = {}) {
+  const parts = String(relpath).split('/').filter(Boolean);
+  const name = parts.pop();
+  let d = dir;
+  for (const seg of parts) d = await d.getDirectoryHandle(seg, { create });
+  return d.getFileHandle(name, { create });
+}
+async function removeFileAt(dir, relpath) {
+  const parts = String(relpath).split('/').filter(Boolean);
+  const name = parts.pop();
+  let d = dir;
+  for (const seg of parts) { try { d = await d.getDirectoryHandle(seg); } catch { return; } }
+  try { await d.removeEntry(name); } catch { /* already gone */ }
+}
+// where a layer's primary file actually lives (real path via its handle, else
+// the canonical kind-folder path)
+async function layerRelpath(L, dir) {
+  if (!L.dh && L.handle && dir.resolve) { try { const p = await dir.resolve(L.handle); if (p) return p.join('/'); } catch { /* not a descendant */ } }
+  return relPathFor(L, L.name);
+}
+// the drillhole-set descriptor filename (lives in drillholes/)
+const dhSetName = (L) => (basename(String(L.name || 'holes')).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'holes') + '.holes.json';
 async function copyLayerIn(L, dir) {
+  const kd = kindDir(L);
   for (const fd of layerFiles(L)) {
+    const rel = joinPath(kd, basename(fd.name));
     let exists = null;
-    try { exists = await dir.getFileHandle(fd.name); } catch { /* not there */ }
-    if (exists) { const f = await exists.getFile(); if (f.size === fd.blob.size) continue; }
-    const fh = await dir.getFileHandle(fd.name, { create: true });
+    try { exists = await resolveFileHandle(dir, rel); } catch { /* not there */ }
+    if (exists) { const f = await exists.getFile(); if (f.size === fd.blob.size) { if (!L.dh) L.handle = exists; continue; } }
+    const fh = await resolveFileHandle(dir, rel, { create: true });
     const w = await fh.createWritable();
     await fd.blob.stream().pipeTo(w);
     if (!L.dh) L.handle = fh;
@@ -5420,11 +5462,13 @@ async function saveProject() {
         let inFolder = false;
         if (!L.dh && L.handle && dir.resolve) { try { inFolder = !!(await dir.resolve(L.handle)); } catch { /* not a descendant */ } }
         if (!inFolder) {
-          try {
-            const ex = await dir.getFileHandle(fd.name);
-            const f = await ex.getFile();
-            if (f.size === fd.blob.size) { inFolder = true; if (!L.dh) L.handle = ex; }
-          } catch { /* not there */ }
+          for (const rel of [relPathFor(L, fd.name), basename(fd.name)]) {   // canonical kind folder, then legacy root
+            try {
+              const ex = await resolveFileHandle(dir, rel);
+              const f = await ex.getFile();
+              if (f.size === fd.blob.size) { inFolder = true; if (!L.dh) L.handle = ex; break; }
+            } catch { /* not there */ }
+          }
         }
         if (!inFolder) allIn = false;
       }
@@ -5433,6 +5477,21 @@ async function saveProject() {
     }
     if (outside.length && await askCopyOutside(outside) === 'copy') {
       for (const L of outside) { $('#meta').textContent = `project: copying ${L.name}…`; await copyLayerIn(L, dir); }
+    }
+    // record each layer's real path for the manifest + write the drillhole-set
+    // descriptor (the one compound load: three CSVs + desurvey config → .holes.json)
+    for (const L of _layers) {
+      L._relpath = undefined; L._setPath = undefined;
+      if (L.storage === 'external') { L._relpath = basename(L.name); continue; }
+      if (L.storage !== 'project') continue;
+      if (L.dh && L.docs.dhDoc) {
+        const files = layerFiles(L);
+        const setRel = joinPath('drillholes', dhSetName(L));
+        const desc = { app: 'micro', kind: 'drillholes', collar: basename(files[0].name), survey: basename(files[1].name), intervals: basename(files[2].name), config: L.docs.dhDoc.config };
+        try { const dh2 = await resolveFileHandle(dir, setRel, { create: true }); const w = await dh2.createWritable(); await w.write(JSON.stringify(desc, null, 2) + '\n'); await w.close(); L._setPath = setRel; } catch { /* fall back to inline manifest */ }
+      } else {
+        L._relpath = await layerRelpath(L, dir);
+      }
     }
     // grid display-cache sidecars: the decimated/overview DISPLAY grid, stored
     // as compact Surfer binary so a huge DEM's project reopens WITHOUT
@@ -5456,7 +5515,7 @@ async function saveProject() {
           },
           colStats: L._colStats || undefined,
         };
-        const mh = await dir.getFileHandle(L.name + '.meta.json', { create: true });
+        const mh = await resolveFileHandle(dir, (L._relpath || relPathFor(L, L.name)) + '.meta.json', { create: true });
         const mw = await mh.createWritable();
         await mw.write(JSON.stringify(meta));
         await mw.close();
@@ -5558,15 +5617,24 @@ async function openProjectDir(dir) {
       const ls = mf.layers[i];
       plRow(i, 'loading…');
       if (ls.dh) {
-        // drillholes restore from the three in-folder files + the saved config
+        // drillholes restore from the three files + config — via the .holes.json
+        // descriptor (paths relative to its folder) or the legacy inline form
+        let dhRef = ls.dh, setDir = '';
+        if (ls.dh.set) {
+          try {
+            setDir = ls.dh.set.split('/').slice(0, -1).join('/');
+            const desc = JSON.parse(await (await (await resolveFileHandle(dir, ls.dh.set)).getFile()).text());
+            dhRef = { collar: desc.collar, survey: desc.survey, intervals: desc.intervals, config: desc.config };
+          } catch { $('#meta').textContent = `project: drillhole set “${ls.dh.set}” missing/invalid — layer skipped`; plRow(i, 'skipped — set missing', 'skip'); continue; }
+        }
         const dhFiles = {};
         let missing = null;
         for (const role of ['collar', 'survey', 'intervals']) {
-          try { dhFiles[role] = await (await dir.getFileHandle(ls.dh[role])).getFile(); }
-          catch { missing = ls.dh[role]; break; }
+          try { dhFiles[role] = await (await resolveFileHandle(dir, joinPath(setDir, dhRef[role]))).getFile(); }
+          catch { missing = dhRef[role]; break; }
         }
         if (missing) { $('#meta').textContent = `project: drillhole file “${missing}” missing from the folder — layer skipped`; plRow(i, `skipped — ${missing} missing`, 'skip'); continue; }
-        await openDrillholeLayer(dhFiles, ls.dh.config || {}, _layers.length ? 'add' : 'replace');
+        await openDrillholeLayer(dhFiles, dhRef.config || {}, _layers.length ? 'add' : 'replace');
         const Ld = activeLayer();
         if (Ld) {
           Ld.storage = 'project';
@@ -5606,7 +5674,7 @@ async function openProjectDir(dir) {
           if (!file) { $('#meta').textContent = `project: “${ls.source}” skipped (linked outside the folder)`; plRow(i, 'skipped — linked outside, not located', 'skip'); continue; }
         }
       } else {
-        try { handle = await dir.getFileHandle(ls.source); file = await handle.getFile(); }
+        try { handle = await resolveFileHandle(dir, ls.source); file = await handle.getFile(); }
         catch { $('#meta').textContent = `project: “${ls.source}” missing from the folder — skipped`; plRow(i, 'skipped — missing from the folder', 'skip'); continue; }
       }
       if (handle) _fileHandles.set(file, handle);
@@ -5618,9 +5686,9 @@ async function openProjectDir(dir) {
       // skipping the re-decimation (eval still windows the source full res)
       if (ls.kind !== 'mesh' && /\.(tif|tiff)$/i.test(ls.source)) {
         try {
-          const jj = JSON.parse(await (await (await dir.getFileHandle(ls.source + '.disp.json')).getFile()).text());
+          const jj = JSON.parse(await (await (await resolveFileHandle(dir, ls.source + '.disp.json')).getFile()).text());
           if (jj && jj.v === 1 && jj.size === file.size) {
-            const grd = await readSurferGrd(await (await dir.getFileHandle(ls.source + '.disp.grd')).getFile());
+            const grd = await readSurferGrd(await (await resolveFileHandle(dir, ls.source + '.disp.grd')).getFile());
             overR.displayCache = grd;
           }
         } catch { /* no cache — decimate as usual */ }
@@ -5629,12 +5697,12 @@ async function openProjectDir(dir) {
       let sidecar = null;
       if (ls.kind !== 'mesh' && /\.(csv|txt|dat|asc|xyz|pts)$/i.test(ls.source)) {
         try {
-          const mh = await dir.getFileHandle(ls.source + '.meta.json');
+          const mh = await resolveFileHandle(dir, ls.source + '.meta.json');
           const mj = JSON.parse(await (await mh.getFile()).text());
           if (mj && mj.v === 1 && mj.size === file.size) { sidecar = mj; overR.discovered = mj.header; }
         } catch { /* no sidecar — full discovery as usual */ }
       }
-      await openBlob(file, ls.source, i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
+      await openBlob(file, basename(ls.source), i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
       { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; } }
       const L = activeLayer();
       if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
@@ -5681,6 +5749,49 @@ async function openProjectPicker() {
   try { await openProjectDir(await window.showDirectoryPicker({ mode: 'readwrite' })); } catch { /* cancelled */ }
 }
 function closeProject() { _project = null; _views = []; updateProjectTitle(); }
+// Tidy: migrate an already-saved project's files into their kind subfolders
+// (drillholes / models / clouds / meshes / grids), carrying sidecars along and
+// rewriting project.json + the drillhole descriptors. Files are MOVED (not
+// copied), confirmed first; external/linked layers stay put.
+async function tidyProject() {
+  if (!_project) { $('#meta').textContent = 'tidy: save the project to a folder first'; return; }
+  const dir = _project.dir;
+  const ok = await microConfirm('Tidy project folder',
+    'Move each layer file into its kind subfolder (drillholes / models / clouds / meshes / grids), carry its sidecars along, and rewrite project.json. Files are moved, not copied. External/linked layers stay where they are.',
+    'Tidy', 'Cancel');
+  if (!ok) return;
+  try {
+    if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'tidy: write permission denied'; return; }
+    let moved = 0;
+    for (const L of _layers) {
+      if (L.storage !== 'project') continue;
+      for (const fd of layerFiles(L)) {
+        const target = relPathFor(L, fd.name);
+        let curRel = null;                                          // where the file is now
+        if (!L.dh && L.handle && dir.resolve) { try { const p = await dir.resolve(L.handle); if (p) curRel = p.join('/'); } catch { /* not a descendant */ } }
+        if (!curRel) { for (const c of [target, basename(fd.name)]) { try { await resolveFileHandle(dir, c); curRel = c; break; } catch { /* not there */ } } }
+        if (!curRel || curRel === target) continue;                 // not found, or already placed
+        const bytes = await (await (await resolveFileHandle(dir, curRel)).getFile()).arrayBuffer();
+        const nh = await resolveFileHandle(dir, target, { create: true });
+        const w = await nh.createWritable(); await w.write(bytes); await w.close();
+        if (!L.dh) L.handle = nh;
+        for (const suf of ['.meta.json', '.disp.grd', '.disp.json']) {   // sidecars ride along
+          try {
+            const sb = await (await (await resolveFileHandle(dir, curRel + suf)).getFile()).arrayBuffer();
+            const sh = await resolveFileHandle(dir, target + suf, { create: true });
+            const sw = await sh.createWritable(); await sw.write(sb); await sw.close();
+            await removeFileAt(dir, curRel + suf);
+          } catch { /* no such sidecar */ }
+        }
+        await removeFileAt(dir, curRel);
+        moved++;
+      }
+    }
+    markProjectDirty();
+    await saveProject();                                            // rewrites project.json + writes descriptors at the new paths
+    $('#meta').textContent = moved ? `project tidied — ${moved} file${moved === 1 ? '' : 's'} moved into kind folders` : 'project already tidy';
+  } catch (e) { $('#meta').textContent = `tidy failed — ${e.message}`; }
+}
 // File → New project: back to the empty slate. Confirmed — it closes every
 // layer and drops the project link; nothing on disk is touched.
 async function newProject() {
@@ -5893,7 +6004,8 @@ $('#mFile').onclick = () => {
     items.push({ sep: true },
       { label: 'Open project folder…', action: openProjectPicker },
       { label: _project ? `Save project${_project.dirty ? ' •' : ''}` : 'Save project', kbd: 'Ctrl+S', action: saveProject },
-      { label: 'Save project as…', action: saveProjectAs });
+      { label: 'Save project as…', action: saveProjectAs },
+      { label: 'Tidy project folder…', action: tidyProject });
     if (_project) items.push({ label: `Close project (${_project.name})`, action: closeProject });
   }
   if (_remember && _recents.length) {
@@ -6623,6 +6735,7 @@ const COMMANDS = [
   { id: 'new', group: 'File', title: 'New grid / block model…', kw: 'create empty cover common lattice', run: () => openNewDialog() },
   { id: 'newproj', group: 'File', title: 'New project (clear)', kw: 'reset slate', run: () => newProject() },
   { id: 'save', group: 'File', title: 'Save project', kw: 'store', when: () => hasFSAA, run: () => saveProject() },
+  { id: 'tidy', group: 'File', title: 'Tidy project folder', kw: 'organize subfolders kind reorganize move drillholes models clouds meshes grids', when: () => hasFSAA && !!_project, run: () => tidyProject() },
   { id: 'png', group: 'File', title: 'Save viewport PNG', kw: 'screenshot image capture', run: () => $('#btnShot').click() },
   { id: 'figure', group: 'File', title: 'Export figure (PNG)…', kw: 'decorations scale bar north legend title report', run: () => exportFigure() },
   { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
@@ -9476,7 +9589,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
