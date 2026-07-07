@@ -15,7 +15,7 @@ export { buildSoupChunk, soupLocalCentroid, createSoupChunkBuilder, soupFromMesh
 export { createSoupPipeline } from './gl-soup.js';
 export { categoryPalettePixels, createBlocksPipeline } from './gl-blocks.js';
 export { createPickPipeline } from './gl-pick.js';
-export { openDmModel, fetchDmRecord } from './dm-provider.js';
+export { openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe } from './dm-provider.js';
 export { parsePlyHeader, openPly } from './ply.js';
 export { mat4Perspective, mat4Ortho, mat4LookAt, mat4Multiply, transformPoint, frustumPlanes, aabbInFrustum, createOrbitCamera, attachOrbitInput } from './camera.js';
 export { makeProgram, rampPixels, palettePixels, uploadChunk, createRenderer } from './gl.js';

@@ -5312,6 +5312,74 @@ async function fetchDmRecord(blob, h, rec) {
   return decodeRecord(bytes, h);                           // positional values, h.columns order
 }
 
+// ── Datamine WIREFRAME (triangulated surface / DTM / solid) ──────────────────
+// A Datamine wireframe is a PAIR of .dm files: a POINTS file (XP/YP/ZP + PID) and
+// a TRIANGLES file (PID1/PID2/PID3 indexing the points by id), by convention named
+// <base>pt.dm / <base>tr.dm. Together they're an indexed mesh — the same
+// { vertices, triangles } shape the OBJ/MSH/PLY providers return, so buildMeshChunk
+// and the whole mesh pipeline take it unchanged.
+
+// Peek a .dm's column names without the block-model requirement (openDmModel throws
+// for non-block-model files). Returns names[] or null if not a recognizable .dm.
+async function peekDmColumns(blob) {
+  const head = new Uint8Array(await blob.slice(0, Math.min(8192, blob.size)).arrayBuffer());
+  const fmt = detectDM(head);
+  if (!fmt) return null;
+  try { return parseHeader(head, fmt).columns.map((c) => c.name); } catch { return null; }
+}
+
+// Classify a .dm by its fields: a wireframe points half, a triangle half, or null.
+function dmWireframeRole(names) {
+  if (!names) return null;
+  const has = (n) => names.some((c) => String(c).toUpperCase() === n);
+  if (has('PID1') && has('PID2') && has('PID3')) return 'triangles';
+  if (has('PID') && has('XP') && has('YP') && has('ZP')) return 'points';
+  return null;
+}
+
+// Join a points file + a triangles file into a mesh. Reads both whole (wireframes
+// are small — 2–4 k records is typical); maps PID → 0-based vertex index (gaps ok);
+// drops any triangle whose vertices don't resolve (reports the count). Multiple
+// GROUPs merge into one mesh for v1.
+async function openDmWireframe(ptBlob, trBlob) {
+  const pb = new Uint8Array(await ptBlob.arrayBuffer());
+  const ph = parseHeader(pb, detectDM(pb) || {});
+  const pu = ph.columns.map((c) => c.name.toUpperCase());
+  const xi = pu.indexOf('XP'), yi = pu.indexOf('YP'), zi = pu.indexOf('ZP'), pid = pu.indexOf('PID');
+  if (xi < 0 || yi < 0 || zi < 0 || pid < 0) throw new Error('dm wireframe: the points file needs XP/YP/ZP/PID');
+  const idxOfPid = new Map();
+  const vx = [];
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  let n = 0;
+  for (let i = 0; i < ph.recordCount; i++) {
+    const { offset, length } = recordRange(ph, i);
+    const v = decodeRecord(pb.subarray(offset, offset + length), ph);
+    const id = v[pid], x = v[xi], y = v[yi], z = v[zi];
+    if (id == null || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    idxOfPid.set(id, n++); vx.push(x, y, z);
+    if (x < min[0]) min[0] = x; if (x > max[0]) max[0] = x;
+    if (y < min[1]) min[1] = y; if (y > max[1]) max[1] = y;
+    if (z < min[2]) min[2] = z; if (z > max[2]) max[2] = z;
+  }
+  const tb = new Uint8Array(await trBlob.arrayBuffer());
+  const th = parseHeader(tb, detectDM(tb) || {});
+  const tu = th.columns.map((c) => c.name.toUpperCase());
+  const a = tu.indexOf('PID1'), b = tu.indexOf('PID2'), c = tu.indexOf('PID3');
+  if (a < 0 || b < 0 || c < 0) throw new Error('dm wireframe: the triangles file needs PID1/PID2/PID3');
+  const tri = [];
+  let dropped = 0;
+  for (let i = 0; i < th.recordCount; i++) {
+    const { offset, length } = recordRange(th, i);
+    const r = decodeRecord(tb.subarray(offset, offset + length), th);
+    const i1 = idxOfPid.get(r[a]), i2 = idxOfPid.get(r[b]), i3 = idxOfPid.get(r[c]);
+    if (i1 == null || i2 == null || i3 == null || i1 === i2 || i2 === i3 || i1 === i3) { dropped++; continue; }
+    tri.push(i1, i2, i3);
+  }
+  if (!n || !tri.length) throw new Error('dm wireframe: no resolvable triangles');
+  const vertices = Float64Array.from(vx), triangles = Uint32Array.from(tri);
+  return { header: { kind: 'mesh', format: 'dm-wireframe', vertexCount: n, triCount: triangles.length / 3 | 0, bbox: { min, max }, dropped }, vertices, triangles };
+}
+
 // ── src/camera.js ──
 
 // @gcu/condenser — minimal mat4 math + an orbit camera. Raw WebGL2 needs ~four
@@ -6543,6 +6611,9 @@ export {
   createPickPipeline,
   openDmModel,
   fetchDmRecord,
+  peekDmColumns,
+  dmWireframeRole,
+  openDmWireframe,
   parsePlyHeader,
   openPly,
   mat4Perspective,

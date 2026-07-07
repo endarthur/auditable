@@ -568,7 +568,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { compileBool, compileValue, validate, complete, parse, deps } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
@@ -1658,12 +1658,18 @@ function orientBySignedVolume(V, T) {
   for (let t = 0; t < T.length; t += 3) { flipped[t] = T[t]; flipped[t + 1] = T[t + 2]; flipped[t + 2] = T[t + 1]; }
   return flipped;
 }
+// Re-derive a context mesh's { vertices, triangles } from its source(s). A Datamine
+// wireframe is a pt/tr PAIR (md.ptBlob + md.blob); everything else is single-file.
+async function reReadMesh(md) {
+  if (md.header.format === 'dm-wireframe') return openDmWireframe(md.ptBlob, md.blob);
+  const open = /\.msh$/i.test(md.name) ? openMsh : /\.obj$/i.test(md.name) ? openObj : /\.lfm$/i.test(md.name) ? openLfmMesh : openPlyMesh;
+  return open(md.blob);
+}
 async function solidOrientedMesh(meshL) {
   if (meshL._solidMesh) return meshL._solidMesh;
   const md = meshL.docs && meshL.docs.meshDoc;
   if (!md || md.header.soup) return null;                  // context tier only (soup keeps no CPU triangles)
-  const open = /\.msh$/i.test(md.name) ? openMsh : /\.obj$/i.test(md.name) ? openObj : /\.lfm$/i.test(md.name) ? openLfmMesh : openPlyMesh;
-  const m = await open(md.blob);
+  const m = await reReadMesh(md);
   // topology: edge → face count; a boundary edge has exactly one face
   const edges = new Map();
   const T = m.triangles;
@@ -3644,8 +3650,53 @@ function setActiveLayer(id) {
 }
 async function openBlobs(files, mode = 'replace', at = null) {
   if (!files.length) return;
-  await openBlob(files[0], files[0].name, mode === 'add' ? 'add' : 'replace', at);
-  for (let i = 1; i < files.length; i++) await openBlob(files[i], files[i].name, 'add');
+  // Datamine WIREFRAMES arrive as a pt/tr PAIR (points + triangles, two .dm files).
+  // Detect them among the opened files (by fields — XP/YP/ZP+PID vs PID1/2/3) and
+  // load each pair as ONE mesh; everything else opens normally. Pairs a points with
+  // a triangles file, preferring the same <base>pt/<base>tr base name.
+  const { pairs, singles } = await detectDmWireframePairs(files);
+  let first = true;
+  const openNext = async (fn) => { await fn(first && mode !== 'add' ? 'replace' : 'add', first ? at : null); first = false; };
+  for (const [pt, tr] of pairs) await openNext((m, a) => openDmWireframeBlob(pt, tr, m, a));
+  for (const f of singles) await openNext((m, a) => openBlob(f, f.name, m, a));
+}
+async function detectDmWireframePairs(files) {
+  const dm = files.filter((f) => /\.dm$/i.test(f.name));
+  if (dm.length < 2) return { pairs: [], singles: files };
+  const role = new Map();
+  for (const f of dm) { try { role.set(f, dmWireframeRole(await peekDmColumns(f))); } catch { role.set(f, null); } }
+  const pts = dm.filter((f) => role.get(f) === 'points'), trs = dm.filter((f) => role.get(f) === 'triangles');
+  const pairs = [], used = new Set();
+  const baseOf = (n) => n.replace(/\.dm$/i, '').replace(/(pt|tr)$/i, '');
+  for (const pt of pts) {
+    const b = baseOf(pt.name);
+    const tr = trs.find((t) => !used.has(t) && baseOf(t.name) === b) || trs.find((t) => !used.has(t));
+    if (tr) { pairs.push([pt, tr]); used.add(pt); used.add(tr); }
+  }
+  return { pairs, singles: files.filter((f) => !used.has(f)) };
+}
+// Open a Datamine wireframe pair as a single mesh layer (routes the joined mesh
+// through openMeshDoc's static path via opts.prebuilt).
+async function openDmWireframeBlob(ptFile, trFile, mode = 'replace', at = null) {
+  if (mode !== 'add') closeAllLayers();
+  const lid = allocLayerId('mesh');
+  if (lid == null) { $('#meta').textContent = 'mesh layer limit reached — remove one first'; return; }
+  const first = _layers.length === 0;
+  const base = trFile.name.replace(/\.dm$/i, '').replace(/tr$/i, '');
+  const name = `${base || 'wireframe'} (Datamine wireframe)`;
+  _layers.push({ id: lid, name, kind: 'mesh', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'loose', lineage: openLineage(name, trFile) });
+  _activeId = lid;
+  $('#empty').style.display = 'none';
+  $('#meta').textContent = `${name} — joining points + triangles…`;
+  try {
+    const mesh = await openDmWireframe(ptFile, trFile);
+    await openMeshDoc(trFile, name, { layer: lid, first, prebuilt: mesh, ptBlob: ptFile });
+    const drop = mesh.header.dropped ? ` · ${mesh.header.dropped} triangles dropped (unresolved)` : '';
+    $('#meta').textContent = `${name} — ${mesh.header.triCount.toLocaleString()} triangles · ${mesh.header.vertexCount.toLocaleString()} vertices${drop}`;
+    const L = layerById(lid); if (L) L.colorSel = $('#colorBy').value;
+    renderLayers();
+    dispatchEvent(new Event('micro:project-dirty'));
+  } catch (e) { $('#meta').textContent = `${name} — ${e.message}`; const L = layerById(lid); if (L) removeLayerUI(lid); }
 }
 // provenance: every layer carries a lineage tree — how it was made. Opened
 // files are leaves (op:'open'); derived ops (join/reconcile/optimize/keyjoin/
@@ -3960,8 +4011,7 @@ async function meshToGridLayer(meshL, { cell, keep = 'top', extend = 'none', hol
   const md = meshL.docs && meshL.docs.meshDoc;
   if (!md) { $('#meta').textContent = 'mesh → grid: needs a context-tier mesh'; return null; }
   $('#meta').textContent = `${meshL.label || meshL.name} — reading mesh…`;
-  const open = /\.msh$/i.test(md.name) ? openMsh : /\.obj$/i.test(md.name) ? openObj : /\.lfm$/i.test(md.name) ? openLfmMesh : openPlyMesh;
-  const m = await open(md.blob);
+  const m = await reReadMesh(md);
   const bb = m.header.bbox;
   const extent = Math.max(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1]);
   const dx = geom ? geom.dx : (cell && cell > 0 ? cell : niceStep(extent / 400));
@@ -4181,7 +4231,7 @@ async function openMeshDoc(blob, name, opts = {}) {
   const setupLayer = (header) => {
     if (!L) return;
     L.kind = 'mesh';
-    L.docs = { meshDoc: { blob, name, header } };
+    L.docs = { meshDoc: { blob, name, header, ptBlob: opts.ptBlob || null } };
     L.tint = opts.tint || '#9ea3a8';
     L.opacity = opts.opacity != null ? opts.opacity : 1;
     renderer.setLayerMeshStyle(lid, { tint: hexToRgb01(L.tint), opacity: L.opacity });
@@ -4192,13 +4242,14 @@ async function openMeshDoc(blob, name, opts = {}) {
   // file ever being held whole; .msh/.obj formats are whole-file reads anyway,
   // so their vertices are transient and only the soup stays resident.
   let header = null, soupSrc = null;
-  if (/\.ply$/i.test(name) && (opts.forceSoup || await plyFaceCount(blob) > CONTEXT_TRI_CAP)) {
+  if (!opts.prebuilt && /\.ply$/i.test(name) && (opts.forceSoup || await plyFaceCount(blob) > CONTEXT_TRI_CAP)) {
     const doc = await openPlySoup(blob, { onProgress: (a, b2) => { $('#meta').textContent = `${name} — reading vertices… ${Math.round(100 * a / b2)}%`; } });
     header = doc.header;
     soupSrc = (o) => doc.streamChunks(o);
   } else {
-    const open = /\.msh$/i.test(name) ? openMsh : /\.obj$/i.test(name) ? openObj : /\.lfm$/i.test(name) ? openLfmMesh : openPlyMesh;
-    const m = await open(blob);
+    // prebuilt = an already-joined mesh (e.g. a Datamine pt/tr wireframe pair);
+    // otherwise pick the single-file provider by extension.
+    const m = opts.prebuilt || await (/\.msh$/i.test(name) ? openMsh : /\.obj$/i.test(name) ? openObj : /\.lfm$/i.test(name) ? openLfmMesh : openPlyMesh)(blob);
     header = m.header;
     if (opts.forceSoup || header.triCount > CONTEXT_TRI_CAP) {
       header = { ...header, soup: true };
@@ -4364,7 +4415,9 @@ async function describeFile(f) {
       d.split = groups.length > 1;                         // default: split (a group keeps it tidy)
       d.desc = 'Wavefront mesh (.obj)' + (groups.length > 1 ? ` · ${groups.length} objects` : '');
     } else if (/\.dm$/i.test(name)) {
-      d.kind = 'dm'; d.desc = 'Datamine .dm block model';
+      const wf = dmWireframeRole(await peekDmColumns(f).catch(() => null));
+      if (wf) { d.kind = 'dm-wireframe'; d.wfRole = wf; d.desc = `Datamine wireframe · ${wf} (pairs with its ${wf === 'points' ? 'triangles' : 'points'} file)`; }
+      else { d.kind = 'dm'; d.desc = 'Datamine .dm block model'; }
     } else if (/\.(parquet|pq)$/i.test(name)) {
       d.kind = 'blocks';
       // the footer alone (range-read from the tail) yields the census — no
@@ -4390,6 +4443,7 @@ async function describeFile(f) {
   // delimited/parquet don't offer grid). Drillhole roles arrive in stage 2b.
   d.interps = d.kind === 'ply' ? [['mesh', 'mesh'], ['points', 'points']]
     : d.kind === 'mesh' ? [['mesh', 'mesh']]
+    : d.kind === 'dm-wireframe' ? [['wireframe', 'wireframe (mesh)']]
     : d.kind === 'grid' ? [['grid', 'grid']]
     : d.kind === 'dm' ? [['blocks', 'block model'], ['points', 'points']]
     : d.kind === 'las' ? [['points', 'points']]
@@ -4397,6 +4451,7 @@ async function describeFile(f) {
     : d.kind === 'delimited' ? [['blocks', 'block model'], ['points', 'points'], ['collar', 'DH collar'], ['survey', 'DH survey'], ['intervals', 'DH intervals']]
     : [['points', 'points']];
   d.asKind = d.kind === 'ply' ? (d.plyFaces ? 'mesh' : 'points')
+    : d.kind === 'dm-wireframe' ? 'wireframe'
     : d.kind === 'mesh' ? 'mesh' : d.kind === 'grid' ? 'grid' : d.kind === 'dm' ? 'blocks'
     : d.kind === 'las' ? 'points'
     : d.kind === 'delimited' ? (d.dhRole || (d.forcePoints ? 'points' : 'blocks'))
@@ -4551,6 +4606,21 @@ function renderOfDialog() {
   }
   body.appendChild(modeRow);
 }
+// pair Datamine wireframe halves (points + triangles) among the dialog rows,
+// preferring the same <base>pt/<base>tr base name (mirrors assembleDhSets).
+function assembleWireframePairs(rows) {
+  const wf = rows.filter((r) => r.load && r.kind === 'dm-wireframe' && r.asKind === 'wireframe');
+  const pts = wf.filter((r) => r.wfRole === 'points'), trs = wf.filter((r) => r.wfRole === 'triangles');
+  const pairs = [], used = new Set();
+  const baseOf = (n) => n.replace(/\.dm$/i, '').replace(/(pt|tr)$/i, '');
+  for (const pt of pts) {
+    const b = baseOf(pt.name);
+    const tr = trs.find((t) => !used.has(t) && baseOf(t.name) === b) || trs.find((t) => !used.has(t));
+    if (tr) { pairs.push({ pt, tr }); used.add(pt); used.add(tr); }
+  }
+  const wfFiles = new Set(wf.map((r) => r.file)), pairFiles = new Set([...used].map((r) => r.file));
+  return { pairs, wfFiles, pairFiles, unpaired: wf.length - used.size };
+}
 $('#ofOpen').onclick = async () => {
   const st = _ofDlg;
   $('#ofDlg').classList.remove('show');
@@ -4558,10 +4628,12 @@ $('#ofOpen').onclick = async () => {
   const sets = assembleDhSets(st.rows).filter(dhSetComplete);
   const inSet = new Set();                                 // files consumed by a drillhole set
   for (const s of sets) { inSet.add(s.collar.file); inSet.add(s.survey.file); for (const iv of s.intervals) inSet.add(iv.file); }
-  // non-drillhole rows: everything loaded that isn't a role-assigned file in a set
-  const toLoad = st.rows.filter((r) => r.load && !inSet.has(r.file) && !['collar', 'survey', 'intervals'].includes(r.asKind));
+  const wire = assembleWireframePairs(st.rows);            // Datamine wireframe pt/tr pairs
+  // non-compound rows: everything loaded that isn't a drillhole role or a wireframe half
+  const toLoad = st.rows.filter((r) => r.load && !inSet.has(r.file) && !wire.wfFiles.has(r.file) && !['collar', 'survey', 'intervals'].includes(r.asKind));
   if (st.mode === 'replace') closeAllLayers();
   let first = st.mode === 'replace' || !_layers.length;
+  for (const { pt, tr } of wire.pairs) { await openDmWireframeBlob(pt.file, tr.file, first ? 'replace' : 'add'); first = false; }
   for (const r of toLoad) {
     const over = {};
     if (r.mapping && r.kind === 'delimited') over.mapping = { x: r.mapping.x ?? 0, y: r.mapping.y ?? 1, z: r.mapping.z ?? 2, chan: r.mapping.chan ?? null, cat: r.mapping.cat ?? null };
@@ -4573,6 +4645,7 @@ $('#ofOpen').onclick = async () => {
     first = false;
   }
   for (const set of sets) { await loadDrillholeSet(set, st.dhCfg[set.idx] || {}, first); first = false; }
+  if (wire.unpaired) $('#meta').textContent = `note: ${wire.unpaired} Datamine wireframe file(s) had no matching pt/tr partner — open both halves together to view the mesh`;
   _ofDlg = null;
 };
 $('#ofCancel').onclick = () => { $('#ofDlg').classList.remove('show'); _ofDlg = null; };
@@ -4870,6 +4943,12 @@ async function openBlocksBlob(blob, name, opts = {}) {
 async function openDmBlob(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : _activeId;
   _lasDoc = null; _plyDoc = null;
+  // a lone Datamine wireframe half → guide the user to open the pair (a wireframe
+  // is a points file + a triangles file; one alone isn't a viewable model)
+  if (opts.chan == null) {
+    const role = dmWireframeRole(await peekDmColumns(blob).catch(() => null));
+    if (role) { const other = role === 'points' ? 'triangles (…tr.dm)' : 'points (…pt.dm)'; throw new Error(`Datamine wireframe ${role} file — open it together with its ${other} file to view the mesh`); }
+  }
   $('#meta').textContent = `${name} — reading DD…`;
   const mapping = opts.chan != null && _blockDoc && _blockDoc.header ? { chan: opts.chan } : null;
   renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);

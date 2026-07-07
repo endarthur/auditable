@@ -406,6 +406,49 @@ test('dm provider: rejects a non-model .dm with direction', async () => {
   await assert.rejects(() => openDmModel(blob), /XC|centroid/);
 });
 
+import { peekDmColumns, dmWireframeRole, openDmWireframe } from '../ext/condenser/src/main.js';
+
+test('dm wireframe: pt/tr pair → indexed mesh (PID join, roles, gaps)', async () => {
+  // a synthetic Datamine wireframe: 4 corner vertices (non-sequential PIDs) + 2
+  // triangles (a quad). NOT the mystery real files — a made-here fixture.
+  const ptFields = [{ name: 'XP', type: 'N' }, { name: 'YP', type: 'N' }, { name: 'ZP', type: 'N' }, { name: 'PID', type: 'N' }, { name: 'GROUP', type: 'N' }];
+  const ptRows = [
+    { XP: 0, YP: 0, ZP: 10, PID: 5, GROUP: 1 },
+    { XP: 10, YP: 0, ZP: 12, PID: 6, GROUP: 1 },
+    { XP: 10, YP: 10, ZP: 11, PID: 9, GROUP: 1 },
+    { XP: 0, YP: 10, ZP: 13, PID: 12, GROUP: 1 },
+  ];
+  const trFields = [{ name: 'TRIANGLE', type: 'N' }, { name: 'PID1', type: 'N' }, { name: 'PID2', type: 'N' }, { name: 'PID3', type: 'N' }, { name: 'GROUP', type: 'N' }];
+  const trRows = [
+    { TRIANGLE: 1, PID1: 5, PID2: 6, PID3: 9, GROUP: 1 },
+    { TRIANGLE: 2, PID1: 5, PID2: 9, PID3: 12, GROUP: 1 },
+    { TRIANGLE: 3, PID1: 5, PID2: 6, PID3: 999, GROUP: 1 },   // dangling → dropped
+  ];
+  const ptBlob = new Blob([makeDM(ptFields, ptRows, { precision: 'sp' })]);
+  const trBlob = new Blob([makeDM(trFields, trRows, { precision: 'sp' })]);
+  // roles
+  assert.equal(dmWireframeRole(await peekDmColumns(ptBlob)), 'points');
+  assert.equal(dmWireframeRole(await peekDmColumns(trBlob)), 'triangles');
+  // join
+  const m = await openDmWireframe(ptBlob, trBlob);
+  assert.equal(m.header.format, 'dm-wireframe');
+  assert.equal(m.header.vertexCount, 4);
+  assert.equal(m.header.triCount, 2, 'the dangling triangle was dropped');
+  assert.equal(m.header.dropped, 1);
+  // PID 5,6,9,12 → 0,1,2,3 (insertion order); triangle 1 = (0,1,2), triangle 2 = (0,2,3)
+  assert.deepEqual([...m.triangles], [0, 1, 2, 0, 2, 3]);
+  // vertex 0 (PID 5) = (0,0,10); vertex 2 (PID 9) = (10,10,11)
+  assert.deepEqual([m.vertices[0], m.vertices[1], m.vertices[2]], [0, 0, 10]);
+  assert.deepEqual([m.vertices[6], m.vertices[7], m.vertices[8]], [10, 10, 11]);
+  assert.deepEqual(m.header.bbox.min, [0, 0, 10]);
+  assert.deepEqual(m.header.bbox.max, [10, 10, 13]);
+});
+
+test('dm wireframe: role is null for a block model / non-wireframe .dm', async () => {
+  const bm = new Blob([makeDM([{ name: 'XC', type: 'N' }, { name: 'YC', type: 'N' }, { name: 'ZC', type: 'N' }, { name: 'FE', type: 'N' }], [{ XC: 5, YC: 5, ZC: 5, FE: 60 }], { precision: 'sp' })]);
+  assert.equal(dmWireframeRole(await peekDmColumns(bm)), null);
+});
+
 test('shuffledIndices: deterministic for a seed, permutation always', () => {
   const a = shuffledIndices(100, mulberry32(3)), b = shuffledIndices(100, mulberry32(3));
   assert.deepEqual([...a], [...b]);
