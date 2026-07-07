@@ -13,7 +13,7 @@
 // v1 scope: regular uniform grids (INC as DD constants). Sub-blocked models
 // (per-record INC) and non-model .dm files are a later milestone.
 
-import { detectDM, parseHeader, recordRange, decodeRecord } from '../../dm/src/dm.js';
+import { detectDM, parseHeader, recordRange, decodeRecord, readField } from '../../dm/src/dm.js';
 
 const DEF_NAMES = new Set(['IJK', 'XC', 'YC', 'ZC', 'XINC', 'YINC', 'ZINC', 'XMORIG', 'YMORIG', 'ZMORIG', 'NX', 'NY', 'NZ']);
 
@@ -31,9 +31,11 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false } 
   const zc = idx('ZC') >= 0 ? idx('ZC') : idx('Z');
   if (xc < 0 || yc < 0 || zc < 0) throw new Error('dm: no XC/YC/ZC centroid fields — not a block model export');
 
-  // Decoded-record batches (a cold recipe — call again for the filter sweep or
-  // the sub-blocked bbox sweep). Reads ~4 MB page runs sequentially; yields
-  // { recStart, rows } with RAW record numbering (recStart + k, no skips here).
+  // Decoded-record batches (a cold recipe). Reads ~4 MB page runs sequentially;
+  // yields { recStart, rows } with RAW record numbering (recStart + k, no skips
+  // here). Full decode — every field of every record. For a column-selective op
+  // (a filter, a grade scan, the render stream) prefer columnBatches, which
+  // strides only the fields it needs (≈ 3–30× less work; see bench-formats).
   async function* recordBatches({ signal } = {}) {
     const pagesPer = Math.max(1, Math.floor((4 << 20) / h.pageSize));
     for (let page = 2; page <= h.lastPage; page += pagesPer) {
@@ -49,6 +51,38 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false } 
         }
       }
       yield { recStart: (page - 2) * h.recordsPerPage, rows };
+    }
+  }
+
+  // PROJECTED batches — decode only the requested column indices by striding each
+  // field's fixed word-offset across records (no whole-record decode, no per-row
+  // allocation). Numeric col → Float64Array (NaN = missing); alpha col → string[]
+  // (''=missing); constants come free from the header. Yields { recStart, count,
+  // cols } where cols[idx] is the array for column `idx`. Same RAW numbering as
+  // recordBatches (recStart + k over ALL records, skips resolved by the caller).
+  async function* columnBatches(colIdxs, { signal } = {}) {
+    const ids = [...new Set(colIdxs)];
+    const cols = ids.map((i) => h.columns[i]), alpha = cols.map((c) => c.type === 'A');
+    const pagesPer = Math.max(1, Math.floor((4 << 20) / h.pageSize));
+    for (let page = 2; page <= h.lastPage; page += pagesPer) {
+      if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      const pEnd = Math.min(page + pagesPer - 1, h.lastPage);
+      const bytes = new Uint8Array(await blob.slice((page - 1) * h.pageSize, pEnd * h.pageSize).arrayBuffer());
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      let total = 0;
+      for (let pg = page; pg <= pEnd; pg++) total += pg === h.lastPage ? h.lastRec : h.recordsPerPage;
+      const out = cols.map((c, ci) => (alpha[ci] ? new Array(total) : new Float64Array(total)));
+      let w = 0;
+      for (let pg = page; pg <= pEnd; pg++) {
+        const nRec = pg === h.lastPage ? h.lastRec : h.recordsPerPage, pageBase = (pg - page) * h.pageSize;
+        for (let r = 0; r < nRec; r++) {
+          const recBase = pageBase + r * h.maxLen * h.wordSize;
+          for (let ci = 0; ci < cols.length; ci++) { const v = readField(dv, h, cols[ci], recBase); out[ci][w] = alpha[ci] ? (v == null ? '' : v) : (v == null ? NaN : v); }
+          w++;
+        }
+      }
+      const cobj = {}; ids.forEach((idx, ci) => { cobj[idx] = out[ci]; });
+      yield { recStart: (page - 2) * h.recordsPerPage, count: total, cols: cobj };
     }
   }
 
@@ -78,16 +112,18 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false } 
     const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
     const ax = [new Set(), new Set(), new Set()];            // axis distinct centroids (for the fine lattice)
     const minDim = [Infinity, Infinity, Infinity], dimSet = new Set();
-    for await (const { rows } of recordBatches({})) {
-      for (const vals of rows) {
-        const xv = vals[xc], yv = vals[yc], zv = vals[zc];
+    const sweepCols = perRecDims ? [xc, yc, zc, incIdx.x, incIdx.y, incIdx.z] : [xc, yc, zc];
+    for await (const { count, cols } of columnBatches(sweepCols)) {
+      const X = cols[xc], Y = cols[yc], Z = cols[zc], DX = perRecDims ? cols[incIdx.x] : null, DY = perRecDims ? cols[incIdx.y] : null, DZ = perRecDims ? cols[incIdx.z] : null;
+      for (let k = 0; k < count; k++) {
+        const xv = X[k], yv = Y[k], zv = Z[k];
         if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
         if (xv < min[0]) min[0] = xv; if (xv > max[0]) max[0] = xv;
         if (yv < min[1]) min[1] = yv; if (yv > max[1]) max[1] = yv;
         if (zv < min[2]) min[2] = zv; if (zv > max[2]) max[2] = zv;
         if (perRecDims) {
           if (ax[0].size < CAP) ax[0].add(r10(xv)); if (ax[1].size < CAP) ax[1].add(r10(yv)); if (ax[2].size < CAP) ax[2].add(r10(zv));
-          const dx = +vals[incIdx.x], dy = +vals[incIdx.y], dz = +vals[incIdx.z];
+          const dx = DX[k], dy = DY[k], dz = DZ[k];
           if (dx > 0 && dy > 0 && dz > 0) {
             if (dx < minDim[0]) minDim[0] = dx; if (dy < minDim[1]) minDim[1] = dy; if (dz < minDim[2]) minDim[2] = dz;
             if (dimSet.size <= 300) dimSet.add(`${r10(dx)},${r10(dy)},${r10(dz)}`);
@@ -148,17 +184,24 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false } 
       dim: dimCode ? new Uint8Array(chunkPoints) : null,
       recIdx: new Uint32Array(chunkPoints),
     });
+    // project ONLY the fields the render needs (coords + grade + category + dims)
+    // — not all N columns. On the real Leapfrog .dm that's ~6 of 14+.
+    const streamCols = [xc, yc, zc];
+    if (chan != null) streamCols.push(chan);
+    if (catIdx >= 0) streamCols.push(catIdx);
+    if (dimCode) streamCols.push(incIdx.x, incIdx.y, incIdx.z);
     let buf = alloc(), fill = 0, done = 0;
-    for await (const { recStart, rows } of recordBatches({ signal })) {
-      for (let k = 0; k < rows.length; k++) {
-        const vals = rows[k];
-        const xv = vals[xc], yv = vals[yc], zv = vals[zc];
+    for await (const { recStart, count, cols } of columnBatches(streamCols, { signal })) {
+      const X = cols[xc], Y = cols[yc], Z = cols[zc];
+      const CH = chan != null ? cols[chan] : null, CA = catIdx >= 0 ? cols[catIdx] : null;
+      const DX = dimCode ? cols[incIdx.x] : null, DY = dimCode ? cols[incIdx.y] : null, DZ = dimCode ? cols[incIdx.z] : null;
+      for (let k = 0; k < count; k++) {
+        const xv = X[k], yv = Y[k], zv = Z[k];
         if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // skipped, raw number NOT reused
         buf.x[fill] = xv; buf.y[fill] = yv; buf.z[fill] = zv;
-        const cv = chan != null ? vals[chan] : 0;
-        buf.chan[fill] = cv == null ? NaN : cv;
+        buf.chan[fill] = CH ? CH[k] : 0;                   // NaN already when missing
         if (buf.cat) {
-          const v = String(vals[catIdx] == null ? '' : vals[catIdx]);
+          const v = CA[k];                                 // '' when missing
           let code = catCode.get(v);
           if (code === undefined) {
             if (catCode.size < 255) { code = catCode.size; catCode.set(v, code); categories.push(v); }
@@ -166,7 +209,7 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false } 
           }
           buf.cat[fill] = code;
         }
-        if (buf.dim) { const c = dimCode.get(`${r10s(+vals[incIdx.x])},${r10s(+vals[incIdx.y])},${r10s(+vals[incIdx.z])}`); buf.dim[fill] = c === undefined ? 0 : c; }
+        if (buf.dim) { const c = dimCode.get(`${r10s(DX[k])},${r10s(DY[k])},${r10s(DZ[k])}`); buf.dim[fill] = c === undefined ? 0 : c; }
         buf.recIdx[fill] = recStart + k;                   // RAW record number — the join key
         fill++;
         if (fill === chunkPoints) {
@@ -174,7 +217,7 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false } 
           buf = alloc(); fill = 0;
         }
       }
-      done += rows.length;
+      done += count;
       if (onProgress) onProgress(done, h.recordCount);
     }
     if (fill) {
@@ -187,7 +230,7 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false } 
     }
   }
 
-  return { header, streamChunks, recordBatches };
+  return { header, streamChunks, recordBatches, columnBatches };
 }
 
 // O(1) fetch of one record by RAW record number (the pick → inspector path).

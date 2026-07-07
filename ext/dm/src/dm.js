@@ -186,24 +186,32 @@ export function recordRange(h, i) {
   return { offset: (dataPage - 1) * h.pageSize + recInPage * h.maxLen * h.wordSize, length: h.maxLen * h.wordSize };
 }
 
+/** Read ONE field of the record whose words begin at byte `recBase` in `dv`:
+ *  number | null (missing/sentinel) for numeric columns, trimmed string for
+ *  alpha, the header value for constants (no body access). This is the strided
+ *  projection primitive — a caller reads a single COLUMN by striding recBase =
+ *  pageBase + r·maxLen·wordSize across records, decoding only the field it wants
+ *  instead of the whole record. `dv` may span many records (a page run); the
+ *  offsets are relative to recBase. */
+export function readField(dv, h, col, recBase) {
+  if (col.isConstant) return col.constantValue;
+  const ws = h.wordSize, isLE = h.byteOrder === 'le';
+  if (col.type === 'A') {
+    let s = '';
+    for (const sw of col.sw) { const b0 = recBase + (sw - 1) * ws; for (let b = 0; b < 4; b++) { if (b0 + b >= dv.byteLength) break; const c = dv.getUint8(b0 + b); if (c >= 32 && c < 127) s += String.fromCharCode(c); } }
+    return s.trim();
+  }
+  const off = recBase + (col.sw[0] - 1) * ws;
+  if (off + ws > dv.byteLength) return null;
+  const v = h.precision === 'ep' ? dv.getFloat64(off, isLE) : dv.getFloat32(off, isLE);
+  return Math.abs(v) > SENTINEL ? null : v;
+}
+
 /** Decode one record's word slice (from recordRange) into positional values:
  *  number | null (missing/sentinel) for numeric columns, string for alpha. */
 export function decodeRecord(bytes, h) {
   const dv = toDV(bytes);
-  const ws = h.wordSize, isLE = h.byteOrder === 'le';
-  const readNum = h.precision === 'ep' ? (o) => dv.getFloat64(o, isLE) : (o) => dv.getFloat32(o, isLE);
-  return h.columns.map((col) => {
-    if (col.isConstant) return col.constantValue;
-    if (col.type === 'A') {
-      let s = '';
-      for (const sw of col.sw) { const base = (sw - 1) * ws; for (let b = 0; b < 4; b++) { if (base + b >= dv.byteLength) break; const c = dv.getUint8(base + b); if (c >= 32 && c < 127) s += String.fromCharCode(c); } }
-      return s.trim();
-    }
-    const off = (col.sw[0] - 1) * ws;
-    if (off + ws > dv.byteLength) return null;
-    const v = readNum(off);
-    return Math.abs(v) > SENTINEL ? null : v;
-  });
+  return h.columns.map((col) => readField(dv, h, col, 0));   // record bytes start at 0
 }
 
 /**

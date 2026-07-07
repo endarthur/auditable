@@ -5083,20 +5083,52 @@ async function applyBlockFilter(expr) {
     }
     if (skipped) $('#meta').textContent = `filter: ${skipped} of ${P.rowGroups.length} row groups skipped by the footer…`;
   } else if (header.dm) {
-    // .dm: decoded record batches, RAW record numbering (matches recIdx exactly)
-    const { recordBatches } = await openDmModel(blob);
-    for await (const { recStart, rows } of recordBatches()) {
-      for (let k = 0; k < rows.length; k++) {
-        const vals = rows[k].map((v) => (v == null ? '' : v));
-        if (fn(extendRow(AL, vals, recStart + k))) {
-          mask[recStart + k] = 1; hits++;
-          const code = catCode ? (catCode.get(String(vals[m.cat] ?? '').trim()) ?? 0) : 0;
-          collect(+vals[m.x], +vals[m.y], +vals[m.z], m.chan != null ? +vals[m.chan] : 0, code, recStart + k);
+    // .dm: PROJECT only the predicate's columns (+ coords/cat/chan) and decode
+    // them by striding — not all N fields. Same RAW record numbering as recIdx.
+    // Calc/painted columns → their formulas may reach any column, so fall back to
+    // the full decode (matches the parquet column-prune rule).
+    const { columnBatches, recordBatches } = await openDmModel(blob);
+    let ast = null; try { ast = parse(expr); } catch { ast = null; }
+    const hasCalc = !!((AL && AL.calcCols && AL.calcCols.length) || (AL && AL.paintCols && AL.paintCols.length));
+    let colIdxs = null;
+    if (ast && !hasCalc) {
+      const need = new Set([m.x, m.y, m.z]);
+      if (m.cat != null) need.add(m.cat);
+      if (m.chan != null) need.add(m.chan);
+      const lower = header.columns.map((n) => String(n).toLowerCase());
+      for (const d of deps(ast)) { const i = lower.indexOf(String(d).toLowerCase()); if (i >= 0) need.add(i); }
+      colIdxs = [...need];
+    }
+    if (colIdxs) {
+      for await (const { recStart, count, cols } of columnBatches(colIdxs)) {
+        for (let k = 0; k < count; k++) {
+          const r = recStart + k;
+          const vals = new Array(header.columns.length);
+          for (const ci of colIdxs) { const v = cols[ci][k]; vals[ci] = (typeof v === 'number' && Number.isNaN(v)) ? '' : v; }
+          if (fn(extendRow(AL, vals, r))) {
+            mask[r] = 1; hits++;
+            const code = catCode ? (catCode.get(String(vals[m.cat] ?? '').trim()) ?? 0) : 0;
+            collect(+vals[m.x], +vals[m.y], +vals[m.z], m.chan != null ? +vals[m.chan] : 0, code, r);
+          }
         }
+        rec = recStart + count;
+        await new Promise((r2) => setTimeout(r2));
+        if (epoch !== _filterEpoch) return;
       }
-      rec = recStart + rows.length;
-      await new Promise((r) => setTimeout(r));
-      if (epoch !== _filterEpoch) return;                  // superseded — stop before pushing more compact chunks
+    } else {
+      for await (const { recStart, rows } of recordBatches()) {   // full decode (calc/paint reach any column)
+        for (let k = 0; k < rows.length; k++) {
+          const vals = rows[k].map((v) => (v == null ? '' : v));
+          if (fn(extendRow(AL, vals, recStart + k))) {
+            mask[recStart + k] = 1; hits++;
+            const code = catCode ? (catCode.get(String(vals[m.cat] ?? '').trim()) ?? 0) : 0;
+            collect(+vals[m.x], +vals[m.y], +vals[m.z], m.chan != null ? +vals[m.chan] : 0, code, recStart + k);
+          }
+        }
+        rec = recStart + rows.length;
+        await new Promise((r) => setTimeout(r));
+        if (epoch !== _filterEpoch) return;
+      }
     }
   } else {
     for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow !== undefined ? header.hasHeaderRow : !!header.columns)) {
