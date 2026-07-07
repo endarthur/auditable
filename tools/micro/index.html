@@ -89,6 +89,7 @@
   #help .fi .fi-v:hover { background: var(--accent-soft, rgba(200, 155, 60, 0.18)); color: var(--accent); }
   #help .fi .fi-v.copied { background: rgba(140, 184, 120, 0.3); }
   #help .fi .fi-x { color: var(--dim); padding: 0 2px; }
+  #help .fi .fi-w { white-space: normal; color: var(--text-hi); padding-top: 5px; line-height: 1.4; }
   #bar label { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
   #bar input[type="range"] { width: 90px; accent-color: var(--accent); }
   #bar #filterWrap { flex: 0 1 340px; min-width: 140px; position: relative; display: flex; }
@@ -5840,6 +5841,9 @@ function showFileInfo() {
   const sep = (x) => `<span class="fi-x">${x}</span>`;
   const rows = [];
   const row = (k, v) => rows.push(`<tr><td class="fi-k">${k}</td><td>${v}</td></tr>`);
+  // full-width wrapping row — for prose (drillhole checks) that would blow out
+  // the nowrap key column and push every value off-screen
+  const wide = (html) => rows.push(`<tr><td colspan="2" class="fi-w">${html}</td></tr>`);
   row('file', V(meshDoc ? meshDoc.name : _blockDoc ? _blockDoc.name : _plyDoc ? _plyDoc.name : 'point cloud'));
   row('kind', V(meshDoc ? `${h.soup ? 'streamed mesh' : 'context mesh'} (${h.format})` : _dhDoc ? `drillholes (${h.method === 'minimumCurvature' ? 'minimum curvature' : h.method}, dip ${h.dipConvention})` : _lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
   if (meshDoc) {
@@ -5851,7 +5855,7 @@ function showFileInfo() {
   if (_dhDoc) {
     row('holes', num(h.holes));
     row('placed', num(h.placed));
-    for (const c of h.report.checks) row(`⚠ ${c.label}`, `${V(c.count)} ${c.bhids.length ? sep('· ') + V(c.bhids.slice(0, 8).join(', ') + (c.bhids.length > 8 ? '…' : '')) : ''}`);
+    for (const c of h.report.checks) wide(`${sep('⚠')} ${escA(c.label)} ${sep('—')} ${V(c.count)}${c.bhids.length ? ' ' + sep('·') + ' ' + V(c.bhids.slice(0, 8).join(', ') + (c.bhids.length > 8 ? '…' : '')) : ''}`);
   }
   if (h.bbox) {
     for (const [ax, i] of [['X', 0], ['Y', 1], ['Z', 2]]) {
