@@ -9300,7 +9300,13 @@ function renderLayers() {
     const slot = document.createElement('span'); slot.className = 'lp-caret';
     row.append(slot, eye, name, n);
     row.onclick = (e) => {
-      if (e.ctrlKey || e.metaKey) { if (!_lpSel.delete(L.id)) _lpSel.add(L.id); renderLayers(); return; }
+      if (e.ctrlKey || e.metaKey) {
+        // starting a multi-select: promote the currently-active layer in first,
+        // so ctrl+click a second layer gives you BOTH (matches shift-range)
+        if (!_lpSel.size && layerById(_activeId)) _lpSel.add(_activeId);
+        if (!_lpSel.delete(L.id)) _lpSel.add(L.id);
+        renderLayers(); return;
+      }
       if (e.shiftKey) { lpSelRange(L.id); return; }
       if (_lpSel.size) _lpSel.clear();
       setActiveLayer(L.id);
