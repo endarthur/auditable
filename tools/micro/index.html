@@ -6321,8 +6321,8 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
   { sep: true },
   { label: 'Section on/off', kbd: 'x', action: toggleSection },
   { label: 'Along the section', kbd: 'l', action: viewAlongSection },
-  { label: 'Scrub section back', kbd: '[', action: () => scrubSection(-1) },
-  { label: 'Scrub section forward', kbd: ']', action: () => scrubSection(1) },
+  { label: 'Scrub section back', kbd: ',', action: () => scrubSection(-1) },
+  { label: 'Scrub section forward', kbd: '.', action: () => scrubSection(1) },
   { sep: true },
   { label: (_autoOptimize === 'on' ? '✓ ' : '') + 'Auto-optimize block models to spatial Parquet on save', action: () => setAutoOptimize(_autoOptimize === 'on' ? 'off' : 'on') },
   { label: 'Memory…', action: showMemoryInfo },
@@ -6333,7 +6333,7 @@ const HELP_KEYS = `
 drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
 <code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br>
-<code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove · <code>,</code> / <code>.</code> step the active layer<br>
+<code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove · <code>[</code> / <code>]</code> step the active layer<br>
 <code>Ctrl+S</code> — <b>save the project</b>: File → project folder (Chromium) keeps your layers, styling, filters, camera, section, and saved views in a plain folder — project.json + the files<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
@@ -6341,7 +6341,7 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line</b> (the vertical section through it, <code>Esc</code> cancels), or choose <b>custom</b> and type the plane's dip direction + dip · <code>x</code> toggles the section on/off<br>
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
-<code>l</code> — face the section · <code>[</code> <code>]</code> — step one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
+<code>l</code> — face the section · <code>,</code> <code>.</code> — walk the section one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
 <b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br>
 The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Select through) flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
@@ -7046,16 +7046,15 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'Escape' && _paintArm) paintDisarm();
   else if (k === 'Escape' && _selArm) disarmSelect();
   else if (k === 'Escape' && !_knifeArm && !_measure.arm && !_measure.b) clearSelection();
-  else if ((k === ',' || k === '.') && _layers.length > 1) {   // step the active layer (wraps)
+  else if (k === ',' || k === '.') scrubSection(k === ',' ? -1 : 1);   // walk the section (Leapfrog convention)
+  else if ((k === '[' || k === ']') && _layers.length > 1) {   // step the active layer (wraps)
     const i = _layers.findIndex((L) => L.id === _activeId);
-    const j = (i + (k === '.' ? 1 : -1) + _layers.length) % _layers.length;
+    const j = (i + (k === ']' ? 1 : -1) + _layers.length) % _layers.length;
     setActiveLayer(_layers[j].id);
   }
   else if (k === 'Escape' && (_measure.arm || _measure.b)) clearMeasure();
   else if (k === 'o') { cam.setOrtho(!cam.state.ortho); requestRender(); }
   else if (k === 'x') toggleSection();
-  else if (k === '[') scrubSection(-1);
-  else if (k === ']') scrubSection(1);
 });
 
 // Synthetic QF block model AS A CSV BLOB — exercises the full provider path
