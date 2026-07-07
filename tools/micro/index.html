@@ -568,7 +568,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { compileBool, compileValue, validate, complete, parse, deps } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
@@ -7136,6 +7136,7 @@ async function fetchLayerRow(L, rec) {
     return [+(g.grid.x0 + c * g.grid.dx).toFixed(3), +(g.grid.y0 - r * g.grid.dy).toFixed(3), +g.grid.data[i].toFixed(3), r, c];
   }
   if (d.dhDoc) return d.dhDoc.fetchRecord(rec);
+  if (d.tracesDoc) return d.tracesDoc.fetchRecord(rec);    // pick a trace → its collar record
   if (d.blockDoc && d.blockDoc.parquet) { const row = await readParquetRow(d.blockDoc.parquet.buf, rec); return row ? d.blockDoc.parquet.names.map((n) => { const v = row[n]; return v == null ? '' : v; }) : null; }
   if (d.blockDoc && d.blockDoc.header.dm) return await fetchDmRecord(d.blockDoc.blob, d.blockDoc.header.dm, rec);
   if (d.blockDoc) return await fetchCsvRecord(rec, d.blockDoc);
@@ -9569,6 +9570,36 @@ async function redesurveySet(nd, patch) {
   }
   renderLayers(); markProjectDirty();
 }
+// derived collar→EOH hole traces for a set: a non-persisted (volatile) sticks
+// layer, thin + solid grey, nested under the set. Toggled on the set node —
+// shows full hole coverage even where an interval table has gaps.
+const setHasTraces = (nd) => groupLayerIds(nd).some((id) => { const L = layerById(id); return L && L.trace; });
+function hideHoleTraces(nd) {
+  for (const id of groupLayerIds(nd).slice()) { const L = layerById(id); if (L && L.trace) { renderer.removeLayer(id); _layers = _layers.filter((l) => l.id !== id); } }
+  treeSync(); renderLayers(); requestRender();
+}
+async function showHoleTraces(nd) {
+  if (setHasTraces(nd)) { hideHoleTraces(nd); return; }   // toggle off
+  const info = dhSetInfo(nd); if (!info) return;
+  const lid = allocLayerId('element');
+  if (lid == null) { $('#meta').textContent = 'layer limit reached (7 element layers)'; return; }
+  const name = dhGroupName(basename(info.blobs.collar.name || 'holes')) + ' · traces';
+  // NOT made active — a non-active layer renders modeOf(colorSel), i.e. solid grey
+  _layers.push({ id: lid, name, label: name, kind: 'points', trace: true, docs: {}, bboxLocal: null, colorSel: 'solid', clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'volatile', lineage: null });
+  $('#meta').textContent = `${name} — desurveying…`;
+  try {
+    const { header, streamChunks, fetchRecord } = await openDrillholeTraces({ collar: info.blobs.collar, survey: info.blobs.survey }, { ...info.config });
+    const L = layerById(lid); if (L) L.docs = { tracesDoc: { header, fetchRecord, config: info.config } };
+    renderer.setLayerStickRadius(lid, 0.4);   // thin
+    const cb = createStickChunkBuilder({ frame, chunkSize: 1 << 16, batchSize: 1 << 20, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
+    for await (const rc of streamChunks({ chunkPoints: 1 << 16 })) { cb.push(rc); await new Promise((r) => setTimeout(r)); }
+    const doc = cb.flush();
+    if (L) L.bboxLocal = doc.bboxLocal;
+    treeSync(); treeMove(lid, nd, 'into');    // nest under the set
+    renderLayers(); requestRender();
+    $('#meta').textContent = `${header.holes} hole trace${header.holes === 1 ? '' : 's'} · ${header.count.toLocaleString()} segments`;
+  } catch (e) { $('#meta').textContent = `traces — ${e.message}`; renderer.removeLayer(lid); _layers = _layers.filter((l) => l.id !== lid); renderLayers(); }
+}
 function redesurveyMenu(nd, x, y) {
   menuXY(x, y, [
     { label: 'method: minimum curvature', action: () => redesurveySet(nd, { method: 'minimumCurvature' }) },
@@ -9588,6 +9619,7 @@ function groupMenu(nd, x, y) {
       items.push({ label: `collar · ${basename(info.blobs.collar.name)}`, action: () => { $('#meta').textContent = `set collar: ${info.blobs.collar.name} · survey: ${info.blobs.survey.name}`; } });
       items.push({ label: `survey · ${basename(info.blobs.survey.name)}`, action: () => { $('#meta').textContent = `set collar: ${info.blobs.collar.name} · survey: ${info.blobs.survey.name}`; } });
     }
+    items.push({ label: setHasTraces(nd) ? 'Hide hole traces' : 'Show hole traces', action: () => showHoleTraces(nd) });
     items.push({ label: 'Add interval table…', action: () => addIntervalToSet(nd) });
     items.push({ label: 'Re-desurvey set…', action: () => setTimeout(() => redesurveyMenu(nd, x, y), 0) });
     items.push({ sep: true });
@@ -9858,7 +9890,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

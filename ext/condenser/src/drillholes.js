@@ -250,3 +250,80 @@ export async function openDrillholes({ collar, survey, intervals }, opts = {}) {
 
   return { header, streamChunks, fetchRecord, recordPosition };
 }
+
+/**
+ * openDrillholeTraces({ collar, survey }, opts) — the bare hole PATHS: each
+ * hole's collar→EOH trace desurveyed at its survey stations (+ 0 and EOH),
+ * rendered as consecutive stick SEGMENTS. recIdx = the collar row (a hole), so
+ * pick → the collar record. No interval data — this is the geometry a set owns,
+ * so a drillhole set shows full coverage even where an assay table has gaps.
+ * → { header, streamChunks, fetchRecord } — RawChunk in the sticks shape.
+ */
+export async function openDrillholeTraces({ collar, survey }, opts = {}) {
+  const tCollar = await readDelimited(collar);
+  const tSurvey = await readDelimited(survey);
+  const mc = (opts.mappings && opts.mappings.collar) || (classifyDrillholeHeader(tCollar.columns) || {}).mapping;
+  const ms = (opts.mappings && opts.mappings.survey) || (classifyDrillholeHeader(tSurvey.columns) || {}).mapping;
+  if (!mc || mc.x == null) throw new Error('drillhole traces: collar columns not identified (need BHID + X/Y/Z)');
+  if (!ms || ms.az == null) throw new Error('drillhole traces: survey columns not identified (need BHID + AZ + DIP)');
+  const collars = tCollar.rows.map((r) => ({
+    bhid: r[mc.bhid], x: +r[mc.x], y: +r[mc.y], z: +r[mc.z], eoh: mc.eoh >= 0 ? +r[mc.eoh] : undefined,
+  }));
+  const surveys = tSurvey.rows.map((r) => ({ bhid: r[ms.bhid], depth: ms.at >= 0 ? +r[ms.at] : 0, az: +r[ms.az], dip: +r[ms.dip] }));
+
+  // per hole: sample depths = {0} ∪ survey station depths ∪ {EOH}; EOH from the
+  // collar when present, else the deepest survey station
+  const depthsOf = new Map(), holeIdx = new Map(), maxSurvey = new Map();
+  collars.forEach((c, i) => { if (!depthsOf.has(c.bhid)) { depthsOf.set(c.bhid, new Set([0])); holeIdx.set(c.bhid, i); } });
+  for (const s of surveys) { if (depthsOf.has(s.bhid)) { depthsOf.get(s.bhid).add(s.depth); maxSurvey.set(s.bhid, Math.max(maxSurvey.get(s.bhid) || 0, s.depth)); } }
+  for (const c of collars) { if (depthsOf.has(c.bhid)) { const eoh = c.eoh != null && Number.isFinite(c.eoh) ? c.eoh : maxSurvey.get(c.bhid); if (eoh) depthsOf.get(c.bhid).add(eoh); } }
+
+  const sBhid = [], sDepth = [], sRow = [], sSeq = [];
+  for (const [hb, ds] of depthsOf) {
+    const sorted = [...ds].filter((d) => Number.isFinite(d)).sort((a, b) => a - b);
+    sorted.forEach((d, k) => { sBhid.push(hb); sDepth.push(d); sRow.push(holeIdx.get(hb)); sSeq.push(k); });
+  }
+  const samples = { bhid: sBhid, depth: Float64Array.from(sDepth), cols: [{ name: '__row', values: Float64Array.from(sRow) }, { name: '__seq', values: Float64Array.from(sSeq) }] };
+  const ds = dhDesurveySamples({ collars, surveys, samples }, { method: opts.method || 'minimumCurvature', dipConvention: opts.dipConvention || 'auto' });
+
+  // group placed points by hole, order by __seq, connect consecutive → segments
+  const perHole = new Map();
+  for (const row of ds.rows) { const hi = row[5] | 0, sq = row[6] | 0; if (!perHole.has(hi)) perHole.set(hi, []); perHole.get(hi).push([sq, row[1], row[2], row[3]]); }
+  let nSeg = 0;
+  for (const pts of perHole.values()) { pts.sort((a, b) => a[0] - b[0]); nSeg += Math.max(0, pts.length - 1); }
+  const ax = new Float64Array(nSeg), ay = new Float64Array(nSeg), az = new Float64Array(nSeg);
+  const bx = new Float64Array(nSeg), by = new Float64Array(nSeg), bz = new Float64Array(nSeg);
+  const px = new Float64Array(nSeg), py = new Float64Array(nSeg), pz = new Float64Array(nSeg);
+  const pChan = new Float64Array(nSeg), pRec = new Uint32Array(nSeg);
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  let si = 0;
+  for (const [hi, pts] of perHole) {
+    for (let k = 0; k + 1 < pts.length; k++, si++) {
+      const a = pts[k], b = pts[k + 1];
+      ax[si] = a[1]; ay[si] = a[2]; az[si] = a[3]; bx[si] = b[1]; by[si] = b[2]; bz[si] = b[3];
+      px[si] = (a[1] + b[1]) / 2; py[si] = (a[2] + b[2]) / 2; pz[si] = (a[3] + b[3]) / 2;
+      pRec[si] = hi; pChan[si] = 0;
+      for (const pt of [a, b]) for (let d = 0; d < 3; d++) { const v = pt[d + 1]; if (v < min[d]) min[d] = v; if (v > max[d]) max[d] = v; }
+    }
+  }
+  const header = {
+    kind: 'drillholeTraces', count: nSeg, holes: depthsOf.size,
+    bbox: { min, max }, chanRange: [0, 1],
+    columns: tCollar.columns, collarMapping: mc, surveyMapping: ms,
+    method: opts.method || 'minimumCurvature', dipConvention: ds.report ? ds.report.dipConvention : (opts.dipConvention || 'auto'),
+  };
+  async function* streamChunks({ chunkPoints = 1 << 16 } = {}) {
+    for (let at = 0; at < nSeg; at += chunkPoints) {
+      const k = Math.min(chunkPoints, nSeg - at);
+      yield {
+        count: k,
+        x: px.subarray(at, at + k), y: py.subarray(at, at + k), z: pz.subarray(at, at + k),
+        ax: ax.subarray(at, at + k), ay: ay.subarray(at, at + k), az: az.subarray(at, at + k),
+        bx: bx.subarray(at, at + k), by: by.subarray(at, at + k), bz: bz.subarray(at, at + k),
+        chan: pChan.subarray(at, at + k), cat: null, recIdx: pRec.subarray(at, at + k),
+      };
+    }
+  }
+  const fetchRecord = (rec) => (rec >= 0 && rec < tCollar.rows.length ? tCollar.rows[rec] : null);
+  return { header, streamChunks, fetchRecord, recordPosition: () => null };
+}
