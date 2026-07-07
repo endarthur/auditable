@@ -4745,7 +4745,7 @@ async function openParquetBlocks(blob, name, opts = {}) {
   const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
   const numericColumns = names.map((n, i) => ({ name: n, i })).filter(({ i }) => i !== mapping.x && i !== mapping.y && i !== mapping.z && _pqNum(typeOf[names[i]]));
   const attributes = names.filter((_, i) => i !== mapping.x && i !== mapping.y && i !== mapping.z);
-  const header = { kind: 'blocks', count: N, bbox: { min, max }, grid, columns: names, mapping, delim: ',', hasHeaderRow: true, numericColumns, categories, attributes, parquet: true };
+  const header = { kind: 'blockmodel', count: N, bbox: { min, max }, grid, columns: names, mapping, delim: ',', hasHeaderRow: true, numericColumns, categories, attributes, parquet: true };
   // ── display: stream the coord + chan + cat columns row-group by row-group
   // into the chunk builder; nothing decoded is retained after the chunk. ──
   async function* streamChunks() {
