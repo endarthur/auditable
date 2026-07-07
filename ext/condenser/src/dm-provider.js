@@ -132,7 +132,7 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false } 
 
   const header = {
     kind: 'blockmodel', count: h.recordCount,
-    bbox, grid, subBlocked, dimPalette,
+    bbox, grid, subBlocked, dimPalette, dimCols: subBlocked ? incIdx : null,
     columns: names,
     mapping: { x: xc, y: yc, z: zc, chan, cat: catIdx >= 0 ? catIdx : null },
     numericColumns, categories,

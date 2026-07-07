@@ -134,6 +134,89 @@ export function makeResampler(srcAxes, tgtAxes, opts = {}) {
   };
 }
 
+// Box → grid volume-weighted aggregator (sub-blocked reconcile). A sub-blocked
+// model has no source LATTICE — it's a set of variable-size axis-aligned boxes.
+// This scatters each box (world centroid + half-dims) onto a regular TARGET grid
+// weighted by geometric OVERLAP VOLUME, so a sub-blocked model aggregates up to
+// any compatible regular grid — the PARENT grid being the natural choice (each
+// sub-block lands wholly in its parent cell). Reuses the same acc/finalize shape
+// as makeResampler, so the reconcile Δ-map machinery is identical. The caller
+// controls WHICH boxes scatter (a selection/filter): just skip the ones it wants
+// excluded — volume weighting handles partial parent coverage correctly.
+export function makeBoxAggregator(tgt, opts = {}) {
+  const nx = tgt.x.count, ny = tgt.y.count, nz = tgt.z.count;
+  const cells = nx * ny * nz;
+  const idxOf = (ti, tj, tk) => ti + nx * (tj + ny * tk);
+  // world volume of a full target cell (degenerate axes factor out as 1)
+  const cellVol = ['x', 'y', 'z'].reduce((p, k) => p * (tgt[k].pitch > 0 ? tgt[k].pitch : 1), 1);
+  // target cells overlapping world interval [lo,hi] on one axis → [{ i, ov }]
+  const axisCells = (ax, lo, hi) => {
+    if (!(ax.pitch > 0)) return [{ i: 0, ov: 1 }];           // single-plane axis: unit overlap (factors out)
+    const low0 = ax.origin - ax.pitch / 2;
+    const first = Math.floor((lo - low0) / ax.pitch);
+    const last = Math.floor((hi - low0) / ax.pitch - 1e-9);
+    const out = [];
+    for (let i = Math.max(0, first); i <= Math.min(ax.count - 1, last); i++) {
+      const cLo = low0 + i * ax.pitch, cHi = cLo + ax.pitch;
+      const ov = Math.min(hi, cHi) - Math.max(lo, cLo);
+      if (ov > 1e-12) out.push({ i, ov });
+    }
+    return out;
+  };
+  return {
+    ok: true, nx, ny, nz, cells, idxOf, cellVol,
+    newAcc: () => ({ sum: new Float64Array(cells), w: new Float64Array(cells) }),
+    // scatter one box (world centroid cx,cy,cz + half-dims hx,hy,hz), value v,
+    // extra weight wt (e.g. 0 to exclude). Accumulates v·overlapVol and overlapVol.
+    scatterBox(cx, cy, cz, hx, hy, hz, v, wt, acc) {
+      if (!(wt > 0) || !Number.isFinite(v)) return;
+      const xs = axisCells(tgt.x, cx - hx, cx + hx);
+      if (!xs.length) return;
+      const ys = axisCells(tgt.y, cy - hy, cy + hy);
+      if (!ys.length) return;
+      const zs = axisCells(tgt.z, cz - hz, cz + hz);
+      for (const X of xs) for (const Y of ys) for (const Z of zs) {
+        const w = X.ov * Y.ov * Z.ov * wt; if (w <= 0) continue;
+        const idx = idxOf(X.i, Y.i, Z.i); acc.sum[idx] += v * w; acc.w[idx] += w;
+      }
+    },
+    // → { out: Float64Array (NaN where empty), coverage: Float32Array (w/cellVol),
+    // present: Uint8Array }. op: 'mean' (default) | 'sum' | 'volume' | 'coverage'.
+    finalize(acc, op = 'mean') {
+      const out = new Float64Array(cells), coverage = new Float32Array(cells), present = new Uint8Array(cells);
+      for (let i = 0; i < cells; i++) {
+        const w = acc.w[i]; if (w <= 0) { out[i] = NaN; continue; }
+        present[i] = 1; coverage[i] = cellVol > 0 ? Math.min(1, w / cellVol) : 1;
+        out[i] = op === 'sum' ? acc.sum[i] : op === 'volume' ? w : op === 'coverage' ? coverage[i] : acc.sum[i] / w;
+      }
+      return { out, coverage, present };
+    },
+    // categorical: volume-weighted majority vote (parity with makeResampler)
+    newCatAcc: () => new Map(),                              // idx → Map(code → volume)
+    scatterCatBox(cx, cy, cz, hx, hy, hz, code, wt, votes) {
+      if (!(wt > 0)) return;
+      const xs = axisCells(tgt.x, cx - hx, cx + hx); if (!xs.length) return;
+      const ys = axisCells(tgt.y, cy - hy, cy + hy); if (!ys.length) return;
+      const zs = axisCells(tgt.z, cz - hz, cz + hz);
+      for (const X of xs) for (const Y of ys) for (const Z of zs) {
+        const w = X.ov * Y.ov * Z.ov * wt; if (w <= 0) continue;
+        const idx = idxOf(X.i, Y.i, Z.i);
+        let m = votes.get(idx); if (!m) { m = new Map(); votes.set(idx, m); }
+        m.set(code, (m.get(code) || 0) + w);
+      }
+    },
+    finalizeCat(votes) {
+      const out = new Int32Array(cells).fill(-1), tie = new Uint8Array(cells);
+      for (const [idx, m] of votes) {
+        let best = -1, bw = -1, tied = false;
+        for (const [code, w] of m) { if (w > bw + 1e-9) { best = code; bw = w; tied = false; } else if (Math.abs(w - bw) <= 1e-9) tied = true; }
+        out[idx] = best; tie[idx] = tied ? 1 : 0;
+      }
+      return { out, tie };
+    },
+  };
+}
+
 // A common target lattice covering the union of N grids AND compatible with all.
 // grids: [{x,y,z}]. resolution: 'finest' | 'coarsest' | 'gcd' | number(pitch,
 // per-axis via {x,y,z}). Returns { ok, reason } or { x, y, z } target axes.

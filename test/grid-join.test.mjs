@@ -2,7 +2,7 @@
 // / aggregate / mixed / categorical / coverage), and the common lattice.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { floatGcd, axisMap, gridsCompatible, makeResampler, commonLattice } from '../ext/condenser/src/main.js';
+import { floatGcd, axisMap, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice } from '../ext/condenser/src/main.js';
 
 const ax = (origin, pitch, count) => ({ origin, pitch, count });
 const grid = (x, y, z) => ({ x, y, z });
@@ -134,4 +134,49 @@ test('commonLattice — a resampler round-trips onto it', () => {
   const T = commonLattice([A, B], { resolution: 'finest' });   // → the 5 m lattice
   assert.equal(T.x.pitch, 5); assert.equal(T.x.count, 4);
   assert.ok(makeResampler(A, T).ok && makeResampler(B, T).ok);
+});
+
+test('makeBoxAggregator — sub-blocks aggregate to their parent cell (volume-weighted mean)', () => {
+  // one 10×10×5 parent cell, centroid (5,5,2.5), filled by 8 sub-blocks (5×5×2.5)
+  const parent = grid(ax(5, 10, 1), ax(5, 10, 1), ax(2.5, 5, 1));
+  const A = makeBoxAggregator(parent);
+  const acc = A.newAcc();
+  const subs = [];
+  let g = 0;
+  for (const oz of [1.25, 3.75]) for (const oy of [2.5, 7.5]) for (const ox of [2.5, 7.5]) subs.push({ cx: ox, cy: oy, cz: oz, g: g++ });
+  for (const s of subs) A.scatterBox(s.cx, s.cy, s.cz, 2.5, 2.5, 1.25, s.g, 1, acc);
+  const f = A.finalize(acc);
+  assert.equal(f.present[0], 1);
+  assert.ok(Math.abs(f.out[0] - 3.5) < 1e-9, `equal-volume mean of 0..7 = 3.5, got ${f.out[0]}`);
+  assert.ok(Math.abs(f.coverage[0] - 1) < 1e-9, `fully covered, got ${f.coverage[0]}`);
+});
+
+test('makeBoxAggregator — selection: excluded sub-blocks drop out, coverage falls', () => {
+  const parent = grid(ax(5, 10, 1), ax(5, 10, 1), ax(2.5, 5, 1));
+  const A = makeBoxAggregator(parent);
+  const acc = A.newAcc();
+  // 8 sub-blocks; scatter only the 4 in the lower z half (a "domain" filter)
+  let idx = 0;
+  for (const oz of [1.25, 3.75]) for (const oy of [2.5, 7.5]) for (const ox of [2.5, 7.5]) {
+    const sel = oz < 2 ? 1 : 0;                              // lower half only
+    A.scatterBox(ox, oy, oz, 2.5, 2.5, 1.25, 100 + idx, sel, acc); idx++;
+  }
+  const f = A.finalize(acc);
+  assert.ok(Math.abs(f.coverage[0] - 0.5) < 1e-9, `half covered, got ${f.coverage[0]}`);
+  assert.ok(f.out[0] >= 100 && f.out[0] <= 103, `mean over the selected 4, got ${f.out[0]}`);
+});
+
+test('makeBoxAggregator — a full block covering the parent = that block grade; sum/volume ops', () => {
+  const parent = grid(ax(5, 10, 2), ax(5, 10, 1), ax(2.5, 5, 1));   // 2 parents along x
+  const A = makeBoxAggregator(parent);
+  const acc = A.newAcc();
+  A.scatterBox(5, 5, 2.5, 5, 5, 2.5, 2.0, 1, acc);          // full 10×10×5 block in parent 0
+  A.scatterBox(15, 5, 2.5, 2.5, 2.5, 2.5, 4.0, 1, acc);     // a 5×5×5 sub-block in parent 1 (quarter of the xy face)
+  const mean = A.finalize(acc, 'mean');
+  assert.ok(Math.abs(mean.out[0] - 2.0) < 1e-9, 'parent 0 = the full block grade');
+  assert.ok(Math.abs(mean.out[1] - 4.0) < 1e-9, 'parent 1 mean = the only contributor');
+  assert.ok(Math.abs(mean.coverage[0] - 1) < 1e-9 && Math.abs(mean.coverage[1] - 0.25) < 1e-9, 'coverage 1 vs 0.25');
+  const vol = A.finalize(acc, 'volume');
+  assert.ok(Math.abs(vol.out[0] - 500) < 1e-6, 'parent 0 overlap volume = 500');
+  assert.ok(Math.abs(vol.out[1] - 125) < 1e-6, 'parent 1 overlap volume = 125');
 });

@@ -568,7 +568,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { compileBool, compileValue, validate, complete, parse, deps } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
@@ -2371,6 +2371,11 @@ async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], co
   const perSource = {};
   for (const side of ['left', 'right']) {
     const L = sides[side]; if (!L) continue;
+    const h0 = layerTableHeader(L);
+    // sub-blocked source: no source lattice — scatter each block as a volume-
+    // overlap BOX onto the target (aggregates to the parent/target resolution).
+    const sub = !!(h0 && h0.subBlocked && h0.dimCols);
+    if (sub) { perSource[side] = { L, sub: true, R: makeBoxAggregator(T), dimCols: h0.dimCols, cols: [] }; continue; }
     const sa = gridAxesOf(L); if (!sa) throw new Error(`${side} is not a regular block model`);
     const R = makeResampler(sa, T); if (!R.ok) throw new Error(`${side}: ${R.reason}`);
     perSource[side] = { L, sa, R, cols: [] };
@@ -2379,7 +2384,7 @@ async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], co
   // stream each source, scatter its columns
   for (const side of Object.keys(perSource)) {
     const ps = perSource[side]; if (!ps.cols.length) continue;
-    const { L, sa, R } = ps, h = layerTableHeader(L), m = h.mapping;
+    const { L, sa, R, sub, dimCols } = ps, h = layerTableHeader(L), m = h.mapping;
     for (const c of ps.cols) {
       c._i = h.columns.indexOf(c.name); c._w = c.weight ? h.columns.indexOf(c.weight) : -1;
       if (c.num) c._acc = R.newAcc(); else { c._acc = R.newCatAcc(); c._dict = ['']; c._codeOf = new Map(); }
@@ -2389,12 +2394,23 @@ async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], co
       for (const f of batch) {
         const wx = +f[m.x], wy = +f[m.y], wz = +f[m.z];
         if (!Number.isFinite(wx) || !Number.isFinite(wy) || !Number.isFinite(wz)) continue;
-        const si = Math.round((wx - sa.x.origin) / (sa.x.pitch || 1)), sj = Math.round((wy - sa.y.origin) / (sa.y.pitch || 1)), sk = sa.z.pitch ? Math.round((wz - sa.z.origin) / sa.z.pitch) : 0;
-        if (si < 0 || si >= sa.x.count || sj < 0 || sj >= sa.y.count || sk < 0 || sk >= sa.z.count) continue;
+        let si, sj, sk, hx, hy, hz;
+        if (sub) {
+          hx = (+f[dimCols.x] || 0) / 2; hy = (+f[dimCols.y] || 0) / 2; hz = (+f[dimCols.z] || 0) / 2;
+          if (!(hx > 0 && hy > 0 && hz > 0)) continue;
+        } else {
+          si = Math.round((wx - sa.x.origin) / (sa.x.pitch || 1)); sj = Math.round((wy - sa.y.origin) / (sa.y.pitch || 1)); sk = sa.z.pitch ? Math.round((wz - sa.z.origin) / sa.z.pitch) : 0;
+          if (si < 0 || si >= sa.x.count || sj < 0 || sj >= sa.y.count || sk < 0 || sk >= sa.z.count) continue;
+        }
         for (const c of ps.cols) {
           const wt = c._w >= 0 ? (+f[c._w] || 0) : 1; if (wt <= 0 && c._w >= 0) continue;
-          if (c.num) { const v = +f[c._i]; if (Number.isFinite(v)) R.scatter(si, sj, sk, v, wt, c._acc); }
-          else { const lbl = f[c._i] == null ? '' : String(f[c._i]); let code = c._codeOf.get(lbl); if (code == null) { code = c._dict.length; c._dict.push(lbl); c._codeOf.set(lbl, code); } R.scatterCat(si, sj, sk, code, wt, c._acc); }
+          if (c.num) {
+            const v = +f[c._i]; if (!Number.isFinite(v)) continue;
+            if (sub) R.scatterBox(wx, wy, wz, hx, hy, hz, v, wt, c._acc); else R.scatter(si, sj, sk, v, wt, c._acc);
+          } else {
+            const lbl = f[c._i] == null ? '' : String(f[c._i]); let code = c._codeOf.get(lbl); if (code == null) { code = c._dict.length; c._dict.push(lbl); c._codeOf.set(lbl, code); }
+            if (sub) R.scatterCatBox(wx, wy, wz, hx, hy, hz, code, wt, c._acc); else R.scatterCat(si, sj, sk, code, wt, c._acc);
+          }
         }
         rc++;
       }
@@ -9234,10 +9250,14 @@ function openReconcileMenu(L, R, jf, shared, anchor) {
 async function runReconcile(L, R, jf, grade) {
   try {
     // reconcile on the COMMON lattice (finest) so it captures matched AND
-    // added/removed cells even when the two models' extents differ
-    const cl = commonLattice([gridAxesOf(L), gridAxesOf(R)], { resolution: 'finest' });
-    if (!cl.ok) throw new Error(cl.reason);
-    const T = cl;
+    // added/removed cells even when the two models' extents differ. When ONE side
+    // is sub-blocked, its gridAxesOf is the fine lattice — reconcile at the
+    // REGULAR side's (parent) resolution instead, aggregating the sub-blocks up
+    // by volume; both sub-blocked → the finest common of their fine lattices.
+    const subL = !!(layerTableHeader(L) || {}).subBlocked, subR = !!(layerTableHeader(R) || {}).subBlocked;
+    let T;
+    if (subL !== subR) { T = gridAxesOf(subL ? R : L); if (!T) throw new Error('the regular side has no grid to reconcile onto'); }
+    else { const cl = commonLattice([gridAxesOf(L), gridAxesOf(R)], { resolution: 'finest' }); if (!cl.ok) throw new Error(cl.reason); T = cl; }
     // this (active/left) − reference (right); Δ is a REAL column → colourable
     const aName = `ref_${grade}`, bName = `this_${grade}`, dName = `Δ${grade}`;
     const columns = [
@@ -9936,7 +9956,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
