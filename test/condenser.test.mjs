@@ -360,6 +360,46 @@ function c0recPast30(chunks) {
   return true;
 }
 
+test('dm provider: sub-blocked (per-record XINC/YINC/ZINC) → fine lattice + size palette', async () => {
+  // no DD grid constants; XINC/YINC/ZINC are per-record → sub-block discovery
+  const fields = [
+    { name: 'XC', type: 'N' }, { name: 'YC', type: 'N' }, { name: 'ZC', type: 'N' },
+    { name: 'XINC', type: 'N' }, { name: 'YINC', type: 'N' }, { name: 'ZINC', type: 'N' }, { name: 'FE', type: 'N' },
+  ];
+  const rows = [];
+  for (const [x, y] of [[5, 5], [15, 5], [5, 15], [15, 15]]) rows.push({ XC: x, YC: y, ZC: 2.5, XINC: 10, YINC: 10, ZINC: 5, FE: 40 });
+  for (const oz of [1.25, 3.75]) for (const oy of [2.5, 7.5]) for (const ox of [22.5, 27.5]) rows.push({ XC: ox, YC: oy, ZC: oz, XINC: 5, YINC: 5, ZINC: 2.5, FE: 55 });
+  const blob = new Blob([new Uint8Array(makeDM(fields, rows, { precision: 'ep' }))]);
+  const { header, streamChunks } = await openDmModel(blob);
+  assert.ok(header.subBlocked, 'sub-blocked .dm detected');
+  assert.deepEqual([header.grid.x.pitch, header.grid.y.pitch, header.grid.z.pitch], [2.5, 2.5, 1.25], 'fine pitch = minDim/2');
+  assert.equal(header.dimPalette.length, 2);
+  const halves = header.dimPalette.map((h) => h.join(','));
+  assert.ok(halves.includes('5,5,2.5') && halves.includes('2.5,2.5,1.25'), `palette ${JSON.stringify(header.dimPalette)}`);
+  const frame = documentFrame(header);
+  const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
+  const chunks = [];
+  const cb = createBlockChunkBuilder({ frame, grid, dimPalette: header.dimPalette, chunkSize: 8, seed: 1, onChunk: (c) => chunks.push(c) });
+  for await (const rc of streamChunks({ chunkPoints: 8 })) cb.push(rc);
+  cb.flush();
+  let checked = 0;
+  for (const c of chunks) {
+    assert.ok(c.dim && c.dimPalette, 'chunk carries size codes + palette');
+    for (let k = 0; k < c.count; k++) {
+      const ctr = blockLocalCenter(c, k), world = [ctr[0] + frame.origin[0], ctr[1] + frame.origin[1], ctr[2] + frame.origin[2]];
+      const src = rows.find((r) => Math.abs(r.XC - world[0]) < 1e-9 && Math.abs(r.YC - world[1]) < 1e-9 && Math.abs(r.ZC - world[2]) < 1e-9);
+      assert.ok(src, `centroid ${world} matches a source block`);
+      assert.deepEqual(c.dimPalette[c.dim[k]], [src.XINC / 2, src.YINC / 2, src.ZINC / 2], 'size code → correct half-dims');
+      checked++;
+    }
+  }
+  assert.equal(checked, 12);
+  // forcePoints still overrides → points fallback
+  const pts = await openDmModel(blob, { forcePoints: true });
+  assert.equal(pts.header.grid, null);
+  assert.equal(pts.header.subBlocked, false);
+});
+
 test('dm provider: rejects a non-model .dm with direction', async () => {
   const blob = new Blob([makeDM([{ name: 'BHID', type: 'A', width: 8 }, { name: 'FROM', type: 'N' }, { name: 'TO', type: 'N' }],
     [{ BHID: 'DDH1', FROM: 0, TO: 1 }], { precision: 'ep' })]);
