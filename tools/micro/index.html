@@ -1459,6 +1459,7 @@ async function convertLayerToParquet(L) {
   const bytes = writeParquet({ columnData, rowGroupSize: 1 << 16, codec: 'SNAPPY', kvMetadata: kv });
   // 4. replace the blockDoc IN PLACE (reuse the layer id, keep paint/calc/style)
   const base = (L.label || L.name).replace(/\.[^.]+$/, ''), keepLabel = L.label, keepColorSel = L.colorSel, keepFilter = L.filterExpr;
+  const oldHandle = L.handle;                              // the PRE-optimize source file (CSV/.dm) — now stale + orphanable
   const savedActive = _activeId; setActiveLayer(L.id);
   try {
     await openParquetBlocks(new Blob([bytes]), `${base}.parquet`, { layer: L.id, first: false });
@@ -1466,6 +1467,12 @@ async function convertLayerToParquet(L) {
   L.name = `${base}.parquet`;                              // so save/reload routes to the parquet path
   L.lineage = optLineage;                                  // provenance: this layer was optimized in place
   if (keepLabel) L.label = keepLabel;
+  // the bytes are now Parquet, but L.handle still points at the PRE-optimize source
+  // (CSV/.dm). Drop it → saveProject re-triages this layer and persists model.parquet.
+  // Leaving the stale handle made save resolve it INSIDE the project and treat the CSV
+  // as still the layer's file → the parquet was never written → reload found no rows.
+  L.handle = null; L.storage = 'loose';
+  L._optimizedOrphan = oldHandle || null;                 // saveProject removes the leftover source file (§ below)
   // 5. PERMUTE every per-record thing by the SAME order — paint stays editable
   for (const col of L.paintCols || []) { const nc = new Uint8Array(n); for (let i = 0; i < n; i++) nc[i] = col.codes[order[i]]; col.codes = nc; }
   if (L._selMask && L._selMask.length === n) { const nm = new Uint8Array(n); for (let i = 0; i < n; i++) nm[i] = L._selMask[order[i]]; L._selMask = nm; applyLayerSelection(L); }
@@ -5708,6 +5715,25 @@ async function saveProject() {
   try {
     if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'project: write permission denied'; return; }
     await maybeAutoOptimize();                              // reorder block models to spatial Parquet BEFORE triage, so the parquet is what's referenced/copied
+    // A just-optimized layer's bytes are now Parquet but its handle was dropped
+    // (convertLayerToParquet). Write the Parquet INTO the project + delete the old
+    // source here — so triage sees a clean in-project layer (no spurious "copy
+    // outside files in?" prompt) and the folder shows the .parquet only.
+    for (const L of _layers) {
+      const orphan = L._optimizedOrphan; if (!orphan) continue;
+      L._optimizedOrphan = null;
+      try {
+        await copyLayerIn(L, dir);                          // writes models/<name>.parquet, sets L.handle + storage 'project'
+        const segs = dir.resolve ? await dir.resolve(orphan) : null;
+        const keep = await layerRelpath(L, dir);
+        if (segs && segs.length && segs.join('/') !== keep) {
+          let d = dir; for (let i = 0; i < segs.length - 1; i++) d = await d.getDirectoryHandle(segs[i]);
+          const leaf = segs[segs.length - 1];
+          await d.removeEntry(leaf);                         // drop the pre-optimize CSV/.dm
+          try { await d.removeEntry(leaf + '.meta.json'); } catch { /* no sidecar */ }   // + its derived-cache sidecar
+        }
+      } catch { /* falls back to normal triage; an orphan is harmless clutter */ }
+    }
     const outside = [];
     for (const L of _layers) {
       const flist = layerFiles(L);

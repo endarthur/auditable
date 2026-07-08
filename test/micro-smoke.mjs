@@ -319,6 +319,34 @@ const back = await p2.evaluate(() => { const L = window._micro.layers().find((x)
 chk(`project round trip: ${back.n} blocks back, grid ${back.grid}, auto-optimized to Parquet (${back.parquet}, “${back.name}”)`, back.n === NBLOCKS && back.grid === '30,20,2' && back.parquet && /\.parquet$/.test(back.name || ''));
 chk(`lineage survives round trip: optimize wrapping the opened file (${back.linOp}←${back.linSrc})`, back.linOp === 'optimize' && back.linSrc === 'open');
 
+// ── 8b. RE-SAVE after auto-optimize (the data-loss bug): a CSV already IN a project
+//    → enable optimize → save AGAIN. The layer's stale handle used to make save skip
+//    writing the parquet, so reload found no rows. Assert: parquet on disk, CSV gone,
+//    reload has rows. (Closes the round-trip blind spot per the ROADMAP testing note.) ──
+const walkDir = (pg, proj) => pg.evaluate(async (proj) => { const root = await (await navigator.storage.getDirectory()).getDirectoryHandle(proj); const out = []; async function rec(d, pre) { for await (const [n, h] of d.entries()) { if (h.kind === 'directory') await rec(h, pre + n + '/'); else out.push(pre + n); } } await rec(root, ''); return out.sort(); }, proj);
+const pr = await ctx.newPage(); pr.on('pageerror', (e) => { console.log('PR PAGEERROR:', e.message); process.exitCode = 1; });
+await pr.goto(`http://127.0.0.1:${PORT}/tools/micro/index.html`, { waitUntil: 'load' });
+await pr.waitForFunction(() => window._micro, null, { timeout: 20000 });
+await pr.evaluate(() => { window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('microsmoke_rs', { create: true }); });
+await pr.evaluate((csv) => window._micro.openBlob(new Blob([csv]), 'model.csv', 'replace'), blockCsv());
+await pr.waitForFunction(() => { const L = window._micro.layers()[0]; return L && window._micro.renderer.layerElementCount(L.id) > 0; }, null, { timeout: 60000 });
+await pr.evaluate(() => window._micro.setAutoOptimize('off'));   // first save keeps the CSV in the project
+pr.evaluate(() => window._micro.saveProjectAs());
+await pr.waitForFunction(() => document.querySelector('#svDlg').classList.contains('show') || /project saved/.test(document.querySelector('#meta').textContent), null, { timeout: 30000 });
+await pr.evaluate(() => { if (document.querySelector('#svDlg').classList.contains('show')) document.querySelector('#svCopy').click(); });
+await pr.waitForFunction(() => /project saved/.test(document.querySelector('#meta').textContent), null, { timeout: 60000 });
+await pr.evaluate(() => window._micro.setAutoOptimize('on'));    // now optimize + SAVE AGAIN (the bug trigger)
+await pr.evaluate(() => window._micro.saveProject());
+await pr.waitForFunction(() => /project saved/.test(document.querySelector('#meta').textContent), null, { timeout: 60000 });
+await pr.waitForTimeout(500);
+const rsDisk = await walkDir(pr, 'microsmoke_rs');
+chk(`re-save optimize: parquet on disk, orphan CSV removed (${JSON.stringify(rsDisk.filter((f) => /model\.(csv|parquet)$/.test(f)))})`, rsDisk.some((f) => f.endsWith('model.parquet')) && !rsDisk.some((f) => f.endsWith('model.csv')));
+const pr2 = await ctx.newPage(); pr2.on('pageerror', (e) => { console.log('PR2 PAGEERROR:', e.message); process.exitCode = 1; });
+await pr2.goto(`http://127.0.0.1:${PORT}/tools/micro/index.html`, { waitUntil: 'load' });
+await pr2.waitForFunction(() => window._micro, null, { timeout: 20000 });
+const rs = await pr2.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('microsmoke_rs'); await window._micro.openProjectDir(dir); for (let i = 0; i < 200; i++) { const L = window._micro.layers()[0]; if (L && window._micro.renderer.layerElementCount(L.id) > 0) break; await new Promise((r) => setTimeout(r, 100)); } const L = window._micro.layers()[0]; const h = L && L.docs.blockDoc && L.docs.blockDoc.header; return { n: L ? window._micro.renderer.layerElementCount(L.id) : 0, count: h && h.count, name: L && L.name }; });
+chk(`re-save reload HAS ROWS (${rs.n} blocks, ${rs.count} rows, “${rs.name}”)`, rs.n === NBLOCKS && rs.count === NBLOCKS && /\.parquet$/.test(rs.name || ''));
+
 console.log(ok && process.exitCode !== 1 ? '\nMICRO SMOKE: PASS' : '\nMICRO SMOKE: FAIL');
 await b.close(); server.close();
 process.exit(ok && process.exitCode !== 1 ? 0 : 1);
