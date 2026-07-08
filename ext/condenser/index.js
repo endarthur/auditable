@@ -4195,6 +4195,10 @@ function createBlocksPipeline(gl) {
       gl.uniform1f(uni.subBlock, 1);
     } else {
       gl.disableVertexAttribArray(4);
+      // A disabled `in uint aDim` reads the generic current value, which defaults to
+      // FLOAT — a type mismatch vs the uint declaration (GL_INVALID_OPERATION at draw).
+      // Give it a valid uint default; aDim is unused when uSubBlock=0, so 0 is a no-op.
+      gl.vertexAttribI4ui(4, 0, 0, 0, 0);
       gl.uniform1f(uni.subBlock, 0);
     }
     gl.uniform3f(uni.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
@@ -4722,6 +4726,7 @@ function createPickPipeline(gl) {
           gl.uniform1f(uBlk.subBlock, 1);
         } else {
           gl.disableVertexAttribArray(4);
+          gl.vertexAttribI4ui(4, 0, 0, 0, 0);   // uint default for the disabled `in uint aDim` (see gl-blocks.js)
           gl.uniform1f(uBlk.subBlock, 0);
         }
         gl.uniform3f(uBlk.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);

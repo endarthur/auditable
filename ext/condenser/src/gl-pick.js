@@ -450,6 +450,7 @@ export function createPickPipeline(gl) {
           gl.uniform1f(uBlk.subBlock, 1);
         } else {
           gl.disableVertexAttribArray(4);
+          gl.vertexAttribI4ui(4, 0, 0, 0, 0);   // uint default for the disabled `in uint aDim` (see gl-blocks.js)
           gl.uniform1f(uBlk.subBlock, 0);
         }
         gl.uniform3f(uBlk.gridOrigin, c.grid.originLocal[0], c.grid.originLocal[1], c.grid.originLocal[2]);
