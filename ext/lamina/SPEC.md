@@ -286,6 +286,20 @@ artifact in the GCU enterprise-profile sense:
   histogram could project too (the cursor already accepts `cols`); the gutter/
   all-columns scan can't (needs everything). The CSV/text backing can't stride
   (variable-width rows).
+- **Project-awareness** (planned, Arthur 2026-07-08) — lamina opens single files
+  today; make it read the shared **GCU project standard** (a directory marked by
+  `project.json` `{ kind, id, title }` — Works uses it; micro's project folder is the
+  rich version: layers + kind subfolders `drillholes/models/clouds/meshes/grids/` +
+  sidecars under one FSAA dir handle). lamina should: recognise a project (a dir
+  handle with a `project.json`) → **browse its data files** (a tree over the dir,
+  honouring the kind subfolders) → open any it can read (`.dm`/`.csv`/`.parquet`/…)
+  → save its view as a **`.lamina` lens beside the data**. `kind` is advisory — a
+  `kind:'micro'` project is still a folder of readable files lamina can *view* without
+  *owning*; that's the point of a shared standard (any GCU tool = a viewer onto any
+  GCU project). Rides the same-origin substrate: a project is a directory handle, so
+  it's a `gcuOpened` `kind:'directory'` entry → "Open project in lamina ↗" is the same
+  no-re-pick handoff as a file. Full design (handoff + projects + the deferred A-Bus
+  linked-views layer): `spec_inbox/gcu-opened-handoff-spec.md`.
 
 ## Versioning
 
