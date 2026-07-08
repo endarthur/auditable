@@ -9,6 +9,13 @@
 
 import { makeProgram } from './gl-util.js';
 
+// 4×4-Bayer screen-door opacity (see gl-mesh / gl-blocks): see-through without
+// alpha blending — real depth writes stay correct, no back-to-front sort.
+const SCREENDOOR = `
+uniform float uOpacity;
+const float _BAYER[16] = float[16](0.0,8.0,2.0,10.0,12.0,4.0,14.0,6.0,3.0,11.0,1.0,9.0,15.0,7.0,13.0,5.0);
+bool _screendoor() { if (uOpacity >= 0.999) return false; int bi = (int(gl_FragCoord.x) & 3) + ((int(gl_FragCoord.y) & 3) << 2); return uOpacity < (_BAYER[bi] + 0.5) / 16.0; }`;
+
 const VERT = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aA;          // segment start, frame-local
@@ -123,8 +130,10 @@ uniform float uRadius;
 uniform vec3 uLightDir;
 uniform mat4 uViewProj;
 out vec4 outColor;
+${SCREENDOOR}
 void main() {
   if (vCull > 0.5) discard;
+  if (_screendoor()) discard;           // per-layer opacity (screen-door)
   if (vMode > 0.5) {                    // demoted splat
     if (dot(vCorner, vCorner) > 1.0) discard;
     gl_FragDepth = gl_FragCoord.z;
@@ -190,8 +199,10 @@ uniform vec3 uEye;
 uniform vec3 uLightDir;
 uniform mat4 uViewProj;
 out vec4 outColor;
+${SCREENDOOR}
 void main() {
   if (vCull > 0.5) discard;
+  if (_screendoor()) discard;
   if (dot(vCorner, vCorner) > 1.0) discard;
   outColor = vColor;
 }`;
@@ -201,7 +212,7 @@ export function createSticksPipeline(gl) {
     const prog = makeProgram(gl, VERT, frag);
     const U = (n) => gl.getUniformLocation(prog, n);
     return { prog, uni: {
-      viewProj: U('uViewProj'), eye: U('uEye'), radius: U('uRadius'),
+      viewProj: U('uViewProj'), eye: U('uEye'), radius: U('uRadius'), opacity: U('uOpacity'),
       perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'), fixedSplat: U('uFixedSplat'),
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
@@ -259,7 +270,7 @@ export function createSticksPipeline(gl) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
   }
 
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null, selTex = null, ruleTex = null }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null, selTex = null, ruleTex = null, opacity = 1 }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -273,6 +284,7 @@ export function createSticksPipeline(gl) {
       const l2 = Math.hypot(lx, ly, lz) || 1;
       gl.uniform3f(uni.lightDir, lx / l2, ly / l2, lz / l2);
       gl.uniform1f(uni.radius, radius);
+      gl.uniform1f(uni.opacity, Math.max(0.02, Math.min(1, opacity)));   // per-layer screen-door opacity
       gl.uniform1f(uni.perspScale, s.ortho ? (viewportH / 2) / s.halfH : (viewportH / 2) / Math.tan(s.fovY / 2));
       gl.uniform1f(uni.ortho, s.ortho ? 1 : 0);
       gl.uniform1f(uni.orthoRay, s.ortho ? 1 : 0);

@@ -112,6 +112,14 @@ void main() {
   if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);   // repaint pass: everything else clips out
 }`;
 
+// 4×4-Bayer screen-door opacity (same as gl-mesh): drops a fraction of pixels by a
+// stable dither → "see through" the model WITHOUT alpha blending, so real depth
+// writes + occlusion stay correct and no back-to-front sort is needed.
+const SCREENDOOR = `
+uniform float uOpacity;
+const float _BAYER[16] = float[16](0.0,8.0,2.0,10.0,12.0,4.0,14.0,6.0,3.0,11.0,1.0,9.0,15.0,7.0,13.0,5.0);
+bool _screendoor() { if (uOpacity >= 0.999) return false; int bi = (int(gl_FragCoord.x) & 3) + ((int(gl_FragCoord.y) & 3) << 2); return uOpacity < (_BAYER[bi] + 0.5) / 16.0; }`;
+
 const FRAG = `#version 300 es
 precision highp float;
 flat in vec3 vCenter;
@@ -128,8 +136,10 @@ uniform float uBackoff;                 // how far behind the quad the ortho ray
 uniform vec3 uLightDir;
 uniform mat4 uViewProj;
 out vec4 outColor;
+${SCREENDOOR}
 void main() {
   if (vCull > 0.5) discard;             // isolate mode: filtered-out block
+  if (_screendoor()) discard;           // per-layer opacity (screen-door)
   if (vMode > 0.5) {                    // demoted splat: circular mask, rasterizer depth
     if (dot(vCorner, vCorner) > 1.0) discard;
     gl_FragDepth = gl_FragCoord.z;
@@ -175,8 +185,10 @@ uniform vec3 uEye;
 uniform vec3 uLightDir;
 uniform mat4 uViewProj;
 out vec4 outColor;
+${SCREENDOOR}
 void main() {
   if (vCull > 0.5) discard;
+  if (_screendoor()) discard;
   if (dot(vCorner, vCorner) > 1.0) discard;
   outColor = vColor;
 }`;
@@ -200,7 +212,7 @@ export function createBlocksPipeline(gl) {
     return { prog, uni: {
       viewProj: U('uViewProj'), eye: U('uEye'), right: U('uRight'), up: U('uUp'),
       gridOrigin: U('uGridOrigin'), gridSize: U('uGridSize'),
-      dimPalette: U('uDimPalette'), subBlock: U('uSubBlock'),
+      dimPalette: U('uDimPalette'), subBlock: U('uSubBlock'), opacity: U('uOpacity'),
       perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'),
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
@@ -294,7 +306,7 @@ export function createBlocksPipeline(gl) {
 
   // Per-frame program state (called once before the chunk loop) — set on BOTH
   // programs so drawSlice can switch freely between full and cheap.
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, catVisTex = null, selTex = null, ruleTex = null }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, catVisTex = null, selTex = null, ruleTex = null, opacity = 1 }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -328,6 +340,7 @@ export function createBlocksPipeline(gl) {
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
       gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.dimPalette, 2);   // unit 2 = per-chunk sub-block half-dims; a complete default so regular draws never sample incomplete
       gl.uniform1f(uni.subBlock, 0);
+      gl.uniform1f(uni.opacity, Math.max(0.02, Math.min(1, opacity)));   // per-layer screen-door opacity
       gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
       gl.uniform1ui(uni.picked, picked >>> 0);
       gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);

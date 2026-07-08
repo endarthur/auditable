@@ -227,7 +227,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     if (!l) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
             intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
-            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0, selTex: null, selH: 0,
+            meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, opacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0, selTex: null, selH: 0,
             ruleTex: null, ruleH: 0, ruleOn: false };
       layers.set(id, l);
     }
@@ -371,6 +371,10 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       needClear = true;
     },
     layerMeshStyle(layer) { const ls = layerOf(layer); return { tint: ls.meshTint, opacity: ls.meshOpacity }; },
+    // per-layer opacity for blocks (box impostors) + sticks (drillholes) — applied
+    // as a screen-door dither in their shaders (see-through, no alpha-blend ordering).
+    setLayerOpacity(layer, opacity) { const ls = layerOf(layer); ls.opacity = Math.max(0.02, Math.min(1, +opacity)); needClear = true; },
+    layerOpacity(layer) { return layerOf(layer).opacity; },
     // per-layer SELECTION bitmask (spec §15): same texture shape as the filter
     // mask; selected elements get a warm tint in every element program
     setLayerSelection(layer, mask) {
@@ -775,6 +779,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
             catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
+            opacity: ls.opacity,
           });
         };
         for (const [id, group] of blkGroups) {
@@ -823,6 +828,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
             radius: ls.stickRadius, catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
+            opacity: ls.opacity,
           });
         };
         for (const [id, group] of stkGroups) {

@@ -709,7 +709,18 @@ let _knifeArm = false, _knifeStart = null;
 function armKnife(on) {
   _knifeArm = on;
   cv.style.cursor = on ? 'crosshair' : '';
-  if (on) $('#meta').textContent = 'knife: drag a line across the model — the vertical section through it';
+  if (on) $('#meta').textContent = 'knife: drag a line across the model — the vertical section through it · ⇧ snaps to 15° (⇧⌥ 5°)';
+}
+// ⇧ constrains the drawn line to angle increments (15°; ⇧⌥ → 5°). Screen-space —
+// in plan view (where sections are cut) that IS the bearing, so ⇧ gives clean
+// N–S / E–W / 15° sections. Alt (not Ctrl) so Mac's ctrl-click-is-right-click
+// doesn't abort the drag.
+function knifeSnap(sx, sy, ex, ey, e) {
+  if (!e.shiftKey) return [ex, ey];
+  const step = (e.altKey ? 5 : 15) * Math.PI / 180;
+  const ang = Math.round(Math.atan2(ey - sy, ex - sx) / step) * step;
+  const len = Math.hypot(ex - sx, ey - sy);
+  return [sx + Math.cos(ang) * len, sy + Math.sin(ang) * len];
 }
 cv.addEventListener('pointerdown', (e) => {
   if (!_knifeArm || e.button !== 0) return;
@@ -721,8 +732,9 @@ cv.addEventListener('pointermove', (e) => {
   if (!_knifeArm || !_knifeStart) return;
   e.stopImmediatePropagation();
   const r = cv.getBoundingClientRect(), L = $('#knifeLine');
+  const [ex, ey] = knifeSnap(_knifeStart.x, _knifeStart.y, e.clientX, e.clientY, e);
   L.setAttribute('x1', _knifeStart.x - r.left); L.setAttribute('y1', _knifeStart.y - r.top);
-  L.setAttribute('x2', e.clientX - r.left); L.setAttribute('y2', e.clientY - r.top);
+  L.setAttribute('x2', ex - r.left); L.setAttribute('y2', ey - r.top);
 }, { capture: true });
 cv.addEventListener('pointerup', (e) => {
   if (!_knifeArm || !_knifeStart) return;
@@ -731,7 +743,8 @@ cv.addEventListener('pointerup', (e) => {
   _knifeStart = null;
   $('#knifeSvg').style.display = 'none';
   armKnife(false);
-  if (knifeCut(st.x - r.left, st.y - r.top, e.clientX - r.left, e.clientY - r.top)) {
+  const [ex, ey] = knifeSnap(st.x, st.y, e.clientX, e.clientY, e);
+  if (knifeCut(st.x - r.left, st.y - r.top, ex - r.left, ey - r.top)) {
     $('#meta').textContent = _blockDoc ? _blockDoc.metaLine : $('#meta').textContent.replace(/^knife:.*/, '');
   } else {
     $('#secMode').value = 'off'; $('#secMode').dispatchEvent(new Event('input'));
@@ -5560,7 +5573,7 @@ function projectManifest() {
       sectioned: renderer.layerSectioned(L.id) ? undefined : false,
       kind: L.kind === 'mesh' ? 'mesh' : undefined,
       tint: L.kind === 'mesh' ? L.tint : undefined,
-      opacity: L.kind === 'mesh' && L.opacity !== 1 ? L.opacity : undefined,
+      opacity: (L.opacity != null && L.opacity !== 1) ? L.opacity : undefined,   // any kind (mesh/blocks/drillholes)
       soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
       hiddenCats: L.catHidden && L.catHidden.size
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
@@ -6002,7 +6015,7 @@ async function openProjectDir(dir) {
         } catch { /* no sidecar — full discovery as usual */ }
       }
       await openBlob(file, basename(ls.source), i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
-      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; } }
+      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } } }   // mesh opacity rides overR
       const L = activeLayer();
       if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
       if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the columns tab wakes up scanned
@@ -7585,10 +7598,11 @@ function layerMenu(L, x, y) {
       }
     } }] : []),
     ...(L.dh && L.docs.dhDoc ? [{ label: 'Add interval table…', action: () => addIntervalToLayer(L) }] : []),
+    ...(L.kind !== 'mesh' && (L.docs.blockDoc || L.dh) ? [{ label: `Opacity… (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, action: () => setTimeout(() => opacityMenu(L, x, y), 0) }] : []),
     ...(L.kind === 'mesh' ? (() => {
       const items = [
         { label: 'Tint…', action: () => setTimeout(() => meshTintMenu(L, x, y), 0) },
-        { label: `Opacity… (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, action: () => setTimeout(() => meshOpacityMenu(L, x, y), 0) },
+        { label: `Opacity… (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, action: () => setTimeout(() => opacityMenu(L, x, y), 0) },
       ];
       const h = L.docs.meshDoc && L.docs.meshDoc.header;
       if (h && !h.soup) items.push({ label: 'Select by this solid…', action: () => openSolidDialog(L) });
@@ -7658,10 +7672,18 @@ function meshTintMenu(L, x, y) {
     } },
   ]);
 }
-function meshOpacityMenu(L, x, y) {
+// per-layer opacity, kind-aware: meshes screen-door via meshStyle, blocks/sticks
+// via setLayerOpacity (both are Bayer dither in-shader — see-through, no blend order).
+function applyLayerOpacity(L, v) {
+  L.opacity = v;
+  if (L.kind === 'mesh') renderer.setLayerMeshStyle(L.id, { opacity: v });
+  else renderer.setLayerOpacity(L.id, v);
+  markProjectDirty(); requestRender();
+}
+function opacityMenu(L, x, y) {
   menuXY(x, y, [100, 75, 50, 25].map((pc) => ({
     label: (Math.round((L.opacity != null ? L.opacity : 1) * 100) === pc ? '✓ ' : '') + pc + '%',
-    action: () => { L.opacity = pc / 100; renderer.setLayerMeshStyle(L.id, { opacity: pc / 100 }); markProjectDirty(); requestRender(); },
+    action: () => applyLayerOpacity(L, pc / 100),
   })));
 }
 // ── layer properties (§10 v1): follows the ACTIVE layer, live-apply, tabbed.
@@ -9844,6 +9866,15 @@ function redesurveyMenu(nd, x, y) {
     { label: 'dip: negative down', action: () => redesurveySet(nd, { dipConvention: 'neg-down' }) },
   ]);
 }
+// one opacity for every layer in a group (the members apply it kind-aware)
+function groupOpacityMenu(nd, x, y) {
+  const Ls = groupLayerIds(nd).map(layerById).filter(Boolean);
+  const cur = Ls.length ? Math.round((Ls[0].opacity != null ? Ls[0].opacity : 1) * 100) : 100;
+  menuXY(x, y, [100, 75, 50, 25].map((pc) => ({
+    label: (cur === pc ? '✓ ' : '') + pc + '%',
+    action: () => { for (const L of Ls) applyLayerOpacity(L, pc / 100); },
+  })));
+}
 function groupMenu(nd, x, y) {
   const items = [];
   if (nd.dhSet) {
@@ -9871,6 +9902,7 @@ function groupMenu(nd, x, y) {
       }
       if (u) { cam.fit(u); requestRender(); }
     } },
+    { label: 'Opacity…', action: () => setTimeout(() => groupOpacityMenu(nd, x, y), 0) },
     { sep: true },
     { label: 'Ungroup (keep layers)', action: () => {
       treeSync();
