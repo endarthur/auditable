@@ -268,6 +268,24 @@ artifact in the GCU enterprise-profile sense:
   rough edges are interaction: context menus need long-press (today right-click),
   column-resize drag is fiddly on touch (autofit-all covers it), and the toolbar
   wants a narrow-width reflow.
+- **Strided/projected `.dm` FILTER — SHIPPED 2026-07-07.** lamina's `eachRecord`
+  handed every op the WHOLE record; `.dm` is row-major fixed-width, so a column
+  sits at a constant word offset and reads by **striding** (skip the rest, no
+  per-row allocation) via `@gcu/dm`'s `readField(dv, h, col, recBase)`. WIRED for
+  the FILTER: the DM cursor's `eachRecord({ cols })` decodes only the requested
+  field indices (`projectDmRecord`, app.js); `scanFilter` forwards `cols`
+  (filter.js, ignored by the CSV backing which decodes full rows anyway);
+  `applyFilter` computes the predicate's `@gcu/expr` `deps` → column indices and
+  passes them — UNLESS calc columns are present (their formulas may reach any
+  column → full decode). **Measured 33.7× on a real 486k-record, 17-column
+  Leapfrog `.dm`** (524→16 ms for a 1-column predicate), byte-identical hits;
+  verified `experiments/verify-lamina-dm-projection.mjs` (projected count ==
+  full-decode count). NB: `@gcu/dm`'s `main.js` export surface had to add
+  `readField` (lamina imports the BUNDLE, not the source micro uses).
+  **Remaining (smaller wins):** SORT by a key column + the single-column PROFILE
+  histogram could project too (the cursor already accepts `cols`); the gutter/
+  all-columns scan can't (needs everything). The CSV/text backing can't stride
+  (variable-width rows).
 
 ## Versioning
 

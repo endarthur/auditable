@@ -14,7 +14,7 @@ import { gradeTonnage } from '@gcu/sluice';   // streaming accumulators — the 
 import { geometryAccumulator, inferGeometry } from '@gcu/recon';   // grid-geometry inference (harvested from BMA) — the grid summary
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
-import { detectDM, parseHeader, recordRange, decodeRecord } from '@gcu/dm';
+import { detectDM, parseHeader, recordRange, decodeRecord, readField } from '@gcu/dm';
 import { Unzip, UnzipInflate } from 'fflate';
 import { idbCache } from './idb-cache.js';
 
@@ -847,10 +847,22 @@ async function applyFilter(str) {
   try { predicate = compileBool(str, cols, { decimal: c.d.decimal }); } catch (e) { return filterErr(e); }
   $('#filter').classList.remove('err');
   $('#meta').textContent = 'filtering…';
+  // on a .dm, PROJECT the scan to the predicate's referenced columns (strided
+  // decode — read only those fields per record, not all N). Skip when calc columns
+  // are in play (their formulas may reach any column → full decode is required).
+  let projCols = null;
+  if (c.dm && (!c.calcs || !c.calcs.length)) {
+    try {
+      const idxOf = new Map(c.d.schema.map((s, i) => [String(s.name).toLowerCase(), i]));
+      const need = new Set();
+      for (const d of deps(str)) { const i = idxOf.get(String(d).toLowerCase()); if (i != null) need.add(i); }
+      projCols = need.size ? [...need] : null;
+    } catch { projCols = null; }
+  }
   const ac = newFooterScan();
   try {
     c.filterResult = await scanFilter(c.source, {
-      predicate, dataStart: c.dataStart, signal: ac.signal,
+      predicate, dataStart: c.dataStart, signal: ac.signal, cols: projCols,
       onProgress: (b, n) => { $('#meta').textContent = `filtering… ${n ? Math.round((100 * b) / n) : 0}% · Esc to cancel`; },
     });
     const r = recompute(); refreshGutterFiltered(); return r;   // overlay the matched-rows distribution on the gutters
@@ -960,11 +972,20 @@ function createDmViewSource(reader, h, { cacheBlocks = 16, blockSize = 256 } = {
 // stay numbers — exact, no parse-back); the locator is just the record index;
 // readByLoc re-reads one record for a scattered result view. Reads in record
 // chunks (one page-span per read); a `rows` subset stops early.
+// project ONE record: decode only the requested column indices by striding each
+// field's fixed word-offset (readField), instead of the whole record. Missing/
+// unreferenced columns stay undefined — the predicate only reads its own columns.
+function projectDmRecord(bytes, h, cols) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const out = new Array(h.columns.length);
+  for (const ci of cols) out[ci] = readField(dv, h, h.columns[ci], 0);
+  return out;
+}
 function createDmCursor(reader, h, { chunk = 4096 } = {}) {
   const n = h.recordCount;
   return {
     kind: 'dm', rowCount: n, schema: h.schema, delimiter: '\t', quote: '"',
-    async eachRecord({ dataStart = 0, rows = null, onProgress, limit = Infinity } = {}, visit) {
+    async eachRecord({ dataStart = 0, rows = null, onProgress, limit = Infinity, cols = null } = {}, visit) {
       let sp = 0, seen = 0;
       for (let i0 = 0; i0 < n; i0 += chunk) {
         const i1 = Math.min(n, i0 + chunk);
@@ -980,7 +1001,9 @@ function createDmCursor(reader, h, { chunk = 4096 } = {}) {
             sp++;
           }
           const r = recordRange(h, i);
-          visit(disp, decodeRecord(bytes.subarray(r.offset - start, r.offset - start + r.length), h), i, 0);   // loc0 = record index
+          const sub = bytes.subarray(r.offset - start, r.offset - start + r.length);
+          visit(disp, cols ? projectDmRecord(sub, h, cols) : decodeRecord(sub, h), i, 0);   // loc0 = record index; cols = strided projection
+
           if (++seen >= limit) return;                      // sample cap (gutter stats)
         }
         if (onProgress) onProgress(i1, n);
