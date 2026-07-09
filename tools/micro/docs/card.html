@@ -50,8 +50,14 @@
 
   .grp { margin-bottom: 2.1mm; }
   .grp .t { font: 600 2.05mm/1 var(--sans); color: var(--accent); text-transform: uppercase; letter-spacing: 0.13em; margin-bottom: 1.05mm; }
-  .row { display: flex; flex-wrap: wrap; column-gap: 3.1mm; row-gap: 1.15mm; }
-  .kv { display: inline-flex; align-items: center; gap: 1.05mm; white-space: nowrap; }
+  /* a REAL column grid — keys sit in a fixed-width slot, so chips and labels
+     align vertically down the whole face instead of flowing at random x */
+  .g { display: grid; grid-template-columns: repeat(3, 1fr); column-gap: 2mm; row-gap: 1.2mm; }
+  .s2 { grid-column: span 2; }
+  .s3 { grid-column: 1 / -1; }
+  .kv { display: flex; align-items: center; gap: 1.2mm; white-space: nowrap; min-width: 0; }
+  .kk { display: inline-flex; gap: 0.7mm; min-width: 6.9mm; flex: 0 0 auto; }
+  .kk.wk { font: 600 2.4mm/1.15 var(--sans); color: var(--ink); }   /* mouse "keys" are words */
   kbd {
     font: 700 2.5mm/1 var(--mono); color: var(--accent);
     background: var(--chip); border: 0.18mm solid var(--border); border-bottom-width: 0.45mm;
@@ -59,6 +65,9 @@
   }
   .kv b { font: 400 2.55mm/1.15 var(--sans); color: var(--ink); }
   .kv .d { color: var(--dim); }
+  .ml { font: 400 2.4mm/1.3 var(--sans); color: var(--ink); }   /* mouse: one flowing line (no chips to align) */
+  .ml b { font-weight: 600; }
+  .ml .d { color: var(--dim); }
   .ft { margin-top: auto; display: flex; align-items: baseline; gap: 1.5mm; }
   .ft .url { font: 400 2.2mm/1 var(--mono); color: var(--dim); }
   .ft .gcu { margin-left: auto; font: 400 2mm/1 var(--sans); color: #6a6a6a; letter-spacing: 0.06em; }
@@ -106,32 +115,27 @@
       <div class="strip"></div>
       <div class="grp">
         <div class="t">view</div>
-        <div class="row">
-          <span class="kv"><kbd>f</kbd><b>fit</b></span>
-          <span class="kv"><kbd>o</kbd><b>ortho ⇄ persp</b></span>
-          <span class="kv"><kbd>d</kbd><b>plan</b></span>
-          <span class="kv"><kbd>u</kbd><b>from below</b></span>
-          <span class="kv"><kbd>n</kbd><kbd>s</kbd><kbd>e</kbd><kbd>w</kbd><b>look that way</b></span>
+        <div class="g">
+          <span class="kv"><span class="kk"><kbd>f</kbd></span><b>fit</b></span>
+          <span class="kv"><span class="kk"><kbd>o</kbd></span><b>ortho ⇄ persp</b></span>
+          <span class="kv"><span class="kk"><kbd>d</kbd></span><b>plan</b></span>
+          <span class="kv"><span class="kk"><kbd>u</kbd></span><b>from below</b></span>
+          <span class="kv s2"><span class="kk"><kbd>n</kbd><kbd>s</kbd><kbd>e</kbd><kbd>w</kbd></span><b>look that way</b></span>
         </div>
       </div>
       <div class="grp">
         <div class="t">section</div>
-        <div class="row">
-          <span class="kv"><kbd>k</kbd><b>knife <span class="d">— drag a line · ⇧ snap 15° · ⇧⌥ 5°</span></b></span>
-          <span class="kv"><kbd>x</kbd><b>on / off</b></span>
-          <span class="kv"><kbd>l</kbd><b>face it</b></span>
-          <span class="kv"><kbd>⇧L</kbd><b>its back</b></span>
-          <span class="kv"><kbd>,</kbd><kbd>.</kbd><b>step one slab</b></span>
+        <div class="g">
+          <span class="kv s2"><span class="kk"><kbd>k</kbd></span><b>knife <span class="d">— drag a line · ⇧ snap 15° · ⇧⌥ 5°</span></b></span>
+          <span class="kv"><span class="kk"><kbd>x</kbd></span><b>on / off</b></span>
+          <span class="kv"><span class="kk"><kbd>l</kbd></span><b>face it</b></span>
+          <span class="kv"><span class="kk"><kbd>⇧L</kbd></span><b>its back</b></span>
+          <span class="kv"><span class="kk"><kbd>,</kbd><kbd>.</kbd></span><b>step one slab</b></span>
         </div>
       </div>
       <div class="grp">
         <div class="t">mouse</div>
-        <div class="row">
-          <span class="kv"><b>drag</b><b class="d">orbit</b></span>
-          <span class="kv"><b>⇧ / right-drag</b><b class="d">pan</b></span>
-          <span class="kv"><b>wheel</b><b class="d">zoom</b></span>
-          <span class="kv"><b>click</b><b class="d">pick a record</b></span>
-        </div>
+        <div class="ml"><b>drag</b> <span class="d">orbit</span> · <b>⇧ / right-drag</b> <span class="d">pan</span> · <b>wheel</b> <span class="d">zoom</span> · <b>click</b> <span class="d">pick a record</span></div>
       </div>
       <div class="ft"><span class="url">gentropic.org/micro</span><span class="gcu">GCU</span></div>
     </div>
@@ -148,39 +152,34 @@
       </div>
       <div class="strip"></div>
       <div class="grp">
-        <div class="t">tools</div>
-        <div class="row">
-          <span class="kv"><kbd>m</kbd><b>measure <span class="d">(2 picks)</span></b></span>
-          <span class="kv"><kbd>i</kbd><b>file info</b></span>
-          <span class="kv"><kbd>/</kbd><b>filter</b></span>
-          <span class="kv"><kbd>t</kbd><b>attribute table</b></span>
-        </div>
-      </div>
-      <div class="grp">
-        <div class="t">select · paint</div>
-        <div class="row">
-          <span class="kv"><kbd>r</kbd><b>rectangle</b></span>
-          <span class="kv"><kbd>v</kbd><b>lasso</b></span>
-          <span class="kv"><kbd>b</kbd><b>paint</b></span>
-          <span class="kv"><kbd>Esc</kbd><b>cancel</b></span>
+        <div class="t">tools · select · paint</div>
+        <div class="g">
+          <span class="kv"><span class="kk"><kbd>m</kbd></span><b>measure</b></span>
+          <span class="kv"><span class="kk"><kbd>i</kbd></span><b>file info</b></span>
+          <span class="kv"><span class="kk"><kbd>/</kbd></span><b>filter</b></span>
+          <span class="kv"><span class="kk"><kbd>t</kbd></span><b>table</b></span>
+          <span class="kv"><span class="kk"><kbd>r</kbd></span><b>rectangle</b></span>
+          <span class="kv"><span class="kk"><kbd>v</kbd></span><b>lasso</b></span>
+          <span class="kv"><span class="kk"><kbd>b</kbd></span><b>paint</b></span>
+          <span class="kv s2"><span class="kk"><kbd>Esc</kbd></span><b>cancel</b></span>
         </div>
       </div>
       <div class="grp">
         <div class="t">layers</div>
-        <div class="row">
-          <span class="kv"><kbd>p</kbd><b>panel</b></span>
-          <span class="kv"><kbd>[</kbd><kbd>]</kbd><b>step active</b></span>
-          <span class="kv"><kbd>h</kbd><b>hide / show</b></span>
-          <span class="kv"><kbd>⇧P</kbd><b>properties</b></span>
-          <span class="kv"><kbd>⇧B</kbd><b>block edges</b></span>
+        <div class="g">
+          <span class="kv"><span class="kk"><kbd>p</kbd></span><b>panel</b></span>
+          <span class="kv"><span class="kk"><kbd>h</kbd></span><b>hide / show</b></span>
+          <span class="kv"><span class="kk"><kbd>[</kbd><kbd>]</kbd></span><b>step active</b></span>
+          <span class="kv"><span class="kk"><kbd>⇧P</kbd></span><b>properties</b></span>
+          <span class="kv"><span class="kk"><kbd>⇧B</kbd></span><b>block edges</b></span>
         </div>
       </div>
       <div class="grp">
         <div class="t">everything else</div>
-        <div class="row">
-          <span class="kv"><kbd>⌘K</kbd><b>command palette</b></span>
-          <span class="kv"><kbd>⌘S</kbd><b>save project</b></span>
-          <span class="kv"><kbd>⌘Z</kbd><b>undo paint</b></span>
+        <div class="g">
+          <span class="kv"><span class="kk"><kbd>⌘K</kbd></span><b>palette</b></span>
+          <span class="kv"><span class="kk"><kbd>⌘S</kbd></span><b>save project</b></span>
+          <span class="kv"><span class="kk"><kbd>⌘Z</kbd></span><b>undo paint</b></span>
         </div>
       </div>
       <div class="ft"><span class="url">one file · no install · no network</span><span class="gcu">Sealed</span></div>
