@@ -639,7 +639,7 @@ import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribut
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
 import { readLFM, writeLFM } from '../../ext/lfm/lfm.js';   // Leapfrog model files (multi-mesh + colours)
 import { readGTiff, gridFromGTiff, gridWindowFromGTiff, gridDecimatedFromGTiff, stepForCap, windowForWorldBbox, pickOverviewForCap } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs + windowed/decimated reads (spec 7.1)
-import { parquetInfo, parquetInfoAsync, streamParquetColumns, readParquetRange, readParquetRow, writeParquet } from '../../ext/parquet/index.js';   // Apache Parquet block models (columnar, streamed row-group by row-group)
+import { parquetInfo, parquetInfoAsync, streamParquetColumns, readParquetRange, readParquetRow, writeParquet, createParquetBlobWriter } from '../../ext/parquet/index.js';   // Apache Parquet block models (columnar, streamed row-group by row-group)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -1559,38 +1559,60 @@ async function convertLayerToParquet(L) {
   if (!h || (L.docs.blockDoc && L.docs.blockDoc.parquet)) { $('#meta').textContent = 'materialize: needs a non-Parquet block model'; return; }
   const m = h.mapping || {};
   if (m.x == null || m.y == null || m.z == null) { $('#meta').textContent = 'materialize: needs X/Y/Z columns'; return; }
-  // the in-memory converter decodes every column — over the ceiling it will
-  // exhaust the tab. Warn with an estimate; the streaming converter is the fix.
-  if (h.count > OPTIMIZE_MAX_BLOCKS) {
-    const est = (h.count * h.columns.length * 16 / 1073741824).toFixed(1);
-    const go = await microConfirm('Convert a very large model in memory?',
-      `${(h.count / 1e6).toFixed(1)}M blocks × ${h.columns.length} columns needs roughly ${est} GB of tab memory — this will likely crash the page. Proceed anyway?`,
-      'Proceed', 'Cancel');
-    if (!go) { $('#meta').textContent = 'optimize: cancelled (streaming conversion for big models is on the roadmap)'; return; }
-  }
-  $('#meta').textContent = `${L.label || L.name} — reading columns…`;
-  // 1. read the BASE data columns in record order (+ coords for the sort).
-  // Memory discipline: category strings are INTERNED (one string object per
-  // distinct value, not one per row — 40 B/row → 8 B pointer) and coords go
-  // straight into preallocated Float64Arrays (no plain-array duplicates).
   const names = h.columns, isNum = names.map((_, k) => colIsNumeric(L, h, k));
+  const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm), isDelim = !!(L.docs.blockDoc && !isDm);
+  const intern = names.map((_, k) => (isNum[k] ? null : new Map()));   // one string object per distinct value, not per row
+  const pushVal = (arr, k, v) => {
+    if (isNum[k]) arr.push(v == null || v === '' || Number.isNaN(+v) ? null : +v);
+    else if (v == null || v === '') arr.push(null);
+    else { const s = String(v); let iv = intern[k].get(s); if (iv === undefined) { iv = s; intern[k].set(s, s); } arr.push(iv); }
+  };
+  const kvOf = (lin) => [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs) || null, spatial: !(lin.params && lin.params.streaming) }) }, { key: 'micro:lineage', value: JSON.stringify(lin) }];
+  // over the in-memory ceiling → the STREAMING file-order path: row groups
+  // accumulate 64k at a time and append to the blob writer (peak memory ≈ one
+  // group, whatever the model size). No Morton sort — block files are written
+  // in IJK loops, so file order is already spatially coherent and the per-group
+  // footer bboxes stay tight (pushdown still bites). Small models keep the
+  // sorted in-memory path (a true spatial index).
+  const streaming = h.count > OPTIMIZE_MAX_BLOCKS;
+  let outBlob = null, n = 0, order = null, optLineage;
+  if (streaming) {
+    optLineage = mkLineage('optimize', { morton: false, streaming: true, format: 'parquet', blocks: h.count }, [L.lineage]);
+    const columnTypes = {}; names.forEach((nm, k) => { columnTypes[nm] = isNum[k] ? 'DOUBLE' : 'STRING'; });
+    const w = createParquetBlobWriter({ columnTypes, kvMetadata: kvOf(optLineage) });
+    const GROUP = 1 << 16;
+    let acc = names.map(() => []), accN = 0;
+    const flushGroup = () => { if (!accN) return; w.write(names.map((nm, k) => ({ name: nm, data: acc[k] }))); acc = names.map(() => []); accN = 0; };
+    try {
+      for await (const batch of layerRows(L, null)) {
+        for (const f0 of batch) {
+          if (isDelim) { const xv = +f0[m.x], yv = +f0[m.y], zv = +f0[m.z]; if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue; }
+          const f = isDm ? f0.map((v) => (v == null ? '' : v)) : f0;
+          for (let k = 0; k < names.length; k++) pushVal(acc[k], k, f[k]);
+          accN++; n++;
+          if (accN >= GROUP) flushGroup();
+        }
+        $('#meta').textContent = `converting (streaming, file order): ${n.toLocaleString()} / ${h.count.toLocaleString()} blocks…`;
+        await new Promise((r) => setTimeout(r));
+      }
+      flushGroup();
+      if (!n) { $('#meta').textContent = 'materialize: empty model'; return; }
+      outBlob = w.finish();
+    } catch (e) { $('#meta').textContent = `materialize: ${e.message}`; return; }
+  } else {
+  $('#meta').textContent = `${L.label || L.name} — reading columns…`;
+  // 1. read the BASE data columns in record order (+ coords for the sort);
+  // coords go straight into preallocated Float64Arrays (no plain-array copies)
   const colArr = names.map(() => []);
-  const intern = names.map((_, k) => (isNum[k] ? null : new Map()));
   const cap = h.count || 0;
   let XC = new Float64Array(cap), YC = new Float64Array(cap), ZC = new Float64Array(cap);
-  const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm), isDelim = !!(L.docs.blockDoc && !isDm);
   let rc = 0;
   try {
     for await (const batch of layerRows(L, null)) {
       for (const f0 of batch) {
         if (isDelim) { const xv = +f0[m.x], yv = +f0[m.y], zv = +f0[m.z]; if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue; }
         const f = isDm ? f0.map((v) => (v == null ? '' : v)) : f0;
-        for (let k = 0; k < names.length; k++) {
-          const v = f[k];
-          if (isNum[k]) colArr[k].push(v == null || v === '' || Number.isNaN(+v) ? null : +v);
-          else if (v == null || v === '') colArr[k].push(null);
-          else { const s = String(v); let iv = intern[k].get(s); if (iv === undefined) { iv = s; intern[k].set(s, s); } colArr[k].push(iv); }
-        }
+        for (let k = 0; k < names.length; k++) pushVal(colArr[k], k, f[k]);
         if (rc >= XC.length) {   // headerless count estimate ran short — grow
           const g = Math.max(1024, XC.length * 2);
           const nx = new Float64Array(g); nx.set(XC); XC = nx;
@@ -1604,23 +1626,23 @@ async function convertLayerToParquet(L) {
       await new Promise((r) => setTimeout(r));
     }
   } catch (e) { $('#meta').textContent = `materialize: ${e.message}`; return; }
-  const n = rc;
+  n = rc;
   if (!n) { $('#meta').textContent = 'materialize: empty model'; return; }
   // 2. Morton order → 3. write the base columns Morton-sorted (spatial index).
   // Each source column is RELEASED right after its reorder — no full double-copy.
   $('#meta').textContent = 'materialize: spatial sort + write…';
-  const order = radixSortIndices(mortonKeys(XC.subarray(0, n), YC.subarray(0, n), ZC.subarray(0, n), n), n);
+  order = radixSortIndices(mortonKeys(XC.subarray(0, n), YC.subarray(0, n), ZC.subarray(0, n), n), n);
   XC = YC = ZC = null;                                     // coords served their purpose
   const columnData = names.map((nm, k) => { const src = colArr[k], dst = new Array(n); for (let i = 0; i < n; i++) dst[i] = src[order[i]]; colArr[k] = null; return { name: nm, data: dst }; });
-  const optLineage = mkLineage('optimize', { morton: true, format: 'parquet', blocks: n }, [L.lineage]);
-  const kv = [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs) || null, spatial: true }) }, { key: 'micro:lineage', value: JSON.stringify(optLineage) }];
-  const bytes = writeParquet({ columnData, rowGroupSize: 1 << 16, codec: 'SNAPPY', kvMetadata: kv });
+  optLineage = mkLineage('optimize', { morton: true, format: 'parquet', blocks: n }, [L.lineage]);
+  outBlob = new Blob([writeParquet({ columnData, rowGroupSize: 1 << 16, codec: 'SNAPPY', kvMetadata: kvOf(optLineage) })]);
+  }
   // 4. replace the blockDoc IN PLACE (reuse the layer id, keep paint/calc/style)
   const base = (L.label || L.name).replace(/\.[^.]+$/, ''), keepLabel = L.label, keepColorSel = L.colorSel, keepFilter = L.filterExpr;
   const oldHandle = L.handle;                              // the PRE-optimize source file (CSV/.dm) — now stale + orphanable
   const savedActive = _activeId; setActiveLayer(L.id);
   try {
-    await openParquetBlocks(new Blob([bytes]), `${base}.parquet`, { layer: L.id, first: false });
+    await openParquetBlocks(outBlob, `${base}.parquet`, { layer: L.id, first: false });
   } catch (e) { $('#meta').textContent = `materialize: reopen — ${e.message}`; setActiveLayer(savedActive); return; }
   L.name = `${base}.parquet`;                              // so save/reload routes to the parquet path
   L.lineage = optLineage;                                  // provenance: this layer was optimized in place
@@ -1631,9 +1653,13 @@ async function convertLayerToParquet(L) {
   // as still the layer's file → the parquet was never written → reload found no rows.
   L.handle = null; L.storage = 'loose';
   L._optimizedOrphan = oldHandle || null;                 // saveProject removes the leftover source file (§ below)
-  // 5. PERMUTE every per-record thing by the SAME order — paint stays editable
-  for (const col of L.paintCols || []) { const nc = new Uint8Array(n); for (let i = 0; i < n; i++) nc[i] = col.codes[order[i]]; col.codes = nc; }
-  if (L._selMask && L._selMask.length === n) { const nm = new Uint8Array(n); for (let i = 0; i < n; i++) nm[i] = L._selMask[order[i]]; L._selMask = nm; applyLayerSelection(L); }
+  // 5. PERMUTE every per-record thing by the SAME order — paint stays editable.
+  // (The streaming path preserves FILE ORDER — record identity is unchanged,
+  // so paint/selection need no permutation at all.)
+  if (order) {
+    for (const col of L.paintCols || []) { const nc = new Uint8Array(n); for (let i = 0; i < n; i++) nc[i] = col.codes[order[i]]; col.codes = nc; }
+    if (L._selMask && L._selMask.length === n) { const nm = new Uint8Array(n); for (let i = 0; i < n; i++) nm[i] = L._selMask[order[i]]; L._selMask = nm; applyLayerSelection(L); }
+  }
   L._colStats = null;                                      // aggregate — recomputed on demand
   addPaintColorOptions(L);
   if (keepColorSel && [...$('#colorBy').options].some((o) => o.value === keepColorSel)) { L.colorSel = keepColorSel; setLayerColorSel(L, keepColorSel); }
@@ -1641,7 +1667,9 @@ async function convertLayerToParquet(L) {
   // filter re-sweeps (with pushdown) against the new order
   if (keepFilter && keepFilter.trim()) { $('#filter').value = keepFilter; syncFilterClear(); await applyBlockFilter(keepFilter); }
   renderLayers(); markProjectDirty();
-  $('#meta').textContent = `optimized “${base}.parquet” — ${n.toLocaleString()} blocks, Morton-sorted (spatial index) · painting stays editable. Save the project to store it.`;
+  $('#meta').textContent = streaming
+    ? `converted “${base}.parquet” — ${n.toLocaleString()} blocks, streamed in file order (footer index per 64k group). Save the project to store it.`
+    : `optimized “${base}.parquet” — ${n.toLocaleString()} blocks, Morton-sorted (spatial index) · painting stays editable. Save the project to store it.`;
 }
 // ── the export dialog ──
 let _exDlg = null;
@@ -2030,7 +2058,7 @@ async function* layerPositions(L, bbox = null) {
     for (const rg of P.rowGroups) {
       const count = rg.rowCount;
       if (bbox && !pqGroupBboxIntersects(rg, P.coordNames, bbox)) { start += count; skipped++; continue; }
-      const cols = await readParquetRange(P.buf, P.coordNames, start, start + count);
+      const cols = await readParquetRange(P.buf, P.coordNames, start, start + count, P.meta);
       const X = cols[xN], Y = cols[yN], Z = cols[zN];
       const x = new Float64Array(count), y = new Float64Array(count), z = new Float64Array(count), recs = new Uint32Array(count);
       for (let i = 0; i < count; i++) { x[i] = +X[i]; y[i] = +Y[i]; z[i] = +Z[i]; recs[i] = start + i; }
@@ -5155,9 +5183,11 @@ function pqGroupRanges(rg) {
   return ranges;
 }
 async function openParquetBlocks(blob, name, opts = {}) {
-  const buf = await blob.arrayBuffer();
+  // the layer holds the BLOB, never the bytes: every read below range-reads
+  // (toAsyncBuffer slices the blob), so a multi-GB parquet costs no residency.
+  // info.meta rides along so hyparquet never re-parses the footer per call.
   $('#meta').textContent = `${name} — reading parquet footer…`;
-  const info = parquetInfo(buf);
+  const info = await parquetInfoAsync(blob);
   const names = info.columns.map((c) => c.name);
   const typeOf = {}; info.columns.forEach((c) => { typeOf[c.name] = c.type; });
   if (names.length < 3) throw new Error('parquet: need at least 3 columns (X, Y, Z)');
@@ -5178,7 +5208,7 @@ async function openParquetBlocks(blob, name, opts = {}) {
   const catSet = catN ? new Set() : null;
   const discCols = catN ? [xN, yN, zN, catN] : [xN, yN, zN];
   $('#meta').textContent = `${name} — discovering grid…`;
-  for await (const { count, cols } of streamParquetColumns(buf, discCols, info.rowGroups)) {
+  for await (const { count, cols } of streamParquetColumns(blob, discCols, info.rowGroups, info.meta)) {
     const X = cols[xN], Y = cols[yN], Z = cols[zN], C = catN ? cols[catN] : null;
     for (let i = 0; i < count; i++) {
       const xv = +X[i], yv = +Y[i], zv = +Z[i];
@@ -5202,7 +5232,7 @@ async function openParquetBlocks(blob, name, opts = {}) {
   // into the chunk builder; nothing decoded is retained after the chunk. ──
   async function* streamChunks() {
     const cnames = [xN, yN, zN, ...(chanN ? [chanN] : []), ...(catN ? [catN] : [])];
-    for await (const { start, count, cols } of streamParquetColumns(buf, cnames, info.rowGroups)) {
+    for await (const { start, count, cols } of streamParquetColumns(blob, cnames, info.rowGroups, info.meta)) {
       const X = cols[xN], Y = cols[yN], Z = cols[zN], CH = chanN ? cols[chanN] : null, CA = catN ? cols[catN] : null;
       const x = new Float64Array(count), y = new Float64Array(count), z = new Float64Array(count), chan = new Float64Array(count);
       const cat = catCode ? new Uint8Array(count) : null, recIdx = new Uint32Array(count);
@@ -5218,7 +5248,7 @@ async function openParquetBlocks(blob, name, opts = {}) {
   }
   // the layer holds NO decoded columns — just the bytes, schema, and row-group
   // table; pick/filter/eval re-read the source, a group at a time (like CSV)
-  const pq = { buf, names, mapping, rowGroups: info.rowGroups, coordNames: [xN, yN, zN], catName: catN, catCode };
+  const pq = { buf: blob, meta: info.meta, names, mapping, rowGroups: info.rowGroups, coordNames: [xN, yN, zN], catName: catN, catCode };
   await openBlocksBlob(blob, name, { ...opts, provider: async () => ({ header, streamChunks, parquet: pq }) });
 }
 // Block-model path (.csv etc.): two-sweep provider → regular grid → box impostors.
@@ -5489,7 +5519,7 @@ async function applyBlockFilter(expr) {
     for (const rg of P.rowGroups) {
       const count = rg.rowCount;
       if (ast && !pqGroupCanMatch(ast, pqGroupRanges(rg))) { start += count; skipped++; continue; }   // pushdown skip
-      const cols = await readParquetRange(P.buf, readCols, start, start + count);
+      const cols = await readParquetRange(P.buf, readCols, start, start + count, P.meta);
       for (let i = 0; i < count; i++) {
         const r = start + i;
         const f = new Array(P.names.length);
@@ -5790,14 +5820,15 @@ function markProjectDirty() {
 // escape hatch; the remembered choice is resettable from Tools → Settings.
 let _autoOptimize = (() => { try { return localStorage.getItem('micro.autoOptimize'); } catch { return null; } })();   // 'on' | 'off' | null (unasked)
 function setAutoOptimize(v) { _autoOptimize = v; try { localStorage.setItem('micro.autoOptimize', v); } catch { /* private mode */ } }
-// the in-memory converter's honest ceiling — above this, a convert (and thus an
-// auto-optimize on SAVE) would OOM the tab. Big models keep their source format
-// until the streaming converter lands; convert stays available explicitly below.
+// the Morton in-memory converter's ceiling — above this, convertLayerToParquet
+// switches to the STREAMING file-order path (bounded memory, no sort). Auto-
+// optimize-on-save still skips big models: streaming a multi-GB file mid-save
+// is a surprise nobody wants — convert them explicitly from the layer menu.
 const OPTIMIZE_MAX_BLOCKS = 8_000_000;
 async function maybeAutoOptimize() {
   let cands = _layers.filter((L) => L.docs.blockDoc && !L.docs.blockDoc.parquet && layerTableHeader(L) && (layerTableHeader(L).mapping || {}).x != null);
   const big = cands.filter((L) => layerTableHeader(L).count > OPTIMIZE_MAX_BLOCKS);
-  if (big.length) { $('#meta').textContent = `optimize: ${big.map((L) => L.label || L.name).join(', ')} over ${(OPTIMIZE_MAX_BLOCKS / 1e6)}M blocks — kept as-is (in-memory conversion would exhaust the tab)`; cands = cands.filter((L) => !big.includes(L)); }
+  if (big.length) { $('#meta').textContent = `optimize: ${big.map((L) => L.label || L.name).join(', ')} over ${(OPTIMIZE_MAX_BLOCKS / 1e6)}M blocks — kept as-is (convert explicitly via the layer menu; it streams with bounded memory but takes a while)`; cands = cands.filter((L) => !big.includes(L)); }
   if (!cands.length) return;
   let choice = _autoOptimize;
   if (choice == null) {
@@ -7079,7 +7110,7 @@ async function recordPosition(fullId) {
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
   if (dd) return dd.recordPosition(rec);
   const m = bd && bd.header.mapping;
-  if (bd && bd.parquet) { const row = await readParquetRow(bd.parquet.buf, rec); const cn = bd.parquet.coordNames; return row ? [+row[cn[0]], +row[cn[1]], +row[cn[2]]] : null; }
+  if (bd && bd.parquet) { const row = await readParquetRow(bd.parquet.buf, rec, bd.parquet.meta); const cn = bd.parquet.coordNames; return row ? [+row[cn[0]], +row[cn[1]], +row[cn[2]]] : null; }
   if (bd && bd.header.dm) {
     const vals = await fetchDmRecord(bd.blob, bd.header.dm, rec);
     return [vals[m.x], vals[m.y], vals[m.z]];
@@ -7902,7 +7933,7 @@ async function fetchLayerRow(L, rec) {
   }
   if (d.dhDoc) return d.dhDoc.fetchRecord(rec);
   if (d.tracesDoc) return d.tracesDoc.fetchRecord(rec);    // pick a trace → its collar record
-  if (d.blockDoc && d.blockDoc.parquet) { const row = await readParquetRow(d.blockDoc.parquet.buf, rec); return row ? d.blockDoc.parquet.names.map((n) => { const v = row[n]; return v == null ? '' : v; }) : null; }
+  if (d.blockDoc && d.blockDoc.parquet) { const row = await readParquetRow(d.blockDoc.parquet.buf, rec, d.blockDoc.parquet.meta); return row ? d.blockDoc.parquet.names.map((n) => { const v = row[n]; return v == null ? '' : v; }) : null; }
   if (d.blockDoc && d.blockDoc.header.dm) return await fetchDmRecord(d.blockDoc.blob, d.blockDoc.header.dm, rec);
   if (d.blockDoc) return await fetchCsvRecord(rec, d.blockDoc);
   if (d.plyDoc) return await d.plyDoc.fetchRecord(rec);
@@ -9461,7 +9492,7 @@ async function* layerRows(L, onProgress) {
   } else if (d.blockDoc && d.blockDoc.parquet) {
     const P = d.blockDoc.parquet;
     let done = 0;
-    for await (const { count, cols } of streamParquetColumns(P.buf, P.names, P.rowGroups)) {
+    for await (const { count, cols } of streamParquetColumns(P.buf, P.names, P.rowGroups, P.meta)) {
       const rows = [];
       for (let i = 0; i < count; i++) rows.push(P.names.map((n) => { const v = cols[n][i]; return v == null ? '' : v; }));
       yield rows;
@@ -10696,7 +10727,7 @@ async function showRecord(fullId) {
   }
   if (bd && bd.parquet) {
     showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, [], 'fetching…');
-    const row = await readParquetRow(bd.parquet.buf, rec);
+    const row = await readParquetRow(bd.parquet.buf, rec, bd.parquet.meta);
     if (!row) { showRecPanel(`${tag}block · row ${rec.toLocaleString()}`, [], 'row not found'); return; }
     const f = bd.header.columns.map((n) => { const v = row[n]; return v == null ? '—' : v; });
     const rows = bd.header.columns.map((nm, i) => [nm, f[i]]);

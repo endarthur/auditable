@@ -4,7 +4,7 @@
 // add GZIP (fflate, sync) and ZSTD (fzstd, read-only). The decompress callback
 // is SYNCHRONOUS — no DecompressionStream here (that's async), unlike gtiff.
 import { parquetMetadata, parquetMetadataAsync, parquetReadObjects, parquetRead, parquetSchema, snappyUncompress, toJson } from 'hyparquet';
-import { parquetWriteBuffer } from 'hyparquet-writer';
+import { parquetWriteBuffer, ParquetWriter, ByteWriter, schemaFromColumnData } from 'hyparquet-writer';
 import { gunzipSync, gzipSync } from 'fflate';
 import { decompress as zstdDecompress } from 'fzstd';
 
@@ -78,32 +78,81 @@ export async function readParquetColumnMap(input, columns) {
   return out;
 }
 // named columns for a ROW RANGE (one row group) as arrays — the streaming
-// primitive: hold nothing, decode a group at a time, only the columns asked for
-export async function readParquetRange(input, columns, rowStart, rowEnd) {
+// primitive: hold nothing, decode a group at a time, only the columns asked for.
+// `metadata` (parquetInfo(…).meta) skips the per-call footer parse — with a
+// Blob/AsyncBuffer input that parse is real I/O, so PASS IT for hot paths.
+export async function readParquetRange(input, columns, rowStart, rowEnd, metadata) {
   const out = {};
   for (const name of columns) {
     const col = [];
-    await parquetRead({ file: toAsyncBuffer(input), compressors: readCompressors, columns: [name], rowStart, rowEnd, onComplete: (rows) => { for (const r of rows) col.push(r[0]); } });
+    await parquetRead({ file: toAsyncBuffer(input), compressors: readCompressors, metadata, columns: [name], rowStart, rowEnd, onComplete: (rows) => { for (const r of rows) col.push(r[0]); } });
     out[name] = col;
   }
   return out;
 }
 // stream the given columns row-group by row-group → { start, count, cols } —
 // one group resident at a time. rowGroups (from parquetInfo) can be passed to
-// skip re-parsing the footer each call.
-export async function* streamParquetColumns(input, columns, rowGroups) {
-  const groups = rowGroups || parquetInfo(input).rowGroups;
+// skip re-parsing the footer each call; `metadata` skips it inside hyparquet too.
+export async function* streamParquetColumns(input, columns, rowGroups, metadata) {
+  const groups = rowGroups || (await parquetInfoAsync(input)).rowGroups;
   let start = 0;
   for (const rg of groups) {
     const count = rg.rowCount;
-    yield { start, count, cols: await readParquetRange(input, columns, start, start + count) };
+    yield { start, count, cols: await readParquetRange(input, columns, start, start + count, metadata) };
     start += count;
   }
 }
 // one row (all columns) as an object — the pick join; reads only its row group
-export async function readParquetRow(input, index) {
-  const rows = await readParquet(input, { rowStart: index, rowEnd: index + 1 });
+export async function readParquetRow(input, index, metadata) {
+  const rows = await readParquet(input, { rowStart: index, rowEnd: index + 1, metadata });
   return rows[0] || null;
+}
+
+// ── STREAMING writer: row groups appended incrementally, finished bytes drained
+// to Blob parts after every group (ByteWriter.flush — the library calls it) —
+// peak memory ≈ one encoded row group, whatever the file size. The write-side
+// twin of streamParquetColumns; the big-model .dm → parquet conversion rides it.
+//
+// SCHEMA DISCIPLINE: the file schema is fixed at the FIRST write, and raw
+// inference commits to whatever group 1 happens to hold (all-whole-numbers →
+// INT, no-nulls → REQUIRED — then a later 8.15 or null THROWS; see the same
+// trap in writeParquet). So columns are typed CONSERVATIVELY: explicit
+// `columnTypes` ({ name → 'DOUBLE' | 'STRING' | … }) when the caller knows
+// (a .dm DD does), else number→DOUBLE / string→STRING from the first batch;
+// everything nullable (OPTIONAL — the library default).
+export function createParquetBlobWriter({ schema = null, columnTypes = null, codec = 'SNAPPY', kvMetadata } = {}) {
+  const parts = [];
+  const bw = new ByteWriter();
+  bw.flush = function () { if (this.index) { parts.push(this.getBuffer()); this.index = 0; } };
+  let pw = null, sch = schema;
+  const guessType = (data) => {
+    for (const v of data) {
+      if (v == null) continue;
+      if (typeof v === 'number') return 'DOUBLE';
+      if (typeof v === 'boolean') return 'BOOLEAN';
+      if (typeof v === 'bigint') return 'INT64';
+      return 'STRING';
+    }
+    return 'STRING';                                       // all-null first batch — strings hold anything
+  };
+  return {
+    // columnData: [{ name, data }] — one call per row group (any size)
+    write(columnData) {
+      if (!pw) {
+        if (!sch) {
+          const cd = columnData.map((c) => ({ ...c, type: (columnTypes && columnTypes[c.name]) || c.type || guessType(c.data) }));
+          sch = schemaFromColumnData({ columnData: cd });
+        }
+        pw = new ParquetWriter({ writer: bw, schema: sch, codec, compressors: writeCompressors, statistics: true, kvMetadata });
+      }
+      pw.write({ columnData, rowGroupSize: (columnData[0] && columnData[0].data.length) || 1 });
+    },
+    finish() {
+      if (!pw) throw new Error('parquet blob writer: nothing written');
+      pw.finish(); bw.flush();
+      return new Blob(parts, { type: 'application/vnd.apache.parquet' });
+    },
+  };
 }
 
 // write columnar data → parquet bytes. columnData: [{ name, data:Array, type? }].
@@ -137,3 +186,5 @@ function toAsyncBuffer(input) {
 }
 
 export { parquetMetadata, parquetMetadataAsync, parquetReadObjects, parquetRead, parquetSchema, parquetWriteBuffer, snappyUncompress, toJson };
+
+export { schemaFromColumnData };
