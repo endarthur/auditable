@@ -129,7 +129,9 @@ chk(`command palette: filters to Swath (${pal.swath}) + Join/reconcile (${pal.re
 // ── 1c. viewport decorations + figure export ──
 await new Promise((r) => setTimeout(r, 300));
 const deco = await p.evaluate(async () => {
-  window._micro.setDeco('scale', true); window._micro.setDeco('legend', true);
+  const L = window._micro.layers()[0];
+  window._micro.setDeco('scale', true); window._micro.setLayerLegend(L, true);   // legend is now per-layer
+  window._micro.drawDecorations();
   const dc = document.querySelector('#decoCv');
   const drawn = dc.width > 0;
   const g = dc.getContext('2d'); const d = g.getImageData(0, 0, dc.width, dc.height).data;
@@ -137,10 +139,22 @@ const deco = await p.evaluate(async () => {
   window._lastFigure = null; window._micro.exportFigure();
   await new Promise((r) => setTimeout(r, 400));
   const fb = window._lastFigure, buf = fb ? new Uint8Array(await fb.arrayBuffer()) : null;
-  window._micro.setDeco('scale', false); window._micro.setDeco('legend', false);
+  window._micro.setDeco('scale', false); window._micro.setLayerLegend(L, false);
   return { drawn, painted, png: !!buf && buf[0] === 0x89 && buf[1] === 0x50, size: fb ? fb.size : 0 };
 });
 chk(`decorations overlay draws (${deco.painted} px) + figure export → PNG (${deco.size} bytes)`, deco.drawn && deco.painted > 100 && deco.png && deco.size > 1000);
+// ── 1c′. decorations & figure PANEL (non-modal float; per-layer legend list) ──
+const panel = await p.evaluate(() => {
+  window._micro.openDecoPanel();
+  const w = [...document.querySelectorAll('.fwin')].find((el) => el.querySelector('.deco-panel'));
+  const secs = w ? w.querySelectorAll('.deco-panel .deco-h').length : 0;
+  const legSec = w && [...w.querySelectorAll('.deco-sec')].find((s) => /legends/i.test(s.querySelector('.deco-h').textContent));
+  const legRows = legSec ? legSec.querySelectorAll('.deco-legrow input[type=checkbox]').length : 0;
+  const modal = getComputedStyle(w).position;
+  w.querySelector('.fwin-head button:last-child').click();   // close
+  return { open: !!w, secs, legRows, modal };
+});
+chk(`deco panel: float window (${panel.modal}), 3 sections, ${panel.legRows} legend row(s)`, panel.open && panel.modal === 'absolute' && panel.secs === 3 && panel.legRows >= 1);
 // background colour: clears to white then back to basalt (flows through EDL)
 const bg = await p.evaluate(async () => {
   const sample = async () => { await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); const cv = document.querySelector('#cv'), c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0); const d = g.getImageData(2, 2, 1, 1).data; return [d[0], d[1], d[2]]; };

@@ -390,6 +390,23 @@
   .fwin.min .fwin-body, .fwin.min .fwin-grip { display: none; }
   .fwin-grip { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; z-index: 3; }
   .fwin-grip::after { content: ''; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-right: 2px solid var(--dim); border-bottom: 2px solid var(--dim); }
+  .deco-panel { height: 100%; overflow-y: auto; padding: 8px 12px 10px; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  .deco-sec { margin-bottom: 10px; }
+  .deco-h { color: var(--accent); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+  .deco-chk { display: flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .deco-chk:hover { color: var(--text-hi); }
+  .deco-legrow { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+  .deco-legrow .deco-chk { flex: 0 1 auto; margin-bottom: 0; min-width: 0; }
+  .deco-in { font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 5px; }
+  .deco-in.sm { flex: 1 1 90px; min-width: 60px; }
+  .deco-empty { color: var(--dim); font-size: 11px; padding: 2px 0; }
+  .deco-swatches { display: flex; align-items: center; gap: 6px; }
+  .deco-sw { width: 22px; height: 22px; border-radius: 3px; border: 1px solid var(--bd2); cursor: pointer; padding: 0; }
+  .deco-sw.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .deco-color { width: 26px; height: 24px; padding: 0; border: 1px solid var(--bd2); border-radius: 3px; background: none; cursor: pointer; }
+  .deco-foot { margin-top: 4px; }
+  .deco-export { width: 100%; font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 6px; cursor: pointer; }
+  .deco-export:hover { background: var(--accent); color: #121212; }
   .pp-cat:hover { background: #242424; }
   .pp-cat input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
   .pp-cat .sw { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto; }
@@ -5587,6 +5604,7 @@ function projectManifest() {
       tint: L.kind === 'mesh' ? L.tint : undefined,
       opacity: (L.opacity != null && L.opacity !== 1) ? L.opacity : undefined,   // any kind (mesh/blocks/drillholes)
       recHide: (L._recHide && L._recHide.size) ? [...L._recHide] : undefined,   // record-panel hidden fields (view pref)
+      legend: L.legend || undefined, legendTitle: (L.legendTitle && L.legendTitle.trim()) || undefined,   // per-layer figure legend
       soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
       hiddenCats: L.catHidden && L.catHidden.size
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
@@ -6028,7 +6046,7 @@ async function openProjectDir(dir) {
         } catch { /* no sidecar — full discovery as usual */ }
       }
       await openBlob(file, basename(ls.source), i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
-      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } if (ls.recHide && ls.recHide.length) Lx._recHide = new Set(ls.recHide); } }   // mesh opacity rides overR
+      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } if (ls.recHide && ls.recHide.length) Lx._recHide = new Set(ls.recHide); if (ls.legend) Lx.legend = true; if (ls.legendTitle) Lx.legendTitle = ls.legendTitle; } }   // mesh opacity rides overR
       const L = activeLayer();
       if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
       if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the columns tab wakes up scanned
@@ -6479,7 +6497,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
   { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
-  { label: 'Decorations & figure…', action: () => decorationsMenu($('#mView')) },
+  { label: 'Decorations & figure…', action: () => openDecoPanel() },
   { label: 'Windows…', action: () => windowsMenu($('#mView')) },
   { sep: true },
   ...(_views.length ? _views.map((v) => ({ label: `⤷ ${v.name}`, action: () => applyView(v) })) : []),
@@ -6611,7 +6629,7 @@ Everything here is on a block model's <b>right-click menu</b> and in the <b>comm
 <b>optimize to spatial Parquet</b> — reorders a model Morton-sorted (a footer spatial index; queries skip whole row-groups). Runs automatically when you save a project — Parquet is the project store<br>
 <b>lineage</b> — every derived layer remembers <i>how it was made</i>: open → join / reconcile / optimize wraps its sources with the params + build + time. <b>Lineage…</b> shows the tree + exports a readable HTML <b>report</b>; Parquet exports carry it embedded. Provenance you can attach to a sign-off<br>
 <b>linked brushing</b> — the grade-tonnage &amp; swath windows have an <b>all / selection</b> toggle: rubber-band a bench, a domain, or a suspect zone in 3D and read its curve live<br><br>
-<b>figures</b> (View → <b>Decorations &amp; figure…</b>) — toggle a <b>scale bar</b>, <b>north arrow</b>, colour <b>legend</b>, and <b>title</b> on the viewport; set a <b>background</b> (white/paper for print — the decorations flip to dark ink). <b>Export figure</b> captures exactly what you see as a report-ready PNG<br>
+<b>figures</b> (View → <b>Decorations &amp; figure…</b>) — a live panel: toggle a <b>scale bar</b>, <b>north arrow</b>, and <b>title</b>; turn on a colour <b>legend per layer</b> (they stack, each captioned by its coloured attribute — rename inline); set a <b>background</b> (white/paper for print — the decorations flip to dark ink). <b>Export figure</b> captures exactly what you see as a report-ready PNG<br>
 <b>windows</b> (View → <b>Windows…</b>) — the analysis + table + paint windows are all draggable and layer-pinned; list / focus / <b>cascade</b> / <b>close all</b> from here<br>`;
 function showHelp(title, html) {
   $('#helpTitle').textContent = title;
@@ -6947,39 +6965,67 @@ function drawTitleDeco(g, W, H) {
   g.font = 'bold 16px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'top';
   _label(g, _deco.titleText, W / 2, 12);
 }
-function drawLegendDeco(g, W, H) {
-  const L = activeLayer(); if (!L) return; const sel = colorSelOf(L);
-  const bx = W - 148 - _rightInset(), by = 84, bw = 15;
+// legend title shown when the user hasn't overridden it — the coloured attribute
+function legendDefaultTitle(L) {
+  const sel = colorSelOf(L);
+  if (String(sel).startsWith('chan:')) { const h = layerTableHeader(L); return (h && h.columns[+sel.slice(5)]) || 'value'; }
+  return L.label || L.name || '';
+}
+// can this layer show a legend at all? (a continuous ramp with a range, or classes)
+function legendAvailable(L) {
+  const sel = colorSelOf(L);
+  if (String(sel).startsWith('chan:')) return !!rampRangeFor(L);
+  const info = layerClassInfo(L); if (!info) return false; const leg = ensureLegend(L, info); return !!(leg && leg.entries && leg.entries.length);
+}
+function legendLayers() { return _layers.filter((L) => L.legend && L.visible && legendAvailable(L)); }
+function anyLegend() { return legendLayers().length > 0; }
+// draw ONE legend for layer L at (bx, by); returns the vertical extent consumed
+// (so multiple legends can stack down the right column). Caption defaults to the
+// coloured attribute name, overridable per-layer via L.legendTitle.
+function drawOneLegend(g, L, bx, by) {
+  const sel = colorSelOf(L), bw = 15;
+  const cap = (L.legendTitle && L.legendTitle.trim()) || legendDefaultTitle(L);
   if (String(sel).startsWith('chan:')) {
     const cfg = rampCfgOf(L) || { preset: 'viridis' }, stops = RAMP_PRESETS[cfg.preset] || RAMP_PRESETS.viridis, rng = rampRangeFor(L);
-    if (!rng) return; const [lo, hi] = rng, bh = 118;
+    if (!rng) return 0; const [lo, hi] = rng, bh = 118;
+    if (cap) { g.font = '11px monospace'; g.textAlign = 'left'; g.textBaseline = 'alphabetic'; _label(g, cap, bx, by - 7); }
     for (let i = 0; i < bh; i++) { const c = rampSample(stops, 1 - i / bh); g.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`; g.fillRect(bx, by + i, bw, 1); }
     g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 1; g.strokeRect(bx, by, bw, bh);
     g.font = '11px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
     _label(g, fmtStat(hi), bx + bw + 5, by); _label(g, fmtStat((lo + hi) / 2), bx + bw + 5, by + bh / 2); _label(g, fmtStat(lo), bx + bw + 5, by + bh);
-    const h = layerTableHeader(L), nm = h && h.columns[+sel.slice(5)]; if (nm) { g.textBaseline = 'alphabetic'; _label(g, nm, bx, by - 7); }
+    return bh + 12;
   } else {
-    const info = layerClassInfo(L); if (!info) return; const leg = ensureLegend(L, info); if (!leg || !leg.entries) return;
-    g.font = '11px monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
-    let y = by; for (const e of leg.entries.slice(0, 12)) { g.fillStyle = e.color; g.fillRect(bx, y - 6, 12, 12); g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 1; g.strokeRect(bx, y - 6, 12, 12); _label(g, String(e.values ? e.values[0] : e.label || ''), bx + 17, y); y += 17; }
+    const info = layerClassInfo(L); if (!info) return 0; const leg = ensureLegend(L, info); if (!leg || !leg.entries) return 0;
+    let y = by;
+    if (cap) { g.font = '11px monospace'; g.textAlign = 'left'; g.textBaseline = 'alphabetic'; _label(g, cap, bx, y - 7); }
+    g.textBaseline = 'middle';
+    for (const e of leg.entries.slice(0, 12)) { g.fillStyle = e.color; g.fillRect(bx, y - 6, 12, 12); g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 1; g.strokeRect(bx, y - 6, 12, 12); _label(g, String(e.values ? e.values[0] : e.label || ''), bx + 17, y); y += 17; }
+    return (y - by) + 4;
   }
+}
+function drawLegendsDeco(g, W, H) {
+  const bx = W - 148 - _rightInset(); let by = 84;
+  for (const L of legendLayers()) { const used = drawOneLegend(g, L, bx, by); if (used) by += used + 16; }
 }
 function renderDeco(g, W, H) {
   _deInk = decoInk();
   if (_deco.scale) drawScaleBar(g, W, H);
   if (_deco.north) drawNorthArrow(g, W, H);
-  if (_deco.legend) drawLegendDeco(g, W, H);
+  drawLegendsDeco(g, W, H);
   if (_deco.title) drawTitleDeco(g, W, H);
 }
 function drawDecorations() {
   const dc = $('#decoCv'), r = cv.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
-  if (!_deco.scale && !_deco.north && !_deco.legend && !_deco.title) { if (dc.width) { dc.width = 0; dc.height = 0; } return; }
+  if (!_deco.scale && !_deco.north && !anyLegend() && !_deco.title) { if (dc.width) { dc.width = 0; dc.height = 0; } return; }
   dc.width = Math.round(r.width * dpr); dc.height = Math.round(r.height * dpr);
   const g = dc.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, r.width, r.height);
   renderDeco(g, r.width, r.height);
 }
 function setDeco(key, val) { _deco[key] = val; saveDeco(); drawDecorations(); }
 function setDecoTitle(t) { _deco.titleText = t || ''; _deco.title = !!t; saveDeco(); drawDecorations(); }
+// legends are PER-LAYER (each shows that layer's own colour mapping); multiple
+// can be on and they stack. Persisted in the project manifest, not localStorage.
+function setLayerLegend(L, on) { if (!L) return; L.legend = !!on; drawDecorations(); if (_decoWin && _decoWin._render) _decoWin._render(); }
 // export the viewport + decorations as a PNG (cv already has preserveDrawingBuffer)
 function exportFigure() {
   const out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
@@ -6995,27 +7041,66 @@ function exportFigure() {
     $('#meta').textContent = `figure → ${a.download}`;
   }, 'image/png');
 }
-function decorationsMenu(anchorEl) {
-  const r = anchorEl.getBoundingClientRect();
-  menuXY(r.left, r.bottom + 2, [
-    { label: (_deco.scale ? '✓ ' : '') + 'Scale bar', action: () => setDeco('scale', !_deco.scale) },
-    { label: (_deco.north ? '✓ ' : '') + 'North arrow', action: () => setDeco('north', !_deco.north) },
-    { label: (_deco.legend ? '✓ ' : '') + 'Legend', action: () => setDeco('legend', !_deco.legend) },
-    { label: (_deco.title ? '✓ ' : '') + 'Title', action: () => setDeco('title', !_deco.title) },
-    { sep: true },
-    { label: 'Set title…', action: async () => { const t = await microPrompt('figure title', _deco.titleText || ''); if (t != null) { _deco.titleText = t; _deco.title = !!t; saveDeco(); drawDecorations(); } } },
-    { label: `Background ▸`, action: () => setTimeout(() => menuXY(r.left + 150, r.bottom + 2, [
-      { label: (_bgColor === '#121212' ? '✓ ' : '') + 'Basalt (default)', action: () => setBg('#121212') },
-      { label: (_bgColor === '#000000' ? '✓ ' : '') + 'Black', action: () => setBg('#000000') },
-      { label: (_bgColor === '#ffffff' ? '✓ ' : '') + 'White (print)', action: () => setBg('#ffffff') },
-      { label: (_bgColor === '#f4f2ec' ? '✓ ' : '') + 'Paper', action: () => setBg('#f4f2ec') },
-      { sep: true },
-      { label: 'Custom…', action: async () => { const v = ((await microPrompt('background (hex)', _bgColor)) || '').trim(); if (/^#?[0-9a-fA-F]{6}$/.test(v)) setBg(v.startsWith('#') ? v : '#' + v); } },
-    ]), 0) },
-    { sep: true },
-    { label: 'Export figure (PNG)…', action: () => exportFigure() },
-  ]);
+// Decorations & figure — a NON-MODAL float panel (not a modal): decorations draw
+// live on the viewport, so a dimming backdrop would hide what you're adjusting.
+// Everything applies live; the window's × dismisses. Single instance.
+let _decoWin = null;
+function openDecoPanel() {
+  if (_decoWin) { _decoWin.el.style.zIndex = ++_fwinZ; _decoWin.el.classList.remove('min'); return; }
+  const win = floatWin({ title: 'decorations & figure', sub: '', x: Math.max(12, innerWidth - 336), y: 92, w: 316, h: 430, onClose: () => { _decoWin = null; } });
+  _decoWin = win;
+  const wrap = document.createElement('div'); wrap.className = 'deco-panel'; win.body.appendChild(wrap);
+  const mkChk = (label, on, fn) => { const l = document.createElement('label'); l.className = 'deco-chk'; const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = on; cb.onchange = () => fn(cb.checked, cb); l.append(cb, document.createTextNode(label)); return l; };
+  const render = () => {
+    wrap.textContent = '';
+    // ── decorations ──
+    const secD = document.createElement('div'); secD.className = 'deco-sec';
+    const hD = document.createElement('div'); hD.className = 'deco-h'; hD.textContent = 'decorations'; secD.append(hD);
+    secD.append(mkChk('Scale bar', _deco.scale, (v) => setDeco('scale', v)));
+    secD.append(mkChk('North arrow', _deco.north, (v) => setDeco('north', v)));
+    const tRow = document.createElement('div'); tRow.className = 'deco-legrow';
+    const tcb = document.createElement('input'); tcb.type = 'checkbox'; tcb.checked = _deco.title;
+    const tLab = document.createElement('label'); tLab.className = 'deco-chk'; tLab.append(tcb, document.createTextNode('Title'));
+    tcb.onchange = () => setDeco('title', tcb.checked);
+    const tin = document.createElement('input'); tin.type = 'text'; tin.className = 'deco-in sm'; tin.placeholder = 'figure title…'; tin.value = _deco.titleText || '';
+    tin.oninput = () => { _deco.titleText = tin.value; _deco.title = !!tin.value; tcb.checked = _deco.title; saveDeco(); drawDecorations(); };
+    tRow.append(tLab, tin); secD.append(tRow);
+    wrap.append(secD);
+    // ── legends (per-layer, stack) ──
+    const secL = document.createElement('div'); secL.className = 'deco-sec';
+    const hL = document.createElement('div'); hL.className = 'deco-h'; hL.textContent = 'legends'; secL.append(hL);
+    const cands = _layers.filter((L) => L.visible && legendAvailable(L));
+    if (!cands.length) { const e = document.createElement('div'); e.className = 'deco-empty'; e.textContent = 'no coloured layers to key'; secL.append(e); }
+    for (const L of cands) {
+      const row = document.createElement('div'); row.className = 'deco-legrow';
+      const lab = document.createElement('label'); lab.className = 'deco-chk'; lab.title = L.label || L.name;
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!L.legend; cb.onchange = () => { L.legend = cb.checked; drawDecorations(); };
+      lab.append(cb, document.createTextNode(L.label || L.name));
+      const ti = document.createElement('input'); ti.type = 'text'; ti.className = 'deco-in sm'; ti.placeholder = legendDefaultTitle(L); ti.value = L.legendTitle || '';
+      ti.oninput = () => { L.legendTitle = ti.value; drawDecorations(); };
+      row.append(lab, ti); secL.append(row);
+    }
+    wrap.append(secL);
+    // ── background ──
+    const secB = document.createElement('div'); secB.className = 'deco-sec';
+    const hB = document.createElement('div'); hB.className = 'deco-h'; hB.textContent = 'background'; secB.append(hB);
+    const sw = document.createElement('div'); sw.className = 'deco-swatches';
+    for (const [name, hex] of [['basalt', '#121212'], ['black', '#000000'], ['white', '#ffffff'], ['paper', '#f4f2ec']]) {
+      const b = document.createElement('button'); b.className = 'deco-sw' + (_bgColor.toLowerCase() === hex ? ' on' : ''); b.style.background = hex; b.title = name;
+      b.onclick = () => { setBg(hex); render(); }; sw.append(b);
+    }
+    const col = document.createElement('input'); col.type = 'color'; col.className = 'deco-color'; col.title = 'custom'; col.value = /^#[0-9a-fA-F]{6}$/.test(_bgColor) ? _bgColor : '#121212';
+    col.oninput = () => { setBg(col.value); [...sw.querySelectorAll('.deco-sw')].forEach((x) => x.classList.remove('on')); };
+    sw.append(col); secB.append(sw); wrap.append(secB);
+    // ── export ──
+    const foot = document.createElement('div'); foot.className = 'deco-foot';
+    const ex = document.createElement('button'); ex.className = 'deco-export'; ex.textContent = 'Export figure (PNG)'; ex.onclick = () => exportFigure();
+    foot.append(ex); wrap.append(foot);
+  };
+  win._render = render;
+  render();
 }
+function decorationsMenu() { openDecoPanel(); }   // back-compat alias (View menu / palette)
 applyBg();                                                 // restore the saved background at boot
 // ── window management: as the float windows multiply (GT · swath · validate ·
 // lineage · table · paint), a place to find, focus, tidy, and dismiss them. ──
@@ -7164,9 +7249,10 @@ const COMMANDS = [
   { id: 'scan', group: 'File', title: 'Scan folder for new data', kw: 'import inbox dropped rescan pick up new files refresh', when: () => hasFSAA && !!_project, run: () => scanFolderForNewData() },
   { id: 'png', group: 'File', title: 'Save viewport PNG', kw: 'screenshot image capture', run: () => $('#btnShot').click() },
   { id: 'figure', group: 'File', title: 'Export figure (PNG)…', kw: 'decorations scale bar north legend title report', run: () => exportFigure() },
+  { id: 'decopanel', group: 'View', title: 'Decorations & figure…', kw: 'legend scale bar north title background export panel', run: () => openDecoPanel() },
   { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
   { id: 'deconorth', group: 'View', title: 'Toggle north arrow', kw: 'decoration compass', run: () => setDeco('north', !_deco.north) },
-  { id: 'decolegend', group: 'View', title: 'Toggle legend', kw: 'decoration ramp colours key', run: () => setDeco('legend', !_deco.legend) },
+  { id: 'decolegend', group: 'View', title: 'Toggle legend (active layer)', kw: 'decoration ramp colours key', run: () => { const L = activeLayer(); if (L) setLayerLegend(L, !L.legend); } },
   { id: 'decotitle', group: 'View', title: 'Set figure title…', kw: 'decoration caption', run: async () => { const t = await microPrompt('figure title', _deco.titleText || ''); if (t != null) { _deco.titleText = t; _deco.title = !!t; saveDeco(); drawDecorations(); } } },
   { id: 'bg', group: 'View', title: 'Background colour…', kw: 'clear white black print paper', run: async () => { const v = ((await microPrompt('background (hex) — e.g. #ffffff for print', _bgColor)) || '').trim(); if (/^#?[0-9a-fA-F]{6}$/.test(v)) setBg(v.startsWith('#') ? v : '#' + v); } },
   { id: 'windows', group: 'View', title: 'Windows…', kw: 'focus find list float', when: () => document.querySelector('.fwin'), run: () => windowsMenu({ x: innerWidth / 2 - 90, y: 60 }) },
@@ -10234,7 +10320,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, exportFigure, drawDecorations, decorationsMenu, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, drawDecorations, decorationsMenu, openDecoPanel, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
