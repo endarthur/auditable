@@ -406,6 +406,29 @@ const an = await p.evaluate(async () => {
 chk(`analysis: GT mean-above-min = 250 (${an.gtMean}), swath along X rises [${an.swX.map((v) => Math.round(v)).join(',')}]`,
   Math.abs(an.gtMean - 250) < 1e-9 && an.swX.length === 2 && Math.abs(an.swX[0] - 200) < 1e-9 && Math.abs(an.swX[1] - 300) < 1e-9);
 
+// grade-tonnage on the swath chassis: rail + series rows + set-then-Run; the
+// scan caches cumulative curves so cutoffs/ranges/units re-derive with no re-scan
+const gtc = await p.evaluate(async () => {
+  const m = window._micro, A = m.layers().find((L) => L.name === 'A.csv');
+  m.openGradeTonnage(A);
+  const w = () => [...document.querySelectorAll('.fwin')].find((el) => el.querySelector('.fwin-head .t').textContent.startsWith('grade-tonnage'));
+  const noAuto = !!w() && !w()._gtSpec && !!w().querySelector('.sw-run');
+  const ui = { rail: !!w().querySelector('.sw-rail'), ser: w().querySelectorAll('.sw-ser').length,
+    segs: [...w().querySelectorAll('.sw-seg .sw-segbtn')].map((x) => x.textContent).join(','),
+    rr: !!w().querySelector('.rr-row'), exp: !!w().querySelector('.pp-exp') };
+  w().querySelector('.sw-run').click();
+  await new Promise((r) => { const t = setInterval(() => { if (w() && w()._gtSpec) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 15000); });
+  const t0 = w()._gtSpec && w()._gtSpec.series[0].data[0][1];
+  // cutoff-count change re-derives from the cached scan (no re-scan → no stale)
+  const cutI = [...w().querySelectorAll('.sw-rail input')].find((i) => i.title && /cutoff steps/.test(i.title));
+  cutI.value = '10'; cutI.dispatchEvent(new Event('change'));
+  const live = w()._gtSpec.series[0].data.length === 11 && w().querySelector('.sw-stale').textContent === '';
+  w().querySelector('.fwin-head button:last-child').click();
+  return { noAuto, ui, t0, live };
+});
+chk(`GT chassis: no auto-run (${gtc.noAuto}), rail+series+scope [${gtc.ui.segs}]+ranges+export (${gtc.ui.rail}/${gtc.ui.ser}/${gtc.ui.rr}/${gtc.ui.exp}), Run → t0 ${gtc.t0}, cutoffs re-derive live (${gtc.live})`,
+  gtc.noAuto && gtc.ui.rail && gtc.ui.ser >= 1 && gtc.ui.segs === 'all,filt,sel' && gtc.ui.rr && gtc.ui.exp && gtc.t0 === 400 && gtc.live);
+
 // swath window v2: NO auto-run on open, a Run button computes, direction/band
 // re-bin live from the single scan (no re-scan)
 const sw2 = await p.evaluate(async () => {
