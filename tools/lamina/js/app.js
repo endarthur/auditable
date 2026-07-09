@@ -2969,6 +2969,7 @@ function openGradeTonnage() {
     grades: [grade ? grade.i : (num[0] ? num[0].i : 0)],
     gradeUnits: [''],      // DECLARED grade unit per field ('' = undeclared) — labels + metal-in-tonnes
     cutoffs: [''],   // per grade field: comma-separated cutoffs, blank = auto (round bin edges)
+    ranges: [''],    // per grade field: manual plot ranges "x:0..2 t:5e6 g:3" — blank = auto
   };
   _gtResult = null;
   $('#helpTitle').textContent = `Grade–tonnage — ${c.label}${c.filterResult ? ' (filtered)' : ''}`;
@@ -2992,7 +2993,7 @@ function paintGradeTonnage() {
   h += `<label>Density ${exprInp('density', 'e.g. density or 2.7')} <select id="gtDensUnit" title="declared unit of the density factor — converted to t/m³ so tonnes are tonnes">${[['t/m3', 't/m³ (=g/cm³)'], ['kg/m3', 'kg/m³'], ['lb/ft3', 'lb/ft³']].map(([v, t]) => `<option value="${v}"${v === (_gtConfig.densityUnit || 't/m3') ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
   h += `<label>Ore proportion ${exprInp('proportion', 'e.g. ore_pct or 1')}</label>`;
   h += '<span class="gb-vals">';
-  _gtConfig.grades.forEach((uc, gi) => { h += `<label class="gb-val">Grade <select class="gt-grade" data-gi="${gi}">${cols.map((s, i) => s.type === 'number' ? `<option value="${i}"${i === uc ? ' selected' : ''}>${esc(s.name)}</option>` : '').join('')}</select><select class="gt-unit" data-gi="${gi}" title="declared grade unit — labels the report + makes metal come out in tonnes">${GT_GRADE_UNITS.map(([v, t]) => `<option value="${v}"${v === (_gtConfig.gradeUnits[gi] || '') ? ' selected' : ''}>${t}</option>`).join('')}</select><input class="gt-cut" data-gi="${gi}" value="${esc(_gtConfig.cutoffs[gi] || '')}" placeholder="cutoffs · auto" title="comma-separated cutoffs for this grade, e.g. 0.5, 1, 2 — blank = automatic round steps" spellcheck="false" autocomplete="off" style="width:120px;font-family:var(--mono)">${_gtConfig.grades.length > 1 ? `<button class="gt-rm" data-gi="${gi}" title="remove">✕</button>` : ''}</label>`; });
+  _gtConfig.grades.forEach((uc, gi) => { h += `<label class="gb-val">Grade <select class="gt-grade" data-gi="${gi}">${cols.map((s, i) => s.type === 'number' ? `<option value="${i}"${i === uc ? ' selected' : ''}>${esc(s.name)}</option>` : '').join('')}</select><select class="gt-unit" data-gi="${gi}" title="declared grade unit — labels the report + makes metal come out in tonnes">${GT_GRADE_UNITS.map(([v, t]) => `<option value="${v}"${v === (_gtConfig.gradeUnits[gi] || '') ? ' selected' : ''}>${t}</option>`).join('')}</select><input class="gt-cut" data-gi="${gi}" value="${esc(_gtConfig.cutoffs[gi] || '')}" placeholder="cutoffs · auto" title="comma-separated cutoffs for this grade, e.g. 0.5, 1, 2 — blank = automatic round steps" spellcheck="false" autocomplete="off" style="width:120px;font-family:var(--mono)"><input class="gt-rng" data-gi="${gi}" value="${esc(_gtConfig.ranges[gi] || '')}" placeholder="ranges · auto" title="manual plot ranges — tokens: x:0..2 (cutoff axis) · t:5e6 (tonnes max, or t:1e6..5e6) · g:3.2 (grade max, or g:1..3) — blank = auto" spellcheck="false" autocomplete="off" style="width:110px;font-family:var(--mono)">${_gtConfig.grades.length > 1 ? `<button class="gt-rm" data-gi="${gi}" title="remove">✕</button>` : ''}</label>`; });
   h += '</span>';
   h += `<button id="gtAdd" class="gb-add">+ add grade</button>`;
   h += `<button id="gtRun" class="gb-run">Report</button>`;
@@ -3118,6 +3119,20 @@ function gtCurveTSV(cv, gradeName, unit) {
   return L.join('\n');
 }
 
+// manual plot ranges per grade: "x:0..2 t:5e6 g:1..3" → { x, t, g } with [lo, hi]
+// pairs (null bound = auto). A single number after t:/g: means "max".
+function parseGtRanges(s) {
+  const out = { x: null, t: null, g: null };
+  for (const m of String(s || '').matchAll(/([xtg])\s*:\s*(-?[\d.eE+]+)?\s*(?:\.\.)?\s*(-?[\d.eE+]+)?/g)) {
+    const lo = m[2] != null ? +m[2] : null, hi = m[3] != null ? +m[3] : null;
+    // one number + no ".." = a max; "a..b" = both; "a.." = min only
+    const dots = m[0].includes('..');
+    out[m[1]] = dots ? [lo, hi] : [null, lo];
+    if (out[m[1]][0] != null && !Number.isFinite(out[m[1]][0])) out[m[1]][0] = null;
+    if (out[m[1]][1] != null && !Number.isFinite(out[m[1]][1])) out[m[1]][1] = null;
+  }
+  return out;
+}
 // Save a chart canvas as PNG (at its dpr-scaled resolution) — blob + a[download],
 // no network involved. The memo-paste path until report export lands.
 function saveCanvasPng(canvas, filename) {
@@ -3140,7 +3155,7 @@ function renderGTCurves(c) {
     const u = cfg.gradeUnits && cfg.gradeUnits[gi], uL = gtUnitLabel(u), mS = gtMetalScale(u);
     const t0 = cv.curve[0].tonnage;
     h += `<div class="gt-curve-sec">`;
-    h += `<div class="gt-curve-head">${esc(gn)}${uL ? ` (${uL})` : ''} — by cutoff <button class="gt-ccopy" data-gi="${gi}">copy</button><button class="gt-ccopy gt-csave" data-gi="${gi}">save png</button></div>`;
+    h += `<div class="gt-curve-head">${esc(gn)}${uL ? ` (${uL})` : ''} — by cutoff <button class="gt-ccopy" data-gi="${gi}">copy</button><button class="gt-ccopy gt-cpng" data-gi="${gi}" title="copy the plot image to the clipboard">copy png</button><button class="gt-ccopy gt-csave" data-gi="${gi}">save png</button></div>`;
     h += `<canvas class="gt-curve" data-gi="${gi}"></canvas>`;
     h += `<div class="gt-curve-legend"><span class="lg-t">—</span> tonnes ≥ cutoff &nbsp; <span class="lg-g">—</span> mean grade ≥ cutoff</div>`;
     h += `<table class="sum-tbl gt-cut-tbl"><thead><tr><th class="num">cutoff${uL ? ` (${uL})` : ''}</th><th class="num">tonnes ≥</th><th class="num">${esc(gn)}</th><th class="num">${u ? `${esc(gn)} metal (t)` : `${esc(gn)}·t`}</th><th class="num">% of tonnes</th></tr></thead><tbody>`;
@@ -3168,34 +3183,44 @@ function drawGTCurves(c) {
     const n = cv.bins, t0 = cv.curve[0].tonnage || 1;
     let gMax = 0; for (const p of cv.curve) if (p.tonnage > 0 && p.grade > gMax) gMax = p.grade;
     if (!(gMax > 0)) gMax = 1;
-    const X = (i) => padL + (i / (n - 1 || 1)) * plotW;
+    // manual ranges (per grade): x windows the cutoff axis; t / g pin the y scales
+    const rng = parseGtRanges(_gtConfig && _gtConfig.ranges && _gtConfig.ranges[+canvas.dataset.gi]);
+    const x0 = rng.x && rng.x[0] != null ? rng.x[0] : cv.gradeMin, x1 = rng.x && rng.x[1] != null ? rng.x[1] : cv.gradeMax;
+    const tLo = rng.t && rng.t[0] != null ? rng.t[0] : 0, tHi = rng.t && rng.t[1] != null ? rng.t[1] : t0;
+    const gLo = rng.g && rng.g[0] != null ? rng.g[0] : 0, gHi = rng.g && rng.g[1] != null ? rng.g[1] : gMax;
+    const span = (x1 - x0) || 1;
+    const Xv = (c2) => padL + ((c2 - x0) / span) * plotW;    // value-based x (handles custom cutoffs + windows)
+    const Yt = (t) => padT + plotH * (1 - (t - tLo) / ((tHi - tLo) || 1));
+    const Yg = (g2) => padT + plotH * (1 - (g2 - gLo) / ((gHi - gLo) || 1));
     // axes: baseline + x tick labels at the table's stride cutoffs
     ctx.strokeStyle = bd; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, padT + plotH + 0.5); ctx.lineTo(padL + plotW, padT + plotH + 0.5); ctx.stroke();
     ctx.fillStyle = dim; ctx.font = '10px ' + (css.getPropertyValue('--mono').trim() || 'monospace'); ctx.textAlign = 'center';
-    const span = (cv.gradeMax - cv.gradeMin) || 1;           // ticks at the table's cutoffs (handles custom, non-uniform)
     for (const p of gtCurveRows(cv)) {
-      if (p.cutoff < cv.gradeMin || p.cutoff > cv.gradeMax) continue;
-      const x = padL + ((p.cutoff - cv.gradeMin) / span) * plotW;
+      if (p.cutoff < x0 || p.cutoff > x1) continue;
+      const x = Xv(p.cutoff);
       ctx.fillRect(x, padT + plotH, 1, 3); ctx.fillText(fmtN(p.cutoff), x, H - 3);
     }
+    ctx.save(); ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();   // windows may cut the curves
     // tonnes (falling) — accent
     ctx.strokeStyle = acc; ctx.lineWidth = 1.5; ctx.beginPath();
-    for (let i = 0; i < n; i++) { const y = padT + plotH * (1 - cv.curve[i].tonnage / t0); i ? ctx.lineTo(X(i), y) : ctx.moveTo(X(i), y); }
+    let st2 = false;
+    for (let i = 0; i < n; i++) { const p = cv.curve[i]; const x = Xv(p.cutoff), y = Yt(p.tonnage); st2 ? ctx.lineTo(x, y) : ctx.moveTo(x, y); st2 = true; }
     ctx.stroke();
     // mean grade (rising) — info; only over bins that still have mass
     ctx.strokeStyle = info; ctx.lineWidth = 1.5; ctx.beginPath();
     let started = false;
     for (let i = 0; i < n; i++) {
       const p = cv.curve[i]; if (!(p.tonnage > 0)) break;
-      const y = padT + plotH * (1 - p.grade / gMax);
-      started ? ctx.lineTo(X(i), y) : ctx.moveTo(X(i), y); started = true;
+      const x = Xv(p.cutoff), y = Yg(p.grade);
+      started ? ctx.lineTo(x, y) : ctx.moveTo(x, y); started = true;
     }
     ctx.stroke();
-    // scale hints: max tonnes (left, accent) + max grade (right, info)
-    ctx.textAlign = 'left'; ctx.fillStyle = acc; ctx.fillText(fmtInt(t0) + ' t', padL + 2, padT - 2);
+    ctx.restore();
+    // scale hints: y-max tonnes (left, accent) + y-max grade (right, info)
+    ctx.textAlign = 'left'; ctx.fillStyle = acc; ctx.fillText(fmtInt(tHi) + ' t', padL + 2, padT - 2);
     const uL = gtUnitLabel(_gtResult.config.gradeUnits && _gtResult.config.gradeUnits[+canvas.dataset.gi]);
-    ctx.textAlign = 'right'; ctx.fillStyle = info; ctx.fillText(fmtN(gMax) + (uL ? ' ' + uL : ''), W - padR - 2, padT - 2);
+    ctx.textAlign = 'right'; ctx.fillStyle = info; ctx.fillText(fmtN(gHi) + (uL ? ' ' + uL : ''), W - padR - 2, padT - 2);
   });
 }
 async function computeGradeTonnage() {
@@ -3253,12 +3278,22 @@ function wireGradeTonnage(c) {
   $('#helpBody').querySelectorAll('.gt-unit').forEach((sel) => sel.onchange = () => { _gtConfig.gradeUnits[+sel.dataset.gi] = sel.value; });
   const du = $('#gtDensUnit'); if (du) du.onchange = () => { _gtConfig.densityUnit = du.value; };
   $('#helpBody').querySelectorAll('.gt-cut').forEach((inp) => inp.oninput = () => { _gtConfig.cutoffs[+inp.dataset.gi] = inp.value; });
-  $('#helpBody').querySelectorAll('.gt-rm').forEach((b) => b.onclick = () => { const gi = +b.dataset.gi; _gtConfig.grades.splice(gi, 1); _gtConfig.gradeUnits.splice(gi, 1); _gtConfig.cutoffs.splice(gi, 1); paintGradeTonnage(); });
-  const add = $('#gtAdd'); if (add) add.onclick = () => { const fn = c.schema.findIndex((s) => s.type === 'number'); _gtConfig.grades.push(fn >= 0 ? fn : 0); _gtConfig.gradeUnits.push(''); _gtConfig.cutoffs.push(''); paintGradeTonnage(); };
+  $('#helpBody').querySelectorAll('.gt-rng').forEach((inp) => { inp.oninput = () => { _gtConfig.ranges[+inp.dataset.gi] = inp.value; }; inp.onchange = () => { if (_gtResult) drawGTCurves(c); }; });
+  $('#helpBody').querySelectorAll('.gt-rm').forEach((b) => b.onclick = () => { const gi = +b.dataset.gi; _gtConfig.grades.splice(gi, 1); _gtConfig.gradeUnits.splice(gi, 1); _gtConfig.cutoffs.splice(gi, 1); _gtConfig.ranges.splice(gi, 1); paintGradeTonnage(); });
+  const add = $('#gtAdd'); if (add) add.onclick = () => { const fn = c.schema.findIndex((s) => s.type === 'number'); _gtConfig.grades.push(fn >= 0 ? fn : 0); _gtConfig.gradeUnits.push(''); _gtConfig.cutoffs.push(''); _gtConfig.ranges.push(''); paintGradeTonnage(); };
   const run = $('#gtRun'); if (run) run.onclick = () => computeGradeTonnage();
   $('#helpBody').querySelectorAll('.sum-tbl th[data-k]').forEach((th) => th.onclick = () => { const k = th.getAttribute('data-k'); if (_gtSort.col === k) _gtSort.dir *= -1; else _gtSort = { col: k, dir: k === 'key' ? 1 : -1 }; paintGradeTonnage(); });
   const cp = $('#gtCopy'); if (cp) cp.onclick = () => { copyText(gtTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
-  $('#helpBody').querySelectorAll('.gt-ccopy:not(.gt-csave)').forEach((b) => b.onclick = () => {
+  $('#helpBody').querySelectorAll('.gt-cpng').forEach((b) => b.onclick = () => {
+    const canvas = $('#helpBody').querySelector(`canvas.gt-curve[data-gi="${b.dataset.gi}"]`); if (!canvas) return;
+    canvas.toBlob(async (blob) => {
+      if (!blob) return;
+      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); b.textContent = 'copied ✓'; }
+      catch { b.textContent = 'copy failed'; }
+      setTimeout(() => { b.textContent = 'copy png'; }, 1200);
+    }, 'image/png');
+  });
+  $('#helpBody').querySelectorAll('.gt-ccopy:not(.gt-csave):not(.gt-cpng)').forEach((b) => b.onclick = () => {
     const gi = +b.dataset.gi, cv = _gtResult && _gtResult.curves && _gtResult.curves[gi]; if (!cv) return;
     const gn = c.schema[_gtResult.config.grades[gi]] ? c.schema[_gtResult.config.grades[gi]].name : '?';
     copyText(gtCurveTSV(cv, gn, _gtResult.config.gradeUnits && _gtResult.config.gradeUnits[gi])); b.textContent = 'copied ✓'; setTimeout(() => { b.textContent = 'copy'; }, 1200);

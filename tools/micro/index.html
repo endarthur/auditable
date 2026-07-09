@@ -411,6 +411,15 @@
   #meDlg .me-note { color: var(--dim); font-size: 11px; line-height: 1.5; min-height: 28px; }
   #meDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
   #meDlg .dh-foot #meDlgMsg { color: var(--muted); font-family: var(--mono); font-size: 12px; margin-right: auto; }
+  /* manual plot ranges (GT + swath) */
+  .rr-row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; width: 100%; }
+  .rr-grp { display: inline-flex; gap: 3px; align-items: center; }
+  .rr-lab { color: var(--dim); font-family: var(--mono); font-size: 10px; }
+  .rr-in { width: 52px; font-family: var(--mono); font-size: 10px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 3px; }
+  .rr-in::-webkit-outer-spin-button, .rr-in::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .rr-clear { font-family: var(--mono); font-size: 10px; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 3px; padding: 1px 7px; cursor: pointer; }
+  .rr-clear:hover { border-color: var(--accent); color: var(--text); }
+  .pp-exp { display: inline-flex; gap: 4px; }
   #brDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
   #brDlg .dh-foot #brNot { border-color: var(--border); }
 
@@ -653,7 +662,7 @@
     <label id="sec2DW" title="2D mode: face the section, go orthographic, and lock rotation — drags pan instead of orbiting, so the view reads like a paper section/plan" style="display:none"><input id="sec2D" type="checkbox">2D</label>
   </div>
   <div id="barTools"></div>
-  <div id="view"><canvas id="cv"></canvas><canvas id="decoCv" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
+  <div id="view"><canvas id="cv"></canvas><canvas id="decoCv" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="bandSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="bandPolyA" fill="rgba(74,120,176,0.10)" stroke="#4a78b0" stroke-width="1.4"/><polygon id="bandPolyB" fill="none" stroke="#4a78b0" stroke-width="1.4" stroke-dasharray="4 3"/><text id="bandLabel" fill="#fff" font-size="11" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3"></text></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
   <div id="empty"><b>open a point cloud or block model</b><span>Open… or drag .las / .ply / .csv / .xyz / .dm / .msh / .obj / .lfm / .tif / .grd / .parquet anywhere — several at once become layers</span><span>nothing handy? sample bench scan — <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points · or <a id="sampleBlocks">▸ a 2M-block model</a> — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
@@ -743,6 +752,7 @@ function loop(t) {
     $('#stats').textContent = `${total.toLocaleString()} pts · ${renderer.chunkCount} chunks (${r.visible} vis) · ${converged ? `converged ${acc.toLocaleString()}` : `accumulating ${(100 * acc / (total || 1)).toFixed(0)}%`} · ${ms.toFixed(1)} ms${vram}${heap}`;
     drawMeasure();                                         // the overlay rides the camera
     drawSectionPlane();
+    drawSwathBand();                                       // the swath hover/drag band ghost
     drawCompass();
     drawDecorations();                                     // scale bar / north / legend / title overlay
   }
@@ -981,6 +991,24 @@ function applyLayerSelection(L) {
   renderer.setLayerSelection(L.id, c ? L._selMask : null);
   attrTableSelChanged(L.id);
   refreshLinkedWindows(L);                                 // GT/swath windows tracking the selection recompute
+}
+// materialize the 3D selection as a painted column (empty = out, 'IN' = selected)
+// — same machinery as flag-by-solid, so it's brush-editable, filterable (SEL == 'IN'),
+// and rides every export
+async function selectionToColumn(L) {
+  if (!L || !L._selMask || !L._selCount) { $('#meta').textContent = 'selection → column: nothing selected on this layer'; return; }
+  const name = (await microPrompt('column name', 'SEL') || '').trim();
+  if (!name) return;
+  const col = createPaintCol(L, name);
+  if (!col) return;                                        // name taken — createPaintCol already said so
+  const code = addPaintValue(L, col, 'IN');
+  const m = L._selMask, codes = col.codes, n = Math.min(m.length, codes.length);
+  for (let r = 0; r < n; r++) if (m[r]) codes[r] = code;
+  paintRecount(col);
+  addPaintColorOptions(L);
+  const t2 = _attrTables.get(L.id); if (t2 && t2.invalidate) t2.invalidate();
+  markProjectDirty(); requestRender();
+  $('#meta').textContent = `selection → ${name}: ${L._selCount.toLocaleString()} rows flagged IN (filter with ${name} == 'IN' · rides exports)`;
 }
 function selectionStatus() {
   let total = 0, nL = 0;
@@ -2782,10 +2810,12 @@ function plotChart(cv, spec) {
   const mL = 52, mR = hasRight ? 50 : 12, mT = 14 + (spec.series.length > 1 ? 12 : 0), mB = 30;
   const px0 = mL, px1 = W - mR, py0 = H - mB, py1 = mT;
   const allX = spec.series.flatMap((s) => s.data.map((d) => d[0]));
-  if (!allX.length) { g.fillStyle = dim; g.font = '12px monospace'; g.textAlign = 'center'; g.fillText('no data', W / 2, H / 2); return; }
-  const xr = spec.xRange || [Math.min(...allX), Math.max(...allX)]; if (xr[0] === xr[1]) xr[1] = xr[0] + 1;
+  if (!allX.length) { g.fillStyle = dim; g.font = '12px monospace'; g.textAlign = 'center'; g.fillText('no data', W / 2, H / 2); return null; }
+  // manual range overrides merge PER BOUND ([lo, hi], null = auto) so "just pin the max" works
+  const mrg = (auto, man) => { const r = man ? [man[0] != null ? man[0] : auto[0], man[1] != null ? man[1] : auto[1]] : auto.slice(); if (r[0] === r[1]) r[1] = r[0] + 1; return r; };
+  const xr = mrg([Math.min(...allX), Math.max(...allX)], spec.xRange);
   const yrOf = (axis) => { const ys = spec.series.filter((s) => s.axis === axis).flatMap((s) => s.data.map((d) => d[1])).filter(Number.isFinite); if (!ys.length) return [0, 1]; let lo = Math.min(...ys), hi = Math.max(...ys); if (lo > 0) lo = 0; if (lo === hi) hi = lo + 1; return [lo, hi]; };
-  const lr = yrOf('left'), rr = yrOf('right');
+  const lr = mrg(yrOf('left'), spec.leftRange), rr = mrg(yrOf('right'), spec.rightRange);
   const sx = (x) => px0 + (px1 - px0) * (x - xr[0]) / (xr[1] - xr[0]);
   const syL = (y) => py0 + (py1 - py0) * (y - lr[0]) / (lr[1] - lr[0]);
   const syR = (y) => py0 + (py1 - py0) * (y - rr[0]) / (rr[1] - rr[0]);
@@ -2796,11 +2826,13 @@ function plotChart(cv, spec) {
   g.textAlign = 'right';
   for (const ty of ticks(lr[0], lr[1])) { const Y = syL(ty); g.strokeStyle = grid; g.beginPath(); g.moveTo(px0, Y); g.lineTo(px1, Y); g.stroke(); g.fillStyle = dim; g.fillText(fmtStat(ty), px0 - 4, Y + 3); }
   if (hasRight) { g.textAlign = 'left'; g.fillStyle = dim; for (const ty of ticks(rr[0], rr[1])) g.fillText(fmtStat(ty), px1 + 4, syR(ty) + 3); }
+  g.save(); g.beginPath(); g.rect(px0, py1, px1 - px0, py0 - py1); g.clip();   // manual ranges may window the data
   for (const s of spec.series) {
     const sy = s.axis === 'right' ? syR : syL; g.strokeStyle = s.color; g.fillStyle = s.color; g.lineWidth = 1.6;
     if (s.kind === 'bar') { const bw = Math.max(1, (px1 - px0) / Math.max(1, s.data.length) * 0.7); g.globalAlpha = 0.22; for (const [x, y] of s.data) { if (!Number.isFinite(y)) continue; const X = sx(x), Y = sy(y); g.fillRect(X - bw / 2, Y, bw, py0 - Y); } g.globalAlpha = 1; }
     else { g.beginPath(); let started = false; for (const [x, y] of s.data) { if (!Number.isFinite(y)) { started = false; continue; } const X = sx(x), Y = sy(y); if (!started) { g.moveTo(X, Y); started = true; } else g.lineTo(X, Y); } g.stroke(); }
   }
+  g.restore();
   g.fillStyle = dim; g.textAlign = 'center'; g.font = '10px monospace';
   if (spec.xLabel) g.fillText(spec.xLabel, (px0 + px1) / 2, H - 4);
   const rot = (txt, x, dir) => { g.save(); g.translate(x, (py0 + py1) / 2); g.rotate(dir * Math.PI / 2); g.fillText(txt, 0, 0); g.restore(); };
@@ -2809,6 +2841,8 @@ function plotChart(cv, spec) {
   // legend
   let lx = px0 + 2; g.textAlign = 'left';
   for (const s of spec.series) { g.fillStyle = s.color; g.fillRect(lx, 4, 9, 3); g.fillStyle = ink; g.fillText(s.name, lx + 12, 8); lx += 16 + g.measureText(s.name).width + 8; }
+  // the plot→data mapping, so callers can hit-test the canvas (swath hover)
+  return { px0, px1, py0, py1, xr, lr, rr };
 }
 // reconcile columns come as ref_<g>/this_<g>; detect the pairs for auto-series
 function reconcilePairs(cols) {
@@ -2873,12 +2907,19 @@ function openGradeTonnage(L) {
   const cv = document.createElement('canvas'); cv.style.cssText = 'width:100%;flex:1;min-height:80px;display:block';
   const ctrls = document.createElement('div'); ctrls.className = 'awin-ctrls';
   win.body.append(cv, ctrls);
+  // replot from the cached compute (ranges are display-only — no re-scan)
+  const replot = () => {
+    if (!st._spec) return;
+    const spec = { ...st._spec, ...rangesOf(st) };
+    plotChart(cv, spec); win._spec = spec; win.el._gtSpec = spec;
+  };
   const redraw = async () => {
-    if (st.scope === 'selection' && !(L._selMask && L._selCount)) { win.sub.textContent = 'no selection — brush the 3D'; plotChart(cv, { series: [] }); win._spec = null; return; }
-    const selMask = st.scope === 'selection' ? L._selMask : null;
+    const miss = scopeMissing(st, L);
+    if (miss) { win.sub.textContent = miss; plotChart(cv, { series: [] }); win._spec = null; st._spec = null; return; }
+    const mask = scopeMask(st, L);
     win.sub.textContent = 'computing…';
     const wspec = st.weight === '#const' ? { const: st.densConst, unit: st.densUnit } : st.weight ? { col: st.weight, unit: st.densUnit } : {};
-    const res = await computeGT(L, st.cols, wspec, st.nCut, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; }, selMask);
+    const res = await computeGT(L, st.cols, wspec, st.nCut, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; }, mask);
     if (!res) { win.sub.textContent = 'no data'; return; }
     st.last = res;
     const gl = guLabel();
@@ -2888,8 +2929,8 @@ function openGradeTonnage(L) {
       spec.series.push({ name: `${c} · t`, color: col, axis: 'left', kind: 'line', data: res.gt[i].map((p) => [p.cut, p.tonnage]) });
       spec.series.push({ name: `${c} · grade`, color: col, axis: 'right', kind: 'line', data: res.gt[i].map((p) => [p.cut, p.grade]) });
     });
-    win.sub.textContent = `${st.scope === 'selection' ? 'selection · ' : ''}${res.weighted ? `tonnes (${st.weight === '#const' ? `ρ ${st.densConst}` : st.weight} ${st.densUnit === 't/m3' ? 't/m³' : st.densUnit === 'kg/m3' ? 'kg/m³' : 'lb/ft³'})` : 'count'} · ${st.nCut} cutoffs`;
-    plotChart(cv, spec); win._spec = spec; win.el._gtSpec = spec;
+    win.sub.textContent = `${st.scope !== 'all' ? st.scope + ' · ' : ''}${res.weighted ? `tonnes (${st.weight === '#const' ? `ρ ${st.densConst}` : st.weight} ${st.densUnit === 't/m3' ? 't/m³' : st.densUnit === 'kg/m3' ? 'kg/m³' : 'lb/ft³'})` : 'count'} · ${st.nCut} cutoffs`;
+    st._spec = spec; replot();
   };
   win.el._onResized = () => { if (win._spec) plotChart(cv, win._spec); };
   const buildCtrls = () => {
@@ -2919,21 +2960,76 @@ function openGradeTonnage(L) {
     for (const [v, t] of [['t/m3', 't/m³ (=g/cm³)'], ['kg/m3', 'kg/m³'], ['lb/ft3', 'lb/ft³']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; dSel.appendChild(o); }
     dSel.value = st.densUnit; dSel.disabled = !st.weight;
     dSel.onchange = () => { st.densUnit = dSel.value; persistUnits(); redraw(); };
-    ctrls.append(seriesBtn, gSel, wSel, dSel, scopeSeg(st, redraw));
+    const rngBtn = document.createElement('button'); rngBtn.className = 'awin-btn'; rngBtn.textContent = 'ranges'; rngBtn.title = 'manual axis ranges (x · tonnage · grade)';
+    rngBtn.onclick = () => { st._showRanges = !st._showRanges; buildCtrls(); };
+    ctrls.append(seriesBtn, gSel, wSel, dSel, scopeSeg(st, redraw), rngBtn, plotExportBtns(cv, () => `gt-${(L.label || L.name).replace(/\.[^.]+$/, '')}.png`));
+    if (st._showRanges) ctrls.append(rangesRow(st, replot, { x: 'cutoff', l: 't', r: 'grade' }));
   };
   _gtWins.set(L.id, { win, redraw, st });
   buildCtrls(); redraw();
 }
-// the linked-brushing scope toggle: whole layer vs the current 3D selection
+// the scope toggle: whole layer · rows matching the current filter · the 3D selection
 function scopeSeg(st, redraw) {
-  const seg = document.createElement('div'); seg.className = 'pp-seg'; seg.title = 'whole layer, or just the 3D selection (updates as you select)';
-  for (const [v, t] of [['all', 'all'], ['selection', 'sel']]) { const bt = document.createElement('button'); bt.className = 'pp-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; for (const b2 of seg.children) b2.classList.toggle('on', b2 === bt); redraw(); }; seg.appendChild(bt); }
+  const seg = document.createElement('div'); seg.className = 'pp-seg'; seg.title = 'all rows · rows matching the current filter expression · just the 3D selection (updates as you select)';
+  for (const [v, t] of [['all', 'all'], ['filtered', 'filt'], ['selection', 'sel']]) { const bt = document.createElement('button'); bt.className = 'pp-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; for (const b2 of seg.children) b2.classList.toggle('on', b2 === bt); redraw(); }; seg.appendChild(bt); }
   return seg;
 }
-// redraw open GT/swath windows bound to L when they track the selection
-function refreshLinkedWindows(L) {
+// the row mask a scope implies for layer L (null = all rows); message when the
+// scope's prerequisite isn't there yet
+function scopeMask(st, L) {
+  if (st.scope === 'selection') return L._selMask || null;
+  if (st.scope === 'filtered') return L._filterMask || null;
+  return null;
+}
+function scopeMissing(st, L) {
+  if (st.scope === 'selection' && !(L._selMask && L._selCount)) return 'no selection — brush the 3D first';
+  if (st.scope === 'filtered' && !L._filterMask) return 'no active filter — run one in the filter box first';
+  return null;
+}
+// redraw open GT/swath windows bound to L when their scope's input changed
+// (kind: 'selection' after brushing, 'filtered' after a filter run)
+function refreshLinkedWindows(L, kind = 'selection') {
   if (!L) return;
-  for (const map of [_gtWins, _swathWins]) { const e = map.get(L.id); if (e && e.st && e.st.scope === 'selection') e.redraw(); }
+  for (const map of [_gtWins, _swathWins]) { const e = map.get(L.id); if (e && e.st && e.st.scope === kind) e.redraw(); }
+}
+// manual axis ranges: st.ranges = { x: [lo,hi], l: [lo,hi], r: [lo,hi] } with
+// null = auto per BOUND. A compact toggleable row of six inputs.
+function rangesRow(st, redraw, labels) {
+  if (!st.ranges) st.ranges = { x: [null, null], l: [null, null], r: [null, null] };
+  const row = document.createElement('div'); row.className = 'rr-row';
+  const mk = (key, bi, ph) => {
+    const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any'; inp.className = 'rr-in'; inp.placeholder = ph;
+    const v = st.ranges[key][bi]; if (v != null) inp.value = String(v);
+    inp.onchange = () => { st.ranges[key][bi] = inp.value === '' ? null : +inp.value; redraw(); };
+    return inp;
+  };
+  for (const [key, lab] of [['x', labels.x], ['l', labels.l], ['r', labels.r]]) {
+    if (!lab) continue;
+    const grp = document.createElement('span'); grp.className = 'rr-grp';
+    const l = document.createElement('span'); l.className = 'rr-lab'; l.textContent = lab;
+    grp.append(l, mk(key, 0, 'min'), mk(key, 1, 'max'));
+    row.append(grp);
+  }
+  const clr = document.createElement('button'); clr.className = 'rr-clear'; clr.textContent = 'auto'; clr.title = 'clear all manual ranges';
+  clr.onclick = () => { st.ranges = { x: [null, null], l: [null, null], r: [null, null] }; redraw(); for (const i of row.querySelectorAll('input')) i.value = ''; };
+  row.append(clr);
+  return row;
+}
+const rangesOf = (st) => (st.ranges && [st.ranges.x, st.ranges.l, st.ranges.r].some((r) => r[0] != null || r[1] != null)
+  ? { xRange: st.ranges.x, leftRange: st.ranges.l, rightRange: st.ranges.r } : {});
+// export / copy a chart canvas (PNG at its dpr-scaled resolution)
+function plotExportBtns(cv, nameFn) {
+  const wrap = document.createElement('span'); wrap.className = 'pp-exp';
+  const save = document.createElement('button'); save.className = 'awin-btn'; save.textContent = '⤓ png'; save.title = 'save the plot as PNG';
+  save.onclick = () => cv.toBlob((blob) => { if (!blob) return; const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nameFn(); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); $('#meta').textContent = `saved ${nameFn()}`; }, 'image/png');
+  const copy = document.createElement('button'); copy.className = 'awin-btn'; copy.textContent = '⧉ copy'; copy.title = 'copy the plot to the clipboard';
+  copy.onclick = () => cv.toBlob(async (blob) => {
+    if (!blob) return;
+    try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); $('#meta').textContent = 'plot copied to clipboard'; }
+    catch (e) { $('#meta').textContent = `copy failed (${e.message}) — use ⤓ png`; }
+  }, 'image/png');
+  wrap.append(save, copy);
+  return wrap;
 }
 // ── swath (drift) analysis ────────────────────────────────────────────────────
 // small vector helpers
@@ -3022,7 +3118,10 @@ async function scanSwath(st, onProgress) {
   const fineOrigin = range.map(([lo]) => lo);
   let total = 0;
   for (const se of series) {
-    const L = se.L, m = se.m, selMask = st.scope === 'selection' ? L._selMask : null;
+    // scope mask per series layer: selection / current filter / all. A layer
+    // without the scope's mask contributes ALL its rows (e.g. comparing a
+    // filtered model against unfiltered samples) — the sub line names the scope.
+    const L = se.L, m = se.m, selMask = scopeMask(st, L);
     let rec = 0;
     for await (const batch of layerRows(L, null)) {
       for (const f of batch) {
@@ -3068,10 +3167,13 @@ function openSwath(L) {
   const nums = numericColsOf(L); if (!nums.length) { $('#meta').textContent = 'swath: no numeric column'; return; }
   const pairs = reconcilePairs(nums);
   const mkSer = (Lx, col, i) => ({ layerId: Lx.id, col, weight: '', filter: '', color: SERIES_COLORS[i % SERIES_COLORS.length] });
-  const st = { mode: 'axes', axis: 0, dd: 90, dip: 45, rake: 0, trend: 0, plunge: 0, bandWidth: null, offset: null, bars: 'count', zebra: false, scope: 'all',
+  // bandW / off are PER DIRECTION (keyed by axis index) — an E–W drift wants a
+  // different band than a bench-by-bench Z profile. null/absent = auto.
+  const st = { mode: 'axes', axis: 0, dd: 90, dip: 45, rake: 0, trend: 0, plunge: 0, bandW: {}, off: {}, bars: 'count', zebra: false, scope: 'all',
+    gradeUnit: (L.gtUnits && L.gtUnits.grade) || '',        // shares the layer's declared grade unit with GT
     series: pairs.length ? [mkSer(L, pairs[0].ref, 0), mkSer(L, pairs[0].self, 1)] : [mkSer(L, nums[0], 0)],
     scan: null, stale: true, running: false };
-  const win = floatWin({ title: `swath · ${L.label || L.name}`, sub: 'configure, then Run', x: Math.max(12, innerWidth - 660), y: 120, w: 640, h: 440, onClose: () => { _swathWins.delete(L.id); if (st.zebra) clearSwathZebra(zebraL()); } });
+  const win = floatWin({ title: `swath · ${L.label || L.name}`, sub: 'configure, then Run', x: Math.max(12, innerWidth - 660), y: 120, w: 640, h: 440, onClose: () => { _swathWins.delete(L.id); if (st.zebra) clearSwathZebra(zebraL()); setSwathBand(null); removeEventListener('mouseup', onUp); } });
   const body = document.createElement('div'); body.className = 'sw-body'; win.body.append(body);
   const rail = document.createElement('div'); rail.className = 'sw-rail';
   const main = document.createElement('div'); main.className = 'sw-main';
@@ -3082,32 +3184,132 @@ function openSwath(L) {
   const curDir = () => swathModeDirs(st)[st.axis] || swathModeDirs(st)[0];
   const rangeFor = () => (st.scan ? st.scan.range[st.axis] : projRange(zebraL(), curDir()));
   const autoWidth = () => { const [lo, hi] = rangeFor(); return Math.max(niceStep((hi - lo) / 25) || 1, 1e-6); };
-  const effWidth = () => st.bandWidth || autoWidth();
-  const effOffset = () => (st.offset != null ? st.offset : rangeFor()[0]);
+  const effWidth = () => st.bandW[st.axis] || autoWidth();
+  const effOffset = () => (st.off[st.axis] != null ? st.off[st.axis] : rangeFor()[0]);
+  // render the cached spec + the hover/drag band strip (NO re-binning) — cheap
+  // enough for mousemove. plotChart leaves its dpr transform on the context, so
+  // the strip draws in CSS coords.
+  const renderChart = () => {
+    if (!st._plotSpec) { plotChart(cv, { series: [] }); st._map = null; win._spec = null; win.el._swathSpec = null; return; }
+    st._map = plotChart(cv, st._plotSpec); win._spec = st._plotSpec; win.el._swathSpec = st._plotSpec;
+    if (st._band && st._map) {
+      const { px0, px1, py0, py1, xr } = st._map;
+      const X = (x) => px0 + (px1 - px0) * (x - xr[0]) / (xr[1] - xr[0]);
+      const x0 = Math.max(px0, Math.min(px1, X(st._band.a))), x1 = Math.max(px0, Math.min(px1, X(st._band.b)));
+      const g = cv.getContext('2d'), col = st._band.sticky ? '#b48ead' : '#4a78b0';
+      g.fillStyle = st._band.sticky ? 'rgba(180,142,173,0.16)' : 'rgba(74,120,176,0.12)';
+      g.fillRect(x0, py1, Math.max(1, x1 - x0), py0 - py1);
+      g.strokeStyle = col; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(x0, py1); g.lineTo(x0, py0); g.moveTo(x1, py1); g.lineTo(x1, py0); g.stroke();
+    }
+  };
   // cheap replot from the existing scan (axis / band / offset / bars / zebra) —
   // no re-scan. Expensive changes (series / weight / filter / mode / scope) set
   // st.stale and wait for Run.
   const plot = () => {
     buildTabs();
-    if (!st.scan) { win.sub.textContent = st.stale ? 'configure, then Run' : ''; plotChart(cv, { series: [] }); win._spec = null; win.el._swathSpec = null; return; }
+    if (!st.scan) { win.sub.textContent = st.stale ? 'configure, then Run' : ''; st._plotSpec = null; renderChart(); return; }
     const di = st.axis, bw = effWidth(), off = effOffset();
     const b = binSwath(st.scan, di, bw, off);
-    if (!b.keys.length) { win.sub.textContent = 'no data in range'; plotChart(cv, { series: [] }); win._spec = null; win.el._swathSpec = null; return; }
+    if (!b.keys.length) { win.sub.textContent = 'no data in range'; st._plotSpec = null; renderChart(); return; }
     const multi = _layers.length > 1 || st.series.length > 1;
-    const spec = { xLabel: `distance along ${st.scan.dirNames[di]}`, leftLabel: 'mean grade', rightLabel: st.bars === 'tonnage' ? 'weight' : 'count', series: [] };
+    const gl = st.gradeUnit === 'pct' ? '%' : st.gradeUnit;
+    const spec = { xLabel: `distance along ${st.scan.dirNames[di]}`, leftLabel: `mean grade${gl ? ` (${gl})` : ''}`, rightLabel: st.bars === 'tonnage' ? 'weight' : 'count', series: [], ...rangesOf(st) };
     const prim = b.out[0];
     spec.series.push({ name: st.bars, color: '#6a6f75', axis: 'right', kind: 'bar', data: b.keys.map((B) => { const e = prim.bands.get(B); return [off + (B + 0.5) * bw, e ? (st.bars === 'tonnage' ? e.sw : e.n) : 0]; }) });
     b.out.forEach((o) => { const Lx = layerById(o.se.s.layerId); const nm = multi ? `${(Lx ? (Lx.label || Lx.name) : '').replace(/\.[^.]*$/, '')}·${o.se.s.col}` : o.se.s.col; spec.series.push({ name: nm, color: o.se.s.color, axis: 'left', kind: 'line', data: b.keys.map((B) => { const e = o.bands.get(B); return [off + (B + 0.5) * bw, e && e.sw > 0 ? e.swg / e.sw : NaN]; }) }); });
-    win.sub.textContent = `${st.scope === 'selection' ? 'selection · ' : ''}${b.keys.length} bands · ${bw.toPrecision(3)} m · ${st.scan.series.reduce((s, x) => s + x.n, 0).toLocaleString()} rows`;
-    plotChart(cv, spec); win._spec = spec; win.el._swathSpec = spec;
+    win.sub.textContent = `${st.scope !== 'all' ? st.scope + ' · ' : ''}${b.keys.length} bands · ${bw.toPrecision(3)} m · ${st.scan.series.reduce((s, x) => s + x.n, 0).toLocaleString()} rows`;
+    st._plotSpec = spec; renderChart();
     if (st.zebra) applySwathZebra(zebraL(), curDir(), bw, off);
+  };
+  // ── hover/drag → the 3D band ghost (toggleable). Hover lights the bin under
+  // the cursor; drag holds a band range (violet) and offers select-in-3D. ──
+  st.locate = true;
+  const bandBbox = () => {
+    let u = null;
+    for (const s of st.series) { const Lx = layerById(s.layerId); const b2 = Lx && Lx.bboxLocal; if (!b2) continue; if (!u) u = Float64Array.from(b2); else for (let i = 0; i < 3; i++) { if (b2[i] < u[i]) u[i] = b2[i]; if (b2[i + 3] > u[i + 3]) u[i + 3] = b2[i + 3]; } }
+    return u || rendererDocBbox();
+  };
+  const setBand = (a, b2, sticky) => {
+    st._band = a == null ? null : { a, b: b2, sticky };
+    renderChart();
+    setSwathBand(a == null ? null : { a, b: b2, dir: curDir(), bbox: bandBbox(), sticky, label: `${fmtStat(a)} – ${fmtStat(b2)}` });
+  };
+  const tAt = (ev) => {
+    const map = st._map; if (!map || !st.scan) return null;
+    const r = cv.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    if (mx < map.px0 || mx > map.px1 || my < map.py1 - 6 || my > map.py0 + 6) return null;
+    return map.xr[0] + (mx - map.px0) / (map.px1 - map.px0) * (map.xr[1] - map.xr[0]);
+  };
+  let dragA = null, dragged = false;
+  cv.addEventListener('mousemove', (ev) => {
+    if (!st.locate || !st.scan) return;
+    const t = tAt(ev), bw = effWidth(), off = effOffset();
+    if (dragA != null) {
+      if (t == null) return;
+      dragged = true;
+      const lo = Math.min(dragA, t), hi = Math.max(dragA, t);
+      setBand(off + Math.floor((lo - off) / bw) * bw, off + Math.ceil((hi - off) / bw) * bw, true);   // snap to band edges
+      return;
+    }
+    if (st._band && st._band.sticky) return;               // a held range stays until clicked away
+    if (t == null) { if (st._band) setBand(null); return; }
+    const B = Math.floor((t - off) / bw);
+    setBand(off + B * bw, off + (B + 1) * bw, false);
+  });
+  cv.addEventListener('mouseleave', () => { if (st._band && !st._band.sticky) setBand(null); });
+  cv.addEventListener('mousedown', (ev) => {
+    if (!st.locate || !st.scan || ev.button !== 0) return;
+    if (st._band && st._band.sticky) setBand(null);        // click releases a held range
+    const t = tAt(ev); if (t == null) return;
+    dragA = t; dragged = false; ev.preventDefault();
+  });
+  const onUp = (ev) => {
+    if (dragA == null) return;
+    const was = dragged; dragA = null; dragged = false;
+    if (!was || !st._band) return;
+    const { a, b: b2 } = st._band;
+    menuXY(ev.clientX, ev.clientY, [
+      { label: `Select rows in ${fmtStat(a)} – ${fmtStat(b2)}`, action: () => bandRangeSelect(a, b2, 'replace') },
+      { label: 'Add to selection', action: () => bandRangeSelect(a, b2, 'add') },
+      { label: 'Keep highlight', action: () => {} },
+      { label: 'Clear', action: () => setBand(null) },
+    ], () => {});                                          // dismiss keeps the ghost
+  };
+  addEventListener('mouseup', onUp);
+  // materialize the held band range as a real 3D selection on every series layer
+  const bandRangeSelect = async (a, b2, mode) => {
+    const dir = curDir();
+    const Ls = [...new Set(st.series.map((s) => s.layerId))].map(layerById)
+      .filter((Lx) => { const h = layerTableHeader(Lx); return Lx && h && h.mapping && attrRowCountOf(Lx); });
+    if (mode === 'replace') clearSelection({ silent: true });
+    for (const Lx of Ls) {
+      const h = layerTableHeader(Lx), m = h.mapping, n = attrRowCountOf(Lx);
+      if (!Lx._selMask || Lx._selMask.length !== n) Lx._selMask = new Uint8Array(n);
+      win.sub.textContent = `selecting in ${Lx.label || Lx.name}…`;
+      let rec = 0;
+      for await (const batch of layerRows(Lx, null)) {
+        for (const f of batch) {
+          const rr = rec++;
+          const x = +f[m.x], y = +f[m.y], z = +f[m.z];
+          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+          const t = x * dir[0] + y * dir[1] + z * dir[2];
+          if (t >= a && t < b2 && rr < n) Lx._selMask[rr] = 1;
+        }
+        await new Promise((r2) => setTimeout(r2));
+      }
+      applyLayerSelection(Lx);
+    }
+    selectionStatus(); markProjectDirty(); requestRender();
   };
   win.el._onResized = () => { if (win._spec) plotChart(cv, win._spec); };
   let staleEl, progEl, runBtn;
   const markStale = () => { st.stale = true; if (staleEl) staleEl.textContent = st.scan ? '↻ config changed — Run to update' : ''; };
   const run = async () => {
     if (st.running) return;
-    if (st.scope === 'selection' && !(zebraL()._selMask && zebraL()._selCount)) { win.sub.textContent = 'no selection — brush the 3D first'; return; }
+    if (st.scope !== 'all' && !st.series.some((s) => { const Lx = layerById(s.layerId); return Lx && scopeMask(st, Lx); })) {
+      win.sub.textContent = scopeMissing(st, zebraL()) || `no layer carries a ${st.scope} mask`; return;
+    }
     st.running = true; runBtn.disabled = true; win.sub.textContent = 'scanning…';
     try { st.scan = await scanSwath(st, (n) => { progEl.textContent = `${n.toLocaleString()} rows…`; }); }
     catch (e) { win.sub.textContent = `swath: ${e.message}`; st.running = false; runBtn.disabled = false; progEl.textContent = ''; return; }
@@ -3119,7 +3321,7 @@ function openSwath(L) {
     tabs.textContent = '';
     const names = st.scan ? st.scan.dirNames : swathDirNames(st);
     if (names.length < 2) return;
-    names.forEach((nm, i) => { const t = document.createElement('button'); t.className = 'sw-tab' + (st.axis === i ? ' on' : ''); t.textContent = nm.split(' ')[0]; t.title = nm; t.onclick = () => { st.axis = i; plot(); }; tabs.append(t); });
+    names.forEach((nm, i) => { const t = document.createElement('button'); t.className = 'sw-tab' + (st.axis === i ? ' on' : ''); t.textContent = nm.split(' ')[0]; t.title = nm; t.onclick = () => { st.axis = i; buildRail(); plot(); }; tabs.append(t); });   // buildRail: band width/offset are per-direction
   }
   const seriesRow = (s, i) => {
     const box = document.createElement('div'); box.className = 'sw-ser';
@@ -3150,13 +3352,14 @@ function openSwath(L) {
     if (st.mode === 'oriented') { dSec.append(numRow('dd', 'dipdir'), numRow('dip', 'dip'), numRow('rake', 'rake')); }
     if (st.mode === 'direction') { dSec.append(numRow('trend', 'trend'), numRow('plunge', 'plunge')); }
     rail.append(dSec);
-    // ── Bands (cheap: re-bin, no re-scan) ──
+    // ── Bands (cheap: re-bin, no re-scan) — width + offset are PER DIRECTION ──
     const bSec = document.createElement('div');
-    bSec.append(Object.assign(document.createElement('div'), { className: 'sw-h', textContent: 'bands' }));
+    const dirNm = (st.scan ? st.scan.dirNames : swathDirNames(st))[st.axis] || '';
+    bSec.append(Object.assign(document.createElement('div'), { className: 'sw-h', textContent: `bands · ${dirNm.split(' ')[0]}` }));
     const bwRow = document.createElement('div'); bwRow.className = 'sw-row'; const bwL = document.createElement('span'); bwL.textContent = 'width'; bwL.style.width = '38px';
-    const bwI = document.createElement('input'); bwI.type = 'number'; bwI.step = 'any'; bwI.className = 'sw-in'; bwI.placeholder = 'auto'; bwI.value = st.bandWidth ? String(+st.bandWidth.toPrecision(4)) : ''; bwI.title = 'band width (m) — blank = auto'; bwI.onchange = () => { st.bandWidth = bwI.value === '' ? null : (+bwI.value || null); if (st.scan) plot(); }; bwRow.append(bwL, bwI); bSec.append(bwRow);
+    const bwI = document.createElement('input'); bwI.type = 'number'; bwI.step = 'any'; bwI.className = 'sw-in'; bwI.placeholder = 'auto'; bwI.value = st.bandW[st.axis] ? String(+st.bandW[st.axis].toPrecision(4)) : ''; bwI.title = `band width (m) along ${dirNm} — blank = auto; each direction keeps its own`; bwI.onchange = () => { st.bandW[st.axis] = bwI.value === '' ? null : (+bwI.value || null); if (st.scan) plot(); }; bwRow.append(bwL, bwI); bSec.append(bwRow);
     const offRow = document.createElement('div'); offRow.className = 'sw-row'; const offL = document.createElement('span'); offL.textContent = 'offset'; offL.style.width = '38px';
-    const offI = document.createElement('input'); offI.type = 'number'; offI.step = 'any'; offI.className = 'sw-in'; offI.placeholder = 'auto'; offI.value = st.offset != null ? String(+st.offset.toPrecision(6)) : ''; offI.title = 'where band 0 aligns along the direction — blank = auto'; offI.onchange = () => { st.offset = offI.value === '' ? null : +offI.value; if (st.scan) plot(); }; offRow.append(offL, offI); bSec.append(offRow);
+    const offI = document.createElement('input'); offI.type = 'number'; offI.step = 'any'; offI.className = 'sw-in'; offI.placeholder = 'auto'; offI.value = st.off[st.axis] != null ? String(+st.off[st.axis].toPrecision(6)) : ''; offI.title = `where band 0 aligns along ${dirNm} — blank = auto; each direction keeps its own`; offI.onchange = () => { st.off[st.axis] = offI.value === '' ? null : +offI.value; if (st.scan) plot(); }; offRow.append(offL, offI); bSec.append(offRow);
     rail.append(bSec);
     // ── Series ──
     const sSec = document.createElement('div');
@@ -3171,10 +3374,28 @@ function openSwath(L) {
     vSec.append(Object.assign(document.createElement('div'), { className: 'sw-h', textContent: 'display' }));
     const barRow = document.createElement('div'); barRow.className = 'sw-row'; const barL = document.createElement('span'); barL.textContent = 'bars';
     const barSel = document.createElement('select'); barSel.className = 'sw-sel'; for (const [v, t] of [['count', 'count'], ['tonnage', 'weight']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; barSel.append(o); } barSel.value = st.bars; barSel.onchange = () => { st.bars = barSel.value; if (st.scan) plot(); }; barRow.append(barL, barSel); vSec.append(barRow);
+    // grade unit — the same declaration GT uses (labels the grade axis)
+    const guRow = document.createElement('div'); guRow.className = 'sw-row'; const guL = document.createElement('span'); guL.textContent = 'unit';
+    const guSel = document.createElement('select'); guSel.className = 'sw-sel'; guSel.title = 'declared grade unit — labels the mean-grade axis (shared with grade-tonnage)';
+    for (const [v, t] of [['', '— unit'], ['pct', '%'], ['g/t', 'g/t'], ['ppm', 'ppm'], ['oz/t', 'oz/t']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; guSel.append(o); }
+    guSel.value = st.gradeUnit;
+    guSel.onchange = () => { st.gradeUnit = guSel.value; const Lz = zebraL(); Lz.gtUnits = { ...(Lz.gtUnits || {}), grade: st.gradeUnit }; markProjectDirty(); if (st.scan) plot(); };
+    guRow.append(guL, guSel); vSec.append(guRow);
+    // locate: hover the plot → the band's slab lights on the 3D; drag → hold a range
+    const locRow = document.createElement('div'); locRow.className = 'sw-row';
+    const lc = document.createElement('input'); lc.type = 'checkbox'; lc.checked = st.locate; lc.id = 'sw-loc-' + L.id;
+    const ll = document.createElement('label'); ll.setAttribute('for', lc.id); ll.textContent = 'locate on 3D'; ll.title = 'hover the plot to light that band on the 3D; drag a range to hold it, then right there turn it into a selection';
+    lc.onchange = () => { st.locate = lc.checked; if (!st.locate) setBand(null); };
+    locRow.append(lc, ll); vSec.append(locRow);
     const zRow = document.createElement('div'); zRow.className = 'sw-row'; const zc = document.createElement('input'); zc.type = 'checkbox'; zc.checked = st.zebra; zc.id = 'sw-zebra-' + L.id; const zl = document.createElement('label'); zl.setAttribute('for', zc.id); zl.textContent = 'zebra on 3D'; zl.title = 'stripe alternate bands on the 3D view'; zc.onchange = () => { if (zc.checked && !gridAxesOf(zebraL())) { win.sub.textContent = 'zebra needs a regular model as the first series'; zc.checked = false; return; } st.zebra = zc.checked; if (st.zebra && st.scan) applySwathZebra(zebraL(), curDir(), effWidth(), effOffset()); else clearSwathZebra(zebraL()); }; zRow.append(zc, zl); vSec.append(zRow);
     const scRow = document.createElement('div'); scRow.className = 'sw-row'; const scL = document.createElement('span'); scL.textContent = 'scope';
-    const seg = document.createElement('div'); seg.className = 'sw-seg';
-    for (const [v, t] of [['all', 'all'], ['selection', 'selection']]) { const bt = document.createElement('button'); bt.className = 'sw-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; markStale(); buildRail(); }; seg.append(bt); } scRow.append(scL, seg); vSec.append(scRow);
+    const seg = document.createElement('div'); seg.className = 'sw-seg'; seg.title = 'all rows · rows matching each layer\'s current filter · the 3D selection';
+    for (const [v, t] of [['all', 'all'], ['filtered', 'filt'], ['selection', 'sel']]) { const bt = document.createElement('button'); bt.className = 'sw-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; markStale(); buildRail(); }; seg.append(bt); } scRow.append(scL, seg); vSec.append(scRow);
+    // manual plot ranges (display-only — re-plots from the scan)
+    vSec.append(rangesRow(st, () => { if (st.scan) plot(); }, { x: 'x', l: 'grade', r: 'bars' }));
+    // export / copy the plot
+    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `swath-${(zebraL().label || zebraL().name).replace(/\.[^.]+$/, '')}-${(st.scan ? st.scan.dirNames : swathDirNames(st))[st.axis].split(' ')[0].replace(/[^\w-]/g, '')}.png`));
+    vSec.append(exRow);
     rail.append(vSec);
     // ── Footer: Run + stale + progress ──
     const foot = document.createElement('div'); foot.className = 'sw-foot';
@@ -5643,7 +5864,7 @@ async function applyBlockFilter(expr) {
   const epoch = ++_filterEpoch;
   if (!expr.trim()) {
     renderer.setFilter(null, {}, lid); renderer.clearCompact(lid); inp.classList.remove('err'); requestRender();
-    { const Lf = layerById(lid); if (Lf) { Lf._filterMask = null; attrTableFilterChanged(lid); } }
+    { const Lf = layerById(lid); if (Lf) { Lf._filterMask = null; attrTableFilterChanged(lid); refreshLinkedWindows(Lf, 'filtered'); } }
     $('#meta').textContent = (fBlockDoc || fDhDoc).metaLine; return;
   }
   // drillholes: the interval table is in memory — the sweep is a plain loop
@@ -5659,7 +5880,7 @@ async function applyBlockFilter(expr) {
     for (let i = 0; i < dh.header.count; i++) { if (fn2(extendRow(AL, dh.fetchRecord(i), i))) { mask2[i] = 1; hits2++; } }
     renderer.setActiveSet('base', lid);
     renderer.setFilter(mask2, { isolate: true }, lid);
-    { const Lf = layerById(lid); if (Lf) { Lf._filterMask = mask2; attrTableFilterChanged(lid); } }
+    { const Lf = layerById(lid); if (Lf) { Lf._filterMask = mask2; attrTableFilterChanged(lid); refreshLinkedWindows(Lf, 'filtered'); } }
     requestRender();
     $('#meta').textContent = `${dh.metaLine} · filter: ${hits2.toLocaleString()} of ${dh.header.count.toLocaleString()} match`;
     return;
@@ -5871,7 +6092,7 @@ async function applyBlockFilter(expr) {
   }
   // the attribute table's only-matches mode needs the mask EITHER WAY — the
   // compact path renders matches as chunks, but the table reads rows
-  { const Lf = layerById(lid); if (Lf) { Lf._filterMask = mask; attrTableFilterChanged(lid); } }
+  { const Lf = layerById(lid); if (Lf) { Lf._filterMask = mask; attrTableFilterChanged(lid); refreshLinkedWindows(Lf, 'filtered'); } }
   requestRender();
   $('#meta').textContent = `${fBlockDoc.metaLine} · filter: ${hits.toLocaleString()} of ${rec.toLocaleString()} match${cb2 ? ' · compacted' : ''}`;
 }
@@ -7541,14 +7762,10 @@ function drawMeasure() {
 // living on the ground plane and projected through the CAMERA — it foreshortens
 // in oblique views, collapses edge-on, and flips seen from below, so it reads
 // as real orientation, not a decal. Ring + ticks stay screen-fixed. ──
-// the section plane made visible: intersect the plane with the document bbox
-// (12 edges), order the crossings around their centroid in an in-plane basis,
-// project through the camera → a dashed outline in the overlay SVG.
-function drawSectionPlane() {
-  const svg = $('#secSvg');
-  const sec = $('#secPlaneVis').checked ? currentSection() : null;
-  if (!sec || !cam.state.viewProj) { svg.style.display = 'none'; return; }
-  const n = sec.n, d = sec.d0, b = rendererDocBbox();
+// a plane (frame-local normal n, offset d) intersected with a bbox: crossings
+// on the 12 edges, ordered around their centroid in an in-plane basis, projected
+// through the camera → an SVG points string (null when degenerate / behind eye).
+function planeBboxCssPts(n, d, b) {
   const corner = (c) => [b[(c & 1) ? 3 : 0], b[(c & 2) ? 4 : 1], b[(c & 4) ? 5 : 2]];
   const sd = (p) => p[0] * n[0] + p[1] * n[1] + p[2] * n[2] - d;
   const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
@@ -7559,7 +7776,7 @@ function drawSectionPlane() {
     const t = sa / (sa - sb);
     P.push([a[0] + t * (c2[0] - a[0]), a[1] + t * (c2[1] - a[1]), a[2] + t * (c2[2] - a[2])]);
   }
-  if (P.length < 3) { svg.style.display = 'none'; return; }
+  if (P.length < 3) return null;
   const c0 = [0, 1, 2].map((k) => P.reduce((s2, p) => s2 + p[k], 0) / P.length);
   let u = Math.abs(n[2]) < 0.9 ? [-n[1], n[0], 0] : [1, 0, 0];
   const ul = Math.hypot(u[0], u[1], u[2]); u = [u[0] / ul, u[1] / ul, u[2] / ul];
@@ -7573,10 +7790,43 @@ function drawSectionPlane() {
     const cx = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12];
     const cy = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13];
     const cw = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
-    if (cw < 1e-6) { svg.style.display = 'none'; return; }   // a vertex behind the eye — skip this frame
+    if (cw < 1e-6) return null;                              // a vertex behind the eye — skip this frame
     pts.push(`${((cx / cw) * 0.5 + 0.5) * r.width},${(0.5 - (cy / cw) * 0.5) * r.height}`);
   }
+  return pts;
+}
+// the section plane made visible: a dashed outline in the overlay SVG.
+function drawSectionPlane() {
+  const svg = $('#secSvg');
+  const sec = $('#secPlaneVis').checked ? currentSection() : null;
+  if (!sec || !cam.state.viewProj) { svg.style.display = 'none'; return; }
+  const pts = planeBboxCssPts(sec.n, sec.d0, rendererDocBbox());
+  if (!pts) { svg.style.display = 'none'; return; }
   $('#secPoly').setAttribute('points', pts.join(' '));
+  svg.style.display = '';
+}
+// ── the swath band GHOST: hovering the swath plot lights the band's slab on
+// the 3D (both slab faces × the layer bbox — same construction as the section
+// outline). t values are WORLD projections along dir; sticky = a dragged range
+// held for select-in-3D. ──
+let _swathBand = null;   // { a, b, dir:[3], bbox (frame-local), sticky }
+function setSwathBand(band) { _swathBand = band; drawSwathBand(); }
+function drawSwathBand() {
+  const svg = $('#bandSvg');
+  const B = _swathBand;
+  if (!B || !cam.state.viewProj) { if (svg) svg.style.display = 'none'; return; }
+  const o = frame ? frame.origin : [0, 0, 0];
+  const dLoc = (t) => t - (B.dir[0] * o[0] + B.dir[1] * o[1] + B.dir[2] * o[2]);   // world t → frame-local plane offset
+  const ptsA = planeBboxCssPts(B.dir, dLoc(B.a), B.bbox);
+  const ptsB = planeBboxCssPts(B.dir, dLoc(B.b), B.bbox);
+  if (!ptsA && !ptsB) { svg.style.display = 'none'; return; }
+  const col = B.sticky ? '#b48ead' : '#4a78b0';              // violet = held range, info = hover
+  const pA = $('#bandPolyA'), pB = $('#bandPolyB'), lab = $('#bandLabel');
+  pA.setAttribute('points', ptsA ? ptsA.join(' ') : ''); pA.setAttribute('stroke', col);
+  pA.setAttribute('fill', B.sticky ? 'rgba(180,142,173,0.10)' : 'rgba(74,120,176,0.10)');
+  pB.setAttribute('points', ptsB ? ptsB.join(' ') : ''); pB.setAttribute('stroke', col);
+  if (ptsA && ptsA.length) { const [x, y] = ptsA[0].split(','); lab.setAttribute('x', +x + 6); lab.setAttribute('y', +y - 6); lab.textContent = B.label || ''; }
+  else lab.textContent = '';
   svg.style.display = '';
 }
 function drawCompass() {
@@ -8096,6 +8346,7 @@ const COMMANDS = [
   { id: 'copyin', group: 'File', title: 'Copy layer into project…', kw: 'import move file folder store persist', when: (c) => canCopyIntoProject(c.L), run: (c) => copyLayerIntoProject(c.L) },
   { id: 'rename', group: 'Layer', title: 'Rename layer…', kw: 'label title F2', when: (c) => !!c.L, run: (c) => renameActiveLayer(c.L) },
   { id: 'rename-batch', group: 'Layer', title: 'Rename layers…', kw: 'batch prefix suffix regex replace', when: () => _layers.length >= 2, run: () => openBatchRename(_lpSel.size >= 2 ? lpSelIds().map(layerById) : _layers.slice()) },
+  { id: 'sel-column', group: 'Layer', title: 'Selection → column…', kw: 'materialize save flag 0 1 paint selected', when: (c) => !!(c.L && c.L._selCount), run: (c) => selectionToColumn(c.L) },
   { id: 'export-mesh', group: 'Layer', title: 'Export mesh(es)…', kw: 'obj ply msh lfm wavefront leapfrog save', when: () => _layers.some((L) => L.kind === 'mesh' && L.docs.meshDoc), run: (c) => {
     const sel = lpSelIds().map(layerById).filter((x) => x && x.kind === 'mesh' && x.docs.meshDoc);
     openMeshExportDialog(sel.length ? sel : (c.L && c.L.kind === 'mesh' ? [c.L] : _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc)));
@@ -8595,6 +8846,7 @@ function layerMenu(L, x, y) {
     ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
     ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }, { label: 'Swath plot…', action: () => openSwath(L) }] : []),
     ...(false && gridAxesOf(L) && drillholeLayers().length ? [{ label: 'Validate vs drillholes…', action: () => openValidation(L) }] : []),   // temporarily disabled pending window rework
+    ...(L._selCount ? [{ label: `Selection → column… (${L._selCount.toLocaleString()} rows)`, action: () => selectionToColumn(L) }] : []),
     ...(L.lineage ? [{ label: 'Lineage…', action: () => openLineageWindow(L) }] : []),
     ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Store as Parquet…', action: async () => { const res = await openOptimizeDialog([L]); if (res && res.layers.length) await convertLayerToParquet(L, { keepOriginal: res.keepOriginal }); } }] : []),
     ...(L.docs.blockDoc ? [{ label: 'Build index (stats + pushdown)…', action: async () => {
@@ -11218,7 +11470,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, setSwathBand, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

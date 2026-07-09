@@ -425,10 +425,23 @@ const sw2 = await p.evaluate(async () => {
   // switching axis tab also re-bins from the same scan
   document.querySelectorAll('.sw-tab')[1].click();
   const tabRebin = !!w()._swathSpec && document.querySelector('.sw-stale').textContent === '';
+  // plot controls: 3-way scope (all/filt/sel), per-direction bands header, manual
+  // ranges row, export buttons, locate-on-3D toggle, hover band ghost on the 3D
+  const segs = [...w().querySelectorAll('.sw-seg .sw-segbtn')].map((x) => x.textContent).join(',');
+  const ctl = { rr: !!w().querySelector('.rr-row'), exp: !!w().querySelector('.pp-exp'),
+    loc: [...w().querySelectorAll('label')].some((l) => /locate on 3D/.test(l.textContent)),
+    perDir: [...w().querySelectorAll('.sw-h')].some((h) => /^bands · /.test(h.textContent)) };
+  const cv3 = w().querySelector('.sw-main canvas'); const r3 = cv3.getBoundingClientRect();
+  cv3.dispatchEvent(new MouseEvent('mousemove', { clientX: r3.left + r3.width / 2, clientY: r3.top + r3.height / 2, bubbles: true }));
+  await new Promise((r) => setTimeout(r, 100));
+  const ghost = document.querySelector('#bandSvg').style.display !== 'none';
+  cv3.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
   w().querySelector('.fwin-head button:last-child').click();   // close
-  return { noAuto, ran, tabs, rebinLive, tabRebin };
+  return { noAuto, ran, tabs, rebinLive, tabRebin, segs, ctl, ghost };
 });
 chk(`swath v2: no auto-run (${sw2.noAuto}), Run computes (${sw2.ran}), 3 axis tabs (${sw2.tabs}), band+axis re-bin live no re-scan (${sw2.rebinLive}/${sw2.tabRebin})`, sw2.noAuto && sw2.ran && sw2.tabs === 3 && sw2.rebinLive && sw2.tabRebin);
+chk(`swath controls: scope [${sw2.segs}], ranges ${sw2.ctl.rr}, export ${sw2.ctl.exp}, locate ${sw2.ctl.loc}, per-dir bands ${sw2.ctl.perDir}, hover ghost ${sw2.ghost}`,
+  sw2.segs === 'all,filt,sel' && sw2.ctl.rr && sw2.ctl.exp && sw2.ctl.loc && sw2.ctl.perDir && sw2.ghost);
 
 // linked brushing: a selection restricts the compute (high-FE half → min 300, tonnage halved)
 const lk = await p.evaluate(async () => {
