@@ -3831,7 +3831,10 @@ function writeObjText(meshes) {
   const out = ['# micro — mesh export'];
   let off = 0;
   for (const m of meshes) {
-    out.push(`o ${(m.name || 'mesh').replace(/\s+/g, '_')}`);
+    // both o AND g: importers disagree on which token splits meshes (older
+    // CAD/mining readers key on g only and ignore o) — emitting both works everywhere
+    const nm = (m.name || 'mesh').replace(/\s+/g, '_');
+    out.push(`o ${nm}`, `g ${nm}`);
     const V = m.vertices, T = m.triangles;
     for (let i = 0; i < V.length; i += 3) out.push(`v ${V[i]} ${V[i + 1]} ${V[i + 2]}`);
     for (let t = 0; t < T.length; t += 3) out.push(`f ${off + T[t] + 1} ${off + T[t + 1] + 1} ${off + T[t + 2] + 1}`);
