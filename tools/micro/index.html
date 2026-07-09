@@ -6482,37 +6482,72 @@ addEventListener('keydown', (e) => {
 });
 
 // ── menubar (lamina's compact menuAt pattern — commands in menus, knobs in the bar) ──
-let _menuEl = null;
+let _menuEl = null;                                        // the ROOT menu (compat alias for _menuChain[0])
 let _menuDoc = null;                                       // the dismiss listener — owned by closeMenu
+let _menuChain = [];                                       // root → open submenu → … (hover-nested)
 function closeMenu() {
-  if (_menuEl) { _menuEl.remove(); _menuEl = null; }
+  for (const m of _menuChain) m.remove();
+  _menuChain = []; _menuEl = null;
   if (_menuDoc) { removeEventListener('pointerdown', _menuDoc); _menuDoc = null; }
 }
-function menuXY(x, y, items, onCancel) {
-  closeMenu();
-  const m = document.createElement('div');
-  m.className = 'menu';
+// close every menu deeper than `level` in the chain
+function _closeDeeperThan(level) { while (_menuChain.length > level + 1) _menuChain.pop().remove(); }
+function _buildMenu(items) {
+  const m = document.createElement('div'); m.className = 'menu';
   for (const it of items) {
     if (it.sep) { const d = document.createElement('div'); d.className = 'sep'; m.appendChild(d); continue; }
-    const d = document.createElement('div');
-    d.className = 'item';
+    const d = document.createElement('div'); d.className = 'item'; d._item = it;
     const lab = document.createElement('span'); lab.textContent = it.label; d.appendChild(lab);
-    if (it.kbd) { const kb = document.createElement('span'); kb.className = 'kbd'; kb.textContent = it.kbd; d.appendChild(kb); }
-    d.onclick = () => { closeMenu(); it.action && it.action(); };
+    if (it.submenu) { const c = document.createElement('span'); c.className = 'kbd sub'; c.textContent = '▸'; d.appendChild(c); }
+    else if (it.kbd) { const kb = document.createElement('span'); kb.className = 'kbd'; kb.textContent = it.kbd; d.appendChild(kb); }
     m.appendChild(d);
   }
+  return m;
+}
+function _placeMenu(m, x, y) {
   document.body.appendChild(m);
-  m.style.zIndex = _fwinZ + 1;                             // above the top float window (.menu's static z:20 sits BELOW them, so a menu opened from a GT/swath window rendered behind it)
+  m.style.zIndex = _fwinZ + 1 + _menuChain.length;         // each level above the last, all above float windows
   const mw = m.offsetWidth || 180, mh = m.offsetHeight || 40;
-  m.style.left = Math.min(x, innerWidth - mw - 4) + 'px';
-  m.style.top = Math.min(y, innerHeight - mh - 4) + 'px';
-  _menuEl = m;
-  // the dismiss listener is OWNED by closeMenu — selecting an item must not
-  // leak it, or the stale pointerdown kills the NEXT menu before its click
-  // lands (chained menus: merge-into submenus, copy-consent sequences)
+  m.style.left = Math.max(2, Math.min(x, innerWidth - mw - 4)) + 'px';
+  m.style.top = Math.max(2, Math.min(y, innerHeight - mh - 4)) + 'px';
+}
+function _wireMenu(m, level) {
+  m.querySelectorAll('.item').forEach((d) => {
+    const it = d._item;
+    d.addEventListener('mouseenter', () => {
+      if (_menuChain[level + 1] && _menuChain[level + 1]._forItem === d) return;   // its submenu is already open
+      _closeDeeperThan(level);                             // hovering a sibling closes the old submenu
+      if (!it || !it.submenu) return;
+      const items = typeof it.submenu === 'function' ? it.submenu() : it.submenu;
+      if (!items || !items.length) return;
+      const sub = _buildMenu(items); sub._forItem = d;
+      const r = d.getBoundingClientRect();
+      _menuChain.push(sub);
+      _placeMenu(sub, r.right - 3, r.top - 5);             // adjacent to the right, aligned to the item
+      const sw = sub.offsetWidth || 180;
+      if (r.right - 3 + sw > innerWidth - 4) sub.style.left = Math.max(2, r.left - sw + 3) + 'px';   // flip left if it would overflow
+      _wireMenu(sub, level + 1);
+    });
+    d.addEventListener('click', (e) => {
+      if (it && it.submenu && !it.action) { e.stopPropagation(); d.dispatchEvent(new Event('mouseenter')); return; }   // parent row: open, don't dismiss
+      closeMenu(); if (it && it.action) it.action();
+    });
+  });
+}
+// menuXY(x, y, items, onCancel). Items may carry { submenu: [...] | () => [...] }
+// for HOVER-opened nested menus (adjacent, parent stays open); { action } items
+// click-close as before, so both styles coexist.
+function menuXY(x, y, items, onCancel) {
+  closeMenu();
+  const m = _buildMenu(items);
+  _menuChain.push(m); _menuEl = m;
+  _placeMenu(m, x, y);
+  _wireMenu(m, 0);
+  // dismiss on a pointerdown OUTSIDE the whole chain (a sibling menu replacing
+  // this one leaks nothing — closeMenu owns the listener)
   setTimeout(() => {
-    if (_menuEl !== m) return;                             // a newer menu already replaced this one
-    const onDoc = (e) => { if (!m.contains(e.target)) { closeMenu(); if (onCancel) onCancel(); } };
+    if (_menuChain[0] !== m) return;
+    const onDoc = (e) => { if (!_menuChain.some((mm) => mm.contains(e.target))) { closeMenu(); if (onCancel) onCancel(); } };
     _menuDoc = onDoc;
     addEventListener('pointerdown', onDoc);
   }, 0);
@@ -6613,10 +6648,12 @@ $('#mFile').onclick = () => {
     { sep: true },
     { label: (_remember ? '✓ ' : '') + 'Remember recent files', action: () => setRemember(!_remember) },
     { sep: true },
-    { label: 'Sample bench scan — 2M', action: () => openSample(2_000_000) },
-    { label: 'Sample bench scan — 10M', action: () => openSample(10_000_000) },
-    { label: 'Sample bench scan — 50M', action: () => openSample(50_000_000) },
-    { label: 'Sample block model — 2M', action: () => $('#sampleBlocks').onclick() },
+    { label: 'Sample data', submenu: [
+      { label: 'Bench scan — 2M points', action: () => openSample(2_000_000) },
+      { label: 'Bench scan — 10M points', action: () => openSample(10_000_000) },
+      { label: 'Bench scan — 50M points', action: () => openSample(50_000_000) },
+      { label: 'Block model — 2M', action: () => $('#sampleBlocks').onclick() },
+    ] },
     { sep: true },
     { label: 'Save viewport PNG', action: () => $('#btnShot').click() },
   );
@@ -6668,10 +6705,10 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   { label: (_viewMode === 'boxes' ? '✓ ' : '') + 'Blocks as boxes', action: () => { _viewMode = 'boxes'; requestRender(); } },
   { label: (_viewMode === 'points' ? '✓ ' : '') + 'Blocks as points', action: () => { _viewMode = 'points'; requestRender(); } },
-  { label: `Point budget (${$('#budget').selectedOptions[0].textContent}) ▸`, action: () => setTimeout(() => menuXY(innerWidth / 2 - 90, 120, [...$('#budget').options].map((o) => ({
+  { label: `Point budget: ${$('#budget').selectedOptions[0].textContent}`, submenu: () => [...$('#budget').options].map((o) => ({
     label: (o.selected ? '✓ ' : '') + o.textContent,
     action: () => { const b2 = $('#budget'); b2.value = o.value; b2.dispatchEvent(new Event('input')); b2.dispatchEvent(new Event('change')); },
-  }))), 0) },
+  })) },
   { sep: true },
   { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
   { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
@@ -6680,7 +6717,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   ...(_views.length ? _views.map((v) => ({ label: `⤷ ${v.name}`, action: () => applyView(v) })) : []),
   { label: 'Save view…', action: saveViewAs },
-  ...(_views.length ? [{ label: 'Remove view ▸', action: () => setTimeout(() => menuXY(innerWidth / 2 - 90, 100, _views.map((v) => ({ label: v.name, action: () => { _views = _views.filter((x) => x !== v); markProjectDirty(); } }))), 0) }] : []),
+  ...(_views.length ? [{ label: 'Remove view', submenu: () => _views.map((v) => ({ label: v.name, action: () => { _views = _views.filter((x) => x !== v); markProjectDirty(); } })) }] : []),
 ]);
 // Data = the dataset's interpretation + derived state (lamina's grammar:
 // intake wizards, the properties panel's deep tabs, filter state)
@@ -7481,7 +7518,8 @@ const COMMANDS = [
   { id: 'domains', group: 'Select', title: 'Assign domains…', kw: 'coded model solids', when: () => _layers.some((L) => L.kind === 'mesh'), run: () => openDomainsDialog() },
   { id: 'gt', group: 'Analyse', title: 'Grade-tonnage…', kw: 'cutoff tonnes curve reserve', when: (c) => c.L && gridAxesOf(c.L), run: (c) => openGradeTonnage(c.L) },
   { id: 'swath', group: 'Analyse', title: 'Swath plot…', kw: 'drift bias direction trend plunge dip rake', when: (c) => c.L && gridAxesOf(c.L), run: (c) => openSwath(c.L) },
-  { id: 'validate', group: 'Analyse', title: 'Validate vs drillholes…', kw: 'declustered sample bias check reconcile composite', when: (c) => c.L && gridAxesOf(c.L) && drillholeLayers().length, run: (c) => openValidation(c.L) },
+  // validate-vs-drillholes temporarily DISABLED (pending a rework of the window) — when: false hides it everywhere
+  { id: 'validate', group: 'Analyse', title: 'Validate vs drillholes…', kw: 'declustered sample bias check reconcile composite', when: () => false, run: (c) => openValidation(c.L) },
   { id: 'join', group: 'Analyse', title: 'Join / reconcile…', kw: 'merge compare delta reconciliation spatial key', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); _propTab = 'join'; openProps(); } },
   { id: 'table', group: 'Analyse', title: 'Attribute table…', kw: 'rows data grid', when: (c) => c.L && c.L.kind !== 'mesh', run: (c) => openAttrTable(c.L) },
   { id: 'filter', group: 'Analyse', title: 'Filter…', kw: 'query where expression', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); $('#filter').focus(); } },
@@ -7932,7 +7970,7 @@ function layerMenu(L, x, y) {
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
     ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }, { label: 'Swath plot…', action: () => openSwath(L) }] : []),
-    ...(gridAxesOf(L) && drillholeLayers().length ? [{ label: 'Validate vs drillholes…', action: () => openValidation(L) }] : []),
+    ...(false && gridAxesOf(L) && drillholeLayers().length ? [{ label: 'Validate vs drillholes…', action: () => openValidation(L) }] : []),   // temporarily disabled pending window rework
     ...(L.lineage ? [{ label: 'Lineage…', action: () => openLineageWindow(L) }] : []),
     ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Optimize to spatial Parquet', action: () => convertLayerToParquet(L) }] : []),
     { sep: true },
@@ -9068,12 +9106,11 @@ function renderClassList(body, L, info) {
       }
       menuXY(ev.clientX, ev.clientY, [
         { label: 'Rename…', action: async () => { const v = await microPrompt('legend label', e.label); if (v && v.trim()) { const l2 = legS(); const me = l2.entries.find((x) => x.label === e.label); if (me) me.label = v.trim(); touch(); renderProps(); } } },
-        ...(leg.entries.length > 1 ? [{ label: 'Merge into ▸', action: () => setTimeout(() => menuXY(ev.clientX + 16, ev.clientY + 8,
-          leg.entries.filter((x) => x !== e).map((t2) => ({ label: t2.label, action: () => {
-            const l2 = legS();
-            const src = l2.entries.find((x) => x.label === e.label), dst = l2.entries.find((x) => x.label === t2.label);
-            if (src && dst && src !== dst) { dst.values.push(...src.values); l2.entries.splice(l2.entries.indexOf(src), 1); touch(); renderProps(); }
-          } }))), 0) }] : []),
+        ...(leg.entries.length > 1 ? [{ label: 'Merge into', submenu: () => leg.entries.filter((x) => x !== e).map((t2) => ({ label: t2.label, action: () => {
+          const l2 = legS();
+          const src = l2.entries.find((x) => x.label === e.label), dst = l2.entries.find((x) => x.label === t2.label);
+          if (src && dst && src !== dst) { dst.values.push(...src.values); l2.entries.splice(l2.entries.indexOf(src), 1); touch(); renderProps(); }
+        } })) }] : []),
         ...(e.values.length > 1 ? [{ label: 'Ungroup', action: () => {
           const l2 = legS();
           const me = l2.entries.find((x) => x.label === e.label);

@@ -126,6 +126,22 @@ const pal = await p.evaluate(() => {
 });
 chk(`command palette: filters to Swath (${pal.swath}) + Join/reconcile (${pal.rec}) on a block model`, pal.swath && pal.rec);
 
+// menubar hover-submenus: File → "Sample data ▸" opens an adjacent submenu on
+// hover (parent stays), and validate-vs-drillholes is disabled everywhere
+const hv = await p.evaluate(() => {
+  document.querySelector('#mFile').click();
+  const parent = [...document.querySelectorAll('.menu .item')].find((d) => /Sample data/.test(d.textContent));
+  const caret = parent && /▸/.test(parent.textContent);
+  parent.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+  const menus = document.querySelectorAll('.menu');
+  const adjacent = menus.length === 2 && menus[1].getBoundingClientRect().left >= menus[0].getBoundingClientRect().left + menus[0].getBoundingClientRect().width - 20;
+  const hasChild = menus.length === 2 && [...menus[1].querySelectorAll('.item')].some((x) => /Bench scan/.test(x.textContent));
+  document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+  const validateGone = !window._micro.COMMANDS.find((c) => c.id === 'validate').when({ L: window._micro.layers()[0] });
+  return { caret, adjacent, hasChild, validateGone };
+});
+chk(`menubar hover-submenu opens adjacent (${hv.adjacent}/${hv.hasChild}) + validate disabled (${hv.validateGone})`, hv.caret && hv.adjacent && hv.hasChild && hv.validateGone);
+
 // ── 1c. viewport decorations + figure export ──
 await new Promise((r) => setTimeout(r, 300));
 const deco = await p.evaluate(async () => {
