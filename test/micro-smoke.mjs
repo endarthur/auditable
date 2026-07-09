@@ -181,6 +181,19 @@ await p.waitForFunction(() => document.querySelector('#recPanel').classList.cont
 const rec = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('#recPanel .rp-row')].map((r) => [r.querySelector('.k').textContent, r.querySelector('.v').textContent])));
 chk(`pick record 100: XC ${rec.XC}, LITO ${rec.LITO}`, +rec.XC === 612100 && rec.LITO === 'ITABIRITE');
 
+// ── 2b. record-panel field selection (search + all/none + hidden set) ──
+const recN = await p.evaluate(() => document.querySelectorAll('#recPanel .rp-row').length);
+await p.evaluate(() => document.querySelector('#rpFieldsBtn').click());
+await p.waitForFunction(() => document.querySelector('#rpCfg').classList.contains('show'), null, { timeout: 3000 });
+const pickerUI = await p.evaluate(() => !!document.querySelector('#rpCfg .rp-search') && document.querySelectorAll('#rpCfg .rp-links a').length === 2 && document.querySelectorAll('#rpCfg .rp-checks label').length === document.querySelectorAll('#recPanel .rp-row').length);
+chk('field picker: search + all/none + a checkbox per field', pickerUI);
+await p.evaluate(() => { const cb = [...document.querySelectorAll('#rpCfg .rp-checks label')].find((l) => l.textContent.includes('FE')).querySelector('input'); cb.checked = false; cb.dispatchEvent(new Event('change')); });
+const afterHide = await p.evaluate(() => [...document.querySelectorAll('#recPanel .rp-row .k')].map((e) => e.textContent));
+chk(`hiding FE drops it from the record (${recN}→${afterHide.length})`, afterHide.length === recN - 1 && !afterHide.includes('FE') && afterHide.includes('XC'));
+await p.evaluate(() => document.querySelectorAll('#rpCfg .rp-links a')[0].click());   // all → restore
+chk('“all” restores every field', (await p.evaluate(() => document.querySelectorAll('#recPanel .rp-row').length)) === recN);
+await p.evaluate(() => { document.querySelector('#rpFieldsBtn').click(); const L = window._micro.layers()[0]; L._recHide = new Set(); });
+
 // ── 3. CSV filter (predicate over the model) ──
 await p.evaluate(() => { const i = document.querySelector('#filter'); i.value = 'LITO = "HEMATITE" and FE > 45'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); });
 await p.waitForFunction(() => window._micro.layers()[0]._filterMask, null, { timeout: 30000 });

@@ -429,6 +429,18 @@
   #recPanel .rp-row .k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #recPanel .rp-row .v { color: var(--text-hi); text-align: right; white-space: nowrap; }
   #recPanel .rp-note { color: var(--dim); font-size: 11px; padding: 6px 0; }
+  #recPanel .rp-fields { margin-left: auto; background: none; border: none; color: var(--muted); font-family: var(--mono); font-size: 11px; cursor: pointer; padding: 0 4px; white-space: nowrap; }
+  #recPanel .rp-fields:hover { color: var(--text-hi); }
+  #recPanel .rp-fields + .rp-close { margin-left: 0; }   /* fields button already ate the auto gap */
+  #recPanel .rp-cfg { display: none; padding: 6px 12px 8px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; }
+  #recPanel .rp-cfg.show { display: block; }
+  #recPanel .rp-cfg .rp-search { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 5px; margin-bottom: 5px; }
+  #recPanel .rp-cfg .rp-links { margin-bottom: 5px; }
+  #recPanel .rp-cfg .rp-links a { color: var(--accent); cursor: pointer; margin-right: 12px; }
+  #recPanel .rp-cfg .rp-links .tally { color: var(--muted); }
+  #recPanel .rp-cfg .rp-checks { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+  #recPanel .rp-cfg .rp-checks label { display: flex; align-items: center; gap: 6px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+  #recPanel .rp-cfg .rp-checks label:hover { color: var(--text-hi); }
   /* in-app prompt — micro never speaks through the browser's "says" box */
   #pmDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 31; }
   #pmDlg.show { display: flex; }
@@ -543,7 +555,7 @@
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
-  <div id="recPanel"><div class="rp-grab" id="rpGrab"></div><div class="rp-head"><span id="rpTitle">record</span><button class="rp-close" id="rpClose">×</button></div><div class="rp-list" id="rpList"></div></div>
+  <div id="recPanel"><div class="rp-grab" id="rpGrab"></div><div class="rp-head"><span id="rpTitle">record</span><button class="rp-fields" id="rpFieldsBtn" title="choose which fields to show">fields ▾</button><button class="rp-close" id="rpClose">×</button></div><div class="rp-cfg" id="rpCfg"></div><div class="rp-list" id="rpList"></div></div>
   <div id="layersPanel"><div class="lp-head"><span>layers</span><button class="lp-close" id="lpClose">×</button></div><div id="lpRows"></div><div class="lp-grab" id="lpGrab"></div></div>
   <div id="propPanel"><div class="rp-grab" id="ppGrab"></div><div class="rp-head"><span id="ppTitle">properties</span><button class="rp-close" id="ppClose">×</button></div><div class="pp-sub" id="ppSub"></div><div class="pp-tabs" id="ppTabs"></div><div class="pp-body" id="ppBody"></div><div class="pp-foot"><label title="apply style edits as you make them — uncheck to batch changes (each apply restarts accumulation on huge layers)"><input type="checkbox" id="ppAuto" checked>auto</label><span class="spacer"></span><button id="ppApply" disabled>apply</button><button id="ppRevert">revert</button></div></div>
   <div id="dhDlg"><div class="box"><div class="hd"><span>import drillholes</span><button id="dhCancel">×</button></div><div class="bd" id="dhDlgBody"></div><div class="dh-foot"><span id="dhDlgMsg"></span><button id="dhImport">Import</button></div></div></div>
@@ -5574,6 +5586,7 @@ function projectManifest() {
       kind: L.kind === 'mesh' ? 'mesh' : undefined,
       tint: L.kind === 'mesh' ? L.tint : undefined,
       opacity: (L.opacity != null && L.opacity !== 1) ? L.opacity : undefined,   // any kind (mesh/blocks/drillholes)
+      recHide: (L._recHide && L._recHide.size) ? [...L._recHide] : undefined,   // record-panel hidden fields (view pref)
       soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
       hiddenCats: L.catHidden && L.catHidden.size
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
@@ -6015,7 +6028,7 @@ async function openProjectDir(dir) {
         } catch { /* no sidecar — full discovery as usual */ }
       }
       await openBlob(file, basename(ls.source), i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
-      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } } }   // mesh opacity rides overR
+      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } if (ls.recHide && ls.recHide.length) Lx._recHide = new Set(ls.recHide); } }   // mesh opacity rides overR
       const L = activeLayer();
       if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
       if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the columns tab wakes up scanned
@@ -10031,15 +10044,80 @@ function renderLayers() {
 // ── pick → record inspector: a CLICK (not a drag) GPU-picks the element under
 // the cursor (record index), then fetches the full source row — O(1) for LAS
 // (fixed records), an early-exit sweep for CSV — into the right panel. ──
+// record-panel field selection: a per-layer HIDDEN set (default show-all) keyed
+// by column name; the picker (search + all/none + checklist) mirrors the export
+// dialog. State lives on the layer (`L._recHide`) so it persists to the manifest.
+let _recLayer = null, _recRows = [], _recNote = '', _recAllNames = [], _recQ = '';
+function paintRecList() {
+  const hide = _recLayer && _recLayer._recHide;
+  const vis = (hide && hide.size) ? _recRows.filter(([k]) => !hide.has(String(k))) : _recRows;
+  let h = vis.map(([k, v]) => `<div class="rp-row"><span class="k" title="${k}">${k}</span><span class="v">${v}</span></div>`).join('');
+  if (_recNote) h += `<div class="rp-note">${_recNote}</div>`;
+  $('#rpList').innerHTML = h;
+  const fb = $('#rpFieldsBtn');
+  fb.style.display = _recAllNames.length ? '' : 'none';
+  const nh = hide ? hide.size : 0;
+  fb.textContent = nh ? `fields ▾ (${_recAllNames.length - nh}/${_recAllNames.length})` : 'fields ▾';
+}
+function renderRecCfg() {
+  const cfg = $('#rpCfg'), L = _recLayer;
+  if (!L) { cfg.classList.remove('show'); return; }
+  L._recHide = L._recHide || new Set();
+  const names = _recAllNames;
+  cfg.textContent = '';
+  const search = document.createElement('input'); search.className = 'rp-search'; search.type = 'text'; search.placeholder = 'search fields…'; search.value = _recQ;
+  const links = document.createElement('div'); links.className = 'rp-links';
+  const allA = document.createElement('a'), noneA = document.createElement('a'), tally = document.createElement('span'); tally.className = 'tally';
+  links.append(allA, noneA, tally);
+  const checks = document.createElement('div'); checks.className = 'rp-checks';
+  cfg.append(search, links, checks);
+  let shown = [];
+  const rebuild = () => {
+    const q = _recQ.toLowerCase();
+    shown = names.filter((n) => !q || n.toLowerCase().includes(q));
+    allA.textContent = q ? 'all shown' : 'all';
+    noneA.textContent = q ? 'none shown' : 'none';
+    tally.textContent = `${names.length - L._recHide.size}/${names.length} shown${q ? ` · ${shown.length} match` : ''}`;
+    checks.textContent = '';
+    for (const n of shown) {
+      const lab = document.createElement('label'); lab.title = n;
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !L._recHide.has(n);
+      cb.onchange = () => { if (cb.checked) L._recHide.delete(n); else L._recHide.add(n); paintRecList(); rebuild(); };
+      lab.append(cb, document.createTextNode(n));
+      checks.appendChild(lab);
+    }
+    if (!shown.length) { const s = document.createElement('span'); s.style.color = 'var(--muted)'; s.textContent = 'no fields match'; checks.appendChild(s); }
+  };
+  search.oninput = () => { _recQ = search.value; rebuild(); };
+  allA.onclick = () => { for (const n of shown) L._recHide.delete(n); paintRecList(); rebuild(); };
+  noneA.onclick = () => { for (const n of shown) L._recHide.add(n); paintRecList(); rebuild(); };
+  rebuild();
+}
 function showRecPanel(title, rows, note) {
   if (_propOpen) closeProps();
   $('#rpTitle').textContent = title;
-  let h = rows.map(([k, v]) => `<div class="rp-row"><span class="k" title="${k}">${k}</span><span class="v">${v}</span></div>`).join('');
-  if (note) h += `<div class="rp-note">${note}</div>`;
-  $('#rpList').innerHTML = h;
+  _recRows = rows; _recNote = note || ''; _recAllNames = rows.map(([k]) => String(k));
+  paintRecList();
+  if ($('#rpCfg').classList.contains('show')) renderRecCfg();
   $('#recPanel').classList.add('show');
 }
-$('#rpClose').onclick = () => { $('#recPanel').classList.remove('show'); renderer.setPicked(null); requestRender(); };
+$('#rpFieldsBtn').onclick = () => {
+  const cfg = $('#rpCfg');
+  if (cfg.classList.contains('show')) cfg.classList.remove('show');
+  else { cfg.classList.add('show'); renderRecCfg(); }
+};
+$('#rpList').addEventListener('contextmenu', (e) => {
+  const row = e.target.closest('.rp-row'); if (!row || !_recLayer) return;
+  const kEl = row.querySelector('.k'); const name = kEl && (kEl.getAttribute('title') || kEl.textContent);
+  if (!name) return;
+  e.preventDefault();
+  const hasHidden = _recLayer._recHide && _recLayer._recHide.size;
+  menuXY(e.clientX, e.clientY, [
+    { label: `Hide “${name}”`, action: () => { _recLayer._recHide = _recLayer._recHide || new Set(); _recLayer._recHide.add(name); paintRecList(); if ($('#rpCfg').classList.contains('show')) renderRecCfg(); } },
+    ...(hasHidden ? [{ label: 'Show all fields', action: () => { _recLayer._recHide.clear(); paintRecList(); if ($('#rpCfg').classList.contains('show')) renderRecCfg(); } }] : []),
+  ]);
+});
+$('#rpClose').onclick = () => { $('#recPanel').classList.remove('show'); $('#rpCfg').classList.remove('show'); renderer.setPicked(null); requestRender(); };
 
 async function fetchCsvRecord(rec, doc = _blockDoc) {
   const { blob, header } = doc;
@@ -10076,6 +10154,7 @@ async function showRecord(fullId) {
   // docs, not the active aliases: any visible layer is pickable
   const lid = fullId >>> 29, rec = fullId & 0x1FFFFFFF;
   const L = layerById(lid);
+  _recLayer = L;                        // gate the field picker to the picked layer's own hidden set
   attrTableReveal(lid, rec);
   const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
   const tag = _layers.length > 1 && L ? `${L.label || L.name} · ` : '';
