@@ -6871,6 +6871,7 @@ function createEdl(gl) {
 
 // @gcu/condenser — streaming no-preprocess renderer for massive spatial elements.
 // The engine under micro (the scope over lamina's slide). Curated public surface.
+// mesh export (micro): the ARANZ writer rides the already-inlined @gcu/msh
 
 export {
   LasFormatError,
@@ -6949,4 +6950,5 @@ export {
   uploadChunk,
   createRenderer,
   createEdl,
+  writeMSH,
 };

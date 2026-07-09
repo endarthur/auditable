@@ -301,6 +301,20 @@ const flagged = await p.evaluate(() => { const col = window._micro.layers().find
 // × all 20 Y rows × both benches = 440
 chk(`mesh solid flag: ${flagged} blocks inside the box (winding)`, flagged === 440);
 
+// ── 4b. mesh export: OBJ named object + LFM round-trip, exact world coords ──
+const mex = await p.evaluate(async () => {
+  const m = window._micro;
+  HTMLAnchorElement.prototype.click = function () {};   // capture, don't download
+  const mesh = m.layers().find((L) => L.kind === 'mesh');
+  const objText = await (await m.exportMeshes([mesh], 'obj', 'ex.obj')).text();
+  const lfm = await import('../../ext/lfm/lfm.js');
+  const r = await lfm.readLFM(await (await m.exportMeshes([mesh], 'lfm', 'ex.lfm')).arrayBuffer());
+  const nv = mesh.docs.meshDoc.header.vertexCount;
+  return { obj: /^o /m.test(objText) && (objText.match(/^v /gm) || []).length === nv,
+    lfm: r.meshes.length === 1 && r.meshes[0].vCount === nv };
+});
+chk(`mesh export: OBJ named + vert count (${mex.obj}), LFM round-trip (${mex.lfm})`, mex.obj && mex.lfm);
+
 // ── 5. GeoTIFF grid opens as a heightfield layer ──
 await p.evaluate((bytes) => window._micro.openBlob(new Blob([new Uint8Array(bytes)]), 'dem.tif', 'add'), [...geoTiff(30, 20, (r, c) => 700 + r + c)]);
 await layerReady('dem.tif');

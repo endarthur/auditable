@@ -400,6 +400,17 @@
   #brDlg td.same { color: var(--dim); }
   #brDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
   #brDlg .dh-foot #brDlgMsg { color: var(--muted); font-family: var(--mono); font-size: 12px; margin-right: auto; }
+  #meDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
+  #meDlg.show { display: flex; }
+  #meDlg .box { width: min(480px, 94vw); background: #1a1a1a; border: 1px solid var(--bd2); }
+  #meDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #meDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #meDlg .bd { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  #meDlg .me-list { color: var(--muted); max-height: 70px; overflow-y: auto; }
+  #meDlg select, #meDlg input[type=text] { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; }
+  #meDlg .me-note { color: var(--dim); font-size: 11px; line-height: 1.5; min-height: 28px; }
+  #meDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
+  #meDlg .dh-foot #meDlgMsg { color: var(--muted); font-family: var(--mono); font-size: 12px; margin-right: auto; }
   #brDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
   #brDlg .dh-foot #brNot { border-color: var(--border); }
 
@@ -656,6 +667,7 @@
   <div id="svDlg"><div class="box"><div class="hd"><span>save project</span><button id="svCancel">×</button></div><div class="bd" id="svDlgBody"></div><div class="dh-foot"><button id="svLink">Link without copying</button><button id="svCopy">Copy into project</button></div></div></div>
   <div id="opDlg"><div class="box"><div class="hd"><span>store block models as Parquet</span><button id="opCancel">×</button></div><div class="bd" id="opDlgBody"></div><div class="dh-foot"><span id="opDlgMsg"></span><button id="opNot">Not now</button><button id="opGo">Convert</button></div></div></div>
   <div id="brDlg"><div class="box"><div class="hd"><span>rename layers</span><button id="brCancel">×</button></div><div class="bd" id="brDlgBody"></div><div class="dh-foot"><span id="brDlgMsg"></span><button id="brNot">Cancel</button><button id="brGo">Apply</button></div></div></div>
+  <div id="meDlg"><div class="box"><div class="hd"><span>export mesh</span><button id="meCancel">×</button></div><div class="bd" id="meDlgBody"></div><div class="dh-foot"><span id="meDlgMsg"></span><button id="meNot">Cancel</button><button id="meGo">Export</button></div></div></div>
   <div id="plDlg"><div class="box"><div class="hd"><span>opening project</span><button id="plClose">×</button></div><div class="bd" id="plDlgBody"></div></div></div>
   <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
   <div id="adDlg"><div class="box"><div class="hd"><span>assign domains</span><button id="adCancel">×</button></div><div class="bd" id="adDlgBody"></div><div id="adProg" style="display:none"><div id="adProgFill"></div></div><div class="dh-foot"><span id="adDlgMsg"></span><button id="adGo">Assign</button></div></div></div>
@@ -675,7 +687,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH } from '../../ext/condenser/src/main.js';
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { compileBool, compileValue, validate, complete, parse, deps } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
@@ -3808,6 +3820,127 @@ async function exportGridAsc(L) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   $('#meta').textContent = `exported ${a.download} (${g.nx}×${g.ny})`;
+}
+// ── MESH EXPORT — OBJ / PLY / MSH / LFM ──────────────────────────────────
+// Geometry is re-read from each layer's source blob (reReadMesh → world-coord
+// Float64 vertices), so what leaves is exactly what came in — no chunk
+// quantization, no frame rebase. OBJ + LFM are multi-mesh (one named object
+// per layer; LFM carries each layer's tint as the mesh colour); PLY + MSH are
+// single-mesh formats, so multiple layers merge into one.
+function writeObjText(meshes) {
+  const out = ['# micro — mesh export'];
+  let off = 0;
+  for (const m of meshes) {
+    out.push(`o ${(m.name || 'mesh').replace(/\s+/g, '_')}`);
+    const V = m.vertices, T = m.triangles;
+    for (let i = 0; i < V.length; i += 3) out.push(`v ${V[i]} ${V[i + 1]} ${V[i + 2]}`);
+    for (let t = 0; t < T.length; t += 3) out.push(`f ${off + T[t] + 1} ${off + T[t + 1] + 1} ${off + T[t + 2] + 1}`);
+    off += V.length / 3;
+  }
+  out.push('');
+  return out.join('\n');
+}
+// binary little-endian, DOUBLE coordinates — float32 loses ~0.5 m at UTM northings
+function writePlyMeshBytes(vertices, triangles) {
+  const nv = vertices.length / 3, nf = triangles.length / 3;
+  const hb = new TextEncoder().encode(
+    `ply\nformat binary_little_endian 1.0\ncomment micro mesh export\nelement vertex ${nv}\n` +
+    `property double x\nproperty double y\nproperty double z\n` +
+    `element face ${nf}\nproperty list uchar uint vertex_indices\nend_header\n`);
+  const bytes = new Uint8Array(hb.length + nv * 24 + nf * 13);
+  bytes.set(hb);
+  const dv = new DataView(bytes.buffer);
+  let at = hb.length;
+  for (let i = 0; i < vertices.length; i++) { dv.setFloat64(at, vertices[i], true); at += 8; }
+  for (let t = 0; t < triangles.length; t += 3) {
+    dv.setUint8(at, 3);
+    dv.setUint32(at + 1, triangles[t], true); dv.setUint32(at + 5, triangles[t + 1], true); dv.setUint32(at + 9, triangles[t + 2], true);
+    at += 13;
+  }
+  return bytes;
+}
+function mergeMeshGeometry(meshes) {
+  let nv = 0, nt = 0;
+  for (const m of meshes) { nv += m.vertices.length; nt += m.triangles.length; }
+  const V = new Float64Array(nv), T = new Uint32Array(nt);
+  let vo = 0, to = 0, base = 0;
+  for (const m of meshes) {
+    V.set(m.vertices, vo);
+    for (let i = 0; i < m.triangles.length; i++) T[to + i] = m.triangles[i] + base;
+    base += m.vertices.length / 3; vo += m.vertices.length; to += m.triangles.length;
+  }
+  return { vertices: V, triangles: T };
+}
+async function exportMeshes(Ls, fmt, fname) {
+  const meshes = [];
+  for (const L of Ls) {
+    $('#meta').textContent = `reading ${L.label || L.name}…`;
+    const m = await reReadMesh(L.docs.meshDoc);
+    meshes.push({ name: (L.label || L.name).replace(/\.[^.]+$/, ''), vertices: m.vertices, triangles: Uint32Array.from(m.triangles), tint: L.tint });
+  }
+  let blob;
+  if (fmt === 'obj') blob = new Blob([writeObjText(meshes)], { type: 'text/plain' });
+  else if (fmt === 'lfm') {
+    const hex2rgb = (h) => { const v = parseInt((h || '#9ea3a8').slice(1), 16); return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 }; };
+    blob = new Blob([await writeLFM({
+      collectionName: fname.replace(/\.[^.]+$/, ''),
+      meshes: meshes.map((m) => ({ name: m.name, colour: hex2rgb(m.tint), vertices: m.vertices, triangles: Int32Array.from(m.triangles) })),
+    })]);
+  } else {
+    const g = meshes.length > 1 ? mergeMeshGeometry(meshes) : meshes[0];
+    blob = fmt === 'ply'
+      ? new Blob([writePlyMeshBytes(g.vertices, g.triangles)])
+      : new Blob([await writeMSH({ arrays: {
+          Location: { type: 'Double', components: 3, count: g.vertices.length / 3, data: g.vertices },
+          Tri: { type: 'Integer', components: 3, count: g.triangles.length / 3, data: Int32Array.from(g.triangles) },
+        } })]);
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = fname;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  const tris = meshes.reduce((s, m) => s + m.triangles.length / 3, 0);
+  $('#meta').textContent = `exported ${fname} — ${Ls.length > 1 ? `${Ls.length} meshes, ` : ''}${tris.toLocaleString()} triangles (${fmtSize(blob.size)})`;
+  return blob;
+}
+const MESH_EXPORT_FMTS = [
+  { id: 'obj', label: 'OBJ — Wavefront (text)', multi: 'named objects' },
+  { id: 'lfm', label: 'LFM — Leapfrog model (colours)', multi: 'named meshes + colours' },
+  { id: 'ply', label: 'PLY — binary, double precision', multi: 'merged into one mesh' },
+  { id: 'msh', label: 'MSH — ARANZ / Leapfrog surface', multi: 'merged into one mesh' },
+];
+function openMeshExportDialog(Ls) {
+  Ls = (Ls || []).filter((L) => L && L.kind === 'mesh' && L.docs.meshDoc);
+  if (!Ls.length) return;
+  const body = $('#meDlgBody'); body.textContent = '';
+  const list = document.createElement('div'); list.className = 'me-list';
+  list.textContent = Ls.map((L) => L.label || L.name).join(' · ');
+  const sel = document.createElement('select');
+  for (const f of MESH_EXPORT_FMTS) { const o = document.createElement('option'); o.value = f.id; o.textContent = f.label; sel.append(o); }
+  const nameIn = document.createElement('input'); nameIn.type = 'text';
+  const baseName = (Ls.length === 1 ? (Ls[0].label || Ls[0].name).replace(/\.[^.]+$/, '') : 'meshes');
+  const note = document.createElement('div'); note.className = 'me-note';
+  const sync = () => {
+    const f = MESH_EXPORT_FMTS.find((x) => x.id === sel.value);
+    nameIn.value = (nameIn.value.replace(/\.[^.]+$/, '') || baseName) + '.' + f.id;
+    note.textContent = (Ls.length > 1 ? `${Ls.length} layers → ${f.multi}. ` : '') +
+      (Ls.some((L) => L.docs.meshDoc.header.soup) ? 'streamed layers are fully re-read from their source to export. ' : '') +
+      'world coordinates, full precision — exactly what the source file carries.';
+  };
+  nameIn.value = baseName + '.obj';
+  sel.oninput = sync; sync();
+  body.append(list, sel, nameIn, note);
+  const close = () => { $('#meDlg').classList.remove('show'); $('#meGo').onclick = $('#meNot').onclick = $('#meCancel').onclick = null; };
+  $('#meGo').onclick = async () => {
+    const fmt = sel.value, fname = nameIn.value.trim() || baseName + '.' + fmt;
+    close();
+    try { await exportMeshes(Ls, fmt, fname); }
+    catch (e) { $('#meta').textContent = `mesh export failed: ${e.message}`; }
+  };
+  $('#meNot').onclick = close;
+  $('#meCancel').onclick = close;
+  $('#meDlg').classList.add('show');
 }
 // write the decimated display grid + a size-key as sidecars next to a
 // project-stored tiff, so reopening skips re-decimating the source. Returns a
@@ -7960,6 +8093,10 @@ const COMMANDS = [
   { id: 'copyin', group: 'File', title: 'Copy layer into project…', kw: 'import move file folder store persist', when: (c) => canCopyIntoProject(c.L), run: (c) => copyLayerIntoProject(c.L) },
   { id: 'rename', group: 'Layer', title: 'Rename layer…', kw: 'label title F2', when: (c) => !!c.L, run: (c) => renameActiveLayer(c.L) },
   { id: 'rename-batch', group: 'Layer', title: 'Rename layers…', kw: 'batch prefix suffix regex replace', when: () => _layers.length >= 2, run: () => openBatchRename(_lpSel.size >= 2 ? lpSelIds().map(layerById) : _layers.slice()) },
+  { id: 'export-mesh', group: 'Layer', title: 'Export mesh(es)…', kw: 'obj ply msh lfm wavefront leapfrog save', when: () => _layers.some((L) => L.kind === 'mesh' && L.docs.meshDoc), run: (c) => {
+    const sel = lpSelIds().map(layerById).filter((x) => x && x.kind === 'mesh' && x.docs.meshDoc);
+    openMeshExportDialog(sel.length ? sel : (c.L && c.L.kind === 'mesh' ? [c.L] : _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc)));
+  } },
   { id: 'decopanel', group: 'View', title: 'Decorations & figure…', kw: 'legend scale bar north title background export panel', run: () => openDecoPanel() },
   { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
   { id: 'deconorth', group: 'View', title: 'Toggle north arrow', kw: 'decoration compass', run: () => setDeco('north', !_deco.north) },
@@ -8394,6 +8531,10 @@ function layerMenu(L, x, y) {
         createLayerGroup(v.trim(), ids, { collapsed: false });
       } },
       { label: `Rename ${selN} selected…`, action: () => openBatchRename(lpSelIds().map(layerById)) },
+      ...(() => {
+        const meshSel = lpSelIds().map(layerById).filter((x) => x && x.kind === 'mesh' && x.docs.meshDoc);
+        return meshSel.length >= 2 ? [{ label: `Export ${meshSel.length} meshes…`, action: () => openMeshExportDialog(meshSel) }] : [];
+      })(),
       { sep: true },
     ] : []),
     { label: 'Zoom to layer', action: () => fitLayer(L) },
@@ -8432,6 +8573,7 @@ function layerMenu(L, x, y) {
       const h = L.docs.meshDoc && L.docs.meshDoc.header;
       if (h && !h.soup) items.push({ label: 'Select by this solid…', action: () => openSolidDialog(L) });
       if (h && !h.soup) items.push({ label: 'Rasterize to grid…', action: () => openMeshGridDialog(L) });
+      if (h) items.push({ label: 'Export mesh…', action: () => openMeshExportDialog([L]) });
       if (h) {
         const now = renderer.layerVramBytes(L.id);
         if (!h.soup) {
@@ -10741,6 +10883,10 @@ function groupMenu(nd, x, y) {
     { label: 'Move down', action: () => treeMoveStep(nd, 1) },
     { label: 'Rename group…', action: async () => { const v = await microPrompt('group name', nd.name); if (v && v.trim()) { nd.name = v.trim(); renderLayers(); markProjectDirty(); } } },
     ...(groupLayerIds(nd).length >= 2 ? [{ label: 'Rename layers…', action: () => openBatchRename(groupLayerIds(nd).map(layerById)) }] : []),
+    ...(() => {
+      const gm = groupLayerIds(nd).map(layerById).filter((x) => x && x.kind === 'mesh' && x.docs.meshDoc);
+      return gm.length ? [{ label: gm.length > 1 ? `Export ${gm.length} meshes…` : 'Export mesh…', action: () => openMeshExportDialog(gm) }] : [];
+    })(),
     { label: 'Zoom to group', action: () => {
       let u = null;
       for (const id of groupLayerIds(nd)) {
@@ -11069,7 +11215,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
