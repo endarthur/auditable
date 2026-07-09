@@ -4098,11 +4098,11 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   $('#empty').style.display = 'none';
   try {
     if (isMesh && /\.(msh|obj|lfm|ply)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
-    else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first, forcePoints }); }
+    else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first, forcePoints, cached: over.cached }); }
     // grid stays extension-driven (no table→grid provider yet); asKind never forces it.
     else if (over.asKind == null && /\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache }); }
     else if (over.asKind == null && /\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first }); }
-    else if (/\.(parquet|pq)$/i.test(name)) { await openParquetBlocks(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping }); }
+    else if (/\.(parquet|pq)$/i.test(name)) { await openParquetBlocks(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping, cached: over.cached }); }
     // .xyz/.pts default to POINTS (2-decimal coords form a fake lattice); a
     // block/points asKind override rides forcePoints for every delimited file.
     else if (/\.(csv|txt|dat|asc|xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping, discovered: over.discovered }); }
@@ -5202,8 +5202,16 @@ async function openParquetBlocks(blob, name, opts = {}) {
   // ── discovery: ONE streamed pass over the coord (+ cat) columns — a row
   // group resident at a time, nothing retained. bbox could come from the
   // footer stats; the distinct axes (grid pitch) need the values. ──
+  let grid = null, categories = null;
+  if (opts.cached && opts.cached.bbox && !opts.forcePoints) {
+    // sidecar-cached discovery (freshness = the caller's contract): the grid +
+    // categories were inferred once — skip the coord/cat streaming pass entirely
+    grid = opts.cached.grid || null;
+    categories = opts.cached.categories || null;
+    var min = [...opts.cached.bbox.min], max = [...opts.cached.bbox.max];   // hoisted (used by header below)
+  } else {
   const CAP = 100000, r10 = (v) => Number(v.toPrecision(10));
-  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  var min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   const ax = [new Set(), new Set(), new Set()];
   const catSet = catN ? new Set() : null;
   const discCols = catN ? [xN, yN, zN, catN] : [xN, yN, zN];
@@ -5222,8 +5230,9 @@ async function openParquetBlocks(blob, name, opts = {}) {
     await new Promise((res) => setTimeout(res));
   }
   const axes = ax.map((set) => (set.size < CAP ? inferAxis([...set].sort((a, b) => a - b)) : null));
-  const grid = !opts.forcePoints && axes.every(Boolean) ? { x: axes[0], y: axes[1], z: axes[2] } : null;
-  const categories = catSet && catSet.size > 0 && catSet.size <= 255 ? [...catSet].sort() : null;
+  grid = !opts.forcePoints && axes.every(Boolean) ? { x: axes[0], y: axes[1], z: axes[2] } : null;
+  categories = catSet && catSet.size > 0 && catSet.size <= 255 ? [...catSet].sort() : null;
+  }
   const catCode = categories ? new Map(categories.map((v, i) => [v, i])) : null;
   const numericColumns = names.map((n, i) => ({ name: n, i })).filter(({ i }) => i !== mapping.x && i !== mapping.y && i !== mapping.z && _pqNum(typeOf[names[i]]));
   const attributes = names.filter((_, i) => i !== mapping.x && i !== mapping.y && i !== mapping.z);
@@ -5329,7 +5338,7 @@ async function openDmBlob(blob, name, opts = {}) {
   // chunk (a 13 GB file reads silently for a minute otherwise) — show progress
   const gb = blob.size / 1073741824;
   const onProgress = (p) => { $('#meta').textContent = `${name} — discovery sweep ${Math.round(100 * p.done / (p.total || 1))}% of ${p.total.toLocaleString()} records${gb > 0.5 ? ` (${gb.toFixed(1)} GB)` : ''}…`; };
-  const { header, streamChunks } = await openDmModel(blob, { ...(mapping ? { mapping } : {}), forcePoints: opts.forcePoints, onProgress });
+  const { header, streamChunks } = await openDmModel(blob, { ...(mapping ? { mapping } : {}), forcePoints: opts.forcePoints, onProgress, cached: opts.cached || null });
   _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints };
   registerDocs(lid, header.grid ? 'blocks' : 'points');
   fitFromHeader(header, opts.first !== false && opts.chan == null);
@@ -5555,8 +5564,26 @@ async function applyBlockFilter(expr) {
       for (const d of deps(ast)) { const i = lower.indexOf(String(d).toLowerCase()); if (i >= 0) need.add(i); }
       colIdxs = [...need];
     }
+    // BAND PUSHDOWN: sidecar per-64k min/max per column → skip whole page-runs
+    // the predicate provably can't match (parquet's row-group skip on .dm).
+    // Sound/conservative — pqGroupCanMatch keeps anything it can't decide.
+    let bandsSkipped = 0, bandsTotal = 0;
+    const shouldRead = (AL && AL._bands && ast && colIdxs) ? (recStart, count) => {
+      bandsTotal++;
+      const B = AL._bands, b0 = (recStart / B.size) | 0, b1 = ((recStart + count - 1) / B.size) | 0;
+      const ranges = {};
+      for (const nm in B.cols) {
+        const arr = B.cols[nm];
+        let mn = Infinity, mx = -Infinity;
+        for (let b = b0; b <= b1; b++) { const v0 = arr[b * 2], v1 = arr[b * 2 + 1]; if (v0 == null) continue; if (v0 < mn) mn = v0; if (v1 > mx) mx = v1; }
+        if (mn !== Infinity) ranges[nm.toLowerCase()] = { min: mn, max: mx };   // pqGroupCanMatch's key convention
+      }
+      const keep = pqGroupCanMatch(ast, ranges);
+      if (!keep) bandsSkipped++;
+      return keep;
+    } : null;
     if (colIdxs) {
-      for await (const { recStart, count, cols } of columnBatches(colIdxs)) {
+      for await (const { recStart, count, cols } of columnBatches(colIdxs, { shouldRead })) {
         for (let k = 0; k < count; k++) {
           const r = recStart + k;
           const vals = new Array(header.columns.length);
@@ -5571,6 +5598,8 @@ async function applyBlockFilter(expr) {
         await new Promise((r2) => setTimeout(r2));
         if (epoch !== _filterEpoch) return;
       }
+      window.__dmBandsSkipped = bandsSkipped;              // smoke hook
+      if (bandsSkipped) $('#meta').textContent = `filter: ${bandsSkipped} of ${bandsTotal} page-runs skipped by the sidecar index…`;
     } else {
       for await (const { recStart, rows } of recordBatches()) {   // full decode (calc/paint reach any column)
         for (let k = 0; k < rows.length; k++) {
@@ -6173,22 +6202,35 @@ async function saveProject() {
     // re-decimating the source (eval still windows the source at full res)
     for (const L of _layers) { try { await writeGridDisplayCache(L, dir); } catch { /* cache, never a failure */ } }
     // derived-cache sidecars (spec section 12): the discovery header + column
-    // stats travel WITH the data — reopening skips the grid-discovery sweep
-    // and the columns tab wakes up already scanned. Best-effort, size-keyed.
+    // stats + BAND min/max travel WITH the data — reopening skips the discovery
+    // sweep, the styling/statistics UIs wake up already scanned, and .dm filters
+    // get parquet-style pushdown (bands prove page-runs can't match). Built here
+    // when missing — the one full read per file, ever (size-keyed). CSV + .dm +
+    // parquet all get one; parquet skips bands (its footer already has them).
     for (const L of _layers) {
       const doc = L.docs.blockDoc;
-      if (!doc || doc.header.dm || L.storage !== 'project') continue;
+      if (!doc || L.storage !== 'project') continue;
       try {
         const h = doc.header;
+        const isPq = !!doc.parquet, isDmL = !!h.dm;
+        if (!L._colStats || (!L._bands && !isPq)) {
+          $('#meta').textContent = `indexing ${L.label || L.name}…`;
+          await scanColumns(L, (a, b) => { $('#meta').textContent = `indexing ${L.label || L.name} — ${b ? Math.round(100 * a / b) : 0}%…`; }, { bands: !isPq });
+        }
         const meta = {
-          v: 1, size: doc.blob.size,
-          header: {
-            kind: h.kind, count: h.count, bbox: h.bbox, grid: h.grid,
-            columns: h.columns, mapping: h.mapping, delim: h.delim, hasHeaderRow: h.hasHeaderRow,
-            numericColumns: h.numericColumns, categories: h.categories, attributes: h.attributes,
-            index: h.index ? { k: h.index.k, offsets: [...h.index.offsets] } : undefined,
-          },
+          v: 2, size: doc.blob.size,
+          header: isDmL
+            ? { kind: 'dm', count: h.count, bbox: h.bbox, grid: h.grid, subBlocked: h.subBlocked || false, dimPalette: h.dimPalette || null, categories: h.categories || null }
+            : isPq
+              ? { kind: 'parquet', count: h.count, bbox: h.bbox, grid: h.grid, categories: h.categories || null }
+              : {
+                kind: h.kind, count: h.count, bbox: h.bbox, grid: h.grid,
+                columns: h.columns, mapping: h.mapping, delim: h.delim, hasHeaderRow: h.hasHeaderRow,
+                numericColumns: h.numericColumns, categories: h.categories, attributes: h.attributes,
+                index: h.index ? { k: h.index.k, offsets: [...h.index.offsets] } : undefined,
+              },
           colStats: L._colStats || undefined,
+          bands: L._bands || undefined,
         };
         const mh = await resolveFileHandle(dir, (L._relpath || relPathFor(L, L.name)) + '.meta.json', { create: true });
         const mw = await mh.createWritable();
@@ -6372,19 +6414,26 @@ async function openProjectDir(dir) {
         } catch { /* no cache — decimate as usual */ }
       }
       // the sidecar cache: matching size → skip the discovery sweep entirely
+      // (CSV rebuilds its whole header incl. the line index; .dm/parquet take
+      // the cached grid/bbox/palette/categories via opts.cached)
       let sidecar = null;
-      if (ls.kind !== 'mesh' && /\.(csv|txt|dat|asc|xyz|pts)$/i.test(ls.source)) {
+      if (ls.kind !== 'mesh' && /\.(csv|txt|dat|asc|xyz|pts|dm|parquet|pq)$/i.test(ls.source)) {
         try {
           const mh = await resolveFileHandle(dir, ls.source + '.meta.json');
           const mj = JSON.parse(await (await mh.getFile()).text());
-          if (mj && mj.v === 1 && mj.size === file.size) { sidecar = mj; overR.discovered = mj.header; }
+          if (mj && (mj.v === 1 || mj.v === 2) && mj.size === file.size) {
+            sidecar = mj;
+            if (mj.header && (mj.header.kind === 'dm' || mj.header.kind === 'parquet')) overR.cached = mj.header;
+            else overR.discovered = mj.header;
+          }
         } catch { /* no sidecar — full discovery as usual */ }
       }
       await openBlob(file, basename(ls.source), i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
       { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } if (ls.recHide && ls.recHide.length) Lx._recHide = new Set(ls.recHide); if (ls.legend) Lx.legend = true; if (ls.legendTitle) Lx.legendTitle = ls.legendTitle; if (ls.edges != null) { Lx.edges = ls.edges; renderer.setLayerEdges(Lx.id, ls.edges); } if (ls.gtUnits) Lx.gtUnits = ls.gtUnits; } }   // mesh opacity rides overR
       const L = activeLayer();
       if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
-      if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the columns tab wakes up scanned
+      if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the styling/statistics UIs wake up scanned
+      if (sidecar && sidecar.bands) L._bands = sidecar.bands;            // .dm/CSV filter pushdown substrate
       // color channel first (may re-stream), then filter (sweeps), then the rest
       if (ls.colorSel && ls.colorSel !== $('#colorBy').value && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) {
         L.colorSel = ls.colorSel;
@@ -8189,6 +8238,11 @@ function layerMenu(L, x, y) {
     ...(false && gridAxesOf(L) && drillholeLayers().length ? [{ label: 'Validate vs drillholes…', action: () => openValidation(L) }] : []),   // temporarily disabled pending window rework
     ...(L.lineage ? [{ label: 'Lineage…', action: () => openLineageWindow(L) }] : []),
     ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Optimize to spatial Parquet', action: () => convertLayerToParquet(L) }] : []),
+    ...(L.docs.blockDoc ? [{ label: 'Build index (stats + pushdown)…', action: async () => {
+      await scanColumns(L, (a, b) => { $('#meta').textContent = `indexing ${L.label || L.name} — ${b ? Math.round(100 * a / b) : 0}%…`; }, { bands: !L.docs.blockDoc.parquet });
+      $('#meta').textContent = `indexed ${L.label || L.name} — stats + band index ready (written as a sidecar on the next project save)`;
+      markProjectDirty();
+    } }] : []),
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
     { label: (renderer.layerSectioned(L.id) ? '✓ ' : '') + 'Cut by sections', action: () => { renderer.setLayerSectioned(L.id, !renderer.layerSectioned(L.id)); markProjectDirty(); requestRender(); } },
@@ -9509,7 +9563,10 @@ async function* layerRows(L, onProgress) {
     }
   }
 }
-async function scanColumns(L, onTick) {
+// opts.bands: also collect per-64k-record-band min/max for every BASE numeric
+// column into L._bands — the .dm/CSV pushdown substrate (parquet's footer
+// stats, retrofitted). Same single pass; band numbering = RAW record order.
+async function scanColumns(L, onTick, { bands = false } = {}) {
   const h = layerTableHeader(L); if (!h) return null;
   const calc = L.calcCols || [];
   const paint = L.paintCols || [];
@@ -9521,6 +9578,9 @@ async function scanColumns(L, onTick) {
   const st = cols.map((name, i) => (isNumAt(i)
     ? { num: true, w: W.create(), td: TD.create(), nulls: 0 }
     : { num: false, top: TK.create(), card: CD.create(), nulls: 0 }));
+  const BAND = 65536;
+  const bandCols = bands ? h.columns.map((nm, i) => (colIsNumeric(L, h, i) ? i : -1)).filter((i) => i >= 0) : [];
+  const bandData = bands ? new Map(bandCols.map((i) => [i, []])) : null;   // colIdx → [min0,max0, min1,max1, …]
   let rows = 0;
   // renderer record numbering for painted lookups (delimited skips bad-coord rows)
   const mSc = h.mapping || {};
@@ -9533,6 +9593,16 @@ async function scanColumns(L, onTick) {
       else if (Number.isFinite(+f0[mSc.x]) && Number.isFinite(+f0[mSc.y]) && Number.isFinite(+f0[mSc.z])) rAt = recSc++;
       const f = extendRow(L, f0, rAt);
       rows++;
+      if (bands && rAt != null) {                          // band index rides the layer's record numbering (raw for .dm, accepted for CSV)
+        const at = ((rAt / BAND) | 0) * 2;
+        for (const i of bandCols) {
+          const x = typeof f0[i] === 'number' ? f0[i] : parseFloat(f0[i]);
+          if (!Number.isFinite(x)) continue;
+          const arr = bandData.get(i);
+          if (arr[at] === undefined) { arr[at] = x; arr[at + 1] = x; }
+          else { if (x < arr[at]) arr[at] = x; if (x > arr[at + 1]) arr[at + 1] = x; }
+        }
+      }
       for (let i = 0; i < cols.length; i++) {
         const c = st[i], v = f[i];
         if (c.num) {
@@ -9547,6 +9617,11 @@ async function scanColumns(L, onTick) {
       }
     }
     await new Promise((r) => setTimeout(r));               // the panel stays live
+  }
+  if (bands) {
+    const colsOut = {};
+    for (const i of bandCols) colsOut[h.columns[i]] = bandData.get(i).map((v) => (v === undefined ? null : v));
+    L._bands = { size: BAND, cols: colsOut };
   }
   L._colStats = {};
   for (let i = 0; i < cols.length; i++) {

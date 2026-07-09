@@ -17,7 +17,10 @@ import { detectDM, parseHeader, recordRange, decodeRecord, readField } from '../
 
 const DEF_NAMES = new Set(['IJK', 'XC', 'YC', 'ZC', 'XINC', 'YINC', 'ZINC', 'XMORIG', 'YMORIG', 'ZMORIG', 'NX', 'NY', 'NZ']);
 
-export async function openDmModel(blob, { mapping = null, forcePoints = false, onProgress = null } = {}) {
+// `cached` (a sidecar's discovery results: { grid, bbox, subBlocked, dimPalette,
+// categories }) skips the full-file discovery sweep — a 13 GB sub-blocked model
+// reopens straight to streaming. Callers own freshness (name+size match).
+export async function openDmModel(blob, { mapping = null, forcePoints = false, onProgress = null, cached = null } = {}) {
   const head = new Uint8Array(await blob.slice(0, Math.min(8192, blob.size)).arrayBuffer());
   const fmt = detectDM(head);
   if (!fmt) throw new Error('dm: not a recognizable .dm file');
@@ -60,13 +63,21 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false, o
   // (''=missing); constants come free from the header. Yields { recStart, count,
   // cols } where cols[idx] is the array for column `idx`. Same RAW numbering as
   // recordBatches (recStart + k over ALL records, skips resolved by the caller).
-  async function* columnBatches(colIdxs, { signal } = {}) {
+  // opts.shouldRead(recStart, count): PUSHDOWN hook — return false and the whole
+  // page-run is skipped BEFORE any I/O (sidecar band stats prove no record in
+  // the run can match a filter — parquet's row-group skip, retrofitted onto .dm)
+  async function* columnBatches(colIdxs, { signal, shouldRead = null } = {}) {
     const ids = [...new Set(colIdxs)];
     const cols = ids.map((i) => h.columns[i]), alpha = cols.map((c) => c.type === 'A');
     const pagesPer = Math.max(1, Math.floor((4 << 20) / h.pageSize));
     for (let page = 2; page <= h.lastPage; page += pagesPer) {
       if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       const pEnd = Math.min(page + pagesPer - 1, h.lastPage);
+      if (shouldRead) {
+        let totalR = 0;
+        for (let pg = page; pg <= pEnd; pg++) totalR += pg === h.lastPage ? h.lastRec : h.recordsPerPage;
+        if (!shouldRead((page - 2) * h.recordsPerPage, totalR)) continue;
+      }
       const bytes = new Uint8Array(await blob.slice((page - 1) * h.pageSize, pEnd * h.pageSize).arrayBuffer());
       const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       let total = 0;
@@ -100,7 +111,16 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false, o
   const perRecDims = !regular && !forcePoints && incIdx.x >= 0 && incIdx.y >= 0 && incIdx.z >= 0
     && !h.columns[incIdx.x].isConstant && !h.columns[incIdx.y].isConstant && !h.columns[incIdx.z].isConstant;
   let grid = null, bbox, subBlocked = false, dimPalette = null, dimCode = null;
-  if (regular) {
+  if (cached && cached.bbox && !forcePoints) {
+    // sidecar-cached discovery: trust it wholesale (freshness is the caller's contract)
+    grid = cached.grid || null; bbox = cached.bbox;
+    subBlocked = !!cached.subBlocked;
+    dimPalette = cached.dimPalette || null;
+    if (subBlocked && dimPalette) {
+      const r10c = (v) => Number(v.toPrecision(10));
+      dimCode = new Map(dimPalette.map((h2, i) => [`${r10c(h2[0] * 2)},${r10c(h2[1] * 2)},${r10c(h2[2] * 2)}`, i]));
+    }
+  } else if (regular) {
     grid = {
       x: { origin: mor[0] + inc[0] / 2, pitch: inc[0], count: Math.round(cnt[0]) },
       y: { origin: mor[1] + inc[1] / 2, pitch: inc[1], count: Math.round(cnt[1]) },
@@ -164,8 +184,8 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false, o
     .map((o) => ({ i: o.i, name: o.c.name }));
   const chan = mapping && mapping.chan != null ? mapping.chan : (numericColumns[0] ? numericColumns[0].i : null);
   const catIdx = h.columns.findIndex((c) => c.type === 'A' && !c.isConstant);
-  const categories = catIdx >= 0 ? [] : null;              // fills incrementally during the sweep
-  const catCode = catIdx >= 0 ? new Map() : null;
+  const categories = catIdx >= 0 ? (cached && cached.categories ? [...cached.categories] : []) : null;   // fills incrementally during the sweep (or prefilled from a sidecar)
+  const catCode = catIdx >= 0 ? new Map(categories.map((v, i) => [v, i])) : null;
 
   const header = {
     kind: 'blockmodel', count: h.recordCount,
