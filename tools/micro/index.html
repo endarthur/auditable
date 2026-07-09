@@ -623,17 +623,23 @@ new ResizeObserver(() => { const [w, h] = renderer.resize(); cam.setAspect(w / h
 
 let converged = true;
 let _viewMode = 'boxes';                                   // boxes = impostors · points = fixed splats (View menu)
+// the per-frame draw options (budget, point size, colour modes, per-layer clip/
+// colour, section, clip). Shared by the render loop and figure export so a
+// supersample export renders the scene identically.
+function currentDrawOpts() {
+  const clipV = (id) => { const v = $('#' + id).value.trim(); return v === '' ? null : +v; };
+  const clipOf = (L) => { const c = [L.clip[0].trim(), L.clip[1].trim()]; return [c[0] === '' ? null : +c[0], c[1] === '' ? null : +c[1]]; };
+  const modeOf = (v) => (v === 'elev' ? 0 : v && v.startsWith('chan:') ? 1 : v === 'cat' || v === 'rules' || (v && v.startsWith('paint:')) ? 2 : v === 'solid' ? 3 : +v || 0);
+  const layerOpts = {};
+  for (const L of _layers) layerOpts[L.id] = { colorMode: L.id === _activeId ? resolveColorMode() : modeOf(L.colorSel), clip: L.id === _activeId ? [clipV('clipMin'), clipV('clipMax')] : clipOf(L) };
+  return { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')], layerOpts: _layers.length ? layerOpts : null };
+}
 function loop(t) {
   if (dirty || !converged) {                               // keep converging while still (progressive accumulation)
     dirty = false;
     const [w, h] = renderer.resize();
     cam.setAspect(w / h);
-    const clipV = (id) => { const v = $('#' + id).value.trim(); return v === '' ? null : +v; };
-    const clipOf = (L) => { const c = [L.clip[0].trim(), L.clip[1].trim()]; return [c[0] === '' ? null : +c[0], c[1] === '' ? null : +c[1]]; };
-    const modeOf = (v) => (v === 'elev' ? 0 : v && v.startsWith('chan:') ? 1 : v === 'cat' || v === 'rules' || (v && v.startsWith('paint:')) ? 2 : v === 'solid' ? 3 : +v || 0);
-    const layerOpts = {};
-    for (const L of _layers) layerOpts[L.id] = { colorMode: L.id === _activeId ? resolveColorMode() : modeOf(L.colorSel), clip: L.id === _activeId ? [clipV('clipMin'), clipV('clipMax')] : clipOf(L) };
-    const opts = { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')], layerOpts: _layers.length ? layerOpts : null };
+    const opts = currentDrawOpts();
     const t0 = performance.now();
     const r = edl.render(w, h, cam, () => renderer.draw(cam, opts), { enabled: $('#edlOn').checked, strength: +$('#edlStr').value });
     converged = r.converged;
@@ -6629,7 +6635,7 @@ Everything here is on a block model's <b>right-click menu</b> and in the <b>comm
 <b>optimize to spatial Parquet</b> — reorders a model Morton-sorted (a footer spatial index; queries skip whole row-groups). Runs automatically when you save a project — Parquet is the project store<br>
 <b>lineage</b> — every derived layer remembers <i>how it was made</i>: open → join / reconcile / optimize wraps its sources with the params + build + time. <b>Lineage…</b> shows the tree + exports a readable HTML <b>report</b>; Parquet exports carry it embedded. Provenance you can attach to a sign-off<br>
 <b>linked brushing</b> — the grade-tonnage &amp; swath windows have an <b>all / selection</b> toggle: rubber-band a bench, a domain, or a suspect zone in 3D and read its curve live<br><br>
-<b>figures</b> (View → <b>Decorations &amp; figure…</b>) — a live panel: toggle a <b>scale bar</b>, <b>north arrow</b>, and <b>title</b>; turn on a colour <b>legend per layer</b> (they stack, each captioned by its coloured attribute — rename inline); set a <b>background</b> (white/paper for print — the decorations flip to dark ink). <b>Export figure</b> captures exactly what you see as a report-ready PNG<br>
+<b>figures</b> (View → <b>Decorations &amp; figure…</b>) — a live panel: toggle a <b>scale bar</b>, <b>north arrow</b>, and <b>title</b>; turn on a colour <b>legend per layer</b> (they stack, each captioned by its coloured attribute — rename inline); set a <b>background</b> (white/paper for print — the decorations flip to dark ink). <b>Export figure</b> captures exactly what you see as a report-ready PNG — at <b>1× / 2× / 3×</b> resolution (2×/3× re-render the scene sharper for print)<br>
 <b>windows</b> (View → <b>Windows…</b>) — the analysis + table + paint windows are all draggable and layer-pinned; list / focus / <b>cascade</b> / <b>close all</b> from here<br>`;
 function showHelp(title, html) {
   $('#helpTitle').textContent = title;
@@ -7026,20 +7032,45 @@ function setDecoTitle(t) { _deco.titleText = t || ''; _deco.title = !!t; saveDec
 // legends are PER-LAYER (each shows that layer's own colour mapping); multiple
 // can be on and they stack. Persisted in the project manifest, not localStorage.
 function setLayerLegend(L, on) { if (!L) return; L.legend = !!on; drawDecorations(); if (_decoWin && _decoWin._render) _decoWin._render(); }
-// export the viewport + decorations as a PNG (cv already has preserveDrawingBuffer)
-function exportFigure() {
-  const out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
-  const g = out.getContext('2d');
-  g.drawImage(cv, 0, 0);
-  const sx = cv.width / cv.getBoundingClientRect().width;   // logical → device scale
-  g.setTransform(sx, 0, 0, sx, 0, 0);
-  renderDeco(g, cv.getBoundingClientRect().width, cv.getBoundingClientRect().height);
+// export resolution multiplier (1× = on-screen; 2×/3× supersample for print)
+let _figScale = (() => { try { return Math.max(1, Math.min(4, +localStorage.getItem('micro.figScale') || 1)); } catch { return 1; } })();
+function setFigScale(s) { _figScale = Math.max(1, Math.min(4, (s | 0) || 1)); try { localStorage.setItem('micro.figScale', String(_figScale)); } catch { /* private */ } }
+function _figureDownload(out) {
   out.toBlob((blob) => {
     if (!blob) return; window._lastFigure = blob;
     const a = document.createElement('a'); const stem = (activeLayer() && (activeLayer().label || activeLayer().name) || 'micro').replace(/\.[^.]*$/, '').replace(/[^\w.-]+/g, '_');
     a.href = URL.createObjectURL(blob); a.download = `figure_${stem}.png`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 8000);
     $('#meta').textContent = `figure → ${a.download}`;
   }, 'image/png');
+}
+// export the viewport + decorations as a PNG (cv has preserveDrawingBuffer). At
+// scale > 1 the scene is re-rendered into a scale× backing and converged there
+// (a one-shot supersample), then restored — point size / EDL radius scale too so
+// the figure looks identical, just sharper. Sealed: no network, pure canvas.
+function exportFigure(scale = _figScale) {
+  scale = Math.max(1, Math.min(4, (scale | 0) || 1));
+  const r = cv.getBoundingClientRect();
+  if (scale === 1) {
+    const out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
+    const g = out.getContext('2d'); g.drawImage(cv, 0, 0);
+    const sx = cv.width / r.width; g.setTransform(sx, 0, 0, sx, 0, 0);
+    renderDeco(g, r.width, r.height);
+    _figureDownload(out); return;
+  }
+  const bw = cv.width, bh = cv.height, tw = bw * scale, th = bh * scale;
+  const opts = currentDrawOpts(); opts.pointPx = opts.pointPx * scale;   // px → keep relative size at higher res
+  const edlOpts = { enabled: $('#edlOn').checked, strength: +$('#edlStr').value, radius: 1.4 * scale };
+  $('#meta').textContent = `rendering figure ${scale}×…`;
+  cv.width = tw; cv.height = th;
+  renderer.invalidate();                                    // reset accumulation → full re-render at the new size
+  let res, guard = 0; const cap = 4000;
+  do { res = edl.render(tw, th, cam, () => renderer.draw(cam, opts), edlOpts); guard++; } while (!res.converged && guard < cap);
+  const out = document.createElement('canvas'); out.width = tw; out.height = th;
+  const g = out.getContext('2d'); g.drawImage(cv, 0, 0);
+  const sx = tw / r.width; g.setTransform(sx, 0, 0, sx, 0, 0);
+  renderDeco(g, r.width, r.height);
+  _figureDownload(out);
+  cv.width = bw; cv.height = bh; renderer.invalidate(); requestRender();   // restore interactive backing
 }
 // Decorations & figure — a NON-MODAL float panel (not a modal): decorations draw
 // live on the viewport, so a dimming backdrop would hide what you're adjusting.
@@ -7094,6 +7125,12 @@ function openDecoPanel() {
     sw.append(col); secB.append(sw); wrap.append(secB);
     // ── export ──
     const foot = document.createElement('div'); foot.className = 'deco-foot';
+    const scRow = document.createElement('div'); scRow.className = 'deco-legrow';
+    const scLab = document.createElement('span'); scLab.className = 'deco-chk'; scLab.style.cursor = 'default'; scLab.textContent = 'Resolution';
+    const scSel = document.createElement('select'); scSel.className = 'deco-in';
+    for (const s of [1, 2, 3]) { const o = document.createElement('option'); o.value = s; o.textContent = s + '×' + (s === 1 ? ' (screen)' : ''); if (s === _figScale) o.selected = true; scSel.append(o); }
+    scSel.onchange = () => setFigScale(+scSel.value);
+    scRow.append(scLab, scSel); foot.append(scRow);
     const ex = document.createElement('button'); ex.className = 'deco-export'; ex.textContent = 'Export figure (PNG)'; ex.onclick = () => exportFigure();
     foot.append(ex); wrap.append(foot);
   };
@@ -10320,7 +10357,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, drawDecorations, decorationsMenu, openDecoPanel, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

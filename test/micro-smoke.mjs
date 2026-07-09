@@ -155,6 +155,17 @@ const panel = await p.evaluate(() => {
   return { open: !!w, secs, legRows, modal };
 });
 chk(`deco panel: float window (${panel.modal}), 3 sections, ${panel.legRows} legend row(s)`, panel.open && panel.modal === 'absolute' && panel.secs === 3 && panel.legRows >= 1);
+// ── 1c″. supersample figure export (2× = double the pixel dimensions, then restore) ──
+const ss = await p.evaluate(async () => {
+  const dims = async () => { const f = window._lastFigure; if (!f) return null; const bmp = await createImageBitmap(f); return { w: bmp.width, h: bmp.height }; };
+  window._lastFigure = null; window._micro.exportFigure(1); await new Promise((r) => setTimeout(r, 350)); const a = await dims();
+  const back = { w: document.querySelector('#cv').width, h: document.querySelector('#cv').height };
+  window._lastFigure = null; window._micro.exportFigure(2); await new Promise((r) => setTimeout(r, 700)); const c = await dims();
+  await new Promise((r) => setTimeout(r, 250));
+  const after = { w: document.querySelector('#cv').width, h: document.querySelector('#cv').height };
+  return { a, c, restored: after.w === back.w && after.h === back.h };
+});
+chk(`figure 2× export: ${ss.a && ss.a.w}×${ss.a && ss.a.h} → ${ss.c && ss.c.w}×${ss.c && ss.c.h}, backing restored`, ss.a && ss.c && ss.c.w === ss.a.w * 2 && ss.c.h === ss.a.h * 2 && ss.restored);
 // background colour: clears to white then back to basalt (flows through EDL)
 const bg = await p.evaluate(async () => {
   const sample = async () => { await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); const cv = document.querySelector('#cv'), c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.drawImage(cv, 0, 0); const d = g.getImageData(2, 2, 1, 1).data; return [d[0], d[1], d[2]]; };
