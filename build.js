@@ -1699,6 +1699,7 @@ if (target === 'micro') {
     '../../ext/gtiff/index.js': '#gtiff',
     '../../ext/parquet/index.js': '#parquet',
     '../../ext/gsjs/src/decluster.js': '#gsjs-decluster',
+    '../../ext/units/index.js': '#units',
   };
   const libs = [
     ['condenser', 'ext/condenser/index.js'],
@@ -1710,6 +1711,7 @@ if (target === 'micro') {
     ['gtiff',     'ext/gtiff/index.js'],               // GeoTIFF DEMs (spec 7.1)
     ['parquet',   'ext/parquet/index.js'],             // Apache Parquet block models
     ['gsjs-decluster', 'ext/gsjs/src/decluster.js'],   // @gcu/gsjs cell declustering (validation) — zero-import module
+    ['units',     'ext/units/index.js'],               // @gcu/units — grade/density unit declarations (grade-tonnage)
   ];
   const modules = [];
   for (const [name, rel] of libs) {

@@ -632,6 +632,7 @@
 <script type="module">
 import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32 } from '../../ext/condenser/src/main.js';
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
+import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { compileBool, compileValue, validate, complete, parse, deps } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
@@ -2695,16 +2696,23 @@ function reconcilePairs(cols) {
 function numericColsOf(L) { const h = layerTableHeader(L); if (!h) return []; const m = h.mapping || {}; return h.columns.filter((_, i) => colIsNumeric(L, h, i) && ![m.x, m.y, m.z].includes(i)); }
 function blockVolumeOf(L) { const a = gridAxesOf(L); return a ? (Math.abs((a.x.pitch || 1) * (a.y.pitch || 1) * (a.z.pitch || 1)) || 1) : 1; }
 // grade-tonnage: for each series column, cutoff → (tonnage above, mean grade above)
+// weight: a column name (back-compat) or { col?, const?, unit? } — `unit` is a
+// DECLARED density unit ('t/m3' | 'kg/m3' | 'lb/ft3'…), converted to t/m³ via
+// @gcu/units so tonnage comes out in actual tonnes; `const` is a fixed density
+// for models without a density column.
 async function computeGT(L, cols, weightCol, nCut, onProgress, selMask) {
+  const wspec = typeof weightCol === 'string' ? { col: weightCol } : (weightCol || {});
   const h = layerTableHeader(L), idx = cols.map((n) => h.columns.indexOf(n));
-  const wi = weightCol ? h.columns.indexOf(weightCol) : -1, vol = blockVolumeOf(L);
+  const wi = wspec.col ? h.columns.indexOf(wspec.col) : -1, vol = blockVolumeOf(L);
+  const dScale = wspec.unit ? unitConvert(1, wspec.unit, 't/m3') : 1;
+  const dConst = wspec.const != null && Number.isFinite(+wspec.const) ? +wspec.const : null;
   const ser = cols.map(() => ({ g: [], w: [] }));
   let gmin = Infinity, gmax = -Infinity, rc = 0, rec = 0;
   for await (const batch of layerRows(L, null)) {
     for (const f of batch) {
       const inSel = !selMask || (rec < selMask.length && selMask[rec]); rec++;
       if (!inSel) continue;
-      const wt = (wi >= 0 ? (+f[wi] || 0) : 1) * vol;
+      const wt = (wi >= 0 ? (+f[wi] || 0) : dConst != null ? dConst : 1) * dScale * vol;
       for (let s = 0; s < idx.length; s++) { const v = +f[idx[s]]; if (Number.isFinite(v)) { ser[s].g.push(v); ser[s].w.push(wt); if (v < gmin) gmin = v; if (v > gmax) gmax = v; } }
     }
     rc += batch.length; if (onProgress) onProgress(rc);
@@ -2722,7 +2730,7 @@ async function computeGT(L, cols, weightCol, nCut, onProgress, selMask) {
       return { cut: c, tonnage: cw[lo], grade: cw[lo] > 0 ? cwg[lo] / cw[lo] : NaN };
     });
   });
-  return { cuts, gt, gmin, gmax, weighted: wi >= 0 };
+  return { cuts, gt, gmin, gmax, weighted: wi >= 0 || dConst != null };
 }
 const _gtWins = new Map();
 function openGradeTonnage(L) {
@@ -2730,7 +2738,13 @@ function openGradeTonnage(L) {
   const ex = _gtWins.get(L.id); if (ex) { ex.win.el.style.zIndex = ++_fwinZ; return; }
   const nums = numericColsOf(L); if (!nums.length) { $('#meta').textContent = 'grade-tonnage: no numeric column'; return; }
   const pairs = reconcilePairs(nums);
-  const st = { cols: pairs.length ? [pairs[0].ref, pairs[0].self] : [nums[0]], weight: '', nCut: 40, scope: 'all', last: null };
+  // unit DECLARATIONS (what the data is, not display toggles) — persisted per
+  // layer in the project manifest (L.gtUnits)
+  const gu0 = L.gtUnits || {};
+  const st = { cols: pairs.length ? [pairs[0].ref, pairs[0].self] : [nums[0]], weight: gu0.weight || '', nCut: 40, scope: 'all', last: null,
+    gradeUnit: gu0.grade || '', densUnit: gu0.densUnit || 't/m3', densConst: gu0.densConst != null ? gu0.densConst : null };
+  const persistUnits = () => { L.gtUnits = { grade: st.gradeUnit, densUnit: st.densUnit, densConst: st.densConst, weight: st.weight }; markProjectDirty(); };
+  const guLabel = () => (st.gradeUnit === 'pct' ? '%' : st.gradeUnit);
   const win = floatWin({ title: `grade-tonnage · ${L.label || L.name}`, sub: '', x: Math.max(12, innerWidth - 500), y: 100, w: 470, h: 360, onClose: () => _gtWins.delete(L.id) });
   win.body.style.cssText += 'display:flex;flex-direction:column;gap:0';
   const cv = document.createElement('canvas'); cv.style.cssText = 'width:100%;flex:1;min-height:80px;display:block';
@@ -2740,17 +2754,19 @@ function openGradeTonnage(L) {
     if (st.scope === 'selection' && !(L._selMask && L._selCount)) { win.sub.textContent = 'no selection — brush the 3D'; plotChart(cv, { series: [] }); win._spec = null; return; }
     const selMask = st.scope === 'selection' ? L._selMask : null;
     win.sub.textContent = 'computing…';
-    const res = await computeGT(L, st.cols, st.weight, st.nCut, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; }, selMask);
+    const wspec = st.weight === '#const' ? { const: st.densConst, unit: st.densUnit } : st.weight ? { col: st.weight, unit: st.densUnit } : {};
+    const res = await computeGT(L, st.cols, wspec, st.nCut, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; }, selMask);
     if (!res) { win.sub.textContent = 'no data'; return; }
     st.last = res;
-    const spec = { xLabel: 'cutoff', leftLabel: res.weighted ? 'tonnage' : 'volume (m³)', rightLabel: 'mean grade', series: [] };
+    const gl = guLabel();
+    const spec = { xLabel: `cutoff${gl ? ` (${gl})` : ''}`, leftLabel: res.weighted ? 'tonnage (t)' : 'volume (m³)', rightLabel: `mean grade${gl ? ` (${gl})` : ''}`, series: [] };
     st.cols.forEach((c, i) => {
       const col = SERIES_COLORS[i % SERIES_COLORS.length];
       spec.series.push({ name: `${c} · t`, color: col, axis: 'left', kind: 'line', data: res.gt[i].map((p) => [p.cut, p.tonnage]) });
       spec.series.push({ name: `${c} · grade`, color: col, axis: 'right', kind: 'line', data: res.gt[i].map((p) => [p.cut, p.grade]) });
     });
-    win.sub.textContent = `${st.scope === 'selection' ? 'selection · ' : ''}${res.weighted ? 'tonnage-weighted' : 'count'} · ${st.nCut} cutoffs`;
-    plotChart(cv, spec); win._spec = spec;
+    win.sub.textContent = `${st.scope === 'selection' ? 'selection · ' : ''}${res.weighted ? `tonnes (${st.weight === '#const' ? `ρ ${st.densConst}` : st.weight} ${st.densUnit === 't/m3' ? 't/m³' : st.densUnit === 'kg/m3' ? 'kg/m³' : 'lb/ft³'})` : 'count'} · ${st.nCut} cutoffs`;
+    plotChart(cv, spec); win._spec = spec; win.el._gtSpec = spec;
   };
   win.el._onResized = () => { if (win._spec) plotChart(cv, win._spec); };
   const buildCtrls = () => {
@@ -2758,8 +2774,29 @@ function openGradeTonnage(L) {
     const nums2 = numericColsOf(L);
     const seriesBtn = document.createElement('button'); seriesBtn.className = 'awin-btn'; seriesBtn.textContent = `series: ${st.cols.join(', ')}`;
     seriesBtn.onclick = (e) => menuXY(e.clientX, e.clientY, nums2.map((c) => ({ label: (st.cols.includes(c) ? '✓ ' : '') + c, action: () => { if (st.cols.includes(c)) { if (st.cols.length > 1) st.cols = st.cols.filter((x) => x !== c); } else if (st.cols.length < 4) st.cols.push(c); buildCtrls(); redraw(); } })));
-    const wSel = document.createElement('select'); { const o = document.createElement('option'); o.value = ''; o.textContent = 'count'; wSel.appendChild(o); } for (const c of nums2) { const o = document.createElement('option'); o.value = c; o.textContent = '× ' + c; wSel.appendChild(o); } wSel.value = st.weight; wSel.title = 'weight (density) — tonnage = weight × block volume'; wSel.onchange = () => { st.weight = wSel.value; redraw(); };
-    ctrls.append(seriesBtn, wSel, scopeSeg(st, redraw));
+    // grade unit — a declaration for honest axis labels
+    const gSel = document.createElement('select'); gSel.title = 'grade unit (labels the cutoff + mean-grade axes)';
+    for (const [v, t] of [['', '— unit'], ['pct', '%'], ['g/t', 'g/t'], ['ppm', 'ppm'], ['oz/t', 'oz/t']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; gSel.appendChild(o); }
+    gSel.value = st.gradeUnit; gSel.onchange = () => { st.gradeUnit = gSel.value; persistUnits(); redraw(); };
+    // density: count · a constant · × column, with a DECLARED unit that scales to t/m³
+    const wSel = document.createElement('select');
+    { const o = document.createElement('option'); o.value = ''; o.textContent = 'count'; wSel.appendChild(o); }
+    { const o = document.createElement('option'); o.value = '#const'; o.textContent = st.densConst != null ? `ρ = ${st.densConst}` : 'ρ constant…'; wSel.appendChild(o); }
+    for (const c of nums2) { const o = document.createElement('option'); o.value = c; o.textContent = '× ' + c; wSel.appendChild(o); }
+    wSel.value = st.weight; wSel.title = 'density — tonnage = density × block volume (pick a column or a constant)';
+    wSel.onchange = async () => {
+      if (wSel.value === '#const') {
+        const v = await microPrompt('density (constant)', st.densConst != null ? String(st.densConst) : '2.7');
+        if (v == null || !Number.isFinite(+v)) { wSel.value = st.weight; return; }
+        st.densConst = +v;
+      }
+      st.weight = wSel.value; persistUnits(); buildCtrls(); redraw();
+    };
+    const dSel = document.createElement('select'); dSel.title = 'density unit — converted to t/m³ so tonnage is in tonnes';
+    for (const [v, t] of [['t/m3', 't/m³ (=g/cm³)'], ['kg/m3', 'kg/m³'], ['lb/ft3', 'lb/ft³']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; dSel.appendChild(o); }
+    dSel.value = st.densUnit; dSel.disabled = !st.weight;
+    dSel.onchange = () => { st.densUnit = dSel.value; persistUnits(); redraw(); };
+    ctrls.append(seriesBtn, gSel, wSel, dSel, scopeSeg(st, redraw));
   };
   _gtWins.set(L.id, { win, redraw, st });
   buildCtrls(); redraw();
@@ -5834,6 +5871,7 @@ function projectManifest() {
       recHide: (L._recHide && L._recHide.size) ? [...L._recHide] : undefined,   // record-panel hidden fields (view pref)
       legend: L.legend || undefined, legendTitle: (L.legendTitle && L.legendTitle.trim()) || undefined,   // per-layer figure legend
       edges: L.edges != null ? L.edges : undefined,        // per-layer block-edge override (tri-state; absent = follow View)
+      gtUnits: L.gtUnits || undefined,                     // grade-tonnage unit declarations (grade unit, density col/const + unit)
       soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
       hiddenCats: L.catHidden && L.catHidden.size
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
@@ -6275,7 +6313,7 @@ async function openProjectDir(dir) {
         } catch { /* no sidecar — full discovery as usual */ }
       }
       await openBlob(file, basename(ls.source), i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
-      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } if (ls.recHide && ls.recHide.length) Lx._recHide = new Set(ls.recHide); if (ls.legend) Lx.legend = true; if (ls.legendTitle) Lx.legendTitle = ls.legendTitle; if (ls.edges != null) { Lx.edges = ls.edges; renderer.setLayerEdges(Lx.id, ls.edges); } } }   // mesh opacity rides overR
+      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } if (ls.recHide && ls.recHide.length) Lx._recHide = new Set(ls.recHide); if (ls.legend) Lx.legend = true; if (ls.legendTitle) Lx.legendTitle = ls.legendTitle; if (ls.edges != null) { Lx.edges = ls.edges; renderer.setLayerEdges(Lx.id, ls.edges); } if (ls.gtUnits) Lx.gtUnits = ls.gtUnits; } }   // mesh opacity rides overR
       const L = activeLayer();
       if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
       if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the columns tab wakes up scanned
