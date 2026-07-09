@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>micro — shortcut card</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- A credit-card-sized (ISO ID-1, 85.6 × 54 mm) keyboard reference for micro.
+     Print at 100% with background graphics ON, cut along the marks, glue the
+     two faces back-to-back, laminate. gentropic.org/micro -->
+<style>
+  :root {
+    --bg: #121212; --panel: #1a1a1a; --chip: #202020;
+    --ink: #d6d6d6; --hi: #efefef; --dim: #8b8b8b;
+    --accent: #c89b3c; --border: #3a3a3a;
+    --mono: 'Space Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+    --sans: 'Barlow', system-ui, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: #0c0c0c; }
+  body { font-family: var(--sans); color: var(--ink); }
+
+  .sheet { display: flex; flex-direction: column; align-items: center; gap: 10mm; padding: 12mm 0 20mm; }
+  .note { font: 13px/1.6 var(--sans); color: #9a9a9a; max-width: 560px; text-align: center; padding: 0 16px; }
+  .note b { color: #cfcfcf; }
+  .note a { color: var(--accent); }
+
+  /* crop marks: hairlines just outside each corner */
+  .cut { position: relative; }
+  .cut i { position: absolute; display: block; }
+  .cut i.h { width: 4mm; height: 0; border-top: 0.15mm solid #777; }
+  .cut i.v { width: 0; height: 4mm; border-left: 0.15mm solid #777; }
+  .cut .tl.h { top: 0; left: -5mm; } .cut .tl.v { top: -5mm; left: 0; }
+  .cut .tr.h { top: 0; right: -5mm; } .cut .tr.v { top: -5mm; right: 0; }
+  .cut .bl.h { bottom: 0; left: -5mm; } .cut .bl.v { bottom: -5mm; left: 0; }
+  .cut .br.h { bottom: 0; right: -5mm; } .cut .br.v { bottom: -5mm; right: 0; }
+
+  .card {
+    width: 85.6mm; height: 54mm; background: var(--bg);
+    border-radius: 3.18mm; overflow: hidden;
+    display: flex; flex-direction: column;
+    padding: 2.6mm 3.2mm 2.2mm;
+    outline: 0.15mm solid #555;                 /* the cut line */
+  }
+  .hd { display: flex; align-items: center; gap: 1.8mm; padding-bottom: 1.4mm; }
+  .hd svg { width: 5.4mm; height: 5.4mm; flex: 0 0 auto; }
+  .hd .name { font: 700 4mm/1 var(--mono); color: var(--hi); letter-spacing: 0.02em; }
+  .hd .face { margin-left: auto; font: 500 2.35mm/1 var(--sans); color: var(--dim); text-transform: uppercase; letter-spacing: 0.14em; }
+  .strip { height: 0.9mm; border-radius: 0.45mm; margin-bottom: 2mm; flex: 0 0 auto;
+    background: linear-gradient(90deg, #440154, #414487, #2a788e, #22a884, #7ad151, #fde725); }
+
+  .grp { margin-bottom: 2.1mm; }
+  .grp .t { font: 600 2.05mm/1 var(--sans); color: var(--accent); text-transform: uppercase; letter-spacing: 0.13em; margin-bottom: 1.05mm; }
+  .row { display: flex; flex-wrap: wrap; column-gap: 3.1mm; row-gap: 1.15mm; }
+  .kv { display: inline-flex; align-items: center; gap: 1.05mm; white-space: nowrap; }
+  kbd {
+    font: 700 2.5mm/1 var(--mono); color: var(--accent);
+    background: var(--chip); border: 0.18mm solid var(--border); border-bottom-width: 0.45mm;
+    border-radius: 0.8mm; padding: 0.55mm 1mm 0.45mm; min-width: 3.7mm; text-align: center;
+  }
+  .kv b { font: 400 2.55mm/1.15 var(--sans); color: var(--ink); }
+  .kv .d { color: var(--dim); }
+  .ft { margin-top: auto; display: flex; align-items: baseline; gap: 1.5mm; }
+  .ft .url { font: 400 2.2mm/1 var(--mono); color: var(--dim); }
+  .ft .gcu { margin-left: auto; font: 400 2mm/1 var(--sans); color: #6a6a6a; letter-spacing: 0.06em; }
+
+  /* the back carries one more group — tighten it so the footer clears */
+  .tight .grp { margin-bottom: 1.55mm; }
+  .tight .grp .t { margin-bottom: 0.8mm; }
+  .tight .row { row-gap: 0.9mm; }
+
+  @media screen { .cut { zoom: 2.4; } }
+  @media print {
+    @page { size: A4; margin: 0; }
+    html, body { background: #fff; }
+    .sheet { padding: 25mm 0 0; gap: 14mm; }
+    .note { display: none; }
+    .card { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="note">
+    <b>micro — shortcut card</b> (credit-card size, 85.6 × 54 mm)<br>
+    Print at <b>100% scale</b> with <b>background graphics on</b> → cut along the corner marks →
+    glue the faces back-to-back → <b>laminate</b>. · <a href="index.html">manual</a> · <a href="../">open micro ↗</a>
+  </div>
+
+  <!-- ── FRONT: navigate · section ── -->
+  <div class="cut">
+    <i class="tl h"></i><i class="tl v"></i><i class="tr h"></i><i class="tr v"></i>
+    <i class="bl h"></i><i class="bl v"></i><i class="br h"></i><i class="br v"></i>
+    <div class="card">
+      <div class="hd">
+        <svg viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="9.6" stroke="#c89b3c" stroke-width="1.5"/>
+          <path d="M12 1.2v3.4M12 19.4v3.4M1.2 12h3.4M19.4 12h3.4" stroke="#c89b3c" stroke-width="1.5"/>
+          <rect x="8.4" y="8.4" width="3.4" height="3.4" fill="#c89b3c"/>
+          <rect x="12.2" y="8.4" width="3.4" height="3.4" fill="#555"/>
+          <rect x="8.4" y="12.2" width="3.4" height="3.4" fill="#555"/>
+          <rect x="12.2" y="12.2" width="3.4" height="3.4" fill="#3a3a3a"/>
+        </svg>
+        <span class="name">micro</span>
+        <span class="face">navigate · section</span>
+      </div>
+      <div class="strip"></div>
+      <div class="grp">
+        <div class="t">view</div>
+        <div class="row">
+          <span class="kv"><kbd>f</kbd><b>fit</b></span>
+          <span class="kv"><kbd>o</kbd><b>ortho ⇄ persp</b></span>
+          <span class="kv"><kbd>d</kbd><b>plan</b></span>
+          <span class="kv"><kbd>u</kbd><b>from below</b></span>
+          <span class="kv"><kbd>n</kbd><kbd>s</kbd><kbd>e</kbd><kbd>w</kbd><b>look that way</b></span>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="t">section</div>
+        <div class="row">
+          <span class="kv"><kbd>k</kbd><b>knife <span class="d">(drag a line)</span></b></span>
+          <span class="kv"><kbd>x</kbd><b>on / off</b></span>
+          <span class="kv"><kbd>l</kbd><b>face the section</b></span>
+          <span class="kv"><kbd>,</kbd><kbd>.</kbd><b>step one slab</b></span>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="t">mouse</div>
+        <div class="row">
+          <span class="kv"><b>drag</b><b class="d">orbit</b></span>
+          <span class="kv"><b>⇧ / right-drag</b><b class="d">pan</b></span>
+          <span class="kv"><b>wheel</b><b class="d">zoom</b></span>
+          <span class="kv"><b>click</b><b class="d">pick a record</b></span>
+        </div>
+      </div>
+      <div class="ft"><span class="url">gentropic.org/micro</span><span class="gcu">GCU</span></div>
+    </div>
+  </div>
+
+  <!-- ── BACK: tools · layers ── -->
+  <div class="cut">
+    <i class="tl h"></i><i class="tl v"></i><i class="tr h"></i><i class="tr v"></i>
+    <i class="bl h"></i><i class="bl v"></i><i class="br h"></i><i class="br v"></i>
+    <div class="card tight">
+      <div class="hd">
+        <span class="name">micro</span>
+        <span class="face">tools · layers</span>
+      </div>
+      <div class="strip"></div>
+      <div class="grp">
+        <div class="t">tools</div>
+        <div class="row">
+          <span class="kv"><kbd>m</kbd><b>measure <span class="d">(2 picks)</span></b></span>
+          <span class="kv"><kbd>i</kbd><b>file info</b></span>
+          <span class="kv"><kbd>/</kbd><b>filter</b></span>
+          <span class="kv"><kbd>t</kbd><b>attribute table</b></span>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="t">select · paint</div>
+        <div class="row">
+          <span class="kv"><kbd>r</kbd><b>rectangle</b></span>
+          <span class="kv"><kbd>v</kbd><b>lasso</b></span>
+          <span class="kv"><kbd>b</kbd><b>paint</b></span>
+          <span class="kv"><kbd>Esc</kbd><b>cancel</b></span>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="t">layers</div>
+        <div class="row">
+          <span class="kv"><kbd>p</kbd><b>panel</b></span>
+          <span class="kv"><kbd>[</kbd><kbd>]</kbd><b>step active</b></span>
+          <span class="kv"><kbd>h</kbd><b>hide / show</b></span>
+          <span class="kv"><kbd>⇧P</kbd><b>properties</b></span>
+          <span class="kv"><kbd>⇧B</kbd><b>block edges</b></span>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="t">everything else</div>
+        <div class="row">
+          <span class="kv"><kbd>⌘K</kbd><b>command palette</b></span>
+          <span class="kv"><kbd>⌘S</kbd><b>save project</b></span>
+          <span class="kv"><kbd>⌘Z</kbd><b>undo paint</b></span>
+        </div>
+      </div>
+      <div class="ft"><span class="url">one file · no install · no network</span><span class="gcu">Sealed</span></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
