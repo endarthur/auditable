@@ -6785,10 +6785,10 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
 <b>sections</b> — a cut through the data; everything hidden is neither drawn nor pickable. Blocks and drillhole sticks cut <b>true</b>: a block straddling the plane shows its cut interior at the plane (a thin slab reads as a continuous painted wall), and a sectioned mesh's trace draws <b>over</b> the wall like a wireframe outline on a section plot<br>
-pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line</b> (the vertical section through it, <code>Esc</code> cancels), or choose <b>custom</b> and type the plane's dip direction + dip · <code>x</code> toggles the section on/off<br>
+pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line</b> (the vertical section through it; <code>⇧</code> snaps to 15°, <code>⇧⌥</code> to 5°, <code>Esc</code> cancels), or choose <b>custom</b> and type the plane's dip direction + dip · <code>x</code> toggles the section on/off<br>
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
-<code>l</code> — face the section · <code>,</code> <code>.</code> — walk the section one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
+<code>l</code> — face the section (<code>⇧L</code> its back) · <code>,</code> <code>.</code> — walk the section one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
 <b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br>
 The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Select through) flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
@@ -7448,11 +7448,12 @@ function setView(theta, phi) {
 const PHI_MAX = Math.PI / 2 - 0.02;
 // face-on to the current section: look along the plane normal (minimal turn —
 // keep the side we're already on) and pivot the orbit on the section plane.
-function viewAlongSection() {
+function viewAlongSection(back = false) {
   const sec = currentSection(); if (!sec) return;
   const st = cam.state, n = sec.n;
   const fwd = [st.target[0] - st.eye[0], st.target[1] - st.eye[1], st.target[2] - st.eye[2]];
-  const sign = (fwd[0] * n[0] + fwd[1] * n[1] + fwd[2] * n[2]) >= 0 ? 1 : -1;   // look dir = sign·n
+  let sign = (fwd[0] * n[0] + fwd[1] * n[1] + fwd[2] * n[2]) >= 0 ? 1 : -1;     // look dir = sign·n
+  if (back) sign = -sign;                                                       // ⇧L: face the OTHER side
   const off = [-sign * n[0], -sign * n[1], -sign * n[2]];                        // eye offset = -lookdir
   // re-center the pivot on the plane, then aim
   const dd = st.target[0] * n[0] + st.target[1] * n[1] + st.target[2] * n[2] - sec.d0;
@@ -7609,6 +7610,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'd') setView(cam.state.theta, PHI_MAX);  // plan (looking down)
   else if (k === 'u') setView(cam.state.theta, -PHI_MAX); // looking up
   else if (k === 'l') viewAlongSection();                 // face-on to the section
+  else if (k === 'L') viewAlongSection(true);             // ⇧L: face its BACK (the other side)
   else if (k === '/') { e.preventDefault(); $('#filter').focus(); }
   else if (k === 'i') showFileInfo();
   else if (k === 'm') armMeasure();
