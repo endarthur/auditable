@@ -38,7 +38,7 @@
     width: 85.6mm; height: 54mm; background: var(--bg);
     border-radius: 3.18mm; overflow: hidden;
     display: flex; flex-direction: column;
-    padding: 2.6mm 3.2mm 2.2mm;
+    padding: 2.6mm 3.2mm 3.1mm;
     outline: 0.15mm solid #555;                 /* the cut line */
   }
   .hd { display: flex; align-items: center; gap: 1.8mm; padding-bottom: 1.4mm; }
@@ -73,9 +73,9 @@
   .ft .gcu { margin-left: auto; font: 400 2mm/1 var(--sans); color: #6a6a6a; letter-spacing: 0.06em; }
 
   /* the back carries one more group — tighten it so the footer clears */
-  .tight .grp { margin-bottom: 1.55mm; }
+  .tight .grp { margin-bottom: 1.4mm; }
   .tight .grp .t { margin-bottom: 0.8mm; }
-  .tight .row { row-gap: 0.9mm; }
+  .tight .g { row-gap: 1mm; }
 
   @media screen { .cut { zoom: 2.4; } }
   @media print {
