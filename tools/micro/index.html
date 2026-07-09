@@ -360,6 +360,25 @@
   .awin-ctrls select, .awin-btn { font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; cursor: pointer; }
   .awin-ctrls label { font: 11px monospace; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
   .awin-ctrls input[type=number] { width: 62px; font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; }
+  /* the explicit "store as Parquet" dialog — the exDlg family's look */
+  #opDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
+  #opDlg.show { display: flex; }
+  #opDlg .box { width: min(560px, 94vw); max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #opDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #opDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #opDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  #opDlg .op-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(127,127,127,0.08); }
+  #opDlg .op-row .nm { color: var(--text-hi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #opDlg .op-row .d { color: var(--muted); white-space: nowrap; }
+  #opDlg .op-row .path { color: var(--accent); font-size: 11px; margin-left: auto; white-space: nowrap; }
+  #opDlg .op-opts { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; color: var(--muted); }
+  #opDlg .op-opts label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+  #opDlg .op-note { color: var(--dim); font-size: 11px; margin-top: 8px; line-height: 1.5; }
+  #opDlg .dh-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
+  #opDlg .dh-foot #opDlgMsg { color: var(--muted); font-family: var(--mono); font-size: 12px; margin-right: auto; }
+  #opDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
+  #opDlg .dh-foot #opNot { border-color: var(--border); }
+
   /* swath v2: a thin left config rail + the chart on the right */
   .sw-body { display: flex; height: 100%; min-height: 0; }
   .sw-rail { width: 236px; flex: 0 0 auto; overflow-y: auto; border-right: 1px solid var(--border); padding: 8px 9px; display: flex; flex-direction: column; gap: 10px; }
@@ -611,6 +630,7 @@
   <div id="ofDlg"><div class="box"><div class="hd"><span>open files</span><button id="ofCancel">×</button></div><div class="bd" id="ofDlgBody"></div><div class="dh-foot"><button id="ofOpen">Open</button></div></div></div>
   <div id="exDlg"><div class="box"><div class="hd"><span>export rows (CSV / Parquet)</span><button id="exCancel">×</button></div><div class="bd" id="exDlgBody"></div><div class="dh-foot"><span id="exDlgMsg"></span><button id="exGo">Export</button></div></div></div>
   <div id="svDlg"><div class="box"><div class="hd"><span>save project</span><button id="svCancel">×</button></div><div class="bd" id="svDlgBody"></div><div class="dh-foot"><button id="svLink">Link without copying</button><button id="svCopy">Copy into project</button></div></div></div>
+  <div id="opDlg"><div class="box"><div class="hd"><span>store block models as Parquet</span><button id="opCancel">×</button></div><div class="bd" id="opDlgBody"></div><div class="dh-foot"><span id="opDlgMsg"></span><button id="opNot">Not now</button><button id="opGo">Convert</button></div></div></div>
   <div id="plDlg"><div class="box"><div class="hd"><span>opening project</span><button id="plClose">×</button></div><div class="bd" id="plDlgBody"></div></div></div>
   <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
   <div id="adDlg"><div class="box"><div class="hd"><span>assign domains</span><button id="adCancel">×</button></div><div class="bd" id="adDlgBody"></div><div id="adProg" style="display:none"><div id="adProgFill"></div></div><div class="dh-foot"><span id="adDlgMsg"></span><button id="adGo">Assign</button></div></div></div>
@@ -1530,6 +1550,9 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
     const kv = [
       { key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs || (L.docs.gridDoc && L.docs.gridDoc.grid.crs)) || null, spatial: !!(doSort && sx.length) }) },
       { key: 'micro:lineage', value: JSON.stringify(expLin) },
+      // full-scope exports carry their discovery (self-describing on reopen);
+      // filtered/selection subsets don't — their bbox/categories would lie
+      ...(scope === 'all' && h.bbox ? [{ key: 'micro:model', value: JSON.stringify({ grid: h.grid || null, bbox: h.bbox, categories: h.categories || null, subBlocked: h.subBlocked || false }) }] : []),
     ];
     const columnData = colIdx.map((i, k) => ({ name: cols[i].name, data: pqCols[k] }));
     const bytes = writeParquet({ columnData, codec, rowGroupSize: 1 << 16, kvMetadata: kv });
@@ -1554,7 +1577,7 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
 // reordered under the Morton sort) into a new .parquet layer that saves/reloads
 // through the existing parquet path (no manifest surgery, no in-place record
 // remap). A subsequent project save stores the optimized copy.
-async function convertLayerToParquet(L) {
+async function convertLayerToParquet(L, cvOpts = {}) {
   const h = layerTableHeader(L);
   if (!h || (L.docs.blockDoc && L.docs.blockDoc.parquet)) { $('#meta').textContent = 'materialize: needs a non-Parquet block model'; return; }
   const m = h.mapping || {};
@@ -1567,7 +1590,15 @@ async function convertLayerToParquet(L) {
     else if (v == null || v === '') arr.push(null);
     else { const s = String(v); let iv = intern[k].get(s); if (iv === undefined) { iv = s; intern[k].set(s, s); } arr.push(iv); }
   };
-  const kvOf = (lin) => [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs) || null, spatial: !(lin.params && lin.params.streaming) }) }, { key: 'micro:lineage', value: JSON.stringify(lin) }];
+  const kvOf = (lin) => [
+    { key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs) || null, spatial: !(lin.params && lin.params.streaming) }) },
+    { key: 'micro:lineage', value: JSON.stringify(lin) },
+    // self-description: a micro-written parquet opens FOOTER-ONLY — the grid /
+    // categories discovery is already done, so carry it in the file itself
+    // (shared files stay self-contained; foreign parquets fall back to discovery
+    // + the project sidecar)
+    { key: 'micro:model', value: JSON.stringify({ grid: h.grid || null, bbox: h.bbox, categories: h.categories || null, subBlocked: h.subBlocked || false }) },
+  ];
   // over the in-memory ceiling → the STREAMING file-order path: row groups
   // accumulate 64k at a time and append to the blob writer (peak memory ≈ one
   // group, whatever the model size). No Morton sort — block files are written
@@ -1652,7 +1683,7 @@ async function convertLayerToParquet(L) {
   // Leaving the stale handle made save resolve it INSIDE the project and treat the CSV
   // as still the layer's file → the parquet was never written → reload found no rows.
   L.handle = null; L.storage = 'loose';
-  L._optimizedOrphan = oldHandle || null;                 // saveProject removes the leftover source file (§ below)
+  L._optimizedOrphan = (cvOpts.keepOriginal ? null : oldHandle) || null;   // saveProject removes the leftover source (unless the user chose to keep it)
   // 5. PERMUTE every per-record thing by the SAME order — paint stays editable.
   // (The streaming path preserves FILE ORDER — record identity is unchanged,
   // so paint/selection need no permutation at all.)
@@ -5202,13 +5233,17 @@ async function openParquetBlocks(blob, name, opts = {}) {
   // ── discovery: ONE streamed pass over the coord (+ cat) columns — a row
   // group resident at a time, nothing retained. bbox could come from the
   // footer stats; the distinct axes (grid pitch) need the values. ──
+  // cached discovery: an explicit sidecar wins, else the file's own
+  // `micro:model` kv (micro-written parquets are self-describing)
+  let kvModel = null;
+  try { const e = (info.meta.key_value_metadata || []).find((x) => x.key === 'micro:model'); if (e) kvModel = JSON.parse(e.value); } catch { /* foreign file */ }
+  const cachedPq = opts.cached || kvModel;
   let grid = null, categories = null;
-  if (opts.cached && opts.cached.bbox && !opts.forcePoints) {
-    // sidecar-cached discovery (freshness = the caller's contract): the grid +
-    // categories were inferred once — skip the coord/cat streaming pass entirely
-    grid = opts.cached.grid || null;
-    categories = opts.cached.categories || null;
-    var min = [...opts.cached.bbox.min], max = [...opts.cached.bbox.max];   // hoisted (used by header below)
+  if (cachedPq && cachedPq.bbox && !opts.forcePoints) {
+    // freshness = the caller's contract (sidecar) or intrinsic (kv rides the file)
+    grid = cachedPq.grid || null;
+    categories = cachedPq.categories || null;
+    var min = [...cachedPq.bbox.min], max = [...cachedPq.bbox.max];   // hoisted (used by header below)
   } else {
   const CAP = 100000, r10 = (v) => Number(v.toPrecision(10));
   var min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
@@ -5616,19 +5651,51 @@ async function applyBlockFilter(expr) {
       }
     }
   } else {
-    for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow !== undefined ? header.hasHeaderRow : !!header.columns)) {
-      for (const f of batch) {
-        const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
-        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // same rows sweep 2 kept
-        if (fn(extendRow(AL, f, rec))) {
-          mask[rec] = 1; hits++;
-          const code = catCode ? (catCode.get((f[m.cat] || '').trim()) ?? 0) : 0;
-          collect(xv, yv, zv, m.chan != null ? +f[m.chan] : 0, code, rec);
-        }
-        rec++;
+    const scanRow = (f) => {
+      const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
+      if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) return;   // same rows sweep 2 kept
+      if (fn(extendRow(AL, f, rec))) {
+        mask[rec] = 1; hits++;
+        const code = catCode ? (catCode.get((f[m.cat] || '').trim()) ?? 0) : 0;
+        collect(xv, yv, zv, m.chan != null ? +f[m.chan] : 0, code, rec);
       }
+      rec++;
+    };
+    // BAND PUSHDOWN (sidecar bands + the line-offset index): the anchors mark
+    // the byte start of every k-th ACCEPTED row, and bands are numbered in
+    // accepted-row order — so a band the stats prove can't match is skipped by
+    // SEEKING past its bytes, with the record numbering advanced exactly.
+    let astC = null; try { astC = parse(expr); } catch { astC = null; }
+    const BB = AL && AL._bands, idxC = header.index;
+    const perBand = BB && idxC && idxC.k ? Math.round(BB.size / idxC.k) : 0;
+    if (BB && idxC && astC && perBand > 0 && idxC.offsets && idxC.offsets.length > 0) {
+      let bandsSkipped = 0;
+      const nBands = Math.ceil(header.count / BB.size);
+      for (let b = 0; b < nBands; b++) {
+        if (epoch !== _filterEpoch) return;
+        const ranges = {};
+        for (const nm in BB.cols) { const arr = BB.cols[nm]; const v0 = arr[b * 2], v1 = arr[b * 2 + 1]; if (v0 != null) ranges[nm.toLowerCase()] = { min: v0, max: v1 }; }
+        if (!pqGroupCanMatch(astC, ranges)) { bandsSkipped++; rec = Math.min(header.count, (b + 1) * BB.size); continue; }
+        const a0 = b * perBand, aN = (b + 1) * perBand;
+        const byteStart = a0 < idxC.offsets.length ? idxC.offsets[a0] : null;
+        if (byteStart == null) break;                      // index ran short — nothing left to read
+        const byteEnd = aN < idxC.offsets.length ? idxC.offsets[aN] : blob.size;
+        rec = b * BB.size;                                 // accepted-row numbering at the band start
+        const bandEnd = Math.min(header.count, (b + 1) * BB.size);
+        for await (const batch of lineFields(blob.slice(byteStart, byteEnd), header.delim, false)) {
+          for (const f of batch) { if (rec >= bandEnd) break; scanRow(f); }
+          await new Promise((r) => setTimeout(r));
+          if (epoch !== _filterEpoch) return;
+        }
+      }
+      window.__csvBandsSkipped = bandsSkipped;             // smoke hook
+      if (bandsSkipped) $('#meta').textContent = `filter: ${bandsSkipped} of ${nBands} bands skipped by the sidecar index…`;
+    } else {
+    for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow !== undefined ? header.hasHeaderRow : !!header.columns)) {
+      for (const f of batch) scanRow(f);
       await new Promise((r) => setTimeout(r));
       if (epoch !== _filterEpoch) return;                  // superseded — stop before pushing more compact chunks
+    }
     }
   }
 
@@ -5854,21 +5921,55 @@ function setAutoOptimize(v) { _autoOptimize = v; try { localStorage.setItem('mic
 // optimize-on-save still skips big models: streaming a multi-GB file mid-save
 // is a surprise nobody wants — convert them explicitly from the layer menu.
 const OPTIMIZE_MAX_BLOCKS = 8_000_000;
+// the EXPLICIT conversion dialog (less magic): per-layer rows naming the path
+// it will take (Morton-sorted vs streamed file-order), a VISIBLE keep-original
+// choice (orphan removal used to be silent), and the auto-on-save preference
+// set where its meaning is in front of you. Resolves { layers, keepOriginal,
+// auto } or null (Not now / ×).
+function openOptimizeDialog(cands, { fromSave = false } = {}) {
+  return new Promise((resolve) => {
+    const body = $('#opDlgBody'); body.textContent = '';
+    const rows = cands.map((L) => {
+      const h = layerTableHeader(L), streaming = h.count > OPTIMIZE_MAX_BLOCKS;
+      const row = document.createElement('div'); row.className = 'op-row';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = true;
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = L.label || L.name;
+      const d = document.createElement('span'); d.className = 'd'; d.textContent = `${fmtSize(layerBlob(L) ? layerBlob(L).size : 0)} · ${h.count.toLocaleString()} blocks`;
+      const path = document.createElement('span'); path.className = 'path'; path.textContent = streaming ? '→ streamed, file order' : '→ Morton-sorted (spatial index)';
+      path.title = streaming ? 'over 8M blocks: converted row-group by row-group in bounded memory; file order keeps footer bboxes tight (pushdown still works)' : 'reordered on the Morton curve — the footer becomes a 3D spatial index';
+      row.append(cb, nm, d, path); body.append(row);
+      return { L, cb };
+    });
+    const opts = document.createElement('div'); opts.className = 'op-opts';
+    const mkOpt = (label, checked, title) => { const l = document.createElement('label'); const c = document.createElement('input'); c.type = 'checkbox'; c.checked = checked; if (title) l.title = title; l.append(c, document.createTextNode(label)); opts.append(l); return c; };
+    const keepC = mkOpt('keep the original file in the project (otherwise it is removed after the parquet saves)', false);
+    const autoC = fromSave ? mkOpt('do this automatically on every save (models under 8M blocks)', _autoOptimize === 'on') : null;
+    body.append(opts);
+    const note = document.createElement('div'); note.className = 'op-note';
+    note.textContent = 'What happens: the layer swaps to the parquet in place — painting stays editable, filters re-apply, lineage records the conversion. The parquet self-describes (grid, categories, frame) and its footer is the query index.';
+    body.append(note);
+    const done = (res) => { $('#opDlg').classList.remove('show'); $('#opGo').onclick = $('#opNot').onclick = $('#opCancel').onclick = null; resolve(res); };
+    $('#opGo').onclick = () => done({ layers: rows.filter((r) => r.cb.checked).map((r) => r.L), keepOriginal: keepC.checked, auto: autoC ? autoC.checked : null });
+    $('#opNot').onclick = () => done(null);
+    $('#opCancel').onclick = () => done(null);
+    $('#opDlgMsg').textContent = fromSave ? 'asked once — the checkbox below makes it standing' : '';
+    $('#opDlg').classList.add('show');
+  });
+}
 async function maybeAutoOptimize() {
   let cands = _layers.filter((L) => L.docs.blockDoc && !L.docs.blockDoc.parquet && layerTableHeader(L) && (layerTableHeader(L).mapping || {}).x != null);
   const big = cands.filter((L) => layerTableHeader(L).count > OPTIMIZE_MAX_BLOCKS);
   if (big.length) { $('#meta').textContent = `optimize: ${big.map((L) => L.label || L.name).join(', ')} over ${(OPTIMIZE_MAX_BLOCKS / 1e6)}M blocks — kept as-is (convert explicitly via the layer menu; it streams with bounded memory but takes a while)`; cands = cands.filter((L) => !big.includes(L)); }
   if (!cands.length) return;
-  let choice = _autoOptimize;
+  let choice = _autoOptimize, picked = cands, keepOriginal = false;
   if (choice == null) {
-    const total = cands.reduce((t, L) => t + (layerBlob(L) ? layerBlob(L).size : 0), 0);
-    const yes = await microConfirm('Store block models as spatial Parquet?',
-      `${cands.length} block model${cands.length > 1 ? 's' : ''} (${fmtSize(total)}) can be reordered to Morton-sorted Parquet — faster spatial queries, smaller files, painting stays editable. Apply on every save?`,
-      'Optimize', 'Keep original');
-    choice = yes ? 'on' : 'off'; setAutoOptimize(choice);
-  }
-  if (choice !== 'on') return;
-  for (const L of cands) { $('#meta').textContent = `optimizing ${L.name}…`; try { await convertLayerToParquet(L); } catch (e) { $('#meta').textContent = `optimize ${L.name}: ${e.message}`; } }
+    const res = await openOptimizeDialog(cands, { fromSave: true });
+    if (!res) { setAutoOptimize('off'); return; }
+    if (res.auto != null) setAutoOptimize(res.auto ? 'on' : 'off');
+    picked = res.layers; keepOriginal = res.keepOriginal;
+    if (!picked.length) return;
+  } else if (choice !== 'on') return;
+  for (const L of picked) { $('#meta').textContent = `optimizing ${L.name}…`; try { await convertLayerToParquet(L, { keepOriginal }); } catch (e) { $('#meta').textContent = `optimize ${L.name}: ${e.message}`; } }
 }
 function updateProjectTitle() {
   document.title = _project ? `micro — ${_project.name}${_project.dirty ? ' •' : ''}` : 'micro';
@@ -7792,7 +7893,7 @@ const COMMANDS = [
   { id: 'measure', group: 'Analyse', title: 'Measure…', kw: 'distance ruler', run: () => armMeasure() },
   { id: 'props', group: 'Layer', title: 'Properties…', kw: 'style colour clip', when: (c) => c.L, run: (c) => { setActiveLayer(c.L.id); openProps(); } },
   { id: 'lineage', group: 'Layer', title: 'Lineage…', kw: 'provenance audit report history derivation', when: (c) => c.L && c.L.lineage, run: (c) => openLineageWindow(c.L) },
-  { id: 'optimize', group: 'Layer', title: 'Optimize to spatial Parquet', kw: 'morton index materialize', when: (c) => c.L && c.L.docs.blockDoc && !c.L.docs.blockDoc.parquet, run: (c) => convertLayerToParquet(c.L) },
+  { id: 'optimize', group: 'Layer', title: 'Store as Parquet…', kw: 'optimize morton index materialize convert spatial', when: (c) => c.L && c.L.docs.blockDoc && !c.L.docs.blockDoc.parquet, run: async (c) => { const res = await openOptimizeDialog([c.L]); if (res && res.layers.length) await convertLayerToParquet(c.L, { keepOriginal: res.keepOriginal }); } },
   { id: 'paint', group: 'Layer', title: 'Paint column…', kw: 'brush domain category', when: (c) => c.L && layerTableHeader(c.L), run: (c) => openPaintPalette(c.L) },
   { id: 'export', group: 'Layer', title: 'Export rows…', kw: 'csv parquet save out', when: (c) => c.L && layerTableHeader(c.L), run: (c) => openExportDialog(c.L) },
   { id: 'hide', group: 'Layer', title: 'Hide / show layer', kw: 'visible toggle', when: (c) => c.L, run: (c) => { c.L.visible = !c.L.visible; applyTreeVisibility(); renderLayers(); } },
@@ -8249,7 +8350,7 @@ function layerMenu(L, x, y) {
     ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }, { label: 'Swath plot…', action: () => openSwath(L) }] : []),
     ...(false && gridAxesOf(L) && drillholeLayers().length ? [{ label: 'Validate vs drillholes…', action: () => openValidation(L) }] : []),   // temporarily disabled pending window rework
     ...(L.lineage ? [{ label: 'Lineage…', action: () => openLineageWindow(L) }] : []),
-    ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Optimize to spatial Parquet', action: () => convertLayerToParquet(L) }] : []),
+    ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Store as Parquet…', action: async () => { const res = await openOptimizeDialog([L]); if (res && res.layers.length) await convertLayerToParquet(L, { keepOriginal: res.keepOriginal }); } }] : []),
     ...(L.docs.blockDoc ? [{ label: 'Build index (stats + pushdown)…', action: async () => {
       await scanColumns(L, (a, b) => { $('#meta').textContent = `indexing ${L.label || L.name} — ${b ? Math.round(100 * a / b) : 0}%…`; }, { bands: !L.docs.blockDoc.parquet });
       $('#meta').textContent = `indexed ${L.label || L.name} — stats + band index ready (written as a sidecar on the next project save)`;
