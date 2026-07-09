@@ -596,6 +596,7 @@
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
     <label id="secPlaneW" title="outline the section plane in the view" style="display:none"><input id="secPlaneVis" type="checkbox">plane</label>
     <label id="secFollowW" title="camera follows the scrub — the cut stays put on screen while you walk the deposit section by section" style="display:none"><input id="secFollow" type="checkbox">follow</label>
+    <label id="sec2DW" title="2D mode: face the section, go orthographic, and lock rotation — drags pan instead of orbiting, so the view reads like a paper section/plan" style="display:none"><input id="sec2D" type="checkbox">2D</label>
   </div>
   <div id="barTools"></div>
   <div id="view"><canvas id="cv"></canvas><canvas id="decoCv" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
@@ -826,6 +827,8 @@ function syncSecUI() {
   $('#secHalf').style.display = on && $('#secClip').value === 'slab' ? '' : 'none';
   $('#secPlaneW').style.display = on ? '' : 'none';
   $('#secFollowW').style.display = on ? '' : 'none';
+  $('#sec2DW').style.display = on ? '' : 'none';
+  if (!on && $('#sec2D').checked) { $('#sec2D').checked = false; $('#sec2D').dispatchEvent(new Event('input')); }   // section off releases the lock
   $('#secDipDir').style.display = mode === 'custom' ? '' : 'none';
   $('#secDip').style.display = mode === 'custom' ? '' : 'none';
 }
@@ -857,6 +860,25 @@ function secFollowShift(dd, n) {
   st.target = [st.target[0] + dd * n[0], st.target[1] + dd * n[1], st.target[2] + dd * n[2]];
   cam.update();
 }
+// 2D MODE: face the section, go orthographic, lock drag-orbit (drags pan) —
+// micro reads like a paper section/plan. Composes with follow = the slicer walk.
+// Transient (not persisted): a restored project shouldn't come up rotation-locked.
+let _sec2DPrevOrtho = false;
+$('#sec2D').addEventListener('input', () => {
+  const on = $('#sec2D').checked;
+  if (on) {
+    _sec2DPrevOrtho = !!cam.state.ortho;
+    viewAlongSection();                                    // face-on (keeps the side you're on)
+    cam.setOrtho(true);
+    cam.state.orbitLock = true;
+    $('#meta').textContent = '2D — drags pan, view keys still work · uncheck to orbit again';
+  } else {
+    cam.state.orbitLock = false;
+    if (!_sec2DPrevOrtho) cam.setOrtho(false);             // restore the projection you came from
+    $('#meta').textContent = '2D off';
+  }
+  requestRender();
+});
 let _secPosPrev = null;                                    // refreshed at gesture start — a silent restore can't leave a stale jump
 for (const ev of ['pointerdown', 'focus']) $('#secPos').addEventListener(ev, () => { _secPosPrev = +$('#secPos').value; });
 $('#secMode').addEventListener('input', () => { _secPosPrev = null; });
@@ -6806,14 +6828,14 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom · <code>⌃
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
 <code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br>
 <code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove · <code>[</code> / <code>]</code> step the active layer<br>
-<code>h</code> — hide/show the <b>active layer</b> (flick between overlaid models) · <code>⇧B</code> — <b>block edges</b> on/off (per-layer override in the layer's right-click menu)<br>
+<code>h</code> — hide/show the <b>active layer</b> (flick between overlaid models) · <code>⇧H</code> — <b>solo</b> it (again restores; step layers with <code>[</code> <code>]</code> while soloed to walk them one at a time) · <code>⇧B</code> — <b>block edges</b> on/off (per-layer override in the layer's right-click menu)<br>
 <code>Ctrl+S</code> — <b>save the project</b>: File → project folder (Chromium) keeps your layers, styling, filters, camera, section, and saved views in a plain folder — project.json + the files<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
 <b>sections</b> — a cut through the data; everything hidden is neither drawn nor pickable. Blocks and drillhole sticks cut <b>true</b>: a block straddling the plane shows its cut interior at the plane (a thin slab reads as a continuous painted wall), and a sectioned mesh's trace draws <b>over</b> the wall like a wireframe outline on a section plot<br>
 pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line</b> (the vertical section through it; <code>⇧</code> snaps to 15°, <code>⇧⌥</code> to 5°, <code>Esc</code> cancels), or choose <b>custom</b> and type the plane's dip direction + dip · <code>x</code> toggles the section on/off<br>
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
-<b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
+<b>plane</b> — outline the cut plane in the view · <b>2D</b> — face-on + orthographic + rotation locked (drags pan; the paper-section view) · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
 <code>l</code> — face the section (<code>⇧L</code> its back) · <code>,</code> <code>.</code> — walk the section one slab at a time · <code>⌃</code>wheel or the slider scrubs · <b>follow</b> — the camera walks with the scrub (the cut stays put on screen) · the number is slab half-thickness (m)<br><br>
 <b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br>
 The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Select through) flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
@@ -7508,6 +7530,27 @@ function toggleSection() {
   sel.dispatchEvent(new Event('input'));
 }
 // scrub the section by one slab thickness (adjacent section, like flipping pages)
+// ⇧H solo: hide everything but the active layer; ⇧H again restores the previous
+// visibility set. If the ACTIVE layer changed while soloed ([ ] stepping), ⇧H
+// re-solos the new one instead of restoring — so ⇧H · ] · ⇧H · ] · ⇧H walks the
+// layers one at a time, and a final ⇧H (same layer) brings everything back.
+let _solo = null;                                          // { id, prev: Map(id→visible) }
+function soloActiveLayer() {
+  const La = activeLayer(); if (!La) return;
+  if (_solo && _solo.id === La.id) {
+    for (const L of _layers) if (_solo.prev.has(L.id)) L.visible = _solo.prev.get(L.id);
+    _solo = null;
+    $('#meta').textContent = 'solo off';
+  } else {
+    if (!_solo) {
+      if (_layers.length < 2) { $('#meta').textContent = 'solo: only one layer'; return; }
+      _solo = { id: La.id, prev: new Map(_layers.map((L) => [L.id, L.visible])) };
+    } else _solo.id = La.id;                               // re-solo the new active, keep the original snapshot
+    for (const L of _layers) L.visible = L.id === La.id;
+    $('#meta').textContent = `solo — ${La.label || La.name} (⇧H restores)`;
+  }
+  applyTreeVisibility(); renderLayers();
+}
 function scrubSection(dir, frac = 1) {
   const sec = currentSection(); if (!sec) return;
   const [lo, hi] = secRange();
@@ -7548,6 +7591,8 @@ const COMMANDS = [
   { id: 'figure', group: 'File', title: 'Export figure (PNG)…', kw: 'decorations scale bar north legend title report', run: () => exportFigure() },
   { id: 'blockedges', group: 'View', title: 'Toggle block edges', kw: 'borders lines wireframe outline grid', when: (c) => c.L && !!c.L.docs.blockDoc, run: () => setBlockEdges(!_blockEdges) },
   { id: 'secfollow', group: 'View', title: 'Section: camera follows the scrub', kw: 'walk slicer step through benches follow', when: () => !!currentSection(), run: () => { const c = $('#secFollow'); c.checked = !c.checked; c.dispatchEvent(new Event('input')); $('#meta').textContent = `section follow ${c.checked ? 'on' : 'off'}`; } },
+  { id: 'sec2d', group: 'View', title: 'Section: 2D lock (face-on, ortho, no orbit)', kw: 'paper plan flat lock rotation', when: () => !!currentSection(), run: () => { const c = $('#sec2D'); c.checked = !c.checked; c.dispatchEvent(new Event('input')); } },
+  { id: 'solo', group: 'View', title: 'Solo the active layer', kw: 'hide others isolate only', when: (c) => c.L && _layers.length > 1, run: () => soloActiveLayer() },
   { id: 'decopanel', group: 'View', title: 'Decorations & figure…', kw: 'legend scale bar north title background export panel', run: () => openDecoPanel() },
   { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
   { id: 'deconorth', group: 'View', title: 'Toggle north arrow', kw: 'decoration compass', run: () => setDeco('north', !_deco.north) },
@@ -7663,6 +7708,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'P') { const Lp = activeLayer(); if (Lp) { setActiveLayer(Lp.id); openProps(); } }   // ⇧P: layer Properties (pairs with p = layers panel)
   else if (k === 'B') { setBlockEdges(!_blockEdges); $('#meta').textContent = `block edges ${_blockEdges ? 'on' : 'off'}`; }   // ⇧B: block edges (the View toggle)
   else if (k === 'h') { const Lh = activeLayer(); if (Lh) { Lh.visible = !Lh.visible; applyTreeVisibility(); renderLayers(); $('#meta').textContent = `${Lh.label || Lh.name} ${Lh.visible ? 'shown' : 'hidden'}`; } }   // h: hide/show the active layer (compare-overlays flick)
+  else if (k === 'H') soloActiveLayer();                  // ⇧H: solo the active layer (again = restore; re-solos if active changed)
   else if (k === 't') { const Lt = activeLayer(); if (Lt && Lt.kind !== 'mesh') openAttrTable(Lt); }
   else if (k === 'r') armSelect('rect');
   else if (k === 'v') armSelect('lasso');

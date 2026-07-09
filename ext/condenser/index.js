@@ -5830,14 +5830,16 @@ function attachOrbitInput(canvas, cam, { onChange } = {}) {
       let dA = now.angle - pinch.angle;
       if (dA > Math.PI) dA -= 2 * Math.PI;
       if (dA < -Math.PI) dA += 2 * Math.PI;
-      cam.orbit(-dA, 0);                                   // twist: grab-the-world
+      if (!cam.state.orbitLock) cam.orbit(-dA, 0);         // twist: grab-the-world (locked views don't twist)
       pinch = now;
       if (onChange) onChange();
       return;
     }
     if (!mode || mode === 'pinch') return;
     const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY;
-    if (mode === 'orbit') cam.orbit(-dx * 0.006, dy * 0.006);
+    // orbitLock (state flag): 2D/section-locked views — drags PAN instead of
+    // orbiting, so a locked plan/section can't be knocked off-plane by a drag
+    if (mode === 'orbit') { if (cam.state.orbitLock) cam.pan(dx, dy, canvas.clientHeight); else cam.orbit(-dx * 0.006, dy * 0.006); }
     else cam.pan(dx, dy, canvas.clientHeight);
     if (onChange) onChange();
   };
