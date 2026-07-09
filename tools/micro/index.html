@@ -6779,7 +6779,7 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <code>Ctrl+S</code> — <b>save the project</b>: File → project folder (Chromium) keeps your layers, styling, filters, camera, section, and saved views in a plain folder — project.json + the files<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
-<b>sections</b> — a cut through the data; everything hidden is neither drawn nor pickable<br>
+<b>sections</b> — a cut through the data; everything hidden is neither drawn nor pickable. Blocks and drillhole sticks cut <b>true</b>: a block straddling the plane shows its cut interior at the plane (a thin slab reads as a continuous painted wall), and a sectioned mesh's trace draws <b>over</b> the wall like a wireframe outline on a section plot<br>
 pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line</b> (the vertical section through it, <code>Esc</code> cancels), or choose <b>custom</b> and type the plane's dip direction + dip · <code>x</code> toggles the section on/off<br>
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>

@@ -235,6 +235,32 @@ await p.evaluate(() => document.querySelectorAll('#rpCfg .rp-links a')[0].click(
 chk('“all” restores every field', (await p.evaluate(() => document.querySelectorAll('#recPanel .rp-row').length)) === recN);
 await p.evaluate(() => { document.querySelector('#rpFieldsBtn').click(); const L = window._micro.layers()[0]; L._recHide = new Set(); });
 
+// ── 2c. TRUE SECTIONS: a thin plan slab BETWEEN centroid rows (z=655±2; rows at
+// 650/660) — the old centroid cull rendered NOTHING there; the analytic ray-
+// interval clip must paint a continuous cut wall, and the wall must be pickable.
+const ts = await p.evaluate(async () => {
+  const m = window._micro;
+  const sel = document.querySelector('#secMode'); sel.value = 'plan'; sel.dispatchEvent(new Event('input'));
+  const h = document.querySelector('#secHalf'); h.value = '2'; h.dispatchEvent(new Event('input'));
+  const pos = document.querySelector('#secPos'); pos.value = '0.5'; pos.dispatchEvent(new Event('input'));
+  m.requestRender();
+  await new Promise((r) => { const t = setInterval(() => { if (/converged/.test(document.querySelector('#stats').textContent)) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 15000); });
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const cv = document.querySelector('#cv'), c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height;
+  const g = c.getContext('2d'); g.drawImage(cv, 0, 0);
+  const d = g.getImageData(0, 0, cv.width, cv.height).data; let lit = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 60) lit++;
+  let rec = null;
+  const r = cv.getBoundingClientRect();
+  for (let gy = 0.35; gy <= 0.65 && rec == null; gy += 0.1) for (let gx = 0.35; gx <= 0.65; gx += 0.1) {
+    const hit = m.renderer.pick(r.width * gx, r.height * gy, m.cam, { section: m.currentSection() });
+    if (hit != null && hit !== 0xFFFFFFFF) { rec = hit; break; }
+  }
+  sel.value = 'off'; sel.dispatchEvent(new Event('input')); m.requestRender();
+  return { lit, rec };
+});
+chk(`true section: gap slab paints a cut wall (${ts.lit} px lit — centroid cull gave 0) + wall pickable (rec ${ts.rec})`, ts.lit > 2000 && ts.rec != null);
+
 // ── 3. CSV filter (predicate over the model) ──
 await p.evaluate(() => { const i = document.querySelector('#filter'); i.value = 'LITO = "HEMATITE" and FE > 45'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); });
 await p.waitForFunction(() => window._micro.layers()[0]._filterMask, null, { timeout: 30000 });

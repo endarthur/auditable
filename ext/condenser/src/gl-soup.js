@@ -45,14 +45,73 @@ void main() {
   outColor = vec4(uTint.rgb * shade, 1.0);
 }`;
 
+// sectioned variant: flatten in-slab fragment depth onto the camera-side slab
+// face so the streamed-mesh trace draws over the true-cut block wall (gl-mesh's
+// FRAG_OVERLAY, same math — see the rationale there)
+const FRAG_OVERLAY = `#version 300 es
+precision highp float;
+in vec3 vWorldPos;
+in float vSecDist;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
+uniform vec4 uTint;
+uniform vec3 uLightDir;
+uniform vec3 uEye;
+uniform mat4 uViewProj;
+uniform vec3 uFwd;
+uniform float uOrtho;
+out vec4 outColor;
+const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+void main() {
+  if (abs(vSecDist) > uSecCfg.y) discard;
+  if (uTint.a < 0.999) {
+    int bi = (int(gl_FragCoord.x) & 3) + ((int(gl_FragCoord.y) & 3) << 2);
+    if (uTint.a < (BAYER[bi] + 0.5) / 16.0) discard;
+  }
+  vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
+  vec3 vd = normalize(uEye - vWorldPos);
+  if (dot(n, vd) < 0.0) n = -n;
+  float shade = 0.42 + 0.58 * max(dot(n, uLightDir), 0.0);
+  outColor = vec4(uTint.rgb * shade, 1.0);
+  gl_FragDepth = gl_FragCoord.z;
+  float dcEye = dot(uEye, uSecPlane.xyz) - uSecPlane.w;
+  if (abs(dcEye) > uSecCfg.y) {
+    float side = sign(dcEye);
+    vec3 q; bool front = false;
+    if (uOrtho > 0.5) {
+      float den = dot(uFwd, uSecPlane.xyz);
+      if (abs(den) > 1e-9) {
+        float s = (vSecDist - side * uSecCfg.y) / den;
+        if (s > 0.0) { q = vWorldPos - uFwd * s; front = true; }
+      }
+    } else {
+      vec3 rdm = vWorldPos - uEye;
+      float den = dot(rdm, uSecPlane.xyz);
+      if (abs(den) > 1e-9) {
+        float tF = (side * uSecCfg.y - dcEye) / den;
+        if (tF > 0.0 && tF < 1.0) { q = uEye + rdm * tF; front = true; }
+      }
+    }
+    if (front) {
+      vec4 clipQ = uViewProj * vec4(q, 1.0);
+      gl_FragDepth = clamp(clipQ.z / clipQ.w * 0.5 + 0.5, 0.0, 1.0) - 3e-5;
+    }
+  }
+}`;
+
 export function createSoupPipeline(gl) {
-  const prog = makeProgram(gl, VERT, FRAG);
-  const U = (n) => gl.getUniformLocation(prog, n);
-  const uni = {
-    viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
-    secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
-    tint: U('uTint'), lightDir: U('uLightDir'), eye: U('uEye'),
+  const mk = (frag) => {
+    const prog = makeProgram(gl, VERT, frag);
+    const U = (n) => gl.getUniformLocation(prog, n);
+    return { prog, uni: {
+      viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
+      secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
+      tint: U('uTint'), lightDir: U('uLightDir'), eye: U('uEye'),
+      fwd: U('uFwd'), ortho: U('uOrtho'),
+    } };
   };
+  const base = mk(FRAG), overlay = mk(FRAG_OVERLAY);
+  let uni = base.uni;                                      // drawSlice uses the ACTIVE program's locations
 
   function upload(chunk) {
     const vao = gl.createVertexArray();
@@ -71,7 +130,9 @@ export function createSoupPipeline(gl) {
 
   function begin(cam, { tint = [0.62, 0.64, 0.66], opacity = 1, section = null }) {
     const s = cam.state;
-    gl.useProgram(prog);
+    const pp = section ? overlay : base;
+    uni = pp.uni;
+    gl.useProgram(pp.prog);
     gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
     gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
     const v = s.view;
@@ -83,6 +144,12 @@ export function createSoupPipeline(gl) {
     gl.uniform4f(uni.tint, tint[0], tint[1], tint[2], Math.max(0.02, Math.min(1, opacity)));
     gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
     gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
+    if (uni.fwd) {
+      const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+      const fl = Math.hypot(...f) || 1;
+      gl.uniform3f(uni.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+      gl.uniform1f(uni.ortho, s.ortho ? 1 : 0);
+    }
   }
 
   // first/k in TRIANGLES — the prefix invariant rides the shuffled build order

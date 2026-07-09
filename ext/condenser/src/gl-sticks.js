@@ -73,7 +73,10 @@ void main() {
     int rec = int(aRec & 0x1FFFFFFFu);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
-  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  // section cull: keep any capsule that TOUCHES the slab (segment support along
+  // the normal + radius) — the fragment shader clips exactly (see gl-blocks).
+  float secSupp = demoted > 0.5 ? 0.0 : (abs(dot(axis, uSecPlane.xyz)) * 0.5 + uRadius);
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y + secSupp) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float cls = aCat;
   if (uRuleOn > 0.5) {
@@ -129,6 +132,8 @@ uniform float uBackoff;
 uniform float uRadius;
 uniform vec3 uLightDir;
 uniform mat4 uViewProj;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 out vec4 outColor;
 ${SCREENDOOR}
 void main() {
@@ -179,10 +184,30 @@ void main() {
     }
   }
   if (t < 0.0) discard;
+  // TRUE SECTION on the capsule (convex, so one inside-test at the slab face is
+  // exact): a hit outside the slab either becomes the flat cut CROSS-SECTION at
+  // the face, or the capsule never overlaps the slab and the pixel is gone.
+  float cutFace = 0.0;
+  if (uSecCfg.x > 0.5) {
+    float den = dot(rd, uSecPlane.xyz);
+    float dc = dot(ro, uSecPlane.xyz) - uSecPlane.w;
+    if (abs(dc + t * den) > uSecCfg.y) {
+      if (abs(den) < 1e-9) discard;
+      float sIn = min((-uSecCfg.y - dc) / den, (uSecCfg.y - dc) / den);
+      if (sIn <= t) discard;                               // hit past the slab exit
+      vec3 q = ro + rd * sIn;                              // at the slab face: still inside?
+      vec3 qa = q - vA;
+      float yq = clamp(dot(qa, ba) / baba, 0.0, 1.0);
+      if (length(qa - ba * yq) > uRadius) discard;
+      t = sIn;
+      n = uSecPlane.xyz * -sign(den);
+      cutFace = 1.0;
+    }
+  }
   vec3 p = ro + rd * t;
   vec4 clip = uViewProj * vec4(p, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
-  float shade = 0.55 + 0.45 * max(dot(n, uLightDir), 0.0);
+  float shade = (0.55 + 0.45 * max(dot(n, uLightDir), 0.0)) * (cutFace > 0.5 ? 0.85 : 1.0);
   outColor = vec4(vColor.rgb * shade, vColor.a);
 }`;
 

@@ -110,7 +110,10 @@ void main() {
     int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
-  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  // touch-the-slab cull (support radius) — the fragment clips exactly, matching
+  // the visual true-section cut so the cut wall is pickable
+  float secSupp = demoted > 0.5 ? 0.0 : dot(half_, abs(uSecPlane.xyz));
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y + secSupp) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);   // hidden (isolated or sectioned) isn't pickable
   float cls = aCat;
   if (uRuleOn > 0.5) {
@@ -134,6 +137,8 @@ uniform vec3 uFwd;
 uniform float uOrthoRay;
 uniform float uBackoff;
 uniform mat4 uViewProj;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 out vec4 outColor;
 ${ENCODE}
 void main() {
@@ -153,6 +158,18 @@ void main() {
   float tin = max(max(tmin3.x, tmin3.y), tmin3.z);
   float tout = min(min(tmax3.x, tmax3.y), tmax3.z);
   if (tin > tout || tout < 0.0) discard;
+  // clip by the section slab — the visible CUT surface is what picks (gl-blocks)
+  if (uSecCfg.x > 0.5) {
+    float den = dot(rd, uSecPlane.xyz);
+    float dc = dot(ro, uSecPlane.xyz) - uSecPlane.w;
+    if (abs(den) < 1e-9) { if (abs(dc) > uSecCfg.y) discard; }
+    else {
+      float ta = (-uSecCfg.y - dc) / den, tb = (uSecCfg.y - dc) / den;
+      tin = max(tin, min(ta, tb));
+      tout = min(tout, max(ta, tb));
+      if (tin > tout || tout < 0.0) discard;
+    }
+  }
   float t = tin > 0.0 ? tin : tout;
   vec4 clip = uViewProj * vec4(ro + rd * t, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
@@ -203,7 +220,8 @@ void main() {
     int rec = int(aRec & 0x1FFFFFFFu);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
-  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  float secSupp = demoted > 0.5 ? 0.0 : (abs(dot(axis, uSecPlane.xyz)) * 0.5 + uRadius);
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y + secSupp) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float cls = aCat;
   if (uRuleOn > 0.5) {
@@ -238,6 +256,8 @@ uniform float uOrthoRay;
 uniform float uBackoff;
 uniform float uRadius;
 uniform mat4 uViewProj;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 out vec4 outColor;
 ${ENCODE}
 void main() {
@@ -278,6 +298,22 @@ void main() {
     }
   }
   if (t < 0.0) discard;
+  // section clip (convexity trick, matches gl-sticks): a hit outside the slab is
+  // either the cut cross-section at the face or not pickable at all
+  if (uSecCfg.x > 0.5) {
+    float den = dot(rd, uSecPlane.xyz);
+    float dc = dot(ro, uSecPlane.xyz) - uSecPlane.w;
+    if (abs(dc + t * den) > uSecCfg.y) {
+      if (abs(den) < 1e-9) discard;
+      float sIn = min((-uSecCfg.y - dc) / den, (uSecCfg.y - dc) / den);
+      if (sIn <= t) discard;
+      vec3 q = ro + rd * sIn;
+      vec3 qa = q - vA;
+      float yq = clamp(dot(qa, ba) / baba, 0.0, 1.0);
+      if (length(qa - ba * yq) > uRadius) discard;
+      t = sIn;
+    }
+  }
   vec4 clip = uViewProj * vec4(ro + rd * t, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
   outColor = encodeRec(vRec);

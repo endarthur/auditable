@@ -2371,7 +2371,10 @@ void main() {
     int rec = int(aRec & 0x1FFFFFFFu);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
-  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  // section cull: keep any capsule that TOUCHES the slab (segment support along
+  // the normal + radius) — the fragment shader clips exactly (see gl-blocks).
+  float secSupp = demoted > 0.5 ? 0.0 : (abs(dot(axis, uSecPlane.xyz)) * 0.5 + uRadius);
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y + secSupp) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float cls = aCat;
   if (uRuleOn > 0.5) {
@@ -2427,6 +2430,8 @@ uniform float uBackoff;
 uniform float uRadius;
 uniform vec3 uLightDir;
 uniform mat4 uViewProj;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 out vec4 outColor;
 ${SCREENDOOR$gl_sticks}
 void main() {
@@ -2477,10 +2482,30 @@ void main() {
     }
   }
   if (t < 0.0) discard;
+  // TRUE SECTION on the capsule (convex, so one inside-test at the slab face is
+  // exact): a hit outside the slab either becomes the flat cut CROSS-SECTION at
+  // the face, or the capsule never overlaps the slab and the pixel is gone.
+  float cutFace = 0.0;
+  if (uSecCfg.x > 0.5) {
+    float den = dot(rd, uSecPlane.xyz);
+    float dc = dot(ro, uSecPlane.xyz) - uSecPlane.w;
+    if (abs(dc + t * den) > uSecCfg.y) {
+      if (abs(den) < 1e-9) discard;
+      float sIn = min((-uSecCfg.y - dc) / den, (uSecCfg.y - dc) / den);
+      if (sIn <= t) discard;                               // hit past the slab exit
+      vec3 q = ro + rd * sIn;                              // at the slab face: still inside?
+      vec3 qa = q - vA;
+      float yq = clamp(dot(qa, ba) / baba, 0.0, 1.0);
+      if (length(qa - ba * yq) > uRadius) discard;
+      t = sIn;
+      n = uSecPlane.xyz * -sign(den);
+      cutFace = 1.0;
+    }
+  }
   vec3 p = ro + rd * t;
   vec4 clip = uViewProj * vec4(p, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
-  float shade = 0.55 + 0.45 * max(dot(n, uLightDir), 0.0);
+  float shade = (0.55 + 0.45 * max(dot(n, uLightDir), 0.0)) * (cutFace > 0.5 ? 0.85 : 1.0);
   outColor = vec4(vColor.rgb * shade, vColor.a);
 }`;
 
@@ -3458,13 +3483,75 @@ void main() {
   outColor = vec4(uTint.rgb * shade, 1.0);
 }`;
 
+// TRACE-OVER-THE-WALL variant, used while the layer is sectioned: with blocks
+// cutting TRUE at the slab plane (gl-blocks), the mesh inside the slab sits
+// BEHIND the painted cut wall and would be fully occluded — and the mesh AT the
+// plane is edge-on (invisible). This program pulls each in-slab fragment's DEPTH
+// onto the camera-side slab face (minus an epsilon), so the whole in-slab mesh
+// projects onto the section and draws over the wall — the wireframe-trace-on-a-
+// section-plot look. Colour/shading unchanged; costs early-z only while sectioned.
+const FRAG_OVERLAY$gl_mesh = `#version 300 es
+precision highp float;
+in vec3 vWorldPos;
+in float vSecDist;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
+uniform vec4 uTint;
+uniform vec3 uLightDir;
+uniform vec3 uEye;
+uniform mat4 uViewProj;
+uniform vec3 uFwd;
+uniform float uOrtho;
+out vec4 outColor;
+const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+void main() {
+  if (abs(vSecDist) > uSecCfg.y) discard;
+  if (uTint.a < 0.999) {
+    int bi = (int(gl_FragCoord.x) & 3) + ((int(gl_FragCoord.y) & 3) << 2);
+    if (uTint.a < (BAYER[bi] + 0.5) / 16.0) discard;
+  }
+  vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
+  vec3 vd = normalize(uEye - vWorldPos);
+  if (dot(n, vd) < 0.0) n = -n;
+  float shade = 0.42 + 0.58 * max(dot(n, uLightDir), 0.0);
+  outColor = vec4(uTint.rgb * shade, 1.0);
+  gl_FragDepth = gl_FragCoord.z;
+  float dcEye = dot(uEye, uSecPlane.xyz) - uSecPlane.w;
+  if (abs(dcEye) > uSecCfg.y) {                            // eye outside the slab → a wall may occlude
+    float side = sign(dcEye);
+    vec3 q; bool front = false;
+    if (uOrtho > 0.5) {                                    // parallel rays: march back along the view dir
+      float den = dot(uFwd, uSecPlane.xyz);
+      if (abs(den) > 1e-9) {
+        float s = (vSecDist - side * uSecCfg.y) / den;
+        if (s > 0.0) { q = vWorldPos - uFwd * s; front = true; }
+      }
+    } else {
+      vec3 rdm = vWorldPos - uEye;
+      float den = dot(rdm, uSecPlane.xyz);
+      if (abs(den) > 1e-9) {
+        float tF = (side * uSecCfg.y - dcEye) / den;       // where the eye ray crosses the near face
+        if (tF > 0.0 && tF < 1.0) { q = uEye + rdm * tF; front = true; }
+      }
+    }
+    if (front) {
+      vec4 clipQ = uViewProj * vec4(q, 1.0);
+      gl_FragDepth = clamp(clipQ.z / clipQ.w * 0.5 + 0.5, 0.0, 1.0) - 3e-5;
+    }
+  }
+}`;
+
 function createMeshPipeline(gl) {
-  const prog = makeProgram(gl, VERT$gl_mesh, FRAG$gl_mesh);
-  const U = (n) => gl.getUniformLocation(prog, n);
-  const uni = {
-    viewProj: U('uViewProj'), secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
-    tint: U('uTint'), lightDir: U('uLightDir'), eye: U('uEye'),
+  const mk = (frag) => {
+    const prog = makeProgram(gl, VERT$gl_mesh, frag);
+    const U = (n) => gl.getUniformLocation(prog, n);
+    return { prog, uni: {
+      viewProj: U('uViewProj'), secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
+      tint: U('uTint'), lightDir: U('uLightDir'), eye: U('uEye'),
+      fwd: U('uFwd'), ortho: U('uOrtho'),
+    } };
   };
+  const base = mk(FRAG$gl_mesh), overlay = mk(FRAG_OVERLAY$gl_mesh);
 
   function upload(chunk) {
     const vao = gl.createVertexArray();
@@ -3485,9 +3572,12 @@ function createMeshPipeline(gl) {
     };
   }
 
-  // per-layer uniforms — tint [r,g,b] 0..1, opacity 0..1, section may be null
+  // per-layer uniforms — tint [r,g,b] 0..1, opacity 0..1, section may be null.
+  // Sectioned → the overlay program (depth flattened onto the slab face so the
+  // trace draws over the true-cut block wall); unsectioned → the base program.
   function begin(cam, { tint = [0.62, 0.64, 0.66], opacity = 1, section = null }) {
     const s = cam.state;
+    const { prog, uni } = section ? overlay : base;
     gl.useProgram(prog);
     gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
     gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
@@ -3501,6 +3591,12 @@ function createMeshPipeline(gl) {
     gl.uniform4f(uni.tint, tint[0], tint[1], tint[2], Math.max(0.02, Math.min(1, opacity)));
     gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
     gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
+    if (uni.fwd) {
+      const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+      const fl = Math.hypot(...f) || 1;
+      gl.uniform3f(uni.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+      gl.uniform1f(uni.ortho, s.ortho ? 1 : 0);
+    }
   }
 
   function draw(c) {
@@ -3874,14 +3970,73 @@ void main() {
   outColor = vec4(uTint.rgb * shade, 1.0);
 }`;
 
+// sectioned variant: flatten in-slab fragment depth onto the camera-side slab
+// face so the streamed-mesh trace draws over the true-cut block wall (gl-mesh's
+// FRAG_OVERLAY, same math — see the rationale there)
+const FRAG_OVERLAY$gl_soup = `#version 300 es
+precision highp float;
+in vec3 vWorldPos;
+in float vSecDist;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
+uniform vec4 uTint;
+uniform vec3 uLightDir;
+uniform vec3 uEye;
+uniform mat4 uViewProj;
+uniform vec3 uFwd;
+uniform float uOrtho;
+out vec4 outColor;
+const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+void main() {
+  if (abs(vSecDist) > uSecCfg.y) discard;
+  if (uTint.a < 0.999) {
+    int bi = (int(gl_FragCoord.x) & 3) + ((int(gl_FragCoord.y) & 3) << 2);
+    if (uTint.a < (BAYER[bi] + 0.5) / 16.0) discard;
+  }
+  vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
+  vec3 vd = normalize(uEye - vWorldPos);
+  if (dot(n, vd) < 0.0) n = -n;
+  float shade = 0.42 + 0.58 * max(dot(n, uLightDir), 0.0);
+  outColor = vec4(uTint.rgb * shade, 1.0);
+  gl_FragDepth = gl_FragCoord.z;
+  float dcEye = dot(uEye, uSecPlane.xyz) - uSecPlane.w;
+  if (abs(dcEye) > uSecCfg.y) {
+    float side = sign(dcEye);
+    vec3 q; bool front = false;
+    if (uOrtho > 0.5) {
+      float den = dot(uFwd, uSecPlane.xyz);
+      if (abs(den) > 1e-9) {
+        float s = (vSecDist - side * uSecCfg.y) / den;
+        if (s > 0.0) { q = vWorldPos - uFwd * s; front = true; }
+      }
+    } else {
+      vec3 rdm = vWorldPos - uEye;
+      float den = dot(rdm, uSecPlane.xyz);
+      if (abs(den) > 1e-9) {
+        float tF = (side * uSecCfg.y - dcEye) / den;
+        if (tF > 0.0 && tF < 1.0) { q = uEye + rdm * tF; front = true; }
+      }
+    }
+    if (front) {
+      vec4 clipQ = uViewProj * vec4(q, 1.0);
+      gl_FragDepth = clamp(clipQ.z / clipQ.w * 0.5 + 0.5, 0.0, 1.0) - 3e-5;
+    }
+  }
+}`;
+
 function createSoupPipeline(gl) {
-  const prog = makeProgram(gl, VERT$gl_soup, FRAG$gl_soup);
-  const U = (n) => gl.getUniformLocation(prog, n);
-  const uni = {
-    viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
-    secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
-    tint: U('uTint'), lightDir: U('uLightDir'), eye: U('uEye'),
+  const mk = (frag) => {
+    const prog = makeProgram(gl, VERT$gl_soup, frag);
+    const U = (n) => gl.getUniformLocation(prog, n);
+    return { prog, uni: {
+      viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
+      secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
+      tint: U('uTint'), lightDir: U('uLightDir'), eye: U('uEye'),
+      fwd: U('uFwd'), ortho: U('uOrtho'),
+    } };
   };
+  const base = mk(FRAG$gl_soup), overlay = mk(FRAG_OVERLAY$gl_soup);
+  let uni = base.uni;                                      // drawSlice uses the ACTIVE program's locations
 
   function upload(chunk) {
     const vao = gl.createVertexArray();
@@ -3900,7 +4055,9 @@ function createSoupPipeline(gl) {
 
   function begin(cam, { tint = [0.62, 0.64, 0.66], opacity = 1, section = null }) {
     const s = cam.state;
-    gl.useProgram(prog);
+    const pp = section ? overlay : base;
+    uni = pp.uni;
+    gl.useProgram(pp.prog);
     gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
     gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
     const v = s.view;
@@ -3912,6 +4069,12 @@ function createSoupPipeline(gl) {
     gl.uniform4f(uni.tint, tint[0], tint[1], tint[2], Math.max(0.02, Math.min(1, opacity)));
     gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
     gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
+    if (uni.fwd) {
+      const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+      const fl = Math.hypot(...f) || 1;
+      gl.uniform3f(uni.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+      gl.uniform1f(uni.ortho, s.ortho ? 1 : 0);
+    }
   }
 
   // first/k in TRIANGLES — the prefix invariant rides the shuffled build order
@@ -3943,6 +4106,13 @@ function createSoupPipeline(gl) {
 // WebGL2 has no baseInstance, so accumulation slices [first, first+k) work by
 // re-pointing the instance attributes at byte offsets before each draw — the
 // chunk's VAO records the new pointers (cheap: 3 pointer calls per chunk-draw).
+//
+// TRUE SECTIONS: the section slab clips the ray-box interval analytically in the
+// fragment shader (a couple of dots + interval min/max on top of the existing
+// slab test) — a block straddling the plane shows its CUT INTERIOR (flat, plane
+// normal, slightly darkened) instead of vanishing or poking through. The vertex
+// cull keeps anything TOUCHING the slab (box support radius along the normal);
+// demoted splats keep the centroid test (sub-pixel, and a splat can't clip).
 //
 // Positions are IJK-exact (§2.5): center = uGridOrigin + aIjk · uGridSize, with
 // uGridOrigin the frame-local centroid of block (0,0,0).
@@ -4004,7 +4174,12 @@ void main() {
     int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
-  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;   // centroid-in-slab
+  // section cull: keep any box that TOUCHES the slab (support radius of the box
+  // along the plane normal) — the fragment shader then clips the ray interval
+  // EXACTLY, so straddling blocks show their true cut instead of vanishing.
+  // Demoted splats can't clip, so they keep the centroid test (sub-pixel there).
+  float secSupp = demoted > 0.5 ? 0.0 : dot(half_, abs(uSecPlane.xyz));
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y + secSupp) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float cls = aCat;
   if (uRuleOn > 0.5) {
@@ -4063,6 +4238,8 @@ uniform float uOrthoRay;                // 1 = ortho: origin per fragment, direc
 uniform float uBackoff;                 // how far behind the quad the ortho ray starts
 uniform vec3 uLightDir;
 uniform mat4 uViewProj;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 out vec4 outColor;
 ${SCREENDOOR$gl_blocks}
 void main() {
@@ -4085,16 +4262,35 @@ void main() {
   float tin = max(max(tmin3.x, tmin3.y), tmin3.z);
   float tout = min(min(tmax3.x, tmax3.y), tmax3.z);
   if (tin > tout || tout < 0.0) discard;
-  float t = tin > 0.0 ? tin : tout;     // inside the box → exit face
-  vec3 p = ro + rd * t;
-  // face normal = the slab that produced tin
+  // face normal = the slab that produced the BOX entry (chosen pre-clip)
   vec3 n = vec3(0.0);
   if (tin == tmin3.x) n = vec3(-sign(rd.x), 0.0, 0.0);
   else if (tin == tmin3.y) n = vec3(0.0, -sign(rd.y), 0.0);
   else n = vec3(0.0, 0.0, -sign(rd.z));
+  // TRUE SECTION: intersect the ray-box interval with the ray-slab interval.
+  // When the slab plane replaces the box entry, the visible surface is the CUT
+  // INTERIOR — flat, plane normal, slightly darkened — so a thin section reads
+  // as a continuous painted wall instead of a ragged centroid subset.
+  float cutFace = 0.0;
+  if (uSecCfg.x > 0.5) {
+    float den = dot(rd, uSecPlane.xyz);
+    float dc = dot(ro, uSecPlane.xyz) - uSecPlane.w;
+    if (abs(den) < 1e-9) { if (abs(dc) > uSecCfg.y) discard; }
+    else {
+      float ta = (-uSecCfg.y - dc) / den, tb = (uSecCfg.y - dc) / den;
+      float sIn = min(ta, tb), sOut = max(ta, tb);
+      if (sIn > tin) { tin = sIn; cutFace = -sign(den); }
+      tout = min(tout, sOut);
+      if (tin > tout || tout < 0.0) discard;
+    }
+  }
+  float t = tin > 0.0 ? tin : tout;     // inside the box → exit face
+  bool onCut = cutFace != 0.0 && t == tin;
+  if (onCut) n = uSecPlane.xyz * cutFace;
+  vec3 p = ro + rd * t;
   vec4 clip = uViewProj * vec4(p, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
-  float shade = 0.55 + 0.45 * max(dot(n, uLightDir), 0.0);
+  float shade = (0.55 + 0.45 * max(dot(n, uLightDir), 0.0)) * (onCut ? 0.85 : 1.0);
   outColor = vec4(vColor.rgb * shade, vColor.a);
 }`;
 
@@ -4411,7 +4607,10 @@ void main() {
     int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
-  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  // touch-the-slab cull (support radius) — the fragment clips exactly, matching
+  // the visual true-section cut so the cut wall is pickable
+  float secSupp = demoted > 0.5 ? 0.0 : dot(half_, abs(uSecPlane.xyz));
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y + secSupp) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);   // hidden (isolated or sectioned) isn't pickable
   float cls = aCat;
   if (uRuleOn > 0.5) {
@@ -4435,6 +4634,8 @@ uniform vec3 uFwd;
 uniform float uOrthoRay;
 uniform float uBackoff;
 uniform mat4 uViewProj;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 out vec4 outColor;
 ${ENCODE}
 void main() {
@@ -4454,6 +4655,18 @@ void main() {
   float tin = max(max(tmin3.x, tmin3.y), tmin3.z);
   float tout = min(min(tmax3.x, tmax3.y), tmax3.z);
   if (tin > tout || tout < 0.0) discard;
+  // clip by the section slab — the visible CUT surface is what picks (gl-blocks)
+  if (uSecCfg.x > 0.5) {
+    float den = dot(rd, uSecPlane.xyz);
+    float dc = dot(ro, uSecPlane.xyz) - uSecPlane.w;
+    if (abs(den) < 1e-9) { if (abs(dc) > uSecCfg.y) discard; }
+    else {
+      float ta = (-uSecCfg.y - dc) / den, tb = (uSecCfg.y - dc) / den;
+      tin = max(tin, min(ta, tb));
+      tout = min(tout, max(ta, tb));
+      if (tin > tout || tout < 0.0) discard;
+    }
+  }
   float t = tin > 0.0 ? tin : tout;
   vec4 clip = uViewProj * vec4(ro + rd * t, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
@@ -4504,7 +4717,8 @@ void main() {
     int rec = int(aRec & 0x1FFFFFFFu);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
-  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
+  float secSupp = demoted > 0.5 ? 0.0 : (abs(dot(axis, uSecPlane.xyz)) * 0.5 + uRadius);
+  float secCull = (uSecCfg.x > 0.5 && abs(dot(center, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y + secSupp) ? 1.0 : 0.0;
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float cls = aCat;
   if (uRuleOn > 0.5) {
@@ -4539,6 +4753,8 @@ uniform float uOrthoRay;
 uniform float uBackoff;
 uniform float uRadius;
 uniform mat4 uViewProj;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
 out vec4 outColor;
 ${ENCODE}
 void main() {
@@ -4579,6 +4795,22 @@ void main() {
     }
   }
   if (t < 0.0) discard;
+  // section clip (convexity trick, matches gl-sticks): a hit outside the slab is
+  // either the cut cross-section at the face or not pickable at all
+  if (uSecCfg.x > 0.5) {
+    float den = dot(rd, uSecPlane.xyz);
+    float dc = dot(ro, uSecPlane.xyz) - uSecPlane.w;
+    if (abs(dc + t * den) > uSecCfg.y) {
+      if (abs(den) < 1e-9) discard;
+      float sIn = min((-uSecCfg.y - dc) / den, (uSecCfg.y - dc) / den);
+      if (sIn <= t) discard;
+      vec3 q = ro + rd * sIn;
+      vec3 qa = q - vA;
+      float yq = clamp(dot(qa, ba) / baba, 0.0, 1.0);
+      if (length(qa - ba * yq) > uRadius) discard;
+      t = sIn;
+    }
+  }
   vec4 clip = uViewProj * vec4(ro + rd * t, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
   outColor = encodeRec(vRec);
