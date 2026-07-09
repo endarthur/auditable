@@ -374,6 +374,9 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     // per-layer opacity for blocks (box impostors) + sticks (drillholes) — applied
     // as a screen-door dither in their shaders (see-through, no alpha-blend ordering).
     setLayerOpacity(layer, opacity) { const ls = layerOf(layer); ls.opacity = Math.max(0.02, Math.min(1, +opacity)); needClear = true; },
+    // block-edge override: null = follow the draw-level blockEdges flag, true/false = force
+    setLayerEdges(layer, v) { const ls = layerOf(layer); const nv = v == null ? null : !!v; if (ls.edges !== nv) { ls.edges = nv; needClear = true; } },
+    layerEdges(layer) { const v = layerOf(layer).edges; return v === undefined ? null : v; },
     layerOpacity(layer) { return layerOf(layer).opacity; },
     // per-layer SELECTION bitmask (spec §15): same texture shape as the filter
     // mask; selected elements get a warm tint in every element program
@@ -779,7 +782,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
             catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
-            opacity: ls.opacity, edges: blockEdges,
+            opacity: ls.opacity, edges: ls.edges != null ? ls.edges : blockEdges,   // per-layer override, else the View toggle
           });
         };
         for (const [id, group] of blkGroups) {

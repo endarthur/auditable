@@ -5785,6 +5785,7 @@ function projectManifest() {
       opacity: (L.opacity != null && L.opacity !== 1) ? L.opacity : undefined,   // any kind (mesh/blocks/drillholes)
       recHide: (L._recHide && L._recHide.size) ? [...L._recHide] : undefined,   // record-panel hidden fields (view pref)
       legend: L.legend || undefined, legendTitle: (L.legendTitle && L.legendTitle.trim()) || undefined,   // per-layer figure legend
+      edges: L.edges != null ? L.edges : undefined,        // per-layer block-edge override (tri-state; absent = follow View)
       soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
       hiddenCats: L.catHidden && L.catHidden.size
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
@@ -6226,7 +6227,7 @@ async function openProjectDir(dir) {
         } catch { /* no sidecar — full discovery as usual */ }
       }
       await openBlob(file, basename(ls.source), i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
-      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } if (ls.recHide && ls.recHide.length) Lx._recHide = new Set(ls.recHide); if (ls.legend) Lx.legend = true; if (ls.legendTitle) Lx.legendTitle = ls.legendTitle; } }   // mesh opacity rides overR
+      { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } if (ls.recHide && ls.recHide.length) Lx._recHide = new Set(ls.recHide); if (ls.legend) Lx.legend = true; if (ls.legendTitle) Lx.legendTitle = ls.legendTitle; if (ls.edges != null) { Lx.edges = ls.edges; renderer.setLayerEdges(Lx.id, ls.edges); } } }   // mesh opacity rides overR
       const L = activeLayer();
       if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
       if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the columns tab wakes up scanned
@@ -6707,7 +6708,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   { label: (_viewMode === 'boxes' ? '✓ ' : '') + 'Blocks as boxes', action: () => { _viewMode = 'boxes'; requestRender(); } },
   { label: (_viewMode === 'points' ? '✓ ' : '') + 'Blocks as points', action: () => { _viewMode = 'points'; requestRender(); } },
-  { label: (_blockEdges ? '✓ ' : '') + 'Block edges', action: () => setBlockEdges(!_blockEdges) },
+  { label: (_blockEdges ? '✓ ' : '') + 'Block edges', kbd: '⇧B', action: () => setBlockEdges(!_blockEdges) },
   { label: `Point budget: ${$('#budget').selectedOptions[0].textContent}`, submenu: () => [...$('#budget').options].map((o) => ({
     label: (o.selected ? '✓ ' : '') + o.textContent,
     action: () => { const b2 = $('#budget'); b2.value = o.value; b2.dispatchEvent(new Event('input')); b2.dispatchEvent(new Event('change')); },
@@ -6779,6 +6780,7 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
 <code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br>
 <code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove · <code>[</code> / <code>]</code> step the active layer<br>
+<code>h</code> — hide/show the <b>active layer</b> (flick between overlaid models) · <code>⇧B</code> — <b>block edges</b> on/off (per-layer override in the layer's right-click menu)<br>
 <code>Ctrl+S</code> — <b>save the project</b>: File → project folder (Chromium) keeps your layers, styling, filters, camera, section, and saved views in a plain folder — project.json + the files<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
@@ -7611,6 +7613,8 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'm') armMeasure();
   else if (k === 'p') toggleLayersPanel();
   else if (k === 'P') { const Lp = activeLayer(); if (Lp) { setActiveLayer(Lp.id); openProps(); } }   // ⇧P: layer Properties (pairs with p = layers panel)
+  else if (k === 'B') { setBlockEdges(!_blockEdges); $('#meta').textContent = `block edges ${_blockEdges ? 'on' : 'off'}`; }   // ⇧B: block edges (the View toggle)
+  else if (k === 'h') { const Lh = activeLayer(); if (Lh) { Lh.visible = !Lh.visible; applyTreeVisibility(); renderLayers(); $('#meta').textContent = `${Lh.label || Lh.name} ${Lh.visible ? 'shown' : 'hidden'}`; } }   // h: hide/show the active layer (compare-overlays flick)
   else if (k === 't') { const Lt = activeLayer(); if (Lt && Lt.kind !== 'mesh') openAttrTable(Lt); }
   else if (k === 'r') armSelect('rect');
   else if (k === 'v') armSelect('lasso');
@@ -7949,6 +7953,14 @@ function layerMenu(L, x, y) {
     } }] : []),
     ...(L.dh && L.docs.dhDoc ? [{ label: 'Add interval table…', action: () => addIntervalToLayer(L) }] : []),
     ...(L.kind !== 'mesh' && (L.docs.blockDoc || L.dh) ? [{ label: `Opacity… (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, action: () => setTimeout(() => opacityMenu(L, x, y), 0) }] : []),
+    // per-layer block-edge override (tri-state): follow the View toggle, or force
+    ...(L.docs.blockDoc ? [{
+      label: `Block edges: ${L.edges == null ? 'auto' : L.edges ? 'on' : 'off'}`,
+      submenu: () => [[null, `auto (follow View${_blockEdges ? ' — on' : ' — off'})`], [true, 'on'], [false, 'off']].map(([v, t]) => ({
+        label: ((L.edges === v || (v === null && L.edges == null)) ? '✓ ' : '') + t,
+        action: () => { L.edges = v; renderer.setLayerEdges(L.id, v); markProjectDirty(); requestRender(); },
+      })),
+    }] : []),
     ...(L.kind === 'mesh' ? (() => {
       const items = [
         { label: 'Tint…', action: () => setTimeout(() => meshTintMenu(L, x, y), 0) },
