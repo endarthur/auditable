@@ -7095,7 +7095,7 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom · <code>⌃
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
 <code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br>
 <code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove · <code>[</code> / <code>]</code> step the active layer<br>
-<code>h</code> — hide/show the <b>active layer</b> (flick between overlaid models) · <code>⇧H</code> — <b>solo</b> it (again restores; step layers with <code>[</code> <code>]</code> while soloed to walk them one at a time) · <code>⇧B</code> — <b>block edges</b> on/off (per-layer override in the layer's right-click menu)<br>
+<code>h</code> — hide/show the <b>active layer</b> (flick between overlaid models) · <code>⇧H</code> — <b>solo</b> it (again restores; step layers with <code>[</code> <code>]</code> while soloed to walk them one at a time) · <code>F2</code> — <b>rename</b> it · <code>⇧B</code> — <b>block edges</b> on/off (per-layer override in the layer's right-click menu)<br>
 <code>Ctrl+S</code> — <b>save the project</b>: File → project folder (Chromium) keeps your layers, styling, filters, camera, section, and saved views in a plain folder — project.json + the files<br><br>
 <b>view</b><br>
 <code>f</code> fit the data · <code>n</code> <code>s</code> <code>e</code> <code>w</code> look that way (level) · <code>d</code> plan · <code>u</code> from below · <code>o</code> ortho/perspective<br><br>
@@ -7797,6 +7797,13 @@ function toggleSection() {
   sel.dispatchEvent(new Event('input'));
 }
 // scrub the section by one slab thickness (adjacent section, like flipping pages)
+// rename the layer's DISPLAY LABEL (the source name stays load-bearing for
+// save/reload). F2 (the Windows reflex) + the layer context menu + palette.
+async function renameActiveLayer(L) {
+  if (!L) return;
+  const v = await microPrompt('layer name', L.label || L.name);
+  if (v && v.trim()) { L.label = v.trim(); renderLayers(); markProjectDirty(); }
+}
 // ⇧H solo: hide everything but the active layer; ⇧H again restores the previous
 // visibility set. If the ACTIVE layer changed while soloed ([ ] stepping), ⇧H
 // re-solos the new one instead of restoring — so ⇧H · ] · ⇧H · ] · ⇧H walks the
@@ -7861,6 +7868,7 @@ const COMMANDS = [
   { id: 'sec2d', group: 'View', title: 'Section: 2D lock (face-on, ortho, no orbit)', kw: 'paper plan flat lock rotation', when: () => !!currentSection(), run: () => { const c = $('#sec2D'); c.checked = !c.checked; c.dispatchEvent(new Event('input')); } },
   { id: 'solo', group: 'View', title: 'Solo the active layer', kw: 'hide others isolate only', when: (c) => c.L && _layers.length > 1, run: () => soloActiveLayer() },
   { id: 'copyin', group: 'File', title: 'Copy layer into project…', kw: 'import move file folder store persist', when: (c) => canCopyIntoProject(c.L), run: (c) => copyLayerIntoProject(c.L) },
+  { id: 'rename', group: 'Layer', title: 'Rename layer…', kw: 'label title F2', when: (c) => !!c.L, run: (c) => renameActiveLayer(c.L) },
   { id: 'decopanel', group: 'View', title: 'Decorations & figure…', kw: 'legend scale bar north title background export panel', run: () => openDecoPanel() },
   { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
   { id: 'deconorth', group: 'View', title: 'Toggle north arrow', kw: 'decoration compass', run: () => setDeco('north', !_deco.north) },
@@ -7977,6 +7985,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'B') { setBlockEdges(!_blockEdges); $('#meta').textContent = `block edges ${_blockEdges ? 'on' : 'off'}`; }   // ⇧B: block edges (the View toggle)
   else if (k === 'h') { const Lh = activeLayer(); if (Lh) { Lh.visible = !Lh.visible; applyTreeVisibility(); renderLayers(); $('#meta').textContent = `${Lh.label || Lh.name} ${Lh.visible ? 'shown' : 'hidden'}`; } }   // h: hide/show the active layer (compare-overlays flick)
   else if (k === 'H') soloActiveLayer();                  // ⇧H: solo the active layer (again = restore; re-solos if active changed)
+  else if (k === 'F2') { const Lr = activeLayer(); if (Lr) { e.preventDefault(); renameActiveLayer(Lr); } }   // F2: rename (the Windows reflex)
   else if (k === 't') { const Lt = activeLayer(); if (Lt && Lt.kind !== 'mesh') openAttrTable(Lt); }
   else if (k === 'r') armSelect('rect');
   else if (k === 'v') armSelect('lasso');
@@ -8296,7 +8305,7 @@ function layerMenu(L, x, y) {
       { sep: true },
     ] : []),
     { label: 'Zoom to layer', action: () => fitLayer(L) },
-    { label: 'Rename layer…', action: async () => { const v = await microPrompt('layer name', L.label || L.name); if (v && v.trim()) { L.label = v.trim(); renderLayers(); markProjectDirty(); } } },
+    { label: 'Rename layer…', kbd: 'F2', action: () => renameActiveLayer(L) },
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
     { label: 'Move up', action: () => treeMoveStep(L.id, -1) },
     { label: 'Move down', action: () => treeMoveStep(L.id, 1) },
