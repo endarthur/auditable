@@ -595,6 +595,7 @@
     <input id="secPos" type="range" min="0" max="1" step="0.002" value="0.5" title="scrub the section" style="width:140px;display:none">
     <input id="secHalf" type="number" min="0.5" step="0.5" value="5" title="slab half-thickness (m)" style="width:56px;display:none">
     <label id="secPlaneW" title="outline the section plane in the view" style="display:none"><input id="secPlaneVis" type="checkbox">plane</label>
+    <label id="secFollowW" title="camera follows the scrub — the cut stays put on screen while you walk the deposit section by section" style="display:none"><input id="secFollow" type="checkbox">follow</label>
   </div>
   <div id="barTools"></div>
   <div id="view"><canvas id="cv"></canvas><canvas id="decoCv" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
@@ -824,6 +825,7 @@ function syncSecUI() {
   $('#secClip').style.display = on ? '' : 'none';
   $('#secHalf').style.display = on && $('#secClip').value === 'slab' ? '' : 'none';
   $('#secPlaneW').style.display = on ? '' : 'none';
+  $('#secFollowW').style.display = on ? '' : 'none';
   $('#secDipDir').style.display = mode === 'custom' ? '' : 'none';
   $('#secDip').style.display = mode === 'custom' ? '' : 'none';
 }
@@ -842,7 +844,31 @@ $('#btnSection').onclick = () => toggleSection();
 $('#btnKnife').onclick = () => { $('#secMode').value = 'knife'; $('#secMode').dispatchEvent(new Event('input')); };   // arm the free-plane cut (same as k / secMode=knife)
 function syncSectionBtn() { $('#btnSection').classList.toggle('on', $('#secMode').value !== 'off'); }
 $('#secMode').addEventListener('input', syncSectionBtn);
-$('#secPos').addEventListener('input', requestRender);
+// FOLLOW mode: the camera translates with the scrub (Δd along the plane normal)
+// so the cut stays put on screen while the deposit slides through it — walking
+// the sections. Applies to user scrubs only (slider events + scrubSection);
+// project restore sets secPos SILENTLY, so it can never teleport the camera.
+let _secFollow = (() => { try { return localStorage.getItem('micro.secFollow') === '1'; } catch { return false; } })();
+$('#secFollow').checked = _secFollow;
+$('#secFollow').addEventListener('input', () => { _secFollow = $('#secFollow').checked; try { localStorage.setItem('micro.secFollow', _secFollow ? '1' : '0'); } catch { /* private */ } });
+function secFollowShift(dd, n) {
+  if (!dd || !n) return;
+  const st = cam.state;
+  st.target = [st.target[0] + dd * n[0], st.target[1] + dd * n[1], st.target[2] + dd * n[2]];
+  cam.update();
+}
+let _secPosPrev = null;                                    // refreshed at gesture start — a silent restore can't leave a stale jump
+for (const ev of ['pointerdown', 'focus']) $('#secPos').addEventListener(ev, () => { _secPosPrev = +$('#secPos').value; });
+$('#secMode').addEventListener('input', () => { _secPosPrev = null; });
+$('#secPos').addEventListener('input', () => {
+  const pos = +$('#secPos').value;
+  if (_secFollow && _secPosPrev != null) {
+    const s = currentSection();
+    if (s) { const [lo, hi] = secRange(); if (hi > lo) secFollowShift((pos - _secPosPrev) * (hi - lo), s.n); }
+  }
+  _secPosPrev = pos;
+  requestRender();
+});
 $('#secHalf').addEventListener('input', requestRender);
 for (const id of ['secMode', 'secPos', 'secHalf', 'secClip', 'secDipDir', 'secDip', 'secPlaneVis']) $('#' + id).addEventListener('input', () => dispatchEvent(new Event('micro:project-dirty')));
 
@@ -6788,7 +6814,7 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom · <code>⌃
 pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line</b> (the vertical section through it; <code>⇧</code> snaps to 15°, <code>⇧⌥</code> to 5°, <code>Esc</code> cancels), or choose <b>custom</b> and type the plane's dip direction + dip · <code>x</code> toggles the section on/off<br>
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
-<code>l</code> — face the section (<code>⇧L</code> its back) · <code>,</code> <code>.</code> — walk the section one slab at a time · <code>⌃</code>wheel or the slider scrubs · the number is slab half-thickness (m)<br><br>
+<code>l</code> — face the section (<code>⇧L</code> its back) · <code>,</code> <code>.</code> — walk the section one slab at a time · <code>⌃</code>wheel or the slider scrubs · <b>follow</b> — the camera walks with the scrub (the cut stays put on screen) · the number is slab half-thickness (m)<br><br>
 <b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br>
 The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Select through) flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
@@ -7487,7 +7513,10 @@ function scrubSection(dir, frac = 1) {
   const [lo, hi] = secRange();
   if (!(hi > lo)) return;
   const step = (frac * 2 * Math.max(0.01, +$('#secHalf').value)) / (hi - lo);
-  $('#secPos').value = Math.max(0, Math.min(1, +$('#secPos').value + dir * step));
+  const prev = +$('#secPos').value;
+  const next = Math.max(0, Math.min(1, prev + dir * step));
+  $('#secPos').value = next;
+  if (_secFollow) secFollowShift((next - prev) * (hi - lo), sec.n);   // follow: camera walks with the plane
   requestRender();
 }
 // ⌃/⌘ + wheel scrubs the section — the continuous , / . (the slicer feel).
@@ -7518,6 +7547,7 @@ const COMMANDS = [
   { id: 'png', group: 'File', title: 'Save viewport PNG', kw: 'screenshot image capture', run: () => $('#btnShot').click() },
   { id: 'figure', group: 'File', title: 'Export figure (PNG)…', kw: 'decorations scale bar north legend title report', run: () => exportFigure() },
   { id: 'blockedges', group: 'View', title: 'Toggle block edges', kw: 'borders lines wireframe outline grid', when: (c) => c.L && !!c.L.docs.blockDoc, run: () => setBlockEdges(!_blockEdges) },
+  { id: 'secfollow', group: 'View', title: 'Section: camera follows the scrub', kw: 'walk slicer step through benches follow', when: () => !!currentSection(), run: () => { const c = $('#secFollow'); c.checked = !c.checked; c.dispatchEvent(new Event('input')); $('#meta').textContent = `section follow ${c.checked ? 'on' : 'off'}`; } },
   { id: 'decopanel', group: 'View', title: 'Decorations & figure…', kw: 'legend scale bar north title background export panel', run: () => openDecoPanel() },
   { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
   { id: 'deconorth', group: 'View', title: 'Toggle north arrow', kw: 'decoration compass', run: () => setDeco('north', !_deco.north) },
