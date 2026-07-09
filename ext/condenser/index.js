@@ -5760,7 +5760,12 @@ function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
       c.target[1] + c.radius * cp * Math.sin(c.theta),
       c.target[2] + c.radius * Math.sin(c.phi),
     ];
-    c.near = Math.max(c.radius / 1000, 0.01);
+    // near at radius/4000: on a km-scale fitted model the old /1000 put the
+    // clip plane METRES in front of the camera — visible slicing when panning
+    // close past geometry. /4000 keeps depth precision under a block size at
+    // the far end of a 24-bit buffer (error ~ z²/(near·2²⁴): ~3 m at z=10 km
+    // with near 2.5 m) while clipping 4× closer.
+    c.near = Math.max(c.radius / 4000, 0.01);
     c.far = c.radius * 100;
     c.view = mat4LookAt(c.eye, c.target, [0, 0, 1]);
     c.halfH = c.radius * Math.tan(c.fovY / 2);
