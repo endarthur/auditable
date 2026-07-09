@@ -6776,7 +6776,7 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
 const HELP_KEYS = `
 <b>command palette</b> — <code>⌘K</code> / <code>Ctrl+K</code> (or the <b>⌘K</b> button) searches EVERY action and shows only what applies right now — the fastest way to reach anything, including the analysis tools (Help → <b>Analysis & workbench</b> for those)<br><br>
 <b>mouse</b><br>
-drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
+drag — orbit · right-drag / shift-drag — pan · wheel — zoom · <code>⌃</code>wheel — scrub the section<br>
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
 <code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br>
 <code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove · <code>[</code> / <code>]</code> step the active layer<br>
@@ -6788,7 +6788,7 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom<br>
 pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line</b> (the vertical section through it; <code>⇧</code> snaps to 15°, <code>⇧⌥</code> to 5°, <code>Esc</code> cancels), or choose <b>custom</b> and type the plane's dip direction + dip · <code>x</code> toggles the section on/off<br>
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
-<code>l</code> — face the section (<code>⇧L</code> its back) · <code>,</code> <code>.</code> — walk the section one slab at a time · slider scrubs · the number is slab half-thickness (m)<br><br>
+<code>l</code> — face the section (<code>⇧L</code> its back) · <code>,</code> <code>.</code> — walk the section one slab at a time · <code>⌃</code>wheel or the slider scrubs · the number is slab half-thickness (m)<br><br>
 <b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br>
 The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Select through) flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
@@ -7482,14 +7482,29 @@ function toggleSection() {
   sel.dispatchEvent(new Event('input'));
 }
 // scrub the section by one slab thickness (adjacent section, like flipping pages)
-function scrubSection(dir) {
+function scrubSection(dir, frac = 1) {
   const sec = currentSection(); if (!sec) return;
   const [lo, hi] = secRange();
   if (!(hi > lo)) return;
-  const step = (2 * Math.max(0.01, +$('#secHalf').value)) / (hi - lo);
+  const step = (frac * 2 * Math.max(0.01, +$('#secHalf').value)) / (hi - lo);
   $('#secPos').value = Math.max(0, Math.min(1, +$('#secPos').value + dir * step));
   requestRender();
 }
+// ⌃/⌘ + wheel scrubs the section — the continuous , / . (the slicer feel).
+// Capture-phase on window so it pre-empts the camera dolly AND browser zoom;
+// half a slab per notch (finer than the keys), accumulated for trackpads.
+let _secWheelAcc = 0;
+window.addEventListener('wheel', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.target !== cv) return;
+  if (!currentSection()) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  _secWheelAcc += e.deltaY;
+  while (Math.abs(_secWheelAcc) >= 100) {
+    scrubSection(_secWheelAcc > 0 ? -1 : 1, 0.5);
+    _secWheelAcc -= Math.sign(_secWheelAcc) * 100;
+  }
+}, { passive: false, capture: true });
 // ── command palette (GCU noun-first model): one searchable registry over every
 // verb, context-aware via when(ctx). The discoverability surface that ties the
 // menubar / context menus / keyboard together. Ctrl/⌘K or the ⌘K button. ──
