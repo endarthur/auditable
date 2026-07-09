@@ -360,6 +360,36 @@
   .awin-ctrls select, .awin-btn { font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; cursor: pointer; }
   .awin-ctrls label { font: 11px monospace; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
   .awin-ctrls input[type=number] { width: 62px; font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; }
+  /* swath v2: a thin left config rail + the chart on the right */
+  .sw-body { display: flex; height: 100%; min-height: 0; }
+  .sw-rail { width: 236px; flex: 0 0 auto; overflow-y: auto; border-right: 1px solid var(--border); padding: 8px 9px; display: flex; flex-direction: column; gap: 10px; }
+  .sw-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .sw-tabs { display: flex; gap: 2px; padding: 5px 7px 0; }
+  .sw-tab { font: 11px monospace; background: none; border: 1px solid var(--border); border-bottom: none; border-radius: 3px 3px 0 0; color: var(--muted); padding: 2px 10px; cursor: pointer; }
+  .sw-tab.on { color: var(--accent); background: var(--panel); border-color: var(--accent); }
+  .sw-h { font: 11px monospace; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); margin-bottom: 4px; }
+  .sw-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font: 11px monospace; color: var(--muted); }
+  .sw-row > span { flex: 0 0 auto; }
+  .sw-sel, .sw-in { font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; padding: 2px 5px; min-width: 0; box-sizing: border-box; }
+  .sw-in { flex: 1; width: 100%; }
+  .sw-row .sw-sel, .sw-row .sw-in { flex: 1; }
+  .sw-num { width: 66px; flex: 0 0 auto !important; }
+  .sw-series { display: flex; flex-direction: column; gap: 6px; }
+  .sw-ser { border: 1px solid var(--border); border-radius: 4px; padding: 5px; display: flex; flex-direction: column; gap: 4px; }
+  .sw-ser-top { display: flex; align-items: center; gap: 5px; }
+  .sw-dot { width: 12px; height: 12px; border-radius: 2px; flex: 0 0 auto; cursor: pointer; border: 1px solid rgba(255,255,255,0.25); }
+  .sw-x { margin-left: auto; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1; }
+  .sw-x:hover { color: var(--fault, #d07a5c); }
+  .sw-add { font: 11px monospace; background: none; border: 1px dashed var(--border); border-radius: 3px; color: var(--muted); padding: 4px; cursor: pointer; }
+  .sw-add:hover { color: var(--accent); border-color: var(--accent); }
+  .sw-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
+  .sw-segbtn { font: 11px monospace; background: none; border: none; color: var(--muted); padding: 2px 8px; cursor: pointer; }
+  .sw-segbtn.on { background: var(--accent); color: #121212; }
+  .sw-foot { margin-top: auto; display: flex; flex-direction: column; gap: 5px; padding-top: 6px; }
+  .sw-run { font: 12px monospace; background: var(--accent); color: #121212; border: none; border-radius: 3px; padding: 7px; cursor: pointer; font-weight: 600; }
+  .sw-run:disabled { opacity: .55; cursor: default; }
+  .sw-stale { font: 10px monospace; color: var(--caution, #d4a24a); text-align: center; min-height: 12px; }
+  .sw-prog { font: 10px monospace; color: var(--muted); text-align: center; min-height: 12px; }
   .lin-row { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; font-size: 12px; border-bottom: 1px solid rgba(140,145,150,0.08); }
   .lin-op { color: var(--accent); font-weight: 600; min-width: 84px; }
   .lin-sum { flex: 1; color: var(--fg, #ddd); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2748,61 +2778,203 @@ async function computeSwath(L, cols, dir, bandWidth, offset, weightCol, onProgre
   const profile = keys.map((bi) => { const e = bands.get(bi); return { band: bi, center: offset + (bi + 0.5) * bandWidth, mean: cols.map((_, s) => (e.w[s] > 0 ? e.wg[s] / e.w[s] : NaN)), tonnage: e.tw, count: e.n }; });
   return { profile, weighted: wi >= 0 };
 }
+// the direction vectors this mode swaths (all scanned in ONE pass so switching
+// axis/direction is free), + their display names
+function swathModeDirs(st) {
+  if (st.mode === 'axes') return [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  if (st.mode === 'oriented') return frameDipDirDipRake(st.dd, st.dip, st.rake);
+  return [dirTrendPlunge(st.trend, st.plunge)];
+}
+function swathDirNames(st) {
+  if (st.mode === 'axes') return AXIS_NAMES.axes;
+  if (st.mode === 'oriented') return AXIS_NAMES.oriented;
+  return [`trend ${st.trend}° / plunge ${st.plunge}°`];
+}
+// ONE streamed pass per series' layer → per-direction FINE-bin sums {Σw,Σwg,n}.
+// Bounded by BINS, not blocks (so a 200M model is fine) — the scalable answer to
+// "don't cache every element". Each series compiles its own grade/weight/filter
+// expression (@gcu/expr); weight defaults to the block's geometric support.
+async function scanSwath(st, onProgress) {
+  const dirs = swathModeDirs(st);
+  const series = st.series.map((s) => {
+    const L = layerById(s.layerId); if (!L) return null;
+    const h = layerTableHeader(L); if (!h || !h.mapping) return null;
+    const m = h.mapping, schema = schemaExt(L, h);
+    let gradeFn; try { gradeFn = compileValue(s.col, schema, { decimal: '.' }); } catch { return null; }
+    let weightFn = null, filterFn = null;
+    if (s.weight && s.weight.trim()) { try { weightFn = compileValue(s.weight, schema, { decimal: '.' }); } catch { throw new Error(`series weight "${s.weight}": invalid`); } }
+    if (s.filter && s.filter.trim()) { try { filterFn = compileBool(s.filter, schema, { decimal: '.' }); } catch { throw new Error(`series filter "${s.filter}": invalid`); } }
+    return { s, L, m, support: blockVolumeOf(L), gradeFn, weightFn, filterFn, fine: dirs.map(() => new Map()), n: 0 };
+  }).filter(Boolean);
+  if (!series.length) return null;
+  const range = dirs.map((dir) => { let lo = Infinity, hi = -Infinity; for (const se of series) { const [a, b] = projRange(se.L, dir); if (a < lo) lo = a; if (b > hi) hi = b; } return [lo, hi]; });
+  const fineW = range.map(([lo, hi]) => Math.max(1e-6, (hi - lo) / 600 || 1));
+  const fineOrigin = range.map(([lo]) => lo);
+  let total = 0;
+  for (const se of series) {
+    const L = se.L, m = se.m, selMask = st.scope === 'selection' ? L._selMask : null;
+    let rec = 0;
+    for await (const batch of layerRows(L, null)) {
+      for (const f of batch) {
+        const rr = rec++; if (selMask && !(rr < selMask.length && selMask[rr])) continue;
+        const x = +f[m.x], y = +f[m.y], z = +f[m.z]; if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+        const row = extendRow(L, f, rr);
+        if (se.filterFn && !se.filterFn(row)) continue;
+        const g = +se.gradeFn(row); if (!Number.isFinite(g)) continue;
+        const w = se.weightFn ? (+se.weightFn(row) || 0) : se.support; if (!(w > 0)) continue;
+        for (let di = 0; di < dirs.length; di++) {
+          const d = dirs[di], t = x * d[0] + y * d[1] + z * d[2], bi = Math.floor((t - fineOrigin[di]) / fineW[di]);
+          let e = se.fine[di].get(bi); if (!e) { e = { sw: 0, swg: 0, n: 0 }; se.fine[di].set(bi, e); }
+          e.sw += w; e.swg += w * g; e.n++;
+        }
+        se.n++;
+      }
+      total += batch.length; if (onProgress) onProgress(total); await new Promise((r) => setTimeout(r));
+    }
+  }
+  return { dirs, dirNames: swathDirNames(st), series, range, fineW, fineOrigin };
+}
+// re-aggregate the fine bins of direction `di` into display bands — a pure,
+// instant recompute (exact weighted mean, since we kept the sums). This is why
+// band width / offset / axis are live after one Run, with no re-scan.
+function binSwath(scan, di, bandWidth, offset) {
+  const out = scan.series.map((se) => {
+    const bands = new Map();
+    for (const [fb, e] of se.fine[di]) {
+      const center = scan.fineOrigin[di] + (fb + 0.5) * scan.fineW[di];
+      const B = Math.floor((center - offset) / bandWidth);
+      let a = bands.get(B); if (!a) { a = { sw: 0, swg: 0, n: 0 }; bands.set(B, a); }
+      a.sw += e.sw; a.swg += e.swg; a.n += e.n;
+    }
+    return { se, bands };
+  });
+  const allB = new Set(); for (const o of out) for (const b of o.bands.keys()) allB.add(b);
+  return { keys: [...allB].sort((a, b) => a - b), out };
+}
 const _swathWins = new Map();
 function openSwath(L) {
   if (!L || !gridAxesOf(L)) { $('#meta').textContent = 'swath: needs a regular block model'; return; }
   const ex = _swathWins.get(L.id); if (ex) { ex.win.el.style.zIndex = ++_fwinZ; return; }
   const nums = numericColsOf(L); if (!nums.length) { $('#meta').textContent = 'swath: no numeric column'; return; }
   const pairs = reconcilePairs(nums);
-  const st = { mode: 'axes', axis: 0, dd: 90, dip: 45, rake: 0, trend: 0, plunge: 0, bandWidth: null, offset: null, weight: '', cols: pairs.length ? [pairs[0].ref, pairs[0].self] : [nums[0]], bars: 'count', zebra: false, scope: 'all' };
-  const win = floatWin({ title: `swath · ${L.label || L.name}`, sub: '', x: Math.max(12, innerWidth - 520), y: 130, w: 490, h: 380, onClose: () => { _swathWins.delete(L.id); if (st.zebra) clearSwathZebra(L); } });
-  win.body.style.cssText += 'display:flex;flex-direction:column;gap:0';
+  const mkSer = (Lx, col, i) => ({ layerId: Lx.id, col, weight: '', filter: '', color: SERIES_COLORS[i % SERIES_COLORS.length] });
+  const st = { mode: 'axes', axis: 0, dd: 90, dip: 45, rake: 0, trend: 0, plunge: 0, bandWidth: null, offset: null, bars: 'count', zebra: false, scope: 'all',
+    series: pairs.length ? [mkSer(L, pairs[0].ref, 0), mkSer(L, pairs[0].self, 1)] : [mkSer(L, nums[0], 0)],
+    scan: null, stale: true, running: false };
+  const win = floatWin({ title: `swath · ${L.label || L.name}`, sub: 'configure, then Run', x: Math.max(12, innerWidth - 660), y: 120, w: 640, h: 440, onClose: () => { _swathWins.delete(L.id); if (st.zebra) clearSwathZebra(zebraL()); } });
+  const body = document.createElement('div'); body.className = 'sw-body'; win.body.append(body);
+  const rail = document.createElement('div'); rail.className = 'sw-rail';
+  const main = document.createElement('div'); main.className = 'sw-main';
+  const tabs = document.createElement('div'); tabs.className = 'sw-tabs';
   const cv = document.createElement('canvas'); cv.style.cssText = 'width:100%;flex:1;min-height:80px;display:block';
-  const ctrls = document.createElement('div'); ctrls.className = 'awin-ctrls';
-  win.body.append(cv, ctrls);
-  // the block's extent along dir — bands narrower than this are meaningless
-  const blockAlong = (dir) => { const a = gridAxesOf(L); return a ? (Math.abs((a.x.pitch || 0) * dir[0]) + Math.abs((a.y.pitch || 0) * dir[1]) + Math.abs((a.z.pitch || 0) * dir[2])) || 1 : 1; };
-  const effWidth = () => { const dir = swathDir(st); if (st.bandWidth) return st.bandWidth; const [lo, hi] = projRange(L, dir); return Math.max(blockAlong(dir), niceStep((hi - lo) / 25) || 1); };
-  const effOffset = () => { if (st.offset != null) return st.offset; const [lo] = projRange(L, swathDir(st)); return lo; };
-  const redraw = async () => {
-    if (st.scope === 'selection' && !(L._selMask && L._selCount)) { win.sub.textContent = 'no selection — brush the 3D'; plotChart(cv, { series: [] }); win._spec = null; return; }
-    const dir = swathDir(st), bw = effWidth(), off = effOffset();
-    const selMask = st.scope === 'selection' ? L._selMask : null;
-    win.sub.textContent = 'computing…';
-    const res = await computeSwath(L, st.cols, dir, bw, off, st.weight, (n) => { win.sub.textContent = `${n.toLocaleString()} blocks…`; }, selMask);
-    if (!res.profile.length) { win.sub.textContent = 'no data'; plotChart(cv, { series: [] }); return; }
-    const spec = { xLabel: `distance along ${st.mode === 'axes' ? AXIS_NAMES.axes[st.axis] : st.mode === 'oriented' ? AXIS_NAMES.oriented[st.axis] : `trend ${st.trend}/${st.plunge}`}`, leftLabel: 'mean grade', rightLabel: st.bars === 'tonnage' ? 'tonnage' : 'count', series: [] };
-    spec.series.push({ name: st.bars, color: '#6a6f75', axis: 'right', kind: 'bar', data: res.profile.map((p) => [p.center, st.bars === 'tonnage' ? p.tonnage : p.count]) });
-    st.cols.forEach((c, i) => spec.series.push({ name: c, color: SERIES_COLORS[i % SERIES_COLORS.length], axis: 'left', kind: 'line', data: res.profile.map((p) => [p.center, p.mean[i]]) }));
-    win.sub.textContent = `${st.scope === 'selection' ? 'selection · ' : ''}${res.profile.length} bands · ${bw.toPrecision(3)} m · ${res.weighted ? 'tonnage-wtd' : 'count'}`;
-    plotChart(cv, spec); win._spec = spec;
-    if (st.zebra) applySwathZebra(L, dir, bw, off);
+  main.append(tabs, cv); body.append(rail, main);
+  const zebraL = () => layerById(st.series[0] && st.series[0].layerId) || L;
+  const curDir = () => swathModeDirs(st)[st.axis] || swathModeDirs(st)[0];
+  const rangeFor = () => (st.scan ? st.scan.range[st.axis] : projRange(zebraL(), curDir()));
+  const autoWidth = () => { const [lo, hi] = rangeFor(); return Math.max(niceStep((hi - lo) / 25) || 1, 1e-6); };
+  const effWidth = () => st.bandWidth || autoWidth();
+  const effOffset = () => (st.offset != null ? st.offset : rangeFor()[0]);
+  // cheap replot from the existing scan (axis / band / offset / bars / zebra) —
+  // no re-scan. Expensive changes (series / weight / filter / mode / scope) set
+  // st.stale and wait for Run.
+  const plot = () => {
+    buildTabs();
+    if (!st.scan) { win.sub.textContent = st.stale ? 'configure, then Run' : ''; plotChart(cv, { series: [] }); win._spec = null; win.el._swathSpec = null; return; }
+    const di = st.axis, bw = effWidth(), off = effOffset();
+    const b = binSwath(st.scan, di, bw, off);
+    if (!b.keys.length) { win.sub.textContent = 'no data in range'; plotChart(cv, { series: [] }); win._spec = null; win.el._swathSpec = null; return; }
+    const multi = _layers.length > 1 || st.series.length > 1;
+    const spec = { xLabel: `distance along ${st.scan.dirNames[di]}`, leftLabel: 'mean grade', rightLabel: st.bars === 'tonnage' ? 'weight' : 'count', series: [] };
+    const prim = b.out[0];
+    spec.series.push({ name: st.bars, color: '#6a6f75', axis: 'right', kind: 'bar', data: b.keys.map((B) => { const e = prim.bands.get(B); return [off + (B + 0.5) * bw, e ? (st.bars === 'tonnage' ? e.sw : e.n) : 0]; }) });
+    b.out.forEach((o) => { const Lx = layerById(o.se.s.layerId); const nm = multi ? `${(Lx ? (Lx.label || Lx.name) : '').replace(/\.[^.]*$/, '')}·${o.se.s.col}` : o.se.s.col; spec.series.push({ name: nm, color: o.se.s.color, axis: 'left', kind: 'line', data: b.keys.map((B) => { const e = o.bands.get(B); return [off + (B + 0.5) * bw, e && e.sw > 0 ? e.swg / e.sw : NaN]; }) }); });
+    win.sub.textContent = `${st.scope === 'selection' ? 'selection · ' : ''}${b.keys.length} bands · ${bw.toPrecision(3)} m · ${st.scan.series.reduce((s, x) => s + x.n, 0).toLocaleString()} rows`;
+    plotChart(cv, spec); win._spec = spec; win.el._swathSpec = spec;
+    if (st.zebra) applySwathZebra(zebraL(), curDir(), bw, off);
   };
   win.el._onResized = () => { if (win._spec) plotChart(cv, win._spec); };
-  const buildCtrls = () => {
-    ctrls.textContent = '';
-    const nums2 = numericColsOf(L);
-    const sBtn = document.createElement('button'); sBtn.className = 'awin-btn'; sBtn.textContent = `series: ${st.cols.join(', ')}`;
-    sBtn.onclick = (e) => menuXY(e.clientX, e.clientY, nums2.map((c) => ({ label: (st.cols.includes(c) ? '✓ ' : '') + c, action: () => { if (st.cols.includes(c)) { if (st.cols.length > 1) st.cols = st.cols.filter((x) => x !== c); } else if (st.cols.length < 4) st.cols.push(c); buildCtrls(); redraw(); } })));
-    ctrls.append(sBtn);
-    const modeSel = document.createElement('select'); for (const [v, t] of [['axes', 'axes X/Y/Z'], ['oriented', 'dip-dir/dip/rake'], ['direction', 'trend/plunge']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; modeSel.appendChild(o); } modeSel.value = st.mode; modeSel.onchange = () => { st.mode = modeSel.value; st.axis = 0; st.bandWidth = null; st.offset = null; buildCtrls(); redraw(); };
-    ctrls.append(modeSel);
-    if (st.mode === 'axes' || st.mode === 'oriented') {
-      const seg = document.createElement('div'); seg.className = 'pp-seg';
-      AXIS_NAMES[st.mode].forEach((nm, i) => { const bt = document.createElement('button'); bt.className = 'pp-segbtn' + (st.axis === i ? ' on' : ''); bt.textContent = nm.split(' ')[0]; bt.title = nm; bt.onclick = () => { st.axis = i; st.bandWidth = null; st.offset = null; buildCtrls(); redraw(); }; seg.appendChild(bt); });
-      ctrls.append(seg);
-    }
-    const numIn = (key, label, w = 54) => { const l = document.createElement('label'); l.textContent = label; const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any'; inp.style.width = w + 'px'; inp.value = String(st[key]); inp.onchange = () => { st[key] = +inp.value; st.bandWidth = null; st.offset = null; redraw(); }; l.appendChild(inp); return l; };
-    if (st.mode === 'oriented') ctrls.append(numIn('dd', 'DD'), numIn('dip', 'dip'), numIn('rake', 'rake'));
-    if (st.mode === 'direction') ctrls.append(numIn('trend', 'trend'), numIn('plunge', 'plunge'));
-    const bwL = document.createElement('label'); bwL.textContent = 'band'; const bwI = document.createElement('input'); bwI.type = 'number'; bwI.step = 'any'; bwI.style.width = '62px'; bwI.value = String(+effWidth().toPrecision(4)); bwI.title = 'band width (m)'; bwI.onchange = () => { st.bandWidth = +bwI.value || null; redraw(); }; bwL.appendChild(bwI); ctrls.append(bwL);
-    const offL = document.createElement('label'); offL.textContent = 'offset'; const offI = document.createElement('input'); offI.type = 'number'; offI.step = 'any'; offI.style.width = '72px'; offI.value = String(+effOffset().toPrecision(6)); offI.title = 'where band 0 aligns (along the direction)'; offI.onchange = () => { st.offset = bwI.value === '' ? null : +offI.value; redraw(); }; offL.appendChild(offI); ctrls.append(offL);
-    const wSel = document.createElement('select'); { const o = document.createElement('option'); o.value = ''; o.textContent = 'count'; wSel.appendChild(o); } for (const c of nums2) { const o = document.createElement('option'); o.value = c; o.textContent = '× ' + c; wSel.appendChild(o); } wSel.value = st.weight; wSel.title = 'weight (density)'; wSel.onchange = () => { st.weight = wSel.value; redraw(); }; ctrls.append(wSel);
-    const zL = document.createElement('label'); const zc = document.createElement('input'); zc.type = 'checkbox'; zc.checked = st.zebra; zc.onchange = () => { st.zebra = zc.checked; if (st.zebra) applySwathZebra(L, swathDir(st), effWidth(), effOffset()); else clearSwathZebra(L); }; zL.append(zc, document.createTextNode('zebra')); zL.title = 'stripe alternate bands on the 3D view'; ctrls.append(zL);
-    ctrls.append(scopeSeg(st, redraw));
+  let staleEl, progEl, runBtn;
+  const markStale = () => { st.stale = true; if (staleEl) staleEl.textContent = st.scan ? '↻ config changed — Run to update' : ''; };
+  const run = async () => {
+    if (st.running) return;
+    if (st.scope === 'selection' && !(zebraL()._selMask && zebraL()._selCount)) { win.sub.textContent = 'no selection — brush the 3D first'; return; }
+    st.running = true; runBtn.disabled = true; win.sub.textContent = 'scanning…';
+    try { st.scan = await scanSwath(st, (n) => { progEl.textContent = `${n.toLocaleString()} rows…`; }); }
+    catch (e) { win.sub.textContent = `swath: ${e.message}`; st.running = false; runBtn.disabled = false; progEl.textContent = ''; return; }
+    st.running = false; runBtn.disabled = false; progEl.textContent = ''; st.stale = false; if (staleEl) staleEl.textContent = '';
+    if (!st.scan) { win.sub.textContent = 'no series to scan'; plotChart(cv, { series: [] }); return; }
+    plot();
   };
-  _swathWins.set(L.id, { win, redraw, st });
-  buildCtrls(); redraw();
+  function buildTabs() {
+    tabs.textContent = '';
+    const names = st.scan ? st.scan.dirNames : swathDirNames(st);
+    if (names.length < 2) return;
+    names.forEach((nm, i) => { const t = document.createElement('button'); t.className = 'sw-tab' + (st.axis === i ? ' on' : ''); t.textContent = nm.split(' ')[0]; t.title = nm; t.onclick = () => { st.axis = i; plot(); }; tabs.append(t); });
+  }
+  const seriesRow = (s, i) => {
+    const box = document.createElement('div'); box.className = 'sw-ser';
+    const top = document.createElement('div'); top.className = 'sw-ser-top';
+    const dot = document.createElement('span'); dot.className = 'sw-dot'; dot.style.background = s.color; dot.title = 'cycle colour';
+    dot.onclick = () => { s.color = SERIES_COLORS[(SERIES_COLORS.indexOf(s.color) + 1) % SERIES_COLORS.length]; dot.style.background = s.color; if (st.scan) plot(); };
+    const laySel = document.createElement('select'); laySel.className = 'sw-sel';
+    for (const Lx of _layers.filter((x) => numericColsOf(x).length && (x.docs.blockDoc || x.docs.dhDoc))) { const o = document.createElement('option'); o.value = Lx.id; o.textContent = Lx.label || Lx.name; if (Lx.id === s.layerId) o.selected = true; laySel.append(o); }
+    laySel.onchange = () => { s.layerId = +laySel.value; const cols = numericColsOf(layerById(s.layerId)); if (!cols.includes(s.col)) s.col = cols[0] || s.col; markStale(); buildRail(); };
+    const x = document.createElement('button'); x.className = 'sw-x'; x.textContent = '×'; x.title = 'remove series'; x.onclick = () => { if (st.series.length > 1) { st.series.splice(i, 1); markStale(); buildRail(); } };
+    top.append(dot, laySel, x); box.append(top);
+    const colSel = document.createElement('select'); colSel.className = 'sw-sel';
+    for (const c of numericColsOf(layerById(s.layerId) || L)) { const o = document.createElement('option'); o.value = c; o.textContent = c; if (c === s.col) o.selected = true; colSel.append(o); }
+    colSel.onchange = () => { s.col = colSel.value; markStale(); }; box.append(colSel);
+    const wIn = document.createElement('input'); wIn.className = 'sw-in'; wIn.type = 'text'; wIn.placeholder = 'weight expr (blank = support)'; wIn.value = s.weight; wIn.title = 'weight expression (@gcu/expr) — blank = block volume (regular grid) or 1. e.g. SG, SG*PARTIAL, DECLUSTER'; wIn.onchange = () => { s.weight = wIn.value.trim(); markStale(); }; box.append(wIn);
+    const fIn = document.createElement('input'); fIn.className = 'sw-in'; fIn.type = 'text'; fIn.placeholder = 'filter (optional)'; fIn.value = s.filter; fIn.title = 'row filter for THIS series (@gcu/expr) — e.g. ROCK == 2'; fIn.onchange = () => { s.filter = fIn.value.trim(); markStale(); }; box.append(fIn);
+    return box;
+  };
+  function buildRail() {
+    rail.textContent = '';
+    // ── Direction ──
+    const dSec = document.createElement('div');
+    dSec.append(Object.assign(document.createElement('div'), { className: 'sw-h', textContent: 'direction' }));
+    const modeSel = document.createElement('select'); modeSel.className = 'sw-sel'; modeSel.style.width = '100%';
+    for (const [v, t] of [['axes', 'axes X / Y / Z'], ['oriented', 'dip-dir / dip / rake'], ['direction', 'trend / plunge']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; modeSel.append(o); }
+    modeSel.value = st.mode; modeSel.onchange = () => { st.mode = modeSel.value; st.axis = 0; markStale(); buildRail(); buildTabs(); }; dSec.append(modeSel);
+    const numRow = (key, label) => { const r = document.createElement('div'); r.className = 'sw-row'; const l = document.createElement('span'); l.textContent = label; l.style.width = '38px'; const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any'; inp.className = 'sw-in'; inp.value = String(st[key]); inp.onchange = () => { st[key] = +inp.value; markStale(); }; r.append(l, inp); return r; };
+    if (st.mode === 'oriented') { dSec.append(numRow('dd', 'dipdir'), numRow('dip', 'dip'), numRow('rake', 'rake')); }
+    if (st.mode === 'direction') { dSec.append(numRow('trend', 'trend'), numRow('plunge', 'plunge')); }
+    rail.append(dSec);
+    // ── Bands (cheap: re-bin, no re-scan) ──
+    const bSec = document.createElement('div');
+    bSec.append(Object.assign(document.createElement('div'), { className: 'sw-h', textContent: 'bands' }));
+    const bwRow = document.createElement('div'); bwRow.className = 'sw-row'; const bwL = document.createElement('span'); bwL.textContent = 'width'; bwL.style.width = '38px';
+    const bwI = document.createElement('input'); bwI.type = 'number'; bwI.step = 'any'; bwI.className = 'sw-in'; bwI.placeholder = 'auto'; bwI.value = st.bandWidth ? String(+st.bandWidth.toPrecision(4)) : ''; bwI.title = 'band width (m) — blank = auto'; bwI.onchange = () => { st.bandWidth = bwI.value === '' ? null : (+bwI.value || null); if (st.scan) plot(); }; bwRow.append(bwL, bwI); bSec.append(bwRow);
+    const offRow = document.createElement('div'); offRow.className = 'sw-row'; const offL = document.createElement('span'); offL.textContent = 'offset'; offL.style.width = '38px';
+    const offI = document.createElement('input'); offI.type = 'number'; offI.step = 'any'; offI.className = 'sw-in'; offI.placeholder = 'auto'; offI.value = st.offset != null ? String(+st.offset.toPrecision(6)) : ''; offI.title = 'where band 0 aligns along the direction — blank = auto'; offI.onchange = () => { st.offset = offI.value === '' ? null : +offI.value; if (st.scan) plot(); }; offRow.append(offL, offI); bSec.append(offRow);
+    rail.append(bSec);
+    // ── Series ──
+    const sSec = document.createElement('div');
+    sSec.append(Object.assign(document.createElement('div'), { className: 'sw-h', textContent: 'series' }));
+    const list = document.createElement('div'); list.className = 'sw-series';
+    st.series.forEach((s, i) => list.append(seriesRow(s, i))); sSec.append(list);
+    const add = document.createElement('button'); add.className = 'sw-add'; add.textContent = '+ add series';
+    add.onclick = () => { const c = numericColsOf(L)[0]; st.series.push(mkSer(L, c, st.series.length)); markStale(); buildRail(); }; sSec.append(add);
+    rail.append(sSec);
+    // ── Display ──
+    const vSec = document.createElement('div');
+    vSec.append(Object.assign(document.createElement('div'), { className: 'sw-h', textContent: 'display' }));
+    const barRow = document.createElement('div'); barRow.className = 'sw-row'; const barL = document.createElement('span'); barL.textContent = 'bars';
+    const barSel = document.createElement('select'); barSel.className = 'sw-sel'; for (const [v, t] of [['count', 'count'], ['tonnage', 'weight']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; barSel.append(o); } barSel.value = st.bars; barSel.onchange = () => { st.bars = barSel.value; if (st.scan) plot(); }; barRow.append(barL, barSel); vSec.append(barRow);
+    const zRow = document.createElement('div'); zRow.className = 'sw-row'; const zc = document.createElement('input'); zc.type = 'checkbox'; zc.checked = st.zebra; zc.id = 'sw-zebra-' + L.id; const zl = document.createElement('label'); zl.setAttribute('for', zc.id); zl.textContent = 'zebra on 3D'; zl.title = 'stripe alternate bands on the 3D view'; zc.onchange = () => { if (zc.checked && !gridAxesOf(zebraL())) { win.sub.textContent = 'zebra needs a regular model as the first series'; zc.checked = false; return; } st.zebra = zc.checked; if (st.zebra && st.scan) applySwathZebra(zebraL(), curDir(), effWidth(), effOffset()); else clearSwathZebra(zebraL()); }; zRow.append(zc, zl); vSec.append(zRow);
+    const scRow = document.createElement('div'); scRow.className = 'sw-row'; const scL = document.createElement('span'); scL.textContent = 'scope';
+    const seg = document.createElement('div'); seg.className = 'sw-seg';
+    for (const [v, t] of [['all', 'all'], ['selection', 'selection']]) { const bt = document.createElement('button'); bt.className = 'sw-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; markStale(); buildRail(); }; seg.append(bt); } scRow.append(scL, seg); vSec.append(scRow);
+    rail.append(vSec);
+    // ── Footer: Run + stale + progress ──
+    const foot = document.createElement('div'); foot.className = 'sw-foot';
+    runBtn = document.createElement('button'); runBtn.className = 'sw-run'; runBtn.textContent = 'Run'; runBtn.onclick = run;
+    staleEl = document.createElement('div'); staleEl.className = 'sw-stale'; staleEl.textContent = st.scan && st.stale ? '↻ config changed — Run to update' : '';
+    progEl = document.createElement('div'); progEl.className = 'sw-prog';
+    foot.append(runBtn, staleEl, progEl); rail.append(foot);
+  }
+  _swathWins.set(L.id, { win, redraw: () => { if (st.scope === 'selection') run(); }, st });
+  buildRail(); buildTabs(); plot();
 }
 // zebra: paint alternate swath bands as a 2-value column, coloured on the 3D
 async function applySwathZebra(L, dir, bandWidth, offset) {
@@ -6627,7 +6799,7 @@ build <code>${__MICRO_BUILD__}</code>`;
 const HELP_ANALYSIS = `
 Everything here is on a block model's <b>right-click menu</b> and in the <b>command palette</b> (<code>⌘K</code>) — the palette only shows what applies to the active layer.<br><br>
 <b>grade-tonnage</b> — a draggable plot of <b>tonnage</b> + <b>mean grade</b> above cutoff; tonnage-weighted when you pick a density column (else block count). Pick 1–4 grade columns; a reconcile layer auto-overlays reference vs new<br>
-<b>swath (drift)</b> — mean grade per slab along a <b>direction</b>: the grid <b>axes</b> X/Y/Z, an oriented trio from <b>dip-direction / dip / rake</b> (across · along-strike · down-dip), or a single <b>trend / plunge</b>. Band width + offset set the slabs; <b>zebra</b> paints the alternate bands onto the 3D so you see what the plot bins<br>
+<b>swath (drift)</b> — mean grade per slab along a <b>direction</b>: the grid <b>axes</b> X/Y/Z, an oriented trio from <b>dip-direction / dip / rake</b> (across · along-strike · down-dip), or a single <b>trend / plunge</b>. Add a <b>series</b> per curve — each from any layer, with its own <b>column</b>, a free <b>weight expression</b> (blank = block volume; <code>SG</code>, <code>SG*PARTIAL</code>, or a decluster column for tonnage/sample weighting) and its own <b>filter</b> — so you can overlay <b>kriging · NN · samples</b>. Configure, then <b>Run</b> (it scans once, binning all directions together): switching axis and adjusting band width / offset are then instant. <b>zebra</b> paints the alternate bands onto the 3D so you see what the plot bins<br>
 <b>join &amp; reconcile</b> (Properties → <b>join</b> tab) — <b>spatial join</b> resamples a <i>compatible</i> model onto a target grid (a banner shows compatibility: clean replicate/aggregate, or the reason it can't); <b>key join</b> matches by a key column. <b>Reconcile</b> two model versions → a coloured <b>Δ map</b> (this − reference, diverging ramp about 0) on a common lattice, with <b>matched · mean Δ · added · removed</b> — the change-control record<br>
 <b>sub-blocked models</b> — variable-size (octree) block models open as their <b>true boxes</b>, each block at its own size. Join &amp; reconcile aggregate them to the reference grid by <b>volume</b> — a big parent and its small sub-blocks weighted by the space each fills — so a sub-blocked model compares cleanly against a regular one at the parent resolution<br>
 <b>validate vs drillholes</b> — is the model consistent with the samples? Declusters the drillhole grades (spatial sampling over-drills high grade), then reports the <b>global bias</b> (model mean vs declustered sample mean) and a <b>model-vs-sample swath</b>. (Point vs block support: a global offset can be real; the swaths flag <i>local</i> bias)<br>

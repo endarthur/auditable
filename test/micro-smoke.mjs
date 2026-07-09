@@ -314,6 +314,30 @@ const an = await p.evaluate(async () => {
 chk(`analysis: GT mean-above-min = 250 (${an.gtMean}), swath along X rises [${an.swX.map((v) => Math.round(v)).join(',')}]`,
   Math.abs(an.gtMean - 250) < 1e-9 && an.swX.length === 2 && Math.abs(an.swX[0] - 200) < 1e-9 && Math.abs(an.swX[1] - 300) < 1e-9);
 
+// swath window v2: NO auto-run on open, a Run button computes, direction/band
+// re-bin live from the single scan (no re-scan)
+const sw2 = await p.evaluate(async () => {
+  const m = window._micro, A = m.layers().find((L) => L.name === 'A.csv');
+  m.openSwath(A);
+  const w = () => [...document.querySelectorAll('.fwin')].find((el) => el.querySelector('.sw-body'));
+  const noAuto = !!w() && !w()._swathSpec && !!w().querySelector('.sw-run');
+  document.querySelector('.sw-run').click();
+  await new Promise((r) => { const t = setInterval(() => { if (w() && w()._swathSpec) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 15000); });
+  const tabs = document.querySelectorAll('.sw-tab').length;
+  const ran = !!(w()._swathSpec && w()._swathSpec.series.length);
+  // a band-width change must re-bin from the existing scan (spec still present)
+  // WITHOUT marking stale — proving no re-scan was triggered
+  const bwIn = [...document.querySelectorAll('.sw-rail .sw-in')].find((i) => i.placeholder === 'auto');
+  bwIn.value = '100'; bwIn.dispatchEvent(new Event('change'));
+  const rebinLive = !!w()._swathSpec && document.querySelector('.sw-stale').textContent === '';
+  // switching axis tab also re-bins from the same scan
+  document.querySelectorAll('.sw-tab')[1].click();
+  const tabRebin = !!w()._swathSpec && document.querySelector('.sw-stale').textContent === '';
+  w().querySelector('.fwin-head button:last-child').click();   // close
+  return { noAuto, ran, tabs, rebinLive, tabRebin };
+});
+chk(`swath v2: no auto-run (${sw2.noAuto}), Run computes (${sw2.ran}), 3 axis tabs (${sw2.tabs}), band+axis re-bin live no re-scan (${sw2.rebinLive}/${sw2.tabRebin})`, sw2.noAuto && sw2.ran && sw2.tabs === 3 && sw2.rebinLive && sw2.tabRebin);
+
 // linked brushing: a selection restricts the compute (high-FE half → min 300, tonnage halved)
 const lk = await p.evaluate(async () => {
   const m = window._micro, A = m.layers().find((L) => L.name === 'A.csv');
