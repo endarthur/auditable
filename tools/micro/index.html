@@ -1559,11 +1559,25 @@ async function convertLayerToParquet(L) {
   if (!h || (L.docs.blockDoc && L.docs.blockDoc.parquet)) { $('#meta').textContent = 'materialize: needs a non-Parquet block model'; return; }
   const m = h.mapping || {};
   if (m.x == null || m.y == null || m.z == null) { $('#meta').textContent = 'materialize: needs X/Y/Z columns'; return; }
+  // the in-memory converter decodes every column — over the ceiling it will
+  // exhaust the tab. Warn with an estimate; the streaming converter is the fix.
+  if (h.count > OPTIMIZE_MAX_BLOCKS) {
+    const est = (h.count * h.columns.length * 16 / 1073741824).toFixed(1);
+    const go = await microConfirm('Convert a very large model in memory?',
+      `${(h.count / 1e6).toFixed(1)}M blocks × ${h.columns.length} columns needs roughly ${est} GB of tab memory — this will likely crash the page. Proceed anyway?`,
+      'Proceed', 'Cancel');
+    if (!go) { $('#meta').textContent = 'optimize: cancelled (streaming conversion for big models is on the roadmap)'; return; }
+  }
   $('#meta').textContent = `${L.label || L.name} — reading columns…`;
-  // 1. read the BASE data columns in record order (+ coords for the sort)
+  // 1. read the BASE data columns in record order (+ coords for the sort).
+  // Memory discipline: category strings are INTERNED (one string object per
+  // distinct value, not one per row — 40 B/row → 8 B pointer) and coords go
+  // straight into preallocated Float64Arrays (no plain-array duplicates).
   const names = h.columns, isNum = names.map((_, k) => colIsNumeric(L, h, k));
   const colArr = names.map(() => []);
-  const XC = [], YC = [], ZC = [];
+  const intern = names.map((_, k) => (isNum[k] ? null : new Map()));
+  const cap = h.count || 0;
+  let XC = new Float64Array(cap), YC = new Float64Array(cap), ZC = new Float64Array(cap);
   const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm), isDelim = !!(L.docs.blockDoc && !isDm);
   let rc = 0;
   try {
@@ -1571,20 +1585,33 @@ async function convertLayerToParquet(L) {
       for (const f0 of batch) {
         if (isDelim) { const xv = +f0[m.x], yv = +f0[m.y], zv = +f0[m.z]; if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue; }
         const f = isDm ? f0.map((v) => (v == null ? '' : v)) : f0;
-        for (let k = 0; k < names.length; k++) { const v = f[k]; colArr[k].push(isNum[k] ? (v == null || v === '' || Number.isNaN(+v) ? null : +v) : (v == null || v === '' ? null : String(v))); }
-        XC.push(+f[m.x]); YC.push(+f[m.y]); ZC.push(+f[m.z]);
+        for (let k = 0; k < names.length; k++) {
+          const v = f[k];
+          if (isNum[k]) colArr[k].push(v == null || v === '' || Number.isNaN(+v) ? null : +v);
+          else if (v == null || v === '') colArr[k].push(null);
+          else { const s = String(v); let iv = intern[k].get(s); if (iv === undefined) { iv = s; intern[k].set(s, s); } colArr[k].push(iv); }
+        }
+        if (rc >= XC.length) {   // headerless count estimate ran short — grow
+          const g = Math.max(1024, XC.length * 2);
+          const nx = new Float64Array(g); nx.set(XC); XC = nx;
+          const ny = new Float64Array(g); ny.set(YC); YC = ny;
+          const nz = new Float64Array(g); nz.set(ZC); ZC = nz;
+        }
+        XC[rc] = +f[m.x]; YC[rc] = +f[m.y]; ZC[rc] = +f[m.z];
         rc++;
       }
       $('#meta').textContent = `materialize: ${rc.toLocaleString()} blocks read…`;
       await new Promise((r) => setTimeout(r));
     }
   } catch (e) { $('#meta').textContent = `materialize: ${e.message}`; return; }
-  const n = XC.length;
+  const n = rc;
   if (!n) { $('#meta').textContent = 'materialize: empty model'; return; }
-  // 2. Morton order → 3. write the base columns Morton-sorted (spatial index)
+  // 2. Morton order → 3. write the base columns Morton-sorted (spatial index).
+  // Each source column is RELEASED right after its reorder — no full double-copy.
   $('#meta').textContent = 'materialize: spatial sort + write…';
-  const order = radixSortIndices(mortonKeys(Float64Array.from(XC), Float64Array.from(YC), Float64Array.from(ZC), n), n);
-  const columnData = names.map((nm, k) => { const src = colArr[k], dst = new Array(n); for (let i = 0; i < n; i++) dst[i] = src[order[i]]; return { name: nm, data: dst }; });
+  const order = radixSortIndices(mortonKeys(XC.subarray(0, n), YC.subarray(0, n), ZC.subarray(0, n), n), n);
+  XC = YC = ZC = null;                                     // coords served their purpose
+  const columnData = names.map((nm, k) => { const src = colArr[k], dst = new Array(n); for (let i = 0; i < n; i++) dst[i] = src[order[i]]; colArr[k] = null; return { name: nm, data: dst }; });
   const optLineage = mkLineage('optimize', { morton: true, format: 'parquet', blocks: n }, [L.lineage]);
   const kv = [{ key: 'micro:frame', value: JSON.stringify({ origin: frame ? [...frame.origin] : [0, 0, 0], crs: (h.crs) || null, spatial: true }) }, { key: 'micro:lineage', value: JSON.stringify(optLineage) }];
   const bytes = writeParquet({ columnData, rowGroupSize: 1 << 16, codec: 'SNAPPY', kvMetadata: kv });
@@ -5268,7 +5295,11 @@ async function openDmBlob(blob, name, opts = {}) {
   $('#meta').textContent = `${name} — reading DD…`;
   const mapping = opts.chan != null && _blockDoc && _blockDoc.header ? { chan: opts.chan } : null;
   renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);
-  const { header, streamChunks } = await openDmModel(blob, { ...(mapping ? { mapping } : {}), forcePoints: opts.forcePoints });
+  // sub-blocked / irregular models run a FULL discovery sweep before the first
+  // chunk (a 13 GB file reads silently for a minute otherwise) — show progress
+  const gb = blob.size / 1073741824;
+  const onProgress = (p) => { $('#meta').textContent = `${name} — discovery sweep ${Math.round(100 * p.done / (p.total || 1))}% of ${p.total.toLocaleString()} records${gb > 0.5 ? ` (${gb.toFixed(1)} GB)` : ''}…`; };
+  const { header, streamChunks } = await openDmModel(blob, { ...(mapping ? { mapping } : {}), forcePoints: opts.forcePoints, onProgress });
   _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints };
   registerDocs(lid, header.grid ? 'blocks' : 'points');
   fitFromHeader(header, opts.first !== false && opts.chan == null);
@@ -5759,8 +5790,14 @@ function markProjectDirty() {
 // escape hatch; the remembered choice is resettable from Tools → Settings.
 let _autoOptimize = (() => { try { return localStorage.getItem('micro.autoOptimize'); } catch { return null; } })();   // 'on' | 'off' | null (unasked)
 function setAutoOptimize(v) { _autoOptimize = v; try { localStorage.setItem('micro.autoOptimize', v); } catch { /* private mode */ } }
+// the in-memory converter's honest ceiling — above this, a convert (and thus an
+// auto-optimize on SAVE) would OOM the tab. Big models keep their source format
+// until the streaming converter lands; convert stays available explicitly below.
+const OPTIMIZE_MAX_BLOCKS = 8_000_000;
 async function maybeAutoOptimize() {
-  const cands = _layers.filter((L) => L.docs.blockDoc && !L.docs.blockDoc.parquet && layerTableHeader(L) && (layerTableHeader(L).mapping || {}).x != null);
+  let cands = _layers.filter((L) => L.docs.blockDoc && !L.docs.blockDoc.parquet && layerTableHeader(L) && (layerTableHeader(L).mapping || {}).x != null);
+  const big = cands.filter((L) => layerTableHeader(L).count > OPTIMIZE_MAX_BLOCKS);
+  if (big.length) { $('#meta').textContent = `optimize: ${big.map((L) => L.label || L.name).join(', ')} over ${(OPTIMIZE_MAX_BLOCKS / 1e6)}M blocks — kept as-is (in-memory conversion would exhaust the tab)`; cands = cands.filter((L) => !big.includes(L)); }
   if (!cands.length) return;
   let choice = _autoOptimize;
   if (choice == null) {

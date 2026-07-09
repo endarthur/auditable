@@ -17,7 +17,7 @@ import { detectDM, parseHeader, recordRange, decodeRecord, readField } from '../
 
 const DEF_NAMES = new Set(['IJK', 'XC', 'YC', 'ZC', 'XINC', 'YINC', 'ZINC', 'XMORIG', 'YMORIG', 'ZMORIG', 'NX', 'NY', 'NZ']);
 
-export async function openDmModel(blob, { mapping = null, forcePoints = false } = {}) {
+export async function openDmModel(blob, { mapping = null, forcePoints = false, onProgress = null } = {}) {
   const head = new Uint8Array(await blob.slice(0, Math.min(8192, blob.size)).arrayBuffer());
   const fmt = detectDM(head);
   if (!fmt) throw new Error('dm: not a recognizable .dm file');
@@ -113,7 +113,8 @@ export async function openDmModel(blob, { mapping = null, forcePoints = false } 
     const ax = [new Set(), new Set(), new Set()];            // axis distinct centroids (for the fine lattice)
     const minDim = [Infinity, Infinity, Infinity], dimSet = new Set();
     const sweepCols = perRecDims ? [xc, yc, zc, incIdx.x, incIdx.y, incIdx.z] : [xc, yc, zc];
-    for await (const { count, cols } of columnBatches(sweepCols)) {
+    for await (const { recStart, count, cols } of columnBatches(sweepCols)) {
+      if (onProgress) onProgress({ phase: 'discovery', done: recStart + count, total: h.recordCount });
       const X = cols[xc], Y = cols[yc], Z = cols[zc], DX = perRecDims ? cols[incIdx.x] : null, DY = perRecDims ? cols[incIdx.y] : null, DZ = perRecDims ? cols[incIdx.z] : null;
       for (let k = 0; k < count; k++) {
         const xv = X[k], yv = Y[k], zv = Z[k];
