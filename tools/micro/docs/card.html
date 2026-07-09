@@ -83,11 +83,20 @@
   .tight .grp .t { margin-bottom: 0.8mm; }
   .tight .g { row-gap: 1mm; }
 
-  @media screen { .cut { zoom: 2.4; } }
+  /* A6 desk version (page 2): the SAME faces, cloned by script + scaled —
+     one source of truth, so the A6 stays current with every card revision.
+     85.6 × 1.729 = 148 mm; the card's inner height relaxes to fill 105 mm. */
+  .cut.a6 .card { zoom: 1.729; height: 60.73mm; }
+  .cut.a6 .card .grp, .cut.a6 .card.tight .grp { margin-bottom: 2.6mm; }
+  .cut.a6 .card .g, .cut.a6 .card.tight .g { row-gap: 1.6mm; }
+  .cut.a6 .card .grp .t { margin-bottom: 1.2mm; }
+
+  @media screen { .cut { zoom: 2.4; } .cut.a6 { zoom: 1.35; } }
   @media print {
     @page { size: A4; margin: 0; }
     html, body { background: #fff; }
     .sheet { padding: 25mm 0 0; gap: 14mm; }
+    .a6sheet { break-before: page; padding-top: 30mm; }
     .note { display: none; }
     .card { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
@@ -96,7 +105,7 @@
 <body>
 <div class="sheet">
   <div class="note">
-    <b>micro — shortcut card</b> (credit-card size, 85.6 × 54 mm)<br>
+    <b>micro — shortcut card</b> · page 1 = credit-card size (85.6 × 54 mm), page 2 = <b>A6 desk card</b> (148 × 105 mm) — print the page you want<br>
     Print at <b>100% scale</b> with <b>background graphics on</b> → cut along the corner marks →
     glue the faces back-to-back → <b>laminate</b>. · <a href="index.html">manual</a> · <a href="../">open micro ↗</a>
   </div>
@@ -194,5 +203,19 @@
     </div>
   </div>
 </div>
+
+<!-- page 2: the A6 desk pair — cloned from the credit-card faces above so the
+     two sizes can never drift apart -->
+<div class="sheet a6sheet">
+  <div class="note"><b>A6 desk card</b> (148 × 105 mm) — same faces, roomier type</div>
+</div>
+<script>
+  const a6 = document.querySelector('.a6sheet');
+  for (const cut of document.querySelectorAll('.sheet:not(.a6sheet) .cut')) {
+    const c = cut.cloneNode(true);
+    c.classList.add('a6');
+    a6.appendChild(c);
+  }
+</script>
 </body>
 </html>
