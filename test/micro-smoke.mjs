@@ -333,6 +333,22 @@ await layerReady('cloud.xyz');
 const xyzN = await p.evaluate(() => window._micro.renderer.layerElementCount(window._micro.layers().find((L) => L.name === 'cloud.xyz').id));
 chk(`XYZ points: ${xyzN} points`, xyzN === 200);
 
+// ── 7a2. batch rename (multi-layer): dialog previews before→after, find/replace applies ──
+const br = await p.evaluate(async () => {
+  const m = window._micro;
+  m.openBatchRename(m.layers());
+  const shown = document.querySelector('#brDlg').classList.contains('show');
+  const rows = document.querySelectorAll('#brDlg table tr').length - 1;
+  const [fIn, rIn] = document.querySelectorAll('#brDlg .br-find input[type=text]');
+  fIn.value = 'cloud'; rIn.value = 'lidar'; fIn.dispatchEvent(new Event('input'));
+  const preview = [...document.querySelectorAll('#brDlg table td.after')].map((t) => t.textContent);
+  document.querySelector('#brGo').click();
+  return { shown, rows, preview, closed: !document.querySelector('#brDlg').classList.contains('show'),
+    label: m.layers().find((L) => L.name === 'cloud.xyz')?.label };
+});
+chk(`batch rename: dialog ${br.rows} rows, preview [${br.preview.join(', ')}], applied → “${br.label}”`,
+  br.shown && br.rows >= 2 && br.preview.includes('lidar.xyz') && br.closed && br.label === 'lidar.xyz');
+
 // ── 7b. spatial join: resample a compatible fine model onto a coarse grid →
 //    a new block-model layer; reconcile Δ preset. A = 10 m (2×2), B = 5 m (4×4)
 //    whose grade averages back to A per parent cell (aggregate mean == A, Δ==0).
