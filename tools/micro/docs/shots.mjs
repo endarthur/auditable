@@ -107,15 +107,47 @@ await p.evaluate(() => { window._micro.openPalette(); const i = document.querySe
 await shot('palette', { wait: 600 });
 await p.evaluate(() => window._micro.closePalette());
 
-// 3 ── grade–tonnage window
+// 3 ── grade–tonnage window (the swath-chassis rail: series · unit · density expr · Run)
 await p.evaluate(() => window._micro.openGradeTonnage(window._micro.layers()[0]));
+await p.evaluate(() => {
+  const w = [...document.querySelectorAll('.fwin')].find((e) => /grade-tonnage/.test(e.querySelector('.t').textContent));
+  const pu = w.querySelector('.sw-unit-plot'); pu.value = 'pct'; pu.dispatchEvent(new Event('change'));
+  w.querySelector('.sw-run').click();
+});
+await p.waitForFunction(() => { const w = [...document.querySelectorAll('.fwin')].find((e) => /grade-tonnage/.test(e.querySelector('.t').textContent)); return w && w._gtSpec && w._gtSpec.series.length; }, { timeout: 30000 });
 await shot('gradetonnage', { wait: 1600 });
-
-// 4 ── swath with zebra bands on the 3D
-await p.evaluate(() => window._micro.openSwath(window._micro.layers()[0]));
-await p.evaluate(() => { const w = [...document.querySelectorAll('.fwin')].find((e) => /swath/.test(e.querySelector('.t').textContent)); const zc = [...w.querySelectorAll('input[type=checkbox]')].find((c) => /zebra/.test(c.parentElement.textContent)); if (zc && !zc.checked) zc.click(); });
-await shot('swath', { wait: 1800 });
 await p.evaluate(() => window._micro.closeAllWindows());
+
+// 4 ── swath: Run, zebra bands on the 3D
+await p.evaluate(() => window._micro.openSwath(window._micro.layers()[0]));
+await p.evaluate(() => { const w = [...document.querySelectorAll('.fwin')].find((e) => /swath/.test(e.querySelector('.t').textContent)); w.querySelector('.sw-run').click(); });
+await p.waitForFunction(() => { const w = [...document.querySelectorAll('.fwin')].find((e) => /swath/.test(e.querySelector('.t').textContent)); return w && w._swathSpec && w._swathSpec.series.length; }, { timeout: 30000 });
+await p.evaluate(() => { const w = [...document.querySelectorAll('.fwin')].find((e) => /swath/.test(e.querySelector('.t').textContent)); const zc = [...w.querySelectorAll('input[type=checkbox]')].find((c) => /zebra/.test((c.nextElementSibling || c.parentElement).textContent)); if (zc && !zc.checked) zc.click(); });
+await shot('swath', { wait: 1800 });
+
+// 4b ── the band ghost: hover the swath plot → that band's slab lights on the 3D
+await p.evaluate(() => { const w = [...document.querySelectorAll('.fwin')].find((e) => /swath/.test(e.querySelector('.t').textContent)); const zc = [...w.querySelectorAll('input[type=checkbox]')].find((c) => /zebra/.test((c.nextElementSibling || c.parentElement).textContent)); if (zc && zc.checked) zc.click(); });
+await p.evaluate(() => {
+  const w = [...document.querySelectorAll('.fwin')].find((e) => /swath/.test(e.querySelector('.t').textContent));
+  const cv2 = w.querySelector('.sw-main canvas'), r = cv2.getBoundingClientRect();
+  cv2.dispatchEvent(new MouseEvent('mousemove', { clientX: r.left + r.width * 0.58, clientY: r.top + r.height * 0.5, bubbles: true }));
+});
+await shot('bandghost', { wait: 1000 });
+await p.evaluate(() => window._micro.closeAllWindows());
+await p.evaluate(() => window._micro.setSwathBand(null));
+
+// 4c ── a TRUE section: a thin N–S slab seen obliquely — blocks cut analytically,
+// the cut wall continuous and coloured (not a ragged centroid cull)
+await p.evaluate(() => {
+  const cb = document.querySelector('#colorBy'); const o = [...cb.options].find((x) => /FE/.test(x.textContent) && x.value.startsWith('chan:'));   // zebra teardown reset the colour
+  if (o) { cb.value = o.value; cb.dispatchEvent(new Event('change')); }
+  const set = (id, v) => { const e = document.querySelector('#' + id); e.value = v; e.dispatchEvent(new Event('input')); };
+  set('secMode', 'ns'); set('secHalf', '12'); set('secPos', '0.45');
+  window._micro.cam.fit(window._micro.docBbox());
+  window._micro.requestRender();
+});
+await shot('truesection', { wait: 2600 });
+await p.evaluate(() => { const e = document.querySelector('#secMode'); e.value = 'off'; e.dispatchEvent(new Event('input')); window._micro.cam.fit(window._micro.docBbox()); window._micro.requestRender(); });
 
 // 5 ── figure decorations (scale bar / north / legend / title) on a print background
 await p.evaluate(() => { const m = window._micro; m.setBg('#ffffff'); for (const k of ['scale', 'north', 'legend']) m.setDeco(k, true); m.setDecoTitle('Deposit — FE (%)'); m.drawDecorations(); });
