@@ -4158,6 +4158,7 @@ flat out vec3 vHalf;
 flat out vec4 vColor;
 flat out float vMode;                   // 0 = impostor, 1 = splat
 flat out float vCull;
+flat out float vPxR;                    // projected radius (edge-line fade near demotion)
 out vec2 vCorner;
 out vec3 vWorldPos;
 void main() {
@@ -4193,7 +4194,7 @@ void main() {
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec3 wp = center + (uRight * corner.x + uUp * corner.y) * quadR;
   gl_Position = uViewProj * vec4(wp, 1.0);
-  vCenter = center; vHalf = half_; vMode = demoted; vCorner = corner; vWorldPos = wp;
+  vCenter = center; vHalf = half_; vMode = demoted; vCorner = corner; vWorldPos = wp; vPxR = pxR;
   if (uColorMode == 0) {
     float t = clamp((center.z - uZRange.x) / max(uZRange.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
@@ -4230,6 +4231,7 @@ flat in vec3 vHalf;
 flat in vec4 vColor;
 flat in float vMode;
 flat in float vCull;
+flat in float vPxR;
 in vec2 vCorner;
 in vec3 vWorldPos;
 uniform vec3 uEye;
@@ -4240,6 +4242,7 @@ uniform vec3 uLightDir;
 uniform mat4 uViewProj;
 uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
+uniform float uEdges;                   // 1 = draw block edge lines (View toggle)
 out vec4 outColor;
 ${SCREENDOOR$gl_blocks}
 void main() {
@@ -4291,6 +4294,21 @@ void main() {
   vec4 clip = uViewProj * vec4(p, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
   float shade = (0.55 + 0.45 * max(dot(n, uLightDir), 0.0)) * (onCut ? 0.85 : 1.0);
+  // BLOCK EDGES (toggle): the hit point in box-local coords — on a face, one
+  // axis sits at ±1 and the SECOND-largest → 1 marks an edge; on a cut face
+  // (interior) the LARGEST → 1 outlines the cut polygon (block boundaries on
+  // the section wall). fwidth gives a ~screen-constant line; fade the effect
+  // out as the block shrinks toward demotion so the far field stays clean.
+  if (uEdges > 0.5) {
+    vec3 a2 = abs(p - vCenter) / vHalf;
+    float m1 = max(a2.x, max(a2.y, a2.z));
+    float m2 = max(min(a2.x, a2.y), min(max(a2.x, a2.y), a2.z));
+    float e = onCut ? m1 : m2;
+    float dpx = (1.0 - e) / max(fwidth(e), 1e-6);          // distance to the edge in pixels
+    float edge = 1.0 - clamp(dpx * 0.7 - 0.3, 0.0, 1.0);   // ~1.5 px, soft falloff
+    edge *= clamp((vPxR - 5.0) / 8.0, 0.0, 1.0);           // fade below ~13 px projected radius
+    shade *= 1.0 - 0.4 * edge;
+  }
   outColor = vec4(vColor.rgb * shade, vColor.a);
 }`;
 
@@ -4343,7 +4361,7 @@ function createBlocksPipeline(gl) {
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'), repaint: U('uRepaint'),
       catVis: U('uCatVis'), catVisOn: U('uCatVisOn'), sel: U('uSel'), selOn: U('uSelOn'),
       rule: U('uRule'), ruleOn: U('uRuleOn'),
-      secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
+      secPlane: U('uSecPlane'), secCfg: U('uSecCfg'), edges: U('uEdges'),
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
   };
@@ -4430,7 +4448,7 @@ function createBlocksPipeline(gl) {
 
   // Per-frame program state (called once before the chunk loop) — set on BOTH
   // programs so drawSlice can switch freely between full and cheap.
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, catVisTex = null, selTex = null, ruleTex = null, opacity = 1 }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, catVisTex = null, selTex = null, ruleTex = null, opacity = 1, edges = false }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -4470,6 +4488,7 @@ function createBlocksPipeline(gl) {
       gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
       gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
       gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
+      gl.uniform1f(uni.edges, edges ? 1 : 0);
       gl.uniform1f(uni.filterOn, maskTex ? 1 : 0);
       gl.uniform1f(uni.isolate, isolate ? 1 : 0);
       if (maskTex) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, maskTex); gl.uniform1i(uni.mask, 4); }
@@ -6429,13 +6448,13 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     // opts.layerOpts = { [id]: { colorMode, clip } } overrides the global color
     // opts per layer (absent → the globals, so single-layer callers are unchanged).
     // Returns { drawn, converged, visible }.
-    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false, section = null, clip = null, layerOpts = null } = {}) {
+    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false, blockEdges = false, section = null, clip = null, layerOpts = null } = {}) {
       const vp = cam.state.viewProj;
       const sec = section && section.on ? section : null;
       const secKey = sec ? `${sec.n.join(',')}|${sec.d}|${sec.half}` : 'off';
       const clipKey = clip ? `${clip[0]}~${clip[1]}` : 'a';
       const loKey = layerOpts ? JSON.stringify(layerOpts) : '';
-      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${secKey}|${clipKey}|${loKey}|${canvas.width}x${canvas.height}`;
+      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}${blockEdges ? 'E' : ''}|${secKey}|${clipKey}|${loKey}|${canvas.width}x${canvas.height}`;
       const moving = vpChanged(vp) || key !== lastKey || needClear;
       lastKey = key; needClear = false;
       if (moving) repaintSet.clear();                      // the full redraw covers any pending repaint
@@ -6626,7 +6645,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
             catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
-            opacity: ls.opacity,
+            opacity: ls.opacity, edges: blockEdges,
           });
         };
         for (const [id, group] of blkGroups) {

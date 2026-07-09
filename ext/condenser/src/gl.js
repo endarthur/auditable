@@ -582,13 +582,13 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     // opts.layerOpts = { [id]: { colorMode, clip } } overrides the global color
     // opts per layer (absent → the globals, so single-layer callers are unchanged).
     // Returns { drawn, converged, visible }.
-    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false, section = null, clip = null, layerOpts = null } = {}) {
+    draw(cam, { budget = 3_000_000, pointPx = 2.5, colorMode = 0, blocksAsPoints = false, blockEdges = false, section = null, clip = null, layerOpts = null } = {}) {
       const vp = cam.state.viewProj;
       const sec = section && section.on ? section : null;
       const secKey = sec ? `${sec.n.join(',')}|${sec.d}|${sec.half}` : 'off';
       const clipKey = clip ? `${clip[0]}~${clip[1]}` : 'a';
       const loKey = layerOpts ? JSON.stringify(layerOpts) : '';
-      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}|${secKey}|${clipKey}|${loKey}|${canvas.width}x${canvas.height}`;
+      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}${blockEdges ? 'E' : ''}|${secKey}|${clipKey}|${loKey}|${canvas.width}x${canvas.height}`;
       const moving = vpChanged(vp) || key !== lastKey || needClear;
       lastKey = key; needClear = false;
       if (moving) repaintSet.clear();                      // the full redraw covers any pending repaint
@@ -779,7 +779,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
             section: ls.sectioned === false ? null : sec,
             catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
-            opacity: ls.opacity,
+            opacity: ls.opacity, edges: blockEdges,
           });
         };
         for (const [id, group] of blkGroups) {

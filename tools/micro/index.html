@@ -653,6 +653,8 @@ new ResizeObserver(() => { const [w, h] = renderer.resize(); cam.setAspect(w / h
 
 let converged = true;
 let _viewMode = 'boxes';                                   // boxes = impostors · points = fixed splats (View menu)
+let _blockEdges = (() => { try { return localStorage.getItem('micro.edges') === '1'; } catch { return false; } })();   // block edge lines (View toggle)
+function setBlockEdges(on) { _blockEdges = !!on; try { localStorage.setItem('micro.edges', on ? '1' : '0'); } catch { /* private */ } requestRender(); }
 // the per-frame draw options (budget, point size, colour modes, per-layer clip/
 // colour, section, clip). Shared by the render loop and figure export so a
 // supersample export renders the scene identically.
@@ -662,7 +664,7 @@ function currentDrawOpts() {
   const modeOf = (v) => (v === 'elev' ? 0 : v && v.startsWith('chan:') ? 1 : v === 'cat' || v === 'rules' || (v && v.startsWith('paint:')) ? 2 : v === 'solid' ? 3 : +v || 0);
   const layerOpts = {};
   for (const L of _layers) layerOpts[L.id] = { colorMode: L.id === _activeId ? resolveColorMode() : modeOf(L.colorSel), clip: L.id === _activeId ? [clipV('clipMin'), clipV('clipMax')] : clipOf(L) };
-  return { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')], layerOpts: _layers.length ? layerOpts : null };
+  return { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', blockEdges: _blockEdges, section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')], layerOpts: _layers.length ? layerOpts : null };
 }
 function loop(t) {
   if (dirty || !converged) {                               // keep converging while still (progressive accumulation)
@@ -6705,6 +6707,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   { label: (_viewMode === 'boxes' ? '✓ ' : '') + 'Blocks as boxes', action: () => { _viewMode = 'boxes'; requestRender(); } },
   { label: (_viewMode === 'points' ? '✓ ' : '') + 'Blocks as points', action: () => { _viewMode = 'points'; requestRender(); } },
+  { label: (_blockEdges ? '✓ ' : '') + 'Block edges', action: () => setBlockEdges(!_blockEdges) },
   { label: `Point budget: ${$('#budget').selectedOptions[0].textContent}`, submenu: () => [...$('#budget').options].map((o) => ({
     label: (o.selected ? '✓ ' : '') + o.textContent,
     action: () => { const b2 = $('#budget'); b2.value = o.value; b2.dispatchEvent(new Event('input')); b2.dispatchEvent(new Event('change')); },
@@ -6803,7 +6806,7 @@ right-click the layer → <b>Tint…</b> / <b>Opacity…</b> · sections cut mes
 <code>/</code> focuses the box · autocomplete offers columns, functions, and the category values — <code>Tab</code>/<code>Enter</code> accepts<br><code>FE &gt; 55 and LITO = "HEMATITE"</code> · <code>between</code> · <code>in (…)</code> — Enter applies, Esc clears<br>
 matching elements isolate — everything else drops out of the render<br><br>
 <b>knobs</b><br>
-<b>min/max</b> boxes clip the color scale (outliers stop eating the ramp; empty = auto) · View menu: <b>boxes</b> = true block faces · <b>points</b> = fixed splats (snappier) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
+<b>min/max</b> boxes clip the color scale (outliers stop eating the ramp; empty = auto) · View menu: <b>boxes</b> = true block faces · <b>points</b> = fixed splats (snappier) · <b>block edges</b> = outline every block (and every cut block on a section) · <b>budget</b> = elements per frame (lower = snappier; converges when still) · <b>EDL</b> = the shading that makes points read as a surface`;
 const HELP_ABOUT = `
 <b>micro</b> — a streaming workbench for massive spatial-element files: LiDAR point clouds
 (.las, .ply, .xyz), block models (.csv, .dm, .parquet — regular or variable-size sub-blocked), grids, and drillholes. No import step —
@@ -7495,6 +7498,7 @@ const COMMANDS = [
   { id: 'scan', group: 'File', title: 'Scan folder for new data', kw: 'import inbox dropped rescan pick up new files refresh', when: () => hasFSAA && !!_project, run: () => scanFolderForNewData() },
   { id: 'png', group: 'File', title: 'Save viewport PNG', kw: 'screenshot image capture', run: () => $('#btnShot').click() },
   { id: 'figure', group: 'File', title: 'Export figure (PNG)…', kw: 'decorations scale bar north legend title report', run: () => exportFigure() },
+  { id: 'blockedges', group: 'View', title: 'Toggle block edges', kw: 'borders lines wireframe outline grid', when: (c) => c.L && !!c.L.docs.blockDoc, run: () => setBlockEdges(!_blockEdges) },
   { id: 'decopanel', group: 'View', title: 'Decorations & figure…', kw: 'legend scale bar north title background export panel', run: () => openDecoPanel() },
   { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
   { id: 'deconorth', group: 'View', title: 'Toggle north arrow', kw: 'decoration compass', run: () => setDeco('north', !_deco.north) },
@@ -10566,7 +10570,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

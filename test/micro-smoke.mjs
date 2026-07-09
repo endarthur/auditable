@@ -261,6 +261,26 @@ const ts = await p.evaluate(async () => {
 });
 chk(`true section: gap slab paints a cut wall (${ts.lit} px lit — centroid cull gave 0) + wall pickable (rec ${ts.rec})`, ts.lit > 2000 && ts.rec != null);
 
+// ── 2d. block edges (View toggle): analytic edge lines darken the render ──
+const be = await p.evaluate(async () => {
+  const stat = async () => {
+    await new Promise((r) => { const t = setInterval(() => { if (/converged/.test(document.querySelector('#stats').textContent)) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 15000); });
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const cv = document.querySelector('#cv'), c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height;
+    const g = c.getContext('2d'); g.drawImage(cv, 0, 0);
+    const d = g.getImageData(0, 0, cv.width, cv.height).data;
+    let lit = 0, sum = 0;
+    for (let i = 0; i < d.length; i += 4) { const v = d[i] + d[i + 1] + d[i + 2]; if (v > 60) { lit++; sum += v; } }
+    return { lit, mean: lit ? sum / lit : 0 };
+  };
+  const off = await stat();
+  window._micro.setBlockEdges(true);
+  const on = await stat();
+  window._micro.setBlockEdges(false);
+  return { offMean: off.mean, onMean: on.mean, litKept: Math.abs(on.lit - off.lit) / (off.lit || 1) < 0.05 };
+});
+chk(`block edges toggle darkens the render (mean ${be.offMean.toFixed(0)}→${be.onMean.toFixed(0)}, silhouette kept)`, be.onMean < be.offMean - 2 && be.litKept);
+
 // ── 3. CSV filter (predicate over the model) ──
 await p.evaluate(() => { const i = document.querySelector('#filter'); i.value = 'LITO = "HEMATITE" and FE > 45'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); });
 await p.waitForFunction(() => window._micro.layers()[0]._filterMask, null, { timeout: 30000 });
