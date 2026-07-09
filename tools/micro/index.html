@@ -2922,9 +2922,24 @@ function openGradeTonnage(L) {
   const st = { nCut: 40, scope: 'all', gradeUnit: gu0.grade || '', densUnit: gu0.densUnit || 't/m3',
     series: pairs.length ? [mkSer(L, pairs[0].ref, 0), mkSer(L, pairs[0].self, 1)] : [mkSer(L, nums[0], 0)],
     scan: null, stale: true, running: false };
+  // a saved setup (project manifest) beats the defaults — the instrument
+  // reopens configured; Run stays manual (no surprise scans on project open)
+  const saved = L.analysis && L.analysis.gt;
+  if (saved) {
+    if (saved.nCut) st.nCut = saved.nCut;
+    if (saved.scope) st.scope = saved.scope;
+    if (saved.gradeUnit != null) st.gradeUnit = saved.gradeUnit;
+    if (saved.densUnit) st.densUnit = saved.densUnit;
+    if (saved.ranges) st.ranges = JSON.parse(JSON.stringify(saved.ranges));
+    const ser = analysisSerRestore(saved.series, L); if (ser) st.series = ser;
+  }
+  const cfgOf = () => ({ series: analysisSerCfg(st.series), nCut: st.nCut, scope: st.scope, gradeUnit: st.gradeUnit, densUnit: st.densUnit, ranges: st.ranges || undefined });
   const persistUnits = () => { L.gtUnits = { ...(L.gtUnits || {}), grade: st.gradeUnit, densUnit: st.densUnit, weight: st.series[0] ? st.series[0].weight : '' }; markProjectDirty(); };
   const guLabel = () => (st.gradeUnit === 'pct' ? '%' : st.gradeUnit);
-  const win = floatWin({ title: `grade-tonnage · ${L.label || L.name}`, sub: 'configure, then Run', x: Math.max(12, innerWidth - 680), y: 100, w: 640, h: 420, onClose: () => _gtWins.delete(L.id) });
+  const win = floatWin({ title: `grade-tonnage · ${L.label || L.name}`, sub: saved ? 'restored — Run to compute' : 'configure, then Run', x: Math.max(12, innerWidth - 680), y: 100, w: 640, h: 420,
+    onClose: () => { saveAnalysisCfg(L, 'gt', cfgOf(), win); setAnalysisOpen(L, 'gt', false); _gtWins.delete(L.id); } });
+  setAnalysisOpen(L, 'gt', true);
+  applyAnalysisGeo(L, 'gt', win);
   const body = document.createElement('div'); body.className = 'sw-body'; win.body.append(body);
   const rail = document.createElement('div'); rail.className = 'sw-rail';
   const main = document.createElement('div'); main.className = 'sw-main';
@@ -2933,7 +2948,7 @@ function openGradeTonnage(L) {
   // derive every curve from the cached cumulative arrays — cutoffs / ranges /
   // units are display-time (a binary search per cut), Run owns the streaming
   const plot = () => {
-    if (!st.scan || !st.scan.series.length) { win.sub.textContent = st.stale ? 'configure, then Run' : 'no data'; plotChart(cv, { series: [] }); win._spec = null; win.el._gtSpec = null; return; }
+    if (!st.scan || !st.scan.series.length) { win.sub.textContent = st.stale ? (saved ? 'restored — Run to compute' : 'configure, then Run') : 'no data'; plotChart(cv, { series: [] }); win._spec = null; win.el._gtSpec = null; return; }
     let gmin = Infinity, gmax = -Infinity, weighted = false;
     for (const se of st.scan.series) { const f = gradeUnitFactor(se.s.unit, st.gradeUnit); if (se.gmin * f < gmin) gmin = se.gmin * f; if (se.gmax * f > gmax) gmax = se.gmax * f; if (se.weighted) weighted = true; }
     if (!Number.isFinite(gmin) || gmin === Infinity) { win.sub.textContent = 'no data'; plotChart(cv, { series: [] }); win._spec = null; win.el._gtSpec = null; return; }
@@ -3007,7 +3022,33 @@ function openGradeTonnage(L) {
     try { st.scan = await scanGT((n) => { progEl.textContent = `${n.toLocaleString()} rows…`; }); }
     catch (e) { win.sub.textContent = `grade-tonnage: ${e.message}`; st.running = false; runBtn.disabled = false; progEl.textContent = ''; return; }
     st.running = false; runBtn.disabled = false; progEl.textContent = ''; st.stale = false; if (staleEl) staleEl.textContent = '';
+    saveAnalysisCfg(L, 'gt', cfgOf(), win);                // a successful Run snapshots the setup into the project
     plot();
+  };
+  // copy the computed numbers: cutoff | per-series tonnes/grade/metal (TSV)
+  const tableTSV = () => {
+    if (!st.scan || !st.scan.series.length) return null;
+    let gmin = Infinity, gmax = -Infinity, weighted = false;
+    for (const se of st.scan.series) { const f = gradeUnitFactor(se.s.unit, st.gradeUnit); if (se.gmin * f < gmin) gmin = se.gmin * f; if (se.gmax * f > gmax) gmax = se.gmax * f; if (se.weighted) weighted = true; }
+    if (!Number.isFinite(gmin) || gmin === Infinity) return null;
+    const gl = guLabel(), mScale = st.gradeUnit ? unitConvert(1, st.gradeUnit, 'fraction') : 1, tU = weighted ? 't' : 'm³';
+    const cuts = []; for (let i = 0; i <= st.nCut; i++) cuts.push(gmin + (gmax - gmin) * i / st.nCut);
+    const multi = st.scan.series.length > 1;
+    const names = st.scan.series.map((se) => { const Lx = layerById(se.s.layerId); return multi ? `${(Lx ? (Lx.label || Lx.name) : '').replace(/\.[^.]*$/, '')}·${se.s.col}` : se.s.col; });
+    const head = [`cutoff${gl ? ` (${gl})` : ''}`];
+    names.forEach((nm) => head.push(`${nm} ${tU} ≥`, `${nm} grade${gl ? ` (${gl})` : ''}`, st.gradeUnit ? `${nm} metal (t)` : `${nm} grade·${tU}`));
+    const lines = [head.join('\t')];
+    for (const c of cuts) {
+      const row = [c];
+      for (const se of st.scan.series) {
+        const f = gradeUnitFactor(se.s.unit, st.gradeUnit), cN = c / f;
+        let lo = 0, hi = se.gsorted.length; while (lo < hi) { const md = (lo + hi) >> 1; if (se.gsorted[md] >= cN) lo = md + 1; else hi = md; }
+        const t = se.cw[lo], g = t > 0 ? (se.cwg[lo] / se.cw[lo]) * f : NaN;
+        row.push(t, Number.isFinite(g) ? g : '', Number.isFinite(g) ? t * g * mScale : '');
+      }
+      lines.push(row.join('\t'));
+    }
+    return lines.join('\n');
   };
   const seriesRow = (s, i) => {
     const box = document.createElement('div'); box.className = 'sw-ser';
@@ -3057,7 +3098,7 @@ function openGradeTonnage(L) {
     const seg = document.createElement('div'); seg.className = 'sw-seg'; seg.title = 'all rows · rows matching each layer\'s current filter · the 3D selection (re-runs as it changes)';
     for (const [v, t] of [['all', 'all'], ['filtered', 'filt'], ['selection', 'sel']]) { const bt = document.createElement('button'); bt.className = 'sw-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; buildRail(); run(); }; seg.append(bt); } scRow.append(scL, seg); vSec.append(scRow);
     vSec.append(rangesRow(st, () => { if (st.scan) plot(); }, { x: 'cutoff', l: 't', r: 'grade' }));
-    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `gt-${(L.label || L.name).replace(/\.[^.]+$/, '')}.png`)); vSec.append(exRow);
+    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `gt-${(L.label || L.name).replace(/\.[^.]+$/, '')}.png`, tableTSV)); vSec.append(exRow);
     rail.append(vSec);
     // ── Footer: Run + stale + progress ──
     const foot = document.createElement('div'); foot.className = 'sw-foot';
@@ -3110,8 +3151,9 @@ function rangesRow(st, redraw, labels) {
 }
 const rangesOf = (st) => (st.ranges && [st.ranges.x, st.ranges.l, st.ranges.r].some((r) => r[0] != null || r[1] != null)
   ? { xRange: st.ranges.x, leftRange: st.ranges.l, rightRange: st.ranges.r } : {});
-// export / copy a chart canvas (PNG at its dpr-scaled resolution)
-function plotExportBtns(cv, nameFn) {
+// export / copy a chart canvas (PNG at its dpr-scaled resolution); tableFn,
+// when given, adds a TSV copy of the computed NUMBERS (what lands in memos)
+function plotExportBtns(cv, nameFn, tableFn) {
   const wrap = document.createElement('span'); wrap.className = 'pp-exp';
   const save = document.createElement('button'); save.className = 'awin-btn'; save.textContent = '⤓ png'; save.title = 'save the plot as PNG';
   save.onclick = () => cv.toBlob((blob) => { if (!blob) return; const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nameFn(); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); $('#meta').textContent = `saved ${nameFn()}`; }, 'image/png');
@@ -3122,7 +3164,56 @@ function plotExportBtns(cv, nameFn) {
     catch (e) { $('#meta').textContent = `copy failed (${e.message}) — use ⤓ png`; }
   }, 'image/png');
   wrap.append(save, copy);
+  if (tableFn) {
+    const tbl = document.createElement('button'); tbl.className = 'awin-btn'; tbl.textContent = '⧉ table'; tbl.title = 'copy the computed numbers as TSV (paste into a spreadsheet)';
+    tbl.onclick = async () => {
+      const tsv = tableFn();
+      if (!tsv) { $('#meta').textContent = 'table: nothing computed yet — Run first'; return; }
+      try { await navigator.clipboard.writeText(tsv); $('#meta').textContent = `table copied (${tsv.split('\n').length - 1} rows, TSV)`; }
+      catch (e) { $('#meta').textContent = `copy failed (${e.message})`; }
+    };
+    wrap.append(tbl);
+  }
   return wrap;
+}
+// ── analysis-window persistence: per-layer configs in the project manifest.
+// Series reference layers BY NAME (ids are runtime); `open` pins the window so
+// a project reopen brings it back (config restored — Run stays manual). ──
+function analysisSerCfg(series) {
+  return series.map((s) => { const Lx = layerById(s.layerId); return { layer: Lx ? Lx.name : null, col: s.col, unit: s.unit || '', weight: s.weight || '', filter: s.filter || '', color: s.color }; });
+}
+function analysisSerRestore(cfgSeries, L) {
+  const out = [];
+  for (const c of cfgSeries || []) {
+    const Lx = _layers.find((x) => x.name === c.layer) || L;
+    if (!Lx) continue;
+    out.push({ layerId: Lx.id, col: c.col, unit: c.unit || '', weight: c.weight || '', filter: c.filter || '', color: c.color || SERIES_COLORS[out.length % SERIES_COLORS.length] });
+  }
+  return out.length ? out : null;
+}
+function saveAnalysisCfg(L, kind, cfg, win) {
+  const a = L.analysis = L.analysis || {};
+  a.geo = a.geo || {};
+  const geo = win ? [win.el.offsetLeft, win.el.offsetTop, win.el.offsetWidth, win.el.offsetHeight] : a.geo[kind];
+  if (JSON.stringify(a[kind]) !== JSON.stringify(cfg) || JSON.stringify(a.geo[kind]) !== JSON.stringify(geo)) {
+    a[kind] = cfg; a.geo[kind] = geo; markProjectDirty();
+  }
+}
+function setAnalysisOpen(L, kind, open) {
+  const a = L.analysis = L.analysis || {};
+  const set = new Set(a.open || []);
+  if (set.has(kind) === open) return;
+  if (open) set.add(kind); else set.delete(kind);
+  a.open = [...set]; markProjectDirty();
+}
+function applyAnalysisGeo(L, kind, win) {
+  const g = L.analysis && L.analysis.geo && L.analysis.geo[kind];
+  if (!g) return;
+  win.el.style.left = Math.max(0, Math.min(g[0], innerWidth - 80)) + 'px';
+  win.el.style.top = Math.max(28, Math.min(g[1], innerHeight - 60)) + 'px';
+  win.el.style.width = Math.min(g[2], innerWidth - 12) + 'px';
+  win.el.style.height = Math.min(g[3], innerHeight - 72) + 'px';
+  if (win.el._onResized) win.el._onResized();
 }
 // ── swath (drift) analysis ────────────────────────────────────────────────────
 // small vector helpers
@@ -3266,7 +3357,22 @@ function openSwath(L) {
     gradeUnit: (L.gtUnits && L.gtUnits.grade) || '',        // shares the layer's declared grade unit with GT
     series: pairs.length ? [mkSer(L, pairs[0].ref, 0), mkSer(L, pairs[0].self, 1)] : [mkSer(L, nums[0], 0)],
     scan: null, stale: true, running: false };
-  const win = floatWin({ title: `swath · ${L.label || L.name}`, sub: 'configure, then Run', x: Math.max(12, innerWidth - 660), y: 120, w: 640, h: 440, onClose: () => { _swathWins.delete(L.id); if (st.zebra) clearSwathZebra(zebraL()); setSwathBand(null); removeEventListener('mouseup', onUp); } });
+  // a saved setup (project manifest) beats the defaults; Run stays manual
+  const saved = L.analysis && L.analysis.swath;
+  if (saved) {
+    for (const k of ['mode', 'axis', 'dd', 'dip', 'rake', 'trend', 'plunge', 'bars', 'scope', 'gradeUnit']) if (saved[k] != null) st[k] = saved[k];
+    if (saved.bandW) st.bandW = { ...saved.bandW };
+    if (saved.off) st.off = { ...saved.off };
+    if (saved.locate != null) st.locate = saved.locate;
+    if (saved.ranges) st.ranges = JSON.parse(JSON.stringify(saved.ranges));
+    const ser = analysisSerRestore(saved.series, L); if (ser) st.series = ser;
+  }
+  const cfgOf = () => ({ series: analysisSerCfg(st.series), mode: st.mode, axis: st.axis, dd: st.dd, dip: st.dip, rake: st.rake, trend: st.trend, plunge: st.plunge,
+    bandW: st.bandW, off: st.off, bars: st.bars, scope: st.scope, gradeUnit: st.gradeUnit, locate: st.locate, ranges: st.ranges || undefined });
+  const win = floatWin({ title: `swath · ${L.label || L.name}`, sub: saved ? 'restored — Run to compute' : 'configure, then Run', x: Math.max(12, innerWidth - 660), y: 120, w: 640, h: 440,
+    onClose: () => { saveAnalysisCfg(L, 'swath', cfgOf(), win); setAnalysisOpen(L, 'swath', false); _swathWins.delete(L.id); if (st.zebra) clearSwathZebra(zebraL()); setSwathBand(null); removeEventListener('mouseup', onUp); } });
+  setAnalysisOpen(L, 'swath', true);
+  applyAnalysisGeo(L, 'swath', win);
   const body = document.createElement('div'); body.className = 'sw-body'; win.body.append(body);
   const rail = document.createElement('div'); rail.className = 'sw-rail';
   const main = document.createElement('div'); main.className = 'sw-main';
@@ -3301,7 +3407,7 @@ function openSwath(L) {
   // st.stale and wait for Run.
   const plot = () => {
     buildTabs();
-    if (!st.scan) { win.sub.textContent = st.stale ? 'configure, then Run' : ''; st._plotSpec = null; renderChart(); return; }
+    if (!st.scan) { win.sub.textContent = st.stale ? (saved ? 'restored — Run to compute' : 'configure, then Run') : ''; st._plotSpec = null; renderChart(); return; }
     const di = st.axis, bw = effWidth(), off = effOffset();
     const b = binSwath(st.scan, di, bw, off);
     if (!b.keys.length) { win.sub.textContent = 'no data in range'; st._plotSpec = null; renderChart(); return; }
@@ -3317,7 +3423,7 @@ function openSwath(L) {
   };
   // ── hover/drag → the 3D band ghost (toggleable). Hover lights the bin under
   // the cursor; drag holds a band range (violet) and offers select-in-3D. ──
-  st.locate = true;
+  if (st.locate == null) st.locate = true;
   const bandBbox = () => {
     let u = null;
     for (const s of st.series) { const Lx = layerById(s.layerId); const b2 = Lx && Lx.bboxLocal; if (!b2) continue; if (!u) u = Float64Array.from(b2); else for (let i = 0; i < 3; i++) { if (b2[i] < u[i]) u[i] = b2[i]; if (b2[i + 3] > u[i + 3]) u[i + 3] = b2[i + 3]; } }
@@ -3408,7 +3514,28 @@ function openSwath(L) {
     catch (e) { win.sub.textContent = `swath: ${e.message}`; st.running = false; runBtn.disabled = false; progEl.textContent = ''; return; }
     st.running = false; runBtn.disabled = false; progEl.textContent = ''; st.stale = false; if (staleEl) staleEl.textContent = '';
     if (!st.scan) { win.sub.textContent = 'no series to scan'; plotChart(cv, { series: [] }); return; }
+    saveAnalysisCfg(L, 'swath', cfgOf(), win);             // a successful Run snapshots the setup into the project
     plot();
+  };
+  // copy the computed numbers: band center | count | weight | per-series mean (TSV)
+  const tableTSV = () => {
+    if (!st.scan) return null;
+    const di = st.axis, bw = effWidth(), off = effOffset();
+    const b = binSwath(st.scan, di, bw, off);
+    if (!b.keys.length) return null;
+    const gl = st.gradeUnit === 'pct' ? '%' : st.gradeUnit;
+    const multi = st.series.length > 1;
+    const names = b.out.map((o) => { const Lx = layerById(o.se.s.layerId); return multi ? `${(Lx ? (Lx.label || Lx.name) : '').replace(/\.[^.]*$/, '')}·${o.se.s.col}` : o.se.s.col; });
+    const head = [`center along ${st.scan.dirNames[di]}`, 'count', 'weight', ...names.map((nm) => `${nm} mean${gl ? ` (${gl})` : ''}`)];
+    const prim = b.out[0];
+    const lines = [head.join('\t')];
+    for (const B of b.keys) {
+      const e0 = prim.bands.get(B);
+      const row = [off + (B + 0.5) * bw, e0 ? e0.n : 0, e0 ? e0.sw : 0];
+      for (const o of b.out) { const f = gradeUnitFactor(o.se.s.unit, st.gradeUnit); const e = o.bands.get(B); row.push(e && e.sw > 0 ? (e.swg / e.sw) * f : ''); }
+      lines.push(row.join('\t'));
+    }
+    return lines.join('\n');
   };
   function buildTabs() {
     tabs.textContent = '';
@@ -3488,7 +3615,7 @@ function openSwath(L) {
     // manual plot ranges (display-only — re-plots from the scan)
     vSec.append(rangesRow(st, () => { if (st.scan) plot(); }, { x: 'x', l: 'grade', r: 'bars' }));
     // export / copy the plot
-    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `swath-${(zebraL().label || zebraL().name).replace(/\.[^.]+$/, '')}-${(st.scan ? st.scan.dirNames : swathDirNames(st))[st.axis].split(' ')[0].replace(/[^\w-]/g, '')}.png`));
+    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `swath-${(zebraL().label || zebraL().name).replace(/\.[^.]+$/, '')}-${(st.scan ? st.scan.dirNames : swathDirNames(st))[st.axis].split(' ')[0].replace(/[^\w-]/g, '')}.png`, tableTSV));
     vSec.append(exRow);
     rail.append(vSec);
     // ── Footer: Run + stale + progress ──
@@ -6546,6 +6673,7 @@ function projectManifest() {
       legend: L.legend || undefined, legendTitle: (L.legendTitle && L.legendTitle.trim()) || undefined,   // per-layer figure legend
       edges: L.edges != null ? L.edges : undefined,        // per-layer block-edge override (tri-state; absent = follow View)
       gtUnits: L.gtUnits || undefined,                     // grade-tonnage unit declarations (grade unit, density col/const + unit)
+      analysis: L.analysis || undefined,                   // GT/swath window setups (series by layer NAME) + pinned-open state + geometry
       soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
       hiddenCats: L.catHidden && L.catHidden.size
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
@@ -6844,6 +6972,7 @@ async function saveProject() {
 // drillhole project-restore branches (all three are per-record layer state)
 async function restoreStyleExtras(L, ls) {
   if (ls.lineage) L.lineage = ls.lineage;                  // provenance survives project round trips
+  if (ls.analysis) L.analysis = ls.analysis;               // GT/swath setups (windows reopen after all layers land — series may span them)
   if (ls.rules) {
     L.rules = ls.rules;
     L.ruleHidden = new Set(ls.ruleHidden || []);
@@ -7047,6 +7176,14 @@ async function openProjectDir(dir) {
     if (mf.tree) treeFromManifest(mf.tree, idAt);
     applyCamera(mf.camera);
     applySection(mf.section);
+    // pinned analysis windows come back configured (after ALL layers landed —
+    // series may reference other layers). Run stays manual: no surprise scans.
+    for (const L of _layers) {
+      const a = L.analysis;
+      if (!a || !a.open || !a.open.length) continue;
+      if (a.open.includes('gt')) { try { openGradeTonnage(L); } catch { /* layer no longer qualifies */ } }
+      if (a.open.includes('swath')) { try { openSwath(L); } catch { /* same */ } }
+    }
     renderLayers();
     _project.dirty = false;
     updateProjectTitle();

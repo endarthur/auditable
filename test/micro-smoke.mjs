@@ -423,11 +423,18 @@ const gtc = await p.evaluate(async () => {
   const cutI = [...w().querySelectorAll('.sw-rail input')].find((i) => i.title && /cutoff steps/.test(i.title));
   cutI.value = '10'; cutI.dispatchEvent(new Event('change'));
   const live = w()._gtSpec.series[0].data.length === 11 && w().querySelector('.sw-stale').textContent === '';
+  const hasTable = [...w().querySelectorAll('.awin-btn')].some((x) => x.textContent === '⧉ table');
+  w().querySelector('.fwin-head button:last-child').click();   // close → captures the setup onto the layer
+  m.openGradeTonnage(A);                                       // reopen → restored config, Run stays manual
+  const persisted = { nCut: [...w().querySelectorAll('.sw-rail input')].find((i) => i.title && /cutoff steps/.test(i.title)).value,
+    sub: w().querySelector('.fwin-head .sub').textContent, manual: !w()._gtSpec };
   w().querySelector('.fwin-head button:last-child').click();
-  return { noAuto, ui, t0, live };
+  return { noAuto, ui, t0, live, hasTable, persisted };
 });
 chk(`GT chassis: no auto-run (${gtc.noAuto}), rail+series+scope [${gtc.ui.segs}]+ranges+export (${gtc.ui.rail}/${gtc.ui.ser}/${gtc.ui.rr}/${gtc.ui.exp}), Run → t0 ${gtc.t0}, cutoffs re-derive live (${gtc.live})`,
   gtc.noAuto && gtc.ui.rail && gtc.ui.ser >= 1 && gtc.ui.segs === 'all,filt,sel' && gtc.ui.rr && gtc.ui.exp && gtc.t0 === 400 && gtc.live);
+chk(`GT setup persists: ⧉ table (${gtc.hasTable}), close→reopen keeps nCut ${gtc.persisted.nCut} (“${gtc.persisted.sub}”, Run manual ${gtc.persisted.manual})`,
+  gtc.hasTable && gtc.persisted.nCut === '10' && /restored/.test(gtc.persisted.sub) && gtc.persisted.manual);
 
 // swath window v2: NO auto-run on open, a Run button computes, direction/band
 // re-bin live from the single scan (no re-scan)
