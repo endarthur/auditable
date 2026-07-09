@@ -11,6 +11,7 @@ import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, scanGroupBy, scanGradeTonnage, scanDataQuality, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
 import { compile, compileBool, validate, deps, complete, tokenize } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
 import { gradeTonnage } from '@gcu/sluice';   // streaming accumulators — the grade-tonnage cutoff curve (one accumulator per grade field, driven from lamina's record cursor)
+import { convert as unitConvert } from '@gcu/units';   // grade/density unit declarations — the block-model report
 import { geometryAccumulator, inferGeometry } from '@gcu/recon';   // grid-geometry inference (harvested from BMA) — the grid summary
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
@@ -2963,8 +2964,10 @@ function openGradeTonnage() {
     group: firstCat >= 0 ? firstCat : null,
     volume: d3.length === 3 ? d3.map((s) => colRef(s.name)).join(' * ') : (colName(/vol/i) || '1'),
     density: colName(/dens|(^|_)sg($|_)/i) || '2.7',
+    densityUnit: 't/m3',   // DECLARED unit of the density factor — converted to t/m³ so tonnes are tonnes
     proportion: colName(/(^|_)ore|prop|ore.?pct/i) || '1',
     grades: [grade ? grade.i : (num[0] ? num[0].i : 0)],
+    gradeUnits: [''],      // DECLARED grade unit per field ('' = undeclared) — labels + metal-in-tonnes
     cutoffs: [''],   // per grade field: comma-separated cutoffs, blank = auto (round bin edges)
   };
   _gtResult = null;
@@ -2973,6 +2976,12 @@ function openGradeTonnage() {
   $('#help').classList.add('show');
   paintGradeTonnage();
 }
+// declared-unit helpers: display label + the metal-in-tonnes conversion
+// (metal is accumulated raw as t × grade-in-its-unit; a declared unit converts
+// the grade factor to a FRACTION so metal = tonnes × fraction = tonnes)
+const GT_GRADE_UNITS = [['', '— unit'], ['pct', '%'], ['g/t', 'g/t'], ['ppm', 'ppm'], ['oz/t', 'oz/t']];
+const gtUnitLabel = (u) => (u === 'pct' ? '%' : u || '');
+const gtMetalScale = (u) => (u ? unitConvert(1, u, 'fraction') : 1);
 function paintGradeTonnage() {
   const c = current; if (!c) return;
   const cols = c.schema;
@@ -2980,10 +2989,10 @@ function paintGradeTonnage() {
   h += `<label>Group by <select id="gtGroup"><option value=""${_gtConfig.group == null ? ' selected' : ''}>— whole deposit —</option>${cols.map((s, i) => `<option value="${i}"${i === _gtConfig.group ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>`;
   const exprInp = (f, ph) => `<input class="gt-expr" data-f="${f}" value="${esc(_gtConfig[f])}" placeholder="${ph}" spellcheck="false" autocomplete="off" style="width:150px;font-family:var(--mono)">`;
   h += `<label>Volume ${exprInp('volume', 'e.g. dx*dy*dz')}</label>`;
-  h += `<label>Density ${exprInp('density', 'e.g. density or 2.7')}</label>`;
+  h += `<label>Density ${exprInp('density', 'e.g. density or 2.7')} <select id="gtDensUnit" title="declared unit of the density factor — converted to t/m³ so tonnes are tonnes">${[['t/m3', 't/m³ (=g/cm³)'], ['kg/m3', 'kg/m³'], ['lb/ft3', 'lb/ft³']].map(([v, t]) => `<option value="${v}"${v === (_gtConfig.densityUnit || 't/m3') ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
   h += `<label>Ore proportion ${exprInp('proportion', 'e.g. ore_pct or 1')}</label>`;
   h += '<span class="gb-vals">';
-  _gtConfig.grades.forEach((uc, gi) => { h += `<label class="gb-val">Grade <select class="gt-grade" data-gi="${gi}">${cols.map((s, i) => s.type === 'number' ? `<option value="${i}"${i === uc ? ' selected' : ''}>${esc(s.name)}</option>` : '').join('')}</select><input class="gt-cut" data-gi="${gi}" value="${esc(_gtConfig.cutoffs[gi] || '')}" placeholder="cutoffs · auto" title="comma-separated cutoffs for this grade, e.g. 0.5, 1, 2 — blank = automatic round steps" spellcheck="false" autocomplete="off" style="width:120px;font-family:var(--mono)">${_gtConfig.grades.length > 1 ? `<button class="gt-rm" data-gi="${gi}" title="remove">✕</button>` : ''}</label>`; });
+  _gtConfig.grades.forEach((uc, gi) => { h += `<label class="gb-val">Grade <select class="gt-grade" data-gi="${gi}">${cols.map((s, i) => s.type === 'number' ? `<option value="${i}"${i === uc ? ' selected' : ''}>${esc(s.name)}</option>` : '').join('')}</select><select class="gt-unit" data-gi="${gi}" title="declared grade unit — labels the report + makes metal come out in tonnes">${GT_GRADE_UNITS.map(([v, t]) => `<option value="${v}"${v === (_gtConfig.gradeUnits[gi] || '') ? ' selected' : ''}>${t}</option>`).join('')}</select><input class="gt-cut" data-gi="${gi}" value="${esc(_gtConfig.cutoffs[gi] || '')}" placeholder="cutoffs · auto" title="comma-separated cutoffs for this grade, e.g. 0.5, 1, 2 — blank = automatic round steps" spellcheck="false" autocomplete="off" style="width:120px;font-family:var(--mono)">${_gtConfig.grades.length > 1 ? `<button class="gt-rm" data-gi="${gi}" title="remove">✕</button>` : ''}</label>`; });
   h += '</span>';
   h += `<button id="gtAdd" class="gb-add">+ add grade</button>`;
   h += `<button id="gtRun" class="gb-run">Report</button>`;
@@ -2997,8 +3006,13 @@ function gtTable(c) {
   const res = _gtResult, cfg = res.config, schema = c.schema, grouped = res.grouped;
   const groupName = grouped && schema[cfg.group] ? schema[cfg.group].name : 'deposit';
   const COLS = [{ k: 'key', label: groupName, txt: true }, { k: 'blocks', label: 'blocks' }, { k: 'tonnes', label: 'tonnes' }];
-  cfg.grades.forEach((uc, gi) => { const gn = schema[uc] ? schema[uc].name : '?'; COLS.push({ k: `g${gi}`, label: gn }); COLS.push({ k: `m${gi}`, label: `${gn}·t` }); });
-  const rowOf = (key, g) => { const o = { key, blocks: g.count, tonnes: g.tonnes }; cfg.grades.forEach((uc, gi) => { o[`g${gi}`] = g.grades[gi].grade; o[`m${gi}`] = g.grades[gi].metal; }); return o; };
+  const mScale = cfg.grades.map((_, gi) => gtMetalScale(cfg.gradeUnits && cfg.gradeUnits[gi]));
+  cfg.grades.forEach((uc, gi) => {
+    const gn = schema[uc] ? schema[uc].name : '?', u = cfg.gradeUnits && cfg.gradeUnits[gi], uL = gtUnitLabel(u);
+    COLS.push({ k: `g${gi}`, label: uL ? `${gn} (${uL})` : gn });
+    COLS.push({ k: `m${gi}`, label: u ? `${gn} metal (t)` : `${gn}·t`, fN: !!u });   // declared → metal in tonnes (fmtN — Au tonnages are small)
+  });
+  const rowOf = (key, g) => { const o = { key, blocks: g.count, tonnes: g.tonnes }; cfg.grades.forEach((uc, gi) => { o[`g${gi}`] = g.grades[gi].grade; o[`m${gi}`] = g.grades[gi].metal * mScale[gi]; }); return o; };
   let rows = grouped ? res.groups.map((g) => rowOf(g.key, g)) : [];
   const srt = _gtSort, numKey = srt.col === 'key' && grouped && schema[cfg.group] && schema[cfg.group].type === 'number';
   if (srt.col && rows.length) rows.sort((a, b) => {
@@ -3011,11 +3025,11 @@ function gtTable(c) {
 }
 function renderGTResult(c) {
   const { COLS, rows, totalRow } = gtTable(c);
-  const fmtCell = (v, col) => v == null ? '' : col.txt ? esc(String(v)) : (col.k === 'tonnes' || col.k === 'blocks' || col.k[0] === 'm' ? fmtInt(v) : fmtN(v));
+  const fmtCell = (v, col) => v == null ? '' : col.txt ? esc(String(v)) : (col.fN ? fmtN(v) : col.k === 'tonnes' || col.k === 'blocks' || col.k[0] === 'm' ? fmtInt(v) : fmtN(v));
   let h = '<button id="gtCopy" class="sum-copy">copy all</button>';
   if (_gtResult.truncated) h += `<div style="color:var(--accent);font-size:11px;margin:4px 0">⚠ over 1000 groups — table truncated (total still covers all rows)</div>`;
   const cf = _gtResult.config;
-  h += `<div style="color:var(--dim);font-size:11px;margin:4px 0">tonnes = Σ(<code>${esc(cf.volExpr)}</code> × <code>${esc(cf.densExpr)}</code> × <code>${esc(cf.propExpr)}</code>) · grade = tonnage-weighted mean · <i>name</i>·t = contained metal</div>`;
+  h += `<div style="color:var(--dim);font-size:11px;margin:4px 0">tonnes = Σ(<code>${esc(cf.volExpr)}</code> × <code>${esc(cf.densExpr)}</code>${cf.densityUnit && cf.densityUnit !== 't/m3' ? ` <i>[${cf.densityUnit === 'kg/m3' ? 'kg/m³' : 'lb/ft³'} → t/m³]</i>` : ''} × <code>${esc(cf.propExpr)}</code>) · grade = tonnage-weighted mean · metal ${cf.gradeUnits && cf.gradeUnits.some(Boolean) ? 'in tonnes where the grade unit is declared' : '(<i>name</i>·t = tonnes × grade, unit undeclared)'}</div>`;
   h += '<div style="overflow:auto;max-height:50vh;margin-top:4px"><table class="sum-tbl"><thead><tr>';
   for (const col of COLS) h += `<th data-k="${col.k}" class="${col.txt ? '' : 'num'}${_gtSort.col === col.k ? ' sorted' : ''}">${esc(col.label)}${_gtSort.col === col.k ? (_gtSort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
   h += '</tr></thead><tbody>';
@@ -3097,10 +3111,10 @@ function gtCurveRows(cv) {
   }
   return rows;
 }
-function gtCurveTSV(cv, gradeName) {
-  const t0 = cv.curve[0].tonnage || 1;
-  const L = [`cutoff\ttonnes ≥\t${gradeName}\t${gradeName}·t\t% of tonnes`];
-  for (const p of gtCurveRows(cv)) L.push(`${p.cutoff}\t${p.tonnage}\t${p.grade}\t${p.metal}\t${(100 * p.tonnage / t0).toFixed(1)}`);
+function gtCurveTSV(cv, gradeName, unit) {
+  const t0 = cv.curve[0].tonnage || 1, uL = gtUnitLabel(unit), mS = gtMetalScale(unit);
+  const L = [`cutoff${uL ? ` (${uL})` : ''}\ttonnes ≥\t${gradeName}${uL ? ` (${uL})` : ''}\t${unit ? `${gradeName} metal (t)` : `${gradeName}·t`}\t% of tonnes`];
+  for (const p of gtCurveRows(cv)) L.push(`${p.cutoff}\t${p.tonnage}\t${p.grade}\t${unit ? p.metal * mS : p.metal}\t${(100 * p.tonnage / t0).toFixed(1)}`);
   return L.join('\n');
 }
 
@@ -3123,13 +3137,14 @@ function renderGTCurves(c) {
   cfg.grades.forEach((uc, gi) => {
     const cv = curves[gi]; if (!cv || !(cv.curve[0] && cv.curve[0].tonnage > 0)) return;
     const gn = c.schema[uc] ? c.schema[uc].name : '?';
+    const u = cfg.gradeUnits && cfg.gradeUnits[gi], uL = gtUnitLabel(u), mS = gtMetalScale(u);
     const t0 = cv.curve[0].tonnage;
     h += `<div class="gt-curve-sec">`;
-    h += `<div class="gt-curve-head">${esc(gn)} — by cutoff <button class="gt-ccopy" data-gi="${gi}">copy</button><button class="gt-ccopy gt-csave" data-gi="${gi}">save png</button></div>`;
+    h += `<div class="gt-curve-head">${esc(gn)}${uL ? ` (${uL})` : ''} — by cutoff <button class="gt-ccopy" data-gi="${gi}">copy</button><button class="gt-ccopy gt-csave" data-gi="${gi}">save png</button></div>`;
     h += `<canvas class="gt-curve" data-gi="${gi}"></canvas>`;
     h += `<div class="gt-curve-legend"><span class="lg-t">—</span> tonnes ≥ cutoff &nbsp; <span class="lg-g">—</span> mean grade ≥ cutoff</div>`;
-    h += `<table class="sum-tbl gt-cut-tbl"><thead><tr><th class="num">cutoff</th><th class="num">tonnes ≥</th><th class="num">${esc(gn)}</th><th class="num">${esc(gn)}·t</th><th class="num">% of tonnes</th></tr></thead><tbody>`;
-    for (const p of gtCurveRows(cv)) h += `<tr><td class="num">${fmtN(p.cutoff)}</td><td class="num">${fmtInt(p.tonnage)}</td><td class="num">${fmtN(p.grade)}</td><td class="num">${fmtInt(p.metal)}</td><td class="num">${(100 * p.tonnage / t0).toFixed(1)}%</td></tr>`;
+    h += `<table class="sum-tbl gt-cut-tbl"><thead><tr><th class="num">cutoff${uL ? ` (${uL})` : ''}</th><th class="num">tonnes ≥</th><th class="num">${esc(gn)}</th><th class="num">${u ? `${esc(gn)} metal (t)` : `${esc(gn)}·t`}</th><th class="num">% of tonnes</th></tr></thead><tbody>`;
+    for (const p of gtCurveRows(cv)) h += `<tr><td class="num">${fmtN(p.cutoff)}</td><td class="num">${fmtInt(p.tonnage)}</td><td class="num">${fmtN(p.grade)}</td><td class="num">${u ? fmtN(p.metal * mS) : fmtInt(p.metal)}</td><td class="num">${(100 * p.tonnage / t0).toFixed(1)}%</td></tr>`;
     h += '</tbody></table></div>';
   });
   return h;
@@ -3179,7 +3194,8 @@ function drawGTCurves(c) {
     ctx.stroke();
     // scale hints: max tonnes (left, accent) + max grade (right, info)
     ctx.textAlign = 'left'; ctx.fillStyle = acc; ctx.fillText(fmtInt(t0) + ' t', padL + 2, padT - 2);
-    ctx.textAlign = 'right'; ctx.fillStyle = info; ctx.fillText(fmtN(gMax), W - padR - 2, padT - 2);
+    const uL = gtUnitLabel(_gtResult.config.gradeUnits && _gtResult.config.gradeUnits[+canvas.dataset.gi]);
+    ctx.textAlign = 'right'; ctx.fillStyle = info; ctx.fillText(fmtN(gMax) + (uL ? ' ' + uL : ''), W - padR - 2, padT - 2);
   });
 }
 async function computeGradeTonnage() {
@@ -3195,13 +3211,16 @@ async function computeGradeTonnage() {
       return { fn: compile(s, c.schema, { decimal: c.d.decimal }) };
     };
     vol = mk('Volume', _gtConfig.volume); dens = mk('Density', _gtConfig.density); prop = mk('Ore proportion', _gtConfig.proportion);
+    // declared density unit → t/m³ (a kg/m³ column no longer inflates tonnage 1000×)
+    const dScale = unitConvert(1, _gtConfig.densityUnit || 't/m3', 't/m3');
+    if (dScale !== 1) { const f0 = dens.fn; dens = { fn: (fields) => f0(fields) * dScale }; }
   } catch (e) { const r = $('#gtResults'); if (r) r.innerHTML = `<div style="color:var(--fault);margin-top:8px">${esc(e.message)}</div>`; return; }
   // per-grade custom cutoffs: comma/space-separated numbers → sorted unique; blank/junk = auto
   const parseCutoffs = (s) => {
     const nums = String(s || '').split(/[\s,;]+/).map((t) => parseFloat(t)).filter((v) => Number.isFinite(v));
     return nums.length ? [...new Set(nums)].sort((a, b) => a - b) : null;
   };
-  const cfg = { group: _gtConfig.group, grades: _gtConfig.grades.slice(), cutoffs: _gtConfig.grades.map((g, gi) => parseCutoffs(_gtConfig.cutoffs[gi])), volExpr: _gtConfig.volume || '1', densExpr: _gtConfig.density || '1', propExpr: _gtConfig.proportion || '1' };
+  const cfg = { group: _gtConfig.group, grades: _gtConfig.grades.slice(), gradeUnits: _gtConfig.gradeUnits.slice(), densityUnit: _gtConfig.densityUnit || 't/m3', cutoffs: _gtConfig.grades.map((g, gi) => parseCutoffs(_gtConfig.cutoffs[gi])), volExpr: _gtConfig.volume || '1', densExpr: _gtConfig.density || '1', propExpr: _gtConfig.proportion || '1' };
   const ac = newFooterScan();
   const rEl = $('#gtResults'); if (rEl) rEl.innerHTML = '<div style="color:#777;margin-top:8px">computing… <span id="scanPct">0%</span></div>';
   $('#meta').textContent = 'grade–tonnage…';
@@ -3231,16 +3250,18 @@ function wireGradeTonnage(c) {
   const g = $('#gtGroup'); if (g) g.onchange = () => { _gtConfig.group = g.value === '' ? null : +g.value; };
   $('#helpBody').querySelectorAll('.gt-expr').forEach((inp) => { inp.oninput = () => { _gtConfig[inp.dataset.f] = inp.value; }; attachAutocomplete(inp, calcCtx); });
   $('#helpBody').querySelectorAll('.gt-grade').forEach((sel) => sel.onchange = () => { _gtConfig.grades[+sel.dataset.gi] = +sel.value; });
+  $('#helpBody').querySelectorAll('.gt-unit').forEach((sel) => sel.onchange = () => { _gtConfig.gradeUnits[+sel.dataset.gi] = sel.value; });
+  const du = $('#gtDensUnit'); if (du) du.onchange = () => { _gtConfig.densityUnit = du.value; };
   $('#helpBody').querySelectorAll('.gt-cut').forEach((inp) => inp.oninput = () => { _gtConfig.cutoffs[+inp.dataset.gi] = inp.value; });
-  $('#helpBody').querySelectorAll('.gt-rm').forEach((b) => b.onclick = () => { const gi = +b.dataset.gi; _gtConfig.grades.splice(gi, 1); _gtConfig.cutoffs.splice(gi, 1); paintGradeTonnage(); });
-  const add = $('#gtAdd'); if (add) add.onclick = () => { const fn = c.schema.findIndex((s) => s.type === 'number'); _gtConfig.grades.push(fn >= 0 ? fn : 0); _gtConfig.cutoffs.push(''); paintGradeTonnage(); };
+  $('#helpBody').querySelectorAll('.gt-rm').forEach((b) => b.onclick = () => { const gi = +b.dataset.gi; _gtConfig.grades.splice(gi, 1); _gtConfig.gradeUnits.splice(gi, 1); _gtConfig.cutoffs.splice(gi, 1); paintGradeTonnage(); });
+  const add = $('#gtAdd'); if (add) add.onclick = () => { const fn = c.schema.findIndex((s) => s.type === 'number'); _gtConfig.grades.push(fn >= 0 ? fn : 0); _gtConfig.gradeUnits.push(''); _gtConfig.cutoffs.push(''); paintGradeTonnage(); };
   const run = $('#gtRun'); if (run) run.onclick = () => computeGradeTonnage();
   $('#helpBody').querySelectorAll('.sum-tbl th[data-k]').forEach((th) => th.onclick = () => { const k = th.getAttribute('data-k'); if (_gtSort.col === k) _gtSort.dir *= -1; else _gtSort = { col: k, dir: k === 'key' ? 1 : -1 }; paintGradeTonnage(); });
   const cp = $('#gtCopy'); if (cp) cp.onclick = () => { copyText(gtTSV(c)); cp.textContent = 'copied ✓'; setTimeout(() => { cp.textContent = 'copy all'; }, 1200); };
   $('#helpBody').querySelectorAll('.gt-ccopy:not(.gt-csave)').forEach((b) => b.onclick = () => {
     const gi = +b.dataset.gi, cv = _gtResult && _gtResult.curves && _gtResult.curves[gi]; if (!cv) return;
     const gn = c.schema[_gtResult.config.grades[gi]] ? c.schema[_gtResult.config.grades[gi]].name : '?';
-    copyText(gtCurveTSV(cv, gn)); b.textContent = 'copied ✓'; setTimeout(() => { b.textContent = 'copy'; }, 1200);
+    copyText(gtCurveTSV(cv, gn, _gtResult.config.gradeUnits && _gtResult.config.gradeUnits[gi])); b.textContent = 'copied ✓'; setTimeout(() => { b.textContent = 'copy'; }, 1200);
   });
   $('#helpBody').querySelectorAll('.gt-csave').forEach((b) => b.onclick = () => {
     const gi = +b.dataset.gi;
