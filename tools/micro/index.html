@@ -6074,6 +6074,17 @@ async function layerRelpath(L, dir) {
 }
 // the drillhole-set descriptor filename (lives in drillholes/)
 const dhSetName = (L) => (basename(String(L.name || 'holes')).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'holes') + '.holes.json';
+// the copy-into-project verb (layer context menu + the command palette): one
+// SIZED consent step (never copy without consent — the G1 storage rule), then
+// copyLayerIn routes the file to its kind folder.
+function canCopyIntoProject(L) { return !!(_project && L && L.storage !== 'project' && L.storage !== 'volatile' && layerBlob(L)); }
+function copyLayerIntoProject(L) {
+  if (!canCopyIntoProject(L)) { $('#meta').textContent = _project ? 'copy: this layer is already in the project (or has no file)' : 'copy: open a project folder first'; return; }
+  setTimeout(() => menuXY(innerWidth / 2 - 120, innerHeight / 3, [
+    { label: `Copy “${L.name}” (${fmtSize(layerBlob(L).size)}) into ${_project.name}/`, action: async () => { $('#meta').textContent = `copying ${L.name}…`; await copyLayerIn(L, _project.dir); markProjectDirty(); $('#meta').textContent = `copied ${L.name} into the project (${fmtSize(layerBlob(L).size)})`; renderLayers(); } },
+    { label: 'Cancel', action: () => {} },
+  ]), 0);
+}
 async function copyLayerIn(L, dir) {
   const kd = kindDir(L);
   for (const fd of layerFiles(L)) {
@@ -7748,6 +7759,7 @@ const COMMANDS = [
   { id: 'secfollow', group: 'View', title: 'Section: camera follows the scrub', kw: 'walk slicer step through benches follow', when: () => !!currentSection(), run: () => { const c = $('#secFollow'); c.checked = !c.checked; c.dispatchEvent(new Event('input')); $('#meta').textContent = `section follow ${c.checked ? 'on' : 'off'}`; } },
   { id: 'sec2d', group: 'View', title: 'Section: 2D lock (face-on, ortho, no orbit)', kw: 'paper plan flat lock rotation', when: () => !!currentSection(), run: () => { const c = $('#sec2D'); c.checked = !c.checked; c.dispatchEvent(new Event('input')); } },
   { id: 'solo', group: 'View', title: 'Solo the active layer', kw: 'hide others isolate only', when: (c) => c.L && _layers.length > 1, run: () => soloActiveLayer() },
+  { id: 'copyin', group: 'File', title: 'Copy layer into project…', kw: 'import move file folder store persist', when: (c) => canCopyIntoProject(c.L), run: (c) => copyLayerIntoProject(c.L) },
   { id: 'decopanel', group: 'View', title: 'Decorations & figure…', kw: 'legend scale bar north title background export panel', run: () => openDecoPanel() },
   { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
   { id: 'deconorth', group: 'View', title: 'Toggle north arrow', kw: 'decoration compass', run: () => setDeco('north', !_deco.north) },
@@ -8246,12 +8258,9 @@ function layerMenu(L, x, y) {
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
     { label: (renderer.layerSectioned(L.id) ? '✓ ' : '') + 'Cut by sections', action: () => { renderer.setLayerSectioned(L.id, !renderer.layerSectioned(L.id)); markProjectDirty(); requestRender(); } },
-    ...(_project && L.storage !== 'project' && L.storage !== 'volatile' && layerBlob(L) ? [{
+    ...(canCopyIntoProject(L) ? [{
       label: `Copy into project (${fmtSize(layerBlob(L).size)})`,
-      action: () => setTimeout(() => menuXY(innerWidth / 2 - 120, innerHeight / 3, [
-        { label: `Copy “${L.name}” (${fmtSize(layerBlob(L).size)}) into ${_project.name}/`, action: async () => { $('#meta').textContent = `copying ${L.name}…`; await copyLayerIn(L, _project.dir); markProjectDirty(); $('#meta').textContent = `copied ${L.name} into the project (${fmtSize(layerBlob(L).size)})`; } },
-        { label: 'Cancel', action: () => {} },
-      ]), 0),
+      action: () => copyLayerIntoProject(L),
     }] : []),
     { label: 'Remove layer', action: () => removeLayerUI(L.id) },
     { sep: true },
