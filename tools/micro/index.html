@@ -420,6 +420,14 @@
   .rr-clear { font-family: var(--mono); font-size: 10px; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 3px; padding: 1px 7px; cursor: pointer; }
   .rr-clear:hover { border-color: var(--accent); color: var(--text); }
   .pp-exp { display: inline-flex; gap: 4px; }
+  /* the stats window's table */
+  .st-main { overflow: auto; padding: 8px 10px; }
+  .st-empty { color: var(--dim); font-family: var(--mono); font-size: 12px; padding: 18px 6px; }
+  .st-tbl { border-collapse: collapse; font-family: var(--mono); font-size: 11px; width: 100%; }
+  .st-tbl th { text-align: left; color: var(--dim); font-weight: normal; padding: 3px 10px 4px 0; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: #1a1a1a; }
+  .st-tbl td { padding: 2px 10px 2px 0; border-bottom: 1px solid rgba(127,127,127,0.08); white-space: nowrap; }
+  .st-tbl td.num { text-align: right; }
+  .st-tbl tr:hover td { background: rgba(127,127,127,0.06); }
   #brDlg .dh-foot button { font-family: var(--mono); font-size: 12px; color: var(--text-hi); background: var(--bg-btn); border: 1px solid var(--accent); border-radius: 3px; padding: 4px 18px; cursor: pointer; }
   #brDlg .dh-foot #brNot { border-color: var(--border); }
 
@@ -3130,7 +3138,7 @@ function scopeMissing(st, L) {
 // (kind: 'selection' after brushing, 'filtered' after a filter run)
 function refreshLinkedWindows(L, kind = 'selection') {
   if (!L) return;
-  for (const map of [_gtWins, _swathWins]) { const e = map.get(L.id); if (e && e.st && e.st.scope === kind) e.redraw(); }
+  for (const map of [_gtWins, _swathWins, _statsWins]) { const e = map.get(L.id); if (e && e.st && e.st.scope === kind) e.redraw(); }
 }
 // manual axis ranges: st.ranges = { x: [lo,hi], l: [lo,hi], r: [lo,hi] } with
 // null = auto per BOUND. A small aligned grid — one row per axis: label · min · max.
@@ -3244,7 +3252,7 @@ function applyAnalysisGeo(L, kind, win) {
 // in and Scan folder picks it up. Series reference layers BY NAME; a missing
 // primary gets a one-question remap — that prompt IS the parameter binding. ──
 let _recipes = [];                                          // { name, tool, params, file }
-const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath' };
+const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath', stats: 'stats', figure: 'figure' };
 const recipeSlug = (name) => (String(name).toLowerCase().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'recipe');
 // plain JS ⇄ @gcu/yaml AST (the emitter is AST-only; nulls are simply omitted)
 function jsToYamlNode(v) {
@@ -3313,12 +3321,15 @@ async function renameRecipe(r) {
 // series; a missing primary gets the remap menu — every series whose layer is
 // missing then falls back to the substitute
 function runRecipe(r, andRun = true) {
-  const open2 = (Lp) => (r.tool === 'gt' ? openGradeTonnage(Lp, { cfg: r.params, run: andRun }) : openSwath(Lp, { cfg: r.params, run: andRun }));
-  const wantName = r.params.series && r.params.series[0] && r.params.series[0].layer;
+  if (r.tool === 'figure') { runFigureRecipe(r.params); return; }   // camera-based — no layer to resolve
+  const open2 = (Lp) => (r.tool === 'gt' ? openGradeTonnage(Lp, { cfg: r.params, run: andRun })
+    : r.tool === 'stats' ? openStats(Lp, { cfg: r.params, run: andRun })
+    : openSwath(Lp, { cfg: r.params, run: andRun }));
+  const wantName = (r.params.series && r.params.series[0] && r.params.series[0].layer) || r.params.layer;
   const L = _layers.find((x) => x.name === wantName);
   if (L) { open2(L); return; }
-  const cands = _layers.filter((x) => gridAxesOf(x));
-  if (!cands.length) { $('#meta').textContent = `recipe “${r.name}”: wants “${wantName || 'a block model'}” and no regular block model is loaded`; return; }
+  const cands = _layers.filter((x) => (r.tool === 'stats' ? !!layerTableHeader(x) : gridAxesOf(x)));
+  if (!cands.length) { $('#meta').textContent = `recipe “${r.name}”: wants “${wantName || 'a block model'}” and no suitable layer is loaded`; return; }
   setTimeout(() => menuXY(innerWidth / 2 - 140, innerHeight / 3, [
     ...cands.map((c) => ({ label: `“${r.name}” wants ${wantName} — use ${c.label || c.name}`, action: () => open2(c) })),
     { label: 'Cancel', action: () => {} },
@@ -3776,6 +3787,164 @@ async function applySwathZebra(L, dir, bandWidth, offset) {
 function clearSwathZebra(L) {
   const i = (L.paintCols || []).findIndex((c) => c.name === '_swath');
   if (i >= 0) { L.paintCols.splice(i, 1); if (paintSelOf(L) === '_swath') setLayerColorSel(L, L._preZebraSel && L._preZebraSel !== 'paint:_swath' ? L._preZebraSel : 'elev'); L._preZebraSel = null; addPaintColorOptions(L); requestRender(); }
+}
+// ── STATS: the grouped summary table on the analysis chassis — columns × an
+// optional GROUP BY (the category channel or any painted column — assign
+// domains, then stats-by-domain is the resource table) × an optional weight
+// EXPRESSION (density-weighted means; quantiles stay unweighted and say so).
+// One streamed pass per Run (cooperative — the UI stays live); scope + recipe
+// + persistence identical to GT/swath. ──
+const _statsWins = new Map();
+function statsGroupCols(L) {
+  const h = layerTableHeader(L); if (!h) return [];
+  const out = [];
+  if (h.categories && h.mapping && h.mapping.cat != null && h.columns[h.mapping.cat]) out.push(h.columns[h.mapping.cat]);
+  for (const c of (L.paintCols || [])) if (c.kind !== 'ratio') out.push(c.name);
+  return out;
+}
+function openStats(L, ropts) {
+  if (!L || !layerTableHeader(L)) { $('#meta').textContent = 'stats: needs a table-backed layer'; return; }
+  const ex = _statsWins.get(L.id); if (ex) { if (!ropts) { ex.win.el.style.zIndex = ++_fwinZ; return; } ex.win.close(); }
+  const nums = numericColsOf(L); if (!nums.length) { $('#meta').textContent = 'stats: no numeric column'; return; }
+  const st = { cols: [nums[0]], groupBy: '', weight: '', scope: 'all', scan: null, stale: true, running: false };
+  const saved = (ropts && ropts.cfg) || (L.analysis && L.analysis.stats);
+  if (saved) {
+    if (Array.isArray(saved.cols) && saved.cols.length) { const keep = saved.cols.filter((c) => nums.includes(c)); if (keep.length) st.cols = keep; }
+    if (saved.groupBy != null) st.groupBy = saved.groupBy;
+    if (saved.weight != null) st.weight = saved.weight;
+    if (saved.scope) st.scope = saved.scope;
+  }
+  const cfgOf = () => ({ layer: L.name, cols: st.cols.slice(), groupBy: st.groupBy, weight: st.weight, scope: st.scope });
+  const win = floatWin({ title: `stats · ${L.label || L.name}`, sub: saved ? 'restored — Run to compute' : 'configure, then Run', x: Math.max(12, innerWidth - 700), y: 110, w: 680, h: 400,
+    onClose: () => { saveAnalysisCfg(L, 'stats', cfgOf(), win); setAnalysisOpen(L, 'stats', false); _statsWins.delete(L.id); } });
+  setAnalysisOpen(L, 'stats', true);
+  applyAnalysisGeo(L, 'stats', win);
+  const body = document.createElement('div'); body.className = 'sw-body'; win.body.append(body);
+  const rail = document.createElement('div'); rail.className = 'sw-rail';
+  const main = document.createElement('div'); main.className = 'sw-main st-main';
+  body.append(rail, main);
+  let staleEl, progEl, runBtn;
+  const markStale = () => { st.stale = true; if (staleEl) staleEl.textContent = st.scan ? '↻ config changed — Run to update' : ''; };
+  const fmtC = (v) => (v == null || !Number.isFinite(v) ? '' : fmtStat(v));
+  const render = () => {
+    main.textContent = '';
+    if (!st.scan) { const d = document.createElement('div'); d.className = 'st-empty'; d.textContent = win.sub.textContent || 'configure, then Run'; main.append(d); win.el._statsRows = null; return; }
+    const tbl = document.createElement('table'); tbl.className = 'st-tbl';
+    const gb = st.scan.groupBy;
+    const heads = [...(gb ? [gb] : []), 'column', 'n', st.scan.weighted ? 'mean·w' : 'mean', st.scan.weighted ? 'std·w' : 'std', 'min', 'q25', 'median', 'q75', 'max'];
+    const hr = document.createElement('tr'); heads.forEach((h2) => { const th = document.createElement('th'); th.textContent = h2; hr.append(th); }); tbl.append(hr);
+    for (const row of st.scan.rows) {
+      const tr = document.createElement('tr');
+      const cells = [...(gb ? [row.group] : []), row.col, row.n.toLocaleString(), fmtC(row.mean), fmtC(row.std), fmtC(row.min), fmtC(row.q25), fmtC(row.q50), fmtC(row.q75), fmtC(row.max)];
+      cells.forEach((c, i) => { const td = document.createElement('td'); td.textContent = String(c); if (i >= (gb ? 2 : 1)) td.className = 'num'; tr.append(td); });
+      tbl.append(tr);
+    }
+    main.append(tbl);
+    win.sub.textContent = `${st.scope !== 'all' ? st.scope + ' · ' : ''}${st.scan.rows.length} row${st.scan.rows.length === 1 ? '' : 's'}${st.scan.weighted ? ' · weighted mean/std (quantiles unweighted)' : ''}${st.scan.overflow ? ' · ⚠ over 256 groups — extra groups dropped' : ''}`;
+    win.el._statsRows = st.scan.rows;
+  };
+  const tableTSV = () => {
+    if (!st.scan) return null;
+    const gb = st.scan.groupBy;
+    const lines = [[...(gb ? [gb] : []), 'column', 'n', 'mean', 'std', 'min', 'q25', 'median', 'q75', 'max'].join('\t')];
+    for (const r of st.scan.rows) lines.push([...(gb ? [r.group] : []), r.col, r.n, r.mean, r.std, r.min, r.q25, r.q50, r.q75, r.max].join('\t'));
+    return lines.join('\n');
+  };
+  const scanStats = async (onProgress) => {
+    const h = layerTableHeader(L), schema = schemaExt(L, h);
+    const colFns = st.cols.map((c) => { try { return { c, fn: compileValue(c, schema, { decimal: '.' }) }; } catch { return null; } }).filter(Boolean);
+    if (!colFns.length) throw new Error('no valid columns');
+    let groupFn = null, weightFn = null;
+    if (st.groupBy) { try { groupFn = compileValue(st.groupBy, schema, { decimal: '.' }); } catch { throw new Error(`group by "${st.groupBy}": invalid`); } }
+    if (st.weight && st.weight.trim()) { try { weightFn = compileValue(st.weight, schema, { decimal: '.' }); } catch { throw new Error(`weight "${st.weight}": invalid`); } }
+    const mask = scopeMask(st, L);
+    const TD = tdigest();
+    const mkAcc = () => colFns.map(() => ({ n: 0, sw: 0, swx: 0, swx2: 0, min: Infinity, max: -Infinity, td: TD.create() }));
+    const groups = new Map();
+    let overflow = false, rec = 0, total = 0;
+    for await (const batch of layerRows(L, null)) {
+      for (const f of batch) {
+        const rr = rec++; if (mask && !(rr < mask.length && mask[rr])) continue;
+        const row = extendRow(L, f, rr);
+        let g = '';
+        if (groupFn) { const gv = groupFn(row); g = gv == null || gv === '' ? '—' : String(gv); }
+        let A = groups.get(g);
+        if (!A) { if (groups.size >= 256) { overflow = true; continue; } A = mkAcc(); groups.set(g, A); }
+        const w = weightFn ? (+weightFn(row) || 0) : 1;
+        if (!(w > 0)) continue;
+        for (let i = 0; i < colFns.length; i++) {
+          const x = +colFns[i].fn(row);
+          if (!Number.isFinite(x)) continue;
+          const a = A[i];
+          a.n++; a.sw += w; a.swx += w * x; a.swx2 += w * x * x;
+          if (x < a.min) a.min = x; if (x > a.max) a.max = x;
+          TD.push(a.td, x);
+        }
+      }
+      total += batch.length; if (onProgress) onProgress(total); await new Promise((r) => setTimeout(r));   // cooperative — orbiting stays live
+    }
+    const rows = [];
+    for (const g of [...groups.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
+      const A = groups.get(g);
+      for (let i = 0; i < colFns.length; i++) {
+        const a = A[i]; if (!a.n) continue;
+        const mean = a.swx / a.sw, vr = Math.max(0, a.swx2 / a.sw - mean * mean);
+        const td = TD.result(a.td), q = (p) => quantileFromCentroids(td.centroids, td.count, p);
+        rows.push({ group: g, col: colFns[i].c, n: a.n, mean, std: Math.sqrt(vr), min: a.min, max: a.max, q25: q(0.25), q50: q(0.5), q75: q(0.75) });
+      }
+    }
+    return { rows, groupBy: st.groupBy, weighted: !!weightFn, overflow };
+  };
+  const run = async () => {
+    if (st.running) return;
+    if (st.scope !== 'all' && !scopeMask(st, L)) { win.sub.textContent = scopeMissing(st, L) || `no ${st.scope} mask`; return; }
+    st.running = true; runBtn.disabled = true; win.sub.textContent = 'scanning…';
+    try { st.scan = await scanStats((n) => { progEl.textContent = `${n.toLocaleString()} rows…`; }); }
+    catch (e) { win.sub.textContent = `stats: ${e.message}`; st.running = false; runBtn.disabled = false; progEl.textContent = ''; return; }
+    st.running = false; runBtn.disabled = false; progEl.textContent = ''; st.stale = false; if (staleEl) staleEl.textContent = '';
+    saveAnalysisCfg(L, 'stats', cfgOf(), win);
+    render();
+  };
+  function buildRail() {
+    rail.textContent = '';
+    const cSec = document.createElement('div');
+    cSec.append(Object.assign(document.createElement('div'), { className: 'sw-h', textContent: 'columns' }));
+    const colBtn = document.createElement('button'); colBtn.className = 'sw-add'; colBtn.textContent = st.cols.length > 3 ? `${st.cols.length} columns` : st.cols.join(', ');
+    colBtn.onclick = (e) => menuXY(e.clientX, e.clientY, numericColsOf(L).map((c) => ({ label: (st.cols.includes(c) ? '✓ ' : '') + c, action: () => { if (st.cols.includes(c)) { if (st.cols.length > 1) st.cols = st.cols.filter((x) => x !== c); } else st.cols.push(c); markStale(); buildRail(); } })));
+    cSec.append(colBtn); rail.append(cSec);
+    const gSec = document.createElement('div');
+    gSec.append(Object.assign(document.createElement('div'), { className: 'sw-h', textContent: 'group by' }));
+    const gSel = document.createElement('select'); gSel.className = 'sw-sel'; gSel.style.width = '100%'; gSel.title = 'the category channel or any painted column (assign domains → stats by domain)';
+    { const o = document.createElement('option'); o.value = ''; o.textContent = '— whole layer —'; gSel.append(o); }
+    for (const c of statsGroupCols(L)) { const o = document.createElement('option'); o.value = c; o.textContent = c; gSel.append(o); }
+    if (st.groupBy && ![...gSel.options].some((o) => o.value === st.groupBy)) { const o = document.createElement('option'); o.value = st.groupBy; o.textContent = st.groupBy + ' (missing)'; gSel.append(o); }
+    gSel.value = st.groupBy; gSel.onchange = () => { st.groupBy = gSel.value; markStale(); };
+    gSec.append(gSel); rail.append(gSec);
+    const wSec = document.createElement('div');
+    wSec.append(Object.assign(document.createElement('div'), { className: 'sw-h', textContent: 'weight' }));
+    const wIn = document.createElement('input'); wIn.className = 'sw-in'; wIn.style.width = '100%'; wIn.type = 'text'; wIn.placeholder = 'weight expr (blank = none)'; wIn.value = st.weight; wIn.title = 'weight expression (@gcu/expr) — e.g. SG for density-weighted means. Weights the mean/std; quantiles stay unweighted';
+    wIn.onchange = () => { st.weight = wIn.value.trim(); markStale(); }; wSec.append(wIn); rail.append(wSec);
+    const vSec = document.createElement('div');
+    const scRow = document.createElement('div'); scRow.className = 'sw-row'; const scL = document.createElement('span'); scL.textContent = 'scope';
+    const seg = document.createElement('div'); seg.className = 'sw-seg'; seg.title = 'all rows · rows matching the current filter · the 3D selection';
+    for (const [v, t] of [['all', 'all'], ['filtered', 'filt'], ['selection', 'sel']]) { const bt = document.createElement('button'); bt.className = 'sw-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; markStale(); buildRail(); }; seg.append(bt); }
+    scRow.append(scL, seg); vSec.append(scRow);
+    const exRow = document.createElement('div'); exRow.className = 'sw-row';
+    const tblB = document.createElement('button'); tblB.className = 'awin-btn'; tblB.textContent = '⧉ table'; tblB.title = 'copy the table as TSV (paste into a spreadsheet)';
+    tblB.onclick = async () => { const tsv = tableTSV(); if (!tsv) { $('#meta').textContent = 'table: nothing computed yet — Run first'; return; } try { await navigator.clipboard.writeText(tsv); $('#meta').textContent = `table copied (${tsv.split('\n').length - 1} rows, TSV)`; } catch (e) { $('#meta').textContent = `copy failed (${e.message})`; } };
+    exRow.append(tblB); vSec.append(exRow);
+    rail.append(vSec);
+    const foot = document.createElement('div'); foot.className = 'sw-foot';
+    runBtn = document.createElement('button'); runBtn.className = 'sw-run'; runBtn.textContent = 'Run'; runBtn.onclick = run;
+    const rcpBtn = document.createElement('button'); rcpBtn.className = 'sw-add'; rcpBtn.textContent = 'save as recipe…'; rcpBtn.title = 'save this setup as a named, re-runnable YAML file in the project (Tools → Recipes)';
+    rcpBtn.onclick = () => saveRecipe('stats', cfgOf(), `${(L.label || L.name).replace(/\.[^.]+$/, '')} stats`);
+    staleEl = document.createElement('div'); staleEl.className = 'sw-stale'; staleEl.textContent = st.scan && st.stale ? '↻ config changed — Run to update' : '';
+    progEl = document.createElement('div'); progEl.className = 'sw-prog';
+    foot.append(runBtn, rcpBtn, staleEl, progEl); rail.append(foot);
+  }
+  _statsWins.set(L.id, { win, redraw: run, st });
+  buildRail(); render();
+  if (ropts && ropts.run) run();
 }
 // ── validation: block model vs drillhole samples ──────────────────────────────
 // The resource-geology check: is the model globally (bias) and locally (swaths)
@@ -7312,6 +7481,7 @@ async function openProjectDir(dir) {
       if (!a || !a.open || !a.open.length) continue;
       if (a.open.includes('gt')) { try { openGradeTonnage(L); } catch { /* layer no longer qualifies */ } }
       if (a.open.includes('swath')) { try { openSwath(L); } catch { /* same */ } }
+      if (a.open.includes('stats')) { try { openStats(L); } catch { /* same */ } }
     }
     renderLayers();
     _project.dirty = false;
@@ -8438,12 +8608,36 @@ function openDecoPanel() {
     scSel.onchange = () => setFigScale(+scSel.value);
     scRow.append(scLab, scSel); foot.append(scRow);
     const ex = document.createElement('button'); ex.className = 'deco-export'; ex.textContent = 'Export figure (PNG)'; ex.onclick = () => exportFigure();
-    foot.append(ex); wrap.append(foot);
+    foot.append(ex);
+    const rcp = document.createElement('button'); rcp.className = 'deco-export'; rcp.textContent = 'save as recipe…'; rcp.title = 'save this view + decorations + background + resolution as a re-runnable figure recipe (Tools → Recipes)';
+    rcp.onclick = () => saveRecipe('figure', captureFigureCfg(), _deco.titleText || 'figure');
+    foot.append(rcp); wrap.append(foot);
   };
   win._render = render;
   render();
 }
 function decorationsMenu() { openDecoPanel(); }   // back-compat alias (View menu / palette)
+// ── the FIGURE recipe: camera + decorations + background + export scale.
+// Running applies the lot, waits for the render to converge, exports the PNG,
+// then RESTORES everything it touched (temporary changes give back what they
+// took). "The monthly plan-view figure" regenerates itself. ──
+function captureFigureCfg() { return { camera: captureCamera(), bg: _bgColor, deco: { ..._deco }, figScale: _figScale }; }
+async function runFigureRecipe(params) {
+  const prev = captureFigureCfg();
+  try {
+    if (params.camera) applyCamera(params.camera);
+    if (params.bg) setBg(params.bg);
+    if (params.deco) { Object.assign(_deco, params.deco); saveDeco(); }
+    drawDecorations(); requestRender();
+    $('#meta').textContent = 'figure recipe: rendering…';
+    await new Promise((res) => { const t0 = performance.now(); const t = setInterval(() => { if (/converged/.test($('#stats').textContent) || performance.now() - t0 > 20000) { clearInterval(t); res(); } }, 150); });
+    exportFigure(params.figScale || 1);
+  } finally {
+    applyCamera(prev.camera); setBg(prev.bg);
+    Object.assign(_deco, prev.deco); saveDeco(); drawDecorations(); requestRender();
+    if (_decoWin && _decoWin._render) _decoWin._render();
+  }
+}
 applyBg();                                                 // restore the saved background at boot
 // ── window management: as the float windows multiply (GT · swath · validate ·
 // lineage · table · paint), a place to find, focus, tidy, and dismiss them. ──
@@ -8713,6 +8907,7 @@ const COMMANDS = [
   { id: 'rename-batch', group: 'Layer', title: 'Rename layers…', kw: 'batch prefix suffix regex replace', when: () => _layers.length >= 2, run: () => openBatchRename(_lpSel.size >= 2 ? lpSelIds().map(layerById) : _layers.slice()) },
   { id: 'sel-column', group: 'Layer', title: 'Selection → column…', kw: 'materialize save flag 0 1 paint selected', when: (c) => !!(c.L && c.L._selCount), run: (c) => selectionToColumn(c.L) },
   { id: 'run-recipe', group: 'Analysis', title: 'Run recipe…', kw: 'saved yaml grade-tonnage swath analysis rerun', when: () => _recipes.length > 0, run: () => setTimeout(() => menuXY(innerWidth / 2 - 130, innerHeight / 3, recipesMenuItems()), 0) },
+  { id: 'stats', group: 'Analysis', title: 'Stats…', kw: 'summary table group by mean std quantiles domain report', when: (c) => !!(c.L && layerTableHeader(c.L) && numericColsOf(c.L).length), run: (c) => openStats(c.L) },
   { id: 'export-mesh', group: 'Layer', title: 'Export mesh(es)…', kw: 'obj ply msh lfm wavefront leapfrog save', when: () => _layers.some((L) => L.kind === 'mesh' && L.docs.meshDoc), run: (c) => {
     const sel = lpSelIds().map(layerById).filter((x) => x && x.kind === 'mesh' && x.docs.meshDoc);
     openMeshExportDialog(sel.length ? sel : (c.L && c.L.kind === 'mesh' ? [c.L] : _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc)));
@@ -9211,6 +9406,7 @@ function layerMenu(L, x, y) {
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
     ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }, { label: 'Swath plot…', action: () => openSwath(L) }] : []),
+    ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Stats…', action: () => openStats(L) }] : []),
     ...(false && gridAxesOf(L) && drillholeLayers().length ? [{ label: 'Validate vs drillholes…', action: () => openValidation(L) }] : []),   // temporarily disabled pending window rework
     ...(L._selCount ? [{ label: `Selection → column… (${L._selCount.toLocaleString()} rows)`, action: () => selectionToColumn(L) }] : []),
     ...(L.lineage ? [{ label: 'Lineage…', action: () => openLineageWindow(L) }] : []),
@@ -11836,7 +12032,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

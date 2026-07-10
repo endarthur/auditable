@@ -436,6 +436,36 @@ chk(`GT chassis: no auto-run (${gtc.noAuto}), rail+series+scope [${gtc.ui.segs}]
 chk(`GT setup persists: ⧉ table (${gtc.hasTable}), close→reopen keeps nCut ${gtc.persisted.nCut} (“${gtc.persisted.sub}”, Run manual ${gtc.persisted.manual})`,
   gtc.hasTable && gtc.persisted.nCut === '10' && /restored/.test(gtc.persisted.sub) && gtc.persisted.manual);
 
+// stats window: the grouped summary table on the same chassis (A.csv: FE 100..400)
+const stc = await p.evaluate(async () => {
+  const m = window._micro, A = m.layers().find((L) => L.name === 'A.csv');
+  m.openStats(A);
+  const w = () => [...document.querySelectorAll('.fwin')].find((el) => el.querySelector('.fwin-head .t').textContent.startsWith('stats'));
+  w().querySelector('.sw-run').click();
+  await new Promise((r) => { const t = setInterval(() => { if (w() && w()._statsRows) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 15000); });
+  const row = w()._statsRows && w()._statsRows[0];
+  const rendered = w().querySelectorAll('.st-tbl tr').length - 1;
+  w().querySelector('.fwin-head button:last-child').click();
+  return { row, rendered };
+});
+chk(`stats window: FE n ${stc.row && stc.row.n}, mean ${stc.row && stc.row.mean}, median ${stc.row && stc.row.q50} (${stc.rendered} table row)`,
+  stc.row && stc.row.n === 4 && stc.row.mean === 250 && Number.isFinite(stc.row.q50) && stc.rendered === 1);
+
+// figure recipe: apply a captured view+deco+bg, export, RESTORE everything
+const fgr = await p.evaluate(async () => {
+  const m = window._micro;
+  HTMLAnchorElement.prototype.click = function () {};
+  m.setBg('#ffffff'); m.setDecoTitle('Fig');
+  const params = m.captureFigureCfg();
+  m.setBg('#121212'); m.setDecoTitle('');
+  window._lastFigure = null;
+  await m.runFigureRecipe(params);
+  await new Promise((res) => { const t = setInterval(() => { if (window._lastFigure) { clearInterval(t); res(); } }, 100); setTimeout(() => { clearInterval(t); res(); }, 5000); });
+  const deco = JSON.parse(localStorage.getItem('micro.deco') || '{}');
+  return { png: !!(window._lastFigure && window._lastFigure.size > 1000), bg: localStorage.getItem('micro.bg'), title: deco.titleText || '' };
+});
+chk(`figure recipe: PNG (${fgr.png}) + restores bg (${fgr.bg}) and title (“${fgr.title}”)`, fgr.png && fgr.bg === '#121212' && fgr.title === '');
+
 // swath window v2: NO auto-run on open, a Run button computes, direction/band
 // re-bin live from the single scan (no re-scan)
 const sw2 = await p.evaluate(async () => {
