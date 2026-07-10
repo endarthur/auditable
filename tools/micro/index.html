@@ -7158,7 +7158,7 @@ function projectManifest() {
       label: L.label && L.label !== L.name ? L.label : undefined,
       external: L.storage === 'external' || undefined,
       colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible,
-      sectioned: renderer.layerSectioned(L.id) ? undefined : false,
+      sectioned: (() => { const m = renderer.layerSectioned(L.id); return m === true ? undefined : m; })(),
       kind: L.kind === 'mesh' ? 'mesh' : undefined,
       tint: L.kind === 'mesh' ? L.tint : undefined,
       opacity: (L.opacity != null && L.opacity !== 1) ? L.opacity : undefined,   // any kind (mesh/blocks/drillholes)
@@ -7580,7 +7580,7 @@ async function openProjectDir(dir) {
           if (ls.label) Ld.label = ls.label;
           if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
           if (ls.visible === false) { Ld.visible = false; renderer.setLayerVisible(Ld.id, false); }
-          if (ls.sectioned === false) renderer.setLayerSectioned(Ld.id, false);
+          if (ls.sectioned != null && ls.sectioned !== true) renderer.setLayerSectioned(Ld.id, ls.sectioned);
           restoreHiddenCats(Ld, ls.hiddenCats);
           if (ls.colTypes) { Ld.colTypes = ls.colTypes; applyColTypes(Ld); }
           if (ls.calcCols) Ld.calcCols = ls.calcCols;
@@ -7665,7 +7665,7 @@ async function openProjectDir(dir) {
       if (ls.clip && (ls.clip[0] || ls.clip[1])) { L.clip = [String(ls.clip[0] || ''), String(ls.clip[1] || '')]; $('#clipMin').value = L.clip[0]; $('#clipMax').value = L.clip[1]; }
       if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
       if (ls.visible === false) { L.visible = false; applyTreeVisibility(); }
-      if (ls.sectioned === false) renderer.setLayerSectioned(L.id, false);
+      if (ls.sectioned != null && ls.sectioned !== true) renderer.setLayerSectioned(L.id, ls.sectioned);
       restoreHiddenCats(L, ls.hiddenCats);
       if (ls.colTypes) { L.colTypes = ls.colTypes; applyColTypes(L); }
       if (ls.calcCols) L.calcCols = ls.calcCols;
@@ -8224,7 +8224,7 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom · <code>⌃
 <b>sections</b> — a cut through the data; everything hidden is neither drawn nor pickable. Blocks and drillhole sticks cut <b>true</b>: a block straddling the plane shows its cut interior at the plane (a thin slab reads as a continuous painted wall), and a sectioned mesh's trace draws <b>over</b> the wall like a wireframe outline on a section plot<br>
 pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line</b> (the vertical section through it; <code>⇧</code> snaps to 15°, <code>⇧⌥</code> to 5°, <code>Esc</code> cancels), or choose <b>custom</b> and type the plane's dip direction + dip · <code>x</code> toggles the section on/off<br>
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
-<b>plane</b> — outline the cut plane in the view · <b>2D</b> — face-on + orthographic + rotation locked (drags pan; the paper-section view) · right-click a layer → <b>Cut by sections</b> exempts it (keep topo for context while sectioning the model)<br>
+<b>plane</b> — outline the cut plane in the view · <b>2D</b> — face-on + orthographic + rotation locked (drags pan; the paper-section view) · right-click a layer → <b>Cut by sections</b>: follow · keep front only · keep behind only · don't cut (keep topo whole for context, or split one model at the plane while another follows the slab)<br>
 <code>l</code> — face the section (<code>⇧L</code> its back) · <code>,</code> <code>.</code> — walk the section one slab at a time · <code>⌃</code>wheel or the slider scrubs · <b>follow</b> — the camera walks with the scrub (the cut stays put on screen) · the number is slab half-thickness (m)<br><br>
 <b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br>
 The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Select through) flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
@@ -9581,7 +9581,7 @@ function layerMenu(L, x, y) {
       }
     } }] : []),
     ...(L.dh && L.docs.dhDoc ? [{ label: 'Add interval table…', action: () => addIntervalToLayer(L) }] : []),
-    ...(L.kind !== 'mesh' && (L.docs.blockDoc || L.dh) ? [{ label: `Opacity… (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, action: () => setTimeout(() => opacityMenu(L, x, y), 0) }] : []),
+    ...(L.kind !== 'mesh' && (L.docs.blockDoc || L.dh) ? [{ label: `Opacity (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, submenu: () => opacityMenuItems(L) }] : []),
     // per-layer block-edge override (tri-state): follow the View toggle, or force
     ...(L.docs.blockDoc ? [{
       label: `Block edges: ${L.edges == null ? 'auto' : L.edges ? 'on' : 'off'}`,
@@ -9593,7 +9593,7 @@ function layerMenu(L, x, y) {
     ...(L.kind === 'mesh' ? (() => {
       const items = [
         { label: 'Tint…', action: () => setTimeout(() => meshTintMenu(L, x, y), 0) },
-        { label: `Opacity… (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, action: () => setTimeout(() => opacityMenu(L, x, y), 0) },
+        { label: `Opacity (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, submenu: () => opacityMenuItems(L) },
       ];
       const h = L.docs.meshDoc && L.docs.meshDoc.header;
       if (h && !h.soup) items.push({ label: 'Select by this solid…', action: () => openSolidDialog(L) });
@@ -9631,7 +9631,11 @@ function layerMenu(L, x, y) {
     } }] : []),
     { sep: true },
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
-    { label: (renderer.layerSectioned(L.id) ? '✓ ' : '') + 'Cut by sections', action: () => { renderer.setLayerSectioned(L.id, !renderer.layerSectioned(L.id)); markProjectDirty(); requestRender(); } },
+    { label: (() => { const m = renderer.layerSectioned(L.id); return 'Cut by sections' + (m === true ? '' : m === false ? ' (off)' : ` (${m})`); })(), submenu: () => {
+      const m = renderer.layerSectioned(L.id);
+      const opt = (v, t) => ({ label: (m === v ? '✓ ' : '') + t, action: () => { renderer.setLayerSectioned(L.id, v); markProjectDirty(); requestRender(); } });
+      return [opt(true, 'follow the section'), opt('front', 'keep front only'), opt('behind', 'keep behind only'), opt(false, "don't cut")];
+    } },
     ...(canCopyIntoProject(L) ? [{
       label: `Copy into project (${fmtSize(layerBytes(L))})`,
       action: () => copyLayerIntoProject(L),
@@ -9653,7 +9657,7 @@ async function convertMeshLayer(L, toSoup) {
   try {
     await openMeshDoc(md.blob, md.name, { layer: L.id, first: false, tint: L.tint, opacity: L.opacity, forceSoup: toSoup });
     if (!keep.visible) { L.visible = false; renderer.setLayerVisible(L.id, false); }
-    if (!keep.sectioned) renderer.setLayerSectioned(L.id, false);
+    if (keep.sectioned !== true) renderer.setLayerSectioned(L.id, keep.sectioned);
     renderLayers(); markProjectDirty(); requestRender();
   } catch (e) { $('#meta').textContent = `${md.name} — ${e.message}`; }
 }
@@ -9679,12 +9683,10 @@ function applyLayerOpacity(L, v) {
   else renderer.setLayerOpacity(L.id, v);
   markProjectDirty(); requestRender();
 }
-function opacityMenu(L, x, y) {
-  menuXY(x, y, [100, 75, 50, 25].map((pc) => ({
-    label: (Math.round((L.opacity != null ? L.opacity : 1) * 100) === pc ? '✓ ' : '') + pc + '%',
-    action: () => applyLayerOpacity(L, pc / 100),
-  })));
-}
+const opacityMenuItems = (L) => [100, 75, 50, 25].map((pc) => ({
+  label: (Math.round((L.opacity != null ? L.opacity : 1) * 100) === pc ? '✓ ' : '') + pc + '%',
+  action: () => applyLayerOpacity(L, pc / 100),
+}));
 // ── layer properties (§10 v1): follows the ACTIVE layer, live-apply, tabbed.
 // style = kind-adaptive controls; classes = per-class eyes (GPU cull — the
 // class code rides every element, so toggling is a texture update: no sweeps).
@@ -9887,6 +9889,15 @@ function renderStyleTab(body, L) {
     body.appendChild(ppNote('a painted column — values, colors, and the brush live in the palette window'));
   } else {
     body.appendChild(ppNote(mode === 'solid' ? 'solid — one color, nothing to map' : 'rgb — colors come from the file'));
+  }
+  // per-layer opacity (Bayer dither in-shader) — meshes get theirs above;
+  // blocks + drillholes share the same verb as the ctx menu
+  if (L.docs.blockDoc || L.dh) {
+    const op = document.createElement('input'); op.type = 'range'; op.min = 5; op.max = 100; op.step = 5;
+    op.value = Math.round((L.opacity != null ? L.opacity : 1) * 100);
+    const opVal = document.createElement('span'); opVal.className = 'pp-val'; opVal.textContent = op.value + '%';
+    op.oninput = () => { opVal.textContent = op.value + '%'; applyLayerOpacity(L, +op.value / 100); };
+    body.appendChild(mkRow('opacity', op, opVal));
   }
   if (L.dh && L.docs.dhDoc) renderStickRadius(body, L);
 }
@@ -11914,14 +11925,14 @@ function redesurveyMenu(nd, x, y) {
   ]);
 }
 // one opacity for every layer in a group (the members apply it kind-aware)
-function groupOpacityMenu(nd, x, y) {
+const groupOpacityItems = (nd) => {
   const Ls = groupLayerIds(nd).map(layerById).filter(Boolean);
   const cur = Ls.length ? Math.round((Ls[0].opacity != null ? Ls[0].opacity : 1) * 100) : 100;
-  menuXY(x, y, [100, 75, 50, 25].map((pc) => ({
+  return [100, 75, 50, 25].map((pc) => ({
     label: (cur === pc ? '✓ ' : '') + pc + '%',
     action: () => { for (const L of Ls) applyLayerOpacity(L, pc / 100); },
-  })));
-}
+  }));
+};
 function groupMenu(nd, x, y) {
   const items = [];
   if (nd.dhSet) {
@@ -11954,7 +11965,7 @@ function groupMenu(nd, x, y) {
       }
       if (u) { cam.fit(u); requestRender(); }
     } },
-    { label: 'Opacity…', action: () => setTimeout(() => groupOpacityMenu(nd, x, y), 0) },
+    { label: 'Opacity', submenu: () => groupOpacityItems(nd) },
     { sep: true },
     { label: 'Ungroup (keep layers)', action: () => {
       treeSync();

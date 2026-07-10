@@ -222,6 +222,18 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   // (§3). Single-layer callers never notice: layer 0 shifts by zero and every
   // API defaults to it. ──
   const layers = new Map();                               // id → per-layer state
+  // a layer's view of the section: false = exempt, 'front'/'behind' = keep that
+  // side only (a half-space is a slab with the far face pushed past the data —
+  // same trick the global clip uses, but per layer, derived from sec.d0)
+  const layerSecOf = (ls, sec) => {
+    const m = ls.sectioned;
+    if (!sec || m === false) return m === false ? null : sec;
+    if ((m === 'front' || m === 'behind') && sec.d0 !== undefined) {
+      const H = Math.max(1e5, 8 * (sec.half || 1));
+      return { ...sec, d: m === 'front' ? sec.d0 + H : sec.d0 - H, half: H, clip: m };
+    }
+    return sec;
+  };
   function layerOf(id) {
     let l = layers.get(id);
     if (!l) {
@@ -361,8 +373,9 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     layerChanRange(layer) { const ls = layers.get(layer); return ls && ls.docChan[0] !== Infinity ? [ls.docChan[0], ls.docChan[1]] : null; },
     // per-layer section participation: an exempt layer draws (and picks) whole
     // while the others are slabbed — e.g. topo kept for context during sectioning
-    setLayerSectioned(layer, on) { const ls = layerOf(layer); const v = on !== false; if (ls.sectioned !== v) { ls.sectioned = v; needClear = true; } },
-    layerSectioned(layer) { return layerOf(layer).sectioned !== false; },
+    setLayerSectioned(layer, mode) { const ls = layerOf(layer); const v = mode === undefined ? true : mode; if (ls.sectioned !== v) { ls.sectioned = v; needClear = true; } },
+    layerSectioned(layer) { const m = layerOf(layer).sectioned; return m === undefined ? true : m; },
+    
     // context-mesh style: tint [r,g,b] 0..1 + opacity 0..1 (Bayer screen-door)
     setLayerMeshStyle(layer, { tint, opacity } = {}) {
       const ls = layerOf(layer);
@@ -659,7 +672,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         for (const [id, group] of byLayer(msh)) {
           if (!group.some((c) => moving || c.cursor === 0)) continue;
           const ls = layerOf(id);
-          meshPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: ls.sectioned === false ? null : sec });
+          meshPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: layerSecOf(ls, sec) });
           for (const c of group) {
             if (!(moving || c.cursor === 0)) continue;
             meshPipe.draw(c);
@@ -677,7 +690,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       if (soup.length) {
         for (const [id, group] of byLayer(soup)) {
           const ls = layerOf(id);
-          soupPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: ls.sectioned === false ? null : sec });
+          soupPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: layerSecOf(ls, sec) });
           for (const c of group) {
             const [first, k] = allot(c);
             if (k > 0) {
@@ -703,7 +716,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         // per-layer uniforms + slices (front-to-back preserved within each group)
         const setupPtsLayer = (id) => {
           const ls = layerOf(id), o = lopt(id), zr = zRangeOf(o);
-          const lsec = ls.sectioned === false ? null : sec;
+          const lsec = layerSecOf(ls, sec);
           gl.uniform4f(uni.secPlane, lsec ? lsec.n[0] : 0, lsec ? lsec.n[1] : 0, lsec ? lsec.n[2] : 1, lsec ? lsec.d : 0);
           gl.uniform2f(uni.secCfg, lsec ? 1 : 0, lsec ? lsec.half : 0);
           gl.uniform1i(uni.colorMode, o.colorMode);
@@ -780,7 +793,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
-            section: ls.sectioned === false ? null : sec,
+            section: layerSecOf(ls, sec),
             catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
             opacity: ls.opacity, edges: ls.edges != null ? ls.edges : blockEdges,   // per-layer override, else the View toggle
           });
@@ -829,7 +842,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
-            section: ls.sectioned === false ? null : sec,
+            section: layerSecOf(ls, sec),
             radius: ls.stickRadius, catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
             opacity: ls.opacity,
           });

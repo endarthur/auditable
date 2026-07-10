@@ -381,7 +381,9 @@ export function createPickPipeline(gl) {
     };
     // per layer: an exempt layer (st.sectioned === false) picks whole
     const setSec = (u, st) => {
-      const s = st && st.sectioned === false ? null : section;
+      let s = st && st.sectioned === false ? null : section;
+      const pm = st ? st.sectioned : true;
+      if (s && (pm === 'front' || pm === 'behind') && s.d0 !== undefined) { const H = Math.max(1e5, 8 * (s.half || 1)); s = { ...s, d: pm === 'front' ? s.d0 + H : s.d0 - H, half: H }; }
       gl.uniform4f(u.secPlane, s ? s.n[0] : 0, s ? s.n[1] : 0, s ? s.n[2] : 1, s ? s.d : 0);
       gl.uniform2f(u.secCfg, s ? 1 : 0, s ? s.half : 0);
     };
