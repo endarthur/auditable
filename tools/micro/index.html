@@ -515,6 +515,7 @@
   .pp-cat.off .nm { color: var(--dim); text-decoration: line-through; }
   .pp-cat .ct { color: var(--dim); font-size: 11px; white-space: nowrap; }
   .pp-bulk { display: flex; gap: 12px; padding: 8px 2px 2px; color: var(--dim); }
+  .pp-catsearch { width: 100%; box-sizing: border-box; margin: 2px 0 6px; font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 7px; }
   .pp-bulk a { color: var(--muted); cursor: pointer; }
   .pp-bulk a:hover { color: var(--accent); }
   .pp-sec { color: var(--accent); margin: 12px 0 8px; font-size: 11px; letter-spacing: 0.06em; }
@@ -3267,7 +3268,31 @@ function applyAnalysisGeo(L, kind, win) {
 // in and Scan folder picks it up. Series reference layers BY NAME; a missing
 // primary gets a one-question remap — that prompt IS the parameter binding. ──
 let _recipes = [];                                          // { name, tool, params, file }
-const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath', stats: 'stats', figure: 'figure' };
+const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath', stats: 'stats', figure: 'figure', calccols: 'calc columns' };
+// apply a calc-column SET to a layer — REPLACE on same name (idempotency is
+// gospel: run-twice == run-once), append the new; invalid expressions are
+// skipped and named. The recipe-facing form of Properties → columns.
+function applyCalcCols(L, cols) {
+  const h = layerTableHeader(L); if (!h) return { applied: 0, bad: [] };
+  const schema = schemaExt(L, h);
+  L.calcCols = L.calcCols || [];
+  let applied = 0; const bad = [];
+  for (const c of cols || []) {
+    if (!c || !c.name || !c.expr) continue;
+    try { compileValue(String(c.expr), schema, { decimal: '.' }); } catch { bad.push(c.name); continue; }
+    const entry = { name: String(c.name), expr: String(c.expr), ty: c.ty === 'string' ? 'string' : 'number' };
+    const at = L.calcCols.findIndex((x) => x.name.toLowerCase() === entry.name.toLowerCase());
+    if (at >= 0) L.calcCols[at] = entry; else L.calcCols.push(entry);
+    applied++;
+  }
+  if (applied) {
+    L._calcFns = null; L._colStats = null;
+    const t2 = _attrTables.get(L.id); if (t2 && t2.invalidate) t2.invalidate();
+    markProjectDirty();
+    if (_propOpen && _propFor === L.id) renderProps();
+  }
+  return { applied, bad };
+}
 const recipeSlug = (name) => (String(name).toLowerCase().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'recipe');
 // plain JS ⇄ @gcu/yaml AST (the emitter is AST-only; nulls are simply omitted)
 function jsToYamlNode(v) {
@@ -3337,13 +3362,20 @@ async function renameRecipe(r) {
 // missing then falls back to the substitute
 function runRecipe(r, andRun = true) {
   if (r.tool === 'figure') { runFigureRecipe(r.params); return; }   // camera-based — no layer to resolve
-  const open2 = (Lp) => (r.tool === 'gt' ? openGradeTonnage(Lp, { cfg: r.params, run: andRun })
-    : r.tool === 'stats' ? openStats(Lp, { cfg: r.params, run: andRun })
-    : openSwath(Lp, { cfg: r.params, run: andRun }));
+  const open2 = (Lp) => {
+    if (r.tool === 'calccols') {
+      const { applied, bad } = applyCalcCols(Lp, r.params.cols);
+      $('#meta').textContent = `recipe “${r.name}”: ${applied} calc column${applied === 1 ? '' : 's'} applied to ${Lp.label || Lp.name}${bad.length ? ` · skipped (invalid expr): ${bad.join(', ')}` : ''}`;
+      return;
+    }
+    return r.tool === 'gt' ? openGradeTonnage(Lp, { cfg: r.params, run: andRun })
+      : r.tool === 'stats' ? openStats(Lp, { cfg: r.params, run: andRun })
+      : openSwath(Lp, { cfg: r.params, run: andRun });
+  };
   const wantName = (r.params.series && r.params.series[0] && r.params.series[0].layer) || r.params.layer;
   const L = _layers.find((x) => x.name === wantName);
   if (L) { open2(L); return; }
-  const cands = _layers.filter((x) => (r.tool === 'stats' ? !!layerTableHeader(x) : gridAxesOf(x)));
+  const cands = _layers.filter((x) => (r.tool === 'stats' || r.tool === 'calccols' ? !!layerTableHeader(x) : gridAxesOf(x)));
   if (!cands.length) { $('#meta').textContent = `recipe “${r.name}”: wants “${wantName || 'a block model'}” and no suitable layer is loaded`; return; }
   setTimeout(() => menuXY(innerWidth / 2 - 140, innerHeight / 3, [
     ...cands.map((c) => ({ label: `“${r.name}” wants ${wantName} — use ${c.label || c.name}`, action: () => open2(c) })),
@@ -10491,6 +10523,14 @@ function renderClassList(body, L, info) {
   body.appendChild(sec);
   if (!L.catHidden) L.catHidden = new Set();
   const leg = legendOf(L, info);
+  // long class lists (domains, lithologies, string codes) get a search box —
+  // same pattern as the record-panel field picker; bulk acts on what's shown
+  let searchIn = null;
+  if (leg.entries.length > 8) {
+    searchIn = document.createElement('input');
+    searchIn.type = 'text'; searchIn.className = 'pp-catsearch'; searchIn.placeholder = `search ${leg.entries.length} classes…`; searchIn.spellcheck = false;
+    body.appendChild(searchIn);
+  }
   const stored = L.catLegend === leg;
   const covered = new Set();
   for (const e of leg.entries) for (const c of legendCodesOf(info, e)) covered.add(c);
@@ -10594,6 +10634,19 @@ function renderClassList(body, L, info) {
     rows.push(r2); entryRows.push(r2);
   }
   if (uncovered.length) rows.push(rowFor(null, uncovered, true));
+  // search: hide non-matching rows; bulk verbs act on the VISIBLE set while a
+  // search is active (so "none" on "cang" hides only the cangas)
+  const shownRows = () => rows.filter((r) => r.row.style.display !== 'none');
+  if (searchIn) {
+    searchIn.oninput = () => {
+      const q = searchIn.value.trim().toLowerCase();
+      for (const r of rows) {
+        const nm2 = r.row.querySelector('.nm');
+        const hay = (nm2 ? nm2.textContent + ' ' + (nm2.title || '') : '').toLowerCase();
+        r.row.style.display = !q || hay.includes(q) ? '' : 'none';
+      }
+    };
+  }
   const bulk = document.createElement('div'); bulk.className = 'pp-bulk';
   const mkA = (label, fn) => { const a = document.createElement('a'); a.textContent = label; a.onclick = fn; return a; };
   const sync = () => {
@@ -10603,10 +10656,11 @@ function renderClassList(body, L, info) {
     }
     applyCatVisibility(L);
   };
+  const shownCodes = () => { const out = []; for (const r of shownRows()) out.push(...r.codes); return out.length ? out : info.codes; };
   bulk.append(
-    mkA('all', () => { L.catHidden.clear(); sync(); }),
-    mkA('none', () => { for (const c of info.codes) L.catHidden.add(c); sync(); }),
-    mkA('invert', () => { for (const c of info.codes) { if (L.catHidden.has(c)) L.catHidden.delete(c); else L.catHidden.add(c); } sync(); }),
+    mkA('all', () => { for (const c of shownCodes()) L.catHidden.delete(c); sync(); }),
+    mkA('none', () => { for (const c of shownCodes()) L.catHidden.add(c); sync(); }),
+    mkA('invert', () => { for (const c of shownCodes()) { if (L.catHidden.has(c)) L.catHidden.delete(c); else L.catHidden.add(c); } sync(); }),
     ...(stored ? [mkA('reset legend', () => { L.catLegend = null; renderer.setLayerPalette(L.id, null); markProjectDirty(); requestRender(); renderProps(); })] : []),
   );
   body.appendChild(bulk);
@@ -10909,6 +10963,12 @@ function renderColumnsTab(body, L) {
     add.textContent = 'add calculated column…';
     add.onclick = () => { _calcForm = { edit: -1 }; renderProps(); };
     body.appendChild(add);
+    if (calc.length) {
+      const rcp = document.createElement('button'); rcp.className = 'pp-scan';
+      rcp.textContent = 'save columns as recipe…'; rcp.title = 'save this calc-column set as a re-runnable recipe — apply the standard derived columns to any fresh model (replaces same-named, adds new)';
+      rcp.onclick = () => saveRecipe('calccols', { layer: L.name, cols: calc.map((c) => ({ name: c.name, expr: c.expr, ty: c.ty })) }, `${(L.label || L.name).replace(/\.[^.]+$/, '')} columns`);
+      body.appendChild(rcp);
+    }
   }
   body.appendChild(ppNote('right-click a column: type (number/text — drives the filter and color-by) · use as category / color channel · ƒ columns work in the filter, the scan, and the record panel'));
 }
@@ -12049,7 +12109,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
