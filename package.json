@@ -23,6 +23,8 @@
     "test:wasm": "node --no-warnings --test-force-exit test/adder-wasm.test.mjs",
     "test:examples": "node test/examples-smoke.mjs",
     "test:micro": "node test/micro-smoke.mjs",
+    "test:micro2": "node test/micro-smoke2.mjs",
+    "test:micro:all": "npm run test:micro && npm run test:micro2",
     "test:idb-browser": "node test/vfs-idb-browser.mjs",
     "test:all": "npm test && npm run test:wasm"
   },
