@@ -7270,16 +7270,25 @@ async function layerRelpath(L, dir) {
   if (!L.dh && L.handle && dir.resolve) { try { const p = await dir.resolve(L.handle); if (p) return p.join('/'); } catch { /* not a descendant */ } }
   return relPathFor(L, L.name);
 }
+// resolve a drillhole-set member: relative to the DESCRIPTOR's folder first,
+// then the project ROOT (root-file projects — the files matched at the legacy
+// root when saved, but the descriptor lives in drillholes/), then drillholes/
+async function resolveDhFile(dir, setDir, name) {
+  for (const rel of [joinPath(setDir, name), basename(name), joinPath('drillholes', name)]) {
+    try { return await (await resolveFileHandle(dir, rel)).getFile(); } catch { /* next */ }
+  }
+  throw new Error(name + ' missing');
+}
 // the drillhole-set descriptor filename (lives in drillholes/)
 const dhSetName = (L) => (basename(String(L.name || 'holes')).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'holes') + '.holes.json';
 // the copy-into-project verb (layer context menu + the command palette): one
 // SIZED consent step (never copy without consent — the G1 storage rule), then
 // copyLayerIn routes the file to its kind folder.
-function canCopyIntoProject(L) { return !!(_project && L && L.storage !== 'project' && L.storage !== 'volatile' && layerBlob(L)); }
+function canCopyIntoProject(L) { return !!(_project && L && L.storage !== 'project' && L.storage !== 'volatile' && layerFiles(L).length); }
 function copyLayerIntoProject(L) {
   if (!canCopyIntoProject(L)) { $('#meta').textContent = _project ? 'copy: this layer is already in the project (or has no file)' : 'copy: open a project folder first'; return; }
   setTimeout(() => menuXY(innerWidth / 2 - 120, innerHeight / 3, [
-    { label: `Copy “${L.name}” (${fmtSize(layerBlob(L).size)}) into ${_project.name}/`, action: async () => { $('#meta').textContent = `copying ${L.name}…`; await copyLayerIn(L, _project.dir); markProjectDirty(); $('#meta').textContent = `copied ${L.name} into the project (${fmtSize(layerBlob(L).size)})`; renderLayers(); } },
+    { label: `Copy “${L.name}”${L.dh ? ' (collar + survey + intervals)' : ''} (${fmtSize(layerBytes(L))}) into ${_project.name}/`, action: async () => { $('#meta').textContent = `copying ${L.name}…`; await copyLayerIn(L, _project.dir); markProjectDirty(); $('#meta').textContent = `copied ${L.name} into the project (${fmtSize(layerBytes(L))})`; renderLayers(); } },
     { label: 'Cancel', action: () => {} },
   ]), 0);
 }
@@ -7497,7 +7506,7 @@ function plStart(layers, name) {
   _plState.rows = layers.map((ls) => {
     const row = document.createElement('div'); row.className = 'pl-row';
     const nm = document.createElement('span'); nm.className = 'nm';
-    nm.textContent = ls.dh ? `${ls.dh.collar} + survey + intervals` : ls.source;
+    nm.textContent = ls.dh ? (ls.dh.collar ? `${ls.dh.collar} + survey + intervals` : basename(ls.dh.set || 'drillhole set')) : ls.source;
     nm.title = nm.textContent;
     const st = document.createElement('span'); st.className = 'st'; st.textContent = 'waiting…';
     row.append(nm, st);
@@ -7559,7 +7568,7 @@ async function openProjectDir(dir) {
         const dhFiles = {};
         let missing = null;
         for (const role of ['collar', 'survey', 'intervals']) {
-          try { dhFiles[role] = await (await resolveFileHandle(dir, joinPath(setDir, dhRef[role]))).getFile(); }
+          try { dhFiles[role] = await resolveDhFile(dir, setDir, dhRef[role]); }
           catch { missing = dhRef[role]; break; }
         }
         if (missing) { $('#meta').textContent = `project: drillhole file “${missing}” missing from the folder — layer skipped`; plRow(i, `skipped — ${missing} missing`, 'skip'); continue; }
@@ -7795,11 +7804,11 @@ async function scanFolderForNewData() {
     // load complete drillhole sets directly (no decisions needed)
     for (const s of newSets) {
       try {
-        const collar = await (await resolveFileHandle(dir, joinPath(s.setDir, s.desc.collar))).getFile();
-        const survey = await (await resolveFileHandle(dir, joinPath(s.setDir, s.desc.survey))).getFile();
+        const collar = await resolveDhFile(dir, s.setDir, s.desc.collar);
+        const survey = await resolveDhFile(dir, s.setDir, s.desc.survey);
         const ids = [];
         for (const iv of s.ivs) {                            // one dh layer per interval table, sharing the set
-          const intervals = await (await resolveFileHandle(dir, joinPath(s.setDir, iv))).getFile();
+          const intervals = await resolveDhFile(dir, s.setDir, iv);
           await openDrillholeLayer({ collar, survey, intervals }, s.desc.config || {}, _layers.length ? 'add' : 'replace');
           const L = activeLayer(); if (L) { L.storage = 'project'; L._setPath = s.e.path; L._setKey = s.e.path; L._intervalName = iv; ids.push(L.id); }
         }
@@ -9624,7 +9633,7 @@ function layerMenu(L, x, y) {
     { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
     { label: (renderer.layerSectioned(L.id) ? '✓ ' : '') + 'Cut by sections', action: () => { renderer.setLayerSectioned(L.id, !renderer.layerSectioned(L.id)); markProjectDirty(); requestRender(); } },
     ...(canCopyIntoProject(L) ? [{
-      label: `Copy into project (${fmtSize(layerBlob(L).size)})`,
+      label: `Copy into project (${fmtSize(layerBytes(L))})`,
       action: () => copyLayerIntoProject(L),
     }] : []),
     { label: 'Remove layer', action: () => removeLayerUI(L.id) },

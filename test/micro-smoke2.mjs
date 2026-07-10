@@ -165,6 +165,31 @@ const col01 = await p.evaluate(() => {
 });
 chk(`selection→column 0/1: ${col01 && col01.n1} ones == sel, all ${col01 && col01.total} rows explicit`, col01 && col01.n1 === col01.sel && col01.n0 === col01.total - col01.sel);
 
+// ═══ 5. drillholes in a ROOT-FILES project (the micro-demo shape): the trio
+// already at the folder root → save (no copy prompt — they're in-folder) →
+// the .holes.json descriptor lands in drillholes/ but references root files →
+// reopen must RESOLVE them (descriptor-relative, then root, then drillholes/) ═══
+const DH = {
+  collar: 'BHID,X,Y,Z\nDH001,100,100,50\nDH002,150,100,50\n',
+  survey: 'BHID,AT,AZ,DIP\nDH001,0,0,-90\nDH002,0,0,-90\n',
+  assay: 'BHID,FROM,TO,FE\nDH001,0,10,55\nDH001,10,20,60\nDH002,0,10,45\n',
+};
+p = await mkPage('sm2dh2');
+await p.evaluate(async (D) => {
+  const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2dh2', { create: true });
+  for (const [n, d] of [['collars.csv', D.collar], ['survey.csv', D.survey], ['assay.csv', D.assay]]) { const fh = await dir.getFileHandle(n, { create: true }); const w = await fh.createWritable(); await w.write(d); await w.close(); }
+}, DH);
+await p.evaluate((D) => window._micro.importDrillholes({ collar: new File([D.collar], 'collars.csv'), survey: new File([D.survey], 'survey.csv'), intervals: new File([D.assay], 'assay.csv') }, {}, 'replace'), DH);
+await p.waitForFunction(() => window._micro.layers().some((L) => L.dh), null, { timeout: 30000 });
+await saveProject(p);
+await p.close();
+p = await mkPage('sm2dh2');
+await p.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2dh2'); await window._micro.openProjectDir(dir); });
+await p.waitForFunction(() => window._micro.layers().some((L) => L.dh) || /0 layers/.test(document.querySelector('#meta').textContent), null, { timeout: 60000 });
+const dhBack = await p.evaluate(() => ({ n: window._micro.layers().filter((L) => L.dh).length, meta: document.querySelector('#meta').textContent }));
+chk(`root-files dh project reopens with its drillholes (${dhBack.n} dh layer, “${dhBack.meta.slice(0, 40)}”)`, dhBack.n === 1);
+await p.close();
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
