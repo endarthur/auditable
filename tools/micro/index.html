@@ -699,6 +699,7 @@
 import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH } from '../../ext/condenser/src/main.js';
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
+import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
 import { compileBool, compileValue, validate, complete, parse, deps } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
@@ -2908,9 +2909,9 @@ function gradeUnitFactor(serUnit, plotUnit) {
 // blank = count/volume) + an optional row filter. One streamed scan per Run
 // caches each series' grade-descending cumulative curve (Σw / Σwg), so cutoff
 // count, plot unit, and manual ranges are LIVE afterwards — no re-scan. ──
-function openGradeTonnage(L) {
+function openGradeTonnage(L, ropts) {
   if (!L || !gridAxesOf(L)) { $('#meta').textContent = 'grade-tonnage: needs a regular block model'; return; }
-  const ex = _gtWins.get(L.id); if (ex) { ex.win.el.style.zIndex = ++_fwinZ; return; }
+  const ex = _gtWins.get(L.id); if (ex) { if (!ropts) { ex.win.el.style.zIndex = ++_fwinZ; return; } ex.win.close(); }   // a recipe replaces the open window
   const nums = numericColsOf(L); if (!nums.length) { $('#meta').textContent = 'grade-tonnage: no numeric column'; return; }
   const pairs = reconcilePairs(nums);
   // unit DECLARATIONS (what the data is, not display toggles) — persisted per
@@ -2922,18 +2923,18 @@ function openGradeTonnage(L) {
   const st = { nCut: 40, scope: 'all', gradeUnit: gu0.grade || '', densUnit: gu0.densUnit || 't/m3',
     series: pairs.length ? [mkSer(L, pairs[0].ref, 0), mkSer(L, pairs[0].self, 1)] : [mkSer(L, nums[0], 0)],
     scan: null, stale: true, running: false };
-  // a saved setup (project manifest) beats the defaults — the instrument
-  // reopens configured; Run stays manual (no surprise scans on project open)
-  const saved = L.analysis && L.analysis.gt;
+  // a recipe (explicitly picked) beats the saved setup beats the defaults;
+  // Run stays manual on project open (no surprise scans) — a recipe's pick IS consent
+  const saved = (ropts && ropts.cfg) || (L.analysis && L.analysis.gt);
   if (saved) {
     if (saved.nCut) st.nCut = saved.nCut;
     if (saved.scope) st.scope = saved.scope;
     if (saved.gradeUnit != null) st.gradeUnit = saved.gradeUnit;
     if (saved.densUnit) st.densUnit = saved.densUnit;
-    if (saved.ranges) st.ranges = JSON.parse(JSON.stringify(saved.ranges));
+    if (saved.ranges) st.ranges = rangesFromCfg(saved.ranges);
     const ser = analysisSerRestore(saved.series, L); if (ser) st.series = ser;
   }
-  const cfgOf = () => ({ series: analysisSerCfg(st.series), nCut: st.nCut, scope: st.scope, gradeUnit: st.gradeUnit, densUnit: st.densUnit, ranges: st.ranges || undefined });
+  const cfgOf = () => ({ series: analysisSerCfg(st.series), nCut: st.nCut, scope: st.scope, gradeUnit: st.gradeUnit, densUnit: st.densUnit, ranges: rangesForCfg(st.ranges) });
   const persistUnits = () => { L.gtUnits = { ...(L.gtUnits || {}), grade: st.gradeUnit, densUnit: st.densUnit, weight: st.series[0] ? st.series[0].weight : '' }; markProjectDirty(); };
   const guLabel = () => (st.gradeUnit === 'pct' ? '%' : st.gradeUnit);
   const win = floatWin({ title: `grade-tonnage · ${L.label || L.name}`, sub: saved ? 'restored — Run to compute' : 'configure, then Run', x: Math.max(12, innerWidth - 680), y: 100, w: 640, h: 420,
@@ -3100,15 +3101,18 @@ function openGradeTonnage(L) {
     vSec.append(rangesRow(st, () => { if (st.scan) plot(); }, { x: 'cutoff', l: 't', r: 'grade' }));
     const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `gt-${(L.label || L.name).replace(/\.[^.]+$/, '')}.png`, tableTSV)); vSec.append(exRow);
     rail.append(vSec);
-    // ── Footer: Run + stale + progress ──
+    // ── Footer: Run + save-as-recipe + stale + progress ──
     const foot = document.createElement('div'); foot.className = 'sw-foot';
     runBtn = document.createElement('button'); runBtn.className = 'sw-run'; runBtn.textContent = 'Run'; runBtn.onclick = run;
+    const rcpBtn = document.createElement('button'); rcpBtn.className = 'sw-add'; rcpBtn.textContent = 'save as recipe…'; rcpBtn.title = 'save this setup as a named, re-runnable YAML file in the project (Tools → Recipes)';
+    rcpBtn.onclick = () => saveRecipe('gt', cfgOf(), `${(L.label || L.name).replace(/\.[^.]+$/, '')} grade-tonnage`);
     staleEl = document.createElement('div'); staleEl.className = 'sw-stale'; staleEl.textContent = st.scan && st.stale ? '↻ config changed — Run to update' : '';
     progEl = document.createElement('div'); progEl.className = 'sw-prog';
-    foot.append(runBtn, staleEl, progEl); rail.append(foot);
+    foot.append(runBtn, rcpBtn, staleEl, progEl); rail.append(foot);
   }
   _gtWins.set(L.id, { win, redraw: run, st });
   buildRail(); plot();
+  if (ropts && ropts.run) run();
 }
 // the row mask a scope implies for layer L (null = all rows); message when the
 // scope's prerequisite isn't there yet
@@ -3151,6 +3155,23 @@ function rangesRow(st, redraw, labels) {
 }
 const rangesOf = (st) => (st.ranges && [st.ranges.x, st.ranges.l, st.ranges.r].some((r) => r[0] != null || r[1] != null)
   ? { xRange: st.ranges.x, leftRange: st.ranges.l, rightRange: st.ranges.r } : {});
+// serialized form: { x: {min?, max?}, … } — maps drop null bounds cleanly
+// (positional [null, hi] arrays would turn into "null" strings in YAML); the
+// restore accepts BOTH shapes (older manifests carry arrays)
+function rangesForCfg(ranges) {
+  if (!ranges) return undefined;
+  const o = {};
+  for (const k of ['x', 'l', 'r']) { const r = ranges[k] || []; const e = {}; if (r[0] != null) e.min = r[0]; if (r[1] != null) e.max = r[1]; if ('min' in e || 'max' in e) o[k] = e; }
+  return Object.keys(o).length ? o : undefined;
+}
+function rangesFromCfg(r) {
+  const out = { x: [null, null], l: [null, null], r: [null, null] };
+  for (const k of ['x', 'l', 'r']) {
+    const v = r && r[k]; if (!v) continue;
+    out[k] = Array.isArray(v) ? [v[0] != null ? v[0] : null, v[1] != null ? v[1] : null] : [v.min != null ? v.min : null, v.max != null ? v.max : null];
+  }
+  return out;
+}
 // export / copy a chart canvas (PNG at its dpr-scaled resolution); tableFn,
 // when given, adds a TSV copy of the computed NUMBERS (what lands in memos)
 function plotExportBtns(cv, nameFn, tableFn) {
@@ -3214,6 +3235,107 @@ function applyAnalysisGeo(L, kind, win) {
   win.el.style.width = Math.min(g[2], innerWidth - 12) + 'px';
   win.el.style.height = Math.min(g[3], innerHeight - 72) + 'px';
   if (win.el._onResized) win.el._onResized();
+}
+// ── RECIPES: named, re-runnable analysis setups as YAML FILES in the project
+// folder (recipes/<slug>.yaml). A recipe is DATA — the same op-shaped
+// { tool, params } the windows already serialize — never code (@gcu/yaml is a
+// strict, tag-free subset, so a recipe file provably can't carry a script).
+// Files are the interface: comment them, copy them between projects, drop one
+// in and Scan folder picks it up. Series reference layers BY NAME; a missing
+// primary gets a one-question remap — that prompt IS the parameter binding. ──
+let _recipes = [];                                          // { name, tool, params, file }
+const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath' };
+const recipeSlug = (name) => (String(name).toLowerCase().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'recipe');
+// plain JS ⇄ @gcu/yaml AST (the emitter is AST-only; nulls are simply omitted)
+function jsToYamlNode(v) {
+  if (Array.isArray(v)) return yamlSeq(v.map(jsToYamlNode));
+  if (v && typeof v === 'object') return yamlMap(Object.entries(v).filter(([, x]) => x != null).map(([k, x]) => yamlEntry(yamlScalar('string', k), jsToYamlNode(x))));
+  if (typeof v === 'boolean') return yamlScalar('bool', v);
+  if (typeof v === 'number') return yamlScalar(Number.isInteger(v) ? 'int' : 'float', v);
+  return yamlScalar('string', String(v));
+}
+function yamlToJs(node) {
+  if (!node) return null;
+  if (node.kind === 'scalar') return node.value;
+  if (node.kind === 'seq') return node.items.map(yamlToJs);
+  if (node.kind === 'map') return Object.fromEntries(node.entries.map((e) => [yamlToJs(e.key), yamlToJs(e.value)]));
+  return null;
+}
+function recipeYaml(r) {
+  const root = jsToYamlNode({ name: r.name, tool: r.tool, params: r.params });
+  // file-level comments ride the first entry's VALUE (that's where the emitter reads them)
+  if (root.entries.length) root.entries[0].value.leadingComments = [` micro recipe — ${RECIPE_TOOLS[r.tool] || r.tool}. Hand-edit freely; series reference layers by NAME.`];
+  return yamlEmit(root);
+}
+async function saveRecipe(tool, params, suggestedName) {
+  if (!_project) { $('#meta').textContent = 'recipes: open or save a project first (a recipe is a file in recipes/)'; return null; }
+  const name = ((await microPrompt('recipe name', suggestedName || '')) || '').trim();
+  if (!name) return null;
+  const existing = _recipes.find((x) => x.name === name);
+  const r = { name, tool, params: JSON.parse(JSON.stringify(params)), file: existing ? existing.file : 'recipes/' + recipeSlug(name) + '.yaml' };
+  try {
+    const fh = await resolveFileHandle(_project.dir, r.file, { create: true });
+    const w = await fh.createWritable(); await w.write(recipeYaml(r)); await w.close();
+  } catch (e) { $('#meta').textContent = `recipe save failed — ${e.message}`; return null; }
+  if (existing) Object.assign(existing, r); else { _recipes.push(r); _recipes.sort((a, b) => a.name.localeCompare(b.name)); }
+  $('#meta').textContent = `${existing ? 'updated' : 'saved'} recipe “${name}” → ${r.file} (Tools → Recipes to run it)`;
+  return r;
+}
+async function loadRecipes(dir) {
+  _recipes = [];
+  try {
+    const rd = await dir.getDirectoryHandle('recipes');
+    for await (const [nm, h] of rd.entries()) {
+      if (h.kind !== 'file' || !/\.ya?ml$/i.test(nm)) continue;
+      try {
+        const j = yamlToJs(yamlParse(await (await h.getFile()).text()));
+        if (j && RECIPE_TOOLS[j.tool] && j.params) _recipes.push({ name: String(j.name || nm.replace(/\.ya?ml$/i, '')), tool: j.tool, params: j.params, file: 'recipes/' + nm });
+        else $('#meta').textContent = `recipe “${nm}”: not a recognized tool — skipped`;
+      } catch (e) { $('#meta').textContent = `recipe “${nm}”: ${e.message}`; }
+    }
+    _recipes.sort((a, b) => a.name.localeCompare(b.name));
+  } catch { /* no recipes/ folder yet */ }
+}
+async function deleteRecipe(r) {
+  await removeFileAt(_project.dir, r.file);
+  _recipes = _recipes.filter((x) => x !== r);
+  $('#meta').textContent = `deleted recipe “${r.name}” (${r.file})`;
+}
+async function renameRecipe(r) {
+  const name = ((await microPrompt('recipe name', r.name)) || '').trim();
+  if (!name || name === r.name) return;
+  r.name = name;
+  try { const fh = await resolveFileHandle(_project.dir, r.file, { create: true }); const w = await fh.createWritable(); await w.write(recipeYaml(r)); await w.close(); } catch { /* file keeps the old name field */ }
+  _recipes.sort((a, b) => a.name.localeCompare(b.name));
+  $('#meta').textContent = `renamed → “${name}” (file stays ${r.file})`;
+}
+// run (or just open configured): resolve the primary layer from the first
+// series; a missing primary gets the remap menu — every series whose layer is
+// missing then falls back to the substitute
+function runRecipe(r, andRun = true) {
+  const open2 = (Lp) => (r.tool === 'gt' ? openGradeTonnage(Lp, { cfg: r.params, run: andRun }) : openSwath(Lp, { cfg: r.params, run: andRun }));
+  const wantName = r.params.series && r.params.series[0] && r.params.series[0].layer;
+  const L = _layers.find((x) => x.name === wantName);
+  if (L) { open2(L); return; }
+  const cands = _layers.filter((x) => gridAxesOf(x));
+  if (!cands.length) { $('#meta').textContent = `recipe “${r.name}”: wants “${wantName || 'a block model'}” and no regular block model is loaded`; return; }
+  setTimeout(() => menuXY(innerWidth / 2 - 140, innerHeight / 3, [
+    ...cands.map((c) => ({ label: `“${r.name}” wants ${wantName} — use ${c.label || c.name}`, action: () => open2(c) })),
+    { label: 'Cancel', action: () => {} },
+  ]), 0);
+}
+function recipesMenuItems() {
+  if (!_project) return [{ label: 'open a project folder first', action: () => {} }];
+  if (!_recipes.length) return [{ label: 'none yet — “save as recipe…” in a grade-tonnage or swath window', action: () => {} }];
+  return _recipes.map((r) => ({
+    label: `${r.name} · ${RECIPE_TOOLS[r.tool]}`,
+    submenu: [
+      { label: 'Run', action: () => runRecipe(r, true) },
+      { label: 'Edit (open configured)', action: () => runRecipe(r, false) },
+      { label: 'Rename…', action: () => renameRecipe(r) },
+      { label: 'Delete', action: () => deleteRecipe(r) },
+    ],
+  }));
 }
 // ── swath (drift) analysis ────────────────────────────────────────────────────
 // small vector helpers
@@ -3345,9 +3467,9 @@ function binSwath(scan, di, bandWidth, offset) {
   return { keys: [...allB].sort((a, b) => a - b), out };
 }
 const _swathWins = new Map();
-function openSwath(L) {
+function openSwath(L, ropts) {
   if (!L || !gridAxesOf(L)) { $('#meta').textContent = 'swath: needs a regular block model'; return; }
-  const ex = _swathWins.get(L.id); if (ex) { ex.win.el.style.zIndex = ++_fwinZ; return; }
+  const ex = _swathWins.get(L.id); if (ex) { if (!ropts) { ex.win.el.style.zIndex = ++_fwinZ; return; } ex.win.close(); }   // a recipe replaces the open window
   const nums = numericColsOf(L); if (!nums.length) { $('#meta').textContent = 'swath: no numeric column'; return; }
   const pairs = reconcilePairs(nums);
   const mkSer = (Lx, col, i) => ({ layerId: Lx.id, col, unit: (Lx.gtUnits && Lx.gtUnits.grade) || '', weight: '', filter: '', color: SERIES_COLORS[i % SERIES_COLORS.length] });
@@ -3357,18 +3479,18 @@ function openSwath(L) {
     gradeUnit: (L.gtUnits && L.gtUnits.grade) || '',        // shares the layer's declared grade unit with GT
     series: pairs.length ? [mkSer(L, pairs[0].ref, 0), mkSer(L, pairs[0].self, 1)] : [mkSer(L, nums[0], 0)],
     scan: null, stale: true, running: false };
-  // a saved setup (project manifest) beats the defaults; Run stays manual
-  const saved = L.analysis && L.analysis.swath;
+  // a recipe (explicitly picked) beats the saved setup beats the defaults
+  const saved = (ropts && ropts.cfg) || (L.analysis && L.analysis.swath);
   if (saved) {
     for (const k of ['mode', 'axis', 'dd', 'dip', 'rake', 'trend', 'plunge', 'bars', 'scope', 'gradeUnit']) if (saved[k] != null) st[k] = saved[k];
     if (saved.bandW) st.bandW = { ...saved.bandW };
     if (saved.off) st.off = { ...saved.off };
     if (saved.locate != null) st.locate = saved.locate;
-    if (saved.ranges) st.ranges = JSON.parse(JSON.stringify(saved.ranges));
+    if (saved.ranges) st.ranges = rangesFromCfg(saved.ranges);
     const ser = analysisSerRestore(saved.series, L); if (ser) st.series = ser;
   }
   const cfgOf = () => ({ series: analysisSerCfg(st.series), mode: st.mode, axis: st.axis, dd: st.dd, dip: st.dip, rake: st.rake, trend: st.trend, plunge: st.plunge,
-    bandW: st.bandW, off: st.off, bars: st.bars, scope: st.scope, gradeUnit: st.gradeUnit, locate: st.locate, ranges: st.ranges || undefined });
+    bandW: st.bandW, off: st.off, bars: st.bars, scope: st.scope, gradeUnit: st.gradeUnit, locate: st.locate, ranges: rangesForCfg(st.ranges) });
   const win = floatWin({ title: `swath · ${L.label || L.name}`, sub: saved ? 'restored — Run to compute' : 'configure, then Run', x: Math.max(12, innerWidth - 660), y: 120, w: 640, h: 440,
     onClose: () => { saveAnalysisCfg(L, 'swath', cfgOf(), win); setAnalysisOpen(L, 'swath', false); _swathWins.delete(L.id); if (st.zebra) clearSwathZebra(zebraL()); setSwathBand(null); removeEventListener('mouseup', onUp); } });
   setAnalysisOpen(L, 'swath', true);
@@ -3618,15 +3740,18 @@ function openSwath(L) {
     const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `swath-${(zebraL().label || zebraL().name).replace(/\.[^.]+$/, '')}-${(st.scan ? st.scan.dirNames : swathDirNames(st))[st.axis].split(' ')[0].replace(/[^\w-]/g, '')}.png`, tableTSV));
     vSec.append(exRow);
     rail.append(vSec);
-    // ── Footer: Run + stale + progress ──
+    // ── Footer: Run + save-as-recipe + stale + progress ──
     const foot = document.createElement('div'); foot.className = 'sw-foot';
     runBtn = document.createElement('button'); runBtn.className = 'sw-run'; runBtn.textContent = 'Run'; runBtn.onclick = run;
+    const rcpBtn = document.createElement('button'); rcpBtn.className = 'sw-add'; rcpBtn.textContent = 'save as recipe…'; rcpBtn.title = 'save this setup as a named, re-runnable YAML file in the project (Tools → Recipes)';
+    rcpBtn.onclick = () => saveRecipe('swath', cfgOf(), `${(L.label || L.name).replace(/\.[^.]+$/, '')} swath`);
     staleEl = document.createElement('div'); staleEl.className = 'sw-stale'; staleEl.textContent = st.scan && st.stale ? '↻ config changed — Run to update' : '';
     progEl = document.createElement('div'); progEl.className = 'sw-prog';
-    foot.append(runBtn, staleEl, progEl); rail.append(foot);
+    foot.append(runBtn, rcpBtn, staleEl, progEl); rail.append(foot);
   }
   _swathWins.set(L.id, { win, redraw: run, st });          // refreshLinkedWindows gates on the scope kind
   buildRail(); buildTabs(); plot();
+  if (ropts && ropts.run) run();
 }
 // zebra: paint alternate swath bands as a 2-value column, coloured on the 3D.
 // The colour switch is TEMPORARY — the layer's own colour is remembered and
@@ -7179,6 +7304,7 @@ async function openProjectDir(dir) {
     if (mf.tree) treeFromManifest(mf.tree, idAt);
     applyCamera(mf.camera);
     applySection(mf.section);
+    await loadRecipes(dir);                                // recipes/ *.yaml → Tools → Recipes
     // pinned analysis windows come back configured (after ALL layers landed —
     // series may reference other layers). Run stays manual: no surprise scans.
     for (const L of _layers) {
@@ -7315,9 +7441,12 @@ async function scanFolderForNewData() {
       } catch (err) { $('#meta').textContent = `scan: “${s.e.name}” — ${err.message}`; }
     }
     if (looseFiles.length) await openFilesDialog(looseFiles);   // the dialog is the confirmation for loose files
-    const total = newSets.length + looseFiles.length;
+    const nRcp = _recipes.length;
+    await loadRecipes(dir);                                 // recipes dropped into recipes/ arrive via the same inbox
+    const rcpNew = _recipes.length - nRcp;
+    const total = newSets.length + looseFiles.length + Math.max(0, rcpNew);
     if (!total) $('#meta').textContent = 'scan: no new data files in the folder';
-    else { markProjectDirty(); if (!looseFiles.length) $('#meta').textContent = `scan: added ${newSets.length} drillhole set${newSets.length === 1 ? '' : 's'}`; }
+    else { markProjectDirty(); if (!looseFiles.length) $('#meta').textContent = `scan: added ${[newSets.length ? `${newSets.length} drillhole set${newSets.length === 1 ? '' : 's'}` : '', rcpNew > 0 ? `${rcpNew} recipe${rcpNew === 1 ? '' : 's'}` : ''].filter(Boolean).join(' + ') || 'nothing'}`; }
   } catch (e) { $('#meta').textContent = `scan failed — ${e.message}`; }
 }
 // File → New project: back to the empty slate. Confirmed — it closes every
@@ -7695,6 +7824,8 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
   { label: 'Select by solid / surface…', action: () => openSolidDialog(null) },
   { label: 'Assign domains…', action: () => openDomainsDialog() },
   { label: 'Clear selection', kbd: 'Esc', action: () => clearSelection() },
+  { sep: true },
+  { label: 'Recipes', submenu: () => recipesMenuItems() },
   { sep: true },
   { label: 'Section on/off', kbd: 'x', action: toggleSection },
   { label: 'Along the section', kbd: 'l', action: viewAlongSection },
@@ -8581,6 +8712,7 @@ const COMMANDS = [
   { id: 'rename', group: 'Layer', title: 'Rename layer…', kw: 'label title F2', when: (c) => !!c.L, run: (c) => renameActiveLayer(c.L) },
   { id: 'rename-batch', group: 'Layer', title: 'Rename layers…', kw: 'batch prefix suffix regex replace', when: () => _layers.length >= 2, run: () => openBatchRename(_lpSel.size >= 2 ? lpSelIds().map(layerById) : _layers.slice()) },
   { id: 'sel-column', group: 'Layer', title: 'Selection → column…', kw: 'materialize save flag 0 1 paint selected', when: (c) => !!(c.L && c.L._selCount), run: (c) => selectionToColumn(c.L) },
+  { id: 'run-recipe', group: 'Analysis', title: 'Run recipe…', kw: 'saved yaml grade-tonnage swath analysis rerun', when: () => _recipes.length > 0, run: () => setTimeout(() => menuXY(innerWidth / 2 - 130, innerHeight / 3, recipesMenuItems()), 0) },
   { id: 'export-mesh', group: 'Layer', title: 'Export mesh(es)…', kw: 'obj ply msh lfm wavefront leapfrog save', when: () => _layers.some((L) => L.kind === 'mesh' && L.docs.meshDoc), run: (c) => {
     const sel = lpSelIds().map(layerById).filter((x) => x && x.kind === 'mesh' && x.docs.meshDoc);
     openMeshExportDialog(sel.length ? sel : (c.L && c.L.kind === 'mesh' ? [c.L] : _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc)));
@@ -11704,7 +11836,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, setSwathBand, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

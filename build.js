@@ -1700,6 +1700,7 @@ if (target === 'micro') {
     '../../ext/parquet/index.js': '#parquet',
     '../../ext/gsjs/src/decluster.js': '#gsjs-decluster',
     '../../ext/units/index.js': '#units',
+    '../../ext/yaml/index.js': '#yaml',
   };
   const libs = [
     ['condenser', 'ext/condenser/index.js'],
@@ -1712,6 +1713,7 @@ if (target === 'micro') {
     ['parquet',   'ext/parquet/index.js'],             // Apache Parquet block models
     ['gsjs-decluster', 'ext/gsjs/src/decluster.js'],   // @gcu/gsjs cell declustering (validation) — zero-import module
     ['units',     'ext/units/index.js'],               // @gcu/units — grade/density unit declarations (grade-tonnage)
+    ['yaml',      'ext/yaml/index.js'],                // @gcu/yaml — recipes (hand-editable analysis setups)
   ];
   const modules = [];
   for (const [name, rel] of libs) {

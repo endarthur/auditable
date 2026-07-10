@@ -236,6 +236,18 @@
 <p>In a Chromium browser, <b>File → Open project folder</b> keeps your layers, styling, filters, selections, camera, section, saved views — and your open <b>analysis windows</b> (see <a href="#windows">Windows</a>) — in a plain folder (<code>project.json</code> + the data files). <span class="kbd">Ctrl+S</span> saves.</p>
 <p>The folder is organized <b>by data kind</b> — <code>models/</code> <code>drillholes/</code> <code>clouds/</code> <code>meshes/</code> <code>grids/</code> — with each file's sidecar beside it. <b>Tidy project folder</b> migrates an older flat project in place, and <b>Scan folder for new data</b> treats the folder as an inbox: drop a file in by hand (or from another tool) and micro picks it up. A loose layer (opened from outside the folder) offers <b>Copy into project</b> from its context menu — always with a sized consent step, never silently.</p>
 <p><b>Export rows…</b> writes any layer back out — scope <b>all</b> / <b>filter matches</b> / <b>selection</b>, every column including calculated and painted ones, as CSV or Parquet. Opening a <code>.dm</code> and exporting <i>is</i> the <code>.dm</code>→CSV (or →Parquet) converter.</p>
+<h3>Recipes — save an analysis to run again</h3>
+<p><b>save as recipe…</b> (next to Run in the grade–tonnage and swath windows) writes the current setup as a named YAML file in <code>recipes/</code> — every series, unit, weight expression, band, scope, and range. <b>Tools → Recipes</b> lists them; picking one opens the tool configured <b>and runs it</b>. Recipes are plain, commented, hand-editable files — copy one between projects, keep an office standard set, drop one into the folder and <b>Scan folder</b> picks it up. Series reference layers <b>by name</b>; if the named layer isn't loaded, one question asks which loaded model to use instead — that's the whole parameter system. A recipe is data, never code: the strict YAML subset can't carry a script.</p>
+<pre># micro recipe — grade-tonnage. Hand-edit freely; series reference layers by NAME.
+name: "Monthly GT"
+tool: "gt"
+params:
+  nCut: 15
+  gradeUnit: "pct"
+  series:
+    - layer: "model.parquet"
+      col: "FE"
+      weight: "SG"</pre>
 <h3>Mesh export</h3>
 <p><b>Export mesh…</b> (right-click a mesh layer; multi-selections and groups get <b>Export N meshes…</b>) writes <b>OBJ</b>, <b>PLY</b>, <b>MSH</b> (Leapfrog/ARANZ), or <b>LFM</b>. OBJ and LFM are multi-mesh — one named object per layer, with each layer's tint carried as the LFM colour — while PLY and MSH merge multiple layers into one mesh. Exports re-read the source geometry, so coordinates leave in <b>full double precision</b> (the PLY writer uses <code>double</code> — at UTM northings, float32 would cost half a metre). A Datamine wireframe pair in, an LFM out: micro is also a mesh-format converter.</p>
 

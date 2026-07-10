@@ -544,6 +544,27 @@ await pr2.waitForFunction(() => window._micro, null, { timeout: 20000 });
 const rs = await pr2.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('microsmoke_rs'); await window._micro.openProjectDir(dir); for (let i = 0; i < 200; i++) { const L = window._micro.layers()[0]; if (L && window._micro.renderer.layerElementCount(L.id) > 0) break; await new Promise((r) => setTimeout(r, 100)); } const L = window._micro.layers()[0]; const h = L && L.docs.blockDoc && L.docs.blockDoc.header; return { n: L ? window._micro.renderer.layerElementCount(L.id) : 0, count: h && h.count, name: L && L.name }; });
 chk(`re-save reload HAS ROWS (${rs.n} blocks, ${rs.count} rows, “${rs.name}”)`, rs.n === NBLOCKS && rs.count === NBLOCKS && /\.parquet$/.test(rs.name || ''));
 
+// ── 9. recipes: a HAND-AUTHORED recipes/*.yaml loads via the project folder,
+// lists under Tools → Recipes, and running it opens the tool configured + runs
+const rcp = await pr2.evaluate(async () => {
+  const m = window._micro;
+  const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('microsmoke');
+  const rd = await dir.getDirectoryHandle('recipes', { create: true });
+  const fh = await rd.getFileHandle('check.yaml', { create: true });
+  const w = await fh.createWritable();
+  await w.write('# hand-authored — the file IS the interface\nname: "Check GT"\ntool: "gt"\nparams:\n  nCut: 12\n  series:\n    - layer: "model.parquet"\n      col: "FE"\n');
+  await w.close();
+  await m.loadRecipes(dir);
+  const r = m._recipesList().find((x) => x.name === 'Check GT');
+  if (!r) return null;
+  m.runRecipe(r);
+  await new Promise((res) => { const t = setInterval(() => { const el = [...document.querySelectorAll('.fwin')].find((e) => e.querySelector('.fwin-head .t').textContent.startsWith('grade-tonnage')); if (el && el._gtSpec) { clearInterval(t); res(); } }, 100); setTimeout(() => { clearInterval(t); res(); }, 15000); });
+  const el = [...document.querySelectorAll('.fwin')].find((e) => e.querySelector('.fwin-head .t').textContent.startsWith('grade-tonnage'));
+  return { menu: m.recipesMenuItems().map((i) => i.label).join(','), cuts: el && el._gtSpec ? el._gtSpec.series[0].data.length : 0 };
+});
+chk(`recipes: hand-authored YAML lists (${rcp && rcp.menu}) + auto-runs (${rcp && rcp.cuts} cuts from nCut 12)`,
+  rcp && /Check GT · grade-tonnage/.test(rcp.menu) && rcp.cuts === 13);
+
 console.log(ok && process.exitCode !== 1 ? '\nMICRO SMOKE: PASS' : '\nMICRO SMOKE: FAIL');
 await b.close(); server.close();
 process.exit(ok && process.exitCode !== 1 ? 0 : 1);
