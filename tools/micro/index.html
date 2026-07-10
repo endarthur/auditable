@@ -3625,12 +3625,15 @@ function openSwath(L) {
     progEl = document.createElement('div'); progEl.className = 'sw-prog';
     foot.append(runBtn, staleEl, progEl); rail.append(foot);
   }
-  _swathWins.set(L.id, { win, redraw: () => { if (st.scope === 'selection') run(); }, st });
+  _swathWins.set(L.id, { win, redraw: run, st });          // refreshLinkedWindows gates on the scope kind
   buildRail(); buildTabs(); plot();
 }
-// zebra: paint alternate swath bands as a 2-value column, coloured on the 3D
+// zebra: paint alternate swath bands as a 2-value column, coloured on the 3D.
+// The colour switch is TEMPORARY — the layer's own colour is remembered and
+// comes back when zebra clears.
 async function applySwathZebra(L, dir, bandWidth, offset) {
   const h = layerTableHeader(L), m = h.mapping;
+  if (paintSelOf(L) !== '_swath') L._preZebraSel = L.colorSel;
   let col = paintColByName(L, '_swath'); if (!col) { col = createPaintCol(L, '_swath'); if (!col) return; }
   while (col.dict.length < 3) addPaintValue(L, col, col.dict.length === 1 ? 'band A' : 'band B');
   col.colors[1] = '#3a3f45'; col.colors[2] = '#c8c2b0';
@@ -3647,7 +3650,7 @@ async function applySwathZebra(L, dir, bandWidth, offset) {
 }
 function clearSwathZebra(L) {
   const i = (L.paintCols || []).findIndex((c) => c.name === '_swath');
-  if (i >= 0) { L.paintCols.splice(i, 1); if (paintSelOf(L) === '_swath') setLayerColorSel(L, 'elev'); addPaintColorOptions(L); requestRender(); }
+  if (i >= 0) { L.paintCols.splice(i, 1); if (paintSelOf(L) === '_swath') setLayerColorSel(L, L._preZebraSel && L._preZebraSel !== 'paint:_swath' ? L._preZebraSel : 'elev'); L._preZebraSel = null; addPaintColorOptions(L); requestRender(); }
 }
 // ── validation: block model vs drillhole samples ──────────────────────────────
 // The resource-geology check: is the model globally (bias) and locally (swaths)
