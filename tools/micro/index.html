@@ -8222,7 +8222,7 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
 const HELP_KEYS = `
 <b>command palette</b> — <code>⌘K</code> / <code>Ctrl+K</code> (or the <b>⌘K</b> button) searches EVERY action and shows only what applies right now — the fastest way to reach anything, including the analysis tools (Help → <b>Analysis & workbench</b> for those)<br><br>
 <b>mouse</b><br>
-drag — orbit · right-drag / shift-drag — pan · wheel — zoom · <code>⌃</code>wheel — scrub the section<br>
+drag — orbit · right-drag / shift-drag — pan · wheel — zoom · <code>⌃</code>wheel — scrub the section · <code>⌥</code>wheel — slab thickness<br>
 <b>click</b> a block or point — pick it: magenta glow + the record panel (full source row)<br>
 <code>m</code> then two clicks — <b>measure</b>: 3D · plan · Δz between the picked records (<code>Esc</code> clears)<br>
 <code>p</code> — <b>layers panel</b>: open several datasets together (drop several files at once, or Open… → "add as a layer"); right-click a layer for zoom / info / filter / remove · <code>[</code> / <code>]</code> step the active layer<br>
@@ -8234,7 +8234,7 @@ drag — orbit · right-drag / shift-drag — pan · wheel — zoom · <code>⌃
 pick a preset (plan · N–S · E–W), press <code>k</code> and <b>drag a line</b> (the vertical section through it; <code>⇧</code> snaps to 15°, <code>⇧⌥</code> to 5°, <code>Esc</code> cancels), or choose <b>custom</b> and type the plane's dip direction + dip · <code>x</code> toggles the section on/off<br>
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · <b>2D</b> — face-on + orthographic + rotation locked (drags pan; the paper-section view) · right-click a layer → <b>Cut by sections</b>: follow · keep front only · keep behind only · don't cut (keep topo whole for context, or split one model at the plane while another follows the slab)<br>
-<code>l</code> — face the section (<code>⇧L</code> its back) · <code>,</code> <code>.</code> — walk the section one slab at a time · <code>⌃</code>wheel or the slider scrubs · <b>follow</b> — the camera walks with the scrub (the cut stays put on screen) · the number is slab half-thickness (m)<br><br>
+<code>l</code> — face the section (<code>⇧L</code> its back) · <code>,</code> <code>.</code> — walk the section one slab at a time · <code>⌃</code>wheel scrubs · <code>⌥</code>wheel thickens the slab · <b>follow</b> — the camera walks with the scrub (the cut stays put on screen) · the number is slab half-thickness (m)<br><br>
 <b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br>
 The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Select through) flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
@@ -9088,11 +9088,26 @@ function scrubSection(dir, frac = 1) {
 // ⌃/⌘ + wheel scrubs the section — the continuous , / . (the slicer feel).
 // Capture-phase on window so it pre-empts the camera dolly AND browser zoom;
 // half a slab per notch (finer than the keys), accumulated for trackpads.
-let _secWheelAcc = 0;
+let _secWheelAcc = 0, _secThickAcc = 0;
 window.addEventListener('wheel', (e) => {
+  if (e.target !== cv || !currentSection()) return;
+  // ⌥ + wheel varies slab THICKNESS (proportional per notch → responsive at any
+  // scale); a slab only — front/behind half-spaces have no thickness. ⌃/⌘ scrubs.
+  if (e.altKey && !e.ctrlKey && !e.metaKey) {
+    if ($('#secClip').value !== 'slab') return;             // half-spaces: nothing to thicken
+    e.preventDefault(); e.stopImmediatePropagation();
+    _secThickAcc += e.deltaY;
+    while (Math.abs(_secThickAcc) >= 100) {
+      const up = _secThickAcc < 0;                          // wheel up = thicker
+      const cur = Math.max(0.5, +$('#secHalf').value || 5);
+      const next = Math.max(0.5, +(cur * (up ? 1.15 : 1 / 1.15)).toPrecision(3));
+      $('#secHalf').value = next; $('#secHalf').dispatchEvent(new Event('input'));
+      _secThickAcc -= Math.sign(_secThickAcc) * 100;
+    }
+    $('#meta').textContent = `slab half-thickness ${+$('#secHalf').value} m`;
+    return;
+  }
   if (!(e.ctrlKey || e.metaKey)) return;
-  if (e.target !== cv) return;
-  if (!currentSection()) return;
   e.preventDefault(); e.stopImmediatePropagation();
   _secWheelAcc += e.deltaY;
   while (Math.abs(_secWheelAcc) >= 100) {
