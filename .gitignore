@@ -203,6 +203,8 @@ moncad.html
 tools/micro/docs/shots/
 tools/micro/docs/micro-manual.pdf
 tools/micro/docs/micro-card.pdf
+tools/lamina/docs/shots/
+tools/lamina/docs/lamina-manual.pdf
 
 # real test datasets (not committed)
 testdata/

@@ -2168,6 +2168,7 @@ $('#mHelp').onclick = () => menuAt($('#mHelp'), [
   { label: 'Filter syntax…', action: () => showHelp('filter') },
   { label: 'Analysis & quality…', action: () => showHelp('analysis') },
   { label: 'Keyboard & mouse…', action: () => showHelp('keys') },
+    { label: 'Manual — the full documentation ↗', action: () => window.open('https://gentropic.org/lamina/docs/', '_blank', 'noopener') },
   { sep: true },
   { label: 'About lamina', action: () => showHelp('about') },
 ]);

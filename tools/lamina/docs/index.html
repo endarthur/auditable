@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lamina — documentation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='5' width='24' height='4' rx='1' fill='%23d97a3c'/%3E%3Crect x='4' y='11' width='24' height='4' rx='1' fill='%238a9099'/%3E%3Crect x='4' y='17' width='24' height='4' rx='1' fill='%238a9099'/%3E%3Crect x='4' y='23' width='24' height='4' rx='1' fill='%238a9099'/%3E%3C/svg%3E">
+<style>
+  :root { --ink:#1d2129; --dim:#5b6470; --orange:#b25a1e; --line:#ddd7cc; --code-bg:#f4f1ea; --paper:#fbfaf6; --go:#3f7d4e; --fault:#b04a3a; }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { font:16px/1.6 -apple-system,"Segoe UI",system-ui,sans-serif; color:var(--ink); background:var(--paper); margin:0; }
+  .wrap { max-width:860px; margin:0 auto; padding:0 20px 120px; }
+  a { color:var(--orange); }
+  code,pre { font-family:"Cascadia Mono",Consolas,ui-monospace,monospace; font-size:.86em; background:var(--code-bg); border-radius:3px; }
+  code { padding:.06em .38em; }
+  pre { padding:.8em 1em; overflow-x:auto; border-left:3px solid var(--orange); line-height:1.5; }
+  h1 { font-size:2em; margin:0; letter-spacing:.01em; }
+  h2 { font-size:1.45em; color:var(--orange); margin:2.4em 0 .5em; padding-bottom:.15em; border-bottom:2px solid var(--orange); scroll-margin-top:12px; }
+  h2 .n { color:var(--dim); font-weight:400; margin-right:.4em; }
+  h3 { font-size:1.12em; margin:1.5em 0 .3em; }
+  p { margin:.6em 0; }
+  ul,ol { margin:.5em 0 .8em; padding-left:1.5em; }
+  li { margin:.28em 0; }
+  figure { margin:1.2em 0; }
+  figure img { width:100%; border:1px solid var(--line); border-radius:6px; display:block; box-shadow:0 2px 14px rgba(0,0,0,.08); }
+  figcaption { font-size:.84em; color:var(--dim); margin-top:.4em; }
+  .kbd { border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:.05em .4em; font-family:Consolas,monospace; font-size:.82em; background:#fff; white-space:nowrap; }
+  .note,.tip { border:1px solid var(--line); border-left:4px solid var(--orange); border-radius:4px; padding:.6em .9em; margin:1em 0; font-size:.94em; background:#fff; }
+  .note { border-left-color:var(--fault); }
+  .tip b:first-child { color:var(--orange); } .note b:first-child { color:var(--fault); }
+  table { border-collapse:collapse; width:100%; margin:.9em 0; font-size:.9em; }
+  th,td { border:1px solid var(--line); padding:.4em .6em; text-align:left; vertical-align:top; }
+  th { background:var(--code-bg); }
+  header.hero { padding:52px 0 26px; border-bottom:1px solid var(--line); margin-bottom:8px; }
+  header.hero .sub { color:var(--dim); font-size:1.15em; margin-top:.5em; }
+  header.hero .badges { margin-top:1em; font-size:.85em; color:var(--dim); }
+  header.hero .badges b { color:var(--go); }
+  nav.toc { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px 20px; margin:1.6em 0; column-count:2; column-gap:32px; font-size:.92em; }
+  nav.toc a { display:block; color:var(--ink); text-decoration:none; padding:2px 0; break-inside:avoid; }
+  nav.toc a:hover { color:var(--orange); }
+  nav.toc a .n { color:var(--dim); display:inline-block; width:1.6em; }
+  .lead { font-size:1.08em; color:#333; }
+  footer { border-top:1px solid var(--line); margin-top:3em; padding-top:1.4em; color:var(--dim); font-size:.86em; }
+  @media (max-width:640px){ nav.toc{column-count:1;} h1{font-size:1.6em;} }
+
+  /* ── print / PDF profile (same as the micro manual) ── */
+  @page { size: A4; margin: 18mm 16mm 20mm; }
+  @media print {
+    html, body { background:#fff; }
+    .wrap { max-width:none; padding:0; }
+    a { color:var(--ink); text-decoration:none; }
+    .no-print { display:none !important; }
+    header.hero { min-height:84vh; display:flex; flex-direction:column; justify-content:center; border:none; padding:0; break-after:page; }
+    header.hero h1 { font-size:42pt; }
+    header.hero .sub { font-size:15pt; }
+    header.hero::after { content:"User documentation · Auditable / Geoscientific Chaos Union · gentropic.org/lamina"; margin-top:5em; color:var(--dim); font-size:9pt; letter-spacing:.05em; }
+    .lead { font-size:11pt; }
+    figure img { max-height:16cm; width:auto; max-width:100%; margin:0 auto; box-shadow:none; }
+    nav.toc { column-count:2; break-after:page; box-shadow:none; }
+    nav.toc::before { content:"Contents"; display:block; column-span:all; font-size:16pt; color:var(--orange); font-weight:600; margin-bottom:.4em; }
+    h2 { break-before:page; }
+    figure, table, pre, .note, .tip, h3 { break-inside:avoid; }
+    h2, h3 { break-after:avoid; }
+    footer { break-before:page; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>lamina</h1>
+  <div class="sub">Open any file, however large — scroll, filter, sort, derive, summarize, and quality-check it. Windowed, read-only, offline.</div>
+  <div class="badges"><b>🔒 Sealed</b> — no network, nothing leaves your machine · single self-contained HTML file · <a href="../lamina.html" download>download lamina.html</a> · <a href="../">open the app ↗</a><span class="no-print"> · <a href="lamina-manual.pdf">download this manual (PDF) ↓</a></span></div>
+</header>
+
+<p class="lead">lamina never loads the whole file, so size isn't the problem: a multi-gigabyte CSV or Datamine <code>.dm</code> scrolls in about a second, filters and sorts in place, and reports grade–tonnage — all without an import step, a server, or a byte leaving your machine.</p>
+
+<figure>
+  <img src="shots/overview.png" alt="A 120,000-row block model open in lamina: the grid with per-column distribution glyphs.">
+  <figcaption>A block model open in lamina. Every column header carries a live distribution glyph — histogram for numbers, top-values bar for categories — and the grid scrolls the file windowed, never resident.</figcaption>
+</figure>
+
+<nav class="toc" aria-label="Contents">
+  <a href="#what"><span class="n">1</span>What lamina is</a>
+  <a href="#start"><span class="n">2</span>Getting started</a>
+  <a href="#grid"><span class="n">3</span>The grid</a>
+  <a href="#dist"><span class="n">4</span>Column distributions</a>
+  <a href="#filter"><span class="n">5</span>Filter</a>
+  <a href="#calc"><span class="n">6</span>Calculated columns</a>
+  <a href="#stats"><span class="n">7</span>Statistics</a>
+  <a href="#group"><span class="n">8</span>Group by</a>
+  <a href="#gt"><span class="n">9</span>Grade–tonnage</a>
+  <a href="#gridsum"><span class="n">10</span>Grid summary</a>
+  <a href="#quality"><span class="n">11</span>Data quality</a>
+  <a href="#lens"><span class="n">12</span>Lenses</a>
+  <a href="#export"><span class="n">13</span>Export</a>
+  <a href="#sealed"><span class="n">14</span>Security: Sealed</a>
+  <a href="#install"><span class="n">15</span>Install &amp; offline</a>
+  <a href="#ref"><span class="n">A</span>Reference</a>
+</nav>
+
+<h2 id="what"><span class="n">1</span>What lamina is</h2>
+<p>lamina is a single self-contained HTML file — a <b>windowed data viewer</b> built for the files resource geology actually produces. It reads over a coarse block index, decoding only what's on screen (plus what a scan is currently sweeping), so the first look is near-instant at any size and memory stays flat.</p>
+<p>It reads:</p>
+<ul>
+  <li><b>Delimited tables</b> — CSV / TSV / TXT / DAT, any size; GSLIB / Geo-EAS and whitespace dumps detected, <code>#</code> comment preambles skipped</li>
+  <li><b>Datamine <code>.dm</code></b> — opened directly at any size, decoded on the fly (no conversion), with the same filter / sort / stats as CSV; filters read only the columns they need (strided), which is how a 17-column file filters 30× faster than a naïve decode</li>
+  <li><b>Archives</b> — zip / tar / gz / zst / bz2: peek inside and window huge compressed entries <i>without unpacking</i></li>
+  <li><b>Text</b> → lines · <b>binary</b> → hex — nothing refuses to open</li>
+</ul>
+<p>Everything is <b>read-only</b>: lamina never modifies your file. Derived things — calculated columns, filters, formats — live in the view (and can be saved as a <a href="#lens">lens</a>), while <a href="#export">Export</a> writes a new file.</p>
+<p class="tip"><b>Tip —</b> No file handy? The empty screen offers <i>▸ open a sample block model</i> — 120,000 rows generated locally, nothing downloaded.</p>
+
+<h2 id="start"><span class="n">2</span>Getting started</h2>
+<p><b>File → Open</b> (<span class="kbd">Ctrl+O</span>) or drag a file anywhere onto the window. Recent files are remembered (toggleable) and reopen with one click.</p>
+<h3>If a file reads wrong</h3>
+<p>Click the <b>kind badge</b> (top right) or <b>Data → Interpretation…</b> to force the delimiter, header on/off, rows to skip, comment prefix, decimal point vs comma, or the <b>character encoding</b> (UTF-8 · Windows-1252 · Latin-1 · UTF-16). A <code>⚠ encoding?</code> hint appears in the footer when bytes don't decode cleanly as UTF-8 — mojibake never passes silently.</p>
+
+<h2 id="grid"><span class="n">3</span>The grid</h2>
+<p>The grid is windowed: scrolling a 1.8-million-row file reads just the rows in view. <b>Click a header</b> to sort (ascending → descending → off; sorts can stack across columns), the <b>row #</b> box jumps, and <span class="kbd">Ctrl+F</span> opens <b>find</b> (case / whole-cell / regex / per-column scope / match count). Selected cells copy as TSV with <span class="kbd">Ctrl+C</span>.</p>
+<p>Two dockable panels (View menu): the <b>Columns</b> panel — search, show/hide, drag-reorder, pin-freeze, and per-column settings — and the <b>Record inspector</b> — one row's fields as a list that follows the selection; <span class="kbd">↑</span>/<span class="kbd">↓</span> step rows and <b>⊙ pin</b> holds one for a side-by-side compare.</p>
+<p>Right-click a numeric header → <b>Color scale</b> heatmaps the cells (8 palettes, linear/log, clip outliers, reverse) — patterns in a million rows read at a glance. <b>Number format</b> and <b>treat as text / number</b> live in the same menu.</p>
+
+<h2 id="dist"><span class="n">4</span>Column distributions</h2>
+<p>Each column header carries a live <b>distribution glyph</b>: a histogram for numbers (with a null-rate bar; <code>≈</code> means sampled, <code>log</code> means auto log-scaled for skewed grades), a coloured top-values bar for categories. They're instruments, not decoration:</p>
+<ul>
+  <li><b>hover</b> — read the value / category under the cursor</li>
+  <li><b>click</b> — filter to that bin or category</li>
+  <li><b>drag</b> — brush a range → a filter (auto-applies when cheap, stages for <span class="kbd">Enter</span> on huge files — Data → Gutter brush)</li>
+  <li><b>double-click</b> — the column's full <a href="#stats">Statistics</a></li>
+</ul>
+<figure>
+  <img src="shots/filter.png" alt="A filtered view: the expression in the filter box, matching rows in the grid.">
+  <figcaption>Filtering: an expression in the box — or a drag across a header glyph — and the grid shows only the matches, windowed as ever. The footer counts them.</figcaption>
+</figure>
+
+<h2 id="filter"><span class="n">5</span>Filter</h2>
+<p>The filter box speaks a <b>SQL-WHERE</b>-style language: <code>grade &gt; 1 and lito = "OXIDE"</code>. <span class="kbd">Enter</span> applies, <span class="kbd">Esc</span> clears. Highlights: <code>between … and …</code>, <code>in (…)</code>, <code>contains</code> / <code>like</code> / <code>matches</code> for text, <code>is blank</code> / <code>is filled</code>, functions (<code>round sqrt log if(c,a,b) bin coalesce isnum</code>…), and parentheses. Bare words are <i>columns</i> (so <code>fe &gt; cu</code> compares two columns); quoted words are text. Blanks behave sanely — no SQL <code>NULL</code> traps. Autocomplete offers columns, functions, and data values.</p>
+<p>On a <code>.dm</code> file the filter reads <i>only the columns the expression uses</i> — the strided fast path — so a selective filter over a huge model finishes in seconds.</p>
+
+<h2 id="calc"><span class="n">6</span>Calculated columns</h2>
+<p>The <b>ƒ+ col</b> button (or a header's right-click, or <b>Data → Calculated columns…</b>) adds a derived column from a formula in the same language as the filter: <code>grade * density</code>, <code>if(au &gt; 1, "ore", "waste")</code>, <code>bin(rl, 10)</code> for elevation bands. Computed on the fly, never written; filter, sort, stat, group, and export it like any column.</p>
+
+<h2 id="stats"><span class="n">7</span>Statistics</h2>
+<p><b>One column:</b> double-click its glyph (or right-click → Statistics) — histogram with a log-x toggle, quantiles, count / nulls / non-numeric (with examples), min / max / mean / std / <b>CV</b> / <b>skew</b> / zeros, and <b>exclude zeros / negatives</b> re-stats for grade-only views. Copies as TSV.</p>
+<p><b>Every column:</b> <b>Σ stats</b> on the toolbar sweeps the whole table once and opens the <b>Column summary</b> — a sortable row per column (n · null% · non-num · min · max · mean · std · CV · skew · zero% · p50). Sort by <b>null%</b> or <b>non-num</b> to triage a new file in seconds; click a row for detail, click a name to jump to the column in the grid.</p>
+<figure>
+  <img src="shots/summary.png" alt="The column summary: one sortable row of statistics per column.">
+  <figcaption>Σ stats — the whole file, one pass, one sortable table. The fastest way to meet a file you've never seen.</figcaption>
+</figure>
+
+<h2 id="group"><span class="n">8</span>Group by</h2>
+<p><b>Tools → Group by…</b> aggregates value columns per group, with an optional <b>weight</b> column — the weighted mean shows next to the plain one, so an unweighted-vs-length-weighted grade difference is visible instead of hidden. Click a group to filter the grid to it; copy as TSV. Numeric bands: add <code>bin(rl, 10)</code> as a calculated column and group by it.</p>
+
+<h2 id="gt"><span class="n">9</span>Grade–tonnage</h2>
+<p><b>Tools → Grade–tonnage…</b> is the resource view. <b>Volume · density · ore proportion</b> are expressions (a column, a constant, <code>dx * dy * dz</code> — auto-detected where obvious; blank = 1), with a <b>declared density unit</b> so a kg/m³ column doesn't inflate tonnage a thousandfold. The report gives <b>tonnes · tonnage-weighted grade · contained metal</b> per domain (+ Σ total), and every grade field gets its <b>cutoff curve</b> — tonnes ≥ cutoff falling, mean grade rising — with a table at automatic round cutoffs <i>or your own</i> (<code>0.5, 1, 2</code> — computed exactly, not snapped).</p>
+<ul>
+  <li><b>Declared grade units</b> (%, g/t, ppm, oz/t) label the report and make <i>metal come out in tonnes</i>.</li>
+  <li><b>Manual plot ranges</b> per grade — <code>x:0..2 t:5e6 g:3</code> pins the cutoff window and the y-scales, so this month's curve overlays last month's at the same scale.</li>
+  <li>Each curve offers <b>copy</b> (TSV) · <b>copy png</b> · <b>save png</b>.</li>
+  <li>Respects the current filter, and computes windowed — a multi-GB model reports without loading.</li>
+</ul>
+<figure>
+  <img src="shots/gradetonnage.png" alt="The grade-tonnage report: tonnes, grade and metal by domain, plus cutoff curves.">
+  <figcaption>Grade–tonnage by domain with cutoff curves — tonnes falling, mean grade rising. Straight off the raw file, respecting the active filter.</figcaption>
+</figure>
+
+<h2 id="gridsum"><span class="n">10</span>Grid summary</h2>
+<p><b>Tools → Grid summary…</b> infers a block model's <b>grid</b> from its centroid columns: origin · block size · count per axis, coordinate <b>ordering</b> (fastest/slowest), <b>sub-block detection</b>, parent-cell count and <b>fill %</b>. "No regular grid" is itself an answer — scattered data, or a broken export. Copy as TSV.</p>
+
+<h2 id="quality"><span class="n">11</span>Data quality</h2>
+<p><b>Tools → Data quality…</b> scans for the quiet bugs that bite an estimate: <b>leading zeros lost</b> (a code like <code>007</code> read as a number — with a one-click <i>fix: treat as text</i>), <b>non-numeric values</b> hiding in numeric columns, <b>missing-value sentinels</b> (<code>-999</code>…), thousands separators, whitespace padding, all-blank or constant columns, dates-as-text. Click a flag for that column's Statistics; <code>✓</code> when clean.</p>
+<figure>
+  <img src="shots/quality.png" alt="The data-quality report flagging sentinel values and lost leading zeros.">
+  <figcaption>Data quality — the pre-flight check. Every flag is a thing that has, somewhere, quietly wrecked an estimate.</figcaption>
+</figure>
+
+<h2 id="lens"><span class="n">12</span>Lenses</h2>
+<p><b>Data → Save lens…</b> saves your <i>view</i> — filter · sort · calculated columns · number formats · color scales · hidden columns — as a small <code>.lamina</code> file. Not the data: the recipe for looking at it. <b>Apply lens…</b> (or just open a <code>.lamina</code>) re-applies it to the current file, matching columns <b>by name</b>; anything that doesn't match is skipped and said. One setup, reused across every export with the same schema — and shareable with a colleague.</p>
+
+<h2 id="export"><span class="n">13</span>Export</h2>
+<p><b>Data → Export…</b> writes the current view — filtered, sorted, calculated columns included, chosen columns only — to CSV/TSV, <b>streamed</b> straight to the file you pick: never uploaded, never fully held in memory. Opening a <code>.dm</code> and exporting <i>is</i> the <code>.dm</code>→CSV converter, at any size.</p>
+
+<h2 id="sealed"><span class="n">14</span>Security: Sealed</h2>
+<p>lamina is <b>Sealed</b>: it makes <b>no network requests</b> — a browser security policy (<code>connect-src 'none'</code>) blocks every connection, so there is no telemetry, no cloud, no auto-update. It is also <b>WASM-free</b> with the runtime in the clear: the code is readable and auditable rather than opaque binary. Your data — models, assays, exports — stays on your device, and its security artifacts (capability declaration, SHA-256, SBOM) are build-enforced, not asserted.</p>
+<p>Verify the build and read how to bring it through approval at <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a>.</p>
+
+<h2 id="install"><span class="n">15</span>Install &amp; offline</h2>
+<p>lamina runs at <a href="../">gentropic.org/lamina</a> — install it as an app from the browser (it's also on the <b>Microsoft Store</b> as <i>GCU Lamina</i>), or <a href="../lamina.html" download>download <code>lamina.html</code></a>: one file, no installer, that you can keep, e-mail, drop on a shared drive, or run fully offline by double-clicking. Nothing to set up, nothing that phones home. Works in current Chrome / Edge / Firefox.</p>
+
+<h2 id="ref"><span class="n">A</span>Reference</h2>
+<h3>Keyboard &amp; mouse</h3>
+<table>
+  <tr><th>Input</th><th>Action</th></tr>
+  <tr><td><span class="kbd">Ctrl+O</span></td><td>open a file</td></tr>
+  <tr><td><span class="kbd">Ctrl+F</span></td><td>find in the table — <span class="kbd">Enter</span>/<span class="kbd">Shift+Enter</span> next/prev, case · whole-cell · regex · column scope</td></tr>
+  <tr><td><span class="kbd">Enter</span> / <span class="kbd">Esc</span> in the filter box</td><td>apply / clear the filter</td></tr>
+  <tr><td>click a header</td><td>sort (ascending → descending → off)</td></tr>
+  <tr><td>right-click a header</td><td>statistics · sort · filter by · number format · color scale · text/number · hide</td></tr>
+  <tr><td>right-click a cell</td><td>copy (with header / row #) · filter by this value · statistics</td></tr>
+  <tr><td>glyph: hover / click / drag / double-click</td><td>read · filter · brush a range · statistics</td></tr>
+  <tr><td>drag a column border / double-click it</td><td>resize / autofit</td></tr>
+  <tr><td>kind badge (top right)</td><td>change how the file is read</td></tr>
+  <tr><td>row # box</td><td>jump to a row</td></tr>
+  <tr><td><span class="kbd">Ctrl+C</span></td><td>copy the selection as TSV</td></tr>
+</table>
+<h3>The filter language</h3>
+<p>Comparisons <code>= != &gt; &gt;= &lt; &lt;=</code>, boolean <code>and or not</code> (C-style <code>== &amp;&amp;</code> also work), <code>between a and b</code>, <code>in (…)</code>, <code>contains</code> / <code>like</code> / <code>matches</code>, <code>is blank</code> / <code>is filled</code>, functions <code>round int abs sqrt log exp pow min max clamp bin if coalesce ifnum isnum isnan</code>. Bare words are columns, quoted words are text; bracket awkward names: <code>["Cu (ppm)"] &gt; 30</code>. The same expressions define calculated columns and the grade–tonnage factors.</p>
+
+<footer>
+  <b>lamina</b> — part of the Auditable project, <a href="https://gentropic.org" target="_blank" rel="noopener">Geoscientific Chaos Union</a>. Engine: <code>@gcu/lamina</code>; grid: <code>@gcu/loom</code>; expressions: <code>@gcu/expr</code>; archives: <code>fflate · fzstd · seek-bzip</code> (MIT). MIT.<br>
+  Screenshots are generated from the app by an automated harness, so they track the current build. See the in-app <b>Help</b> menu for the terse quick reference.
+</footer>
+
+</div>
+</body>
+</html>
