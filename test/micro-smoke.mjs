@@ -286,6 +286,10 @@ await p.evaluate(() => { const i = document.querySelector('#filter'); i.value = 
 await p.waitForFunction(() => window._micro.layers()[0]._filterMask, null, { timeout: 30000 });
 const fmask = await p.evaluate(() => { let h = 0; for (const m of window._micro.layers()[0]._filterMask) if (m) h++; return h; });
 chk(`CSV filter LITO+FE → ${fmask} hits`, fmask === 160);
+// filter → selection: the matches become a real 3D selection (reproducible sel scope)
+const f2s = await p.evaluate(() => { const L = window._micro.layers()[0]; window._micro.filterToSelection(L); return L._selCount; });
+chk(`filter → selection: ${f2s} rows selected`, f2s === 160);
+await p.evaluate(() => { window._micro.clearSelection ? window._micro.clearSelection({ silent: true }) : document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); const L = window._micro.layers()[0]; if (L._selMask) { L._selMask = null; L._selCount = 0; window._micro.renderer.setLayerSelection(L.id, null); } });
 await p.evaluate(() => { const i = document.querySelector('#filter'); i.value = ''; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); });
 
 // ── 4. a mesh SOLID flags blocks inside it (winding pipeline) ──
