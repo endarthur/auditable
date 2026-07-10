@@ -6620,7 +6620,10 @@ async function applyBlockFilter(expr) {
   // color stays full-doc (addChunk skips the ramp update for the compact set). ──
   const compactCap = Math.min(Math.floor(header.count / 2) || 0, 8_000_000);
   const catCode = header.categories ? new Map(header.categories.map((v2, i2) => [v2, i2])) : null;
-  let cb2 = isolate && fBlockDoc.grid && compactCap > 0
+  // sub-blocked models opt OUT of compaction: the compact builder has no dim
+  // palette, so matches would collapse to the fine-grid cell (minDim/2). The
+  // mask path preserves each block's true size (it keeps the base chunks).
+  let cb2 = isolate && fBlockDoc.grid && compactCap > 0 && !header.subBlocked
     ? createBlockChunkBuilder({ frame, grid: fBlockDoc.grid, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 2, onChunk: (c) => renderer.addChunk(c, 'compact', lid) })
     : null;
   const CB = 1 << 18;
@@ -8044,8 +8047,14 @@ function showFileInfo() {
   if (frame) row('frame origin', frame.origin.map(num).join(sep(', ')) + (frame.crs ? ` ${sep('·')} ${V(frame.crs)}` : ''));
   if (AL0 && renderer.layerVramBytes(AL0.id)) row('vram (layer)', V(fmtSize(renderer.layerVramBytes(AL0.id))));
   if (h.grid) {
-    row('grid', [h.grid.x.count, h.grid.y.count, h.grid.z.count].map(num).join(sep(' × ')));
-    row('block size', [h.grid.x.pitch, h.grid.y.pitch, h.grid.z.pitch].map(num).join(sep(' × ')));
+    if (h.subBlocked && h.dimPalette) {
+      row('grid (fine lattice)', [h.grid.x.count, h.grid.y.count, h.grid.z.count].map(num).join(sep(' × ')));
+      const sizes = h.dimPalette.map((d) => d.map((v) => num(v * 2)).join('×'));
+      row('sub-block sizes', `${sizes.length} ` + (sizes.length === 1 ? 'size' : 'sizes') + sep(': ') + sizes.slice(0, 6).join(sep(' · ')) + (sizes.length > 6 ? sep(' …') : ''));
+    } else {
+      row('grid', [h.grid.x.count, h.grid.y.count, h.grid.z.count].map(num).join(sep(' × ')));
+      row('block size', [h.grid.x.pitch, h.grid.y.pitch, h.grid.z.pitch].map(num).join(sep(' × ')));
+    }
     row('block 0 centroid', [h.grid.x.origin, h.grid.y.origin, h.grid.z.origin].map(num).join(sep(', ')));
   }
   if (h.scale) {

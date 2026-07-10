@@ -73,8 +73,12 @@ const re = await p.evaluate(() => { const L = window._micro.layers()[0], h = L.d
 chk(`.dm reopen: discovery cached (subBlocked ${re.sub}) + stats pre-seeded (${re.stats}) + bands loaded (${re.bands})`, re.sub && re.stats && re.bands);
 await p.evaluate(() => { const i = document.querySelector('#filter'); i.value = 'FE > 70'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); });
 await p.waitForFunction(() => { const L = window._micro.layers()[0]; return L._filterMask; }, null, { timeout: 90000 });
-const fl = await p.evaluate(() => { const L = window._micro.layers()[0]; let hits = 0; for (let i = 0; i < L._filterMask.length; i++) hits += L._filterMask[i]; return { hits, skipped: window.__dmBandsSkipped }; });
+const fl = await p.evaluate(() => { const L = window._micro.layers()[0]; let hits = 0; for (let i = 0; i < L._filterMask.length; i++) hits += L._filterMask[i]; return { hits, skipped: window.__dmBandsSkipped, compact: /compacted/.test(document.querySelector('#meta').textContent) }; });
 chk(`.dm band pushdown: ${fl.skipped} page-runs skipped, ${fl.hits} hits == 72000 (exact)`, fl.skipped > 0 && fl.hits === 72000);
+// filtering a SUB-BLOCKED model must NOT compact (the compact set has no dim
+// palette → matches would collapse to the fine-grid cell minDim/2; the mask
+// path keeps each block's true size). Regression guard for the reported bug.
+chk(`sub-blocked filter uses the mask path, not compaction (${!fl.compact})`, !fl.compact);
 await p.close();
 
 // ═══ 2. CSV bands + the explicit Store-as-Parquet dialog + micro:model kv ═══
