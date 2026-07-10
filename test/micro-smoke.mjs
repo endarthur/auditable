@@ -367,6 +367,31 @@ const br = await p.evaluate(async () => {
 chk(`batch rename: dialog ${br.rows} rows, preview [${br.preview.join(', ')}], applied → “${br.label}”`,
   br.shown && br.rows >= 2 && br.preview.includes('lidar.xyz') && br.closed && br.label === 'lidar.xyz');
 
+// ── 7a3. surface tools: combine two flat surfaces with the MIN rule through
+// the real dialog — overlap takes the lower, output is a GRID layer w/ lineage ──
+const sft = await p.evaluate(async () => {
+  const m = window._micro;
+  await m.openBlob(new Blob(['v 100 100 100\nv 200 100 100\nv 200 200 100\nv 100 200 100\nf 1 2 3\nf 1 3 4\n']), 'sfA.obj', 'add');
+  await m.openBlob(new Blob(['v 150 100 50\nv 300 100 50\nv 300 300 50\nv 150 300 50\nf 1 2 3\nf 1 3 4\n']), 'sfB.obj', 'add');
+  const A = m.layers().find((L) => L.name === 'sfA.obj'), B = m.layers().find((L) => L.name === 'sfB.obj');
+  m.openSurfaceTools('combine', A);
+  const sels = [...document.querySelectorAll('#sfDlgBody select')].filter((s) => [...s.options].some((o) => /sfA/.test(o.textContent)));
+  sels[0].value = String(A.id); sels[0].dispatchEvent(new Event('change'));
+  const sels2 = [...document.querySelectorAll('#sfDlgBody select')].filter((s) => [...s.options].some((o) => /sfB/.test(o.textContent)));
+  sels2[1].value = String(B.id); sels2[1].dispatchEvent(new Event('change'));
+  const cellIn = [...document.querySelectorAll('#sfDlgBody input[type=number]')][0];
+  cellIn.value = '10'; cellIn.dispatchEvent(new Event('input'));
+  document.querySelector('#sfGo').click();
+  await new Promise((r) => { const t = setInterval(() => { if (m.layers().some((L) => /^min_/.test(L.name))) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 20000); });
+  const L = m.layers().find((x) => /^min_/.test(x.name));
+  if (!L) return null;
+  const surf = m.surfaceFromGrid(L.docs.gridDoc.grid);
+  return { aOnly: surf.sampleZ(120, 150), overlap: surf.sampleZ(175, 150), bOnly: surf.sampleZ(250, 250), op: L.lineage && L.lineage.op };
+});
+chk(`surface combine (min): A-only ${sft && sft.aOnly}, overlap ${sft && sft.overlap} (lower wins), B-only ${sft && sft.bOnly}, lineage ${sft && sft.op}`,
+  sft && sft.aOnly === 100 && sft.overlap === 50 && sft.bOnly === 50 && sft.op === 'surface.combine');
+await p.evaluate(() => { const m = window._micro; for (const nm of ['sfA.obj', 'sfB.obj']) { const L = m.layers().find((x) => x.name === nm); if (L) { m.renderer.removeLayer(L.id); m.layers().splice(m.layers().indexOf(L), 1); } } const C = m.layers().find((x) => /^min_/.test(x.name)); if (C) { m.renderer.removeLayer(C.id); m.layers().splice(m.layers().indexOf(C), 1); } });
+
 // ── 7b. spatial join: resample a compatible fine model onto a coarse grid →
 //    a new block-model layer; reconcile Δ preset. A = 10 m (2×2), B = 5 m (4×4)
 //    whose grade averages back to A per parent cell (aggregate mean == A, Δ==0).

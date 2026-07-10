@@ -183,14 +183,14 @@
   #recPanel.show ~ #compass.se, #recPanel.show ~ #compass.ne { right: calc(var(--recw, 280px) + 12px); }
   #propPanel.show ~ #compass.se, #propPanel.show ~ #compass.ne { right: calc(var(--ppw, 272px) + 12px); }
   #layersPanel.show ~ #compass.sw, #layersPanel.show ~ #compass.nw { left: calc(var(--lpw, 224px) + 12px); }
-  #dhDlg, #ofDlg, #exDlg, #sbDlg, #svDlg, #plDlg, #adDlg, #rgDlg, #ngDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
-  #dhDlg.show, #ofDlg.show, #exDlg.show, #sbDlg.show, #svDlg.show, #plDlg.show, #adDlg.show, #rgDlg.show, #ngDlg.show { display: flex; }
-  #exDlg .box, #sbDlg .box, #svDlg .box, #plDlg .box, #adDlg .box, #rgDlg .box, #ngDlg .box { width: min(480px, 94vw); max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
-  #exDlg .hd, #sbDlg .hd, #svDlg .hd, #plDlg .hd, #adDlg .hd, #rgDlg .hd, #ngDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
-  #exDlg .hd button, #sbDlg .hd button, #svDlg .hd button, #plDlg .hd button, #adDlg .hd button, #rgDlg .hd button, #ngDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
-  #exDlg .bd, #sbDlg .bd, #svDlg .bd, #plDlg .bd, #adDlg .bd, #rgDlg .bd, #ngDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
-  #exDlg .ex-row, #sbDlg .ex-row, #adDlg .ex-row, #rgDlg .ex-row, #ngDlg .ex-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-  #exDlg .ex-row > b, #sbDlg .ex-row > b, #adDlg .ex-row > b, #rgDlg .ex-row > b, #ngDlg .ex-row > b { color: var(--text-hi); width: 66px; font-weight: normal; flex: 0 0 auto; }
+  #dhDlg, #ofDlg, #exDlg, #sbDlg, #svDlg, #plDlg, #adDlg, #rgDlg, #ngDlg, #sfDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 8; }
+  #dhDlg.show, #ofDlg.show, #exDlg.show, #sbDlg.show, #svDlg.show, #plDlg.show, #adDlg.show, #rgDlg.show, #ngDlg.show, #sfDlg.show { display: flex; }
+  #exDlg .box, #sbDlg .box, #svDlg .box, #plDlg .box, #adDlg .box, #rgDlg .box, #ngDlg .box, #sfDlg .box { width: min(480px, 94vw); max-height: 84%; overflow-y: auto; background: #1a1a1a; border: 1px solid var(--bd2); }
+  #exDlg .hd, #sbDlg .hd, #svDlg .hd, #plDlg .hd, #adDlg .hd, #rgDlg .hd, #ngDlg .hd, #sfDlg .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  #exDlg .hd button, #sbDlg .hd button, #svDlg .hd button, #plDlg .hd button, #adDlg .hd button, #rgDlg .hd button, #ngDlg .hd button, #sfDlg .hd button { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+  #exDlg .bd, #sbDlg .bd, #svDlg .bd, #plDlg .bd, #adDlg .bd, #rgDlg .bd, #ngDlg .bd, #sfDlg .bd { padding: 12px 16px; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  #exDlg .ex-row, #sbDlg .ex-row, #adDlg .ex-row, #rgDlg .ex-row, #ngDlg .ex-row, #sfDlg .ex-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  #exDlg .ex-row > b, #sbDlg .ex-row > b, #adDlg .ex-row > b, #rgDlg .ex-row > b, #ngDlg .ex-row > b, #sfDlg .ex-row > b { color: var(--text-hi); width: 66px; font-weight: normal; flex: 0 0 auto; }
   #exDlg .ex-row label, #sbDlg .ex-row label, #adDlg .ex-row label, #rgDlg .ex-row label, #ngDlg .ex-row label { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
   #exDlg .ex-row label.dis, #sbDlg .ex-row label.dis, #adDlg .ex-row label.dis, #adDlg label.dis { opacity: 0.45; }
   #exDlg select, #exDlg input[type="text"], #sbDlg select, #sbDlg input[type="text"], #adDlg select, #adDlg input[type="text"], #rgDlg input, #ngDlg input, #ngDlg select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
@@ -690,6 +690,7 @@
   <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
   <div id="adDlg"><div class="box"><div class="hd"><span>assign domains</span><button id="adCancel">×</button></div><div class="bd" id="adDlgBody"></div><div id="adProg" style="display:none"><div id="adProgFill"></div></div><div class="dh-foot"><span id="adDlgMsg"></span><button id="adGo">Assign</button></div></div></div>
   <div id="ngDlg"><div class="box"><div class="hd"><span>new grid / block model</span><button id="ngCancel">×</button></div><div class="bd" id="ngDlgBody"></div><div class="dh-foot"><span id="ngDlgMsg"></span><button id="ngGo">Create</button></div></div></div>
+  <div id="sfDlg"><div class="box"><div class="hd"><span id="sfTitle">surface tools</span><button id="sfCancel">×</button></div><div class="bd" id="sfDlgBody"></div><div class="dh-foot"><span id="sfDlgMsg"></span><button id="sfGo">Create</button></div></div></div>
   <div id="rgDlg"><div class="box"><div class="hd"><span>mesh → grid</span><button id="rgCancel">×</button></div><div class="bd" id="rgDlgBody"></div><div class="dh-foot"><span id="rgDlgMsg"></span><button id="rgGo">Rasterize</button></div></div></div>
   <div id="pmDlg"><div class="box"><div class="hd"><span id="pmTitle">name</span><button id="pmCancel">×</button></div><div class="bd"><div id="pmMsg" style="display:none"></div><input id="pmInput" type="text" spellcheck="false" autocomplete="off"></div><div class="dh-foot"><button id="pmOk">OK</button></div></div></div>
   <svg id="compass" class="se" width="74" height="74" viewBox="0 0 74 74" title="north — click for plan view; right-click for options">
@@ -4588,6 +4589,154 @@ $('#rgGo').onclick = async () => {
     $('#rgDlg').classList.remove('show'); _rgDlg = null;
   } catch (e) { $('#rgDlgMsg').textContent = e.message; }
   finally { btn.disabled = false; for (const el of $('#rgDlgBody').querySelectorAll('input, select')) el.disabled = false; }
+};
+// ── SURFACE TOOLS: extend to a footprint + combine with overlap rules ────────
+// Grid-mediated by design (settled 2026-07-10): the output IS a grid layer —
+// downstream flag/between/reconcile consume heightfields natively and exactly,
+// and a naive TIN would be 2 tris/cell of bloat. Mesh-native (exact vertices)
+// waits on CDT; grid→simplified-TIN is a separate roadmapped verb.
+const surfaceableLayers = () => _layers.filter((L) => (L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup) || L.docs.gridDoc);
+// any surface source (mesh or grid layer) → Float32 heights on a target lattice
+async function gridOnLattice(L, geom, onProgress) {
+  if (L.docs.gridDoc) {
+    const bbox4 = [geom.x0, geom.y0 - (geom.ny - 1) * geom.dx, geom.x0 + (geom.nx - 1) * geom.dx, geom.y0];
+    const surf = surfaceFromGrid(await residentGridForEval(L, bbox4));
+    const data = new Float32Array(geom.nx * geom.ny).fill(-9999);
+    for (let r = 0; r < geom.ny; r++) {
+      const y = geom.y0 - r * geom.dx;
+      for (let c = 0; c < geom.nx; c++) {
+        const z = surf.sampleZ(geom.x0 + c * geom.dx, y);
+        if (Number.isFinite(z)) data[r * geom.nx + c] = z;
+      }
+      if (onProgress && (r & 63) === 0) onProgress(r / geom.ny);
+    }
+    return { nx: geom.nx, ny: geom.ny, x0: geom.x0, y0: geom.y0, dx: geom.dx, dy: geom.dx, data, nodata: -9999, crs: null, form: 'resample' };
+  }
+  const m = await reReadMesh(L.docs.meshDoc);
+  return rasterizeMeshToGrid(m.vertices, m.triangles, { x0: geom.x0, y0: geom.y0, dx: geom.dx, dy: geom.dx, nx: geom.nx, ny: geom.ny, keep: 'top', onProgress });
+}
+const surfCellOf = (L) => (L.docs.gridDoc ? L.docs.gridDoc.grid.dx : (L.bboxLocal ? niceStep(Math.max(L.bboxLocal[3] - L.bboxLocal[0], L.bboxLocal[4] - L.bboxLocal[1]) / 400) : 10));
+let _sfDlg = null;
+function openSurfaceTools(mode, L0) {
+  const surfs = surfaceableLayers();
+  if (!surfs.length) { $('#meta').textContent = 'surface tools: needs a surface (a context-tier mesh or a grid layer)'; return; }
+  const src = L0 && surfs.includes(L0) ? L0 : surfs[0];
+  _sfDlg = { mode: mode || 'extend', src: src.id, srcs: surfs.slice(0, 2).map((L) => L.id), rule: 'min',
+    foot: 'all', cell: surfCellOf(src), fill: 'nearest', combFill: 'none' };
+  renderSurfaceTools();
+  $('#sfDlg').classList.add('show');
+}
+// the footprint's world XY bbox [minX, minY, maxX, maxY]
+function sfFootBbox(d) {
+  if (d.mode === 'combine') return targetsXYBbox(d.srcs.map(layerById).filter(Boolean));
+  if (d.foot === 'all') return targetsXYBbox(_layers);
+  const L = layerById(+d.foot); const bb = L && layerWorldBbox(L);
+  return bb ? [bb[0], bb[1], bb[3], bb[4]] : null;
+}
+function sfGeom(d) {
+  const bb = sfFootBbox(d); if (!bb) return null;
+  const dx = Math.max(1e-9, d.cell || 1);
+  const nx = Math.max(2, Math.floor((bb[2] - bb[0]) / dx) + 1), ny = Math.max(2, Math.floor((bb[3] - bb[1]) / dx) + 1);
+  return { x0: bb[0], y0: bb[3], dx, nx, ny };
+}
+function renderSurfaceTools() {
+  const d = _sfDlg; if (!d) return;
+  $('#sfTitle').textContent = d.mode === 'extend' ? 'extend surface' : 'combine surfaces';
+  const body = $('#sfDlgBody'); body.textContent = '';
+  const row = (label, ...els) => { const r = document.createElement('div'); r.className = 'ex-row'; const b = document.createElement('b'); b.textContent = label; r.append(b, ...els); body.appendChild(r); return r; };
+  const surfs = surfaceableLayers();
+  const mSel = document.createElement('select');
+  for (const [v, t] of [['extend', 'extend to a footprint'], ['combine', 'combine with a rule']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; mSel.append(o); }
+  mSel.value = d.mode; mSel.onchange = () => { d.mode = mSel.value; renderSurfaceTools(); };
+  row('mode', mSel);
+  const laySel = (val, onchange) => { const s = document.createElement('select'); for (const L of surfs) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = (L.label || L.name) + (L.docs.gridDoc ? ' (grid)' : ' (mesh)'); s.append(o); } s.value = String(val); s.onchange = () => onchange(+s.value); return s; };
+  if (d.mode === 'extend') {
+    row('surface', laySel(d.src, (v) => { d.src = v; d.cell = surfCellOf(layerById(v)); renderSurfaceTools(); }));
+    const fSel = document.createElement('select');
+    { const o = document.createElement('option'); o.value = 'all'; o.textContent = 'all layers (union)'; fSel.append(o); }
+    for (const L of _layers) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; fSel.append(o); }
+    fSel.value = d.foot; fSel.onchange = () => { d.foot = fSel.value; renderSurfaceTools(); };
+    row('footprint', fSel);
+    const eSel = document.createElement('select');
+    for (const [v, t] of [['nearest', 'nearest (flat extension)'], ['trend', 'planar trend (continue dip)']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; eSel.append(o); }
+    eSel.value = d.fill; eSel.onchange = () => { d.fill = eSel.value; };
+    row('extend by', eSel);
+  } else {
+    // ordered source list — order IS the priority for the 'first' rule
+    const list = document.createElement('div'); list.style.cssText = 'display:flex;flex-direction:column;gap:6px;width:100%';
+    d.srcs.forEach((id, i) => {
+      const r = document.createElement('div'); r.style.cssText = 'display:flex;gap:6px;align-items:center';
+      const s = laySel(id, (v) => { d.srcs[i] = v; renderSurfaceTools(); }); s.style.flex = '1';
+      const up = document.createElement('button'); up.textContent = '↑'; up.disabled = i === 0; up.onclick = () => { [d.srcs[i - 1], d.srcs[i]] = [d.srcs[i], d.srcs[i - 1]]; renderSurfaceTools(); };
+      const x = document.createElement('button'); x.textContent = '×'; x.disabled = d.srcs.length <= 2; x.onclick = () => { d.srcs.splice(i, 1); renderSurfaceTools(); };
+      r.append(s, up, x); list.append(r);
+    });
+    const add = document.createElement('button'); add.textContent = '+ add surface'; add.disabled = d.srcs.length >= surfs.length;
+    add.onclick = () => { const used = new Set(d.srcs); const nxt = surfs.find((L) => !used.has(L.id)); if (nxt) { d.srcs.push(nxt.id); renderSurfaceTools(); } };
+    list.append(add);
+    row('surfaces', list);
+    const rSel = document.createElement('select'); rSel.title = 'where surfaces overlap: min = take the lower (topo ∧ weathering) · max = the higher · first = the FIRST listed wins where it has data (patch a survey into topo) · mean';
+    for (const [v, t] of [['min', 'min — take the lower'], ['max', 'max — take the higher'], ['first', 'first listed wins (priority)'], ['mean', 'mean']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; rSel.append(o); }
+    rSel.value = d.rule; rSel.onchange = () => { d.rule = rSel.value; };
+    row('overlap', rSel);
+    const cSel = document.createElement('select');
+    for (const [v, t] of [['none', 'leave nodata'], ['nearest', 'nearest (flat)'], ['trend', 'planar trend']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; cSel.append(o); }
+    cSel.value = d.combFill; cSel.onchange = () => { d.combFill = cSel.value; };
+    row('empties', cSel);
+  }
+  const cellIn = document.createElement('input'); cellIn.type = 'number'; cellIn.min = '0'; cellIn.step = 'any'; cellIn.value = String(d.cell); cellIn.style.width = '90px';
+  const tally = document.createElement('span'); tally.style.color = 'var(--muted)';
+  const upd = () => { const g = sfGeom(d); tally.textContent = g ? `= ${g.nx.toLocaleString()} × ${g.ny.toLocaleString()} nodes (${(g.nx * g.ny).toLocaleString()})` : '(no extent)'; $('#sfGo').disabled = !g || g.nx * g.ny > 32e6; $('#sfDlgMsg').textContent = g && g.nx * g.ny > 32e6 ? 'over 32M nodes — raise the cell size' : ''; };
+  cellIn.oninput = () => { d.cell = Math.max(1e-9, +cellIn.value || d.cell); upd(); };
+  row('cell (m)', cellIn, tally); upd();
+  body.appendChild(ppNote(d.mode === 'extend'
+    ? 'rasterizes the surface onto a lattice covering the footprint, then fills beyond its edge — nearest holds the boundary z flat, trend continues the fitted dip. The output is a GRID layer (exact for flags/reconcile; export .asc anytime).'
+    : 'each surface is rasterized onto one common lattice, then combined node-wise by the rule. For “first”, list order is priority — the top surface wins where it has data. The output is a GRID layer named for the rule.'));
+}
+$('#sfCancel').onclick = () => { $('#sfDlg').classList.remove('show'); _sfDlg = null; };
+$('#sfGo').onclick = async () => {
+  const d = _sfDlg; if (!d) return;
+  const btn = $('#sfGo'); btn.disabled = true;
+  for (const el of $('#sfDlgBody').querySelectorAll('input, select, button')) el.disabled = true;
+  try {
+    const geom = sfGeom(d); if (!geom) throw new Error('no extent');
+    const prog = (label) => (f) => { $('#sfDlgMsg').textContent = `${label} ${Math.round(f * 100)}%…`; };
+    if (d.mode === 'extend') {
+      const L = layerById(d.src); if (!L) throw new Error('surface gone');
+      const grid = await gridOnLattice(L, geom, prog('rasterizing'));
+      $('#sfDlgMsg').textContent = `extending (${d.fill})…`;
+      applyGridExtend(grid, d.fill, false);
+      const base = (L.label || L.name).replace(/\.[^.]+$/, '');
+      const lin = mkLineage('surface.extend', { footprint: d.foot === 'all' ? 'all layers' : (layerById(+d.foot) || {}).name, cell: geom.dx, fill: d.fill }, [L.lineage]);
+      await openBlob(new Blob([writeEsriAsc(grid)]), `${base}_ext.asc`, _layers.length ? 'add' : 'replace', null, { lineage: lin });
+    } else {
+      const Ls = d.srcs.map(layerById).filter(Boolean);
+      if (Ls.length < 2) throw new Error('combine needs two surfaces');
+      const grids = [];
+      for (let i = 0; i < Ls.length; i++) grids.push(await gridOnLattice(Ls[i], geom, prog(`rasterizing ${i + 1}/${Ls.length}`)));
+      $('#sfDlgMsg').textContent = `combining (${d.rule})…`;
+      const N = geom.nx * geom.ny, out = new Float32Array(N).fill(-9999);
+      const bad = (v) => Number.isNaN(v) || v === -9999;
+      for (let i = 0; i < N; i++) {
+        let acc = NaN, n = 0;
+        for (const g of grids) {
+          const v = g.data[i]; if (bad(v)) continue;
+          n++;
+          if (d.rule === 'first') { acc = v; break; }
+          if (Number.isNaN(acc)) acc = v;
+          else acc = d.rule === 'min' ? Math.min(acc, v) : d.rule === 'max' ? Math.max(acc, v) : acc + v;
+        }
+        if (n) out[i] = d.rule === 'mean' ? acc / n : acc;
+      }
+      const grid = { nx: geom.nx, ny: geom.ny, x0: geom.x0, y0: geom.y0, dx: geom.dx, dy: geom.dx, data: out, nodata: -9999, crs: null, form: 'combine' };
+      if (d.combFill !== 'none') { $('#sfDlgMsg').textContent = `filling (${d.combFill})…`; applyGridExtend(grid, d.combFill, false); }
+      const names = Ls.map((L) => (L.label || L.name).replace(/\.[^.]+$/, ''));
+      const lin = mkLineage('surface.combine', { rule: d.rule, of: names, cell: geom.dx, fill: d.combFill }, Ls.map((L) => L.lineage));
+      await openBlob(new Blob([writeEsriAsc(grid)]), `${d.rule}_${names.join('_').slice(0, 40)}.asc`, _layers.length ? 'add' : 'replace', null, { lineage: lin });
+    }
+    $('#sfDlg').classList.remove('show'); _sfDlg = null;
+  } catch (e) { $('#sfDlgMsg').textContent = e.message; }
+  finally { btn.disabled = false; for (const el of $('#sfDlgBody').querySelectorAll('input, select, button')) el.disabled = false; if (_sfDlg) renderSurfaceTools(); }
 };
 // export a grid layer as an ESRI ASCII .asc
 async function exportGridAsc(L) {
@@ -8955,6 +9104,8 @@ const COMMANDS = [
   { id: 'sel-column', group: 'Layer', title: 'Selection → column…', kw: 'materialize save flag 0 1 paint selected', when: (c) => !!(c.L && c.L._selCount), run: (c) => selectionToColumn(c.L) },
   { id: 'filter-sel', group: 'Layer', title: 'Filter → selection', kw: 'matches convert select expression reproducible', when: (c) => !!(c.L && c.L._filterMask), run: (c) => filterToSelection(c.L) },
   { id: 'run-recipe', group: 'Analysis', title: 'Run recipe…', kw: 'saved yaml grade-tonnage swath analysis rerun', when: () => _recipes.length > 0, run: () => setTimeout(() => menuXY(innerWidth / 2 - 130, innerHeight / 3, recipesMenuItems()), 0) },
+  { id: 'surf-extend', group: 'Layer', title: 'Extend surface to footprint…', kw: 'grow cover topo grid mesh fill trend', when: () => surfaceableLayers().length > 0, run: (cx) => openSurfaceTools('extend', cx.L) },
+  { id: 'surf-combine', group: 'Layer', title: 'Combine surfaces…', kw: 'min max priority mean merge patch topo union overlap', when: () => surfaceableLayers().length >= 2, run: (cx) => openSurfaceTools('combine', cx.L) },
   { id: 'stats', group: 'Analysis', title: 'Stats…', kw: 'summary table group by mean std quantiles domain report', when: (c) => !!(c.L && layerTableHeader(c.L) && numericColsOf(c.L).length), run: (c) => openStats(c.L) },
   { id: 'export-mesh', group: 'Layer', title: 'Export mesh(es)…', kw: 'obj ply msh lfm wavefront leapfrog save', when: () => _layers.some((L) => L.kind === 'mesh' && L.docs.meshDoc), run: (c) => {
     const sel = lpSelIds().map(layerById).filter((x) => x && x.kind === 'mesh' && x.docs.meshDoc);
@@ -9407,6 +9558,8 @@ function layerMenu(L, x, y) {
     { label: 'Move down', action: () => treeMoveStep(L.id, 1) },
     { label: 'Move to group…', action: () => setTimeout(() => moveLayerToGroupMenu(L, x, y), 0) },
     ...(L.docs.gridDoc ? [{ label: 'Flag / ratio by this surface…', action: () => openSolidDialog(L) }] : []),
+    ...(L.docs.gridDoc ? [{ label: 'Extend to footprint…', action: () => openSurfaceTools('extend', L) }] : []),
+    ...(L.docs.gridDoc && surfaceableLayers().length >= 2 ? [{ label: 'Combine surfaces…', action: () => openSurfaceTools('combine', L) }] : []),
     ...(L.docs.gridDoc ? [{ label: 'Export as ESRI ASCII grid…', action: () => exportGridAsc(L) }] : []),
     ...(L.docs.gridDoc && L.docs.gridDoc.source && !L.docs.gridDoc.fullRes && _project ? [{ label: 'Build display cache', action: async () => { try { const why = await writeGridDisplayCache(L, _project.dir); $('#meta').textContent = why ? `display cache: ${why}` : `display cache written · ${L.name}.disp.grd`; } catch (e) { $('#meta').textContent = `display cache — ${e.message}`; } } }] : []),
     ...(L.dh ? [{ label: `Stick radius… (${renderer.layerStickRadius(L.id)} m)`, action: async () => {
@@ -9436,6 +9589,8 @@ function layerMenu(L, x, y) {
       const h = L.docs.meshDoc && L.docs.meshDoc.header;
       if (h && !h.soup) items.push({ label: 'Select by this solid…', action: () => openSolidDialog(L) });
       if (h && !h.soup) items.push({ label: 'Rasterize to grid…', action: () => openMeshGridDialog(L) });
+      if (h && !h.soup) items.push({ label: 'Extend to footprint…', action: () => openSurfaceTools('extend', L) });
+      if (h && !h.soup && surfaceableLayers().length >= 2) items.push({ label: 'Combine surfaces…', action: () => openSurfaceTools('combine', L) });
       if (h) items.push({ label: 'Export mesh…', action: () => openMeshExportDialog([L]) });
       if (h) {
         const now = renderer.layerVramBytes(L.id);
@@ -12109,7 +12264,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
