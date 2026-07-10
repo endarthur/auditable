@@ -86,7 +86,38 @@ await p.goto(`http://127.0.0.1:${PORT}/tools/micro/index.html`, { waitUntil: 'lo
 await p.waitForFunction(() => window._micro, { timeout: 15000 });
 
 const settle = (ms = 1400) => p.waitForTimeout(ms);
-const shot = async (name, opts = {}) => { await settle(opts.wait || 1200); await (opts.el ? p.locator(opts.el) : p).screenshot({ path: join(OUT, name + '.png') }); console.log('shot:', name); };
+// WebGL screenshots can race the swap (no preserveDrawingBuffer → a capture
+// between presents reads back a CLEARED canvas; this blanked overview.png once,
+// silently, on the deployed docs). So VERIFY the CAPTURED PNG itself — decode
+// it back in the page, count lit pixels in the viewport region — and retry.
+const pngLit = async (name) => {
+  const b64 = (await readFile(join(OUT, name + '.png'))).toString('base64');
+  return p.evaluate(async (data) => {
+    const img = new Image();                                 // fetch() is CSP-blocked in Sealed micro; img-src allows data:
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = 'data:image/png;base64,' + data; });
+    const c = document.createElement('canvas'); c.width = 320; c.height = 200;
+    const g = c.getContext('2d');
+    // sample the central viewport area (skips the toolbar + layers panel)
+    g.drawImage(img, img.width * 0.3, img.height * 0.2, img.width * 0.65, img.height * 0.65, 0, 0, 320, 200);
+    const d = g.getImageData(0, 0, 320, 200).data;
+    let lit = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 60) lit++;
+    return lit;
+  }, b64);
+};
+const shot = async (name, opts = {}) => {
+  await settle(opts.wait || 1200);
+  for (let attempt = 0; ; attempt++) {
+    await p.evaluate(() => new Promise((res) => { window._micro.requestRender(); requestAnimationFrame(() => requestAnimationFrame(res)); }));
+    await (opts.el ? p.locator(opts.el) : p).screenshot({ path: join(OUT, name + '.png') });
+    if (opts.blankOk) break;                                 // shots without 3D content
+    const lit = await pngLit(name);
+    if (lit > 200) break;                                    // the scene made it into the FILE
+    if (attempt >= 3) { console.log(`shot: ${name} — STILL DARK after ${attempt + 1} tries (${lit} lit px)`); process.exitCode = 1; break; }
+    console.log(`shot: ${name} — dark capture (${lit} lit px), retrying…`);
+    await settle(1500);
+  }
+  console.log('shot:', name);
+};
 const layerReady = (nm) => p.waitForFunction((n) => { const L = window._micro.layers().find((x) => x.name === n); return L && window._micro.renderer.layerElementCount(L.id) > 0; }, nm, { timeout: 60000 });
 const openModel = (csv, name, mode = 'replace') => p.evaluate(([c, n, m]) => window._micro.openBlob(new Blob([c]), n, m), [csv, name, mode]);
 
