@@ -389,6 +389,16 @@ await p.close();
     window._micro.setSurfaceFlatZ(L, null); return r;   // back to relief for the following checks
   });
   chk(`surface flattens to a horizontal sheet at a chosen z (collapsed to z≈900)`, flat.surface && flat.flatZ === 900 && Math.abs(flat.zmin - 900) < 1 && Math.abs(flat.zmax - 900) < 1);
+  // shading is a style option: smooth (default) ↔ faceted (flat per-triangle)
+  const shade = await ph.evaluate(() => {
+    const L = window._micro.layers().find((x) => x.gridSurface);
+    const def = L.surfaceSmooth; window._micro.setSurfaceSmooth(L, false); const off = L.surfaceSmooth;
+    window._micro.setActiveLayer(L.id); window._micro.openProps();
+    const row = [...document.querySelectorAll('#ppBody .pp-row')].find((r) => /shading/i.test(r.querySelector('label') ? r.querySelector('label').textContent : ''));
+    const val = row && row.querySelector('select') ? row.querySelector('select').value : '';
+    window._micro.setSurfaceSmooth(L, true); return { def, off, val, picker: !!(row && row.querySelector('select')) };
+  });
+  chk(`surface shading toggles smooth↔faceted (default smooth, properties picker)`, shade.def !== false && shade.off === false && shade.picker && shade.val === 'faceted');
   // surface + drape PERSIST across a project save/reload
   await saveProject(ph);
   await ph.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2surf'); await window._micro.openProjectDir(dir); });

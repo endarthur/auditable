@@ -5229,8 +5229,8 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     if (isMesh && /\.(msh|obj|lfm|ply)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
     else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first, forcePoints, cached: over.cached }); }
     // grid stays extension-driven (no table→grid provider yet); asKind only picks points↔surface.
-    else if ((over.asKind == null || over.asKind === 'surface' || over.asKind === 'points') && /\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache, surface: over.asKind === 'surface', flatZ: over.flatZ != null ? over.flatZ : null, band: over.band || 0 }); }
-    else if ((over.asKind == null || over.asKind === 'surface' || over.asKind === 'points') && /\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first, surface: over.asKind === 'surface', flatZ: over.flatZ != null ? over.flatZ : null }); }
+    else if ((over.asKind == null || over.asKind === 'surface' || over.asKind === 'points') && /\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache, surface: over.asKind === 'surface', flatZ: over.flatZ != null ? over.flatZ : null, band: over.band || 0, smooth: over.smooth }); }
+    else if ((over.asKind == null || over.asKind === 'surface' || over.asKind === 'points') && /\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first, surface: over.asKind === 'surface', flatZ: over.flatZ != null ? over.flatZ : null, smooth: over.smooth }); }
     else if (/\.(parquet|pq)$/i.test(name)) { await openParquetBlocks(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping, cached: over.cached }); }
     // .xyz/.pts default to POINTS (2-decimal coords form a fake lattice); a
     // block/points asKind override rides forcePoints for every delimited file.
@@ -5564,10 +5564,11 @@ function rebuildSurface(L) {
   for (let i = 0; i < hf.count; i++) { const z = hf.values[i]; if (z < zmin) zmin = z; if (z > zmax) zmax = z; }
   const drapeLayer = L.drapeSource ? _layers.find((x) => x.name === L.drapeSource && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid) : null;
   const color = surfaceColorArray(hf, drapeLayer ? drapeLayer.docs.gridDoc.grid : null, (rampCfgOf(L) || {}).preset, zmin, zmax);
+  const smooth = L.surfaceSmooth !== false;                 // faceted (no normals → flat per-triangle shading) reads the cell structure
   const vis = L.visible, sec = renderer.layerSectioned(L.id), op = L.opacity != null ? L.opacity : 1;
   renderer.removeLayer(L.id);
   renderer.setLayerMeshStyle(L.id, { tint: [0.6, 0.63, 0.66], opacity: op });
-  renderer.addChunk({ kind: 'mesh', pos: hf.pos, idx: hf.idx, color, normal: hf.normal, count: hf.count, bboxLocal: hf.bboxLocal }, 'base', L.id);
+  renderer.addChunk({ kind: 'mesh', pos: hf.pos, idx: hf.idx, color, normal: smooth ? hf.normal : null, count: hf.count, bboxLocal: hf.bboxLocal }, 'base', L.id);
   L.bboxLocal = hf.bboxLocal;
   if (vis === false) renderer.setLayerVisible(L.id, false);
   if (sec != null && sec !== true) renderer.setLayerSectioned(L.id, sec);
@@ -5587,18 +5588,26 @@ function setSurfaceFlatZ(L, flatZ) {
   rebuildSurface(L);
   $('#meta').textContent = flatZ != null ? `${L.label || L.name} — flat sheet at z ${flatZ}` : `${L.label || L.name} — relief`;
 }
+// smooth (grid-gradient normals) ↔ faceted (flat per-triangle shading — reads the
+// cell structure, better for some interpretation)
+function setSurfaceSmooth(L, smooth) {
+  if (!L.gridSurface) return;
+  L.surfaceSmooth = !!smooth;
+  rebuildSurface(L);
+  $('#meta').textContent = `${L.label || L.name} — ${smooth ? 'smooth' : 'faceted'} shading`;
+}
 // pick which BAND of a multi-band GeoTIFF is displayed (grid ≈ columns) — re-reads
 // the grid at that band, preserving surface / drape / flat / visibility. Anytime,
 // not import-only (like the block-model channel picker).
 async function setGridBand(L, band) {
   const gd = L.docs && L.docs.gridDoc; if (!gd || !(gd.grid.bands > 1)) return;
   const blob = gd.blob, name = L.name;
-  const wasSurface = !!L.gridSurface, drape = L.drapeSource, flatZ = L.surfaceFlatZ;
+  const wasSurface = !!L.gridSurface, drape = L.drapeSource, flatZ = L.surfaceFlatZ, smooth = L.surfaceSmooth;
   const label = L.label, vis = L.visible, keepHandle = L.handle, keepStorage = L.storage;
   renderer.removeLayer(L.id);
   _layers = _layers.filter((l) => l.id !== L.id);
   if (keepHandle && typeof File !== 'undefined' && blob instanceof File) _fileHandles.set(blob, keepHandle);
-  await openBlob(blob, name, 'add', null, { asKind: wasSurface ? 'surface' : 'points', band, flatZ: wasSurface ? flatZ : null });
+  await openBlob(blob, name, 'add', null, { asKind: wasSurface ? 'surface' : 'points', band, flatZ: wasSurface ? flatZ : null, smooth: wasSurface ? smooth : undefined });
   const L2 = activeLayer();
   if (L2) {
     if (label) L2.label = label; L2.storage = keepStorage; if (keepHandle) L2.handle = keepHandle;
@@ -5645,10 +5654,11 @@ async function openGridBlob(blob, name, opts = {}) {
     const color = surfaceColorArray(hf, opts.drape || null, (rampCfgOf(layerById(lid)) || {}).preset, zmin, zmax);
     registerDocs(lid, 'mesh');
     fitFromHeader({ ...header, bbox: { min: hf.bboxLocal.slice(0, 3).map((v, i) => v + (frame ? frame.origin[i] : 0)), max: hf.bboxLocal.slice(3, 6).map((v, i) => v + (frame ? frame.origin[i] : 0)) } }, opts.first !== false);
+    const smooth = opts.smooth !== false;
     renderer.setLayerMeshStyle(lid, { tint: [0.6, 0.63, 0.66], opacity: 1 });
-    renderer.addChunk({ kind: 'mesh', pos: hf.pos, idx: hf.idx, color, normal: hf.normal, count: hf.count, bboxLocal: hf.bboxLocal }, 'base', lid);
+    renderer.addChunk({ kind: 'mesh', pos: hf.pos, idx: hf.idx, color, normal: smooth ? hf.normal : null, count: hf.count, bboxLocal: hf.bboxLocal }, 'base', lid);
     const Lg = layerById(lid);
-    if (Lg) { Lg.bboxLocal = hf.bboxLocal; Lg.docs.gridDoc = _gridDoc; Lg.tint = '#9aa0a6'; Lg.gridSurface = true; Lg.surfaceFlatZ = flatZ; }
+    if (Lg) { Lg.bboxLocal = hf.bboxLocal; Lg.docs.gridDoc = _gridDoc; Lg.tint = '#9aa0a6'; Lg.gridSurface = true; Lg.surfaceFlatZ = flatZ; Lg.surfaceSmooth = smooth; }
     recomputeUnion(); requestRender();
     $('#meta').textContent = `${name} — surface · ${hf.vertexCount.toLocaleString()} nodes${stride > 1 ? ` (every ${stride}ᵗʰ)` : ''}${grid.crs ? ` · ${grid.crs}` : ''}`;
     return;
@@ -7283,6 +7293,7 @@ function projectManifest() {
       gridSurface: (L.docs.gridDoc && L.gridSurface) || undefined,   // a grid shown as a shaded-relief surface
       drape: (L.gridSurface && L.drapeSource) || undefined,          // draped by another grid layer (by NAME)
       flatZ: (L.gridSurface && L.surfaceFlatZ != null) ? L.surfaceFlatZ : undefined,   // flat sheet at this world z (vs relief)
+      faceted: (L.gridSurface && L.surfaceSmooth === false) || undefined,   // flat per-triangle shading (vs smooth, the default)
       band: (L.docs.gridDoc && L.docs.gridDoc.grid.band) || undefined,   // which band of a multi-band GeoTIFF
       soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
       hiddenCats: L.catHidden && L.catHidden.size
@@ -7740,7 +7751,7 @@ async function openProjectDir(dir) {
       const overR = ls.kind === 'mesh'
         ? { tint: ls.tint, opacity: ls.opacity, forceSoup: !!ls.soup }
         : (/\.ply$/i.test(ls.source) ? { forcePoints: true } : (ls.mapping ? { mapping: ls.mapping } : {}));
-      if (ls.gridSurface) { overR.asKind = 'surface'; if (ls.flatZ != null) overR.flatZ = ls.flatZ; }   // a grid saved as a surface reopens as one (relief or flat; drape applied post-load)
+      if (ls.gridSurface) { overR.asKind = 'surface'; if (ls.flatZ != null) overR.flatZ = ls.flatZ; if (ls.faceted) overR.smooth = false; }   // a grid saved as a surface reopens as one (relief/flat, smooth/faceted; drape applied post-load)
       if (ls.band) overR.band = ls.band;                    // multi-band GeoTIFF: the chosen band
       // grid display-cache: matching source size → display from the sidecar,
       // skipping the re-decimation (eval still windows the source full res)
@@ -10174,6 +10185,12 @@ function renderStyleTab(body, L) {
       zIn.onchange = () => { if (flatChk.checked) setSurfaceFlatZ(L, +zIn.value || 0); };
       shp.append(flatChk, document.createTextNode(' flatten'), zLab, zIn);
       body.appendChild(mkRow('shape', shp));
+      // shading: smooth grid-gradient normals vs faceted (flat per-triangle — reads the cells)
+      const shd = document.createElement('select');
+      for (const [v, t] of [['smooth', 'smooth'], ['faceted', 'faceted (flat)']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; shd.appendChild(o); }
+      shd.value = L.surfaceSmooth === false ? 'faceted' : 'smooth';
+      shd.onchange = () => setSurfaceSmooth(L, shd.value === 'smooth');
+      body.appendChild(mkRow('shading', shd));
     } else {
       const tintIn = document.createElement('input'); tintIn.type = 'color'; tintIn.value = L.tint || '#9ea3a8';
       tintIn.oninput = () => setMeshTint(L, tintIn.value);
@@ -12709,7 +12726,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
