@@ -134,6 +134,7 @@
 <p><span class="kbd">F2</span> renames the active layer. <b>Rename layers…</b> (on a group, a multi-selection, or the palette) batch-renames: one-click <b>strip the common prefix/suffix</b>, or find→replace with optional <b>regex</b>, with a live before→after table — handy when a folder of <code>BM2024_​kriging.csv</code>-style names comes in.</p>
 <h3>Getting around</h3>
 <p>Drag to orbit, right-drag (or shift-drag) to pan, wheel to zoom. <span class="kbd">f</span> fits the data. <span class="kbd">n s e w</span> look level that way, <span class="kbd">d</span> is plan, <span class="kbd">o</span> toggles orthographic (needed for a true scale bar). Click a block or point to <b>pick</b> it — the record panel shows its full source row, with a <b>fields</b> picker (search + all/none) to trim it to the columns you care about.</p>
+<p><b>Vertical exaggeration</b> — the <b>Z×</b> box on the instrument rail (or View → Vertical exaggeration) stretches the whole scene vertically so subtle relief or a flat-lying ore lens reads. It's a property of the <i>view</i>, not one layer: every layer stretches together and stays registered, and it's display-only — picking, measuring, and section cutting all stay in true coordinates. It travels with bookmarks and scenes.</p>
 
 <h2 id="view"><span class="n">3</span>Viewing &amp; querying</h2>
 <h3>Colour</h3>
@@ -220,7 +221,15 @@
 </figure>
 
 <h2 id="grids"><span class="n">11</span>Grids</h2>
-<p>GeoTIFF / Surfer <code>.grd</code> / ESRI <code>.asc</code> open as heightfield layers (cells are pickable records; huge DEMs decimate for display while the full grid stays for evaluation). A mesh right-click → <b>Rasterize to grid…</b> renders it onto a DEM (the surface↔grid converter, with fill / extrapolation for gaps). <b>New… → grid / block model</b> creates empty grids from parameters, covering a layer's bounds, or — <b>cover compatible models</b> — on a lattice that covers and is compatible with several models at once (the reconcile target). Grid layers export as ESRI ASCII.</p>
+<p>GeoTIFF / Surfer <code>.grd</code> / ESRI <code>.asc</code> open as heightfield layers — an elevation point cloud where cells are pickable records (huge DEMs decimate for display while the full grid stays for evaluation). A mesh right-click → <b>Rasterize to grid…</b> renders it onto a DEM (the surface↔grid converter, with fill / extrapolation for gaps). <b>New… → grid / block model</b> creates empty grids from parameters, covering a layer's bounds, or — <b>cover compatible models</b> — on a lattice that covers and is compatible with several models at once (the reconcile target). Grid layers export as ESRI ASCII.</p>
+<h3>Show a grid as a surface — relief, flat, and draped</h3>
+<p>Right-click a grid → <b>Reinterpret as → surface</b> renders it as a solid, smooth-shaded <b>relief</b> mesh — a DEM reads as terrain, not a gappy point cloud. In <b>Properties → Style</b> a surface then offers:</p>
+<ul>
+  <li><b>Drape</b> — colour it by its own <i>elevation/value</i>, or by <b>another loaded grid's values</b> (grade / geochem / slope over topo), sampled at each point. Paint the terrain with whatever channel you like. (The drape source is a 2D grid, sampled by position.)</li>
+  <li><b>Shape → flatten @ z</b> — turn a 2D data grid that has <i>no</i> elevation (a grade or geochem grid) into a <b>horizontal coloured sheet</b> at a chosen level, coloured by its value. A plan sheet, floating where you put it.</li>
+  <li><b>Band</b> — for a <b>multi-band GeoTIFF</b>, a picker to choose which band is shown (a GeoTIFF's bands are like a grid's columns). Switch it anytime; it re-reads that sample.</li>
+</ul>
+<p>Surface, drape, flat, and band all <b>persist in the project</b> — reopen and the terrain comes back exactly as you left it.</p>
 <h3>Surface tools: extend &amp; combine</h3>
 <p><b>Extend to footprint…</b> (right-click a surface — mesh or grid) grows it to cover a chosen extent: <b>nearest</b> holds the boundary z flat (the "extend the outer ring" move), <b>trend</b> continues the fitted dip. A topo that stops short of the model no longer leaves blocks unclassified — extend it, then flag above/below covers everything. <b>Combine surfaces…</b> rasterizes two or more surfaces onto one lattice and resolves the overlap by a rule: <b>min</b> (topo ∧ weathering base — take the lower), <b>max</b>, <b>first</b> (list order is priority — patch an end-of-month survey into the original topo), or <b>mean</b>. Both produce <b>grid layers</b> — exact and fast for flags and reconcile — with the rule recorded in the layer name and its lineage; export .asc anytime.</p>
 
