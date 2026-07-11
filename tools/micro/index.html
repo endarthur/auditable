@@ -5529,6 +5529,49 @@ async function meshToGridLayer(meshL, { cell, keep = 'top', extend = 'none', hol
   await openBlob(new Blob([writeEsriAsc(grid)]), `${base}.asc`, _layers.length ? 'add' : 'replace');
   return grid;
 }
+// Colour a heightfield mesh's vertices — by ELEVATION (its own values) or DRAPED
+// from another grid sampled bilinearly at each vertex's world (x,y). Off the drape
+// grid → a dim grey so gaps read honestly. The drape range auto-spans the sampled
+// values. (Phase 2 of the heightfield-drape arc, §17.)
+function surfaceColorArray(hf, drapeGrid, rampPreset, elevLo, elevHi) {
+  const stops = RAMP_PRESETS[rampPreset] || RAMP_PRESETS.viridis;
+  const color = new Float32Array(hf.count * 3), o = frame ? frame.origin : [0, 0, 0];
+  if (drapeGrid) {
+    const surf = surfaceFromGrid(drapeGrid), vals = new Float32Array(hf.count);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < hf.count; i++) { const v = surf.sampleZ(hf.pos[i * 3] + o[0], hf.pos[i * 3 + 1] + o[1]); vals[i] = v; if (!Number.isNaN(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+    const span = (hi - lo) || 1;
+    for (let i = 0; i < hf.count; i++) {
+      const v = vals[i];
+      if (Number.isNaN(v)) { color[i * 3] = 0.24; color[i * 3 + 1] = 0.24; color[i * 3 + 2] = 0.27; }
+      else { const c = rampSample(stops, (v - lo) / span); color[i * 3] = c[0] / 255; color[i * 3 + 1] = c[1] / 255; color[i * 3 + 2] = c[2] / 255; }
+    }
+  } else {
+    const span = (elevHi - elevLo) || 1;
+    for (let i = 0; i < hf.count; i++) { const c = rampSample(stops, (hf.values[i] - elevLo) / span); color[i * 3] = c[0] / 255; color[i * 3 + 1] = c[1] / 255; color[i * 3 + 2] = c[2] / 255; }
+  }
+  return color;
+}
+// Re-colour a loaded surface in place — by elevation (drapeLayer=null) or draped
+// from another grid layer — without re-reading the source (grid is in memory).
+// removeLayer wipes the layer state, so visibility/section/opacity are restored.
+function recolorSurface(L, drapeLayer) {
+  const gd = L.docs && L.docs.gridDoc; if (!gd || !L.gridSurface) { $('#meta').textContent = 'drape: not a surface layer'; return; }
+  const hf = buildHeightfieldMesh(gd.grid, { stride: gd.stride, frame }); if (!hf) return;
+  let zmin = Infinity, zmax = -Infinity;
+  for (let i = 0; i < hf.count; i++) { const z = hf.values[i]; if (z < zmin) zmin = z; if (z > zmax) zmax = z; }
+  const drapeGrid = drapeLayer && drapeLayer.docs.gridDoc ? drapeLayer.docs.gridDoc.grid : null;
+  const color = surfaceColorArray(hf, drapeGrid, (rampCfgOf(L) || {}).preset, zmin, zmax);
+  const vis = L.visible, sec = renderer.layerSectioned(L.id), op = L.opacity != null ? L.opacity : 1;
+  renderer.removeLayer(L.id);
+  renderer.setLayerMeshStyle(L.id, { tint: [0.6, 0.63, 0.66], opacity: op });
+  renderer.addChunk({ kind: 'mesh', pos: hf.pos, idx: hf.idx, color, normal: hf.normal, count: hf.count, bboxLocal: hf.bboxLocal }, 'base', L.id);
+  if (vis === false) renderer.setLayerVisible(L.id, false);
+  if (sec != null && sec !== true) renderer.setLayerSectioned(L.id, sec);
+  L.drapeSource = drapeLayer ? drapeLayer.name : null;
+  requestRender(); markProjectDirty();
+  $('#meta').textContent = drapeLayer ? `draped ${L.label || L.name} with ${drapeLayer.label || drapeLayer.name}` : `${L.label || L.name} — coloured by elevation`;
+}
 async function openGridBlob(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : _activeId;
   $('#meta').textContent = `${name} — reading grid…`;
@@ -5562,8 +5605,7 @@ async function openGridBlob(blob, name, opts = {}) {
   if (opts.surface) {
     const hf = buildHeightfieldMesh(grid, { stride, frame });
     if (!hf) throw new Error('grid is all nodata');
-    const stops = RAMP_PRESETS[(rampCfgOf(layerById(lid)) || {}).preset] || RAMP_PRESETS.viridis, span = (zmax - zmin) || 1, color = new Float32Array(hf.count * 3);
-    for (let i = 0; i < hf.count; i++) { const c = rampSample(stops, (hf.values[i] - zmin) / span); color[i * 3] = c[0] / 255; color[i * 3 + 1] = c[1] / 255; color[i * 3 + 2] = c[2] / 255; }
+    const color = surfaceColorArray(hf, opts.drape || null, (rampCfgOf(layerById(lid)) || {}).preset, zmin, zmax);
     registerDocs(lid, 'mesh');
     fitFromHeader(header, opts.first !== false);
     renderer.setLayerMeshStyle(lid, { tint: [0.6, 0.63, 0.66], opacity: 1 });
@@ -9861,6 +9903,11 @@ function layerMenu(L, x, y) {
     { label: 'Zoom to layer', action: () => fitLayer(L) },
     { label: 'Rename layer…', kbd: 'F2', action: () => renameActiveLayer(L) },
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
+    ...(L.gridSurface ? [{ label: 'Drape', submenu: () => {
+      const grids = _layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
+      return [{ label: (L.drapeSource ? '' : '✓ ') + 'elevation', action: () => recolorSurface(L, null) },
+        ...(grids.length ? grids.map((g) => ({ label: (L.drapeSource === g.name ? '✓ ' : '') + (g.label || g.name), action: () => recolorSurface(L, g) })) : [{ label: '(load another grid to drape over it)', action: () => {} }])];
+    } }] : []),
     { label: 'Move up', action: () => treeMoveStep(L.id, -1) },
     { label: 'Move down', action: () => treeMoveStep(L.id, 1) },
     { label: 'Move to group…', action: () => setTimeout(() => moveLayerToGroupMenu(L, x, y), 0) },
@@ -12583,7 +12630,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

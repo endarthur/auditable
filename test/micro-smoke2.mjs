@@ -349,6 +349,19 @@ await p.close();
   await ph.waitForTimeout(600);
   const surf = await ph.evaluate(() => { const L = window._micro.layers()[0]; return { kind: L.kind, surface: !!L.gridSurface, hasGrid: !!(L.docs.gridDoc && L.docs.gridDoc.grid), elem: window._micro.renderer.layerElementCount(L.id) }; });
   chk(`grid reinterprets to a shaded-relief surface (mesh, ${surf.elem.toLocaleString()} elements, gridDoc kept for eval)`, surf.kind === 'mesh' && surf.surface && surf.hasGrid && surf.elem > 1000);
+  // Phase 2 drape: colour the topo surface by a SECOND grid's values (grade over topo)
+  const grade = await ph.evaluate(() => {
+    const nc = 100, nr = 80, cs = 25, x0 = 500000, y0 = 6000000;
+    let s = `ncols ${nc}\nnrows ${nr}\nxllcorner ${x0}\nyllcorner ${y0}\ncellsize ${cs}\nNODATA_value -9999\n`; const rows = [];
+    for (let r = 0; r < nr; r++) { const line = []; for (let c = 0; c < nc; c++) line.push((0.5 + 3 * (c / nc) + 2 * (1 - r / nr)).toFixed(2)); rows.push(line.join(' ')); }
+    return s + rows.join('\n') + '\n';
+  });
+  await ph.evaluate((g) => window._micro.openBlob(new Blob([g]), 'grade.asc', 'add'), grade);
+  await ph.waitForFunction(() => window._micro.layers().some((L) => L.name === 'grade.asc'), null, { timeout: 30000 });
+  await ph.evaluate(() => { const topo = window._micro.layers().find((L) => L.gridSurface), gr = window._micro.layers().find((L) => L.name === 'grade.asc'); window._micro.recolorSurface(topo, gr); });
+  await ph.waitForTimeout(500);
+  const drape = await ph.evaluate(() => { const L = window._micro.layers().find((x) => x.gridSurface); return { drape: L.drapeSource, kind: L.kind, elem: window._micro.renderer.layerElementCount(L.id) }; });
+  chk(`surface drapes a second grid's values (topo coloured by grade, geometry intact)`, drape.drape === 'grade.asc' && drape.kind === 'mesh' && drape.elem > 1000);
   await ph.close();
 }
 
