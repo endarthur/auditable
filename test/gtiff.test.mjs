@@ -347,3 +347,22 @@ test('levelGeo + pickOverviewForCap over a fake pyramid', () => {
   assert.equal(pickOverviewForCap(g, 200000), 1);          // 400×400 fits
   assert.equal(pickOverviewForCap(g, 5000), 3);            // only the coarsest 100×100 (10k)... falls back
 });
+
+test('multi-band: band selection deinterleaves the right sample', async () => {
+  const W2 = 4, H2 = 3, N = W2 * H2;
+  const bytes = new Uint8Array(N * 2 * 4), dv = new DataView(bytes.buffer);
+  for (let i = 0; i < N; i++) { dv.setFloat32(i * 8, 100 + i, true); dv.setFloat32(i * 8 + 4, 500 - i, true); }   // pixel i = [band0, band1]
+  const base = [
+    [256, 3, 1, [W2]], [257, 3, 1, [H2]], [258, 3, 1, [32]], [259, 3, 1, [1]],
+    [262, 3, 1, [1]], [277, 3, 1, [2]], [278, 3, 1, [H2]], [339, 3, 1, [3]], [279, 4, 1, [bytes.length]],
+    [33550, 12, 3, [10, 10, 0]], [33922, 12, 6, [0, 0, 0, 600000, 7000000, 0]],
+  ].sort((a, b) => a[0] - b[0]);
+  const probe = writeTiff({ le: true, entries: [...base, [273, 4, 1, [0]]].sort((a, b) => a[0] - b[0]), imageData: [] });
+  const tif = writeTiff({ le: true, entries: [...base, [273, 4, 1, [probe.length]]].sort((a, b) => a[0] - b[0]), imageData: [bytes] });
+  const g = await readGTiff(tif);
+  assert.equal(g.images[0].samplesPerPixel, 2);
+  const g0 = await gridFromGTiff(g, 0, 0), g1 = await gridFromGTiff(g, 0, 1);
+  assert.equal(g0.bands, 2); assert.equal(g0.band, 0); assert.equal(g1.band, 1);
+  assert.equal(g0.data[0], 100); assert.equal(g1.data[0], 500);   // band 0 vs band 1 differ
+  assert.equal(g0.data[7], 107); assert.equal(g1.data[7], 493);
+});

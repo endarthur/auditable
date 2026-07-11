@@ -329,7 +329,7 @@ async function readGTiff(input) {
       // assemble a pixel window [x,y,width,height] (default = the whole image)
       // by decoding ONLY the overlapping segments. Cheap random-access on a
       // tiled image / COG overview; strips still decode a whole strip-row.
-      async readWindow(win) {
+      async readWindow(win, band = 0) {
         if (planar !== 1) throw new Error('gtiff: planar (band-separate) layout not supported');
         if (![8, 16, 32, 64].includes(bps)) throw new Error(`gtiff: ${bps}-bit samples not supported`);
         if (fmt === 3 && bps < 32) throw new Error('gtiff: half-float not supported');
@@ -355,22 +355,23 @@ async function readGTiff(input) {
           }
         }
         let data = typedView(out.buffer, fmt, bps);
-        if (spp > 1) {                                     // band 0 of chunky interleave
-          warnings.push(`multi-band image (${spp} samples/pixel) — reading band 0`);
-          const band = typedView(new ArrayBuffer(w.width * w.height * bytesPer), fmt, bps);
-          for (let i = 0; i < w.width * w.height; i++) band[i] = data[i * spp];
-          data = band;
+        if (spp > 1) {                                     // deinterleave the chosen band from chunky
+          const bi = Math.max(0, Math.min(spp - 1, band | 0));
+          const one = typedView(new ArrayBuffer(w.width * w.height * bytesPer), fmt, bps);
+          for (let i = 0; i < w.width * w.height; i++) one[i] = data[i * spp + bi];
+          data = one;
         }
         return { data, x: w.x, y: w.y, width: w.width, height: w.height };
       },
-      async read() { return (await this.readWindow(null)).data; },
+      async read(band = 0) { return (await this.readWindow(null, band)).data; },
       // decode the WHOLE image at 1/step resolution, one segment at a time —
       // bounded memory (one tile/strip + the coarse output), so ANY size TIFF
       // (overview or not, tiled or stripped) yields a display grid. Nodes are
       // taken on the step lattice (rows/cols ≡ 0 mod step); band 0 of chunky.
-      async readDecimated(step) {
+      async readDecimated(step, band = 0) {
         step = Math.max(1, step | 0);
-        if (step === 1) return { data: await this.read(), width, height, step: 1, dnx: width, dny: height };
+        const bi = Math.max(0, Math.min(spp - 1, band | 0));
+        if (step === 1) return { data: await this.read(bi), width, height, step: 1, dnx: width, dny: height };
         if (planar !== 1) throw new Error('gtiff: planar (band-separate) layout not supported');
         if (![8, 16, 32, 64].includes(bps)) throw new Error(`gtiff: ${bps}-bit samples not supported`);
         if (fmt === 3 && bps < 32) throw new Error('gtiff: half-float not supported');
@@ -387,7 +388,7 @@ async function readGTiff(input) {
           const c0 = Math.ceil(s.x0 / step) * step, c1 = Math.min(s.x0 + s.w, width);
           for (let r = r0; r < r1; r += step) {
             const segRow = (r - s.y0) * s.w * spp, outRow = (r / step) * dnx;
-            for (let c = c0; c < c1; c += step) outView[outRow + c / step] = segView[segRow + (c - s.x0) * spp];
+            for (let c = c0; c < c1; c += step) outView[outRow + c / step] = segView[segRow + (c - s.x0) * spp + bi];
           }
         }
         return { data: outView, width, height, step, dnx, dny };
@@ -405,9 +406,9 @@ async function readGTiff(input) {
 // SAMPLE (0,0)'s CENTER (PixelIsArea shifts half a cell in from the corner
 // origin; PixelIsPoint means the origin IS the node); row r's centre is
 // y0 − r·dy with dy POSITIVE. Overview levels inherit IFD0's geo, scaled.
-async function gridFromGTiff(g, level = 0) {
+async function gridFromGTiff(g, level = 0, band = 0) {
   const img = g.images[level];
-  const data = await img.read();
+  const data = await img.read(band);
   const f = g.images[0].width / img.width;                 // overview scale factor
   let x0 = null, y0 = null, dx = 1, dy = 1;
   if (g.geo.origin && g.geo.scale) {
@@ -416,7 +417,7 @@ async function gridFromGTiff(g, level = 0) {
     x0 = g.geo.origin[0] + half * dx;
     y0 = g.geo.origin[1] - half * dy;
   }
-  return { nx: img.width, ny: img.height, data, x0, y0, dx, dy, nodata: g.geo.nodata, crs: g.geo.crs, pixelIsPoint: g.geo.pixelIsPoint };
+  return { nx: img.width, ny: img.height, data, x0, y0, dx, dy, nodata: g.geo.nodata, crs: g.geo.crs, pixelIsPoint: g.geo.pixelIsPoint, bands: img.samplesPerPixel, band };
 }
 
 // geo of a level as functions (no pixel decode): world ↔ pixel, cell size
@@ -457,9 +458,9 @@ function windowForWorldBbox(g, level, bbox, pad = 1) {
 
 // decode a pixel window of a level → a north-up grid (origin shifted to the
 // window's sample (0,0) CENTRE). Only the overlapping tiles are decoded.
-async function gridWindowFromGTiff(g, level, win) {
+async function gridWindowFromGTiff(g, level, win, band = 0) {
   const img = g.images[level];
-  const r = await img.readWindow(win);
+  const r = await img.readWindow(win, band);
   const lg = levelGeo(g, level);
   return { nx: r.width, ny: r.height, data: r.data, x0: lg.x0 + r.x * lg.dx, y0: lg.y0 - r.y * lg.dy, dx: lg.dx, dy: lg.dy, nodata: g.geo.nodata, crs: g.geo.crs, pixelIsPoint: g.geo.pixelIsPoint };
 }
@@ -474,9 +475,9 @@ function stepForCap(g, level, cap) {
 // decode a WHOLE level at 1/step resolution → a north-up grid (cell size ×
 // step, origin unchanged — sample (0,0) is on the step lattice). One segment
 // resident at a time; the display path for any-size TIFFs.
-async function gridDecimatedFromGTiff(g, level, step) {
+async function gridDecimatedFromGTiff(g, level, step, band = 0) {
   const img = g.images[level];
-  const r = await img.readDecimated(step);
+  const r = await img.readDecimated(step, band);
   const lg = levelGeo(g, level);
   return { nx: r.dnx, ny: r.dny, data: r.data, x0: lg.x0, y0: lg.y0, dx: lg.dx * r.step, dy: lg.dy * r.step, nodata: g.geo.nodata, crs: g.geo.crs, pixelIsPoint: g.geo.pixelIsPoint };
 }

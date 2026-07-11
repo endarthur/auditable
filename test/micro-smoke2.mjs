@@ -34,6 +34,16 @@ const saveProject = async (p) => {
   await p.evaluate(() => { const d = document.querySelector('#svDlg'); if (d.classList.contains('show')) document.querySelector('#svCopy').click(); });
   await p.waitForFunction(() => /project saved/.test(document.querySelector('#meta').textContent), null, { timeout: 120000 });
 };
+// a minimal 2-band float32 GeoTIFF (band0 elevation, band1 gradient) for the band-pick check
+const twoBandTiff = () => {
+  const u16 = (v) => [v & 0xff, v >> 8], u32 = (v) => [v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff];
+  const wr = (entries, img) => { const tail = []; let tb = 8 + 2 + entries.length * 12 + 4; const vb = (t, vs) => { if (vs instanceof Uint8Array) return vs; const o = []; for (const v of vs) { if (t === 3) o.push(...u16(v)); else if (t === 4) o.push(...u32(v)); else if (t === 12) { const b = new Uint8Array(8); new DataView(b.buffer).setFloat64(0, v, true); o.push(...b); } else o.push(v); } return new Uint8Array(o); }; const buf = [0x49, 0x49, ...u16(42), ...u32(8), ...u16(entries.length)]; for (const [tag, ty, ct, vs] of entries) { const b = vb(ty, vs); buf.push(...u16(tag), ...u16(ty), ...u32(ct)); if (b.length <= 4) buf.push(...b, ...new Array(4 - b.length).fill(0)); else { buf.push(...u32(tb)); tail.push(b); tb += b.length; } } buf.push(...u32(0)); for (const t of tail) buf.push(...t); for (const d of img) buf.push(...d); return new Uint8Array(buf); };
+  const W = 40, H = 32, N = W * H, bytes = new Uint8Array(N * 2 * 4), dv = new DataView(bytes.buffer);
+  for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) { const i = r * W + c, dx = (c - W * 0.45) / (W * 0.3), dy = (r - H * 0.5) / (H * 0.3); dv.setFloat32(i * 8, 200 + 380 * Math.exp(-(dx * dx + dy * dy)), true); dv.setFloat32(i * 8 + 4, 0.5 + 3 * (c / W) + 2 * (1 - r / H), true); }
+  const base = [[256, 3, 1, [W]], [257, 3, 1, [H]], [258, 3, 1, [32]], [259, 3, 1, [1]], [262, 3, 1, [1]], [277, 3, 1, [2]], [278, 3, 1, [H]], [339, 3, 1, [3]], [279, 4, 1, [bytes.length]], [33550, 12, 3, [25, 25, 0]], [33922, 12, 6, [0, 0, 0, 500000, 6000000, 0]]].sort((a, b) => a[0] - b[0]);
+  const probe = wr([...base, [273, 4, 1, [0]]].sort((a, b) => a[0] - b[0]), []);
+  return wr([...base, [273, 4, 1, [probe.length]]].sort((a, b) => a[0] - b[0]), [bytes]);
+};
 
 // ═══ 1. the .dm sidecar arc: sub-blocked discovery cached, stats + band index
 //     restored, dm band pushdown EXACT ═══
@@ -387,6 +397,32 @@ await p.close();
   const reloaded = await ph.evaluate(() => { const L = window._micro.layers().find((x) => x.name === 'terrain.asc'); return { surface: !!(L && L.gridSurface), drape: L && L.drapeSource, kind: L && L.kind }; });
   chk(`surface + drape persist across a project reload (${JSON.stringify(reloaded)})`, reloaded.surface && reloaded.drape === 'grade.asc' && reloaded.kind === 'mesh');
   await ph.close();
+}
+
+// ═══ 11. multi-band GeoTIFF: pick the band (grid ≈ columns) — anytime, in the
+//     properties panel, re-reading the right sample; persists ═══
+{
+  const pm = await mkPage('sm2band');
+  const tif = twoBandTiff();
+  await pm.evaluate((arr) => window._micro.openBlob(new Blob([new Uint8Array(arr)]), 'multiband.tif', 'replace'), Array.from(tif));
+  await pm.waitForFunction(() => window._micro.layers().length && window._micro.layers()[0].docs.gridDoc, null, { timeout: 30000 });
+  const b0 = await pm.evaluate(() => { const g = window._micro.layers()[0].docs.gridDoc.grid; return { bands: g.bands, band: g.band, v: g.data[Math.floor(g.data.length * 0.4)] }; });
+  chk(`multi-band GeoTIFF detected (${b0.bands} bands, showing band ${b0.band + 1})`, b0.bands === 2 && b0.band === 0);
+  await pm.evaluate(() => window._micro.setGridBand(window._micro.layers()[0], 1));
+  await pm.waitForFunction(() => window._micro.layers()[0] && window._micro.layers()[0].docs.gridDoc.grid.band === 1, null, { timeout: 30000 });
+  const b1 = await pm.evaluate(() => {
+    const L = window._micro.layers()[0], g = L.docs.gridDoc.grid;
+    window._micro.setActiveLayer(L.id); window._micro.openProps();
+    const row = [...document.querySelectorAll('#ppBody .pp-row')].find((r) => /band/i.test(r.querySelector('label') ? r.querySelector('label').textContent : ''));
+    return { band: g.band, v: g.data[Math.floor(g.data.length * 0.4)], picker: !!(row && row.querySelector('select')), opts: row && row.querySelector('select') ? row.querySelector('select').options.length : 0 };
+  });
+  chk(`band pick re-reads the right sample (band0 ${b0.v.toFixed(1)} → band1 ${b1.v.toFixed(1)}) + properties picker`, b1.band === 1 && Math.abs(b0.v - b1.v) > 1 && b1.picker && b1.opts === 2);
+  await saveProject(pm);
+  await pm.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2band'); await window._micro.openProjectDir(dir); });
+  await pm.waitForFunction(() => window._micro.layers().length === 1 && window._micro.layers()[0].docs.gridDoc, null, { timeout: 60000 });
+  const bReload = await pm.evaluate(() => window._micro.layers()[0].docs.gridDoc.grid.band);
+  chk(`the chosen band persists across a project reload (band ${bReload + 1})`, bReload === 1);
+  await pm.close();
 }
 
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
