@@ -3435,6 +3435,48 @@ function buildMeshChunk({ vertices, triangles, frame }) {
   };
 }
 
+// A regular grid IS a single-valued heightfield — triangulate its lattice into a
+// mesh chunk with per-vertex smooth normals (grid-gradient central differences)
+// and a per-vertex value (the caller maps it to a colour via its own colormap).
+// Quads touching a nodata corner are dropped → clean holes. Coords are frame-
+// local. Strided to a display cap by the caller (bounded triangle count).
+function buildHeightfieldMesh(grid, { stride = 1, frame = null } = {}) {
+  const { nx, ny, data, x0, y0, dx, dy, nodata } = grid;
+  const o = (frame && frame.origin) || [0, 0, 0];
+  const isBad = (v) => Number.isNaN(v) || (nodata != null && (nodata >= 1.7e38 ? v >= 1.7014e38 : v === nodata));
+  const cols = Math.floor((nx - 1) / stride) + 1, rows = Math.floor((ny - 1) / stride) + 1;
+  const vidx = new Int32Array(rows * cols).fill(-1);
+  let nv = 0;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (!isBad(data[Math.min(ny - 1, r * stride) * nx + Math.min(nx - 1, c * stride)])) vidx[r * cols + c] = nv++;
+  }
+  if (!nv) return null;
+  const pos = new Float32Array(nv * 3), normal = new Float32Array(nv * 3), values = new Float32Array(nv);
+  const bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+  const zAt = (r, c) => { const v = data[Math.min(ny - 1, Math.max(0, r * stride)) * nx + Math.min(nx - 1, Math.max(0, c * stride))]; return isBad(v) ? NaN : v; };
+  const sx = 2 * stride * dx, sy = 2 * stride * dy;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const vi = vidx[r * cols + c]; if (vi < 0) continue;
+    const gr = Math.min(ny - 1, r * stride), gc = Math.min(nx - 1, c * stride), z = data[gr * nx + gc];
+    const px = (x0 + gc * dx) - o[0], py = (y0 - gr * dy) - o[1], pz = z - o[2];
+    pos[vi * 3] = px; pos[vi * 3 + 1] = py; pos[vi * 3 + 2] = pz; values[vi] = z;
+    if (px < bb[0]) bb[0] = px; if (py < bb[1]) bb[1] = py; if (pz < bb[2]) bb[2] = pz;
+    if (px > bb[3]) bb[3] = px; if (py > bb[4]) bb[4] = py; if (pz > bb[5]) bb[5] = pz;
+    // heightfield normal N = (-∂z/∂x, -∂z/∂y, 1); y decreases as row increases
+    let zl = zAt(r, c - 1), zr = zAt(r, c + 1), zdn = zAt(r - 1, c), zup = zAt(r + 1, c);
+    if (Number.isNaN(zl)) zl = z; if (Number.isNaN(zr)) zr = z; if (Number.isNaN(zdn)) zdn = z; if (Number.isNaN(zup)) zup = z;
+    const nX = -(zr - zl) / sx, nY = -(zdn - zup) / sy, nZ = 1, nl = Math.hypot(nX, nY, nZ) || 1;
+    normal[vi * 3] = nX / nl; normal[vi * 3 + 1] = nY / nl; normal[vi * 3 + 2] = nZ / nl;
+  }
+  const tris = [];
+  for (let r = 0; r < rows - 1; r++) for (let c = 0; c < cols - 1; c++) {
+    const a = vidx[r * cols + c], b = vidx[r * cols + c + 1], d = vidx[(r + 1) * cols + c], e = vidx[(r + 1) * cols + c + 1];
+    if (a < 0 || b < 0 || d < 0 || e < 0) continue;        // drop quads touching nodata → clean holes
+    tris.push(a, d, b, b, d, e);
+  }
+  return { kind: 'mesh', pos, idx: Uint32Array.from(tris), normal, values, count: (tris.length / 3) | 0, vertexCount: nv, bboxLocal: Float64Array.from(bb) };
+}
+
 // ── src/gl-mesh.js ──
 
 // @gcu/condenser — the context-mesh pipeline (micro-layers §7, tier 1).
@@ -3450,37 +3492,62 @@ function buildMeshChunk({ vertices, triangles, frame }) {
 const VERT$gl_mesh = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;        // frame-local vertex
+layout(location=1) in vec3 aColor;      // per-vertex rgb (heightfield drape); ignored when uVColor=0
+layout(location=2) in vec3 aNormal;     // per-vertex normal (smooth relief); ignored when uVNormal=0
 uniform mat4 uViewProj;
 uniform vec4 uSecPlane;
 out vec3 vWorldPos;
+out vec3 vColor;
+out vec3 vNormal;
 out float vSecDist;
 void main() {
   gl_Position = uViewProj * vec4(aPos, 1.0);
   vWorldPos = aPos;
+  vColor = aColor;
+  vNormal = aNormal;
   vSecDist = dot(aPos, uSecPlane.xyz) - uSecPlane.w;
+}`;
+
+// Per-vertex drape (uVColor) + smooth normals (uVNormal) are OPT-IN — default 0
+// keeps the flat-shaded solid-tint behaviour byte-for-byte. The heightfield
+// surface sets both: vColor from a colormap, vNormal from the grid gradient, and
+// the normal's z is divided by uZExag (inverse-transpose of the display z-scale)
+// so lighting matches the vertically-exaggerated relief.
+const SHADE_COMMON = `
+uniform vec4 uTint;                     // rgb + opacity
+uniform vec3 uLightDir;
+uniform vec3 uEye;
+uniform float uVColor;                  // 0/1 use vColor
+uniform float uVNormal;                 // 0/1 use vNormal (else flat derivative)
+uniform float uZExag;                   // vertical exaggeration (for the normal correction)
+const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+vec3 shadeSurface() {
+  vec3 n = (uVNormal > 0.5)
+    ? normalize(vec3(vNormal.xy, vNormal.z / max(uZExag, 1e-4)))   // exaggeration-correct
+    : normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));          // flat shading
+  vec3 vd = normalize(uEye - vWorldPos);
+  if (dot(n, vd) < 0.0) n = -n;                                    // two-sided
+  float shade = 0.42 + 0.58 * max(dot(n, uLightDir), 0.0);
+  vec3 base = (uVColor > 0.5) ? vColor : uTint.rgb;
+  return base * shade;
 }`;
 
 const FRAG$gl_mesh = `#version 300 es
 precision highp float;
 in vec3 vWorldPos;
+in vec3 vColor;
+in vec3 vNormal;
 in float vSecDist;
 uniform vec2 uSecCfg;                   // x: on, y: half-thickness
-uniform vec4 uTint;                     // rgb + opacity
-uniform vec3 uLightDir;
-uniform vec3 uEye;
+${SHADE_COMMON}
 out vec4 outColor;
-const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
 void main() {
   if (uSecCfg.x > 0.5 && abs(vSecDist) > uSecCfg.y) discard;   // per-pixel plane cut
   if (uTint.a < 0.999) {
     int bi = (int(gl_FragCoord.x) & 3) + ((int(gl_FragCoord.y) & 3) << 2);
     if (uTint.a < (BAYER[bi] + 0.5) / 16.0) discard;
   }
-  vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));  // flat shading
-  vec3 vd = normalize(uEye - vWorldPos);
-  if (dot(n, vd) < 0.0) n = -n;                                 // two-sided
-  float shade = 0.42 + 0.58 * max(dot(n, uLightDir), 0.0);
-  outColor = vec4(uTint.rgb * shade, 1.0);
+  outColor = vec4(shadeSurface(), 1.0);
 }`;
 
 // TRACE-OVER-THE-WALL variant, used while the layer is sectioned: with blocks
@@ -3493,28 +3560,23 @@ void main() {
 const FRAG_OVERLAY$gl_mesh = `#version 300 es
 precision highp float;
 in vec3 vWorldPos;
+in vec3 vColor;
+in vec3 vNormal;
 in float vSecDist;
 uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
-uniform vec4 uTint;
-uniform vec3 uLightDir;
-uniform vec3 uEye;
 uniform mat4 uViewProj;
 uniform vec3 uFwd;
 uniform float uOrtho;
+${SHADE_COMMON}
 out vec4 outColor;
-const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
 void main() {
   if (abs(vSecDist) > uSecCfg.y) discard;
   if (uTint.a < 0.999) {
     int bi = (int(gl_FragCoord.x) & 3) + ((int(gl_FragCoord.y) & 3) << 2);
     if (uTint.a < (BAYER[bi] + 0.5) / 16.0) discard;
   }
-  vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
-  vec3 vd = normalize(uEye - vWorldPos);
-  if (dot(n, vd) < 0.0) n = -n;
-  float shade = 0.42 + 0.58 * max(dot(n, uLightDir), 0.0);
-  outColor = vec4(uTint.rgb * shade, 1.0);
+  outColor = vec4(shadeSurface(), 1.0);
   gl_FragDepth = gl_FragCoord.z;
   float dcEye = dot(uEye, uSecPlane.xyz) - uSecPlane.w;
   if (abs(dcEye) > uSecCfg.y) {                            // eye outside the slab → a wall may occlude
@@ -3549,6 +3611,7 @@ function createMeshPipeline(gl) {
       viewProj: U('uViewProj'), secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
       tint: U('uTint'), lightDir: U('uLightDir'), eye: U('uEye'),
       fwd: U('uFwd'), ortho: U('uOrtho'),
+      vColor: U('uVColor'), vNormal: U('uVNormal'), zExag: U('uZExag'),
     } };
   };
   const base = mk(FRAG$gl_mesh), overlay = mk(FRAG_OVERLAY$gl_mesh);
@@ -3556,18 +3619,34 @@ function createMeshPipeline(gl) {
   function upload(chunk) {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-    const bPos = gl.createBuffer();
+    const bufs = [];
+    const bPos = gl.createBuffer(); bufs.push(bPos);
     gl.bindBuffer(gl.ARRAY_BUFFER, bPos);
     gl.bufferData(gl.ARRAY_BUFFER, chunk.pos, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-    const bIdx = gl.createBuffer();                        // stays bound in the VAO
+    if (chunk.color) {                                     // heightfield drape: per-vertex rgb (loc 1)
+      const bCol = gl.createBuffer(); bufs.push(bCol);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bCol);
+      gl.bufferData(gl.ARRAY_BUFFER, chunk.color, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    }
+    if (chunk.normal) {                                    // smooth relief: per-vertex normal (loc 2)
+      const bNrm = gl.createBuffer(); bufs.push(bNrm);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bNrm);
+      gl.bufferData(gl.ARRAY_BUFFER, chunk.normal, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(2);
+      gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+    }
+    const bIdx = gl.createBuffer(); bufs.push(bIdx);       // stays bound in the VAO
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bIdx);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, chunk.idx, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
     return {
-      kind: 'mesh', vao, buffers: [bPos, bIdx],
+      kind: 'mesh', vao, buffers: bufs,
       count: chunk.count, idxCount: chunk.idx.length,
+      hasColor: !!chunk.color, hasNormal: !!chunk.normal,
       bboxLocal: chunk.bboxLocal, cursor: 0,
     };
   }
@@ -3575,11 +3654,14 @@ function createMeshPipeline(gl) {
   // per-layer uniforms — tint [r,g,b] 0..1, opacity 0..1, section may be null.
   // Sectioned → the overlay program (depth flattened onto the slab face so the
   // trace draws over the true-cut block wall); unsectioned → the base program.
-  function begin(cam, { tint = [0.62, 0.64, 0.66], opacity = 1, section = null }) {
+  function begin(cam, { tint = [0.62, 0.64, 0.66], opacity = 1, section = null, vcolor = false, vnormal = false }) {
     const s = cam.state;
     const { prog, uni } = section ? overlay : base;
     gl.useProgram(prog);
     gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
+    gl.uniform1f(uni.vColor, vcolor ? 1 : 0);              // heightfield drape colours
+    gl.uniform1f(uni.vNormal, vnormal ? 1 : 0);            // smooth grid normals
+    gl.uniform1f(uni.zExag, s.zExag || 1);                 // normal correction under exaggeration
     gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
     // the headlight of blocks/sticks: eye direction + a little up
     const v = s.view;
@@ -6583,7 +6665,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         for (const [id, group] of byLayer(msh)) {
           if (!group.some((c) => moving || c.cursor === 0)) continue;
           const ls = layerOf(id);
-          meshPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: layerSecOf(ls, sec) });
+          meshPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: layerSecOf(ls, sec),
+            vcolor: group.some((c) => c.hasColor), vnormal: group.some((c) => c.hasNormal) });   // heightfield drape + smooth normals
           for (const c of group) {
             if (!(moving || c.cursor === 0)) continue;
             meshPipe.draw(c);
@@ -6948,6 +7031,7 @@ export {
   openObj,
   openPlyMesh,
   buildMeshChunk,
+  buildHeightfieldMesh,
   createMeshPipeline,
   buildSoupChunk,
   soupLocalCentroid,

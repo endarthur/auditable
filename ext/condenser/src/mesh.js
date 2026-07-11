@@ -182,3 +182,45 @@ export function buildMeshChunk({ vertices, triangles, frame }) {
     bboxLocal: Float64Array.from(bb),
   };
 }
+
+// A regular grid IS a single-valued heightfield — triangulate its lattice into a
+// mesh chunk with per-vertex smooth normals (grid-gradient central differences)
+// and a per-vertex value (the caller maps it to a colour via its own colormap).
+// Quads touching a nodata corner are dropped → clean holes. Coords are frame-
+// local. Strided to a display cap by the caller (bounded triangle count).
+export function buildHeightfieldMesh(grid, { stride = 1, frame = null } = {}) {
+  const { nx, ny, data, x0, y0, dx, dy, nodata } = grid;
+  const o = (frame && frame.origin) || [0, 0, 0];
+  const isBad = (v) => Number.isNaN(v) || (nodata != null && (nodata >= 1.7e38 ? v >= 1.7014e38 : v === nodata));
+  const cols = Math.floor((nx - 1) / stride) + 1, rows = Math.floor((ny - 1) / stride) + 1;
+  const vidx = new Int32Array(rows * cols).fill(-1);
+  let nv = 0;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (!isBad(data[Math.min(ny - 1, r * stride) * nx + Math.min(nx - 1, c * stride)])) vidx[r * cols + c] = nv++;
+  }
+  if (!nv) return null;
+  const pos = new Float32Array(nv * 3), normal = new Float32Array(nv * 3), values = new Float32Array(nv);
+  const bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+  const zAt = (r, c) => { const v = data[Math.min(ny - 1, Math.max(0, r * stride)) * nx + Math.min(nx - 1, Math.max(0, c * stride))]; return isBad(v) ? NaN : v; };
+  const sx = 2 * stride * dx, sy = 2 * stride * dy;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const vi = vidx[r * cols + c]; if (vi < 0) continue;
+    const gr = Math.min(ny - 1, r * stride), gc = Math.min(nx - 1, c * stride), z = data[gr * nx + gc];
+    const px = (x0 + gc * dx) - o[0], py = (y0 - gr * dy) - o[1], pz = z - o[2];
+    pos[vi * 3] = px; pos[vi * 3 + 1] = py; pos[vi * 3 + 2] = pz; values[vi] = z;
+    if (px < bb[0]) bb[0] = px; if (py < bb[1]) bb[1] = py; if (pz < bb[2]) bb[2] = pz;
+    if (px > bb[3]) bb[3] = px; if (py > bb[4]) bb[4] = py; if (pz > bb[5]) bb[5] = pz;
+    // heightfield normal N = (-∂z/∂x, -∂z/∂y, 1); y decreases as row increases
+    let zl = zAt(r, c - 1), zr = zAt(r, c + 1), zdn = zAt(r - 1, c), zup = zAt(r + 1, c);
+    if (Number.isNaN(zl)) zl = z; if (Number.isNaN(zr)) zr = z; if (Number.isNaN(zdn)) zdn = z; if (Number.isNaN(zup)) zup = z;
+    const nX = -(zr - zl) / sx, nY = -(zdn - zup) / sy, nZ = 1, nl = Math.hypot(nX, nY, nZ) || 1;
+    normal[vi * 3] = nX / nl; normal[vi * 3 + 1] = nY / nl; normal[vi * 3 + 2] = nZ / nl;
+  }
+  const tris = [];
+  for (let r = 0; r < rows - 1; r++) for (let c = 0; c < cols - 1; c++) {
+    const a = vidx[r * cols + c], b = vidx[r * cols + c + 1], d = vidx[(r + 1) * cols + c], e = vidx[(r + 1) * cols + c + 1];
+    if (a < 0 || b < 0 || d < 0 || e < 0) continue;        // drop quads touching nodata → clean holes
+    tris.push(a, d, b, b, d, e);
+  }
+  return { kind: 'mesh', pos, idx: Uint32Array.from(tris), normal, values, count: (tris.length / 3) | 0, vertexCount: nv, bboxLocal: Float64Array.from(bb) };
+}

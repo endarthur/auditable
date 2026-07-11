@@ -9,7 +9,7 @@ export { sniffDelimited, mapColumns, openBlockModel, lineFields, fetchDelimitedR
 export { classifyDrillholeHeader, sniffDrillholeFiles, readDelimited, openDrillholes, openDrillholeTraces } from './drillholes.js';
 export { buildStickChunk, stickLocalCenter, createStickChunkBuilder } from './sticks.js';
 export { createSticksPipeline } from './gl-sticks.js';
-export { openMsh, openObj, openPlyMesh, buildMeshChunk } from './mesh.js';
+export { openMsh, openObj, openPlyMesh, buildMeshChunk, buildHeightfieldMesh } from './mesh.js';
 export { createMeshPipeline } from './gl-mesh.js';
 export { buildSoupChunk, soupLocalCentroid, createSoupChunkBuilder, soupFromMesh, openPlySoup } from './soup.js';
 export { createSoupPipeline } from './gl-soup.js';

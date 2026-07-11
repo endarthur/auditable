@@ -328,6 +328,30 @@ await p.close();
   await pe.close();
 }
 
+// ═══ 10. heightfield surface — a grid reinterprets from the raw elevation point
+//     cloud to a shaded-relief mesh (per-vertex colour + smooth normals), keeping
+//     gridDoc for by-surface eval ═══
+{
+  const ph = await mkPage('sm2surf');
+  const asc = await ph.evaluate(() => {
+    const nc = 100, nr = 80, cs = 25, x0 = 500000, y0 = 6000000;
+    let s = `ncols ${nc}\nnrows ${nr}\nxllcorner ${x0}\nyllcorner ${y0}\ncellsize ${cs}\nNODATA_value -9999\n`;
+    const rows = [];
+    for (let r = 0; r < nr; r++) { const line = []; for (let c = 0; c < nc; c++) { const dx = (c - nc * 0.45) / (nc * 0.3), dy = (r - nr * 0.5) / (nr * 0.3); let z = 200 + 380 * Math.exp(-(dx * dx + dy * dy)); if (c < 6 && r < 6) z = -9999; line.push(z.toFixed(1)); } rows.push(line.join(' ')); }
+    return s + rows.join('\n') + '\n';
+  });
+  await ph.evaluate((a) => window._micro.openBlob(new Blob([a]), 'terrain.asc', 'replace'), asc);
+  await ph.waitForFunction(() => window._micro.layers().length && window._micro.layers()[0].docs.gridDoc, null, { timeout: 30000 });
+  const pts = await ph.evaluate(() => ({ kind: window._micro.layers()[0].kind, surface: !!window._micro.layers()[0].gridSurface }));
+  chk('grid opens as an elevation point cloud', pts.kind === 'points' && !pts.surface);
+  await ph.evaluate(() => window._micro.reopenAs(window._micro.layers()[0], 'surface'));
+  await ph.waitForFunction(() => window._micro.layers()[0] && window._micro.layers()[0].gridSurface, null, { timeout: 30000 });
+  await ph.waitForTimeout(600);
+  const surf = await ph.evaluate(() => { const L = window._micro.layers()[0]; return { kind: L.kind, surface: !!L.gridSurface, hasGrid: !!(L.docs.gridDoc && L.docs.gridDoc.grid), elem: window._micro.renderer.layerElementCount(L.id) }; });
+  chk(`grid reinterprets to a shaded-relief surface (mesh, ${surf.elem.toLocaleString()} elements, gridDoc kept for eval)`, surf.kind === 'mesh' && surf.surface && surf.hasGrid && surf.elem > 1000);
+  await ph.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

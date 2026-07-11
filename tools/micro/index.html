@@ -707,7 +707,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, buildHeightfieldMesh, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH } from '../../ext/condenser/src/main.js';
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
@@ -5228,9 +5228,9 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   try {
     if (isMesh && /\.(msh|obj|lfm|ply)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
     else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first, forcePoints, cached: over.cached }); }
-    // grid stays extension-driven (no table→grid provider yet); asKind never forces it.
-    else if (over.asKind == null && /\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache }); }
-    else if (over.asKind == null && /\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first }); }
+    // grid stays extension-driven (no table→grid provider yet); asKind only picks points↔surface.
+    else if ((over.asKind == null || over.asKind === 'surface' || over.asKind === 'points') && /\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache, surface: over.asKind === 'surface' }); }
+    else if ((over.asKind == null || over.asKind === 'surface' || over.asKind === 'points') && /\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first, surface: over.asKind === 'surface' }); }
     else if (/\.(parquet|pq)$/i.test(name)) { await openParquetBlocks(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping, cached: over.cached }); }
     // .xyz/.pts default to POINTS (2-decimal coords form a fake lattice); a
     // block/points asKind override rides forcePoints for every delimited file.
@@ -5555,6 +5555,25 @@ async function openGridBlob(blob, name, opts = {}) {
   };
   _gridDoc = { blob, name, grid, stride, source: grid._src || null, level: grid._src ? grid._src.level : 0, fullRes: !grid._src || (grid._src.level === 0 && grid._src.step === 1) };
   _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
+  // "Show as surface": a grid IS a heightfield — triangulate it into a shaded
+  // relief mesh coloured by elevation (§17 heightfield-drape Phase 1), instead of
+  // the raw elevation point cloud. gridDoc stays for by-surface eval; per-cell
+  // pick is traded for the solid surface (toggle back to points to pick).
+  if (opts.surface) {
+    const hf = buildHeightfieldMesh(grid, { stride, frame });
+    if (!hf) throw new Error('grid is all nodata');
+    const stops = RAMP_PRESETS[(rampCfgOf(layerById(lid)) || {}).preset] || RAMP_PRESETS.viridis, span = (zmax - zmin) || 1, color = new Float32Array(hf.count * 3);
+    for (let i = 0; i < hf.count; i++) { const c = rampSample(stops, (hf.values[i] - zmin) / span); color[i * 3] = c[0] / 255; color[i * 3 + 1] = c[1] / 255; color[i * 3 + 2] = c[2] / 255; }
+    registerDocs(lid, 'mesh');
+    fitFromHeader(header, opts.first !== false);
+    renderer.setLayerMeshStyle(lid, { tint: [0.6, 0.63, 0.66], opacity: 1 });
+    renderer.addChunk({ kind: 'mesh', pos: hf.pos, idx: hf.idx, color, normal: hf.normal, count: hf.count, bboxLocal: hf.bboxLocal }, 'base', lid);
+    const Lg = layerById(lid);
+    if (Lg) { Lg.bboxLocal = hf.bboxLocal; Lg.docs.gridDoc = _gridDoc; Lg.tint = '#9aa0a6'; Lg.gridSurface = true; }
+    recomputeUnion(); requestRender();
+    $('#meta').textContent = `${name} — surface · ${hf.vertexCount.toLocaleString()} nodes${stride > 1 ? ` (every ${stride}ᵗʰ)` : ''}${grid.crs ? ` · ${grid.crs}` : ''}`;
+    return;
+  }
   registerDocs(lid, 'points');
   fitFromHeader(header, opts.first !== false);
   setColorLabels(null);
@@ -11539,6 +11558,7 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
 function reinterpretOptions(L) {
   if (!L || L.dh) return [];
   const d = L.docs || {};
+  if (d.gridDoc) return L.gridSurface ? [{ kind: 'points', label: 'points (elevation)' }] : [{ kind: 'surface', label: 'surface (shaded relief)' }];
   if (d.blockDoc) return d.blockDoc.forcePoints ? [{ kind: 'blocks', label: 'block model' }] : [{ kind: 'points', label: 'points' }];
   if (d.plyDoc) return [{ kind: 'mesh', label: 'mesh' }];
   if (d.meshDoc && /\.ply$/i.test(L.name)) return [{ kind: 'points', label: 'points' }];
