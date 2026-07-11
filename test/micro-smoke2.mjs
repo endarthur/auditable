@@ -195,6 +195,19 @@ await p.evaluate(async (D) => {
 }, DH);
 await p.evaluate((D) => window._micro.importDrillholes({ collar: new File([D.collar], 'collars.csv'), survey: new File([D.survey], 'survey.csv'), intervals: new File([D.assay], 'assay.csv') }, {}, 'replace'), DH);
 await p.waitForFunction(() => window._micro.layers().some((L) => L.dh), null, { timeout: 30000 });
+// a DATA-PRESERVING reopen (re-desurvey) must keep the layer's derived styling AND identity —
+// reopenDh/reopenDhChan/reopenWithMapping now share captureLayerStyling + captureReopenIdentity.
+const dhReopen = await p.evaluate(async () => {
+  const L = window._micro.layers().find((x) => x.dh);
+  L.calcCols = [{ name: 'fe2', expr: 'FE * 2', ty: 'number' }]; L.colTypes = { FE: 'number' };
+  L.visible = false; window._micro.renderer.setLayerVisible(L.id, false);       // hidden → must stay hidden
+  await window._micro.reopenDh(L, {});                                          // re-desurvey, same config
+  const L2 = window._micro.layers().find((x) => x.dh);
+  return { calc: (L2.calcCols || []).map((c) => c.name), colFE: L2.colTypes && L2.colTypes.FE, visible: L2.visible };
+});
+chk(`re-desurvey keeps styling (calc ${JSON.stringify(dhReopen.calc)} + colTypes ${dhReopen.colFE}) and stays hidden (${dhReopen.visible})`,
+  dhReopen.calc.includes('fe2') && dhReopen.colFE === 'number' && dhReopen.visible === false);
+await p.evaluate(() => { const L = window._micro.layers().find((x) => x.dh); L.visible = true; window._micro.renderer.setLayerVisible(L.id, true); });
 await saveProject(p);
 await p.close();
 p = await mkPage('sm2dh2');
