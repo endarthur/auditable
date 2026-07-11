@@ -188,9 +188,13 @@ export function buildMeshChunk({ vertices, triangles, frame }) {
 // and a per-vertex value (the caller maps it to a colour via its own colormap).
 // Quads touching a nodata corner are dropped → clean holes. Coords are frame-
 // local. Strided to a display cap by the caller (bounded triangle count).
-export function buildHeightfieldMesh(grid, { stride = 1, frame = null } = {}) {
+// flatZ (a world elevation) makes a FLAT horizontal sheet at that z instead of a
+// heightfield — for a 2D data grid (grade/geochem) with no DEM; `values` stays the
+// grid value so the caller still colours by it, and the normal is straight up.
+export function buildHeightfieldMesh(grid, { stride = 1, frame = null, flatZ = null } = {}) {
   const { nx, ny, data, x0, y0, dx, dy, nodata } = grid;
   const o = (frame && frame.origin) || [0, 0, 0];
+  const flat = flatZ != null, flatLocal = flat ? flatZ - o[2] : 0;
   const isBad = (v) => Number.isNaN(v) || (nodata != null && (nodata >= 1.7e38 ? v >= 1.7014e38 : v === nodata));
   const cols = Math.floor((nx - 1) / stride) + 1, rows = Math.floor((ny - 1) / stride) + 1;
   const vidx = new Int32Array(rows * cols).fill(-1);
@@ -206,10 +210,11 @@ export function buildHeightfieldMesh(grid, { stride = 1, frame = null } = {}) {
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
     const vi = vidx[r * cols + c]; if (vi < 0) continue;
     const gr = Math.min(ny - 1, r * stride), gc = Math.min(nx - 1, c * stride), z = data[gr * nx + gc];
-    const px = (x0 + gc * dx) - o[0], py = (y0 - gr * dy) - o[1], pz = z - o[2];
+    const px = (x0 + gc * dx) - o[0], py = (y0 - gr * dy) - o[1], pz = flat ? flatLocal : z - o[2];
     pos[vi * 3] = px; pos[vi * 3 + 1] = py; pos[vi * 3 + 2] = pz; values[vi] = z;
     if (px < bb[0]) bb[0] = px; if (py < bb[1]) bb[1] = py; if (pz < bb[2]) bb[2] = pz;
     if (px > bb[3]) bb[3] = px; if (py > bb[4]) bb[4] = py; if (pz > bb[5]) bb[5] = pz;
+    if (flat) { normal[vi * 3] = 0; normal[vi * 3 + 1] = 0; normal[vi * 3 + 2] = 1; continue; }   // flat sheet → up
     // heightfield normal N = (-∂z/∂x, -∂z/∂y, 1); y decreases as row increases
     let zl = zAt(r, c - 1), zr = zAt(r, c + 1), zdn = zAt(r - 1, c), zup = zAt(r + 1, c);
     if (Number.isNaN(zl)) zl = z; if (Number.isNaN(zr)) zr = z; if (Number.isNaN(zdn)) zdn = z; if (Number.isNaN(zup)) zup = z;

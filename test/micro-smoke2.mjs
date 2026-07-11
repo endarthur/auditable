@@ -371,6 +371,14 @@ await p.close();
     return { hasDrapeRow: !!sel, value: sel && sel.value, opts: sel ? [...sel.options].map((o) => o.textContent) : [] };
   });
   chk(`properties panel has a drape picker (value "${propDrape.value}", options ${JSON.stringify(propDrape.opts)})`, propDrape.hasDrapeRow && propDrape.value === 'grade.asc' && propDrape.opts.includes('elevation'));
+  // flatten: a surface can render as a horizontal sheet at a chosen z (a 2D grid, no DEM)
+  const flat = await ph.evaluate(() => {
+    const L = window._micro.layers().find((x) => x.gridSurface); window._micro.setSurfaceFlatZ(L, 900);
+    const o = window._micro.frame ? window._micro.frame.origin : [0, 0, 0];
+    const r = { flatZ: L.surfaceFlatZ, zmin: L.bboxLocal[2] + o[2], zmax: L.bboxLocal[5] + o[2], surface: !!L.gridSurface };
+    window._micro.setSurfaceFlatZ(L, null); return r;   // back to relief for the following checks
+  });
+  chk(`surface flattens to a horizontal sheet at a chosen z (collapsed to z≈900)`, flat.surface && flat.flatZ === 900 && Math.abs(flat.zmin - 900) < 1 && Math.abs(flat.zmax - 900) < 1);
   // surface + drape PERSIST across a project save/reload
   await saveProject(ph);
   await ph.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2surf'); await window._micro.openProjectDir(dir); });
