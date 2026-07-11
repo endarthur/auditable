@@ -92,6 +92,47 @@ try {
   }, zipArr);
   (zip.rows === 2 && zip.name.includes('inner.csv')) ? ok(`zip entry opened in bundle (${zip.name})`) : fail(`zip in bundle: ${JSON.stringify(zip)}`);
 
+  // ── gotoRow scrolls the viewport (loom scroll on an internal overflow:auto div),
+  //    and a lens round-trips the grade–tonnage setup by column name. ──
+  const gt = await page.evaluate(async () => {
+    let csv = 'x,y,z,Au_gpt,dens\n';
+    for (let i = 0; i < 4000; i++) csv += `${i},${i},${i},${(i % 10) * 0.3},2.7\n`;
+    window._lamina.open('g.csv', new TextEncoder().encode(csv));
+    const loomTop = () => Math.max(0, ...[...document.querySelectorAll('#grid div')]
+      .filter((d) => getComputedStyle(d).overflowY === 'auto' || getComputedStyle(d).overflow === 'auto')
+      .map((d) => d.scrollTop));
+    window._lamina.gotoRow(1); await new Promise((r) => setTimeout(r, 120)); const top0 = loomTop();
+    window._lamina.gotoRow(3800); await new Promise((r) => setTimeout(r, 200)); const top1 = loomTop();
+
+    window._lamina.openGradeTonnage();
+    const dens = document.querySelector('.gt-expr[data-f="density"]'); dens.value = '3.1'; dens.dispatchEvent(new Event('input'));
+    const u = document.querySelector('.gt-unit'); if (u) { u.value = 'g/t'; u.dispatchEvent(new Event('change')); }
+    const cut = document.querySelector('.gt-cut'); if (cut) { cut.value = '0.5, 1, 2'; cut.dispatchEvent(new Event('input')); }
+    const gsel = document.querySelector('.gt-grade');
+    if (gsel) { const o = [...gsel.options].find((x) => /Au_gpt/.test(x.textContent)); if (o) { gsel.value = o.value; gsel.dispatchEvent(new Event('change')); } }
+    const lens = window._lamina.buildLens();
+    // reset + re-apply the lens fresh, then reopen GT → it must be seeded from the lens
+    document.querySelector('#help') && document.querySelector('#help').classList.remove('show');
+    window._lamina.applyLensView(lens);
+    await new Promise((r) => setTimeout(r, 300));
+    document.querySelector('#help') && document.querySelector('#help').classList.remove('show');
+    window._lamina.openGradeTonnage();
+    const seeded = {
+      density: document.querySelector('.gt-expr[data-f="density"]').value,
+      unit: (document.querySelector('.gt-unit') || {}).value,
+      cut: (document.querySelector('.gt-cut') || {}).value,
+      grade: (document.querySelector('.gt-grade') || {}).selectedOptions && document.querySelector('.gt-grade').selectedOptions[0].textContent,
+    };
+    return { top0, top1, lensGt: lens.gt, seeded };
+  });
+  (gt.top1 > gt.top0 + 50000) ? ok(`gotoRow scrolls the viewport (${gt.top0} → ${gt.top1}px)`) : fail(`gotoRow did not scroll: ${JSON.stringify({ top0: gt.top0, top1: gt.top1 })}`);
+  (gt.lensGt && gt.lensGt.density === '3.1' && gt.lensGt.grades.some((g) => /Au_gpt/.test(g.col) && g.unit === 'g/t' && /0\.5/.test(g.cutoffs)))
+    ? ok('lens carries the grade–tonnage setup (density + graded unit + cutoffs, by name)')
+    : fail(`lens gt missing/wrong: ${JSON.stringify(gt.lensGt)}`);
+  (gt.seeded.density === '3.1' && gt.seeded.unit === 'g/t' && /0\.5/.test(gt.seeded.cut) && /Au_gpt/.test(gt.seeded.grade))
+    ? ok('applied lens seeds GT on a matching schema (name → index)')
+    : fail(`applied lens did not seed GT: ${JSON.stringify(gt.seeded)}`);
+
   // build stamp injected (version · content-hash · date) — visible in the footer + window._lamina.build
   const stamp = await page.evaluate(() => ({ footer: document.getElementById('build').textContent, api: window._lamina.build }));
   (/^\d+\.\d+\.\d+ · [0-9a-f]{7} · \d{4}-\d{2}-\d{2}$/.test(stamp.footer) && stamp.footer === stamp.api)

@@ -1122,6 +1122,15 @@ function buildLens() {
   const order = effectiveOrder(c);                          // column display order (names), only if reordered from natural
   if (!order.every((uc, i) => uc === i)) lens.order = order.map(nameOf).filter(Boolean);
   if (c.pinned && c.pinned.size) lens.pinned = order.filter((uc) => c.pinned.has(uc)).map(nameOf).filter(Boolean);
+  // grade–tonnage setup (only if the user configured GT this session) — by NAME
+  // so it re-applies to any file with a matching schema, like everything else
+  if (_gtConfig && Array.isArray(_gtConfig.grades) && _gtConfig.grades.length) {
+    const grades = _gtConfig.grades
+      .map((uc, i) => ({ col: nameOf(uc), unit: _gtConfig.gradeUnits[i] || '', cutoffs: _gtConfig.cutoffs[i] || '', ranges: _gtConfig.ranges[i] || '' }))
+      .filter((g) => g.col);
+    if (grades.length) lens.gt = { group: _gtConfig.group != null ? nameOf(_gtConfig.group) : null,
+      volume: _gtConfig.volume, density: _gtConfig.density, densityUnit: _gtConfig.densityUnit, proportion: _gtConfig.proportion, grades };
+  }
   return lens;
 }
 
@@ -1207,6 +1216,13 @@ async function applyLensView(lens) {
       if (cfg.colorScale.clip) await setColScaleOpt(i, { clip: true });   // recomputes robust bounds for THIS file
     }
     rerender();
+  }
+  // grade–tonnage setup: stash it for openGradeTonnage to seed from (a grade
+  // whose column is missing just falls back to auto there — noted here)
+  if (lens.gt && Array.isArray(lens.gt.grades)) {
+    c._lensGt = lens.gt;
+    const missing = lens.gt.grades.filter((g) => idx(g.col) < 0).map((g) => g.col);
+    if (missing.length) skip.push(`grade–tonnage grade(s) ${missing.join(', ')} (missing)`);
   }
   const where = lens.source && lens.source !== c.label ? ` (from ${lens.source})` : '';
   $('#meta').textContent = skip.length ? `lens applied${where} — skipped: ${skip.join('; ')}` : `lens applied${where}`;
@@ -1946,6 +1962,7 @@ function gotoRow(n) {
   if (!grid || !window._laminaVS) return;
   const row = Math.max(0, Math.min(window._laminaVS.rowCount() - 1, (n | 0) - 1));
   grid.setSelection({ r0: row, c0: 0, r1: row, c1: 0 });
+  grid.revealCell(row, 0);                                  // selection alone doesn't scroll — bring it into view
   grid.focus();
 }
 $('#goto').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.value) { gotoRow(Number(e.target.value)); } });
@@ -2972,6 +2989,23 @@ function openGradeTonnage() {
     cutoffs: [''],   // per grade field: comma-separated cutoffs, blank = auto (round bin edges)
     ranges: [''],    // per grade field: manual plot ranges "x:0..2 t:5e6 g:3" — blank = auto
   };
+  // seed from a lens's GT setup (consumed once — after this the live config wins).
+  // Names → indices; a grade whose column is gone is dropped (auto if none left).
+  if (c._lensGt) {
+    const g = c._lensGt; c._lensGt = null;
+    const nidx = (nm) => c.schema.findIndex((s) => s && s.name === nm);
+    for (const k of ['volume', 'density', 'densityUnit', 'proportion']) if (g[k] != null) _gtConfig[k] = g[k];
+    if (g.group) { const gi = nidx(g.group); if (gi >= 0) _gtConfig.group = gi; }
+    if (Array.isArray(g.grades)) {
+      const gg = g.grades.map((x) => ({ i: nidx(x.col), ...x })).filter((x) => x.i >= 0);
+      if (gg.length) {
+        _gtConfig.grades = gg.map((x) => x.i);
+        _gtConfig.gradeUnits = gg.map((x) => x.unit || '');
+        _gtConfig.cutoffs = gg.map((x) => x.cutoffs || '');
+        _gtConfig.ranges = gg.map((x) => x.ranges || '');
+      }
+    }
+  }
   _gtResult = null;
   $('#helpTitle').textContent = `Grade–tonnage — ${c.label}${c.filterResult ? ' (filtered)' : ''}`;
   $('.help-box').classList.add('wide');
@@ -3539,7 +3573,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') { $('#help').classList.remove('show'); closeCalcEditor(); closeCalcManager(); closeExportDialog(); }
 });
 
-window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, scanGroupBy, scanDataQuality, precomputeStats, showSummary, openGroupBy, computeGroupBy, openGradeTonnage, computeGradeTonnage, openGridSummary, computeGridSummary, openSampleData, showDataQuality, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
+window._lamina = { open, openFile, applyFilter, toggleSort, reopen, gotoRow, hideColumn, showColumn, showAllColumns, setColType, setColFormat, toggleColorScale, setColScaleOpt, autofitAll, resetColWidths, showAllColumns, toggleColPanel, reorderCol, togglePin, scrollToColumn, residentEstimate, statsToTSV, gutterSampleRows, scanColumnStats, scanAllColumnStats, scanGroupBy, scanDataQuality, precomputeStats, showSummary, openGroupBy, computeGroupBy, openGradeTonnage, computeGradeTonnage, openGridSummary, computeGridSummary, openSampleData, showDataQuality, setGutterLog, toggleRecordPanel, renderRecordCard, updateSelStats, openFind, closeFind, findNext, findCountAll, addRecent, clearRecents, setRemember, openRecent, get recents() { return _recents; }, showColumnStats, copySelection, filterByValue, addCalc, removeCalc, openCalcEditor, openCalcManager, brushFilter, showBrushTip, showGutterTip, gutterClick, gutterDblClick, gutterTapFilter, gutterBrush, setBrushMode, exportToString, openExportDialog, saveLens, buildLens, applyLensView, applyLens, applyLensFromFile, sniffLens, setTheme, get theme() { return theme; }, pickFile, showHelp, cache: idbCache, build: __LAMINA_BUILD__, get brushMode() { return brushMode; }, get grid() { return grid; }, get lastScan() { return lastScan; }, get current() { return current; }, get calcs() { return current && current.calcs; }, get gutter() { return current && current.gutter; }, canWorker };
 
 // Build stamp in the footer (far right) — set once; persists past file meta updates.
 $('#build').textContent = __LAMINA_BUILD__;
