@@ -354,9 +354,15 @@ await p.close();
   await ph.waitForFunction(() => window._micro.layers().length && window._micro.layers()[0].docs.gridDoc, null, { timeout: 30000 });
   const pts = await ph.evaluate(() => ({ kind: window._micro.layers()[0].kind, surface: !!window._micro.layers()[0].gridSurface }));
   chk('grid opens as an elevation point cloud', pts.kind === 'points' && !pts.surface);
+  // reopen (reinterpret) preserves layer identity — incl. VISIBILITY: a reinterpret of a HIDDEN layer used to
+  // bring it back visible (each reopen site hand-copied identity; reopenAs dropped `visible`). One shared
+  // captureReopenIdentity/restoreReopenIdentity now guards it.
+  await ph.evaluate(() => { const L = window._micro.layers()[0]; L.visible = false; window._micro.renderer.setLayerVisible(L.id, false); });
   await ph.evaluate(() => window._micro.reopenAs(window._micro.layers()[0], 'surface'));
   await ph.waitForFunction(() => window._micro.layers()[0] && window._micro.layers()[0].gridSurface, null, { timeout: 30000 });
   await ph.waitForTimeout(600);
+  chk('reopen preserves a hidden layer as hidden (reinterpret used to lose visibility)', await ph.evaluate(() => window._micro.layers()[0].visible === false));
+  await ph.evaluate(() => { const L = window._micro.layers()[0]; L.visible = true; window._micro.renderer.setLayerVisible(L.id, true); });
   const surf = await ph.evaluate(() => { const L = window._micro.layers()[0]; return { kind: L.kind, surface: !!L.gridSurface, hasGrid: !!(L.docs.gridDoc && L.docs.gridDoc.grid), elem: window._micro.renderer.layerElementCount(L.id) }; });
   chk(`grid reinterprets to a shaded-relief surface (mesh, ${surf.elem.toLocaleString()} elements, gridDoc kept for eval)`, surf.kind === 'mesh' && surf.surface && surf.hasGrid && surf.elem > 1000);
   // Phase 2 drape: colour the topo surface by a SECOND grid's values (grade over topo)

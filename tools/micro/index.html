@@ -5588,6 +5588,26 @@ function setSurfaceFlatZ(L, flatZ) {
   rebuildSurface(L);
   $('#meta').textContent = flatZ != null ? `${L.label || L.name} — flat sheet at z ${flatZ}` : `${L.label || L.name} — relief`;
 }
+// ── identity that MUST survive a single-blob reopen ──
+// setGridBand · applyLayerSurface · reopenAs all tear a grid/block layer down and
+// re-open it from the same blob. These are the ONE list of fields that must ride
+// through unchanged, so a reopen can't silently drop one the way reopenAs used to
+// drop `visible`. Data-representation styling that legitimately resets on a
+// reinterpret (colour/filter/ramps) is deliberately NOT preserved here.
+function captureReopenIdentity(L) {
+  return { label: L.label, visible: L.visible, handle: L.handle, storage: L.storage };
+}
+function preregisterReopenHandle(blob, keep) {   // openBlob reads _fileHandles → must run BEFORE it
+  if (keep.handle && typeof File !== 'undefined' && blob instanceof File) _fileHandles.set(blob, keep.handle);
+}
+function restoreReopenIdentity(L2, keep) {        // call with the fresh active layer AFTER openBlob
+  if (!L2) return L2;
+  if (keep.label) L2.label = keep.label;
+  L2.storage = keep.storage;
+  if (keep.handle) L2.handle = keep.handle;
+  if (keep.visible === false) { L2.visible = false; renderer.setLayerVisible(L2.id, false); }
+  return L2;
+}
 // ── the SINGLE per-layer surface-presentation state ──
 // captureLayerSurface / applyLayerSurface are the ONE place the grid-surface state
 // (gridSurface · drape · flatZ · faceted · band) is serialized. The project
@@ -5618,12 +5638,11 @@ async function applyLayerSurface(L, s) {
     || (cur.flatZ != null ? cur.flatZ : null) !== (s.flatZ != null ? s.flatZ : null) || !!cur.faceted !== !!s.faceted;
   let L2 = L;
   if (needsReopen) {
-    const blob = gd.blob, name = L.name, label = L.label, vis = L.visible, keepHandle = L.handle, keepStorage = L.storage;
+    const blob = gd.blob, name = L.name, keep = captureReopenIdentity(L);
     renderer.removeLayer(L.id); _layers = _layers.filter((l) => l.id !== L.id);
-    if (keepHandle && typeof File !== 'undefined' && blob instanceof File) _fileHandles.set(blob, keepHandle);
+    preregisterReopenHandle(blob, keep);
     await openBlob(blob, name, 'add', null, { asKind: s.gridSurface ? 'surface' : 'points', band: s.band || 0, flatZ: s.gridSurface && s.flatZ != null ? s.flatZ : null, smooth: s.gridSurface ? !s.faceted : undefined });
-    L2 = activeLayer();
-    if (L2) { if (label) L2.label = label; L2.storage = keepStorage; if (keepHandle) L2.handle = keepHandle; if (vis === false) L2.visible = false; }
+    L2 = restoreReopenIdentity(activeLayer(), keep);
   }
   if (L2 && L2.gridSurface) {                                // drape: in-place rebuild, no reopen
     const want = s.drape || null;
@@ -5646,15 +5665,14 @@ async function setGridBand(L, band) {
   const gd = L.docs && L.docs.gridDoc; if (!gd || !(gd.grid.bands > 1)) return;
   const blob = gd.blob, name = L.name;
   const wasSurface = !!L.gridSurface, drape = L.drapeSource, flatZ = L.surfaceFlatZ, smooth = L.surfaceSmooth;
-  const label = L.label, vis = L.visible, keepHandle = L.handle, keepStorage = L.storage;
+  const keep = captureReopenIdentity(L);
   renderer.removeLayer(L.id);
   _layers = _layers.filter((l) => l.id !== L.id);
-  if (keepHandle && typeof File !== 'undefined' && blob instanceof File) _fileHandles.set(blob, keepHandle);
+  preregisterReopenHandle(blob, keep);
   await openBlob(blob, name, 'add', null, { asKind: wasSurface ? 'surface' : 'points', band, flatZ: wasSurface ? flatZ : null, smooth: wasSurface ? smooth : undefined });
-  const L2 = activeLayer();
+  const L2 = restoreReopenIdentity(activeLayer(), keep);
   if (L2) {
-    if (label) L2.label = label; L2.storage = keepStorage; if (keepHandle) L2.handle = keepHandle;
-    if (vis === false) { L2.visible = false; applyTreeVisibility(); }
+    if (keep.visible === false) applyTreeVisibility();
     if (wasSurface && drape) { const g = _layers.find((x) => x.name === drape && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid); if (g) recolorSurface(L2, g); }
   }
   renderLayers(); markProjectDirty();
@@ -11749,13 +11767,13 @@ function reinterpretOptions(L) {
 }
 async function reopenAs(L, kind) {
   const blob = layerBlob(L); if (!blob) { $('#meta').textContent = 'reinterpret: no source for this layer'; return; }
-  const name = L.name, keepLabel = L.label, keepHandle = L.handle, keepStorage = L.storage;
+  const name = L.name, keep = captureReopenIdentity(L);
   renderer.removeLayer(L.id);
   _layers = _layers.filter((l) => l.id !== L.id);
-  if (keepHandle && typeof File !== 'undefined' && blob instanceof File) _fileHandles.set(blob, keepHandle);
+  preregisterReopenHandle(blob, keep);
   await openBlob(blob, name, 'add', null, { asKind: kind });
-  const L2 = activeLayer();
-  if (L2) { if (keepLabel) L2.label = keepLabel; if (keepHandle) L2.handle = keepHandle; L2.storage = keepStorage; }
+  restoreReopenIdentity(activeLayer(), keep);   // incl. visible — reinterpreting a hidden layer used to bring it back visible
+  if (keep.visible === false) applyTreeVisibility();
   renderLayers(); markProjectDirty();
 }
 function reinterpretMenu(L, x, y) { menuXY(x, y, reinterpretOptions(L).map((o) => ({ label: `→ ${o.label}`, action: () => reopenAs(L, o.kind) }))); }
