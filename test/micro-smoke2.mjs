@@ -194,6 +194,56 @@ const dhBack = await p.evaluate(() => ({ n: window._micro.layers().filter((L) =>
 chk(`root-files dh project reopens with its drillholes (${dhBack.n} dh layer, “${dhBack.meta.slice(0, 40)}”)`, dhBack.n === 1);
 await p.close();
 
+// ═══ 7. bookmarks (viewpoint) + scenes (full working state) round-trip as files
+//     in bookmarks/ + scenes/ across a project reopen ═══
+{
+  const pb = await mkPage('sm2bmk');
+  const answer = async (nm) => {
+    await pb.waitForFunction(() => document.querySelector('#pmDlg') && document.querySelector('#pmDlg').classList.contains('show'), null, { timeout: 8000 });
+    await pb.evaluate((n) => { document.querySelector('#pmInput').value = n; document.querySelector('#pmOk').click(); }, nm);
+  };
+  const CSV = (g) => { let s = 'XC,YC,ZC,AU\n'; for (let k = 0; k < 5; k++) for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++) s += `${i * 10},${j * 10},${k * 5},${g + (i % 3)}\n`; return s; };
+  await pb.evaluate((csv) => window._micro.openBlob(new Blob([csv]), 'A.csv', 'replace'), CSV(1));
+  await pb.waitForFunction(() => window._micro.layers().length === 1, null, { timeout: 30000 });
+  await pb.evaluate((csv) => window._micro.openBlob(new Blob([csv]), 'B.csv', 'add'), CSV(5));
+  await pb.waitForFunction(() => window._micro.layers().length === 2, null, { timeout: 30000 });
+
+  // bookmark: move camera, save, move away, apply → restored
+  await pb.evaluate(() => { window._micro.cam.state.theta = 0.3; });
+  const bmSave = pb.evaluate(() => window._micro.saveViewAs()); await answer('Front'); await bmSave;
+  await pb.evaluate(() => { window._micro.cam.state.theta = 2.0; window._micro.cam.update(); });
+  await pb.evaluate(() => window._micro.applyView(window._micro.views()[0]));
+  chk('bookmark restores camera', Math.abs(await pb.evaluate(() => window._micro.cam.state.theta) - 0.3) < 1e-6);
+
+  // scene: hide B + filter A, save; disturb; apply → both restored
+  await pb.evaluate(() => { const L = window._micro.layers().find((x) => x.name === 'B.csv'); L.visible = false; window._micro.renderer.setLayerVisible(L.id, false); });
+  await pb.evaluate(() => { const A = window._micro.layers().find((x) => x.name === 'A.csv'); window._micro.setActiveLayer(A.id); document.querySelector('#filter').value = 'AU > 1.5'; });
+  await pb.evaluate(() => window._micro.applyBlockFilter('AU > 1.5'));
+  await pb.waitForFunction(() => window._micro.layers().find((x) => x.name === 'A.csv').filterExpr === 'AU > 1.5', null, { timeout: 10000 });
+  const scSave = pb.evaluate(() => window._micro.saveSceneAs(false)); await answer('Review'); await scSave;
+  await pb.evaluate(() => { const L = window._micro.layers().find((x) => x.name === 'B.csv'); L.visible = true; window._micro.renderer.setLayerVisible(L.id, true); const A = window._micro.layers().find((x) => x.name === 'A.csv'); window._micro.setActiveLayer(A.id); document.querySelector('#filter').value = ''; });
+  await pb.evaluate(() => window._micro.applyBlockFilter(''));
+  await pb.evaluate(() => window._micro.applyScene(window._micro.scenes()[0]));
+  await pb.waitForTimeout(400);
+  const sc = await pb.evaluate(() => { const A = window._micro.layers().find((x) => x.name === 'A.csv'), B = window._micro.layers().find((x) => x.name === 'B.csv'); return { bHidden: B.visible === false, aFilter: A.filterExpr }; });
+  chk(`scene restores visibility + filter (B hidden=${sc.bHidden}, A="${sc.aFilter}")`, sc.bHidden && sc.aFilter === 'AU > 1.5');
+
+  // project round-trip: files written to bookmarks/ + scenes/, reopen loads both
+  await saveProject(pb);
+  const files = await pb.evaluate(async () => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2bmk');
+    const ls = async (sub) => { try { const d = await dir.getDirectoryHandle(sub); const out = []; for await (const [nm] of d.entries()) out.push(nm); return out; } catch { return []; } };
+    return { bookmarks: await ls('bookmarks'), scenes: await ls('scenes') };
+  });
+  chk(`bookmarks/ + scenes/ written to the project folder (${files.bookmarks.join(',')} | ${files.scenes.join(',')})`, files.bookmarks.length === 1 && files.scenes.length === 1);
+  await pb.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2bmk'); await window._micro.openProjectDir(dir); });
+  await pb.waitForFunction(() => window._micro.layers().length === 2, null, { timeout: 60000 });
+  const reloaded = await pb.evaluate(() => ({ bm: window._micro.views().map((v) => v.name), sc: window._micro.scenes().map((s) => ({ name: s.name, n: s.layers.length })) }));
+  chk(`reopened project loads bookmark + scene (${reloaded.bm} | ${JSON.stringify(reloaded.sc)})`,
+    reloaded.bm.includes('Front') && reloaded.sc.length === 1 && reloaded.sc[0].name === 'Review' && reloaded.sc[0].n === 2);
+  await pb.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

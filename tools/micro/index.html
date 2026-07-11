@@ -7003,7 +7003,8 @@ refreshRecents();
 // Write-on-save-only: Ctrl+S, dirty marker, no background writes.
 const hasFSAA = !!window.showDirectoryPicker;
 let _project = null;                                       // { dir: FileSystemDirectoryHandle, name, dirty }
-let _views = [];                                           // saved views: { name, camera, section }
+let _views = [];                                           // bookmarks (viewpoints): { name, camera, section, file? }
+let _scenes = [];                                          // scenes (full working state): { name, camera, section, layers:[{name,visible,colorSel,filter,sel?}], file? }
 const PROJECTS_KEY = '__projects__';
 function markProjectDirty() {
   if (_project && !_project.dirty) { _project.dirty = true; updateProjectTitle(); }
@@ -7191,7 +7192,8 @@ function projectManifest() {
     })),
     camera: captureCamera(),
     section: captureSection(),
-    views: _views,
+    // bookmarks + scenes now live as files in bookmarks/ and scenes/ (not in
+    // project.json) — see flushViewsScenes / loadViewsScenes
     tree: (() => {                                         // groups (§4.1) — layers by manifest index
       const idOf = new Map(_layers.map((L, i) => [L.id, i]));
       return treeToManifest(idOf);
@@ -7459,6 +7461,7 @@ async function saveProject() {
         await mw.close();
       } catch { /* sidecars are a cache, never a failure */ }
     }
+    await flushViewsScenes(dir);                            // bookmarks/ + scenes/ — write any not yet persisted
     const fh = await dir.getFileHandle('project.json', { create: true });
     const w = await fh.createWritable();
     await w.write(JSON.stringify(projectManifest(), null, 2) + '\n');
@@ -7545,7 +7548,7 @@ async function openProjectDir(dir) {
     const mf = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
     if (mf.app !== 'micro') { $('#meta').textContent = 'not a micro project (project.json says otherwise)'; return; }
     _project = { dir, name: dir.name, dirty: false };
-    _views = mf.views || [];
+    await loadViewsScenes(dir, mf.views);                   // bookmarks/ + scenes/ (legacy mf.views migrated)
     closeAllLayers();
     $('#empty').style.display = 'none';
     let links = {};
@@ -7707,7 +7710,7 @@ async function openProjectPicker() {
   if (!hasFSAA) return;
   try { await openProjectDir(await window.showDirectoryPicker({ mode: 'readwrite' })); } catch { /* cancelled */ }
 }
-function closeProject() { _project = null; _views = []; updateProjectTitle(); }
+function closeProject() { _project = null; _views = []; _scenes = []; updateProjectTitle(); }
 // Tidy: migrate an already-saved project's files into their kind subfolders
 // (drillholes / models / clouds / meshes / grids), carrying sidecars along and
 // rewriting project.json + the drillhole descriptors. Files are MOVED (not
@@ -7888,14 +7891,120 @@ $('#pmInput').addEventListener('keydown', (e) => {
 $('#pmDlg').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); pmClose(null); }
 });
-// saved views: named camera + section bookmarks, kept in project.json
-async function saveViewAs() {
-  const name = await microPrompt('view name', `view ${_views.length + 1}`);
-  if (!name) return;
-  _views = _views.filter((v) => v.name !== name).concat([{ name, camera: captureCamera(), section: captureSection() }]);
-  markProjectDirty();
+// ── bookmarks & scenes ──
+// A BOOKMARK is a viewpoint (camera + section) — the quick nav aid. A SCENE is
+// the full working state (camera + section + per-layer visibility/colour/filter,
+// and optionally selection) — pick-up-where-you-were. Both live as files in the
+// project folder (bookmarks/ and scenes/, one JSON each — a snapshot .png sidecar
+// is a future addition), mirroring recipes/. The in-memory arrays are the session
+// source of truth; files are written on save/remove and flushed on saveProject.
+function bmSlug(name) { return (String(name).replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'view').toLowerCase(); }
+async function writeViewFile(v, subdir, payload) {
+  if (!_project || !v.file) return;
+  try { const fh = await resolveFileHandle(_project.dir, v.file, { create: true }); const w = await fh.createWritable(); await w.write(JSON.stringify(payload, null, 2) + '\n'); await w.close(); }
+  catch (e) { $('#meta').textContent = `${subdir} save failed — ${e.message}`; }
 }
-function applyView(v) { applyCamera(v.camera); applySection(v.section); }
+// bookmarks (viewpoints)
+async function saveViewAs() {
+  const name = ((await microPrompt('bookmark name', `view ${_views.length + 1}`)) || '').trim();
+  if (!name) return;
+  const existing = _views.find((v) => v.name === name);
+  const v = existing || { name, file: 'bookmarks/' + bmSlug(name) + '.json' };
+  v.camera = captureCamera(); v.section = captureSection();
+  if (!existing) { _views.push(v); _views.sort((a, b) => a.name.localeCompare(b.name)); }
+  await writeViewFile(v, 'bookmark', { app: 'micro', kind: 'bookmark', name: v.name, camera: v.camera, section: v.section });
+  markProjectDirty();
+  $('#meta').textContent = `${existing ? 'updated' : 'saved'} bookmark “${name}”${_project ? ` → ${v.file}` : ' (in memory — save the project to keep it)'}`;
+}
+function applyView(v) { applyCamera(v.camera); applySection(v.section); $('#meta').textContent = `bookmark “${v.name}”`; }
+async function removeBookmark(v) {
+  _views = _views.filter((x) => x !== v);
+  if (_project && v.file) { try { await removeFileAt(_project.dir, v.file); } catch { /* already gone */ } }
+  markProjectDirty();
+  $('#meta').textContent = `removed bookmark “${v.name}”`;
+}
+// scenes (full working state)
+function captureScene(name, withSel) {
+  return {
+    name, camera: captureCamera(), section: captureSection(),
+    layers: _layers.map((L) => {
+      const o = { name: L.name, visible: L.visible !== false, colorSel: L.colorSel || '', filter: L.filterExpr || '' };
+      if (withSel && L._selMask && L._selCount) o.sel = rleEncode(L._selMask);   // opt-in; selection can be large (RLE'd)
+      return o;
+    }),
+  };
+}
+async function applyScene(s) {
+  applyCamera(s.camera); applySection(s.section);
+  const prevActive = _activeId;
+  for (const sl of (s.layers || [])) {
+    const L = _layers.find((x) => x.name === sl.name) || _layers.find((x) => (x.label || x.name) === sl.name);
+    if (!L) continue;
+    if (sl.visible != null) { L.visible = !!sl.visible; renderer.setLayerVisible(L.id, L.visible); }
+    if (sl.colorSel != null && sl.colorSel !== (L.colorSel || '')) setLayerColorSel(L, sl.colorSel);
+    if (sl.filter != null && (L.filterExpr || '') !== sl.filter) {   // applyBlockFilter sweeps the ACTIVE layer → focus it first
+      setActiveLayer(L.id); $('#filter').value = sl.filter; syncFilterClear(); await applyBlockFilter(sl.filter);
+    }
+    if (sl.sel) { L._selMask = rleDecode(sl.sel, attrRowCountOf(L)); applyLayerSelection(L); }   // computes _selCount + paints
+  }
+  if (layerById(prevActive)) setActiveLayer(prevActive);
+  applyTreeVisibility(); renderLayers(); requestRender();
+  const missing = (s.layers || []).filter((sl) => !_layers.some((x) => x.name === sl.name || (x.label || x.name) === sl.name)).map((sl) => sl.name);
+  $('#meta').textContent = `scene “${s.name}”${missing.length ? ` · ${missing.length} layer${missing.length === 1 ? '' : 's'} not loaded (${missing.slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''})` : ''}`;
+}
+async function saveSceneAs(withSel) {
+  const name = ((await microPrompt(withSel ? 'scene name (with selection)' : 'scene name', `scene ${_scenes.length + 1}`)) || '').trim();
+  if (!name) return;
+  const existing = _scenes.find((s) => s.name === name);
+  const captured = captureScene(name, withSel);
+  const s = existing || { name, file: 'scenes/' + bmSlug(name) + '.json' };
+  Object.assign(s, captured);
+  if (!existing) { _scenes.push(s); _scenes.sort((a, b) => a.name.localeCompare(b.name)); }
+  await writeViewFile(s, 'scene', { app: 'micro', kind: 'scene', name: s.name, camera: s.camera, section: s.section, layers: s.layers });
+  markProjectDirty();
+  $('#meta').textContent = `${existing ? 'updated' : 'saved'} scene “${name}” (${s.layers.length} layer${s.layers.length === 1 ? '' : 's'}${withSel ? ' + selection' : ''})${_project ? ` → ${s.file}` : ' (in memory — save the project to keep it)'}`;
+}
+async function removeScene(s) {
+  _scenes = _scenes.filter((x) => x !== s);
+  if (_project && s.file) { try { await removeFileAt(_project.dir, s.file); } catch { /* already gone */ } }
+  markProjectDirty();
+  $('#meta').textContent = `removed scene “${s.name}”`;
+}
+// write out any in-memory bookmarks/scenes that lack a persisted file yet
+// (created before the project existed, or migrated from a legacy project.json)
+async function flushViewsScenes(dir) {
+  for (const v of _views) {
+    if (!v.file) v.file = 'bookmarks/' + bmSlug(v.name) + '.json';
+    try { const fh = await resolveFileHandle(dir, v.file, { create: true }); const w = await fh.createWritable(); await w.write(JSON.stringify({ app: 'micro', kind: 'bookmark', name: v.name, camera: v.camera, section: v.section }, null, 2) + '\n'); await w.close(); } catch { /* best effort */ }
+  }
+  for (const s of _scenes) {
+    if (!s.file) s.file = 'scenes/' + bmSlug(s.name) + '.json';
+    try { const fh = await resolveFileHandle(dir, s.file, { create: true }); const w = await fh.createWritable(); await w.write(JSON.stringify({ app: 'micro', kind: 'scene', name: s.name, camera: s.camera, section: s.section, layers: s.layers }, null, 2) + '\n'); await w.close(); } catch { /* best effort */ }
+  }
+}
+// scan bookmarks/ and scenes/ → the in-memory arrays (mirrors loadRecipes). A
+// legacy project.json `views` array (older projects) is migrated into _views and
+// gets written out to bookmarks/ on the next save.
+async function loadViewsScenes(dir, legacyViews) {
+  _views = []; _scenes = [];
+  try {
+    const bd = await dir.getDirectoryHandle('bookmarks');
+    for await (const [nm, h] of bd.entries()) {
+      if (h.kind !== 'file' || !/\.json$/i.test(nm)) continue;
+      try { const j = JSON.parse(await (await h.getFile()).text()); if (j && j.camera) _views.push({ name: String(j.name || nm.replace(/\.json$/i, '')), camera: j.camera, section: j.section, file: 'bookmarks/' + nm }); } catch { /* skip bad file */ }
+    }
+  } catch { /* no bookmarks/ folder — maybe legacy */ }
+  if (!_views.length && Array.isArray(legacyViews)) _views = legacyViews.map((v) => ({ name: v.name, camera: v.camera, section: v.section }));   // file assigned on next save
+  try {
+    const sd = await dir.getDirectoryHandle('scenes');
+    for await (const [nm, h] of sd.entries()) {
+      if (h.kind !== 'file' || !/\.json$/i.test(nm)) continue;
+      try { const j = JSON.parse(await (await h.getFile()).text()); if (j && j.camera) _scenes.push({ name: String(j.name || nm.replace(/\.json$/i, '')), camera: j.camera, section: j.section, layers: j.layers || [], file: 'scenes/' + nm }); } catch { /* skip */ }
+    }
+  } catch { /* no scenes/ folder */ }
+  _views.sort((a, b) => a.name.localeCompare(b.name));
+  _scenes.sort((a, b) => a.name.localeCompare(b.name));
+}
 // recent projects on the empty state (chips, like recent files)
 async function renderEmptyProjects() {
   const el = $('#emptyProjects'); if (!el) return;
@@ -8163,10 +8272,26 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Decorations & figure…', action: () => openDecoPanel() },
   { label: 'Windows…', action: () => windowsMenu($('#mView')) },
   { sep: true },
-  ...(_views.length ? _views.map((v) => ({ label: `⤷ ${v.name}`, action: () => applyView(v) })) : []),
-  { label: 'Save view…', action: saveViewAs },
-  ...(_views.length ? [{ label: 'Remove view', submenu: () => _views.map((v) => ({ label: v.name, action: () => { _views = _views.filter((x) => x !== v); markProjectDirty(); } })) }] : []),
+  { label: 'Bookmarks', submenu: () => bookmarksMenuItems() },
+  { label: 'Scenes', submenu: () => scenesMenuItems() },
 ]);
+// bookmarks = viewpoints (camera + section); number keys 1–9 jump to the first nine
+function bookmarksMenuItems() {
+  const items = _views.map((v, i) => ({ label: `⤷ ${v.name}`, kbd: i < 9 ? String(i + 1) : undefined, action: () => applyView(v) }));
+  if (items.length) items.push({ sep: true });
+  items.push({ label: 'Save bookmark…', action: saveViewAs });
+  if (_views.length) items.push({ label: 'Remove bookmark', submenu: () => _views.map((v) => ({ label: v.name, action: () => removeBookmark(v) })) });
+  return items;
+}
+// scenes = full working state (visibility + colour + filter, + optional selection)
+function scenesMenuItems() {
+  const items = _scenes.map((s) => ({ label: `◆ ${s.name}`, action: () => applyScene(s) }));
+  if (items.length) items.push({ sep: true });
+  items.push({ label: 'Save scene…', action: () => saveSceneAs(false) });
+  if (_layers.some((L) => L._selMask && L._selCount)) items.push({ label: 'Save scene (with selection)…', action: () => saveSceneAs(true) });
+  if (_scenes.length) items.push({ label: 'Remove scene', submenu: () => _scenes.map((s) => ({ label: s.name, action: () => removeScene(s) })) });
+  return items;
+}
 // Data = the dataset's interpretation + derived state (lamina's grammar:
 // intake wizards, the properties panel's deep tabs, filter state)
 const openPropsTab = (tab) => {
@@ -9294,6 +9419,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'Escape' && (_measure.arm || _measure.b)) clearMeasure();
   else if (k === 'o') { cam.setOrtho(!cam.state.ortho); requestRender(); }
   else if (k === 'x') toggleSection();
+  else if (k >= '1' && k <= '9') { const v = _views[+k - 1]; if (v) applyView(v); }   // jump to bookmark N
 });
 
 // Synthetic QF block model AS A CSV BLOB — exercises the full provider path
@@ -12324,7 +12450,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
