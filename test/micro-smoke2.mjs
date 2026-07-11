@@ -270,6 +270,17 @@ await p.close();
   chk(`demo project: block model (${d.blockCount.toLocaleString()}) + drillholes, one click`, d.hasBlocks && d.blockCount > 100000 && d.hasDh && d.layers >= 2);
   chk(`demo project: E–W section, drillholes stay WHOLE (not cut)`, d.section === 'ew' && d.dhWhole);
   chk(`demo project: grade-tonnage window computed + a bookmark saved`, d.gtCurve && d.bookmark);
+  // the analysis-window config rail scrolls, but Run + save-as-recipe stay pinned:
+  // shrink the GT window so the rail overflows, scroll to the top, and the sticky
+  // footer must still sit flush at the rail bottom with Run visible
+  const sticky = await pd.evaluate(() => {
+    const w = [...document.querySelectorAll('.fwin')].find((x) => /grade.tonnage/i.test(x.textContent));
+    w.style.height = '300px'; w.style.width = '560px';
+    const rail = w.querySelector('.sw-rail'), foot = w.querySelector('.sw-foot'); rail.scrollTop = 0;
+    const rb = rail.getBoundingClientRect(), fb = foot.getBoundingClientRect(), run = foot.querySelector('.sw-run');
+    return { overflow: rail.scrollHeight > rail.clientHeight + 4, pos: getComputedStyle(foot).position, flush: Math.abs(fb.bottom - rb.bottom) < 3, runVisible: run.getBoundingClientRect().bottom <= rb.bottom + 1 };
+  });
+  chk(`analysis window: Run/save-as-recipe stay pinned when the config scrolls (sticky footer)`, sticky.overflow && sticky.pos === 'sticky' && sticky.flush && sticky.runVisible);
   await pd.close();
 }
 
