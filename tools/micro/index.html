@@ -7865,6 +7865,7 @@ async function saveProject() {
     // as compact Surfer binary so a huge DEM's project reopens WITHOUT
     // re-decimating the source (eval still windows the source at full res)
     for (const L of _layers) { try { await writeGridDisplayCache(L, dir); } catch { /* cache, never a failure */ } }
+    for (const L of _layers) { try { if (matColList(L).length) await matColPersist(L); } catch { /* materialized cols are derived — never a save failure */ } }
     // derived-cache sidecars (spec section 12): the discovery header + column
     // stats + BAND min/max travel WITH the data — reopening skips the discovery
     // sweep, the styling/statistics UIs wake up already scanned, and .dm filters
@@ -8135,6 +8136,7 @@ async function openProjectDir(dir) {
       L._pendingDrape = null;
       if (g) { try { recolorSurface(L, g); } catch { /* drape grid gone/incompatible → stays elevation */ } }
     }
+    for (const L of _layers) { try { await matColLoad(L, dir); } catch { /* sidecar cols are derived — never block a load */ } }   // materialized <layer>.cols/
     await loadRecipes(dir);                                // recipes/ *.yaml → Tools → Recipes
     // pinned analysis windows come back configured (after ALL layers landed —
     // series may reference other layers). Run stays manual: no surprise scans.
@@ -11646,22 +11648,78 @@ function calcFns(L) {
 }
 // rec (the renderer record index) keys painted-column lookups; callers that
 // sweep in renderer numbering pass it, others leave painted values blank
+// ── materialized numeric columns ──────────────────────────────────────────────
+// full-precision Float32 columns attached to a layer, aligned 1:1 by record index.
+// Persisted in a per-layer <layer>.cols/ sidecar (project dir → FSAA/OPFS), else IDB
+// (loose file), else memory (volatile). A sourceHash guards against a source reorder
+// (the manifest records it; a mismatch means re-derive, not silently mis-align).
+// Source-agnostic — interpolation AND "materialize a calc column" both write here.
+function matColSourceHash(L) { const b = layerBlob(L); return `${(b && b.size) || 0}:${attrRowCountOf(L) || 0}`; }
+function matColLooseId(L) { const b = layerBlob(L); return `${L.name}:${(b && b.size) || 0}`; }
+function matColList(L) { return (L && L.dataCols) || []; }
+function matColGet(L, name) { return matColList(L).find((c) => c.name === name) || null; }
+// attach (or replace) a full-precision column in memory + recompute its stats
+function matColSet(L, name, values, meta = {}) {
+  let mn = Infinity, mx = -Infinity, nn = 0;
+  for (let i = 0; i < values.length; i++) { const v = values[i]; if (Number.isFinite(v)) { if (v < mn) mn = v; if (v > mx) mx = v; nn++; } }
+  const col = { name, dtype: 'f32', values, min: nn ? mn : 0, max: nn ? mx : 0, count: values.length, nonnull: nn, lineage: meta.lineage || null, source: matColSourceHash(L) };
+  L.dataCols = matColList(L).filter((c) => c.name !== name); L.dataCols.push(col);
+  L._colStats = null; L._calcFns = null;                   // schema changed → invalidate cached scans/fns
+  return col;
+}
+function matColManifest(L) { return { v: 1, sourceHash: matColSourceHash(L), cols: matColList(L).map((c) => ({ name: c.name, dtype: c.dtype, count: c.count, min: c.min, max: c.max, nonnull: c.nonnull, lineage: c.lineage })) }; }
+async function matColPersist(L) {
+  const cols = matColList(L); if (!cols.length) return 'none';
+  if (L.storage === 'project' && _project && _project.dir) {
+    const rel = await layerRelpath(L, _project.dir);
+    for (const c of cols) { const fh = await resolveFileHandle(_project.dir, `${rel}.cols/${c.name}.f32`, { create: true }); const w = await fh.createWritable(); await w.write(c.values.buffer); await w.close(); }
+    const mh = await resolveFileHandle(_project.dir, `${rel}.cols/manifest.json`, { create: true }); const w = await mh.createWritable(); await w.write(JSON.stringify(matColManifest(L))); await w.close();
+    return 'project';
+  }
+  try { const id = matColLooseId(L); for (const c of cols) await _idb.set(`matcol:${id}:col:${c.name}`, c.values.buffer); await _idb.set(`matcol:${id}:manifest`, matColManifest(L)); return 'idb'; }
+  catch { return 'memory'; }
+}
+async function matColLoad(L, dir) {
+  let man = null, get = null;
+  if (dir && L.storage === 'project') {
+    try { const rel = await layerRelpath(L, dir); man = JSON.parse(await (await (await resolveFileHandle(dir, `${rel}.cols/manifest.json`)).getFile()).text()); get = async (nm) => await (await (await resolveFileHandle(dir, `${rel}.cols/${nm}.f32`)).getFile()).arrayBuffer(); }
+    catch { /* no project sidecar */ }
+  }
+  if (!man) { try { const id = matColLooseId(L); man = await _idb.get(`matcol:${id}:manifest`); get = async (nm) => await _idb.get(`matcol:${id}:col:${nm}`); } catch { /* none */ } }
+  if (!man || !man.cols || !man.cols.length) return 0;
+  const cur = matColSourceHash(L);
+  if (man.sourceHash && man.sourceHash !== cur) { $('#meta').textContent = `${L.name}: materialized columns are stale (source changed) — re-run to refresh`; return 0; }
+  L.dataCols = [];
+  for (const cm of man.cols) { try { const buf = await get(cm.name); if (!buf) continue; L.dataCols.push({ name: cm.name, dtype: cm.dtype || 'f32', values: new Float32Array(buf), min: cm.min, max: cm.max, count: cm.count, nonnull: cm.nonnull, lineage: cm.lineage || null, source: cur }); } catch { /* skip a missing file */ } }
+  if (L.dataCols.length) { L._colStats = null; L._calcFns = null; }
+  return matColList(L).length;
+}
+async function matColDelete(L, name) {
+  L.dataCols = matColList(L).filter((c) => c.name !== name); L._colStats = null; L._calcFns = null;
+  try {
+    if (L.storage === 'project' && _project && _project.dir) { const rel = await layerRelpath(L, _project.dir); await removeFileAt(_project.dir, `${rel}.cols/${name}.f32`); await matColPersist(L); }
+    else { const id = matColLooseId(L); await _idb.set(`matcol:${id}:manifest`, matColManifest(L)); }
+  } catch { /* best-effort */ }
+}
 function extendRow(L, f, rec) {
   const fns = calcFns(L);
   const pcs = L && L.paintCols && L.paintCols.length ? L.paintCols : null;
-  if ((!fns && !pcs) || !f) return f;
+  const dcs = L && L.dataCols && L.dataCols.length ? L.dataCols : null;
+  if ((!fns && !pcs && !dcs) || !f) return f;
   const out = f.slice();
   if (fns) for (const fn of fns) { let v; try { v = fn(f); } catch { v = null; } out.push(v); }
   if (pcs) for (const pc of pcs) {
     const c = rec != null && rec < pc.codes.length ? pc.codes[rec] : 0;
     out.push(pc.kind === 'ratio' ? +(c / 255).toFixed(3) : ((c && pc.dict[c]) || ''));
   }
+  if (dcs) for (const dc of dcs) { const v = rec != null && rec < dc.values.length ? dc.values[rec] : NaN; out.push(Number.isFinite(v) ? v : null); }
   return out;
 }
 function schemaExt(L, h) {
   let out = blockSchema(h);
   if (L && L.calcCols && L.calcCols.length) out = out.concat(L.calcCols.map((c) => ({ name: c.name, type: c.ty === 'string' ? 'string' : 'number' })));
   if (L && L.paintCols && L.paintCols.length) out = out.concat(L.paintCols.map((c) => ({ name: c.name, type: c.kind === 'ratio' ? 'number' : 'string' })));
+  if (L && L.dataCols && L.dataCols.length) out = out.concat(L.dataCols.map((c) => ({ name: c.name, type: 'number' })));   // materialized numeric columns
   return out;
 }
 async function sampleRow(L) {
@@ -13033,7 +13091,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, interpolateLattice, readLayerPoints, latticeToBlockCsv, runEstimate, applyOutputFilter, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, interpolateLattice, readLayerPoints, latticeToBlockCsv, runEstimate, applyOutputFilter, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

@@ -573,6 +573,33 @@ await p.close();
   await pg.close();
 }
 
+// ═══ 14. materialized-column store — a full-precision Float32 column persists in the
+//     per-layer <layer>.cols/ sidecar (OPFS project) and reloads aligned by record ═══
+{
+  const pc = await mkPage('sm2matcol');
+  const bm = await pc.evaluate(() => { let s = 'X,Y,Z,GRADE\n'; for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) for (let k = 0; k < 2; k++) s += `${i * 10},${j * 10},${k * 10},${(i + j + k).toFixed(1)}\n`; return s; });
+  await pc.evaluate((csv) => window._micro.openBlob(new File([csv], 'bm.csv'), 'bm.csv', 'replace'), bm);
+  await pc.waitForFunction(() => window._micro.layers().length && window._micro.layers()[0].docs.blockDoc, null, { timeout: 30000 });
+  await saveProject(pc);                                            // copies bm into the project → storage='project'
+  const setInfo = await pc.evaluate(() => {
+    const L = window._micro.layers()[0]; const cnt = L.docs.blockDoc.header.count;
+    const vals = new Float32Array(cnt); for (let i = 0; i < cnt; i++) vals[i] = i * 2;   // EST[i] = i·2
+    const col = window._micro.matColSet(L, 'EST', vals, { lineage: { op: 'test' } });
+    return { n: cnt, min: col.min, max: col.max };
+  });
+  chk(`matColSet attaches a full-precision column (${setInfo.n} records, min ${setInfo.min} max ${setInfo.max})`, setInfo.min === 0 && setInfo.max === (setInfo.n - 1) * 2);
+  await saveProject(pc);                                            // the save hook writes the .cols sidecar
+  await pc.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2matcol'); await window._micro.openProjectDir(dir); });
+  await pc.waitForFunction(() => window._micro.layers().length && window._micro.layers()[0].docs.blockDoc, null, { timeout: 60000 });
+  await pc.waitForTimeout(400);
+  const back = await pc.evaluate(() => {
+    const L = window._micro.layers()[0]; const est = window._micro.matColList(L).find((c) => c.name === 'EST');
+    return { has: !!est, n: est ? est.values.length : 0, v0: est ? est.values[0] : null, v5: est ? est.values[5] : null, vlast: est ? est.values[est.values.length - 1] : null };
+  });
+  chk(`materialized column reloads aligned from the sidecar (EST: ${back.n} records, [0]=${back.v0} [5]=${back.v5} last=${back.vlast})`, back.has && back.v0 === 0 && back.v5 === 10 && back.vlast === (back.n - 1) * 2);
+  await pc.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
