@@ -273,6 +273,36 @@ await p.close();
   await pd.close();
 }
 
+// ═══ 9. vertical exaggeration — a GLOBAL scene z-scale (camera-level): geometry
+//     intact, rides in the camera capture, and a pick still returns a real record
+//     (queries stay in real coords under exaggeration) ═══
+{
+  const pe = await mkPage('sm2exag');
+  const CSV = () => { let s = 'XC,YC,ZC,FE\n'; for (let k = 0; k < 20; k++) for (let j = 0; j < 20; j++) for (let i = 0; i < 20; i++) s += `${i * 10},${j * 10},${k * 5},${40 + (i % 8)}\n`; return s; };
+  await pe.evaluate((csv) => window._micro.openBlob(new Blob([csv]), 'e.csv', 'replace'), CSV());
+  await pe.waitForFunction(() => window._micro.layers().length && window._micro.renderer.layerElementCount(window._micro.layers()[0].id) > 5000, null, { timeout: 30000 });
+  const cnt0 = await pe.evaluate(() => window._micro.renderer.layerElementCount(window._micro.layers()[0].id));
+  await pe.evaluate(() => window._micro.setZExag(4));
+  await pe.waitForTimeout(500);
+  const ex = await pe.evaluate(() => ({
+    z: window._micro.cam.state.zExag,
+    count: window._micro.renderer.layerElementCount(window._micro.layers()[0].id),
+    captured: window._micro.captureScene ? window._micro.captureScene('t', false).camera.zExag : null,
+  }));
+  chk(`exaggeration: global z-scale applied (4×), geometry intact (${ex.count.toLocaleString()})`, ex.z === 4 && ex.count === cnt0);
+  chk('exaggeration rides in the camera capture (bookmarks/scenes)', ex.captured === 4);
+  // a pick under exaggeration must still return a real record (ID-buffer picks what you see)
+  const cv = await pe.$('#gl,canvas'); const box = await cv.boundingBox(); let hit = null;
+  for (const [fx, fy] of [[0.5, 0.5], [0.45, 0.5], [0.55, 0.5], [0.5, 0.45], [0.5, 0.55]]) {
+    await pe.mouse.click(box.x + box.width * fx, box.y + box.height * fy); await pe.waitForTimeout(250);
+    hit = await pe.evaluate(() => { const rp = document.querySelector('#recPanel'); return rp && rp.classList.contains('show') ? rp.querySelectorAll('.rp-row').length : 0; });
+    if (hit) break;
+  }
+  chk('exaggeration: a pick still returns a real record (queries stay in real coords)', hit > 0);
+  await pe.evaluate(() => window._micro.setZExag(1));
+  await pe.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

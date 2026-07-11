@@ -649,6 +649,7 @@
       <option value="100000000">all</option>
     </select></label>
     <span class="spacer"></span>
+    <label title="vertical exaggeration — a global scene z-scale; all layers stay registered and every query (pick, measure, section) stays in real coordinates">Z× <input id="zExag" type="number" min="0.1" max="50" step="0.5" value="1" style="width:46px"></label>
     <label>section <select id="secMode" title="section orientation: plan (horizontal) · N–S (east-facing) · E–W (north-facing) · knife (drag a line) · custom (dip direction + dip)">
       <option value="off">off</option>
       <option value="plan">plan</option>
@@ -5053,6 +5054,7 @@ $('#btnShot').onclick = () => {
 // budget survives refreshes (per-frame element budget is a machine preference)
 try { const b = localStorage.getItem('micro.budget'); if (b && [...$('#budget').options].some((o) => o.value === b)) $('#budget').value = b; } catch { /* private mode */ }
 $('#budget').addEventListener('change', () => { try { localStorage.setItem('micro.budget', $('#budget').value); } catch { /* ignore */ } });
+$('#zExag').addEventListener('input', () => setZExag($('#zExag').value));
 $('#btnFit').onclick = () => { if (renderer.chunkCount) { cam.fit(rendererDocBbox()); requestRender(); } };
 // phones: the tool icons live on their OWN row — the same elements move, so
 // ids, listeners, and lit states travel with them; desktop puts them back
@@ -7076,7 +7078,7 @@ function updateProjectTitle() {
 }
 function captureCamera() {
   const st = cam.state, o = frame ? frame.origin : [0, 0, 0];
-  return { target: [st.target[0] + o[0], st.target[1] + o[1], st.target[2] + o[2]], radius: st.radius, theta: st.theta, phi: st.phi, ortho: !!st.ortho };
+  return { target: [st.target[0] + o[0], st.target[1] + o[1], st.target[2] + o[2]], radius: st.radius, theta: st.theta, phi: st.phi, ortho: !!st.ortho, zExag: st.zExag || 1 };
 }
 function applyCamera(c) {
   if (!c) return;
@@ -7084,7 +7086,16 @@ function applyCamera(c) {
   st.target = [c.target[0] - o[0], c.target[1] - o[1], c.target[2] - o[2]];
   st.radius = c.radius; st.theta = c.theta; st.phi = c.phi;
   cam.setOrtho(!!c.ortho);
+  st.zExag = c.zExag || 1; if ($('#zExag')) $('#zExag').value = st.zExag;   // vertical exaggeration rides with the view (bookmarks/scenes/figure recipes)
   cam.update(); requestRender();
+}
+// vertical exaggeration — a GLOBAL scene z-scale (camera-level, all layers registered)
+function setZExag(v) {
+  const s = Math.max(0.1, Math.min(50, +v || 1));
+  cam.state.zExag = s;
+  if ($('#zExag') && +$('#zExag').value !== s) $('#zExag').value = s;
+  cam.update(); requestRender();
+  $('#meta').textContent = s === 1 ? 'vertical exaggeration off (1×)' : `vertical exaggeration ${s}×`;
 }
 function captureSection() {
   return { mode: $('#secMode').value, pos: +$('#secPos').value, half: +$('#secHalf').value, knifeN: _knife ? _knife.n : null,
@@ -8269,6 +8280,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { sep: true },
   { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
   { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
+  { label: 'Vertical exaggeration', submenu: () => [1, 2, 3, 5, 10, 20].map((s) => ({ label: (cam.state.zExag === s ? '✓ ' : '') + (s === 1 ? 'off (1×)' : s + '×'), action: () => setZExag(s) })) },
   { label: 'Decorations & figure…', action: () => openDecoPanel() },
   { label: 'Windows…', action: () => windowsMenu($('#mView')) },
   { sep: true },
@@ -12551,7 +12563,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

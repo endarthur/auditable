@@ -5771,6 +5771,7 @@ function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
     target: [0, 0, 0], radius: 100, theta: Math.PI / 4, phi: Math.PI / 5, fovY,
     aspect: 1, near: 0.1, far: 1e6,
     ortho: false, halfH: 0,                                // ortho: half-height = radius·tan(fovY/2) — toggling keeps apparent size at the target
+    zExag: 1,                                              // vertical exaggeration: a GLOBAL scene z-scale folded into viewProj (all layers stay registered; queries stay in real coords — see update())
     eye: [0, 0, 0], view: null, proj: null, viewProj: null,
   };
   const EPS = 0.01;
@@ -5794,6 +5795,16 @@ function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
     c.halfH = c.radius * Math.tan(c.fovY / 2);
     c.proj = c.ortho ? mat4Ortho(c.halfH, c.aspect, c.near, c.far) : mat4Perspective(c.fovY, c.aspect, c.near, c.far);
     c.viewProj = mat4Multiply(c.proj, c.view);
+    // Vertical exaggeration: fold a world-space z-scale into viewProj, pivoted at
+    // the target's z (so the look-at point stays fixed). viewProj·M means every
+    // vertex is z-scaled AT DRAW ONLY — shaders still test real z for section
+    // culling (before viewProj), pick is the ID-buffer (real recIdx), measure
+    // reads source records, and unproject uses inverse(viewProj) which yields real
+    // coords. One matrix, all layers registered, every query honest.
+    if (c.zExag && c.zExag !== 1) {
+      const S = c.zExag, tz = c.target[2];                 // z' = tz + (z-tz)·S  ⇒  column-major z-scale about tz
+      c.viewProj = mat4Multiply(c.viewProj, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, S, 0, 0, 0, tz * (1 - S), 1]);
+    }
     return c;
   }
   return {
