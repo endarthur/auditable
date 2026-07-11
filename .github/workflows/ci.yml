@@ -26,8 +26,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # --test-concurrency=1: serialize files so --test-force-exit (needed for
+      # the worker-holding-the-loop test) only fires after the truly-last file
+      # completes. In parallel on a 2-core runner it raced, cancelling a
+      # still-running file's subtests ("did not finish before its parent").
       - name: library + engine tests (node --test)
-        run: npm test
+        run: node --no-warnings --test --test-concurrency=1 --test-force-exit "test/!(adder-wasm).test.*"
       - name: WASM integration tests
         run: npm run test:wasm
 

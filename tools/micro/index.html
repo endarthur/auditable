@@ -8835,20 +8835,36 @@ function decorationsMenu() { openDecoPanel(); }   // back-compat alias (View men
 // Running applies the lot, waits for the render to converge, exports the PNG,
 // then RESTORES everything it touched (temporary changes give back what they
 // took). "The monthly plan-view figure" regenerates itself. ──
-function captureFigureCfg() { return { camera: captureCamera(), bg: _bgColor, deco: { ..._deco }, figScale: _figScale }; }
+// per-layer cut modes captured BY NAME (only non-default: false/'front'/'behind');
+// applying resets everything to follow, then sets the listed overrides
+function captureCutModes() {
+  return _layers.map((L) => ({ layer: L.name, mode: renderer.layerSectioned(L.id) })).filter((x) => x.mode !== true);
+}
+function applyCutModes(modes) {
+  for (const L of _layers) renderer.setLayerSectioned(L.id, true);   // reset to follow
+  for (const { layer, mode } of (modes || [])) { const L = _layers.find((x) => x.name === layer); if (L) renderer.setLayerSectioned(L.id, mode); }
+}
+// a figure recipe captures the whole picture: camera + decorations + background
+// + export scale + the SECTION (position, thickness, orientation) + per-layer
+// cut modes — so "the monthly plan/section figure" reproduces exactly.
+function captureFigureCfg() { return { camera: captureCamera(), bg: _bgColor, deco: { ..._deco }, figScale: _figScale, section: captureSection(), cutModes: captureCutModes() }; }
 async function runFigureRecipe(params) {
   const prev = captureFigureCfg();
   try {
     if (params.camera) applyCamera(params.camera);
     if (params.bg) setBg(params.bg);
     if (params.deco) { Object.assign(_deco, params.deco); saveDeco(); }
+    if (params.section) applySection(params.section);       // the section IS the figure for a section plot
+    if (params.cutModes) applyCutModes(params.cutModes);
     drawDecorations(); requestRender();
     $('#meta').textContent = 'figure recipe: rendering…';
     await new Promise((res) => { const t0 = performance.now(); const t = setInterval(() => { if (/converged/.test($('#stats').textContent) || performance.now() - t0 > 20000) { clearInterval(t); res(); } }, 150); });
     exportFigure(params.figScale || 1);
   } finally {
     applyCamera(prev.camera); setBg(prev.bg);
-    Object.assign(_deco, prev.deco); saveDeco(); drawDecorations(); requestRender();
+    Object.assign(_deco, prev.deco); saveDeco();
+    applySection(prev.section); applyCutModes(prev.cutModes);   // put the section + cut modes back
+    drawDecorations(); requestRender();
     if (_decoWin && _decoWin._render) _decoWin._render();
   }
 }

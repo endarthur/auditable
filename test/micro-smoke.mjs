@@ -480,20 +480,24 @@ const stc = await p.evaluate(async () => {
 chk(`stats window: FE n ${stc.row && stc.row.n}, mean ${stc.row && stc.row.mean}, median ${stc.row && stc.row.q50} (${stc.rendered} table row)`,
   stc.row && stc.row.n === 4 && stc.row.mean === 250 && Number.isFinite(stc.row.q50) && stc.rendered === 1);
 
-// figure recipe: apply a captured view+deco+bg, export, RESTORE everything
+// figure recipe: apply a captured view+deco+bg+SECTION, export, RESTORE everything
 const fgr = await p.evaluate(async () => {
   const m = window._micro;
   HTMLAnchorElement.prototype.click = function () {};
   m.setBg('#ffffff'); m.setDecoTitle('Fig');
+  const set = (id, v) => { const e = document.querySelector('#' + id); e.value = v; e.dispatchEvent(new Event('input')); };
+  set('secMode', 'plan'); set('secHalf', '7');              // a section IS part of the figure now
   const params = m.captureFigureCfg();
-  m.setBg('#121212'); m.setDecoTitle('');
+  const hasSection = params.section && params.section.mode === 'plan' && params.section.half === 7;
+  m.setBg('#121212'); m.setDecoTitle(''); set('secMode', 'off');   // mutate everything
   window._lastFigure = null;
   await m.runFigureRecipe(params);
   await new Promise((res) => { const t = setInterval(() => { if (window._lastFigure) { clearInterval(t); res(); } }, 100); setTimeout(() => { clearInterval(t); res(); }, 5000); });
   const deco = JSON.parse(localStorage.getItem('micro.deco') || '{}');
-  return { png: !!(window._lastFigure && window._lastFigure.size > 1000), bg: localStorage.getItem('micro.bg'), title: deco.titleText || '' };
+  return { png: !!(window._lastFigure && window._lastFigure.size > 1000), bg: localStorage.getItem('micro.bg'), title: deco.titleText || '', hasSection, secRestored: document.querySelector('#secMode').value };
 });
-chk(`figure recipe: PNG (${fgr.png}) + restores bg (${fgr.bg}) and title (“${fgr.title}”)`, fgr.png && fgr.bg === '#121212' && fgr.title === '');
+chk(`figure recipe: PNG (${fgr.png}) + captures section (${fgr.hasSection}) + restores bg/title/section (${fgr.bg}/“${fgr.title}”/${fgr.secRestored})`,
+  fgr.png && fgr.hasSection && fgr.bg === '#121212' && fgr.title === '' && fgr.secRestored === 'off');
 
 // swath window v2: NO auto-run on open, a Run button computes, direction/band
 // re-bin live from the single scan (no re-scan)
