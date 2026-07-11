@@ -107,7 +107,15 @@ const p = await ctx.newPage();
 p.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); process.exitCode = 1; });
 await p.goto(`http://127.0.0.1:${PORT}/tools/micro/index.html`, { waitUntil: 'load' });
 await p.waitForFunction(() => window._micro, null, { timeout: 20000 });
-const layerReady = (name) => p.waitForFunction((n) => { const L = window._micro.layers().find((x) => x.name === n); return L && window._micro.renderer.layerElementCount(L.id) > 0; }, name, { timeout: 60000 });
+// ready = the layer exists, has rendered elements, AND its doc is queryable
+// (element-count can precede the doc being fully set → downstream .header reads
+// race it; this bit CI ~1-in-3 on the CSV grid read)
+const layerReady = (name) => p.waitForFunction((n) => {
+  const L = window._micro.layers().find((x) => x.name === n);
+  if (!L || !(window._micro.renderer.layerElementCount(L.id) > 0)) return false;
+  const d = L.docs || {};
+  return !!((d.blockDoc && d.blockDoc.header) || d.gridDoc || d.meshDoc || d.lasDoc || d.plyDoc || L.dh);
+}, name, { timeout: 60000 });
 
 // ── 1. CSV block model → regular grid inferred ──
 await p.evaluate((csv) => window._micro.openBlob(new Blob([csv]), 'model.csv', 'replace'), blockCsv());

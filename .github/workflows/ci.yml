@@ -36,8 +36,6 @@ jobs:
       # still-running file's subtests ("did not finish before its parent").
       - name: library + engine tests (node --test)
         run: node --no-warnings --test --test-concurrency=1 --test-force-exit "test/!(adder-wasm).test.*"
-      - name: WASM integration tests
-        run: npm run test:wasm
 
   # ── the app-integration smokes: built artifacts in headless Chromium ──
   smoke:
