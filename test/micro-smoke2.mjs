@@ -299,6 +299,20 @@ await p.close();
     if (hit) break;
   }
   chk('exaggeration: a pick still returns a real record (queries stay in real coords)', hit > 0);
+  // vertical pan must track the cursor 1:1 regardless of exaggeration (the z move
+  // is divided by zExag to cancel the display stretch) — a target-depth point
+  // shifts by ~the drag amount at 1× AND at 8×, not zExag× it
+  const pan = await pe.evaluate(() => {
+    const c = window._micro.cam; c.state.phi = Math.PI / 4; c.update(); const H = 760;
+    const track = (exag) => {
+      window._micro.setZExag(exag); const P = [...c.state.target];
+      const projY = (vp) => { const y = vp[1] * P[0] + vp[5] * P[1] + vp[9] * P[2] + vp[13], w = vp[3] * P[0] + vp[7] * P[1] + vp[11] * P[2] + vp[15]; return (1 - y / w) * 0.5 * H; };
+      const y0 = projY(c.state.viewProj); c.pan(0, 80, H); const y1 = projY(c.state.viewProj); c.pan(0, -80, H);
+      return y1 - y0;
+    };
+    return { at1: track(1), at8: track(8) };
+  });
+  chk(`exaggeration: vertical pan tracks 1:1 (1×→${pan.at1.toFixed(0)}px, 8×→${pan.at8.toFixed(0)}px for an 80px drag)`, Math.abs(pan.at1 - 80) < 25 && Math.abs(pan.at8 - 80) < 25);
   await pe.evaluate(() => window._micro.setZExag(1));
   await pe.close();
 }

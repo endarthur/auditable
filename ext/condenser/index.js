@@ -5819,7 +5819,11 @@ function createOrbitCamera({ fovY = 45 * Math.PI / 180 } = {}) {
       // camera right = (-st, ct, 0); camera up ≈ (-ct·sp, -st·sp, cp)
       c.target[0] += (-st) * (-dxPx * s) + (-ct * sp) * (dyPx * s);
       c.target[1] += (ct) * (-dxPx * s) + (-st * sp) * (dyPx * s);
-      c.target[2] += cp * (dyPx * s);
+      // vertical exaggeration stretches displayed z by zExag, so a real-z move
+      // shows amplified — divide the up-vector's z contribution by zExag so the
+      // grabbed point tracks the cursor 1:1 (M⁻¹ of the up-move; x/y are unscaled).
+      // In plan view cp=0 → no change, as it should be.
+      c.target[2] += cp * (dyPx * s) / (c.zExag || 1);
       return update();
     },
     setOrtho(on) { c.ortho = !!on; return update(); },
