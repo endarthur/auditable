@@ -588,15 +588,28 @@ await p.close();
     return { n: cnt, min: col.min, max: col.max };
   });
   chk(`matColSet attaches a full-precision column (${setInfo.n} records, min ${setInfo.min} max ${setInfo.max})`, setInfo.min === 0 && setInfo.max === (setInfo.n - 1) * 2);
+  // colour by it (paint path) → legend reads the REAL range [0,62]; filter sees FULL precision (EST>40 → 11 blocks)
+  const disp = await pc.evaluate(async () => {
+    const L = window._micro.layers()[0]; window._micro.setActiveLayer(L.id);
+    const inOpts = [...document.querySelectorAll('#colorBy option')].some((o) => o.value === 'paint:EST');
+    window._micro.setLayerColorSel(L, 'paint:EST');
+    const range = window._micro.rampRangeFor(L);
+    document.querySelector('#filter').value = 'EST > 40'; await window._micro.applyBlockFilter('EST > 40');
+    const hits = L._filterMask ? L._filterMask.reduce((a, b) => a + b, 0) : -1;
+    await window._micro.applyBlockFilter('');
+    return { inOpts, colorSel: L.colorSel, range, hits };
+  });
+  chk(`materialized column is colourable (in colorBy ${disp.inOpts}, sel ${disp.colorSel}) with a REAL-range legend [${disp.range[0]}, ${disp.range[1]}]`, disp.inOpts && disp.colorSel === 'paint:EST' && disp.range[0] === 0 && disp.range[1] === 62);
+  chk(`filter sees the materialized column at FULL precision (EST>40 → ${disp.hits} blocks)`, disp.hits === 11);
   await saveProject(pc);                                            // the save hook writes the .cols sidecar
   await pc.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2matcol'); await window._micro.openProjectDir(dir); });
   await pc.waitForFunction(() => window._micro.layers().length && window._micro.layers()[0].docs.blockDoc, null, { timeout: 60000 });
   await pc.waitForTimeout(400);
   const back = await pc.evaluate(() => {
     const L = window._micro.layers()[0]; const est = window._micro.matColList(L).find((c) => c.name === 'EST');
-    return { has: !!est, n: est ? est.values.length : 0, v0: est ? est.values[0] : null, v5: est ? est.values[5] : null, vlast: est ? est.values[est.values.length - 1] : null };
+    return { has: !!est, mat: !!(est && est.mat), n: est ? est.fvalues.length : 0, v0: est ? est.fvalues[0] : null, v5: est ? est.fvalues[5] : null, vlast: est ? est.fvalues[est.fvalues.length - 1] : null };
   });
-  chk(`materialized column reloads aligned from the sidecar (EST: ${back.n} records, [0]=${back.v0} [5]=${back.v5} last=${back.vlast})`, back.has && back.v0 === 0 && back.v5 === 10 && back.vlast === (back.n - 1) * 2);
+  chk(`materialized column reloads aligned from the sidecar (EST: ${back.n} records, mat ${back.mat}, [0]=${back.v0} [5]=${back.v5} last=${back.vlast})`, back.has && back.mat && back.v0 === 0 && back.v5 === 10 && back.vlast === (back.n - 1) * 2);
   await pc.close();
 }
 
