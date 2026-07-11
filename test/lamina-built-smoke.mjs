@@ -139,6 +139,23 @@ try {
     ? ok(`build stamp present (${stamp.footer})`)
     : fail(`build stamp missing/malformed: ${JSON.stringify(stamp)}`);
 
+  // the built-in sample opens DRESSED — sorted by grade + heat-mapped — so a
+  // newcomer lands on the ore, not the top-of-model waste cap (grades 0)
+  const sample = await page.evaluate(async () => {
+    window._lamina.openSampleData();
+    await new Promise((r) => setTimeout(r, 1500));   // sort is sync; the colour-scale scan finishes shortly after
+    const c = window._lamina.current;
+    return {
+      rows: window._laminaVS.rowCount(),
+      sortedByCu: !!(c && c.sort && c.sort.length === 1 && c.schema[c.sort[0].col].name === 'Cu_pct' && c.sort[0].dir === 'desc'),
+      heatmapped: !!(c && c.colScale && c.colScale.size),
+      meta: document.getElementById('meta').textContent,
+    };
+  });
+  (sample.rows === 120000 && sample.sortedByCu && sample.heatmapped)
+    ? ok(`sample opens dressed — sorted by Cu_pct ↓ + heat-mapped (${sample.meta.slice(0, 48)}…)`)
+    : fail(`sample not dressed: ${JSON.stringify(sample)}`);
+
   // ── seal: the build-ENFORCED capability — verify the emitted declaration against
   //    the real artifact + the observed runtime (0 egress on load = the Sealed gate). ──
   const seal = await import('../ext/seal/index.js');

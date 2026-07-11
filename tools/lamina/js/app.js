@@ -3506,6 +3506,17 @@ function openSampleData() {
     rows.push([id++, x0 + i * 10, y0 + j * 10, z0 + k * 5, 10, 10, 5, au.toFixed(3), cu.toFixed(3), ag.toFixed(2), fe.toFixed(2), dens.toFixed(3), orep.toFixed(3), rec.toFixed(1), lito, 'Z' + (1 + Math.min(4, Math.floor(depth * 5)))].join(','));
   }
   open('sample_blockmodel.csv', new TextEncoder().encode(rows.join('\n')));
+  // The block model is generated top-down, so its first rows are the waste cap
+  // (grades 0). Land a newcomer on the ORE instead: sort by copper grade
+  // descending and heat-map that column — so the sample opens straight onto
+  // high-grade material with the distribution glyphs, showcasing sort +
+  // colour-scale at once rather than a wall of zeros.
+  const cu = current && current.schema ? current.schema.findIndex((s) => s.name === 'Cu_pct') : -1;
+  if (cu >= 0) {
+    current.sort = [{ col: cu, dir: 'desc' }];
+    recompute();
+    setColScaleOpt(cu, { clip: true }).catch(() => { /* colour-scale is a nicety */ });
+  }
 }
 
 // Precompute exact stats for EVERY column in one BMA-style two-pass scan (moments +
