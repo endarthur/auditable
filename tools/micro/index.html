@@ -672,7 +672,7 @@
   </div>
   <div id="barTools"></div>
   <div id="view"><canvas id="cv"></canvas><canvas id="decoCv" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="bandSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="bandPolyA" fill="rgba(74,120,176,0.10)" stroke="#4a78b0" stroke-width="1.4"/><polygon id="bandPolyB" fill="none" stroke="#4a78b0" stroke-width="1.4" stroke-dasharray="4 3"/><text id="bandLabel" fill="#fff" font-size="11" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3"></text></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
-  <div id="empty"><b>open a block model, drillholes, or point cloud</b><span>Open… or drag .csv / .dm / .parquet / .las / .ply / .xyz / .msh / .obj / .lfm / .tif / .grd anywhere — several at once become layers</span><span>nothing handy? <a id="sampleBlocks">▸ a 2M-block model, grade-coloured</a> — or a bench scan at <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points — made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
+  <div id="empty"><b>open a block model, drillholes, or point cloud</b><span>Open… or drag .csv / .dm / .parquet / .las / .ply / .xyz / .msh / .obj / .lfm / .tif / .grd anywhere — several at once become layers</span><span>nothing handy? <a id="sampleDemo">▸ open the demo project</a> — a block model + drillholes, sectioned, with a grade–tonnage curve · or just <a id="sampleBlocks">▸ a 2M-block model</a> · a bench scan at <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points — all made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
@@ -9462,6 +9462,107 @@ $('#sampleBlocks').onclick = async () => {
   await openBlob(makeSampleBlockCsv(), 'sample_blockmodel.csv', 'replace');
 };
 
+// ── the DEMO PROJECT — the coming-home aha. A dressed session: a block model +
+// drillholes, coloured by grade, cut by a section through the ore lens, with a
+// grade–tonnage curve — so a newcomer meets the whole resource-geology workflow
+// in one click, not a viewer they must learn to drive. It's in-memory; File →
+// Save project as… writes it to a real folder they can inspect (the auditable
+// "your data is just a folder you own" story), and Save also persists the
+// bookmark + the pinned grade-tonnage window. ──
+const _DEMO = { nx: 200, ny: 100, nz: 100, dx: 10, dy: 10, dz: 5, x0: 612000, y0: 7765000, z0: 400 };
+// FE grade at a WORLD position, from the same ellipsoidal dipping lens the block
+// sample uses — so the drillholes intersect the ore exactly where the model shows it.
+function _demoFeAt(x, y, z, rnd) {
+  const D = _DEMO;
+  const i = (x - D.x0) / D.dx, j = (y - D.y0) / D.dy, k = (z - D.z0) / D.dz;
+  const u = (i - D.nx * 0.5 - (k - D.nz / 2) * 0.35) / (D.nx * 0.22), v = (j - D.ny * 0.45) / (D.ny * 0.3), w = (k - D.nz * 0.55) / (D.nz * 0.28);
+  const d2 = u * u + v * v + w * w;
+  return Math.max(8, Math.min(68, 62 - d2 * 30 + ((rnd ? rnd() : 0.5) - 0.5) * 6));
+}
+const _demoSg = (fe) => +(2.5 + (fe / 68) * 2.0).toFixed(2);   // iron ore: ~2.5 waste → ~4.5 hematite
+// block model with FE + SG (density → real grade-tonnage) + LITO
+function makeDemoBlockCsv() {
+  const D = _DEMO, parts = ['XC,YC,ZC,FE,SG,LITO\n']; let rows = [];
+  const rnd = mulberry32(7), benchBlocks = 2;
+  for (let k = 0; k < D.nz; k++) {
+    for (let j = 0; j < D.ny; j++) {
+      for (let i = 0; i < D.nx; i++) {
+        const gx = (i - D.nx * 0.5) / (D.nx * 0.42), gy = (j - D.ny * 0.45) / (D.ny * 0.42);
+        const pitDepth = Math.max(0, 240 * Math.exp(-(gx * gx + gy * gy) * 1.9) - 10);
+        const kSurf = D.nz - 1 - Math.floor(pitDepth / D.dz / benchBlocks) * benchBlocks;
+        if (k > kSurf) continue;
+        const x = D.x0 + i * D.dx, y = D.y0 + j * D.dy, z = D.z0 + k * D.dz;
+        const fe = _demoFeAt(x, y, z, rnd);
+        const u = (i - D.nx * 0.5 - (k - D.nz / 2) * 0.35) / (D.nx * 0.22), v = (j - D.ny * 0.45) / (D.ny * 0.3), w = (k - D.nz * 0.55) / (D.nz * 0.28);
+        const d2 = u * u + v * v + w * w;
+        const lito = d2 < 0.8 ? (k > D.nz * 0.7 ? 'HEMATITE' : 'ITABIRITE') : (k > D.nz * 0.8 ? 'CANGA' : 'WASTE');
+        rows.push(`${x},${y},${z},${fe.toFixed(2)},${_demoSg(fe)},${lito}`);
+      }
+    }
+    parts.push(rows.join('\n') + '\n'); rows = [];
+  }
+  return new Blob(parts, { type: 'text/csv' });
+}
+// a small vertical drillhole set threading the deposit — collar + survey + assay,
+// FE from the same lens so the holes agree with the model (collar/survey/assay
+// column conventions per the @gcu/condenser drillhole provider)
+function makeDemoDrillholes() {
+  const D = _DEMO, rnd = mulberry32(11);
+  const collar = ['HOLEID,X,Y,Z'], survey = ['HOLEID,DEPTH,AZ,DIP'], assay = ['HOLEID,FROM,TO,FE'];
+  const zc = D.z0 + D.nz * D.dz + 10;                     // collar just above the model top
+  let n = 0;
+  for (let gy = 0; gy < 3; gy++) {
+    for (let gx = 0; gx < 4; gx++) {
+      const id = `DH${String(++n).padStart(3, '0')}`;
+      const x = D.x0 + (0.15 + 0.7 * gx / 3) * D.nx * D.dx;
+      const y = D.y0 + (0.15 + 0.7 * gy / 2) * D.ny * D.dy;
+      collar.push(`${id},${x.toFixed(1)},${y.toFixed(1)},${zc}`);
+      survey.push(`${id},0,0,-90`);                        // vertical hole
+      for (let dp = 0; dp < 500; dp += 5) {
+        const zmid = zc - (dp + 2.5);
+        if (zmid < D.z0) break;
+        assay.push(`${id},${dp},${dp + 5},${_demoFeAt(x, y, zmid, rnd).toFixed(2)}`);
+      }
+    }
+  }
+  return {
+    collar: new File([collar.join('\n') + '\n'], 'demo_collars.csv'),
+    survey: new File([survey.join('\n') + '\n'], 'demo_survey.csv'),
+    intervals: new File([assay.join('\n') + '\n'], 'demo_assay.csv'),
+  };
+}
+async function openDemoProject() {
+  $('#empty').style.display = 'none';
+  $('#meta').textContent = 'demo project — assembling a block model…';
+  await new Promise((r) => setTimeout(r));
+  await openBlob(makeDemoBlockCsv(), 'deposit.csv', 'replace');   // lands grade-coloured (FE)
+  const bm = activeLayer();
+  $('#meta').textContent = 'demo project — desurveying drillholes…';
+  let dh = null;
+  try { await openDrillholeLayer(makeDemoDrillholes(), { radius: 6 }, 'add'); dh = activeLayer(); }
+  catch (e) { $('#meta').textContent = `demo drillholes failed — ${e.message}`; }
+  // half-cut the model E–W through the ore lens (opens the deposit on the grade
+  // interior); the drillholes stay WHOLE (per-layer "don't cut") so they thread
+  // the full deposit for context — exactly the section-with-holes view a geologist reads
+  applySection({ mode: 'ew', clip: 'behind', pos: 0.45 });
+  if (dh) renderer.setLayerSectioned(dh.id, false);
+  // a bookmark on this view (persists once the project is saved)
+  try { _views = _views.filter((v) => v.name !== 'Ore lens — E–W section').concat([{ name: 'Ore lens — E–W section', camera: captureCamera(), section: captureSection() }]); } catch { /* view capture best-effort */ }
+  $('#btnFit').click();
+  // a grade–tonnage window on the model (FE grade, SG density) — computed, so the
+  // newcomer sees the curve, not an empty panel — DOCKED RIGHT so the model stays the hero
+  if (bm) {
+    setActiveLayer(bm.id);
+    try {
+      openGradeTonnage(bm, { run: true });
+      const gtWin = [...document.querySelectorAll('.fwin')].pop();
+      if (gtWin) { gtWin.style.left = Math.max(0, innerWidth - gtWin.offsetWidth - 14) + 'px'; gtWin.style.top = '70px'; }
+    } catch { /* window optional */ }
+  }
+  $('#meta').textContent = 'demo project — a block model + drillholes, sectioned, with grade–tonnage. File → Save project as… writes it to a folder you can open and inspect.';
+}
+$('#sampleDemo').onclick = () => openDemoProject();
+
 // ── ATTRIBUTE TABLES (spec §11): floating, LAYER-PINNED windows — reading is
 // stateful, so a table never re-targets under your scroll; one per layer,
 // several open at once. A loom grid over the layer's O(1) fetchRecord
@@ -12450,7 +12551,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

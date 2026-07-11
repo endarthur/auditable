@@ -244,6 +244,35 @@ await p.close();
   await pb.close();
 }
 
+// ═══ 8. the demo project — one click assembles the coming-home scene: a block
+//     model + drillholes, half-cut on the ore lens (holes stay WHOLE), grade-
+//     coloured, with a computed grade-tonnage curve + a saved bookmark ═══
+{
+  const pd = await mkPage('sm2demo');
+  await pd.click('#sampleDemo');
+  await pd.waitForFunction(() => window._micro.layers().length >= 2
+    && window._micro.views().length >= 1
+    && [...document.querySelectorAll('.fwin')].some((w) => /grade.tonnage/i.test(w.textContent)), null, { timeout: 120000 });
+  await pd.waitForTimeout(1000);
+  const d = await pd.evaluate(() => {
+    const dh = window._micro.layers().find((x) => x.dh);
+    const bm = window._micro.layers().find((x) => x.docs && x.docs.blockDoc);
+    const gtWin = [...document.querySelectorAll('.fwin')].find((w) => /grade.tonnage/i.test(w.textContent));
+    return {
+      layers: window._micro.layers().length,
+      hasBlocks: !!bm, blockCount: bm ? window._micro.renderer.layerElementCount(bm.id) : 0,
+      hasDh: !!dh, dhWhole: dh ? !window._micro.renderer.layerSectioned(dh.id) : false,
+      section: document.querySelector('#secMode').value,
+      gtCurve: gtWin ? !!gtWin.querySelector('canvas') : false,
+      bookmark: window._micro.views().some((v) => /lens/i.test(v.name)),
+    };
+  });
+  chk(`demo project: block model (${d.blockCount.toLocaleString()}) + drillholes, one click`, d.hasBlocks && d.blockCount > 100000 && d.hasDh && d.layers >= 2);
+  chk(`demo project: E–W section, drillholes stay WHOLE (not cut)`, d.section === 'ew' && d.dhWhole);
+  chk(`demo project: grade-tonnage window computed + a bookmark saved`, d.gtCurve && d.bookmark);
+  await pd.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
