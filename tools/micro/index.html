@@ -7235,7 +7235,7 @@ function projectManifest() {
       external: L.storage === 'external' || undefined,
       colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible,
       sectioned: (() => { const m = renderer.layerSectioned(L.id); return m === true ? undefined : m; })(),
-      kind: L.kind === 'mesh' ? 'mesh' : undefined,
+      kind: (L.kind === 'mesh' && !L.gridSurface) ? 'mesh' : undefined,   // a grid-surface is kind 'mesh' but reopens as a grid (gridSurface flag)
       tint: L.kind === 'mesh' ? L.tint : undefined,
       opacity: (L.opacity != null && L.opacity !== 1) ? L.opacity : undefined,   // any kind (mesh/blocks/drillholes)
       recHide: (L._recHide && L._recHide.size) ? [...L._recHide] : undefined,   // record-panel hidden fields (view pref)
@@ -7243,6 +7243,8 @@ function projectManifest() {
       edges: L.edges != null ? L.edges : undefined,        // per-layer block-edge override (tri-state; absent = follow View)
       gtUnits: L.gtUnits || undefined,                     // grade-tonnage unit declarations (grade unit, density col/const + unit)
       analysis: L.analysis || undefined,                   // GT/swath window setups (series by layer NAME) + pinned-open state + geometry
+      gridSurface: (L.docs.gridDoc && L.gridSurface) || undefined,   // a grid shown as a shaded-relief surface
+      drape: (L.gridSurface && L.drapeSource) || undefined,          // draped by another grid layer (by NAME)
       soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
       hiddenCats: L.catHidden && L.catHidden.size
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
@@ -7699,6 +7701,7 @@ async function openProjectDir(dir) {
       const overR = ls.kind === 'mesh'
         ? { tint: ls.tint, opacity: ls.opacity, forceSoup: !!ls.soup }
         : (/\.ply$/i.test(ls.source) ? { forcePoints: true } : (ls.mapping ? { mapping: ls.mapping } : {}));
+      if (ls.gridSurface) overR.asKind = 'surface';         // a grid saved as a shaded-relief surface reopens as one (drape applied post-load)
       // grid display-cache: matching source size → display from the sidecar,
       // skipping the re-decimation (eval still windows the source full res)
       if (ls.kind !== 'mesh' && /\.(tif|tiff)$/i.test(ls.source)) {
@@ -7729,6 +7732,7 @@ async function openProjectDir(dir) {
       { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } if (ls.recHide && ls.recHide.length) Lx._recHide = new Set(ls.recHide); if (ls.legend) Lx.legend = true; if (ls.legendTitle) Lx.legendTitle = ls.legendTitle; if (ls.edges != null) { Lx.edges = ls.edges; renderer.setLayerEdges(Lx.id, ls.edges); } if (ls.gtUnits) Lx.gtUnits = ls.gtUnits; } }   // mesh opacity rides overR
       const L = activeLayer();
       if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
+      if (ls.drape && L.gridSurface) L._pendingDrape = ls.drape;   // apply after ALL layers land (the drape grid may come later)
       if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the styling/statistics UIs wake up scanned
       if (sidecar && sidecar.bands) L._bands = sidecar.bands;            // .dm/CSV filter pushdown substrate
       // color channel first (may re-stream), then filter (sweeps), then the rest
@@ -7756,6 +7760,13 @@ async function openProjectDir(dir) {
     if (mf.tree) treeFromManifest(mf.tree, idAt);
     applyCamera(mf.camera);
     applySection(mf.section);
+    // drapes come after ALL layers land — the drape grid may load later than its surface
+    for (const L of _layers) {
+      if (!L._pendingDrape) continue;
+      const g = _layers.find((x) => x.name === L._pendingDrape && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid);
+      L._pendingDrape = null;
+      if (g) { try { recolorSurface(L, g); } catch { /* drape grid gone/incompatible → stays elevation */ } }
+    }
     await loadRecipes(dir);                                // recipes/ *.yaml → Tools → Recipes
     // pinned analysis windows come back configured (after ALL layers landed —
     // series may reference other layers). Run stays manual: no surprise scans.
@@ -10097,9 +10108,19 @@ const ppNote = (text) => { const d = document.createElement('div'); d.className 
 function renderStyleTab(body, L) {
   if (L.kind === 'mesh') {
     const h = layerHeaderOf(L);
-    const tintIn = document.createElement('input'); tintIn.type = 'color'; tintIn.value = L.tint || '#9ea3a8';
-    tintIn.oninput = () => setMeshTint(L, tintIn.value);
-    body.appendChild(mkRow('tint', tintIn));
+    if (L.gridSurface) {                                    // a heightfield surface: colour by elevation or a draped grid
+      const sel = document.createElement('select');
+      const optE = document.createElement('option'); optE.value = ''; optE.textContent = 'elevation'; sel.appendChild(optE);
+      const grids = _layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
+      for (const g of grids) { const o = document.createElement('option'); o.value = g.name; o.textContent = g.label || g.name; sel.appendChild(o); }
+      sel.value = L.drapeSource || '';
+      sel.onchange = () => { const g = grids.find((x) => x.name === sel.value); recolorSurface(L, g || null); };
+      body.appendChild(mkRow('drape', sel));
+    } else {
+      const tintIn = document.createElement('input'); tintIn.type = 'color'; tintIn.value = L.tint || '#9ea3a8';
+      tintIn.oninput = () => setMeshTint(L, tintIn.value);
+      body.appendChild(mkRow('tint', tintIn));
+    }
     const op = document.createElement('input'); op.type = 'range'; op.min = 5; op.max = 100; op.step = 5;
     op.value = Math.round((L.opacity != null ? L.opacity : 1) * 100);
     const opVal = document.createElement('span'); opVal.className = 'pp-val'; opVal.textContent = op.value + '%';

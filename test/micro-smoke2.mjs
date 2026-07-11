@@ -362,6 +362,22 @@ await p.close();
   await ph.waitForTimeout(500);
   const drape = await ph.evaluate(() => { const L = window._micro.layers().find((x) => x.gridSurface); return { drape: L.drapeSource, kind: L.kind, elem: window._micro.renderer.layerElementCount(L.id) }; });
   chk(`surface drapes a second grid's values (topo coloured by grade, geometry intact)`, drape.drape === 'grade.asc' && drape.kind === 'mesh' && drape.elem > 1000);
+  // the drape control is on the properties panel too (not just the context menu)
+  const propDrape = await ph.evaluate(() => {
+    window._micro.setActiveLayer(window._micro.layers().find((L) => L.gridSurface).id); window._micro.openProps();
+    const rows = [...document.querySelectorAll('#ppBody .pp-row')];
+    const row = rows.find((r) => /drape/i.test(r.querySelector('label') ? r.querySelector('label').textContent : ''));
+    const sel = row && row.querySelector('select');
+    return { hasDrapeRow: !!sel, value: sel && sel.value, opts: sel ? [...sel.options].map((o) => o.textContent) : [] };
+  });
+  chk(`properties panel has a drape picker (value "${propDrape.value}", options ${JSON.stringify(propDrape.opts)})`, propDrape.hasDrapeRow && propDrape.value === 'grade.asc' && propDrape.opts.includes('elevation'));
+  // surface + drape PERSIST across a project save/reload
+  await saveProject(ph);
+  await ph.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2surf'); await window._micro.openProjectDir(dir); });
+  await ph.waitForFunction(() => window._micro.layers().length === 2, null, { timeout: 60000 });
+  await ph.waitForTimeout(600);
+  const reloaded = await ph.evaluate(() => { const L = window._micro.layers().find((x) => x.name === 'terrain.asc'); return { surface: !!(L && L.gridSurface), drape: L && L.drapeSource, kind: L && L.kind }; });
+  chk(`surface + drape persist across a project reload (${JSON.stringify(reloaded)})`, reloaded.surface && reloaded.drape === 'grade.asc' && reloaded.kind === 'mesh');
   await ph.close();
 }
 
