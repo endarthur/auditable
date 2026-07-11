@@ -26,6 +26,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # app-export.test.js + update.test.js read build/auditable.html (a gitignored
+      # build output) — npm test implicitly assumes a prior `node build.js`.
+      - name: build auditable.html (tests read build/auditable.html)
+        run: node build.js
       # --test-concurrency=1: serialize files so --test-force-exit (needed for
       # the worker-holding-the-loop test) only fires after the truly-last file
       # completes. In parallel on a 2-core runner it raced, cancelling a
