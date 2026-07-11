@@ -1,0 +1,53 @@
+name: CI
+
+# Launch-window insurance: every push/PR runs the committed suites so a deploy
+# is never guarded by discipline alone. Fast library layer first (Node's test
+# runner, no browser), then the built-artifact smokes (Playwright + headless
+# Chromium WebGL via SwiftShader). The slow examples-smoke (~9 min) stays manual.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── the fast layer: 7k+ library/engine tests, no browser (~30s) ──
+  library:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: library + engine tests (node --test)
+        run: npm test
+      - name: WASM integration tests
+        run: npm run test:wasm
+
+  # ── the app-integration smokes: built artifacts in headless Chromium ──
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: install Chromium (+ system deps)
+        run: npx playwright install --with-deps chromium
+      - name: build micro.html (the smoke boots the deploy artifact)
+        run: node build.js --target=micro
+      - name: micro smoke — features
+        run: npm run test:micro
+      - name: micro smoke 2 — data-integrity + persistence
+        run: npm run test:micro2
+      - name: lamina built smoke — ship artifact + Sealed net gate
+        run: node test/lamina-built-smoke.mjs
