@@ -5588,6 +5588,49 @@ function setSurfaceFlatZ(L, flatZ) {
   rebuildSurface(L);
   $('#meta').textContent = flatZ != null ? `${L.label || L.name} — flat sheet at z ${flatZ}` : `${L.label || L.name} — relief`;
 }
+// ── the SINGLE per-layer surface-presentation state ──
+// captureLayerSurface / applyLayerSurface are the ONE place the grid-surface state
+// (gridSurface · drape · flatZ · faceted · band) is serialized. The project
+// manifest AND scenes both call these, so adding a field is ONE edit and the two
+// paths can't silently diverge (the parity smoke enforces it). Empty {} for a
+// non-grid or an un-styled grid.
+function captureLayerSurface(L) {
+  const gd = L && L.docs && L.docs.gridDoc; if (!gd) return {};
+  const s = {};
+  if (L.gridSurface) {
+    s.gridSurface = true;
+    if (L.drapeSource) s.drape = L.drapeSource;
+    if (L.surfaceFlatZ != null) s.flatZ = L.surfaceFlatZ;
+    if (L.surfaceSmooth === false) s.faceted = true;
+  }
+  if (gd.grid.band) s.band = gd.grid.band;
+  return s;
+}
+// bring L to match a saved surface state — reopens the grid only if a reopen-
+// requiring field changed (surface↔points, band, flatZ, faceted); the drape is a
+// cheap in-place rebuild. Returns the (possibly new) layer. Used by applyScene AND
+// the project load's post-pass.
+async function applyLayerSurface(L, s) {
+  const gd = L && L.docs && L.docs.gridDoc; if (!gd) return L;
+  s = s || {};
+  const cur = captureLayerSurface(L);
+  const needsReopen = !!cur.gridSurface !== !!s.gridSurface || (cur.band || 0) !== (s.band || 0)
+    || (cur.flatZ != null ? cur.flatZ : null) !== (s.flatZ != null ? s.flatZ : null) || !!cur.faceted !== !!s.faceted;
+  let L2 = L;
+  if (needsReopen) {
+    const blob = gd.blob, name = L.name, label = L.label, vis = L.visible, keepHandle = L.handle, keepStorage = L.storage;
+    renderer.removeLayer(L.id); _layers = _layers.filter((l) => l.id !== L.id);
+    if (keepHandle && typeof File !== 'undefined' && blob instanceof File) _fileHandles.set(blob, keepHandle);
+    await openBlob(blob, name, 'add', null, { asKind: s.gridSurface ? 'surface' : 'points', band: s.band || 0, flatZ: s.gridSurface && s.flatZ != null ? s.flatZ : null, smooth: s.gridSurface ? !s.faceted : undefined });
+    L2 = activeLayer();
+    if (L2) { if (label) L2.label = label; L2.storage = keepStorage; if (keepHandle) L2.handle = keepHandle; if (vis === false) L2.visible = false; }
+  }
+  if (L2 && L2.gridSurface) {                                // drape: in-place rebuild, no reopen
+    const want = s.drape || null;
+    if ((L2.drapeSource || null) !== want) { const g = want ? _layers.find((x) => x.name === want && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid) : null; recolorSurface(L2, g); }
+  }
+  return L2;
+}
 // smooth (grid-gradient normals) ↔ faceted (flat per-triangle shading — reads the
 // cell structure, better for some interpretation)
 function setSurfaceSmooth(L, smooth) {
@@ -7290,11 +7333,7 @@ function projectManifest() {
       edges: L.edges != null ? L.edges : undefined,        // per-layer block-edge override (tri-state; absent = follow View)
       gtUnits: L.gtUnits || undefined,                     // grade-tonnage unit declarations (grade unit, density col/const + unit)
       analysis: L.analysis || undefined,                   // GT/swath window setups (series by layer NAME) + pinned-open state + geometry
-      gridSurface: (L.docs.gridDoc && L.gridSurface) || undefined,   // a grid shown as a shaded-relief surface
-      drape: (L.gridSurface && L.drapeSource) || undefined,          // draped by another grid layer (by NAME)
-      flatZ: (L.gridSurface && L.surfaceFlatZ != null) ? L.surfaceFlatZ : undefined,   // flat sheet at this world z (vs relief)
-      faceted: (L.gridSurface && L.surfaceSmooth === false) || undefined,   // flat per-triangle shading (vs smooth, the default)
-      band: (L.docs.gridDoc && L.docs.gridDoc.grid.band) || undefined,   // which band of a multi-band GeoTIFF
+      ...captureLayerSurface(L),   // gridSurface · drape · flatZ · faceted · band — the ONE surface-state source (shared with scenes; parity-tested)
       soup: (L.kind === 'mesh' && L.docs.meshDoc && L.docs.meshDoc.header.soup) || undefined,
       hiddenCats: L.catHidden && L.catHidden.size
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
@@ -8062,7 +8101,7 @@ function captureScene(name, withSel) {
   return {
     name, camera: captureCamera(), section: captureSection(),
     layers: _layers.map((L) => {
-      const o = { name: L.name, visible: L.visible !== false, colorSel: L.colorSel || '', filter: L.filterExpr || '' };
+      const o = { name: L.name, visible: L.visible !== false, colorSel: L.colorSel || '', filter: L.filterExpr || '', ...captureLayerSurface(L) };
       if (withSel && L._selMask && L._selCount) o.sel = rleEncode(L._selMask);   // opt-in; selection can be large (RLE'd)
       return o;
     }),
@@ -8072,8 +8111,9 @@ async function applyScene(s) {
   applyCamera(s.camera); applySection(s.section);
   const prevActive = _activeId;
   for (const sl of (s.layers || [])) {
-    const L = _layers.find((x) => x.name === sl.name) || _layers.find((x) => (x.label || x.name) === sl.name);
+    let L = _layers.find((x) => x.name === sl.name) || _layers.find((x) => (x.label || x.name) === sl.name);
     if (!L) continue;
+    L = await applyLayerSurface(L, sl) || L;   // surface/drape/flatZ/faceted/band FIRST (may reopen → fresh L), then vis/color/filter on it
     if (sl.visible != null) { L.visible = !!sl.visible; renderer.setLayerVisible(L.id, L.visible); }
     if (sl.colorSel != null && sl.colorSel !== (L.colorSel || '')) setLayerColorSel(L, sl.colorSel);
     if (sl.filter != null && (L.filterExpr || '') !== sl.filter) {   // applyBlockFilter sweeps the ACTIVE layer → focus it first

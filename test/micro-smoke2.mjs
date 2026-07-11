@@ -406,6 +406,32 @@ await p.close();
   await ph.waitForTimeout(600);
   const reloaded = await ph.evaluate(() => { const L = window._micro.layers().find((x) => x.name === 'terrain.asc'); return { surface: !!(L && L.gridSurface), drape: L && L.drapeSource, kind: L && L.kind }; });
   chk(`surface + drape persist across a project reload (${JSON.stringify(reloaded)})`, reloaded.surface && reloaded.drape === 'grade.asc' && reloaded.kind === 'mesh');
+  // ── SCENE round-trip: a scene must restore the FULL surface state (surface · drape · relief/flat ·
+  //    smooth/faceted · band), not just vis/colour/filter. captureLayerSurface is the SINGLE source both
+  //    the manifest AND scenes serialize through — this guards the "we wired the manifest but forgot the
+  //    scene" class of bug: dress every field, snapshot, disturb every field, apply → all must come back.
+  const sceneCap = await ph.evaluate(() => {
+    const L = window._micro.layers().find((x) => x.name === 'terrain.asc');
+    window._micro.setSurfaceSmooth(L, false);                         // dress: faceted (drape already grade.asc, relief)
+    const s = window._micro.captureScene('surf-scene', false);
+    window._micro._stashScene = s;
+    const sl = s.layers.find((x) => x.name === 'terrain.asc');
+    return { gridSurface: !!sl.gridSurface, drape: sl.drape || null, faceted: !!sl.faceted };
+  });
+  chk(`scene captures the full surface state (surface+drape+faceted), not just vis/colour`, sceneCap.gridSurface && sceneCap.drape === 'grade.asc' && sceneCap.faceted === true);
+  await ph.evaluate(async () => {                                     // disturb EVERY captured field
+    const L = window._micro.layers().find((x) => x.name === 'terrain.asc');
+    window._micro.setSurfaceFlatZ(L, 500);                            // relief → flat
+    window._micro.setSurfaceSmooth(L, true);                          // faceted → smooth
+    window._micro.recolorSurface(L, null);                            // drape → none
+    await window._micro.applyScene(window._micro._stashScene);        // and put it all back
+  });
+  await ph.waitForTimeout(500);
+  const sceneBack = await ph.evaluate(() => {
+    const L = window._micro.layers().find((x) => x.name === 'terrain.asc');
+    return { surface: !!(L && L.gridSurface), drape: (L && L.drapeSource) || null, flatZ: L && L.surfaceFlatZ != null ? L.surfaceFlatZ : null, faceted: !!(L && L.surfaceSmooth === false), kind: L && L.kind };
+  });
+  chk(`applying a scene RESTORES surface+drape+relief+faceted (${JSON.stringify(sceneBack)})`, sceneBack.surface && sceneBack.drape === 'grade.asc' && sceneBack.flatZ === null && sceneBack.faceted === true && sceneBack.kind === 'mesh');
   await ph.close();
 }
 
