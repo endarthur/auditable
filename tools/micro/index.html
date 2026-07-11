@@ -3270,7 +3270,7 @@ function applyAnalysisGeo(L, kind, win) {
 // in and Scan folder picks it up. Series reference layers BY NAME; a missing
 // primary gets a one-question remap — that prompt IS the parameter binding. ──
 let _recipes = [];                                          // { name, tool, params, file }
-const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath', stats: 'stats', figure: 'figure', calccols: 'calc columns' };
+const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath', stats: 'stats', figure: 'figure', calccols: 'calc columns', interp: 'interpolate' };
 // apply a calc-column SET to a layer — REPLACE on same name (idempotency is
 // gospel: run-twice == run-once), append the new; invalid expressions are
 // skipped and named. The recipe-facing form of Properties → columns.
@@ -3362,8 +3362,37 @@ async function renameRecipe(r) {
 // run (or just open configured): resolve the primary layer from the first
 // series; a missing primary gets the remap menu — every series whose layer is
 // missing then falls back to the substitute
+// rebuild the New… dialog state from a saved interpolate recipe (target as explicit
+// params so replay is exact; source resolved by name)
+function interpDlgFromParams(p, srcLayer) {
+  const g = p.geom || {};
+  return {
+    type: p.isBM ? 'block' : 'grid', mode: 'params',
+    x0: g.x0, y0: g.y0, z0: g.z0, dx: g.dx, dy: g.dy, dz: g.dz, nx: g.nx, ny: g.ny, nz: g.nz,
+    fill: 0, valName: p.valName || 'VAL', align: false, ax: 0, ay: 0, az: 0, res: 'finest', compatSel: new Set(),
+    fillMode: 'estimate', srcLayer, srcCol: p.srcCol, method: p.method || 'idw', power: p.power != null ? p.power : 2,
+    rMaj: p.rMaj, rSemi: p.rSemi, rMin: p.rMin, aniso: !!p.aniso, dip: p.dip || 0, dipAz: p.dipAz || 0, pitch: p.pitch || 0,
+    minPts: p.minPts != null ? p.minPts : 1, maxPts: p.maxPts != null ? p.maxPts : 12, inFilter: p.inFilter || '', outFilter: p.outFilter || '',
+  };
+}
+function runInterpRecipe(r, andRun) {
+  const p = r.params;
+  const go = (L) => {
+    if (andRun) runEstimate({ ...p, srcName: L.name }, (m) => { $('#meta').textContent = m; }).then(() => { $('#meta').textContent = `recipe “${r.name}”: done`; }).catch((e) => { $('#meta').textContent = `recipe “${r.name}”: ${e.message}`; });
+    else { _ngDlg = interpDlgFromParams(p, L.id); renderNewDialog(); $('#ngDlg').classList.add('show'); }
+  };
+  const L = _layers.find((x) => x.name === p.srcName);
+  if (L) { go(L); return; }
+  const cands = ngPointLayers();
+  if (!cands.length) { $('#meta').textContent = `recipe “${r.name}”: wants “${p.srcName}” and no point source is loaded`; return; }
+  setTimeout(() => menuXY(innerWidth / 2 - 140, innerHeight / 3, [
+    ...cands.map((c) => ({ label: `“${r.name}” wants ${p.srcName} — use ${c.label || c.name}`, action: () => go(c) })),
+    { label: 'Cancel', action: () => {} },
+  ]), 0);
+}
 function runRecipe(r, andRun = true) {
   if (r.tool === 'figure') { runFigureRecipe(r.params); return; }   // camera-based — no layer to resolve
+  if (r.tool === 'interp') { runInterpRecipe(r, andRun); return; }
   const open2 = (Lp) => {
     if (r.tool === 'calccols') {
       const { applied, bad } = applyCalcCols(Lp, r.params.cols);
@@ -4616,6 +4645,119 @@ async function gridOnLattice(L, geom, onProgress) {
   const m = await reReadMesh(L.docs.meshDoc);
   return rasterizeMeshToGrid(m.vertices, m.triangles, { x0: geom.x0, y0: geom.y0, dx: geom.dx, dy: geom.dx, nx: geom.nx, ny: geom.ny, keep: 'top', onProgress });
 }
+// ════════ scatter → grid / block model (NN · IDW, anisotropic) ════════
+// The anisotropy kernel is ported verbatim from @gcu/gsjs orient.js (GSLIB
+// setrot/sqdist, validated f64 vs the gslib wasm). rows of R = major/semi/minor
+// ellipsoid axes in world coords, folded with the range ratios so sqdist(·,R) is
+// the squared ANISOTROPIC distance (h'²). The search ellipsoid is h' ≤ major.
+function _anisRotmat({ dip = 0, dipAzimuth = 0, pitch = 0 } = {}) {   // structural (dip/dip-az/pitch) → orthonormal R (rows = major/semi/minor)
+  const r = Math.PI / 180, az = dipAzimuth * r, dp = dip * r, pt = pitch * r;
+  const cd = Math.cos(dp), sd = Math.sin(dp);
+  const strike = [Math.sin(az - Math.PI / 2), Math.cos(az - Math.PI / 2), 0];   // RHR strike
+  const downdip = [Math.sin(az) * cd, Math.cos(az) * cd, -sd];
+  const cp = Math.cos(pt), sp = Math.sin(pt);
+  const major = [strike[0] * cp + downdip[0] * sp, strike[1] * cp + downdip[1] * sp, strike[2] * cp + downdip[2] * sp];
+  const semim = [-strike[0] * sp + downdip[0] * cp, -strike[1] * sp + downdip[1] * cp, -strike[2] * sp + downdip[2] * cp];
+  const minor = [major[1] * semim[2] - major[2] * semim[1], major[2] * semim[0] - major[0] * semim[2], major[0] * semim[1] - major[1] * semim[0]];
+  return [...major, ...semim, ...minor];
+}
+function _anisApply(R, anis1, anis2) {   // fold range ratios (semi/major, minor/major) into rows 2,3
+  const a1 = 1 / Math.max(anis1, 1e-20), a2 = 1 / Math.max(anis2, 1e-20);
+  return [R[0], R[1], R[2], a1 * R[3], a1 * R[4], a1 * R[5], a2 * R[6], a2 * R[7], a2 * R[8]];
+}
+function _anisSqdist(x1, y1, z1, x2, y2, z2, R) {   // squared anisotropic distance under R
+  const dx = x1 - x2, dy = y1 - y2, dz = z1 - z2; let s = 0;
+  for (let i = 0; i < 3; i++) { const c = R[i * 3] * dx + R[i * 3 + 1] * dy + R[i * 3 + 2] * dz; s += c * c; }
+  return s;
+}
+// read any table-backed layer (drillhole composites, block models, points-CSV)
+// into flat coordinate + value arrays via the layer-agnostic layerRows iterator.
+async function readLayerPoints(L, valName, onProgress, filterExpr) {
+  const h = layerTableHeader(L); if (!h) return null;
+  const m = h.mapping || {}; if (m.x == null || m.y == null) return null;
+  const vi = h.columns.indexOf(valName); if (vi < 0) return null;
+  let keep = null;                                                   // optional INPUT filter (@gcu/expr) — drops samples before estimating
+  if (filterExpr && filterExpr.trim()) {
+    const schema = schemaExt(L, h); const v = validate(filterExpr, schema);
+    if (!v.ok) throw new Error(`input filter: ${(v.errors[0] && v.errors[0].message) || 'invalid expression'}`);
+    const fn = compileBool(filterExpr, schema, { decimal: '.' });
+    keep = (row, idx) => { try { return fn(extendRow(L, row, idx)); } catch { return false; } };
+  }
+  const px = [], py = [], pz = [], pv = []; const total = attrRowCountOf(L) || 0; let done = 0, idx = 0;
+  for await (const rows of layerRows(L, null)) {
+    for (const r of rows) {
+      const gi = idx++; if (keep && !keep(r, gi)) continue;
+      const x = +r[m.x], y = +r[m.y], z = m.z != null ? +r[m.z] : 0, v = +r[vi];
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(v) && (m.z == null || Number.isFinite(z))) { px.push(x); py.push(y); pz.push(z); pv.push(v); }
+    }
+    done += rows.length; if (onProgress) onProgress(done, total);
+  }
+  return { px: Float64Array.from(px), py: Float64Array.from(py), pz: Float64Array.from(pz), pv: Float64Array.from(pv) };
+}
+// optional OUTPUT filter (@gcu/expr) — null a result cell whose (X,Y,Z,value) fails
+// the predicate. schema is [X,Y,Z,<valName>]; records are passed positionally.
+function applyOutputFilter(values, geom, mode2d, valName, expr) {
+  const schema = [{ name: 'X', type: 'number' }, { name: 'Y', type: 'number' }, { name: 'Z', type: 'number' }, { name: valName, type: 'number' }];
+  const v = validate(expr, schema); if (!v.ok) throw new Error(`output filter: ${(v.errors[0] && v.errors[0].message) || 'invalid expression'}`);
+  const fn = compileBool(expr, schema, { decimal: '.' });
+  const { nx, ny, x0, y0, z0, dx, dy, dz } = geom; const nz = mode2d ? 1 : geom.nz;
+  for (let k = 0; k < nz; k++) { const z = mode2d ? 0 : z0 + k * dz;
+    for (let j = 0; j < ny; j++) { const y = mode2d ? y0 - j * dx : y0 + j * dy;
+      for (let i = 0; i < nx; i++) { const idx = (k * ny + j) * nx + i; const val = values[idx]; if (!Number.isFinite(val)) continue; try { if (!fn([x0 + i * dx, y, z, val])) values[idx] = NaN; } catch { /* keep on eval error */ } } } }
+}
+// interpolate flat points onto a lattice. mode2d → ignore z (plan grid). ranges =
+// [major, semi, minor] (world units); orient = {dip, dipAzimuth, pitch}. Returns a
+// Float32Array (NaN = no estimate: fewer than minPts inside the ellipsoid). Chunked
+// + yields so the UI stays live; a uniform bucket index keeps per-node cost tiny.
+async function interpolateLattice({ pts, geom, mode2d, method, power, ranges, orient, minPts, maxPts, onProgress, signal }) {
+  const { px, py, pz, pv } = pts; const N = px.length;
+  const a1 = Math.max(ranges[0], 1e-9), a2 = Math.max(ranges[1], 1e-9), a3 = Math.max(ranges[2], 1e-9);
+  const R = _anisApply(_anisRotmat(orient), a2 / a1, a3 / a1); const a1sq = a1 * a1;
+  const cell = a1, inv = 1 / cell;                                   // bucket ≈ major range (ellipsoid ⊂ sphere r=major)
+  const buckets = new Map(); const bkey = (bx, by, bz) => bx + ',' + by + ',' + bz;
+  for (let i = 0; i < N; i++) { const k = bkey(Math.floor(px[i] * inv), Math.floor(py[i] * inv), mode2d ? 0 : Math.floor(pz[i] * inv)); let a = buckets.get(k); if (!a) buckets.set(k, a = []); a.push(i); }
+  const { nx, ny, x0, y0, z0, dx, dy, dz } = geom; const nz = mode2d ? 1 : geom.nz;
+  const out = new Float32Array(nx * ny * nz); const p = power || 2; const mp = minPts || 1, kp = maxPts || 64;
+  const ci = [], ch = [];                                           // candidate index / h² scratch (reused)
+  const estimate = (qx, qy, qz) => {
+    ci.length = 0; ch.length = 0;
+    const bx0 = Math.floor((qx - a1) * inv), bx1 = Math.floor((qx + a1) * inv);
+    const by0 = Math.floor((qy - a1) * inv), by1 = Math.floor((qy + a1) * inv);
+    const bz0 = mode2d ? 0 : Math.floor((qz - a1) * inv), bz1 = mode2d ? 0 : Math.floor((qz + a1) * inv);
+    for (let bx = bx0; bx <= bx1; bx++) for (let by = by0; by <= by1; by++) for (let bz = bz0; bz <= bz1; bz++) {
+      const arr = buckets.get(bkey(bx, by, bz)); if (!arr) continue;
+      for (const i of arr) { const h2 = _anisSqdist(qx, qy, qz, px[i], py[i], mode2d ? 0 : pz[i], R); if (h2 <= a1sq) { ci.push(i); ch.push(h2); } }
+    }
+    const m = ci.length; if (m < mp) return NaN;
+    if (method === 'nn') { let bi = 0, bh = ch[0]; for (let t = 1; t < m; t++) if (ch[t] < bh) { bh = ch[t]; bi = t; } return pv[ci[bi]]; }
+    let ord = null;
+    if (m > kp) { ord = Array.from({ length: m }, (_, t) => t).sort((u, v) => ch[u] - ch[v]); }   // only sort when we must trim
+    const K = ord ? kp : m; let sw = 0, swv = 0;
+    for (let t = 0; t < K; t++) { const idx = ord ? ord[t] : t; const h2 = ch[idx]; if (h2 <= 1e-12) return pv[ci[idx]]; const w = 1 / Math.pow(Math.sqrt(h2), p); sw += w; swv += w * pv[ci[idx]]; }
+    return sw > 0 ? swv / sw : NaN;
+  };
+  if (mode2d) {
+    for (let j = 0; j < ny; j++) { const qy = y0 - j * dx; for (let i = 0; i < nx; i++) out[j * nx + i] = estimate(x0 + i * dx, qy, 0);
+      if ((j & 31) === 0) { if (onProgress) onProgress(j / ny); await new Promise((r) => setTimeout(r)); if (signal && signal.aborted) return out; } }
+  } else {
+    for (let k = 0; k < nz; k++) { const qz = z0 + k * dz;
+      for (let j = 0; j < ny; j++) { const qy = y0 + j * dy; for (let i = 0; i < nx; i++) out[(k * ny + j) * nx + i] = estimate(x0 + i * dx, qy, qz); }
+      if (onProgress) onProgress(k / nz); await new Promise((r) => setTimeout(r)); if (signal && signal.aborted) return out; }
+  }
+  return out;
+}
+// a lattice of computed values → a block-model CSV, skipping NaN nodes (no
+// estimate → no block). x0/y0/z0 = block-0 centre. chunked for the UI.
+async function latticeToBlockCsv(geom, values, valName, onProgress) {
+  const { x0, y0, z0, dx, dy, dz, nx, ny, nz } = geom; const parts = [`XC,YC,ZC,${valName}\n`]; let buf = '';
+  for (let k = 0; k < nz; k++) { const z = z0 + k * dz;
+    for (let j = 0; j < ny; j++) { const y = y0 + j * dy;
+      for (let i = 0; i < nx; i++) { const v = values[(k * ny + j) * nx + i]; if (!Number.isFinite(v)) continue; buf += `${(x0 + i * dx).toPrecision(9)},${y.toPrecision(9)},${z.toPrecision(9)},${v}\n`; } }
+    if (buf.length > (1 << 20)) { parts.push(buf); buf = ''; }
+    if (onProgress && (k & 7) === 0) { onProgress(k / nz); await new Promise((r) => setTimeout(r)); }
+  }
+  parts.push(buf); return new Blob(parts, { type: 'text/csv' });
+}
 const surfCellOf = (L) => (L.docs.gridDoc ? L.docs.gridDoc.grid.dx : (L.bboxLocal ? niceStep(Math.max(L.bboxLocal[3] - L.bboxLocal[0], L.bboxLocal[4] - L.bboxLocal[1]) / 400) : 10));
 let _sfDlg = null;
 function openSurfaceTools(mode, L0) {
@@ -4914,12 +5056,56 @@ function ngSourceBbox(d) {
 // block-model layers eligible for the common-grid creator, and the common
 // lattice covering the selected ones at the chosen resolution.
 const ngBlockLayers = () => _layers.filter((L) => gridAxesOf(L));
+// layers that can be an interpolation SOURCE: any table-backed layer with a
+// numeric value column (drillhole composites, block models, points-CSVs).
+const ngPointLayers = () => _layers.filter((L) => layerTableHeader(L) && numericColsOf(L).length > 0);
 function compatAxes(d) {
   const sel = ngBlockLayers().filter((L) => d.compatSel.has(L.id));
   if (sel.length < 1) return { ok: false, reason: 'pick at least one model' };
   return commonLattice(sel.map((L) => gridAxesOf(L)), { resolution: d.res });
 }
-function openNewDialog() {
+// resolve the target lattice from the dialog state (shared by the Run handler and
+// the recipe-save path so they never drift)
+function resolveGeom(d) {
+  const isBM = d.type === 'block' || d.mode === 'compat';
+  let x0, y0, z0, nx, ny, nz, dx = d.dx, dy = d.dy, dz = d.dz;
+  if (d.mode === 'compat') { const ca = compatAxes(d); if (!ca.ok) throw new Error(ca.reason); x0 = ca.x.origin; y0 = ca.y.origin; z0 = ca.z.origin; nx = ca.x.count; ny = ca.y.count; nz = ca.z.count; dx = ca.x.pitch; dy = ca.y.pitch; dz = ca.z.pitch; }
+  else if (d.mode === 'cover') { const bb = ngSourceBbox(d); if (!bb) throw new Error('no bounding box'); const g = coverGeometry(d, bb); x0 = g.x0; y0 = g.y0; z0 = g.z0; nx = g.nx; ny = g.ny; nz = g.nz; }
+  else { nx = Math.max(1, d.nx | 0); ny = Math.max(1, d.ny | 0); nz = isBM ? Math.max(1, d.nz | 0) : 1; x0 = d.x0; y0 = d.y0; z0 = d.z0; }
+  return { isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz };
+}
+// a serializable estimate config (source by NAME so a recipe re-resolves it)
+function estimateCfg(d, gv, srcName) {
+  return { srcName, srcCol: d.srcCol, method: d.method, power: d.power, aniso: d.aniso, rMaj: d.rMaj, rSemi: d.rSemi, rMin: d.rMin, dip: d.dip, dipAz: d.dipAz, pitch: d.pitch, minPts: d.minPts, maxPts: d.maxPts, inFilter: d.inFilter || '', outFilter: d.outFilter || '', valName: d.valName || d.srcCol, isBM: gv.isBM, geom: { x0: gv.x0, y0: gv.y0, z0: gv.z0, dx: gv.dx, dy: gv.dy, dz: gv.dz, nx: gv.nx, ny: gv.ny, nz: gv.nz } };
+}
+// run an interpolation from a resolved config → a produced grid / block layer.
+// shared by the dialog Run button and the `interp` recipe verb.
+async function runEstimate(cfg, onMsg = () => {}) {
+  const src = _layers.find((L) => L.name === cfg.srcName) || (cfg._srcLayer != null && layerById(cfg._srcLayer)) || null;
+  if (!src) throw new Error(`source layer “${cfg.srcName}” not loaded`);
+  if (!cfg.srcCol) throw new Error('no value column');
+  onMsg('reading points…');
+  const pts = await readLayerPoints(src, cfg.srcCol, (done) => onMsg(`reading points… ${done.toLocaleString()}`), cfg.inFilter);
+  if (!pts || !pts.px.length) throw new Error(`no usable x/y/${cfg.srcCol} rows${cfg.inFilter && cfg.inFilter.trim() ? ' after the input filter' : ''}`);
+  const ranges = cfg.aniso ? [cfg.rMaj, cfg.rSemi, cfg.rMin] : [cfg.rMaj, cfg.rMaj, cfg.rMaj];
+  const orient = cfg.aniso ? { dip: cfg.dip, dipAzimuth: cfg.dipAz, pitch: cfg.pitch } : {};
+  const g = cfg.geom, isBM = cfg.isBM;
+  const geom = { x0: g.x0, y0: g.y0, z0: g.z0, dx: g.dx, dy: isBM ? g.dy : g.dx, dz: g.dz, nx: g.nx, ny: g.ny, nz: g.nz };
+  const values = await interpolateLattice({ pts, geom, mode2d: !isBM, method: cfg.method, power: cfg.power, ranges, orient, minPts: cfg.minPts, maxPts: cfg.maxPts, onProgress: (f) => onMsg(`estimating ${Math.round(f * 100)}%…`) });
+  const valName = cfg.valName || cfg.srcCol;
+  if (cfg.outFilter && cfg.outFilter.trim()) applyOutputFilter(values, geom, !isBM, valName, cfg.outFilter);
+  const lin = mkLineage('interpolate', { method: cfg.method, power: cfg.method === 'idw' ? cfg.power : undefined, ranges, orient: cfg.aniso ? orient : undefined, source: `${cfg.srcName}:${cfg.srcCol}`, samples: pts.px.length, inFilter: (cfg.inFilter || '').trim() || undefined, outFilter: (cfg.outFilter || '').trim() || undefined, block: [geom.dx, geom.dy, geom.dz], count: [geom.nx, geom.ny, geom.nz], minPts: cfg.minPts, maxPts: cfg.maxPts }, [src.lineage].filter(Boolean));
+  if (isBM) {
+    onMsg('writing…');
+    const blob = await latticeToBlockCsv(geom, values, valName, (f) => onMsg(`writing ${Math.round(f * 100)}%…`));
+    await openBlob(blob, 'estimate_model.csv', _layers.length ? 'add' : 'replace', null, { lineage: lin });
+  } else {
+    const data = new Float32Array(values.length); for (let i = 0; i < values.length; i++) data[i] = Number.isFinite(values[i]) ? values[i] : -9999;
+    const grid = { nx: geom.nx, ny: geom.ny, x0: geom.x0, y0: geom.y0, dx: geom.dx, dy: geom.dx, data, nodata: -9999, crs: null, form: 'estimate' };
+    await openBlob(new Blob([writeEsriAsc(grid)]), 'estimate_grid.asc', _layers.length ? 'add' : 'replace', null, { lineage: lin });
+  }
+}
+function openNewDialog(opts = {}) {
   const bb = _docBbox && frame ? unionWorldBbox(_layers.map(layerWorldBbox)) : null;
   _ngDlg = {
     type: 'grid', mode: _layers.length ? 'cover' : 'params',
@@ -4928,6 +5114,11 @@ function openNewDialog() {
     dx: 10, dy: 10, dz: 10, nx: 50, ny: 50, nz: 20, fill: 0, valName: 'VAL',
     align: false, ax: 0, ay: 0, az: 0,
     res: 'finest', compatSel: new Set(),
+    // fill-mode: a constant, or an interpolated estimate from a point source
+    fillMode: opts.estimate ? 'estimate' : 'const',
+    srcLayer: opts.srcLayer || null, srcCol: null, method: 'idw', power: 2,
+    rMaj: 50, rSemi: 50, rMin: 50, aniso: false, dip: 0, dipAz: 0, pitch: 0, minPts: 1, maxPts: 12,
+    inFilter: '', outFilter: '',
   };
   renderNewDialog();
   $('#ngDlg').classList.add('show');
@@ -4976,8 +5167,45 @@ function renderNewDialog() {
     row(isBM ? 'counts' : 'counts', num('nx', 64), num('ny', 64), ...(isBM ? [num('nz', 64)] : []));
   }
   if (d.mode !== 'compat') { if (isBM) row('block (m)', num('dx', 60), num('dy', 60), num('dz', 60)); else row('cell (m)', num('dx', 90)); }
-  const fillRow = row(isBM ? 'fill VAL' : 'fill Z', num('fill'));
-  if (isBM) { const nm = document.createElement('input'); nm.type = 'text'; nm.value = d.valName; nm.style.width = '80px'; nm.oninput = () => { d.valName = nm.value.trim() || 'VAL'; }; fillRow.append(document.createTextNode(' column '), nm); }
+  // values: a constant fill, or an interpolated estimate from a point source (NN · IDW, anisotropic)
+  radios(row('values'), 'ngfill', [['const', 'constant'], ['estimate', 'estimate from points']], d.fillMode, (k) => { d.fillMode = k; renderNewDialog(); });
+  if (d.fillMode === 'const') {
+    const fillRow = row(isBM ? 'fill VAL' : 'fill Z', num('fill'));
+    if (isBM) { const nm = document.createElement('input'); nm.type = 'text'; nm.value = d.valName; nm.style.width = '80px'; nm.oninput = () => { d.valName = nm.value.trim() || 'VAL'; }; fillRow.append(document.createTextNode(' column '), nm); }
+  } else {
+    const pls = ngPointLayers();
+    if (!pls.length) { body.appendChild(ppNote('no point source loaded — open drillholes, a points CSV, or a block model to estimate from')); }
+    else {
+      if (!d.srcLayer || !pls.some((L) => L.id === d.srcLayer)) { d.srcLayer = pls[0].id; d.srcCol = null; }
+      const srcSel = document.createElement('select');
+      for (const L of pls) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; srcSel.appendChild(o); }
+      srcSel.value = String(d.srcLayer); srcSel.onchange = () => { d.srcLayer = +srcSel.value; d.srcCol = null; renderNewDialog(); };
+      const L = layerById(d.srcLayer); const cols = L ? numericColsOf(L) : [];
+      if (!d.srcCol || !cols.includes(d.srcCol)) d.srcCol = cols[0] || null;
+      const colSel = document.createElement('select');
+      for (const c of cols) { const o = document.createElement('option'); o.value = c; o.textContent = c; colSel.appendChild(o); }
+      colSel.value = d.srcCol || ''; colSel.onchange = () => { d.srcCol = colSel.value; };
+      row('from', srcSel, colSel);
+      const mr = row('method'); radios(mr, 'ngmethod', [['idw', 'IDW'], ['nn', 'nearest']], d.method, (k) => { d.method = k; renderNewDialog(); });
+      if (d.method === 'idw') mr.append(document.createTextNode(' power '), num('power', 56));
+      const sr = row('range (m)', num('rMaj', 80));
+      const anl = document.createElement('label'); const acb = document.createElement('input'); acb.type = 'checkbox'; acb.checked = d.aniso; acb.onchange = () => { d.aniso = acb.checked; renderNewDialog(); }; anl.append(acb, 'anisotropy'); sr.append(anl);
+      if (d.aniso) {
+        row('semi · minor', num('rSemi', 80), num('rMin', 80));
+        row('dip·dip-az·pitch', num('dip', 64), num('dipAz', 64), num('pitch', 64));
+        body.appendChild(ppNote('search ellipsoid — major range along the structure, shortened across it. dip / dip-azimuth / pitch orient the major axis (structural convention). isotropic uses the major range on all axes.'));
+      }
+      row('min · max pts', num('minPts', 64), num('maxPts', 64));
+      const txt = (key, ph) => { const t = document.createElement('input'); t.type = 'text'; t.value = d[key] || ''; t.placeholder = ph; t.style.cssText = 'width:210px'; t.spellcheck = false; t.oninput = () => { d[key] = t.value; }; return t; };
+      row('filter in', txt('inFilter', `samples, e.g. DOMAIN=="ORE"`));
+      row('filter out', txt('outFilter', `result cells, e.g. ${d.srcCol || 'VAL'}>0`));
+      body.appendChild(ppNote(`${d.method === 'nn' ? 'nearest sample' : 'inverse-distance'} within the ellipsoid; nodes with fewer than ${d.minPts} sample${d.minPts === 1 ? '' : 's'} in range stay ${isBM ? 'empty (no block)' : 'nodata'}. Input filter drops samples before estimating; output filter blanks result cells. Both use the filter language.`));
+      const rr = row('recipe'); const rb = document.createElement('button'); rb.textContent = 'Save as recipe…'; rb.className = 'pp-btn'; rb.onclick = async () => {
+        try { const gv = resolveGeom(d); const src = layerById(d.srcLayer); if (!src || !d.srcCol) { $('#ngDlgMsg').textContent = 'pick a source layer + value column first'; return; } await saveRecipe('interp', estimateCfg(d, gv, src.name), `estimate ${d.srcCol}`); }
+        catch (e) { $('#ngDlgMsg').textContent = e.message; }
+      }; rr.appendChild(rb);
+    }
+  }
   const tally = document.createElement('div'); tally.className = 'pp-note'; tally.id = 'ngTally'; body.appendChild(tally);
   function dims() {
     if (d.mode === 'compat') { const ca = compatAxes(d); return ca.ok ? { nx: ca.x.count, ny: ca.y.count, nz: ca.z.count } : null; }
@@ -5005,25 +5233,19 @@ function renderNewDialog() {
 $('#ngCancel').onclick = () => { $('#ngDlg').classList.remove('show'); _ngDlg = null; };
 $('#ngGo').onclick = async () => {
   const d = _ngDlg; if (!d) return;
-  const isBM = d.type === 'block' || d.mode === 'compat';
-  let x0, y0, z0, nx, ny, nz, dx = d.dx, dy = d.dy, dz = d.dz;
-  if (d.mode === 'compat') {
-    const ca = compatAxes(d);
-    if (!ca.ok) { $('#ngDlgMsg').textContent = ca.reason; return; }
-    x0 = ca.x.origin; y0 = ca.y.origin; z0 = ca.z.origin; nx = ca.x.count; ny = ca.y.count; nz = ca.z.count;
-    dx = ca.x.pitch; dy = ca.y.pitch; dz = ca.z.pitch;
-  } else if (d.mode === 'cover') {
-    const bb = ngSourceBbox(d);
-    if (!bb) { $('#ngDlgMsg').textContent = 'no bounding box'; return; }
-    const g = coverGeometry(d, bb);
-    x0 = g.x0; y0 = g.y0; z0 = g.z0; nx = g.nx; ny = g.ny; nz = g.nz;
-  } else {
-    nx = Math.max(1, d.nx | 0); ny = Math.max(1, d.ny | 0); nz = isBM ? Math.max(1, d.nz | 0) : 1;
-    x0 = d.x0; y0 = d.y0; z0 = d.z0;
-  }
+  let isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz;
+  try { ({ isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz } = resolveGeom(d)); }
+  catch (e) { $('#ngDlgMsg').textContent = e.message; return; }
   const btn = $('#ngGo'); btn.disabled = true;
   for (const el of $('#ngDlgBody').querySelectorAll('input, select')) el.disabled = true;
   try {
+    if (d.fillMode === 'estimate') {
+      const src = layerById(d.srcLayer);
+      if (!src || !d.srcCol) throw new Error('pick a source layer + value column');
+      await runEstimate(estimateCfg(d, { isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz }, src.name), (m) => { $('#ngDlgMsg').textContent = m; });
+      $('#ngDlg').classList.remove('show'); _ngDlg = null;
+      return;
+    }
     const gridLin = d.mode === 'compat'
       ? mkLineage('grid-cover', { resolution: d.res, block: [dx, dy, dz], count: [nx, ny, nz] }, ngBlockLayers().filter((L2) => d.compatSel.has(L2.id)).map((L2) => L2.lineage))
       : mkLineage('grid-new', { mode: d.mode, block: [dx, dy, dz], count: [nx, ny, nz], origin: [x0, y0, z0] }, d.mode === 'cover' && d.src && d.src[0] === 'L' ? [layerById(+d.src.slice(1)) && layerById(+d.src.slice(1)).lineage] : []);
@@ -8534,6 +8756,7 @@ const openPropsTab = (tab) => {
 $('#mData').onclick = () => menuAt($('#mData'), [
   { label: 'Import drillholes…', action: () => openDhDialog(null) },
   { label: 'New grid / block model…', action: () => openNewDialog() },
+  { label: 'Interpolate points → grid / model…', action: () => openNewDialog({ estimate: true }) },
   { sep: true },
   { label: 'Layer properties…', action: () => { if (_layers.length) openProps(); } },
   { label: 'Source (mapping / desurvey)…', action: () => openPropsTab('source') },
@@ -9493,6 +9716,7 @@ window.addEventListener('wheel', (e) => {
 const COMMANDS = [
   { id: 'open', group: 'File', title: 'Open file…', kw: 'load import csv las ply parquet dm tif grd xyz obj msh', run: () => openFilePicker() },
   { id: 'new', group: 'File', title: 'New grid / block model…', kw: 'create empty cover common lattice', run: () => openNewDialog() },
+  { id: 'interp', group: 'File', title: 'Interpolate points → grid / model…', kw: 'estimate idw nearest neighbour nn kriging scatter grid anisotropy', run: () => openNewDialog({ estimate: true }) },
   { id: 'newproj', group: 'File', title: 'New project (clear)', kw: 'reset slate', run: () => newProject() },
   { id: 'save', group: 'File', title: 'Save project', kw: 'store', when: () => hasFSAA, run: () => saveProject() },
   { id: 'tidy', group: 'File', title: 'Tidy project folder', kw: 'organize subfolders kind reorganize move drillholes models clouds meshes grids', when: () => hasFSAA && !!_project, run: () => tidyProject() },
@@ -10061,6 +10285,7 @@ function layerMenu(L, x, y) {
     { label: 'Zoom to layer', action: () => fitLayer(L) },
     { label: 'Rename layer…', kbd: 'F2', action: () => renameActiveLayer(L) },
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
+    ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Interpolate to grid / model…', action: () => openNewDialog({ estimate: true, srcLayer: L.id }) }] : []),
     ...(L.gridSurface ? [{ label: 'Drape', submenu: () => {
       const grids = _layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
       return [{ label: (L.drapeSource ? '' : '✓ ') + 'elevation', action: () => recolorSurface(L, null) },
@@ -12808,7 +13033,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, interpolateLattice, readLayerPoints, latticeToBlockCsv, runEstimate, applyOutputFilter, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
