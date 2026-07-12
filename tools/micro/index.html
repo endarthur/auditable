@@ -11722,22 +11722,45 @@ function matColSet(L, name, fvalues, meta = {}) {
   addPaintColorOptions(L);
   return col;
 }
-function matColManifest(L) { return { v: 1, sourceHash: matColSourceHash(L), cols: matColList(L).map((c) => ({ name: c.name, min: c.min, max: c.max, count: c.count, nonnull: c.nonnull, lineage: c.lineage })) }; }
+function matColManifest(L) { return { v: 2, sourceHash: matColSourceHash(L), cols: matColList(L).map((c) => ({ name: c.name, storage: 'dense', file: c.name + '.parquet', min: c.min, max: c.max, count: c.count, nonnull: c.nonnull, hasBlank: c.nonnull < c.count, lineage: c.lineage })) }; }
+// one column ↔ one Parquet file (manifest rule A.1): typed, null-aware (NaN ↔ null),
+// SNAPPY, canonical 256K row groups with footer stats — a materialized column reads
+// like any base column and gains push-down. Legacy raw .f32 still loads (PAR1 sniff).
+function matColEncode(c) {
+  return writeParquet({
+    columnData: [{ name: c.name, data: Array.from(c.fvalues, (v) => (Number.isFinite(v) ? v : null)) }],
+    codec: 'SNAPPY', rowGroupSize: 1 << 18,
+    kvMetadata: [{ key: 'micro:lineage', value: JSON.stringify(c.lineage || null) }],
+  });
+}
+async function matColDecode(bytes) {
+  const u8v = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (!(u8v[0] === 0x50 && u8v[1] === 0x41 && u8v[2] === 0x52 && u8v[3] === 0x31)) return new Float32Array(u8v.buffer.slice(u8v.byteOffset, u8v.byteOffset + u8v.byteLength));   // legacy raw .f32
+  const info = parquetInfo(u8v);
+  const name = info.columns[0].name || info.columns[0];
+  const a = (await readParquetRange(u8v, [name], 0, info.rowCount, info.meta))[name];
+  const out = new Float32Array(info.rowCount);
+  for (let i = 0; i < info.rowCount; i++) { const v = a[i]; out[i] = v == null ? NaN : v; }
+  return out;
+}
 async function matColPersist(L) {
   const cols = matColList(L); if (!cols.length) return 'none';
   if (L.storage === 'project' && _project && _project.dir) {
     const rel = await layerRelpath(L, _project.dir);
-    for (const c of cols) { const fh = await resolveFileHandle(_project.dir, `${rel}.cols/${c.name}.f32`, { create: true }); const w = await fh.createWritable(); await w.write(c.fvalues.buffer); await w.close(); }
+    for (const c of cols) { const fh = await resolveFileHandle(_project.dir, `${rel}.cols/${c.name}.parquet`, { create: true }); const w = await fh.createWritable(); await w.write(matColEncode(c)); await w.close(); }
     const mh = await resolveFileHandle(_project.dir, `${rel}.cols/manifest.json`, { create: true }); const w = await mh.createWritable(); await w.write(JSON.stringify(matColManifest(L))); await w.close();
     return 'project';
   }
-  try { const id = matColLooseId(L); for (const c of cols) await _idb.set(`matcol:${id}:col:${c.name}`, c.fvalues.buffer); await _idb.set(`matcol:${id}:manifest`, matColManifest(L)); return 'idb'; }
+  try { const id = matColLooseId(L); for (const c of cols) await _idb.set(`matcol:${id}:col:${c.name}`, matColEncode(c).buffer); await _idb.set(`matcol:${id}:manifest`, matColManifest(L)); return 'idb'; }
   catch { return 'memory'; }
 }
 async function matColLoad(L, dir) {
   let man = null, get = null;
   if (dir && L.storage === 'project') {
-    try { const rel = await layerRelpath(L, dir); man = JSON.parse(await (await (await resolveFileHandle(dir, `${rel}.cols/manifest.json`)).getFile()).text()); get = async (nm) => await (await (await resolveFileHandle(dir, `${rel}.cols/${nm}.f32`)).getFile()).arrayBuffer(); }
+    try {
+      const rel = await layerRelpath(L, dir); man = JSON.parse(await (await (await resolveFileHandle(dir, `${rel}.cols/manifest.json`)).getFile()).text());
+      get = async (nm) => { try { return await (await (await resolveFileHandle(dir, `${rel}.cols/${nm}.parquet`)).getFile()).arrayBuffer(); } catch { return await (await (await resolveFileHandle(dir, `${rel}.cols/${nm}.f32`)).getFile()).arrayBuffer(); } };   // legacy .f32 fallback
+    }
     catch { /* no project sidecar */ }
   }
   if (!man) { try { const id = matColLooseId(L); man = await _idb.get(`matcol:${id}:manifest`); get = async (nm) => await _idb.get(`matcol:${id}:col:${nm}`); } catch { /* none */ } }
@@ -11745,13 +11768,13 @@ async function matColLoad(L, dir) {
   const cur = matColSourceHash(L);
   if (man.sourceHash && man.sourceHash !== cur) { $('#meta').textContent = `${L.name}: materialized columns are stale (source changed) — re-run to refresh`; return 0; }
   let loaded = 0;
-  for (const cm of man.cols) { try { const buf = await get(cm.name); if (!buf) continue; matColSet(L, cm.name, new Float32Array(buf), { lineage: cm.lineage }); loaded++; } catch { /* skip a missing file */ } }
+  for (const cm of man.cols) { try { const buf = await get(cm.name); if (!buf) continue; matColSet(L, cm.name, await matColDecode(buf), { lineage: cm.lineage }); loaded++; } catch { /* skip a missing file */ } }
   return loaded;
 }
 async function matColDelete(L, name) {
   L.paintCols = (L.paintCols || []).filter((c) => c.name !== name); L._colStats = null; L._calcFns = null; addPaintColorOptions(L);
   try {
-    if (L.storage === 'project' && _project && _project.dir) { const rel = await layerRelpath(L, _project.dir); await removeFileAt(_project.dir, `${rel}.cols/${name}.f32`); await matColPersist(L); }
+    if (L.storage === 'project' && _project && _project.dir) { const rel = await layerRelpath(L, _project.dir); try { await removeFileAt(_project.dir, `${rel}.cols/${name}.parquet`); } catch { /* absent */ } try { await removeFileAt(_project.dir, `${rel}.cols/${name}.f32`); } catch { /* absent */ } await matColPersist(L); }
     else { const id = matColLooseId(L); await _idb.set(`matcol:${id}:manifest`, matColManifest(L)); }
   } catch { /* best-effort */ }
 }
