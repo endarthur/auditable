@@ -149,8 +149,6 @@ await p.evaluate(async () => {
   window._micro.requestRender();
 });
 await shot('surfaces', { wait: 2000 });
-await p.evaluate(() => { window._micro.closeAllWindows(); });
-
 // 0 ── sub-blocked model: octree boxes at their true sizes, coloured by grade
 await openModel(genSubblocks(), 'subblocks.csv', 'replace');
 await layerReady('subblocks.csv');
