@@ -1001,6 +1001,19 @@ await p.close();
     return { dict: dom.dict.slice(1).sort().join(), lin: dom.lineage && dom.lineage.op, hits: h };
   });
   chk(`typed sidecar reload: dict [${tr.dict}], lineage ${tr.lin}, filter ${tr.hits} hits`, tr.dict === 'FR,OX' && tr.lin === 'key-lookup' && tr.hits === 50);
+  // GOVERNED residency: matcol fvalues are evictable under the pin budget and
+  // re-fault from the sidecar at the next scan that needs them
+  const gv = await pj2.evaluate(async () => {
+    const L = window._micro.layers().find((x) => /left/.test(x.name));
+    window._micro.setActiveLayer(L.id);
+    window._micro.setPinBudget(0.000001);                  // ~1 byte → everything evicts
+    const evicted = L.paintCols.find((c) => c.name === 'AU').fvalues === null;
+    window._micro.setPinBudget('auto');
+    await window._micro.applyBlockFilter('AU > 0.55');
+    let h = 0; for (const m of L._filterMask) if (m) h++;
+    return { evicted, hits: h, back: !!L.paintCols.find((c) => c.name === 'AU').fvalues };
+  });
+  chk(`governed residency: evicted matcol re-faults from the sidecar on filter (${gv.hits} hits)`, gv.evicted && gv.back && gv.hits === 40);
   await pj2.close();
 }
 
