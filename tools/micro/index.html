@@ -8802,6 +8802,7 @@ async function showMemoryInfo() {
     row(L.label || L.name, `${escM(fmtSize(b))} <span class="fi-x">· ${escM((renderer.layerElementCount(L.id) || 0).toLocaleString())} elements${L.visible ? '' : ' · hidden (still resident)'}</span>`);
   }
   row('total vram', `<b>${escM(fmtSize(renderer.vramBytes || total))}</b>`);
+  { const st = pinStats(); if (st.bytes || st.budget) row('filter column cache', `${escM(fmtSize(st.bytes))} <span class="fi-x">· ${st.cols} column${st.cols === 1 ? '' : 's'} pinned · budget ${st.budget ? escM(fmtSize(st.budget)) : 'off'}</span>`); }
   if (performance.memory) row('js heap', escM(fmtSize(performance.memory.usedJSHeapSize)));
   if (navigator.storage && navigator.storage.estimate) {
     try {
@@ -8845,6 +8846,15 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Layers panel', kbd: 'p', action: () => toggleLayersPanel() },
   { label: 'Compass…', action: () => { const r = $('#compass').getBoundingClientRect(); compassMenu(r.left - 40, r.top - 8); } },
   { label: 'Vertical exaggeration', submenu: () => [1, 2, 3, 5, 10, 20].map((s) => ({ label: (cam.state.zExag === s ? '✓ ' : '') + (s === 1 ? 'off (1×)' : s + '×'), action: () => setZExag(s) })) },
+  { label: 'Filter column cache', submenu: () => {
+    let cur = 'auto'; try { cur = localStorage.getItem('micro.pinBudget') || 'auto'; } catch { /* private */ }
+    const st = pinStats();
+    return [
+      ...[['off', 'off (always re-scan)'], ['auto', `auto (${(pinBudgetBytes() / 1048576) | 0} MB)`], ['256', '256 MB'], ['512', '512 MB'], ['1024', '1 GB']]
+        .map(([v, lab]) => ({ label: (cur === v ? '✓ ' : '') + lab, action: () => { setPinBudget(v); $('#meta').textContent = `filter column cache: ${v === 'off' ? 'off' : v === 'auto' ? 'auto' : v + ' MB'} · ${fmtSize(pinStats().bytes)} pinned`; } })),
+      { label: `— ${fmtSize(st.bytes)} pinned · ${st.cols} column${st.cols === 1 ? '' : 's'}`, action: () => {} },
+    ];
+  } },
   { label: 'Decorations & figure…', action: () => openDecoPanel() },
   { label: 'Windows…', action: () => windowsMenu($('#mView')) },
   { sep: true },
