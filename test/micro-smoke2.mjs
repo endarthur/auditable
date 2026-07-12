@@ -935,6 +935,22 @@ await p.close();
   });
   chk(`broadcast: collar EOH → intervals, filterable (${bc.hits} hits) + op with cross-location inputs`,
     bc.hits === 24 && bc.op);   // EOH = 110..150 by 10; > 125 → holes 3–5 × 8 intervals
+  // CROSS-LOCATION FILTER PROPAGATION: a collars predicate masks the intervals
+  // through the key relation — no materialization — and ANDs with the filter
+  const hf = await pd2.evaluate(async () => {
+    const A = window._micro.layers().find((L) => /assay/.test(L.name));
+    window._micro.setActiveLayer(A.id);
+    await window._micro.applyBlockFilter('');
+    const r = await window._micro.applyHoleFilter(A, 'EOH > 125');
+    let h0 = 0; for (const m of A._filterMask) if (m) h0++;
+    await window._micro.applyBlockFilter('FE > 34');
+    let h1 = 0; for (const m of A._filterMask) if (m) h1++;
+    await window._micro.applyHoleFilter(A, '');
+    await window._micro.applyBlockFilter('');
+    return { holes: r.holes, h0, h1 };
+  });
+  chk(`hole filter: EOH > 125 → ${hf.holes} holes → ${hf.h0} intervals; AND FE > 34 → ${hf.h1}`,
+    hf.holes === 3 && hf.h0 === 24 && hf.h1 > 0 && hf.h1 < 24);
   await pd2.close();
 }
 

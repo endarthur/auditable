@@ -7334,7 +7334,7 @@ async function applyBlockFilter(expr) {
   dispatchEvent(new Event('micro:project-dirty'));
   _filterExpr = expr;
   const epoch = ++_filterEpoch;
-  if (!expr.trim()) {
+  if (!expr.trim() && !(AL && AL._holeMask)) {             // a hole filter still masks with an empty expression
     renderer.setFilter(null, {}, lid); renderer.clearCompact(lid); inp.classList.remove('err'); requestRender();
     { const Lf = layerById(lid); if (Lf) { Lf._filterMask = null; attrTableFilterChanged(lid); refreshLinkedWindows(Lf, 'filtered'); } }
     $('#meta').textContent = (fBlockDoc || fDhDoc).metaLine; return;
@@ -7343,20 +7343,11 @@ async function applyBlockFilter(expr) {
     if (ast0) await ensureStoredValues(layerById(lid), expandedDeps(layerById(lid), ast0)); }   // evicted matcols re-fault before the sweep
   // drillholes: the interval table is in memory — the sweep is a plain loop
   if (fDhDoc) {
-    const dh = fDhDoc;
-    const schema = schemaExt(AL, dh.header);
-    const v2 = validate(expr, schema);
-    if (!v2.ok) { inp.classList.add('err'); $('#meta').textContent = `filter: ${v2.errors[0] && v2.errors[0].message || 'invalid expression'}`; return; }
+    const r = dhFilterSweep(AL, expr);
+    if (r && r.err) { inp.classList.add('err'); $('#meta').textContent = `filter: ${r.err}`; return; }
     inp.classList.remove('err');
-    const fn2 = compileBool(expr, schema, { decimal: '.' });
-    const mask2 = new Uint8Array(dh.header.count);
-    let hits2 = 0;
-    for (let i = 0; i < dh.header.count; i++) { if (fn2(extendRow(AL, dh.fetchRecord(i), i))) { mask2[i] = 1; hits2++; } }
-    renderer.setActiveSet('base', lid);
-    renderer.setFilter(mask2, { isolate: true }, lid);
-    { const Lf = layerById(lid); if (Lf) { Lf._filterMask = mask2; attrTableFilterChanged(lid); refreshLinkedWindows(Lf, 'filtered'); } }
-    requestRender();
-    $('#meta').textContent = `${dh.metaLine} · filter: ${hits2.toLocaleString()} of ${dh.header.count.toLocaleString()} match`;
+    const hits2 = typeof r === 'number' ? r : fDhDoc.header.count;
+    $('#meta').textContent = `${fDhDoc.metaLine} · filter: ${hits2.toLocaleString()} of ${fDhDoc.header.count.toLocaleString()} match${AL && AL._holeIds ? ` · ${AL._holeIds.size} holes` : ''}`;
     return;
   }
   const { blob, header } = fBlockDoc;
@@ -8421,6 +8412,7 @@ function projectManifest() {
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
         : undefined,
       colTypes: L.colTypes && Object.keys(L.colTypes).length ? L.colTypes : undefined,
+      holeFilter: (L.dh && L.holeFilter) || undefined,     // the collars-location predicate (view state)
       // calcCols live in the ELEMENT manifest (spec rule 10) — read here only as legacy
       ramps: L.ramps && Object.keys(L.ramps).length ? L.ramps : undefined,
       catLegend: L.catLegend || undefined,
@@ -8836,6 +8828,7 @@ async function openProjectDir(dir) {
           try { await loadElement(Ld, dir); } catch { /* derived — never block a load */ }   // ƒ + matcols BEFORE filter/color (both may reference them)
           if (ls.calcCols && !(Ld.calcCols || []).length) Ld.calcCols = ls.calcCols;   // legacy projects (no element manifest)
           addPaintColorOptions(Ld);
+          if (ls.holeFilter) { try { await applyHoleFilter(Ld, ls.holeFilter); } catch { /* collar missing → no mask */ } }
           if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
           if (ls.visible === false) { Ld.visible = false; renderer.setLayerVisible(Ld.id, false); }
           if (ls.sectioned != null && ls.sectioned !== true) renderer.setLayerSectioned(Ld.id, ls.sectioned);
@@ -11115,6 +11108,12 @@ function layerMenu(L, x, y) {
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
     ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Interpolate from this…', action: () => openInterpolateDialog({ srcLayer: L.id }) }] : []),
     ...((L.calcCols || []).length ? [{ label: 'Materialize calc column', submenu: () => (L.calcCols || []).map((c) => ({ label: `${c.name} → stored`, action: () => materializeCalcCol(L, c.name) })) }] : []),
+    ...(L.dh && L.docs.dhDoc && !dhSetGroupOf(L.id) ? [{ label: (L.holeFilter ? '✓ ' : '') + 'Filter holes…', action: async () => {
+      const v = await microPrompt('hole filter — an expression over the COLLAR columns (empty clears)', L.holeFilter || '');
+      if (v == null) return;
+      const r = await applyHoleFilter(L, v);
+      $('#meta').textContent = r && r.err ? `hole filter: ${r.err}` : (r && r.holes != null ? `hole filter: ${r.holes} of ${r.total} holes` : 'hole filter cleared');
+    } }] : []),
     ...(L.dh && L.docs.dhDoc ? [{ label: 'Broadcast collar column', submenu: () => {
       const cols = (L.docs.dhDoc._collarCols || []).filter((c) => c.name);
       return cols.length ? cols.map((c) => ({ label: `${c.name} → intervals (${c.type})`, action: () => broadcastCollarCol(L, c.name) })) : [{ label: '(reading collar columns…)', action: () => {} }];
@@ -14201,6 +14200,94 @@ function moveLayerToGroupMenu(L, x, y) {
   ]);
 }
 // a drillhole set's collar/survey/config come from any member interval layer
+// ── CROSS-LOCATION FILTER PROPAGATION — the hole filter: a predicate over the
+// COLLARS location (EOH > 200, a company, a campaign) projects through the
+// key relation to every member's intervals (a per-record mask ANDed into the
+// interval sweep) and to the trace sticks (traces regenerate from the matching
+// holes only). Nothing materializes — the relation carries the verdict.
+// The expression validates against the collar columns (peekCollarCols types).
+function dhFilterSweep(L, expr) {                          // the interval-table sweep for ANY dh layer (hole-mask aware)
+  const dh = L && L.docs && L.docs.dhDoc; if (!dh) return null;
+  const hm = L._holeMask || null;
+  if (!(expr || '').trim()) {
+    if (!hm) { renderer.setFilter(null, {}, L.id); L._filterMask = null; attrTableFilterChanged(L.id); refreshLinkedWindows(L, 'filtered'); requestRender(); return null; }
+    renderer.setActiveSet('base', L.id);
+    renderer.setFilter(hm, { isolate: true }, L.id);
+    L._filterMask = hm.slice(); attrTableFilterChanged(L.id); refreshLinkedWindows(L, 'filtered'); requestRender();
+    let hits = 0; for (const m of hm) if (m) hits++; return hits;
+  }
+  const schema = schemaExt(L, dh.header);
+  const v2 = validate(expr, schema);
+  if (!v2.ok) return { err: (v2.errors[0] && v2.errors[0].message) || 'invalid expression' };
+  const fn2 = compileBool(expr, schema, { decimal: '.' });
+  const mask2 = new Uint8Array(dh.header.count);
+  let hits2 = 0;
+  for (let i = 0; i < dh.header.count; i++) { if (hm && !hm[i]) continue; if (fn2(extendRow(L, dh.fetchRecord(i), i))) { mask2[i] = 1; hits2++; } }
+  renderer.setActiveSet('base', L.id);
+  renderer.setFilter(mask2, { isolate: true }, L.id);
+  L._filterMask = mask2; attrTableFilterChanged(L.id); refreshLinkedWindows(L, 'filtered');
+  requestRender();
+  return hits2;
+}
+function collarCells(lines) {
+  const delim = [',', ';', '\t'].reduce((a, b2) => (lines[0].split(b2).length > lines[0].split(a).length ? b2 : a), ',');
+  return (ln) => ln.split(delim).map((x) => x.trim().replace(/^"|"$/g, ''));
+}
+function collarKeyIndex(dh, low) {                         // the hole-id column on the COLLAR side
+  const im = dh.header.intervalMapping || {};
+  const bhidName = im.bhid != null ? dh.header.columns[im.bhid] : null;
+  const ki = bhidName ? low.indexOf(String(bhidName).toLowerCase()) : -1;
+  return ki >= 0 ? ki : 0;                                 // convention: the hole id leads the collar file
+}
+async function applyHoleFilter(L, expr) {
+  const dh = L && L.docs && L.docs.dhDoc; if (!dh) return { err: 'not a drillhole layer' };
+  expr = (expr || '').trim();
+  if (!expr) {
+    L.holeFilter = ''; L._holeIds = null; L._holeMask = null;
+    dhFilterSweep(L, L.filterExpr || ''); markProjectDirty();
+    return { holes: null };
+  }
+  const cols = await peekCollarCols(dh);
+  const schema = cols.map((c) => ({ name: c.name, type: c.type === 'number' ? 'number' : 'string' }));
+  const v = validate(expr, schema);
+  if (!v.ok) return { err: (v.errors[0] && v.errors[0].message) || 'invalid expression' };
+  const fn = compileBool(expr, schema, { decimal: '.' });
+  const lines = (await dh.blobs.collar.text()).split(/\r?\n/).filter((x) => x.trim());
+  const cells2 = collarCells(lines);
+  const names = cells2(lines[0]), low = names.map((x) => x.toLowerCase());
+  const ki = collarKeyIndex(dh, low);
+  const ids = new Set();
+  let total = 0;
+  for (let i = 1; i < lines.length; i++) {
+    const c = cells2(lines[i]); if (c.length <= ki) continue;
+    total++;
+    let keep = false; try { keep = !!fn(c); } catch { /* blank verdict */ }
+    if (keep) ids.add(String(c[ki]).trim());
+  }
+  const im = dh.header.intervalMapping || {};
+  const mask = new Uint8Array(dh.header.count);
+  for (let i = 0; i < dh.header.count; i++) { const f = dh.fetchRecord(i); if (ids.has(String(f[im.bhid] ?? '').trim())) mask[i] = 1; }
+  L.holeFilter = expr; L._holeIds = ids; L._holeMask = mask;
+  dhFilterSweep(L, L.filterExpr || '');
+  markProjectDirty();
+  return { holes: ids.size, total };
+}
+async function filterHolesSet(nd) {
+  const members = groupLayerIds(nd).map(layerById).filter((L) => L && L.dh && L.docs.dhDoc);
+  if (!members.length) return;
+  const v = await microPrompt('hole filter — an expression over the COLLAR columns (empty clears)', members[0].holeFilter || '');
+  if (v == null) return;
+  let res = null;
+  for (const L of members) {
+    res = await applyHoleFilter(L, v);
+    if (res && res.err) { $('#meta').textContent = `hole filter: ${res.err}`; return; }
+  }
+  if (setHasTraces(nd)) { hideHoleTraces(nd); await showHoleTraces(nd); }   // traces follow the verdict
+  $('#meta').textContent = res && res.holes != null
+    ? `hole filter: ${res.holes} of ${res.total} holes — intervals${setHasTraces(nd) ? ' + traces' : ''} follow`
+    : 'hole filter cleared';
+  renderLayers();
+}
 function dhSetInfo(nd) {
   for (const id of groupLayerIds(nd)) { const L = layerById(id); if (L && L.dh && L.docs.dhDoc) return { blobs: L.docs.dhDoc.blobs, config: L.docs.dhDoc.config, setKey: L._setKey }; }
   return null;
@@ -14258,10 +14345,19 @@ function hideHoleTraces(nd) {
 }
 async function showHoleTraces(nd) {
   if (setHasTraces(nd)) { hideHoleTraces(nd); return; }   // toggle off
-  const info = dhSetInfo(nd); if (!info) return;
+  let info = dhSetInfo(nd); if (!info) return;
   const lid = allocLayerId('element');
   if (lid == null) { $('#meta').textContent = 'layer limit reached (7 element layers)'; return; }
   const name = dhGroupName(basename(info.blobs.collar.name || 'holes')) + ' · traces';
+  const memb = groupLayerIds(nd).map(layerById).find((L2) => L2 && L2.dh && L2._holeIds);
+  if (memb && memb._holeIds) {                             // the hole filter propagates to the traces
+    const lines = (await info.blobs.collar.text()).split(/\r?\n/).filter((x) => x.trim());
+    const cells2 = collarCells(lines);
+    const low = cells2(lines[0]).map((x) => x.toLowerCase());
+    const ki = collarKeyIndex(memb.docs.dhDoc, low);
+    const kept = [lines[0], ...lines.slice(1).filter((ln) => memb._holeIds.has(String(cells2(ln)[ki] ?? '').trim()))];
+    info = { ...info, blobs: { ...info.blobs, collar: new File([kept.join('\n')], basename(info.blobs.collar.name || 'collars.csv'), { type: 'text/csv' }) } };
+  }
   // NOT made active — a non-active layer renders modeOf(colorSel), i.e. solid grey
   _layers.push({ id: lid, name, label: name, kind: 'points', trace: true, docs: {}, bboxLocal: null, colorSel: 'solid', clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'volatile', lineage: null });
   $('#meta').textContent = `${name} — desurveying…`;
@@ -14307,6 +14403,7 @@ function groupMenu(nd, x, y) {
       items.push({ label: `survey · ${basename(info.blobs.survey.name)}`, action: () => { $('#meta').textContent = `set collar: ${info.blobs.collar.name} · survey: ${info.blobs.survey.name}`; } });
     }
     items.push({ label: setHasTraces(nd) ? 'Hide hole traces' : 'Show hole traces', action: () => showHoleTraces(nd) });
+    { const hf = groupLayerIds(nd).map(layerById).find((L2) => L2 && L2.holeFilter); items.push({ label: (hf ? '✓ ' : '') + 'Filter holes…', action: () => filterHolesSet(nd) }); }
     items.push({ label: 'Add interval table…', action: () => addIntervalToSet(nd) });
     items.push({ label: 'Re-desurvey set…', action: () => setTimeout(() => redesurveyMenu(nd, x, y), 0) });
     items.push({ sep: true });
@@ -14650,7 +14747,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
