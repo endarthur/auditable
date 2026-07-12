@@ -133,6 +133,24 @@ await layerReady('model_A.csv');
 await p.evaluate(() => { const cb = document.querySelector('#colorBy'); const o = [...cb.options].find((x) => /FE/.test(x.textContent) && x.value.startsWith('chan:')); if (o) { cb.value = o.value; cb.dispatchEvent(new Event('change')); } window._micro.cam.fit(window._micro.docBbox()); window._micro.requestRender(); });
 await shot('overview', { wait: 2200 });
 
+// 1b ── the filter drawer: the expression as live widgets (ops, pills, brackets, remove)
+await p.evaluate(async () => {
+  const e = 'FE > 40 and (LITO = "HEMATITE" or LITO = "CANGA")';
+  document.querySelector('#filter').value = e; await window._micro.applyBlockFilter(e);
+  window._micro.toggleFilterDrawer(true);
+});
+await shot('filterdrawer', { wait: 1200 });
+await p.evaluate(async () => { window._micro.toggleFilterDrawer(false); await window._micro.applyBlockFilter(''); });
+
+// 1c ── the ƒ Calculations window: an if() ladder as a case table
+await p.evaluate(() => {
+  const L = window._micro.layers().find((x) => x.name === 'model_A.csv');
+  L.calcCols = [{ name: 'DENSITY', expr: 'if(LITO = "HEMATITE", 3.9, if(LITO = "ITABIRITE", 3.4, 2.8))', ty: 'number' }];
+  window._micro.openCalcWindow(L, 0);
+});
+await shot('calcwindow', { wait: 1200 });
+await p.evaluate(() => { window._micro.closeAllWindows(); const L = window._micro.layers().find((x) => x.name === 'model_A.csv'); L.calcCols = []; L._calcFns = null; });
+
 // 2 ── command palette
 await p.evaluate(() => { window._micro.openPalette(); const i = document.querySelector('#palInput'); i.value = 'reconcile'; i.dispatchEvent(new Event('input')); });
 await shot('palette', { wait: 600 });
@@ -205,6 +223,8 @@ await shot('reconcile', { wait: 2600 });
 // 7 ── validation vs drillholes
 await p.evaluate(([c, s, a]) => window._micro.importDrillholes({ collar: new File([c], 'collar.csv'), survey: new File([s], 'survey.csv'), intervals: new File([a], 'assay.csv') }, {}, 'add'), [D.collar, D.survey, D.assay]);
 await p.waitForFunction(() => window._micro.layers().some((L) => L.dh), { timeout: 30000 });
+// 7b ── the drillhole SET in the layers panel: group + collar/survey rows
+await shot('dhset', { el: '#layersPanel', wait: 800, blankOk: true });
 await p.evaluate(() => { const A = window._micro.layers().find((L) => L.name === 'model_A.csv'); window._micro.setActiveLayer(A.id); window._micro.openValidation(A); });
 await shot('validation', { wait: 2200 });
 

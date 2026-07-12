@@ -78,7 +78,7 @@
   <div class="badges"><b>🔒 Sealed</b> — no network, nothing leaves your machine · single self-contained HTML file · <a href="../micro.html" download>download micro.html</a> · <a href="../">open the app ↗</a><span class="no-print"> · <a href="micro-manual.pdf">download this manual (PDF) ↓</a> · <a href="card.html">printable shortcut card ✂</a></span></div>
 </header>
 
-<p class="lead">micro opens a point cloud, block model, grid, or set of drillholes — however large — in about a second, with no import step, and lets you view, query, join, reconcile, validate, and produce report-ready figures from it. Every derived result carries a provenance trail, and nothing ever touches the network.</p>
+<p class="lead">micro opens a point cloud, block model, grid, or set of drillholes — however large — in about a second, with no import step, and lets you view, query, derive, join, reconcile, validate, and produce report-ready figures from it. Every derived column and layer carries a provenance trail, and nothing ever touches the network.</p>
 
 <figure>
   <img src="shots/overview.png" alt="A block model in micro, coloured by iron grade, showing a high-grade shoot.">
@@ -88,22 +88,25 @@
 <nav class="toc" aria-label="Contents">
   <a href="#what"><span class="n">1</span>What micro is</a>
   <a href="#start"><span class="n">2</span>Getting started</a>
-  <a href="#view"><span class="n">3</span>Viewing &amp; querying</a>
-  <a href="#domain"><span class="n">4</span>Selection &amp; domaining</a>
-  <a href="#join"><span class="n">5</span>Join &amp; reconcile</a>
-  <a href="#gt"><span class="n">6</span>Grade–tonnage</a>
-  <a href="#swath"><span class="n">7</span>Swath / drift</a>
-  <a href="#validate"><span class="n">8</span>Validate vs drillholes</a>
-  <a href="#linked"><span class="n">9</span>Linked brushing</a>
-  <a href="#lineage"><span class="n">10</span>Lineage &amp; provenance</a>
-  <a href="#grids"><span class="n">11</span>Grids</a>
-  <a href="#parquet"><span class="n">12</span>The Parquet project store</a>
-  <a href="#figures"><span class="n">13</span>Figures &amp; decorations</a>
-  <a href="#projects"><span class="n">14</span>Projects &amp; export</a>
-  <a href="#windows"><span class="n">15</span>Windows</a>
-  <a href="#sealed"><span class="n">16</span>Security: Sealed</a>
-  <a href="#install"><span class="n">17</span>Install &amp; offline</a>
-  <a href="#ref"><span class="n">A</span>Reference</a>
+  <a href="#view"><span class="n">3</span>Viewing &amp; sections</a>
+  <a href="#filter"><span class="n">4</span>The filter &amp; its widgets</a>
+  <a href="#calc"><span class="n">5</span>The ƒ workbench — derived columns</a>
+  <a href="#dh"><span class="n">6</span>Drillholes</a>
+  <a href="#domain"><span class="n">7</span>Selection &amp; domaining</a>
+  <a href="#join"><span class="n">8</span>Join &amp; reconcile</a>
+  <a href="#gt"><span class="n">9</span>Grade–tonnage</a>
+  <a href="#swath"><span class="n">10</span>Swath / drift</a>
+  <a href="#validate"><span class="n">11</span>Validate vs drillholes</a>
+  <a href="#linked"><span class="n">12</span>Linked brushing</a>
+  <a href="#lineage"><span class="n">13</span>Lineage &amp; provenance</a>
+  <a href="#grids"><span class="n">14</span>Grids &amp; surfaces</a>
+  <a href="#parquet"><span class="n">15</span>The project store, inside</a>
+  <a href="#figures"><span class="n">16</span>Figures &amp; decorations</a>
+  <a href="#projects"><span class="n">17</span>Projects &amp; export</a>
+  <a href="#windows"><span class="n">18</span>Windows</a>
+  <a href="#sealed"><span class="n">19</span>Security: Sealed</a>
+  <a href="#install"><span class="n">20</span>Install &amp; offline</a>
+  <a href="#ref"><span class="n">A</span>Reference — keys &amp; the expression language</a>
 </nav>
 
 <h2 id="what"><span class="n">1</span>What micro is</h2>
@@ -111,17 +114,18 @@
 <p>It reads:</p>
 <ul>
   <li><b>Point clouds</b> — LAS, PLY, XYZ / PTS / DAT dumps</li>
-  <li><b>Block models</b> — CSV / TXT, Datamine <code>.dm</code>, and <b>Parquet</b></li>
+  <li><b>Block models</b> — CSV / TXT, Datamine <code>.dm</code>, and <b>Parquet</b>, sub-blocked included</li>
   <li><b>Grids</b> — GeoTIFF, Surfer <code>.grd</code>, ESRI ASCII <code>.asc</code></li>
-  <li><b>Meshes</b> — <code>.msh</code> (Leapfrog), OBJ, PLY-with-faces, LFM</li>
-  <li><b>Drillholes</b> — collar + survey + interval tables (desurveyed on load); a set can carry <b>several interval tables</b> (assays, lithology, geotech) as sibling layers sharing one geometry, with hole traces on demand</li>
+  <li><b>Meshes</b> — <code>.msh</code> (Leapfrog), OBJ, PLY-with-faces, LFM, Datamine wireframe pairs</li>
+  <li><b>Drillholes</b> — collar + survey + interval tables (desurveyed on load); a set can carry <b>several interval tables</b> (assays, lithology, geotech) sharing one geometry — see <a href="#dh">Drillholes</a></li>
 </ul>
-<p>Beyond viewing, it does the everyday resource-geology work: filter and section, domain by a solid, join and reconcile model versions, grade–tonnage and swath analysis, validation against drillholes, and figure export — all against the source file, all with a provenance trail, all offline.</p>
+<p>Beyond viewing, it does the everyday resource-geology work: filter and section; derive columns by expression, lookup, broadcast, resampling, or interpolation; domain by a solid; join and reconcile model versions; grade–tonnage, swath, and validation analysis; and figure export — all against the source file, all with a provenance trail, all offline.</p>
 <p class="tip"><b>Tip —</b> The fastest way to reach anything is the <b>command palette</b>: <span class="kbd">Ctrl/⌘K</span> (or the <span class="kbd">⌘K</span> button). It searches every action and shows only what applies to the layer you have selected.</p>
 
 <h2 id="start"><span class="n">2</span>Getting started</h2>
 <h3>Opening data</h3>
-<p>Drag a file (or several) anywhere onto the window, or use <b>File → Open…</b>. Several files at once become separate <b>layers</b>. The open dialog shows each file's detected role — an <b>Open as ▾</b> on every row lets you override it (a block model as points, a PLY mesh as points, a delimited file as collar / survey / intervals), and drillhole trios assemble themselves from those roles. No data handy? The empty state offers <b>▸ open the demo project</b> — one click assembles a block model + drillholes, coloured by grade, cut open on the ore lens with the holes threading through it, and a grade–tonnage curve — the whole workflow to explore. (Or a raw <b>sample block model</b> / <b>bench scan</b> if you'd rather start blank.) It's all generated locally, nothing downloaded. Once open, <b>File → Save project as…</b> writes the demo to a real folder you can inspect — plain CSVs and a JSON manifest in kind-folders, no black box.</p>
+<p>Drag a file (or several) anywhere onto the window, or use <b>File → Open…</b>. Several files at once become separate <b>layers</b>. The open dialog shows each file's detected role — an <b>Open as ▾</b> on every row lets you override it (a block model as points, a PLY mesh as points, a delimited file as collar / survey / intervals), and drillhole trios assemble themselves from those roles.</p>
+<p>No data handy? The empty state offers <b>▸ open the demo project</b> — one click generates a full scene locally: a 1.8M-block iron model with realistic bimodal grades, a drillhole set threading the ore, pre-mining <b>topography</b>, three <b>pit-phase shells</b>, and the <b>ore-shell</b> mesh the holes chase — sectioned open on the lens, with a grade–tonnage curve already computed. Every workflow in this manual can be tried on it, and <b>File → Save project as…</b> writes it to a real folder you can inspect: plain CSVs, JSON manifests, no black box.</p>
 <h3>Sub-blocked models</h3>
 <p>micro reads <b>sub-blocked</b> (octree) block models — where cells are refined into smaller boxes near a boundary or a high-grade zone — and renders <b>each block at its true size</b>, straight from the file. CSV/Parquet models with per-block <code>dX/dY/dZ</code> columns and Datamine <code>.dm</code> models with per-record <code>XINC/YINC/ZINC</code> are detected automatically; the model streams, picks, filters, and colours like any other. Join and reconcile handle them by <b>volume</b> — see <a href="#join">Join &amp; reconcile</a>.</p>
 <figure>
@@ -130,51 +134,124 @@
 </figure>
 <p class="note"><b>Note —</b> Detection assumes an <b>axis-aligned</b> model with power-of-two (octree) refinement — the standard export. A <b>rotated</b> model currently opens as its centroids (points); interpreting a rotated model as boxes (enter or measure its azimuth) is on the roadmap.</p>
 <h3>The layers panel</h3>
-<p><span class="kbd">p</span> toggles the layers panel. Each opened dataset is a layer with its own colour, filter, and visibility; right-click a layer for its actions (zoom, info, attribute table, filter, analysis tools, remove). Layers can be grouped and reordered; <span class="kbd">[</span> <span class="kbd">]</span> step the active layer, <span class="kbd">h</span> hides/shows it, <span class="kbd">⇧H</span> <b>solos</b> it (press again to restore what was visible).</p>
-<p><span class="kbd">F2</span> renames the active layer. <b>Rename layers…</b> (on a group, a multi-selection, or the palette) batch-renames: one-click <b>strip the common prefix/suffix</b>, or find→replace with optional <b>regex</b>, with a live before→after table — handy when a folder of <code>BM2024_​kriging.csv</code>-style names comes in.</p>
+<p><span class="kbd">p</span> toggles the layers panel. Each opened dataset is a layer with its own colour, filter, and visibility. Layers can be grouped and reordered by dragging; <span class="kbd">[</span> <span class="kbd">]</span> step the active layer, <span class="kbd">h</span> hides/shows it, <span class="kbd">⇧H</span> <b>solos</b> it (press again to restore what was visible). Drillhole sets appear as their own group with collar and survey rows — see <a href="#dh">Drillholes</a>.</p>
+<p>Right-click a layer for its menu, organized top to bottom: <b>identity</b> (zoom, rename, reinterpret) · <b>inspect &amp; analyze</b> (attribute table, filter, stats, grade–tonnage, swath, file info, lineage, export rows) · <b>derive &amp; store</b> (interpolate, materialize, store as Parquet, index) · <b>display</b> (opacity, edges, sections, hide) · <b>arrange</b> (move, copy into project, remove) · <b>Properties…</b>.</p>
+<p><span class="kbd">F2</span> renames the active layer. <b>Rename layers…</b> (on a group, a multi-selection, or the palette) batch-renames: one-click <b>strip the common prefix/suffix</b>, or find→replace with optional <b>regex</b>, with a live before→after table.</p>
 <h3>Getting around</h3>
-<p>Drag to orbit, right-drag (or shift-drag) to pan, wheel to zoom. <span class="kbd">f</span> fits the data. <span class="kbd">n s e w</span> look level that way, <span class="kbd">d</span> is plan, <span class="kbd">o</span> toggles orthographic (needed for a true scale bar). Click a block or point to <b>pick</b> it — the record panel shows its full source row, with a <b>fields</b> picker (search + all/none) to trim it to the columns you care about.</p>
+<p>Drag to orbit, right-drag (or shift-drag) to pan, wheel to zoom. <span class="kbd">f</span> fits the data. <span class="kbd">n s e w</span> look level that way, <span class="kbd">d</span> is plan, <span class="kbd">o</span> toggles orthographic (needed for a true scale bar). Click a block or point to <b>pick</b> it — the record panel shows its full source row, calculated and derived columns included, with a <b>fields</b> picker to trim it to the columns you care about.</p>
 <p><b>Vertical exaggeration</b> — the <b>Z×</b> box on the instrument rail (or View → Vertical exaggeration) stretches the whole scene vertically so subtle relief or a flat-lying ore lens reads. It's a property of the <i>view</i>, not one layer: every layer stretches together and stays registered, and it's display-only — picking, measuring, and section cutting all stay in true coordinates. It travels with bookmarks and scenes.</p>
 
-<h2 id="view"><span class="n">3</span>Viewing &amp; querying</h2>
+<h2 id="view"><span class="n">3</span>Viewing &amp; sections</h2>
 <h3>Colour</h3>
-<p>The <b>colour</b> dropdown drives the active layer: by elevation, a numeric <b>channel</b> (a grade), or a <b>category</b> (a rock type). Pick a ramp per layer (viridis · spectral · magma · turbo · greys) in <b>Properties → style</b>; the <b>min/max</b> boxes clip the scale so outliers stop eating the ramp. On a grade channel, double-click the histogram to add <b>breakpoints</b> — <b>classed</b> turns them into a solid-colour grade-shell legend.</p>
-<h3>Filter</h3>
-<p><span class="kbd">/</span> focuses the filter box. It speaks a familiar expression language over every column: <code>FE &gt; 55 and LITO = "HEMATITE"</code>, <code>between</code>, <code>in (…)</code>. Matching elements isolate; everything else drops out of the render, the table, and any analysis. <span class="kbd">Enter</span> applies, <span class="kbd">Esc</span> clears.</p>
-<h3>Calculated columns &amp; the scan</h3>
-<p><b>Properties → columns</b> defines ƒ <b>calculated columns</b> (<code>FE + 0.4 * MN</code>) that the filter, scan, table, and record panel all see, and <b>scan columns</b> streams the whole table once to fill n · mean · std · quantiles · histogram per column.</p>
-<h3>The stats table</h3>
-<p><b>Stats…</b> (right-click a layer, or the palette) is the grouped summary report: pick columns, an optional <b>group by</b> (the category channel or any painted column — <i>assign domains, then stats by domain</i> is the classic resource table), and an optional <b>weight expression</b> (<code>SG</code> for density-weighted means — quantiles stay unweighted and the window says so). Same chassis as grade–tonnage and swath: scope (all / filt / sel), Run, <b>⧉ table</b> TSV copy, <b>save as recipe…</b>, and the setup persists with the project. Scans stream cooperatively — the 3D stays live while it computes.</p>
+<p>The <b>colour</b> dropdown drives the active layer: by elevation, a numeric <b>channel</b> (a grade), a <b>category</b> (a rock type), a painted column (<code>✎</code>), a materialized column (<code>%</code>), or a calculated column (<code>ƒ</code> — see <a href="#calc">the ƒ workbench</a>). Pick a ramp per layer (viridis · spectral · magma · turbo · greys) in <b>Properties → style</b>; the <b>min/max</b> boxes clip the scale so outliers stop eating the ramp. On a grade channel, double-click the histogram to add <b>breakpoints</b> — <b>classed</b> turns them into a solid-colour grade-shell legend.</p>
 <h3>Sections &amp; measure</h3>
-<p>A section is a live cut, and on block models it is a <b>true</b> cut: each block is clipped analytically against the slab faces, so the cut paints a continuous wall — with the block's colour — instead of a ragged centroid cull, and the wall itself is pickable. Meshes stay hollow but draw <i>over</i> the cut, so a wireframe's trace lines read on the wall.</p>
+<p>A section is a live cut, and on block models it is a <b>true</b> cut: each block is clipped analytically against the slab faces, so the cut paints a continuous wall — with the block's colour — instead of a ragged centroid cull, and the wall itself is pickable.</p>
+<p><b>Meshes and surfaces draw their trace on the wall.</b> A sectioned mesh doesn't hide the cut face: it renders as its <b>intersection trace</b> — a closed ore shell becomes an outline ring around the grade zone it encloses, a topo surface a thin line across the top — flattened onto the section face like a drafted section plot. The trace width follows the section-width control. A layer that should stay whole (topo for context, the drillholes threading a cut model) sets right-click → <b>Cut by sections → don't cut</b>.</p>
 <figure>
   <img src="shots/truesection.png" alt="A thin N–S slab through the model: the cut face is a continuous, coloured wall.">
   <figcaption>A thin N–S slab. The cut face is a continuous coloured wall — blocks are clipped against the plane, not dropped by centroid — and clicking the wall picks the block behind it.</figcaption>
 </figure>
-<p>Pick a preset (plan · N–S · E–W), press <span class="kbd">k</span> and drag a line (<b>⇧</b> snaps 15°, <b>⇧⌥</b> 5°), or type a plane's dip-direction + dip. <span class="kbd">x</span> toggles it, <span class="kbd">l</span> faces it, <span class="kbd">⇧L</span> faces its back. <span class="kbd">,</span> <span class="kbd">.</span> step one slab at a time, and <b>Ctrl+wheel</b> scrubs the position continuously; <b>Alt+wheel</b> thickens or thins the slab. <b>Follow</b> (next to the section controls) makes the camera ride along as you scrub; <b>2D</b> locks the view flat onto the section — drags pan instead of orbit — for section-by-section interpretation. <span class="kbd">m</span> then two clicks <b>measures</b> 3D · plan · Δz between records. Per layer, right-click → <b>Cut by sections</b> picks how the section treats it: <b>follow</b> (the slab), <b>keep front only</b> / <b>keep behind only</b> (a half-space split at the plane — pit shell one side, model the other), or <b>don&#39;t cut</b> (topo stays whole for context).</p>
+<p>Pick a preset (plan · N–S · E–W), press <span class="kbd">k</span> and drag a line (<b>⇧</b> snaps 15°, <b>⇧⌥</b> 5°), or type a plane's dip-direction + dip. <span class="kbd">x</span> toggles it, <span class="kbd">l</span> faces it, <span class="kbd">⇧L</span> faces its back. <span class="kbd">,</span> <span class="kbd">.</span> step one slab at a time, and <b>Ctrl+wheel</b> scrubs the position continuously; <b>Alt+wheel</b> thickens or thins the slab. <b>Follow</b> makes the camera ride along as you scrub; <b>2D</b> locks the view flat onto the section — drags pan instead of orbit — for section-by-section interpretation. <span class="kbd">m</span> then two clicks <b>measures</b> 3D · plan · Δz between records. Per layer, <b>Cut by sections</b> picks how the section treats it: <b>follow</b> (the slab), <b>keep front only</b> / <b>keep behind only</b> (a half-space split at the plane), or <b>don't cut</b>.</p>
 <h3>Block edges</h3>
 <p><span class="kbd">⇧B</span> (or View → block edges) outlines every block — the classic wireframe-over-solid look for checking sub-blocking or lattice alignment. Each layer can override the global toggle from its context menu (always / never / follow).</p>
-<h3>The attribute table</h3>
-<p><span class="kbd">t</span> opens the layer's rows as a draggable, layer-pinned window — windowed reads, so a 1.8M-row model scrolls cold. <b>matches</b> shows only the filtered rows; click a row to pick it in the scene.</p>
+<h3>The attribute table &amp; the scan</h3>
+<p><span class="kbd">t</span> opens the layer's rows as a draggable, layer-pinned window — windowed reads, so a 1.8M-row model scrolls cold. <b>matches</b> shows only the filtered rows; click a row to pick it in the scene. In <b>Properties → columns</b>, <b>scan columns</b> streams the whole table once to fill n · mean · std · quantiles · histogram per column — the scan sees calculated and derived columns too.</p>
+<h3>The stats table</h3>
+<p><b>Stats…</b> (right-click a layer, or the palette) is the grouped summary report: pick columns, an optional <b>group by</b> (the category channel or any painted column — <i>assign domains, then stats by domain</i> is the classic resource table), and an optional <b>weight expression</b> (<code>SG</code> for density-weighted means — quantiles stay unweighted and the window says so). Same chassis as grade–tonnage and swath: scope (all / filt / sel), Run, <b>⧉ table</b> TSV copy, <b>save as recipe…</b>, and the setup persists with the project.</p>
 
-<h2 id="domain"><span class="n">4</span>Selection &amp; domaining</h2>
+<h2 id="filter"><span class="n">4</span>The filter &amp; its widgets</h2>
+<p><span class="kbd">/</span> focuses the filter box. It speaks a familiar expression language over <b>every</b> column — source, calculated, painted, materialized, joined:</p>
+<pre>FE &gt; 55 and LITO = "HEMATITE"
+AU_OK between 0.5 and 3  or  DOMAIN in ("ORE", "HALO")
+SIO2 &gt; 10 and not (LITO = "CANGA")   # comments are fine</pre>
+<p>Matching elements isolate; everything else drops out of the render, the table, and any analysis. <span class="kbd">Enter</span> applies, <span class="kbd">Esc</span> clears. The box is <b>syntax-highlighted</b> as you type, autocomplete offers columns, functions, and category values, and unknown names get a <i>did-you-mean</i>. The full language — operators, functions, quoting, comments — is in the <a href="#ref">reference</a>.</p>
+<p>On big files the filter is engineered to be <b>live</b>: Parquet models skip whole row-groups their footers prove can't match, CSV and <code>.dm</code> files skip stretches via the project's band index, and after one complete scan the touched columns stay <b>pinned in memory</b> (see <a href="#parquet">the project store</a>) — so dragging a widget re-filters millions of blocks in milliseconds.</p>
+<h3>The filter drawer — the expression as live controls</h3>
+<p>The <b>▾</b> button glued to the filter box opens the <b>drawer</b>: your current expression projected as widgets. The expression stays the single source of truth — every control rewrites its own span of the text, so the box updates as you drag and your formatting survives.</p>
+<ul>
+  <li><b>Numeric comparisons</b> become sliders with a number box; <code>between</code> becomes a two-slider range row. The <b>operator is a dropdown</b> (<code>&gt; ≥ &lt; ≤ = ≠ between</code>) — switching to <code>between</code> converts the clause in place.</li>
+  <li><b>Category comparisons</b> become chips — click a value to swap it, and with <code>in (…)</code> chips toggle membership. The op dropdown offers <code>= ≠ in not&nbsp;in</code>.</li>
+  <li>The <b>AND / OR pills</b> between rows are clickable — each one switches its own joiner in the text.</li>
+  <li><b>Brackets are real</b>: parenthesized groups render as indented blocks with their own <i>add condition</i> row (inserting inside the brackets), and the top-level <i>add</i> offers <code>and&nbsp;(&nbsp;…&nbsp;)</code> to seed a new group or <code>(&nbsp;all&nbsp;)&nbsp;or&nbsp;…</code> to wrap everything so far and start an alternative branch.</li>
+  <li>Every row has a <b>× to remove it</b> — the clause and its joiner go together, removing the last condition inside brackets removes the whole group, and removing the only condition clears the filter.</li>
+  <li>The drawer includes a <b>multiline editor</b> (with <code>#</code> comments) for the expression itself, live-validated; <b>reset</b> restores the filter as it was when the drawer opened.</li>
+</ul>
+<p>Add a condition from the dropdown, then reshape it entirely with the widgets — nothing is locked in at add time.</p>
+<figure>
+  <img src="shots/filterdrawer.png" alt="The filter drawer: sliders, category chips, an AND pill, and a bracketed group projected from the expression.">
+  <figcaption>The drawer projecting <code>FE &gt; 40 and (LITO = "HEMATITE" or LITO = "CANGA")</code> — a slider with its operator dropdown, a bracketed group with clickable chips and an OR pill, a remove × on every row. Dragging the slider rewrites the expression above, live.</figcaption>
+</figure>
+
+<h2 id="calc"><span class="n">5</span>The ƒ workbench — derived columns</h2>
+<p>A derived column behaves exactly like a source column: the filter, colour ramps, stats, grade–tonnage, swath, the record panel, and every export see it. micro derives columns five ways, and each records <i>how</i> in the layer's provenance:</p>
+<table>
+  <tr><th>Kind</th><th>Made by</th><th>Stored as</th></tr>
+  <tr><td><b>ƒ calculated</b></td><td>an expression (<code>FE + 0.4 * MN</code>)</td><td>a definition — computed on the fly</td></tr>
+  <tr><td><b>materialized</b></td><td>freezing a ƒ, or an <b>interpolation</b> (NN / IDW with anisotropy) onto this layer</td><td>a Parquet column beside the source</td></tr>
+  <tr><td><b>painted</b> ✎</td><td>brushing over the scene (<span class="kbd">b</span>), or flag / assign-domains by a solid</td><td>a category column</td></tr>
+  <tr><td><b>joined</b></td><td>a key join or an own-lattice spatial join — see <a href="#join">Join</a></td><td>materialized</td></tr>
+  <tr><td><b>broadcast</b></td><td>a collar column landed on drillhole intervals — see <a href="#dh">Drillholes</a></td><td>materialized</td></tr>
+</table>
+<h3>The Calculations window</h3>
+<p><b>Tools → Calculated columns…</b> (or the <b>ƒ</b> button in Properties → columns) opens the calculations workbench: your ƒ columns listed on a rail, one editor on the right. The editor is multiline and syntax-highlighted, validates live against the layer's <b>full</b> schema — so a calculation can reference source columns, painted columns, materialized columns, <b>and other ƒ columns</b> (<code>FE_EQ</code> then <code>DBL = FE_EQ * 2</code>) — and the type is a visible choice (auto / number / text). Saving a definition immediately updates any live filter or colour that uses it.</p>
+<p>Typing the expression is the primary interface, but below the editor the definition also <b>projects as widgets</b>, the same contract as the filter drawer:</p>
+<ul>
+  <li>An <code>if(…)</code> ladder renders as a <b>case table</b> — condition | value, row per case, plus <i>else</i> and <i>add case</i>. Density by lithology (<code>if(LITO = "HEM", 3.9, if(LITO = "ITA", 3.4, 2.8))</code>) becomes a table you edit with chips and sliders.</li>
+  <li>Any other expression lists its <b>numeric constants as sliders</b> — tune the coefficient in an equivalence formula and, if a filter or colour uses the column, watch the model respond live.</li>
+</ul>
+<figure>
+  <img src="shots/calcwindow.png" alt="The Calculations window: a density-by-lithology if-ladder shown as a case table with chips and sliders.">
+  <figcaption>The ƒ workbench: a density-by-lithology <code>if()</code> ladder — the highlighted expression on top is the truth; below it the same definition as a case table of chips and value sliders.</figcaption>
+</figure>
+<p>Widget edits auto-save an existing column; typed edits wait for the explicit save. <b>materialize → stored</b> freezes a ƒ into a real Parquet column (it survives even if its inputs are later removed, and scans get faster); <b>save as recipe…</b> writes the whole column set as a re-runnable YAML — apply your standard derived columns to next month's model in one click.</p>
+<h3>Colour by ƒ</h3>
+<p>Pick <code>ƒ NAME</code> in the colour dropdown and micro computes the column once for display (a cached realization — recomputed automatically when the definition or anything it references changes, and never written to disk: the definition is the provenance). Combined with the constant sliders this closes a satisfying loop: drag the coefficient, the model recolours.</p>
+<h3>Interpolate onto a layer</h3>
+<p><b>Interpolate from this…</b> (right-click the source points/holes) estimates a value onto <b>any</b> spatial target layer — nearest-neighbour or IDW, with a full anisotropy ellipsoid (ranges + dip-direction / dip / pitch), min/max samples, and expression filters on both the input samples and the output records. The result is a <b>materialized column on the target</b> — not a new layer — with the method and parameters recorded. Run several estimates as separate columns, then compose the final with a ƒ (<code>coalesce(AU_domA, AU_domB)</code>): every step stays auditable. If you need a fresh lattice first, <b>New… → grid / block model</b> creates one, and interpolation targets it like any layer.</p>
+
+<h2 id="dh"><span class="n">6</span>Drillholes</h2>
+<p>A drillhole set is <b>three tables bound by the hole id</b> — collars (one row per hole), survey (deviation stations), intervals (from/to samples) — and micro keeps that structure first-class rather than flattening it away.</p>
+<h3>The set in the layers panel</h3>
+<p>Every load lands as a <b>set group</b>: the group is the drillhole set, with a <b>◈ collars</b> row (hole count), a <b>↧ survey</b> row (desurvey method), and one interval layer per interval table. The rows are live — click one for its menu:</p>
+<ul>
+  <li><b>◈ collars</b> — <b>Attribute table…</b> (the collar file as a table), <b>Filter holes…</b>, <b>Broadcast column to intervals</b>.</li>
+  <li><b>↧ survey</b> — <b>Attribute table…</b>, <b>Re-desurvey…</b> (method: minimum curvature / balanced tangential / tangential; dip convention), <b>Show hole traces</b> (the full collar-to-EOH paths as thin grey sticks, filter-aware).</li>
+  <li>The <b>set group</b> itself — hole traces, <b>Add interval table…</b> (assays + lithology + geotech share one geometry as sibling layers).</li>
+</ul>
+<figure>
+  <img src="shots/dhset.png" alt="The layers panel showing a drillhole set group with collar and survey rows and an interval layer.">
+  <figcaption>A drillhole set in the layers panel: the group is the set, with ◈ collars (hole count) and ↧ survey (desurvey method) rows above the interval layer. Click a row for its actions.</figcaption>
+</figure>
+<h3>The hole filter — filter by collar data</h3>
+<p><b>Filter holes…</b> takes an expression over the <b>collar</b> columns — <code>EOH &gt; 200</code>, <code>COMPANY = "ACME"</code>, a campaign year — and applies the verdict through the whole set: only the matching holes' intervals stay visible (in every interval table at once), the traces redraw for the matching holes only, and the interval filter box then works <i>within</i> the kept holes. Nothing is copied or materialized — it's a live mask driven by the hole relation, and it persists with the project.</p>
+<h3>Broadcast — collar data on the intervals</h3>
+<p><b>Broadcast column to intervals</b> lands a collar column on every interval, matched by hole id — so <code>EOH</code>, the logging company, or a campaign field becomes a real interval column you can filter, colour, and export by. Numeric columns materialize to the project's column store; text columns become category columns with a legend. The operation is recorded with its inputs, like every derivation.</p>
+<h3>Display</h3>
+<p>Intervals render as true cylinders (<b>Stick radius…</b> sets the world-space radius). Colour by any interval column; sections cut the sticks true, and the set usually reads best with the model sectioned and the holes set to <b>don't cut</b>, threading whole through the opened deposit — which is exactly how the demo project arranges itself.</p>
+
+<h2 id="domain"><span class="n">7</span>Selection &amp; domaining</h2>
 <p><b>Select</b> with <span class="kbd">r</span> (rectangle) or <span class="kbd">v</span> (lasso): what you <i>see</i> gets selected (occlusion-honest, all visible layers), tinted gold — <b>shift</b> adds, <b>alt</b> subtracts, <span class="kbd">Esc</span> clears. The <b>select-through</b> toolbar toggle flips to the extruded tube: everything whose position falls inside the shape, occluded included.</p>
 <p><b>Select by solid / surface</b> (Tools menu, or right-click a mesh) classifies records against a closed mesh by winding number: <b>select</b> inside/outside, write a <b>flag column</b>, or a <b>fraction-inside</b> 0–1 column. Open surfaces (topo, weathering horizons) classify <b>above / below / between</b>. <b>Assign domains</b> runs the whole coded-model loop — pick the domain solids and a column name, and every block goes to the solid holding its largest fraction.</p>
 <p><b>Paint a column</b> (<span class="kbd">b</span>) is interactive domaining by hand: a category column you fill by brushing over the scene. Painted values are real columns the filter, table, and export all see.</p>
 <p><b>Selection → column…</b> (right-click the layer, or the palette) materializes the current selection as an explicit <b>0/1 column</b> — every row gets a value, so it filters (<code>SEL = 1</code>), edits like any painted column, and rides every export. Selections themselves also persist in the project.</p>
 
-<h2 id="join"><span class="n">5</span>Join &amp; reconcile</h2>
-<p>Two model versions? The <b>join tab</b> (Properties → <b>join</b>) compares them. A <b>spatial join</b> resamples a <i>compatible</i> model onto a target grid — a banner tells you whether the grids share a lattice (clean replicate / aggregate) or why they can't. A <b>key join</b> matches rows by a key column (e.g. a block ID, or a domain→density lookup).</p>
-<p><b>Reconcile</b> is the preset: it produces a coloured <b>Δ map</b> (this model − reference) on a common lattice, with a diverging ramp centred on zero — blue where the new estimate is lower, red where it's higher, neutral where they agree. The summary reads <b>matched · mean Δ · mean|Δ| · added · removed</b>.</p>
-<p><b>Sub-blocked models</b> reconcile by <b>volume</b>: each variable-size block is aggregated onto the reference (parent) grid weighted by the space it fills — a big parent and its small sub-blocks each contribute in proportion — so a sub-blocked estimate compares cleanly against a regular one at the parent resolution.</p>
+<h2 id="join"><span class="n">8</span>Join &amp; reconcile</h2>
+<p>Two model versions, or a lookup table? The <b>join tab</b> (Properties → <b>join</b>) brings data across — and it follows one rule: <b>if the operation keeps this layer's records, the result lands as columns on it; only an operation that changes the record set makes a new layer.</b></p>
+<ul>
+  <li><b>Key join → columns here</b> — match rows by a key column (a block id, a domain code) and the brought columns land on this layer: numeric as materialized columns, text as categories, name collisions prefixed. The classic domain→density lookup is one join, no new layer.</li>
+  <li><b>Spatial join → columns here</b> — with the target grid set to <i>this model's own lattice</i>, the other model's columns resample onto your existing cells (mean / sum / count, optionally weighted; categories by majority) and land as columns. A compatibility banner tells you whether the grids share a lattice, or why not.</li>
+  <li><b>→ new layer</b> — the secondary, export-shaped verb: a joined copy as a new layer/file. Spatial joins onto a <i>third</i> lattice (common-finest / coarsest) stay layers — they genuinely change the record set.</li>
+</ul>
+<p><b>Reconcile</b> is the preset: it produces a coloured <b>Δ map</b> (this model − reference) on a common lattice, with a diverging ramp centred on zero — blue where the new estimate is lower, red where it's higher. The summary reads <b>matched · mean Δ · mean|Δ| · added · removed</b>.</p>
+<p><b>Sub-blocked models</b> reconcile by <b>volume</b>: each variable-size block is aggregated onto the reference (parent) grid weighted by the space it fills, so a sub-blocked estimate compares cleanly against a regular one at the parent resolution.</p>
 <figure>
   <img src="shots/reconcile.png" alt="A reconciliation Δ map in plan view: blue in the north, red in the south.">
   <figcaption>Reconciling two model versions. Global mean Δ is ≈ 0, but the Δ map exposes a clear <b>conditional bias</b> — the new estimate runs low in the north (blue) and high in the south (red). A global check would have missed it entirely.</figcaption>
 </figure>
 <p class="tip"><b>Tip —</b> The Δ ramp auto-clips to the full range, which extreme blocks can widen. Tighten the <b>min/max</b> boxes (e.g. ±2× the mean|Δ|) to make the local pattern read, as above.</p>
 
-<h2 id="gt"><span class="n">6</span>Grade–tonnage</h2>
-<p><b>Grade-tonnage…</b> (right-click a model, or the palette) draws tonnage and mean grade above cutoff. It shares the swath's interface: a config rail of <b>series</b>, each one a <b>layer + grade column + declared unit + density expression + optional row filter</b> — configure, then <b>Run</b>. Because series pick their own layer, model-vs-model curves (this estimate against the last one) are one window; on a reconcile layer the reference/new pair is pre-seeded.</p>
+<h2 id="gt"><span class="n">9</span>Grade–tonnage</h2>
+<p><b>Grade-tonnage…</b> (right-click a model, or the palette) draws tonnage and mean grade above cutoff. It shares the swath's interface: a config rail of <b>series</b>, each one a <b>layer + grade column + declared unit + density expression + optional row filter</b> — configure, then <b>Run</b>. Because series pick their own layer, model-vs-model curves (this estimate against the last one) are one window; on a reconcile layer the reference/new pair is pre-seeded. Derived columns — calculated, materialized, joined — are all offerable as the grade or the density.</p>
 <ul>
   <li><b>Density</b> is a free expression (<code>SG</code>, <code>2.7</code>, <code>SG * PARTIAL</code>) — tonnage = density × block volume, with a declared density unit converted to t/m³ so tonnes are tonnes. Blank = count/volume.</li>
   <li><b>Units are declarations</b>, not display toggles: declare what each series' grade <i>is</i> (%, g/t, ppm, oz/t) and a <b>plot unit</b> — series convert onto the shared axis honestly, so a %-model overlays a ppm-sample set without lying.</li>
@@ -186,7 +263,7 @@
   <figcaption>Grade–tonnage: tonnage (left axis) falls and mean grade (right axis) rises as the cutoff climbs — the recoverable-resource trade-off at a glance. The rail holds the series, units, density expression, scope, and manual ranges.</figcaption>
 </figure>
 
-<h2 id="swath"><span class="n">7</span>Swath / drift</h2>
+<h2 id="swath"><span class="n">10</span>Swath / drift</h2>
 <p><b>Swath plot…</b> shows mean grade per band along a direction — the classic drift check for local bias. The direction can be the grid <b>axes</b> X/Y/Z, an oriented trio from <b>dip-direction / dip / rake</b> (across-structure · along-strike · down-dip), or a single <b>trend / plunge</b>. Series work exactly like grade–tonnage's: layer + column + declared unit + a free <b>weight expression</b> (blank = block volume) + an optional per-series row filter — so kriging vs nearest-neighbour vs declustered samples overlay in one plot.</p>
 <p>One <b>Run</b> streams everything once into fine bins; after that, <b>band width and offset re-bin instantly</b> — and they are <b>per direction</b>, so your E–W drift keeps its 25 m bands while the bench-by-bench Z profile keeps 10 m. Manual axis ranges, ⤓ png / ⧉ copy / <b>⧉ table</b> (band · count · weight · per-series mean, TSV) match grade–tonnage.</p>
 <p><b>Zebra</b> paints the alternate bands onto the 3D, so the slabs you see in space <i>are</i> the bins in the plot.</p>
@@ -201,7 +278,7 @@
   <figcaption>The band ghost: the bin under the cursor (shaded in the plot) is the slab outlined on the model. Drag a range and the menu offers <i>Select rows in…</i> — the plot becomes a selection tool.</figcaption>
 </figure>
 
-<h2 id="validate"><span class="n">8</span>Validate vs drillholes</h2>
+<h2 id="validate"><span class="n">11</span>Validate vs drillholes</h2>
 <p>Is the model consistent with the samples it was built from? <b>Validate vs drillholes…</b> takes a block model and a drillhole layer, <b>declusters</b> the sample grades (spatial sampling over-drills high grade, so a naïve sample mean is inflated), and reports the <b>global bias</b> (model mean vs declustered sample mean) plus a <b>model-vs-sample swath</b> along X/Y/Z.</p>
 <p class="note"><b>Note —</b> The validation window is <b>temporarily hidden from the menus</b> while it's rebuilt on the new analysis chassis (per-series units, weight expressions, scopes). The machinery it uses — declustering, sample swaths — is unchanged; meanwhile the swath window already overlays model vs drillhole-sample series directly.</p>
 <figure>
@@ -210,17 +287,17 @@
 </figure>
 <p class="note"><b>Note —</b> Samples are point support, blocks are block support, so a <i>global</i> grade offset between them can be real (change of support), not an error. The swaths are what flag <i>local</i>, conditional bias.</p>
 
-<h2 id="linked"><span class="n">9</span>Linked brushing</h2>
+<h2 id="linked"><span class="n">12</span>Linked brushing</h2>
 <p>The grade-tonnage and swath windows carry an <b>all / filt / sel</b> scope. <b>sel</b> follows the 3D selection: rubber-band a bench, a domain, or a suspect zone and the plot recomputes for just those blocks, live, as you brush. <b>filt</b> follows the <b>filter box</b> instead — type <code>LITO = "HEMATITE"</code> and every open analysis window scoped to it re-runs with each new expression. The analysis becomes interactive regional exploration, not a whole-model summary.</p>
 
-<h2 id="lineage"><span class="n">10</span>Lineage &amp; provenance</h2>
-<p>Every derived layer remembers <i>how it was made</i>. Opening a file is a leaf; a join, reconcile, or optimize wraps its source layers with the operation, its parameters, the build, and a timestamp — a tree. <b>Lineage…</b> shows that tree and exports a readable HTML <b>report</b> you can attach to a sign-off. Parquet exports carry the lineage embedded in the file, so the provenance travels <i>inside</i> the data.</p>
+<h2 id="lineage"><span class="n">13</span>Lineage &amp; provenance</h2>
+<p>Every derived layer <i>and every derived column</i> remembers <i>how it was made</i>. Opening a file is a leaf; a join, reconcile, or optimize wraps its source layers with the operation, its parameters, the build, and a timestamp — a tree. An estimated, broadcast, or joined column records its operation and inputs the same way, in the project's element manifests (see <a href="#parquet">the project store</a>). <b>Lineage…</b> shows the layer tree and exports a readable HTML <b>report</b> you can attach to a sign-off. Parquet exports carry the lineage embedded in the file, so the provenance travels <i>inside</i> the data.</p>
 <figure>
   <img src="shots/lineage.png" alt="The lineage window showing a derivation tree.">
   <figcaption>The provenance tree for a reconciliation: the result wraps the two opened models. Export it as an HTML report, or read it back from any Parquet micro wrote.</figcaption>
 </figure>
 
-<h2 id="grids"><span class="n">11</span>Grids</h2>
+<h2 id="grids"><span class="n">14</span>Grids &amp; surfaces</h2>
 <p>GeoTIFF / Surfer <code>.grd</code> / ESRI <code>.asc</code> open as heightfield layers — an elevation point cloud where cells are pickable records (huge DEMs decimate for display while the full grid stays for evaluation). A mesh right-click → <b>Rasterize to grid…</b> renders it onto a DEM (the surface↔grid converter, with fill / extrapolation for gaps). <b>New… → grid / block model</b> creates empty grids from parameters, covering a layer's bounds, or — <b>cover compatible models</b> — on a lattice that covers and is compatible with several models at once (the reconcile target). Grid layers export as ESRI ASCII.</p>
 <h3>Show a grid as a surface — relief, flat, and draped</h3>
 <p>Right-click a grid → <b>Reinterpret as → surface</b> renders it as a solid, smooth-shaded <b>relief</b> mesh — a DEM reads as terrain, not a gappy point cloud. In <b>Properties → Style</b> a surface then offers:</p>
@@ -229,30 +306,37 @@
   <li><b>Shape → flatten @ z</b> — turn a 2D data grid that has <i>no</i> elevation (a grade or geochem grid) into a <b>horizontal coloured sheet</b> at a chosen level, coloured by its value. A plan sheet, floating where you put it.</li>
   <li><b>Band</b> — for a <b>multi-band GeoTIFF</b>, a picker to choose which band is shown (a GeoTIFF's bands are like a grid's columns). Switch it anytime; it re-reads that sample.</li>
 </ul>
-<p>Surface, drape, flat, and band all <b>persist in the project</b> — reopen and the terrain comes back exactly as you left it.</p>
+<p>Surface, drape, flat, and band all <b>persist in the project</b> — reopen and the terrain comes back exactly as you left it. Sectioned surfaces draw their trace on the cut face (see <a href="#view">Sections</a>), and layer opacity applies — a translucent topo over an opened pit.</p>
 <h3>Surface tools: extend &amp; combine</h3>
 <p><b>Extend to footprint…</b> (right-click a surface — mesh or grid) grows it to cover a chosen extent: <b>nearest</b> holds the boundary z flat (the "extend the outer ring" move), <b>trend</b> continues the fitted dip. A topo that stops short of the model no longer leaves blocks unclassified — extend it, then flag above/below covers everything. <b>Combine surfaces…</b> rasterizes two or more surfaces onto one lattice and resolves the overlap by a rule: <b>min</b> (topo ∧ weathering base — take the lower), <b>max</b>, <b>first</b> (list order is priority — patch an end-of-month survey into the original topo), or <b>mean</b>. Both produce <b>grid layers</b> — exact and fast for flags and reconcile — with the rule recorded in the layer name and its lineage; export .asc anytime.</p>
 
-<h2 id="parquet"><span class="n">12</span>The Parquet project store</h2>
-<p><b>Store as Parquet…</b> (right-click a CSV/<code>.dm</code> model) converts it Morton-sorted, so each row-group's footer becomes a tight spatial index and queries skip whole row-groups they can't match. The dialog says exactly what will happen — per-layer rows, sizes, and a <b>keep original</b> option — and the same conversion runs <b>when you save a project</b> (a one-time, remembered choice: always / ask / off). Parquet is micro's project store. Painting stays editable through the reorder, the file self-describes (grid, extents, categories in its metadata, so it reopens with no discovery pass), and the whole thing round-trips. Parquet block models also open <b>streamed</b>, holding nothing decoded, with predicate and spatial push-down on the filter. Truly huge conversions (tens of millions of blocks) stream in file order rather than sorting in memory — the footers stay spatially tight because block-model files are written in grid order anyway.</p>
-<h3>Sidecars — the project remembers its scans</h3>
-<p>Files that live in a project folder get a small <code>.meta.json</code> <b>sidecar</b> written at save time: the discovery result (grid, extents, sub-blocking, categories — so reopening skips the sweep entirely, even on a 13&nbsp;GB <code>.dm</code>), the column statistics (the styling histograms wake up pre-scanned), and a <b>band index</b> that lets filters on CSV and <code>.dm</code> files skip whole stretches of the file that provably can't match. Sidecars are a cache: delete one and micro just re-scans.</p>
+<h2 id="parquet"><span class="n">15</span>The project store, inside</h2>
+<p>A micro project is a plain folder you can read without micro. This section is its anatomy — because auditability means being able to open the hood.</p>
+<h3>Parquet — the model store</h3>
+<p><b>Store as Parquet…</b> (right-click a CSV/<code>.dm</code> model) converts it Morton-sorted, so each row-group's footer becomes a tight spatial index and queries skip whole row-groups they can't match. The dialog says exactly what will happen — per-layer rows, sizes, and a <b>keep original</b> option — and the same conversion runs <b>when you save a project</b> (a one-time, remembered choice: always / ask / off). Painting stays editable through the reorder, the file self-describes (grid, extents, categories in its metadata, so it reopens with no discovery pass), and the whole thing round-trips. Parquet block models also open <b>streamed</b>, holding nothing decoded, with predicate and spatial push-down on the filter.</p>
+<h3>The element manifest — the data model on disk</h3>
+<p>Beside each data file the project writes <code>&lt;file&gt;.element.json</code>: a readable description of the element — its geometry interpretation, its record locations (a drillhole set lists <i>collars</i>, <i>vertices</i>, and one location per interval table, related by the hole id; a grid lists its lattice with coordinates implicit), its columns, and an <b>ops list</b>: every derivation (a calculation's expression, an estimate's method and parameters, a broadcast's source column, a join's inputs) recorded as data. The ops list is the audit trail — open the JSON and read exactly how every derived column came to be. It's also how the project restores: definitions reload from the manifest, and derived data that's missing or stale is simply re-derivable.</p>
+<h3>Column sidecars</h3>
+<p>Derived columns that carry data — estimates, materialized calculations, joins, broadcasts, painted domains — live in a <code>&lt;file&gt;.cols/</code> folder as <b>one Parquet file per column</b> (numeric as floats, categories as strings). Small, typed, self-describing, and readable by anything that reads Parquet.</p>
+<h3>Sidecars &amp; the memory budget</h3>
+<p>Files in a project also get a small <code>.meta.json</code> <b>sidecar</b> at save time: the discovery result (grid, extents, sub-blocking, categories — reopening skips the sweep entirely, even on a 13&nbsp;GB <code>.dm</code>), column statistics, and a <b>band index</b> that lets filters skip stretches of CSV/<code>.dm</code> files that provably can't match. Sidecars are a cache: delete one and micro re-scans.</p>
+<p>In memory, scanned columns <b>pin</b> into a budgeted cache (View → <b>Filter column cache</b>: off / auto / a size in MB — auto scales with your machine) so repeat filters and widget drags run with no file reads; derived-column values share the same budget and quietly reload from their sidecars when evicted. The memory panel (Help → memory) shows what's held.</p>
 
-<h2 id="figures"><span class="n">13</span>Figures &amp; decorations</h2>
+<h2 id="figures"><span class="n">16</span>Figures &amp; decorations</h2>
 <p><b>View → Decorations &amp; figure…</b> toggles a <b>scale bar</b>, <b>north arrow</b>, colour <b>legend</b>, and <b>title</b> onto the viewport — they show live and are captured verbatim by <b>Export figure</b> (at 1× / 2× / 3× scale for print). Legends are <b>per layer</b> — stack one per model when several share the view, each with its own title. Set a <b>background</b> (white or paper for print; the decorations flip to dark ink to stay readable). The exported PNG is what you see, ready for a report — and it pairs with the lineage report for a fully auditable figure. The analysis plots have their own <b>⤓ png / ⧉ copy / ⧉ table</b> buttons.</p>
 <figure>
   <img src="shots/figure.png" alt="The model on a white background with a scale bar, north arrow, legend, and title.">
   <figcaption>A report-ready figure: white background, scale bar, north arrow, grade legend, and title — composited onto the export exactly as shown.</figcaption>
 </figure>
 
-<h2 id="projects"><span class="n">14</span>Projects &amp; export</h2>
+<h2 id="projects"><span class="n">17</span>Projects &amp; export</h2>
 <p>In a Chromium browser, <b>File → Open project folder</b> keeps your layers, styling, filters, selections, camera, section, bookmarks &amp; scenes — and your open <b>analysis windows</b> (see <a href="#windows">Windows</a>) — in a plain folder (<code>project.json</code> + the data files). <span class="kbd">Ctrl+S</span> saves.</p>
-<p>The folder is organized <b>by data kind</b> — <code>models/</code> <code>drillholes/</code> <code>clouds/</code> <code>meshes/</code> <code>grids/</code> — with each file's sidecar beside it. <b>Tidy project folder</b> migrates an older flat project in place, and <b>Scan folder for new data</b> treats the folder as an inbox: drop a file in by hand (or from another tool) and micro picks it up. A loose layer (opened from outside the folder) offers <b>Copy into project</b> from its context menu — always with a sized consent step, never silently.</p>
-<p><b>Export rows…</b> writes any layer back out — scope <b>all</b> / <b>filter matches</b> / <b>selection</b>, every column including calculated and painted ones, as CSV or Parquet. Opening a <code>.dm</code> and exporting <i>is</i> the <code>.dm</code>→CSV (or →Parquet) converter.</p>
+<p>The folder is organized <b>by data kind</b> — <code>models/</code> <code>drillholes/</code> <code>clouds/</code> <code>meshes/</code> <code>grids/</code> — with each file's manifest and sidecars beside it (see <a href="#parquet">the project store</a>). <b>Tidy project folder</b> migrates an older flat project in place, and <b>Scan folder for new data</b> treats the folder as an inbox: drop a file in by hand (or from another tool) and micro picks it up. A loose layer (opened from outside the folder) offers <b>Copy into project</b> from its context menu — always with a sized consent step, never silently.</p>
+<p><b>Export rows…</b> writes any layer back out — scope <b>all</b> / <b>filter matches</b> / <b>selection</b>, every column including calculated, painted, estimated, and joined ones, as CSV or Parquet. Opening a <code>.dm</code> and exporting <i>is</i> the <code>.dm</code>→CSV (or →Parquet) converter.</p>
 <h3>Bookmarks &amp; scenes — save where you were looking</h3>
 <p>Two ways to save a view, under <b>View → Bookmarks</b> and <b>View → Scenes</b>. A <b>bookmark</b> is a <i>viewpoint</i> — camera + section — the quick nav aid: drop a few (<b>Save bookmark…</b>) and jump between them with the number keys <span class="kbd">1</span>–<span class="kbd">9</span>. A <b>scene</b> is the full <i>working state</i> — camera + section <i>plus</i> each layer's visibility, colour-by, and filter, so applying one puts the whole scene back the way it was (<b>Save scene…</b>, or <b>Save scene (with selection)…</b> to also pin the 3D selection). Applying a scene names any layer it wanted that isn't loaded, and skips it. Both live as small JSON files in the project folder — <code>bookmarks/</code> and <code>scenes/</code>, one per entry — so they travel with the project, are hand-editable, and get picked up by <b>Scan folder for new data</b>. There is no fly-through: applying a view snaps straight there.</p>
 <h3>Recipes — save an analysis to run again</h3>
-<p><b>save as recipe…</b> (next to Run in the grade–tonnage, swath, and stats windows, and in the decorations panel) writes the current setup as a named YAML file in <code>recipes/</code> — every series, unit, weight expression, band, scope, and range. A <b>figure recipe</b> captures the view + <b>section</b> + decorations + background + export scale; running it re-renders, exports the PNG, and restores everything it touched — the monthly plan-view figure regenerates itself. <b>Tools → Recipes</b> lists them; picking one opens the tool configured <b>and runs it</b>. Recipes are plain, commented, hand-editable files — copy one between projects, keep an office standard set, drop one into the folder and <b>Scan folder</b> picks it up. Series reference layers <b>by name</b>; if the named layer isn't loaded, one question asks which loaded model to use instead — that's the whole parameter system. A recipe is data, never code: the strict YAML subset can't carry a script.</p>
+<p><b>save as recipe…</b> (next to Run in the grade–tonnage, swath, and stats windows, in the Calculations window, and in the decorations panel) writes the current setup as a named YAML file in <code>recipes/</code> — every series, unit, weight expression, band, scope, and range; for calculations, the whole column set. A <b>figure recipe</b> captures the view + <b>section</b> + decorations + background + export scale; running it re-renders, exports the PNG, and restores everything it touched — the monthly plan-view figure regenerates itself. <b>Tools → Recipes</b> lists them; picking one opens the tool configured <b>and runs it</b>. Recipes are plain, commented, hand-editable files — copy one between projects, keep an office standard set, drop one into the folder and <b>Scan folder</b> picks it up. Series reference layers <b>by name</b>; if the named layer isn't loaded, one question asks which loaded model to use instead — that's the whole parameter system. A recipe is data, never code: the strict YAML subset can't carry a script.</p>
 <pre># micro recipe — grade-tonnage. Hand-edit freely; series reference layers by NAME.
 name: "Monthly GT"
 tool: "gt"
@@ -266,11 +350,11 @@ params:
 <h3>Mesh export</h3>
 <p><b>Export mesh…</b> (right-click a mesh layer; multi-selections and groups get <b>Export N meshes…</b>) writes <b>OBJ</b>, <b>PLY</b>, <b>MSH</b> (Leapfrog/ARANZ), or <b>LFM</b>. OBJ and LFM are multi-mesh — one named object per layer, with each layer's tint carried as the LFM colour — while PLY and MSH merge multiple layers into one mesh. Exports re-read the source geometry, so coordinates leave in <b>full double precision</b> (the PLY writer uses <code>double</code> — at UTM northings, float32 would cost half a metre). A Datamine wireframe pair in, an LFM out: micro is also a mesh-format converter.</p>
 
-<h2 id="windows"><span class="n">15</span>Windows</h2>
-<p>The analysis, table, and paint windows are all draggable and pinned to their layer (open several at once). <b>View → Windows…</b> lists every open window — click to focus, or <b>Cascade</b> and <b>Close all</b> to tidy up.</p>
+<h2 id="windows"><span class="n">18</span>Windows</h2>
+<p>The analysis, table, calculations, and paint windows are all draggable and pinned to their layer (open several at once). <b>View → Windows…</b> lists every open window — click to focus, or <b>Cascade</b> and <b>Close all</b> to tidy up.</p>
 <p>Grade–tonnage and swath setups <b>persist in the project</b>: every series, unit, weight expression, band width, scope, and manual range is snapshotted on each Run and on close, and a window left open when you save is <b>pinned</b> — reopening the project brings it back in place, configured, reading <i>restored — Run to compute</i>. Run stays manual, so a huge project never surprise-scans on open.</p>
 
-<h2 id="sealed"><span class="n">16</span>Security: Sealed</h2>
+<h2 id="sealed"><span class="n">19</span>Security: Sealed</h2>
 <p>micro is <b>Sealed</b>: it makes <b>no network requests</b> — a browser security policy (<code>connect-src 'none'</code>) blocks every connection, so there is no telemetry, no cloud, and no auto-update. Your data — point clouds, block models, drillholes — stays on your device. The build is <b>WASM-free</b> with the runtime in the clear, so the code is readable and auditable rather than opaque binary.</p>
 <figure>
   <img src="shots/sealed.png" alt="The Sealed badge popover explaining the no-network posture.">
@@ -278,10 +362,10 @@ params:
 </figure>
 <p>Verify the build and read how to bring it through approval at <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a>.</p>
 
-<h2 id="install"><span class="n">17</span>Install &amp; offline</h2>
+<h2 id="install"><span class="n">20</span>Install &amp; offline</h2>
 <p>micro runs at <a href="../">gentropic.org/micro</a> — install it as an app from the browser, or <a href="../micro.html" download>download <code>micro.html</code></a>: one file, no installer, that you can keep, e-mail, drop on a shared drive, or run fully offline by double-clicking. There is nothing to set up and nothing that phones home. Works in current Chrome / Edge / Firefox; project folders and mounts need a Chromium browser.</p>
 
-<h2 id="ref"><span class="n">A</span>Reference</h2>
+<h2 id="ref"><span class="n">A</span>Reference — keys &amp; the expression language</h2>
 <h3>Keyboard</h3>
 <table>
   <tr><th>Key</th><th>Action</th><th>Key</th><th>Action</th></tr>
@@ -301,11 +385,24 @@ params:
   <tr><td><span class="kbd">Esc</span></td><td>clear selection / cancel</td><td></td><td></td></tr>
 </table>
 <p class="no-print">A credit-card and A6 <a href="card.html">printable shortcut card</a> covers the same vocabulary, laid out for a laminator.</p>
-<h3>The filter language</h3>
-<p>Comparisons <code>&gt; &gt;= &lt; &lt;= = !=</code>, boolean <code>and</code> / <code>or</code> / <code>not</code>, <code>between a and b</code>, <code>in (a, b, c)</code>, over any column (text values in quotes). The same expressions define calculated columns. Autocomplete offers columns, functions, and category values — <span class="kbd">Tab</span> / <span class="kbd">Enter</span> accepts.</p>
+<h3>The expression language</h3>
+<p>One language everywhere — the filter, calculated columns, density and weight expressions, per-series filters, the hole filter. It is <b>total</b>: an expression can compare and compute but never loop, call out, or crash a scan — a blank input gives a blank result.</p>
+<table>
+  <tr><th>Comparisons</th><td><code>&gt; &gt;= &lt; &lt;= = !=</code> · <code>between a and b</code> · <code>in (a, b, c)</code> · <code>contains "txt"</code> · <code>like "A%_1"</code> (SQL wildcards) · <code>matches "regex"</code> · <code>is blank</code> / <code>is filled</code></td></tr>
+  <tr><th>Boolean</th><td><code>and</code> · <code>or</code> · <code>not</code> — with parentheses for grouping</td></tr>
+  <tr><th>Arithmetic</th><td><code>+ - * /</code> · <code>^</code> (power, Python-style precedence)</td></tr>
+  <tr><th>Numeric fns</th><td><code>round int abs floor ceil mod log log10 exp sqrt pow min max clamp bin</code></td></tr>
+  <tr><th>Blank handling</th><td><code>coalesce(a, b, …)</code> (first filled) · <code>nullif(x, v)</code> (sentinel → blank: <code>nullif(AU, -99)</code>) · <code>ifnum isnum isblank isfilled</code> · the <code>blank</code> literal</td></tr>
+  <tr><th>Text fns</th><td><code>upper lower trim len left right substr replace concat</code></td></tr>
+  <tr><th>Conditional</th><td><code>if(cond, then, else)</code> — nests into case ladders</td></tr>
+  <tr><th>Names</th><td>plain column names as-is (case-insensitive); anything with spaces or symbols in backticks: <code>`Assay Au ppm`</code> (the pandas convention)</td></tr>
+  <tr><th>Text values</th><td>in double quotes: <code>LITO = "HEMATITE"</code></td></tr>
+  <tr><th>Comments</th><td><code># to end of line</code> — expressions may span multiple lines</td></tr>
+</table>
+<p><code>not</code> is a true complement: <code>not (AU &gt; 5)</code> keeps blanks (they fail <code>AU &gt; 5</code>), so it is <i>not</i> the same as <code>AU &lt;= 5</code> — a deliberate, documented choice that makes filter + inverted-filter always cover the whole table. Autocomplete offers columns, functions, and category values — <span class="kbd">Tab</span> / <span class="kbd">Enter</span> accepts.</p>
 
 <footer>
-  <b>micro</b> — part of the Auditable project, <a href="https://gentropic.org" target="_blank" rel="noopener">Geoscientific Chaos Union</a>. Engine: <code>@gcu/condenser</code>; declustering: <code>@gcu/gsjs</code>. MIT.<br>
+  <b>micro</b> — part of the Auditable project, <a href="https://gentropic.org" target="_blank" rel="noopener">Geoscientific Chaos Union</a>. Engine: <code>@gcu/condenser</code>; expressions: <code>@gcu/expr</code>; declustering: <code>@gcu/gsjs</code>. MIT.<br>
   Screenshots are generated from the app by an automated harness, so they track the current build. Docs for micro — see the in-app <b>Help</b> menu for the terse quick reference.
 </footer>
 
