@@ -111,6 +111,9 @@
   <a href="#install"><span class="n">21</span>Install &amp; offline</a>
   <a href="#faq"><span class="n">22</span>Questions &amp; troubleshooting</a>
   <a href="#ref"><span class="n">A</span>Reference — keys &amp; the expression language</a>
+  <a href="#formats"><span class="n">B</span>Formats</a>
+  <a href="#glossary"><span class="n">C</span>Glossary</a>
+  <a href="#idx"><span class="n">D</span>Index</a>
 </nav>
 
 <h2 id="what"><span class="n">1</span>What micro is</h2>
@@ -124,6 +127,14 @@
   <li><b>Drillholes</b> — collar + survey + interval tables (desurveyed on load); a set can carry <b>several interval tables</b> (assays, lithology, geotech) sharing one geometry — see <a href="#dh">Drillholes</a></li>
 </ul>
 <p>Beyond viewing, it does the everyday resource-geology work: filter and section; derive columns by expression, lookup, broadcast, resampling, or interpolation; domain by a solid; join and reconcile model versions; grade–tonnage, swath, and validation analysis; figure export. All of it runs against the source file, offline, with the provenance kept.</p>
+<h3>How micro thinks</h3>
+<p>Four ideas explain almost everything else in this manual:</p>
+<ul>
+  <li><b>A dataset is an element.</b> A block model, a drillhole set, a grid — each is a table (or several, for drillholes) plus an interpretation of its geometry. The records are positional: row 173 of the file is block 173 everywhere, forever.</li>
+  <li><b>Columns are the atoms.</b> Source columns come from the file; derived columns — calculated, estimated, painted, joined, broadcast — behave identically once they exist. Everything downstream (filter, color, analysis, export) consumes columns and doesn't care where they came from.</li>
+  <li><b>Operations are recorded, not just run.</b> Every derivation is written down as data — the expression, the method and parameters, the inputs — in the project's element manifests (§16). What was done is always readable, and re-runnable.</li>
+  <li><b>Nothing is imported.</b> micro reads your files where they are, streams them, and keeps its own additions <i>beside</i> them — sidecar columns, manifests, caches. Delete micro's files and your data is exactly as it was.</li>
+</ul>
 <p class="tip"><b>Tip —</b> The fastest way to reach anything is the <b>command palette</b>: <span class="kbd">Ctrl/⌘K</span> (or the <span class="kbd">⌘K</span> button). It searches every action and shows only what applies to the layer you have selected.</p>
 
 <h2 id="start"><span class="n">2</span>Getting started</h2>
@@ -181,6 +192,10 @@
   <figcaption>A thin N–S slab. The cut face is a continuous colored wall — blocks are clipped against the plane, not dropped by centroid — and clicking the wall picks the block behind it.</figcaption>
 </figure>
 <p>Pick a preset (plan · N–S · E–W), press <span class="kbd">k</span> and drag a line (<b>⇧</b> snaps 15°, <b>⇧⌥</b> 5°), or type a plane's dip-direction + dip. <span class="kbd">x</span> toggles it, <span class="kbd">l</span> faces it, <span class="kbd">⇧L</span> faces its back. <span class="kbd">,</span> <span class="kbd">.</span> step one slab at a time, and <b>Ctrl+wheel</b> scrubs the position continuously; <b>Alt+wheel</b> thickens or thins the slab. <b>Follow</b> makes the camera ride along as you scrub; <b>2D</b> locks the view flat onto the section — drags pan instead of orbit — for section-by-section interpretation. <span class="kbd">m</span> then two clicks <b>measures</b> 3D · plan · Δz between records. Per layer, <b>Cut by sections</b> picks how the section treats it: <b>follow</b> (the slab), <b>keep front only</b> / <b>keep behind only</b> (a half-space split at the plane), or <b>don't cut</b>.</p>
+<h3>Picking &amp; the record panel</h3>
+<p>Click any block, point, or interval to <b>pick</b> it: the record panel (right) shows the full source row — every column, including calculated, estimated, painted, and broadcast ones, each labeled by kind. The <b>fields</b> picker (search + all/none) trims the panel to the columns you care about, per layer, and the choice persists with the project. Picking works on section walls too — the block behind the cut face answers. In the attribute table the link runs both ways: click a row to pick it in the scene, pick in the scene to highlight the row.</p>
+<h3>Measure</h3>
+<p><span class="kbd">m</span> arms the tape: click two records and read <b>3D distance · plan distance · Δz</b> in the status bar — bench heights, hole spacing, the plan width of a zone. The measurement anchors to picked records (not screen pixels), so it is exact in world coordinates and unaffected by vertical exaggeration. Press <span class="kbd">m</span> again or <span class="kbd">Esc</span> to put the tape away.</p>
 <h3>Block edges</h3>
 <p><span class="kbd">⇧B</span> (or View → block edges) outlines every block — the classic wireframe-over-solid look for checking sub-blocking or lattice alignment. Each layer can override the global toggle from its context menu (always / never / follow).</p>
 <h3>The attribute table &amp; the scan</h3>
@@ -467,6 +482,138 @@ params:
   <tr><th>Comments</th><td><code># to end of line</code> — expressions may span multiple lines</td></tr>
 </table>
 <p><code>not</code> is a true complement: <code>not (AU &gt; 5)</code> keeps blanks (they fail <code>AU &gt; 5</code>), so it is <i>not</i> the same as <code>AU &lt;= 5</code> — a deliberate, documented choice that makes filter + inverted-filter always cover the whole table. Autocomplete offers columns, functions, and category values — <span class="kbd">Tab</span> / <span class="kbd">Enter</span> accepts.</p>
+<h3>Expression cookbook</h3>
+<table>
+  <tr><th>Task</th><th>Expression</th></tr>
+  <tr><td>Sentinel values (−99) to blank</td><td><code>nullif(AU, -99)</code></td></tr>
+  <tr><td>Cap grades for a resource case</td><td><code>clamp(AU, 0, 30)</code></td></tr>
+  <tr><td>Merge two estimates, first filled wins</td><td><code>coalesce(AU_OK, AU_ID2)</code></td></tr>
+  <tr><td>Grade classes as a numeric code</td><td><code>if(FE &gt; 58, 2, if(FE &gt; 45, 1, 0))</code></td></tr>
+  <tr><td>Density by lithology</td><td><code>if(LITO = "HEM", 3.9, if(LITO = "ITA", 3.4, 2.8))</code></td></tr>
+  <tr><td>Iron equivalence</td><td><code>FE + 0.4 * MN</code></td></tr>
+  <tr><td>Tonnes per block (10×10×5 m)</td><td><code>SG * 500</code></td></tr>
+  <tr><td>Contained metal (%, per block)</td><td><code>FE / 100 * SG * 500</code></td></tr>
+  <tr><td>Normalize messy hole ids</td><td><code>upper(trim(BHID))</code></td></tr>
+  <tr><td>Everything except two domains</td><td><code>not (DOMAIN in ("WASTE", "AIR"))</code></td></tr>
+  <tr><td>Filter to assayed rows only</td><td><code>AU is filled and AU &gt; 0</code></td></tr>
+  <tr><td>Log-scale color for a skewed grade</td><td><code>log10(clamp(AU, 0.01, 100))</code></td></tr>
+  <tr><td>Flag suspicious duplicates of a cap value</td><td><code>FE = 68  # exactly at the clamp</code></td></tr>
+  <tr><td>Bench index from elevation (10 m benches)</td><td><code>floor(ZC / 10)</code></td></tr>
+</table>
+<p>Each of these works anywhere an expression is accepted: the filter box, a ƒ column, a density or weight slot, a per-series filter, the hole filter (over collar columns).</p>
+
+
+<h2 id="formats"><span class="n">B</span>Formats</h2>
+<table>
+  <tr><th>Format</th><th>Read</th><th>Write</th><th>Notes</th></tr>
+  <tr><td>CSV / TXT / DAT</td><td>✓</td><td>✓</td><td>delimiter sniffed (, ; tab); block models need coordinate columns; per-block <code>dX/dY/dZ</code> → sub-blocked</td></tr>
+  <tr><td>Parquet</td><td>✓</td><td>✓</td><td>streamed with predicate + spatial push-down; micro's own store (Morton-sorted, self-describing metadata)</td></tr>
+  <tr><td>Datamine <code>.dm</code></td><td>✓</td><td>—</td><td>block models + wireframe pairs (<code>…pt.dm</code>/<code>…tr.dm</code>); per-record <code>XINC/YINC/ZINC</code> → sub-blocked; export via CSV/Parquet</td></tr>
+  <tr><td>LAS</td><td>✓</td><td>—</td><td>point clouds; LAZ is not read (needs a compiled decoder — see §20)</td></tr>
+  <tr><td>PLY</td><td>✓</td><td>✓</td><td>points or mesh; writes <code>double</code> coordinates</td></tr>
+  <tr><td>XYZ / PTS</td><td>✓</td><td>—</td><td>plain point dumps</td></tr>
+  <tr><td>OBJ</td><td>✓</td><td>✓</td><td>meshes; multi-object on export</td></tr>
+  <tr><td>MSH (Leapfrog/ARANZ)</td><td>✓</td><td>✓</td><td>single mesh</td></tr>
+  <tr><td>LFM</td><td>✓</td><td>✓</td><td>multi-mesh with colors</td></tr>
+  <tr><td>GeoTIFF</td><td>✓</td><td>—</td><td>grids incl. multi-band + overviews (COG-friendly); no compiled codecs — LZW/deflate/PackBits</td></tr>
+  <tr><td>Surfer <code>.grd</code></td><td>✓</td><td>—</td><td>ASCII + binary</td></tr>
+  <tr><td>ESRI ASCII <code>.asc</code></td><td>✓</td><td>✓</td><td>the grid export</td></tr>
+</table>
+<p><b>Column conventions the sniffers look for</b> — coordinates: <code>XC/YC/ZC</code>, <code>X/Y/Z</code>, <code>EAST/NORTH/ELEV</code>-style names; sub-block sizes: <code>dX/dY/dZ</code>, <code>XINC/YINC/ZINC</code>, <code>DIMX/DIMY/DIMZ</code>; drillholes: a hole id (<code>BHID/HOLEID</code>-style), <code>FROM/TO</code> on intervals, <code>DEPTH/AT · AZ/BRG · DIP</code> on surveys. Everything the sniff decides is shown in <b>file info</b> (<span class="kbd">i</span>) and correctable there.</p>
+
+<h2 id="glossary"><span class="n">C</span>Glossary</h2>
+<table>
+  <tr><td><b>element</b></td><td>one dataset as micro models it: geometry interpretation + record locations + columns + recorded operations</td></tr>
+  <tr><td><b>location</b></td><td>a record space within an element — a block model's cells; a drillhole set's collars, trajectory vertices, and intervals</td></tr>
+  <tr><td><b>ƒ (calculated) column</b></td><td>a column defined by an expression, computed on the fly; nothing stored</td></tr>
+  <tr><td><b>materialized column</b></td><td>a derived column whose values are stored (a Parquet file in <code>.cols/</code>) — estimates, frozen ƒ, joins, broadcasts</td></tr>
+  <tr><td><b>painted column</b></td><td>a category column filled by hand (brush) or by a solid/surface classification</td></tr>
+  <tr><td><b>broadcast</b></td><td>landing a collar column on drillhole intervals by the hole id</td></tr>
+  <tr><td><b>op</b></td><td>a recorded, re-runnable derivation — the expression / method / inputs, stored as data in the element manifest</td></tr>
+  <tr><td><b>element manifest</b></td><td><code>&lt;file&gt;.element.json</code> — the readable description of an element and the audit trail of its ops</td></tr>
+  <tr><td><b>sidecar</b></td><td>a small file micro keeps beside yours: <code>.meta.json</code> caches, <code>.cols/</code> columns, display grids</td></tr>
+  <tr><td><b>pinned column</b></td><td>a column held in memory (under the cache budget) after a scan, so repeat filters skip the file</td></tr>
+  <tr><td><b>section / slab</b></td><td>the live cut: a plane with thickness; blocks clip against it analytically</td></tr>
+  <tr><td><b>trace</b></td><td>a sectioned mesh's intersection outline, drawn flattened on the cut face</td></tr>
+  <tr><td><b>isolate</b></td><td>what the filter does: matching records stay, everything else leaves render, table, and analysis</td></tr>
+  <tr><td><b>declustering</b></td><td>down-weighting spatially clustered samples so a mean isn't dragged by infill drilling</td></tr>
+  <tr><td><b>lineage</b></td><td>the derivation tree of a layer — what it was made from, with parameters and timestamps</td></tr>
+  <tr><td><b>Sealed</b></td><td>the security posture: no network requests possible, no compiled code, runtime readable</td></tr>
+  <tr><td><b>recipe</b></td><td>an analysis setup saved as commented YAML — re-runnable, hand-editable, data not code</td></tr>
+</table>
+
+<h2 id="idx"><span class="n">D</span>Index</h2>
+<div style="column-count:2;column-gap:2em;font-size:.88em">
+<p style="margin:.15em 0">anisotropy (interpolation) — §6</p>
+<p style="margin:.15em 0">attribute table — §4, §7</p>
+<p style="margin:.15em 0">autocomplete — §5, App. A</p>
+<p style="margin:.15em 0">background (figure) — §17</p>
+<p style="margin:.15em 0">band ghost — §11</p>
+<p style="margin:.15em 0">band index (filter push-down) — §16, §22</p>
+<p style="margin:.15em 0">block edges — §4</p>
+<p style="margin:.15em 0">bookmarks — §18</p>
+<p style="margin:.15em 0">breakpoints / classed ramp — §4</p>
+<p style="margin:.15em 0">broadcast (collar → intervals) — §7, C</p>
+<p style="margin:.15em 0">calculated (ƒ) columns — §6, App. A</p>
+<p style="margin:.15em 0">case table (if-ladder) — §6</p>
+<p style="margin:.15em 0">category legend — §4, §17</p>
+<p style="margin:.15em 0">color by ƒ — §6</p>
+<p style="margin:.15em 0">command palette — §1</p>
+<p style="margin:.15em 0">comments (#) — §5, App. A</p>
+<p style="margin:.15em 0">cutoffs — §10</p>
+<p style="margin:.15em 0">declustering — §12, C</p>
+<p style="margin:.15em 0">demo project — §2, §3</p>
+<p style="margin:.15em 0">density expression — §10, App. A</p>
+<p style="margin:.15em 0">desurvey — §7</p>
+<p style="margin:.15em 0">drillholes — §7</p>
+<p style="margin:.15em 0">element manifest — §16, C</p>
+<p style="margin:.15em 0">export (rows / mesh / grid) — §18, §15</p>
+<p style="margin:.15em 0">figures &amp; decorations — §17</p>
+<p style="margin:.15em 0">file info — §22, App. B</p>
+<p style="margin:.15em 0">filter — §5</p>
+<p style="margin:.15em 0">filter drawer (widgets) — §5</p>
+<p style="margin:.15em 0">flag / fraction by solid — §8</p>
+<p style="margin:.15em 0">grade–tonnage — §10</p>
+<p style="margin:.15em 0">grids — §15, App. B</p>
+<p style="margin:.15em 0">hole filter — §7</p>
+<p style="margin:.15em 0">interpolation (NN / IDW) — §6</p>
+<p style="margin:.15em 0">join (key / spatial) — §9</p>
+<p style="margin:.15em 0">keyboard — App. A</p>
+<p style="margin:.15em 0">lineage — §14</p>
+<p style="margin:.15em 0">linked brushing — §13</p>
+<p style="margin:.15em 0">materialized columns — §6, §16</p>
+<p style="margin:.15em 0">measure — §4</p>
+<p style="margin:.15em 0">memory budget / pin cache — §16, §22</p>
+<p style="margin:.15em 0">mesh export — §18</p>
+<p style="margin:.15em 0">offline / install — §21</p>
+<p style="margin:.15em 0">opacity — §4, §15</p>
+<p style="margin:.15em 0">painting a column — §8</p>
+<p style="margin:.15em 0">Parquet — §16, App. B</p>
+<p style="margin:.15em 0">phases (demo) — §2, §3</p>
+<p style="margin:.15em 0">picking / record panel — §4</p>
+<p style="margin:.15em 0">projects (folders) — §18</p>
+<p style="margin:.15em 0">ramps — §4</p>
+<p style="margin:.15em 0">recipes — §18</p>
+<p style="margin:.15em 0">reconcile (Δ map) — §9</p>
+<p style="margin:.15em 0">rename (batch) — §2</p>
+<p style="margin:.15em 0">scenes — §18</p>
+<p style="margin:.15em 0">Sealed — §20, C</p>
+<p style="margin:.15em 0">sections — §4</p>
+<p style="margin:.15em 0">selection (rectangle / lasso / through) — §8</p>
+<p style="margin:.15em 0">selection → column — §8</p>
+<p style="margin:.15em 0">sidecars — §16, C</p>
+<p style="margin:.15em 0">stats table — §4</p>
+<p style="margin:.15em 0">sub-blocked models — §2, §9, §22</p>
+<p style="margin:.15em 0">surfaces (relief / drape / flat) — §15</p>
+<p style="margin:.15em 0">swath / drift — §11</p>
+<p style="margin:.15em 0">trace (section) — §4, C</p>
+<p style="margin:.15em 0">units (declared) — §10, §11</p>
+<p style="margin:.15em 0">validation vs drillholes — §12</p>
+<p style="margin:.15em 0">vertical exaggeration — §2</p>
+<p style="margin:.15em 0">widgets (filter) — §5</p>
+<p style="margin:.15em 0">windows — §19</p>
+<p style="margin:.15em 0">zebra — §11</p>
+</div>
 
 <footer>
   <b>micro</b> — part of the Auditable project, <a href="https://gentropic.org" target="_blank" rel="noopener">Geoscientific Chaos Union</a>. Engine: <code>@gcu/condenser</code>; expressions: <code>@gcu/expr</code>; declustering: <code>@gcu/gsjs</code>. MIT.<br>
