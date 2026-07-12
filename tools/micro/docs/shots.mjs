@@ -334,5 +334,22 @@ await p.evaluate(() => {
 await shot('inputsdialog', { el: '.fwin[data-inputs-dialog]', wait: 700 });
 await p.evaluate(() => { document.querySelectorAll('.fwin').forEach((w) => w.remove()); });
 
+// 12 ── the routine run tracker mid-run (staged through the real component)
+await p.evaluate(() => {
+  document.querySelectorAll('.fwin').forEach((w) => w.remove());
+  const steps = [
+    { guard: 'no-overwrites' },
+    { recipe: 'refresh calc columns', _slug: 'refresh-calc-columns' },
+    { recipe: 'drift check', _slug: 'drift-check-fe' },
+    { recipe: 'drift check', _slug: 'drift-check-sio2' },
+    { recipe: 'drift check', _slug: 'drift-check-al2o3' },
+  ];
+  const t = window._micro.openRoutineTracker('month-end', steps, { output: { prefix: 'm-' } });
+  t.el.style.left = '260px'; t.el.style.top = '120px';
+  t.state(0, 'ok'); t.state(1, 'ok'); t.state(2, 'ok'); t.state(3, 'run');
+});
+await shot('routinetracker', { el: '.fwin[data-routine-run]', wait: 700 });
+await p.evaluate(() => { document.querySelectorAll('.fwin').forEach((w) => w.remove()); });
+
 console.log('done →', OUT);
 await b.close(); server.close();

@@ -423,6 +423,7 @@ params:
   <figcaption>The routine editor. The <b>for each row</b> table is the heart of it — variables are columns, runs are rows. <b>Preview</b> lists every step and every report path before anything runs.</figcaption>
 </figure>
 <p>Steps come in two shapes. A plain step runs one recipe, optionally layering <b>overrides</b> on top (a different cutoff count, a series pointed at another column — the <b>⋯</b> button on a step). A <b>for-each block</b> runs its steps once per <b>row of a parameter table</b>: add a variable for each thing that changes, a row for each run, and write <code>"$grade"</code> in a step wherever the value should land. <b>+ row</b> duplicates the last run so you only edit what differs. There is no scripting here — expansion is plain substitution, so the whole run is knowable before anything executes. That is exactly what <b>Preview</b> shows, and what the optional <b>guard</b> checks: stop before step one if any report it would write already exists.</p>
+<p>The preview is not just a listing — each line is <b>clickable</b>. Every for-each row expands to its own line, so clicking one opens that step's tool window <i>configured</i> with exactly that row's values baked in, and nothing runs: tune a drift check against one grade, save it back under the same recipe name, and the whole routine picks up the change. (Calc-column and figure steps act immediately, so those lines don't open.)</p>
 <p>A step doesn't have to point at a saved recipe at all. Give it <code>tool:</code> instead (<b>+ inline step</b> in the editor: <code>gt</code>, <code>swath</code>, <code>stats</code>, <code>figure</code>, <code>calccols</code>, or <code>interp</code>) and its whole setup lives right in the step — so a batch can be written from scratch, with nothing recorded first. Name a recipe when you'll reuse the setup elsewhere; inline it when it belongs to this routine alone.</p>
 <p>The editor writes a file like this (block style, strings quoted — hand-edit or write them from scratch if you prefer):</p>
 <pre># micro recipe — routine. Hand-edit freely; series reference layers by NAME.
@@ -444,6 +445,11 @@ params:
               col: "$grade"</pre>
 <p>The parameter table has two more spellings for hand-writers: <b>equal-length columns</b> (<code>each:</code> holding one list per variable, zipped row by row — never a cross-product; unequal lengths are an error, not a guess) and <code>from: "params.csv"</code>, which reads the rows from a table file in the project — keep the quarter's run matrix as a CSV and the routine stays two lines.</p>
 <p>Analysis steps (grade–tonnage, swath, stats) write their tables to <code>reports/&lt;date&gt;/&lt;step&gt;.tsv</code> — dated folders diff month over month — and <code>output:</code> takes <code>dir</code>, <code>prefix</code>, and <code>suffix</code> to steer the naming. Calc-column, interpolation, and figure steps run their engines directly. Routines never prompt mid-run: every referenced recipe and layer is checked up front and missing ones are named before anything starts; a failed step stops the routine visibly, its window left open for inspection.</p>
+<figure>
+  <img src="shots/routinetracker.png" alt="The run tracker window: five steps listed with green check marks on the finished ones, an arrow on the running one, step 4 of 5 in the title, and a Cancel button.">
+  <figcaption>The run tracker — the same expanded list, live. ✓ done, ▶ running, ✗ failed with its message in place; <b>Cancel</b> stops cleanly between steps.</figcaption>
+</figure>
+<p>A running routine opens the <b>run tracker</b>: the expanded step list with a live state per line and <i>step n of N</i> in the title. <b>Cancel</b> stops after the current step finishes — reports already written stay written, nothing is left half-done. The window stays open when the run ends (or stops, or is cancelled) as the run's record: what ran, what it wrote, where it stopped.</p>
 <h3>Ask-me-first recipes — <code>inputs:</code></h3>
 <figure>
   <img src="shots/inputsdialog.png" alt="A small generated dialog with three questions — block model, grade column, and cutoff count — and a Run button.">
@@ -656,6 +662,7 @@ params:
 <p style="margin:.15em 0">routine editor — §18</p>
 <p style="margin:.15em 0">inputs (ask-me-first recipes) — §18</p>
 <p style="margin:.15em 0">inline steps (routines) — §18</p>
+<p style="margin:.15em 0">run tracker (routines) — §18</p>
 <p style="margin:.15em 0">scenes — §18</p>
 <p style="margin:.15em 0">Sealed — §20, C</p>
 <p style="margin:.15em 0">sections — §4</p>

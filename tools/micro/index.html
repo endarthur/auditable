@@ -189,6 +189,15 @@
   .rw-ovr { width: 100%; box-sizing: border-box; font: 11px var(--mono); color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 6px; resize: vertical; min-height: 2.1em; margin-top: 4px; }
   .rw-ovr.err { border-color: #b0563a; }
   .rw-prev { white-space: pre; font: 11px var(--mono); color: var(--muted); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 6px 8px; margin-top: 6px; overflow: auto; max-height: 170px; }
+  .rw-prevline { padding: 1px 2px; white-space: pre; font: 11px var(--mono); color: var(--muted); }
+  .rw-prevline.open { cursor: pointer; }
+  .rw-prevline.open:hover { color: var(--text-hi); background: rgba(255,255,255,0.05); }
+  .rw-prevline.dim { color: var(--dim); font-style: italic; }
+  .rw-prevline.fail { color: var(--fault, #d07a5c); }
+  .rw-state { display: inline-block; width: 1.3em; color: var(--dim); }
+  .rw-state.run { color: var(--accent); }
+  .rw-state.ok { color: var(--ok); }
+  .rw-state.fail { color: var(--fault, #d07a5c); }
   #bar #filter:focus { outline: none; border-color: var(--info); }
   #bar #filter.err { border-color: #c0584a; }
   #bar #filter::placeholder { color: var(--faint); }
@@ -3474,6 +3483,64 @@ async function expandRoutine(params) {
 }
 const routineOutDir = (P) => (P.output && P.output.dir) || `reports/${new Date().toISOString().slice(0, 10)}`;
 const routineOutPath = (P, slug) => `${routineOutDir(P)}/${(P.output && P.output.prefix) || ''}${slug}${(P.output && P.output.suffix) || ''}.tsv`;
+// one expanded step → its display line. The expansion list is the routine's
+// spine: the editor previews it (clickable — open a step configured), the
+// run tracker walks it live, and afterwards it stands as the run's summary.
+function routineLineInfo(st, i, P) {
+  if (st.guard) return { text: `${i + 1}. guard — stop if any report below already exists`, guard: true };
+  const rc = st.recipe ? _recipes.find((x) => x.name === st.recipe) : null;
+  const tool = st.recipe ? rc && rc.tool : st.tool;
+  const label = st.recipe || (st.tool ? `${RECIPE_TOOLS[st.tool]} (inline)` : '(pick a recipe)');
+  const wr = ['gt', 'swath', 'stats'].includes(tool);
+  return {
+    text: `${i + 1}. ${label}${wr ? `  →  ${routineOutPath(P, st._slug)}` : ''}${st.recipe && !rc ? '   ⚠ recipe not found' : ''}`,
+    // openable = has a configure-don't-run window (calccols/figure act immediately)
+    openable: ['gt', 'swath', 'stats', 'interp'].includes(tool) && !(st.recipe && !rc),
+  };
+}
+// merge an expanded step into the op runRecipe takes (recipe params ⊕ overrides,
+// or the inline step's own params)
+function routineStepOp(st) {
+  const rc = st.recipe ? _recipes.find((x) => x.name === st.recipe) : null;
+  const extras = Object.fromEntries(Object.entries(st).filter(([k]) => !['recipe', 'tool', 'as', '_slug'].includes(k)));
+  return { name: rc ? rc.name : st._slug, tool: rc ? rc.tool : st.tool, params: rc ? { ...rc.params, ...extras } : extras };
+}
+// the run tracker: the expanded list with live per-step state (· ▶ ✓ ✗),
+// step n/N in the title, and a between-steps Cancel. Stays open afterwards
+// as the run's summary.
+function openRoutineTracker(rname, steps, P) {
+  const win = floatWin({ title: `routine — ${rname}`, sub: `step 0/${steps.length}`, x: innerWidth - 510, y: 74, w: 480, h: Math.min(120 + steps.length * 17, innerHeight - 130) });
+  win.el.dataset.routineRun = '1';
+  win.body.className += ' rw-body';
+  const lines = steps.map((st, i) => {
+    const row = document.createElement('div'); row.className = 'rw-prevline';
+    const ic = document.createElement('span'); ic.className = 'rw-state'; ic.textContent = '·';
+    row.append(ic, document.createTextNode(routineLineInfo(st, i, P).text));
+    win.body.appendChild(row);
+    return { row, ic };
+  });
+  const bar = document.createElement('div'); bar.className = 'rw-bar'; bar.style.marginTop = '6px';
+  const cancelB = document.createElement('button'); cancelB.className = 'awin-btn'; cancelB.textContent = 'Cancel';
+  cancelB.title = 'stop after the current step finishes (nothing half-written)';
+  let cancelled = false;
+  cancelB.onclick = () => { cancelled = true; cancelB.textContent = 'cancelling after this step…'; cancelB.disabled = true; };
+  const sum = document.createElement('span'); sum.className = 'lbl';
+  bar.append(cancelB, sum);
+  win.body.appendChild(bar);
+  return {
+    el: win.el,
+    cancelled: () => cancelled,
+    state(i, st2, msg) {
+      const L2 = lines[i]; if (!L2) return;
+      L2.ic.textContent = st2 === 'run' ? '▶' : st2 === 'ok' ? '✓' : st2 === 'fail' ? '✗' : '·';
+      L2.ic.className = 'rw-state ' + st2;
+      if (msg) { const m = document.createElement('div'); m.className = 'rw-prevline fail'; m.textContent = '     ' + msg; L2.row.after(m); }
+      win.sub.textContent = `step ${Math.min(i + 1, steps.length)}/${steps.length}`;
+      if (L2.row.scrollIntoView) L2.row.scrollIntoView({ block: 'nearest' });
+    },
+    done(msg) { cancelB.remove(); sum.textContent = msg; win.sub.textContent = ''; },
+  };
+}
 function routineLayerNames(rc) {                           // the layer names a recipe's params reference
   const p2 = rc.params || {};
   const names = [];
@@ -3515,15 +3582,21 @@ async function runRoutine(r) {
       if (exists) { $('#meta').textContent = `routine: guard stopped — ${outPath(st._slug)} already exists`; return; }
     }
   }
-  // run
+  // run — the tracker walks the expanded list live; Cancel stops between steps
+  const tracker = openRoutineTracker(r.name, steps, P);
   let n = 0, wrote = 0;
   for (const st of steps) {
-    if (st.guard) { n++; continue; }
-    n++;
-    const rc = st.recipe ? byName.get(st.recipe) : null;   // inline steps (`tool:`) have no recipe — the step IS the setup
-    const tool = rc ? rc.tool : st.tool;
-    const extras = Object.fromEntries(Object.entries(st).filter(([k]) => !['recipe', 'tool', 'as', '_slug'].includes(k)));
-    const merged = { name: rc ? rc.name : st._slug, tool, params: rc ? { ...rc.params, ...extras } : extras };
+    const idx = n; n++;
+    if (tracker.cancelled()) {
+      if (wrote) markProjectDirty();
+      tracker.done(`cancelled — ${idx} of ${steps.length} steps done, ${wrote} report${wrote === 1 ? '' : 's'} → ${outDir}/`);
+      $('#meta').textContent = `routine “${r.name}” cancelled after ${idx} step${idx === 1 ? '' : 's'}`;
+      return;
+    }
+    if (st.guard) { tracker.state(idx, 'ok'); continue; }
+    const merged = routineStepOp(st);
+    const tool = merged.tool;
+    tracker.state(idx, 'run');
     $('#meta').textContent = `routine “${r.name}” — step ${n}/${steps.length}: ${st._slug}…`;
     try {
       if (['gt', 'swath', 'stats'].includes(tool)) {
@@ -3546,12 +3619,16 @@ async function runRoutine(r) {
         runRecipe(merged, true);
         await new Promise((r2) => setTimeout(r2, 400));     // engine steps settle; figure runs its own flow
       } else throw new Error(`unsupported tool in a routine: ${tool}`);
+      tracker.state(idx, 'ok');
     } catch (e) {
+      tracker.state(idx, 'fail', e.message);
+      tracker.done(`stopped at step ${n} — the step's window is left open`);
       $('#meta').textContent = `routine “${r.name}” STOPPED at step ${n} (${st._slug}) — ${e.message}`;
       return;
     }
   }
   markProjectDirty();
+  tracker.done(`${n} steps done, ${wrote} report${wrote === 1 ? '' : 's'} → ${outDir}/`);
   $('#meta').textContent = `routine “${r.name}” — ${n} steps done, ${wrote} report${wrote === 1 ? '' : 's'} → ${outDir}/`;
 }
 // plain JS ⇄ @gcu/yaml AST (the emitter is AST-only; nulls are simply omitted)
@@ -3941,17 +4018,41 @@ function openRoutineWindow(r0) {
   const prev = document.createElement('div'); prev.className = 'rw-prev'; prev.style.display = 'none'; foot.appendChild(prev);
   prevB.onclick = async () => {
     prev.style.display = '';
+    prev.textContent = '';
     try {
-      const P2 = collect();
+      let P2 = collect();
+      // resolve the routine's own inputs from defaults / last answers, so the
+      // preview (and click-to-open) shows what a run would actually do
+      const goodInputs = (model.inputs || []).filter((x) => x && x.name);
+      const assumed = [], unresolved = [];
+      if (goodInputs.length) {
+        const values = {};
+        for (const inp of goodInputs) {
+          const v = r0 && r0._lastInputs && r0._lastInputs[inp.name] !== undefined ? r0._lastInputs[inp.name] : inp.default;
+          if (v !== undefined) { values[inp.name] = v; assumed.push(`${inp.name}=${v}`); }
+          else unresolved.push(inp.name);
+        }
+        P2 = { ...P2, steps: routineSubst(P2.steps, values) };
+      }
       const st2 = await expandRoutine(P2);
-      prev.textContent = st2.map((st, i) => {
-        if (st.guard) return `${i + 1}. guard — stop if any report below already exists`;
-        const rc = _recipes.find((x) => x.name === st.recipe);
-        const tool = st.recipe ? rc && rc.tool : st.tool;
-        const wr = ['gt', 'swath', 'stats'].includes(tool);
-        const label = st.recipe || (st.tool ? `${RECIPE_TOOLS[st.tool]} (inline)` : '(pick a recipe)');
-        return `${i + 1}. ${label}${wr ? `  →  ${routineOutPath(P2, st._slug)}` : ''}${st.recipe && !rc ? '   ⚠ recipe not found' : ''}`;
-      }).join('\n') || '(no steps yet)';
+      if (assumed.length || unresolved.length) {
+        const a = document.createElement('div'); a.className = 'rw-prevline dim';
+        a.textContent = (assumed.length ? `assuming ${assumed.join(', ')} (defaults / last answers)` : '')
+          + (unresolved.length ? `${assumed.length ? ' · ' : ''}no value yet for ${unresolved.map((x) => '$' + x).join(', ')}` : '');
+        prev.appendChild(a);
+      }
+      st2.forEach((st, i) => {
+        const info = routineLineInfo(st, i, P2);
+        const line = document.createElement('div');
+        line.className = 'rw-prevline' + (info.openable ? ' open' : '');
+        line.textContent = info.text;
+        if (info.openable) {
+          line.title = 'open this step configured — the row values baked in, nothing runs';
+          line.onclick = () => runRecipe(routineStepOp(st), false);
+        }
+        prev.appendChild(line);
+      });
+      if (!st2.length) prev.textContent = '(no steps yet)';
     } catch (e) { prev.textContent = '⚠ ' + e.message; }
   };
   async function save() {
@@ -15513,7 +15614,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, openRoutineWindow, openInputsDialog, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

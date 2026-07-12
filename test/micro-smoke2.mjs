@@ -1177,6 +1177,36 @@ await p.close();
   });
   chk(`inline step ran from scratch (${inl.names}) + routine inputs gate the run`,
     /1 report/.test(inl.meta) && /inline-fe\.tsv/.test(inl.names) && inl.dlg);
+
+  // §21e — the run tracker walks the expansion live and stays as the summary;
+  // preview lines open a specific parameterization row configured (not run)
+  const trk = await pr.evaluate(async () => {
+    document.querySelectorAll('.fwin').forEach((w) => w.remove());
+    await window._micro.runRoutine({ name: 'trk', tool: 'routine', params: { output: { prefix: 'k-' }, steps: [
+      { each: [{ g: 'FE' }], steps: [{ tool: 'gt', series: [{ layer: 'm.csv', col: '$g' }], nCut: 4 }] },
+    ] } });
+    const el = document.querySelector('.fwin[data-routine-run]');
+    const oks = el ? el.querySelectorAll('.rw-state.ok').length : 0;
+    const summary = el ? [...el.querySelectorAll('.lbl')].map((x) => x.textContent).join(' ') : '';
+    document.querySelectorAll('.fwin').forEach((w) => w.remove());
+    window._micro.openRoutineWindow({ name: 'trk', tool: 'routine', file: 'recipes/trk.yaml', params: { steps: [
+      { each: [{ g: 'FE' }, { g: 'SG' }], steps: [{ tool: 'gt', series: [{ layer: 'm.csv', col: '$g' }] }] },
+    ] } });
+    const ed = document.querySelector('.fwin[data-routine]');
+    [...ed.querySelectorAll('button')].find((x) => x.textContent === 'Preview').click();
+    await new Promise((r) => setTimeout(r, 300));
+    const lines = [...ed.querySelectorAll('.rw-prevline')];
+    const sg = lines.find((x) => /-sg\.tsv/.test(x.textContent) && x.classList.contains('open'));
+    if (sg) sg.click();
+    await new Promise((r) => setTimeout(r, 800));
+    const w = [...document.querySelectorAll('.fwin')].find((x) => !x.dataset.routine && /grade/i.test(x.querySelector('.fwin-head .t')?.textContent || ''));
+    const cfg = w ? [...w.querySelectorAll('select')].map((x) => x.value).join(',') : '';
+    const ran = w && w._tableTSV && !!w._tableTSV();
+    document.querySelectorAll('.fwin').forEach((x) => x.remove());
+    return { oks, summary, clicked: !!sg, cfg, ran };
+  });
+  chk(`run tracker (✓×${trk.oks}, "${trk.summary.trim()}") + preview click opens the SG row configured (${trk.cfg})`,
+    trk.oks === 1 && /1 report/.test(trk.summary) && trk.clicked && /SG/.test(trk.cfg) && !trk.ran);
   await pr.close();
 }
 
