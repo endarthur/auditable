@@ -7101,29 +7101,8 @@ async function applyBlockFilter(expr) {
     window.__pinUsed = false;
     if (chunkF && readCols.length && readCols.every((nm) => pinGet(AL, nm))) {
       window.__pinUsed = true;
-      const total = header.count, scr = {};
-      const gx = pinGet(AL, P.names[m.x]), gy = pinGet(AL, P.names[m.y]), gz = pinGet(AL, P.names[m.z]);
-      const gch = m.chan != null ? pinGet(AL, P.names[m.chan]) : null, gca = m.cat != null ? pinGet(AL, P.names[m.cat]) : null;
-      for (let at = 0; at < total; at += (1 << 18)) {
-        const n = Math.min(1 << 18, total - at);
-        const byName = {};
-        readCols.forEach((nm, ci2) => { byName[nm] = pinWindow(pinGet(AL, nm), at, n, scr[ci2] || (scr[ci2] = [])); });
-        const ccols = censusChunkCols(AL, header, byName, at, n, needL, calcChunkFns);
-        const mk = chunkF(ccols, n);
-        const wX = pinWindow(gx, at, n), wY = pinWindow(gy, at, n), wZ = pinWindow(gz, at, n);
-        const wCh = gch ? pinWindow(gch, at, n) : null, wCa = gca ? pinWindow(gca, at, n, scr._c || (scr._c = [])) : null;
-        for (let i = 0; i < n; i++) {
-          if (mk[i] !== 1) continue;
-          const xv = +wX[i], yv = +wY[i], zv = +wZ[i];
-          if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
-          const r = at + i;
-          mask[r] = 1; hits++;
-          const code = catCode && wCa ? (catCode.get(String(wCa[i] ?? '').trim()) ?? 0) : 0;
-          collect(xv, yv, zv, wCh ? +wCh[i] : 0, code, r);
-        }
-        rec = at + n;
-        await new Promise((r2) => setTimeout(r2)); if (epoch !== _filterEpoch) return;
-      }
+      const got = await pinnedSweep(AL, header, m, readCols.map((nm) => ({ k: nm })), needL, calcChunkFns, chunkF, { mask, collect, catCode, alive: () => epoch === _filterEpoch });
+      if (got < 0) return; hits += got; rec = header.count;
     } else {
     const tee = (chunkF && pinBudgetBytes() > 0) ? {} : null;   // tee the scan into the pin cache
     let start = 0, skipped = 0;
@@ -7190,16 +7169,32 @@ async function applyBlockFilter(expr) {
     // the full decode (matches the parquet column-prune rule).
     const { columnBatches, recordBatches } = await openDmModel(blob);
     let ast = null; try { ast = parse(expr); } catch { ast = null; }
-    const hasCalc = !!((AL && AL.calcCols && AL.calcCols.length) || (AL && AL.paintCols && AL.paintCols.length));
     let colIdxs = null;
-    if (ast && !hasCalc) {
+    const needL = ast ? expandedDeps(AL, ast) : null;       // calc-expanded: projection works WITH derived columns now
+    if (ast) {
       const need = new Set([m.x, m.y, m.z]);
       if (m.cat != null) need.add(m.cat);
       if (m.chan != null) need.add(m.chan);
       const lower = header.columns.map((n) => String(n).toLowerCase());
-      for (const d of deps(ast)) { const i = lower.indexOf(String(d).toLowerCase()); if (i >= 0) need.add(i); }
+      for (const d of needL) { const i = lower.indexOf(d); if (i >= 0) need.add(i); }
       colIdxs = [...need];
     }
+    // TIER 3: pinned -> no file read; else the projected scan TEES into the cache
+    window.__pinUsed = false;
+    const censusSchema = schemaExt(AL, header);
+    const chunkF = ast ? compileChunkBool(ast, censusSchema, { decimal: '.' }) : null;
+    const baseLen = header.columns.length, paintLen = ((AL && AL.paintCols) || []).length;
+    const calcChunkFns = (ast && AL && AL.calcCols && AL.calcCols.length)
+      ? calcOrder(AL).filter((it) => !needL || needL.has(String(it.c.name).toLowerCase()))
+          .map((it) => { let cfn; try { cfn = compileChunk(it.c.expr, censusSchema, { decimal: '.' }); } catch { cfn = () => ({ t: 'raw', buf: [] }); } return { slot: baseLen + paintLen + it.idx, fn: cfn }; })
+      : null;
+    const pinNames = colIdxs ? colIdxs.map((bi) => ({ k: header.columns[bi], bi })) : [];
+    if (chunkF && pinNames.length && pinNames.every((tn) => pinGet(AL, tn.k))) {
+      window.__pinUsed = true;
+      const got = await pinnedSweep(AL, header, m, pinNames, needL, calcChunkFns, chunkF, { mask, collect, catCode, alive: () => epoch === _filterEpoch });
+      if (got < 0) return; hits += got; rec = header.count;
+    }
+    if (!window.__pinUsed) {
     // BAND PUSHDOWN: sidecar per-64k min/max per column → skip whole page-runs
     // the predicate provably can't match (parquet's row-group skip on .dm).
     // Sound/conservative — pqGroupCanMatch keeps anything it can't decide.
@@ -7219,7 +7214,23 @@ async function applyBlockFilter(expr) {
       return keep;
     } : null;
     if (colIdxs) {
+      const tee = (chunkF && pinBudgetBytes() > 0) ? {} : null;
       for await (const { recStart, count, cols } of columnBatches(colIdxs, { shouldRead })) {
+        if (tee) for (const tn of pinNames) {
+          let e = tee[tn.k];
+          if (e === undefined) {
+            const ty = (censusSchema.find((c2) => c2.name === tn.k) || {}).type;
+            e = tee[tn.k] = ty === 'number' ? { data: new Float64Array(header.count).fill(NaN) } : { codes: new Uint16Array(header.count), dict: [''], map: new Map([['', 0]]) };
+          }
+          if (e === null) continue;
+          const src = cols[tn.bi];
+          if (e.data) { for (let k = 0; k < count; k++) { const v = src[k]; const x = +v; e.data[recStart + k] = (v == null || v === '' || !Number.isFinite(x)) ? NaN : x; } }
+          else for (let k = 0; k < count; k++) {
+            const sv = src[k] == null ? '' : String(src[k]); let c = e.map.get(sv);
+            if (c === undefined) { if (e.dict.length > 65535) { tee[tn.k] = null; break; } c = e.dict.length; e.dict.push(sv); e.map.set(sv, c); }
+            e.codes[recStart + k] = c;
+          }
+        }
         for (let k = 0; k < count; k++) {
           const r = recStart + k;
           const vals = new Array(header.columns.length);
@@ -7234,6 +7245,7 @@ async function applyBlockFilter(expr) {
         await new Promise((r2) => setTimeout(r2));
         if (epoch !== _filterEpoch) return;
       }
+      if (tee && !bandsSkipped && epoch === _filterEpoch) { for (const tn of pinNames) { const e = tee[tn.k]; if (!e) continue; delete e.map; pinPut(AL, tn.k, e); } }   // pin only COMPLETE scans
       window.__dmBandsSkipped = bandsSkipped;              // smoke hook
       if (bandsSkipped) $('#meta').textContent = `filter: ${bandsSkipped} of ${bandsTotal} page-runs skipped by the sidecar index…`;
     } else {
@@ -7250,6 +7262,7 @@ async function applyBlockFilter(expr) {
         await new Promise((r) => setTimeout(r));
         if (epoch !== _filterEpoch) return;
       }
+    }
     }
   } else {
     let teeAcc = null; const pinNames = [];                 // pin-cache tee state (set up below)
@@ -7291,29 +7304,8 @@ async function applyBlockFilter(expr) {
     }
     if (chunkF && pinNames.length && pinNames.every((tn) => pinGet(AL, tn.k))) {
       window.__pinUsed = true;
-      const total = header.count, scr = {};
-      const gx = pinGet(AL, header.columns[m.x]), gy = pinGet(AL, header.columns[m.y]), gz = pinGet(AL, header.columns[m.z]);
-      const gch = m.chan != null ? pinGet(AL, header.columns[m.chan]) : null, gca = m.cat != null ? pinGet(AL, header.columns[m.cat]) : null;
-      for (let at = 0; at < total; at += (1 << 18)) {
-        const n = Math.min(1 << 18, total - at);
-        const byName = {};
-        pinNames.forEach((tn, ci2) => { byName[tn.k] = pinWindow(pinGet(AL, tn.k), at, n, scr[ci2] || (scr[ci2] = [])); });
-        const ccols = censusChunkCols(AL, header, byName, at, n, needL, calcChunkFns);
-        const mk = chunkF(ccols, n);
-        const wX = pinWindow(gx, at, n), wY = pinWindow(gy, at, n), wZ = pinWindow(gz, at, n);
-        const wCh = gch ? pinWindow(gch, at, n) : null, wCa = gca ? pinWindow(gca, at, n, scr._c || (scr._c = [])) : null;
-        for (let i = 0; i < n; i++) {
-          if (mk[i] !== 1) continue;
-          const xv = +wX[i], yv = +wY[i], zv = +wZ[i];
-          if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
-          const r = at + i;
-          mask[r] = 1; hits++;
-          const code = catCode && wCa ? (catCode.get(String(wCa[i] ?? '').trim()) ?? 0) : 0;
-          collect(xv, yv, zv, wCh ? +wCh[i] : 0, code, r);
-        }
-        rec = at + n;
-        await new Promise((r2) => setTimeout(r2)); if (epoch !== _filterEpoch) return;
-      }
+      const got = await pinnedSweep(AL, header, m, pinNames, needL, calcChunkFns, chunkF, { mask, collect, catCode, alive: () => epoch === _filterEpoch });
+      if (got < 0) return; hits += got; rec = header.count;
     }
     if (!window.__pinUsed) {
     const BB = AL && AL._bands, idxC = header.index;
@@ -11998,6 +11990,35 @@ function pinWindow(e, start, n, scratch) {
   const a = scratch && scratch.length >= n ? scratch : new Array(n);
   for (let i = 0; i < n; i++) a[i] = e.dict[e.codes[start + i]] ?? '';   // dict: decode a window
   return a;
+}
+// the shared TIER-3 sweep: evaluate the filter over PINNED columns in 256K
+// windows (no file read). Returns hits, or -1 if superseded (caller returns).
+async function pinnedSweep(AL, header, m, names, needL, calcChunkFns, chunkF, o) {
+  const total = header.count, scr = {};
+  const cn = (i) => header.columns[i];
+  const gx = pinGet(AL, cn(m.x)), gy = pinGet(AL, cn(m.y)), gz = pinGet(AL, cn(m.z));
+  const gch = m.chan != null ? pinGet(AL, cn(m.chan)) : null, gca = m.cat != null ? pinGet(AL, cn(m.cat)) : null;
+  let hits = 0;
+  for (let at = 0; at < total; at += (1 << 18)) {
+    const n = Math.min(1 << 18, total - at);
+    const byName = {};
+    names.forEach((t, ci) => { byName[t.k] = pinWindow(pinGet(AL, t.k), at, n, scr[ci] || (scr[ci] = [])); });
+    const ccols = censusChunkCols(AL, header, byName, at, n, needL, calcChunkFns);
+    const mk = chunkF(ccols, n);
+    const wX = pinWindow(gx, at, n), wY = pinWindow(gy, at, n), wZ = pinWindow(gz, at, n);
+    const wCh = gch ? pinWindow(gch, at, n) : null, wCa = gca ? pinWindow(gca, at, n, scr._c || (scr._c = [])) : null;
+    for (let i = 0; i < n; i++) {
+      if (mk[i] !== 1) continue;
+      const xv = +wX[i], yv = +wY[i], zv = +wZ[i];
+      if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+      const r = at + i;
+      o.mask[r] = 1; hits++;
+      const code = o.catCode && wCa ? (o.catCode.get(String(wCa[i] ?? '').trim()) ?? 0) : 0;
+      o.collect(xv, yv, zv, wCh ? +wCh[i] : 0, code, r);
+    }
+    await new Promise((r2) => setTimeout(r2)); if (!o.alive()) return -1;
+  }
+  return hits;
 }
 async function sampleRow(L) {
   const d = L.docs || {};
