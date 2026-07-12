@@ -207,7 +207,15 @@ export const asAst = (x) => (typeof x === 'string' ? parse(x) : x);
 // Best-effort (tolerant lexer) so it works on a half-typed expression. kinds:
 // column · string · number · operator · punct · keyword · function · boolean · error.
 export function tokenize(src) {
-  return lexAll(String(src == null ? '' : src), true).map((t) => {
+  const raw = lexAll(String(src == null ? '' : src), true);
+  // one-token lookaround (skipping comments) so classification matches the PARSER:
+  // a CALLFNS word is a 'function' only when a '(' follows (else it's a column,
+  // e.g. a column literally named `round`); `blank` is a 'keyword' only inside
+  // `is [not] blank` — elsewhere it's the value LITERAL (painted like true/false).
+  const prevAt = (j) => { for (let q = j - 1; q >= 0; q--) if (raw[q].k !== 'comment') return q; return -1; };
+  const nextAt = (j) => { for (let q = j + 1; q < raw.length; q++) if (raw[q].k !== 'comment') return q; return -1; };
+  const wordAt = (q) => (q >= 0 && raw[q].k === 'word' ? String(raw[q].v).toLowerCase() : null);
+  return raw.map((t, i) => {
     let kind;
     if (t.k === 'err') kind = 'error';
     else if (t.k === 'comment') kind = 'comment';
@@ -215,7 +223,16 @@ export function tokenize(src) {
     else if (t.k === 'num') kind = 'number';
     else if (t.k === 'field') kind = 'column';
     else if (t.k === 'op') kind = (t.v === '(' || t.v === ')' || t.v === ',') ? 'punct' : 'operator';
-    else { const lw = String(t.v).toLowerCase(); kind = (lw === 'true' || lw === 'false') ? 'boolean' : CALLFNS[lw] ? 'function' : RESERVED.has(lw) ? 'keyword' : 'column'; }
+    else {
+      const lw = String(t.v).toLowerCase();
+      if (lw === 'true' || lw === 'false') kind = 'boolean';
+      else if (lw === 'blank') {
+        const p1 = prevAt(i), w1 = wordAt(p1);
+        kind = (w1 === 'is' || (w1 === 'not' && wordAt(prevAt(p1)) === 'is')) ? 'keyword' : 'boolean';
+      }
+      else if (CALLFNS[lw]) { const n = nextAt(i); kind = (n >= 0 && raw[n].k === 'op' && raw[n].v === '(') ? 'function' : 'column'; }
+      else kind = RESERVED.has(lw) ? 'keyword' : 'column';
+    }
     return { kind, value: src.slice(t.start, t.end), start: t.start, end: t.end };
   });
 }

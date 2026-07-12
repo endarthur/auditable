@@ -271,8 +271,15 @@ test('v0.2 lexical — backticks tokenize as columns; ^ and ** as operators', ()
   assert.ok(tk2.some((t) => t.kind === 'operator' && t.value === '**'));
   // comments tokenize as their own kind (the highlight overlay dims them)
   assert.ok(tokenize('AU > 1 # cutoff').some((tk) => tk.kind === 'comment' && tk.value === '# cutoff'));
-  // blank literal is a keyword for highlighting
-  assert.ok(tokenize('x = blank').some((t) => t.kind === 'keyword' && t.value === 'blank'));
+  // blank: a keyword only inside `is [not] blank`; a value LITERAL elsewhere
+  assert.ok(tokenize('x is blank').some((t) => t.kind === 'keyword' && t.value === 'blank'));
+  assert.ok(tokenize('x is not blank').some((t) => t.kind === 'keyword' && t.value === 'blank'));
+  assert.ok(tokenize('x = blank').some((t) => t.kind === 'boolean' && t.value === 'blank'));
+  assert.ok(tokenize('if(a = -99, blank, a)').some((t) => t.kind === 'boolean' && t.value === 'blank'));
+  // a CALLFNS word is a function ONLY when called — a column named `round` stays a column
+  assert.ok(tokenize('round(x)').some((t) => t.kind === 'function' && t.value === 'round'));
+  assert.ok(tokenize('round + 1').some((t) => t.kind === 'column' && t.value === 'round'));
+  assert.ok(tokenize('round  # note\n(x)').some((t) => t.kind === 'function' && t.value === 'round'));   // lookahead skips comments
   // complete() emits the backtick form for awkward names
   const c = complete('', 0, { columns: ['grade', 'Cu (ppm)'] });
   assert.ok(c.options.some((o) => o.value === '`Cu (ppm)`'));
