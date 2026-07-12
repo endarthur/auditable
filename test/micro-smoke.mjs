@@ -343,6 +343,21 @@ await p.evaluate(() => { window.__pqFilterSkipped = 0; const i = document.queryS
 await p.waitForFunction(() => window._micro.layers().find((L) => L.name === 'model.parquet')._filterMask || document.querySelector('#filter').classList.contains('err'), null, { timeout: 30000 });
 const pqFilt = await p.evaluate(() => { const L = window._micro.layers().find((x) => x.name === 'model.parquet'); let h = 0; for (const m of L._filterMask || []) if (m) h++; return { h, skipped: window.__pqFilterSkipped || 0, groups: L.docs.blockDoc.parquet.rowGroups.length }; });
 chk(`Parquet filter ZC>655 → ${pqFilt.h} hits, ${pqFilt.skipped}/${pqFilt.groups} groups skipped by the footer`, pqFilt.h === 600 && pqFilt.skipped > 0);
+// ── the PIN CACHE (tier 3): a complete scan tees columns; the re-filter runs with NO file read ──
+const runF = async (expr) => {
+  await p.evaluate((e) => { const i = document.querySelector('#filter'); i.value = e; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); }, expr);
+  await p.waitForFunction(() => /filter:|match/.test(document.querySelector('#meta').textContent), null, { timeout: 30000 });
+  await p.waitForTimeout(250);
+  return p.evaluate(() => { const L = window._micro.layers().find((x) => x.name === 'model.parquet'); let h = 0; for (const m of L._filterMask || []) if (m) h++; return { h, pinned: window.__pinUsed === true, stats: window._micro.pinStats() }; });
+};
+const f1p = await runF('ZC > -1e9');                        // no groups skippable → complete scan → TEE
+chk(`pin tee: a complete parquet scan pins its columns (${(f1p.stats.bytes / 1024).toFixed(0)} KB pinned, scanned from file ${!f1p.pinned})`, !f1p.pinned && f1p.stats.bytes > 0);
+const f2p = await runF('ZC > 655');                          // re-filter → evaluated from PINNED columns
+chk(`pin refine: the re-filter runs from pinned columns, byte-exact (${f2p.h} hits, pinned path ${f2p.pinned})`, f2p.pinned && f2p.h === 600);
+await p.evaluate(() => window._micro.setPinBudget('off'));   // the OFF switch: cache cleared, back to scanning
+const f3p = await runF('ZC > 655');
+chk(`pin off-switch: budget 'off' clears the cache and re-scans (${f3p.h} hits, pinned path ${f3p.pinned}, ${f3p.stats.bytes} bytes held)`, !f3p.pinned && f3p.h === 600 && f3p.stats.bytes === 0);
+await p.evaluate(() => window._micro.setPinBudget('auto'));
 await p.evaluate(() => { const i = document.querySelector('#filter'); i.value = ''; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); });
 
 // ── 6b. export the model AS Parquet (compact, columnar) + read it back ──

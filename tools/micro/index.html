@@ -7097,11 +7097,56 @@ async function applyBlockFilter(expr) {
       ? calcOrder(AL).filter((it) => !needL || needL.has(String(it.c.name).toLowerCase()))
           .map((it) => { let fn; try { fn = compileChunk(it.c.expr, censusSchema, { decimal: '.' }); } catch { fn = () => ({ t: 'raw', buf: [] }); } return { slot: baseLen + paintLen + it.idx, fn }; })
       : null;
+    // ── TIER 3, REFINE: every needed column pinned → evaluate with NO file read ──
+    window.__pinUsed = false;
+    if (chunkF && readCols.length && readCols.every((nm) => pinGet(AL, nm))) {
+      window.__pinUsed = true;
+      const total = header.count, scr = {};
+      const gx = pinGet(AL, P.names[m.x]), gy = pinGet(AL, P.names[m.y]), gz = pinGet(AL, P.names[m.z]);
+      const gch = m.chan != null ? pinGet(AL, P.names[m.chan]) : null, gca = m.cat != null ? pinGet(AL, P.names[m.cat]) : null;
+      for (let at = 0; at < total; at += (1 << 18)) {
+        const n = Math.min(1 << 18, total - at);
+        const byName = {};
+        readCols.forEach((nm, ci2) => { byName[nm] = pinWindow(pinGet(AL, nm), at, n, scr[ci2] || (scr[ci2] = [])); });
+        const ccols = censusChunkCols(AL, header, byName, at, n, needL, calcChunkFns);
+        const mk = chunkF(ccols, n);
+        const wX = pinWindow(gx, at, n), wY = pinWindow(gy, at, n), wZ = pinWindow(gz, at, n);
+        const wCh = gch ? pinWindow(gch, at, n) : null, wCa = gca ? pinWindow(gca, at, n, scr._c || (scr._c = [])) : null;
+        for (let i = 0; i < n; i++) {
+          if (mk[i] !== 1) continue;
+          const xv = +wX[i], yv = +wY[i], zv = +wZ[i];
+          if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+          const r = at + i;
+          mask[r] = 1; hits++;
+          const code = catCode && wCa ? (catCode.get(String(wCa[i] ?? '').trim()) ?? 0) : 0;
+          collect(xv, yv, zv, wCh ? +wCh[i] : 0, code, r);
+        }
+        rec = at + n;
+        await new Promise((r2) => setTimeout(r2)); if (epoch !== _filterEpoch) return;
+      }
+    } else {
+    const tee = (chunkF && pinBudgetBytes() > 0) ? {} : null;   // tee the scan into the pin cache
     let start = 0, skipped = 0;
     for (const rg of P.rowGroups) {
       const count = rg.rowCount;
       if (ast && !pqGroupCanMatch(ast, pqGroupRanges(rg))) { start += count; skipped++; continue; }   // pushdown skip
       const cols = await readParquetRange(P.buf, readCols, start, start + count, P.meta);
+      if (tee) for (const nm of readCols) {
+        const src = cols[nm]; if (!src) { tee[nm] = null; continue; }
+        let e = tee[nm];
+        if (e === undefined) {
+          let kind = null;
+          for (let i = 0; i < count && kind === null; i++) { const v = src[i]; if (v != null) kind = typeof v === 'number' ? 'num' : 'str'; }
+          e = tee[nm] = kind === 'str' ? { codes: new Uint16Array(header.count), dict: [''], map: new Map([['', 0]]) } : { data: new Float64Array(header.count).fill(NaN) };
+        }
+        if (e === null) continue;
+        if (e.data) { for (let i = 0; i < count; i++) { const v = src[i]; e.data[start + i] = v == null ? NaN : +v; } }
+        else for (let i = 0; i < count; i++) {
+          const v = src[i] == null ? '' : String(src[i]); let c = e.map.get(v);
+          if (c === undefined) { if (e.dict.length > 65535) { tee[nm] = null; break; } c = e.dict.length; e.dict.push(v); e.map.set(v, c); }
+          e.codes[start + i] = c;
+        }
+      }
       const cX = cols[P.names[m.x]], cY = cols[P.names[m.y]], cZ = cols[P.names[m.z]];
       const cChan = m.chan != null ? cols[P.names[m.chan]] : null, cCat = m.cat != null ? cols[P.names[m.cat]] : null;
       if (chunkF) {
@@ -7133,7 +7178,11 @@ async function applyBlockFilter(expr) {
       window.__pqFilterSkipped = skipped;                  // smoke hook
       await new Promise((r2) => setTimeout(r2)); if (epoch !== _filterEpoch) return;
     }
+    if (tee && !skipped && epoch === _filterEpoch) {        // pin ONLY a complete scan (skipped groups would leave holes)
+      for (const nm of readCols) { const e = tee[nm]; if (!e) continue; delete e.map; pinPut(AL, nm, e); }
+    }
     if (skipped) $('#meta').textContent = `filter: ${skipped} of ${P.rowGroups.length} row groups skipped by the footer…`;
+    }
   } else if (header.dm) {
     // .dm: PROJECT only the predicate's columns (+ coords/cat/chan) and decode
     // them by striding — not all N fields. Same RAW record numbering as recIdx.
@@ -11843,6 +11892,55 @@ function expandedDeps(L, ast) {
   const walk = (a) => { let ds = []; try { ds = deps(a); } catch { /* bad expr */ } for (const d of ds) { const k = String(d).toLowerCase(); if (out.has(k)) continue; out.add(k); const cc = ccs.get(k); if (cc) { try { walk(parse(cc.expr)); } catch { /* ignore */ } } } };
   walk(ast); return out;
 }
+// ── the PIN CACHE (filter tier 3: prune → scan → REFINE) ──────────────────────
+// After a filter scans a layer once, the columns it touched stay pinned (typed
+// arrays / dict codes) inside a GLOBAL, budgeted, LRU pool — the next filter
+// change evaluates over pinned columns via compileChunk with NO file read.
+// Budget: localStorage 'micro.pinBudget' = 'off' | 'auto' | MB; auto scales with
+// navigator.deviceMemory. Exact accounting (we own every array); eviction is
+// column-granular LRU; entries carry the layer sourceHash (stale → drop).
+const _pinCache = new Map(); let _pinBytes = 0, _pinTick = 0;
+function pinBudgetBytes() {
+  let v = 'auto'; try { v = localStorage.getItem('micro.pinBudget') || 'auto'; } catch { /* private mode */ }
+  if (v === 'off') return 0;
+  if (v === 'auto') { const dm = (navigator.deviceMemory || 4); return Math.min(1024, Math.max(128, dm * 64)) * 1048576; }   // 8 GB → 512 MB
+  return Math.max(0, +v || 0) * 1048576;
+}
+function setPinBudget(v) { try { localStorage.setItem('micro.pinBudget', String(v)); } catch { /* ignore */ } pinTrim(); }
+function pinStats() { return { bytes: _pinBytes, budget: pinBudgetBytes(), cols: _pinCache.size }; }
+function pinTrim(extra = 0) {
+  const cap = pinBudgetBytes();
+  if (cap === 0) { _pinCache.clear(); _pinBytes = 0; return; }
+  while (_pinBytes + extra > cap && _pinCache.size) {      // LRU: evict the least-recently-used column
+    let lk = null, lt = Infinity;
+    for (const [k, e] of _pinCache) if (e.t < lt) { lt = e.t; lk = k; }
+    const e = _pinCache.get(lk); _pinCache.delete(lk); _pinBytes -= e.bytes;
+  }
+}
+function pinPut(L, name, entry) {
+  if (pinBudgetBytes() === 0) return;
+  entry.bytes = (entry.data ? entry.data.byteLength : entry.codes.byteLength + entry.dict.join('').length * 2);
+  entry.hash = matColSourceHash(L); entry.t = ++_pinTick;
+  pinTrim(entry.bytes);
+  if (entry.bytes + _pinBytes > pinBudgetBytes()) return;  // single column over budget → don't pin
+  const k = L.id + ':' + String(name).toLowerCase();
+  const old = _pinCache.get(k); if (old) _pinBytes -= old.bytes;
+  _pinCache.set(k, entry); _pinBytes += entry.bytes;
+}
+function pinGet(L, name) {
+  const e = _pinCache.get(L.id + ':' + String(name).toLowerCase());
+  if (!e) return null;
+  if (e.hash !== matColSourceHash(L)) { pinEvictLayer(L.id); return null; }   // source changed → stale
+  e.t = ++_pinTick; return e;
+}
+function pinEvictLayer(id) { for (const [k, e] of [..._pinCache]) if (k.startsWith(id + ':')) { _pinCache.delete(k); _pinBytes -= e.bytes; } }
+// a pinned column's values for records [start, start+n) as compileChunk input
+function pinWindow(e, start, n, scratch) {
+  if (e.data) return e.data.subarray(start, start + n);    // numeric: zero-copy view
+  const a = scratch && scratch.length >= n ? scratch : new Array(n);
+  for (let i = 0; i < n; i++) a[i] = e.dict[e.codes[start + i]] ?? '';   // dict: decode a window
+  return a;
+}
 async function sampleRow(L) {
   const d = L.docs || {};
   try {
@@ -13214,7 +13312,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, materializeCalcCol, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
