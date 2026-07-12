@@ -6567,6 +6567,7 @@ async function openDrillholeLayer(files, opts = {}, mode = 'add') {
     const { header, streamChunks, fetchRecord, recordPosition } = await openDrillholes(
       { collar: files.collar, survey: files.survey, intervals: files.intervals }, opts);
     _dhDoc = { blobs: { ...files }, header, fetchRecord, recordPosition, config: { ...opts } };
+    peekCollarCols(_dhDoc);                                // warm the collar-column cache (menu + manifest)
     registerDocs(lid, 'points');
     fitFromHeader(header, first);
     renderer.setCategories(header.categories ? 1 : 0);
@@ -8420,7 +8421,7 @@ function projectManifest() {
       rules: L.rules && L.rules.list && L.rules.list.length ? L.rules : undefined,
       ruleHidden: L.ruleHidden && L.ruleHidden.size ? [...L.ruleHidden] : undefined,
       paintCols: L.paintCols && L.paintCols.some((c) => !c.mat)      // materialized cols persist via the .cols sidecar, not RLE codes
-        ? L.paintCols.filter((c) => !c.mat).map((c) => ({ name: c.name, kind: c.kind, dict: c.dict, colors: c.colors, blankColor: c.blankColor, rle: rleEncodeBytes(c.codes) }))
+        ? L.paintCols.filter((c) => !c.mat).map((c) => ({ name: c.name, kind: c.kind, dict: c.dict, colors: c.colors, blankColor: c.blankColor, lineage: c.lineage || undefined, rle: rleEncodeBytes(c.codes) }))
         : undefined,
       sel: L._selMask && L._selCount ? rleEncode(L._selMask) : undefined,
       lineage: L.lineage || undefined,                     // provenance chain (how this layer was made)
@@ -8726,7 +8727,7 @@ async function restoreStyleExtras(L, ls) {
   }
   if (ls.paintCols) {
     const n2 = attrRowCountOf(L);
-    L.paintCols = ls.paintCols.map((c) => ({ name: c.name, kind: c.kind || undefined, dict: c.dict.slice(), colors: (c.colors || []).slice(), blankColor: c.blankColor, codes: rleDecodeBytes(c.rle || [], n2) }));
+    L.paintCols = ls.paintCols.map((c) => ({ name: c.name, kind: c.kind || undefined, dict: c.dict.slice(), colors: (c.colors || []).slice(), blankColor: c.blankColor, lineage: c.lineage || undefined, codes: rleDecodeBytes(c.rle || [], n2) }));
     for (const pc of L.paintCols) paintRecount(pc);
     addPaintColorOptions(L);
     // colorSel 'paint:…' couldn't land earlier (its option only exists now)
@@ -11103,6 +11104,10 @@ function layerMenu(L, x, y) {
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
     ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Interpolate from this…', action: () => openInterpolateDialog({ srcLayer: L.id }) }] : []),
     ...((L.calcCols || []).length ? [{ label: 'Materialize calc column', submenu: () => (L.calcCols || []).map((c) => ({ label: `${c.name} → stored`, action: () => materializeCalcCol(L, c.name) })) }] : []),
+    ...(L.dh && L.docs.dhDoc ? [{ label: 'Broadcast collar column', submenu: () => {
+      const cols = (L.docs.dhDoc._collarCols || []).filter((c) => c.name);
+      return cols.length ? cols.map((c) => ({ label: `${c.name} → intervals (${c.type})`, action: () => broadcastCollarCol(L, c.name) })) : [{ label: '(reading collar columns…)', action: () => {} }];
+    } }] : []),
     ...(L.gridSurface ? [{ label: 'Drape', submenu: () => {
       const grids = _layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
       return [{ label: (L.drapeSource ? '' : '✓ ') + 'elevation', action: () => recolorSurface(L, null) },
@@ -12605,13 +12610,22 @@ function layerColumnsOps(L, h, loc, idp) {
       const ln = c.lineage;
       const kind = ln.op === 'interpolate' ? 'estimate' : (ln.op === 'materialize' && ln.params && ln.params.from === 'calc' ? 'calc' : ln.op);
       def = idp + 'm' + (i + 1);
-      ops.push({ id: def, op: kind, params: kind === 'calc' ? { expr: ln.params.expr } : (ln.params || {}), outputs: [c.name], at: ln.at, build: ln.build, sources: ln.sources && ln.sources.length ? ln.sources : undefined });
+      ops.push({ id: def, op: kind, params: kind === 'calc' ? { expr: ln.params.expr } : (ln.params || {}), outputs: [c.name], at: ln.at, build: ln.build, sources: ln.sources && ln.sources.length ? ln.sources : undefined,
+        ...(kind === 'broadcast' && ln.params && ln.params.from ? { inputs: [{ loc: ln.params.from, column: ln.params.column }] } : {}) });   // cross-location inputs are explicit (rule 6)
     }
     columns.push({
       loc, name: c.name, type: 'number', from: 'materialized', ...(def ? { def } : {}),
       file: `${src}.cols/${c.name}.parquet`, storage: 'dense',
       stats: { min: c.min, max: c.max, count: c.count, nonnull: c.nonnull, hasBlank: c.nonnull < c.count },
     });
+  });
+  (L.paintCols || []).forEach((c, i) => {                   // op-produced CATEGORY columns (text broadcast): derived,
+    if (c.mat || !c.lineage || !c.lineage.op) return;       // re-derivable from the op; plain hand-paint stays the RLE chore
+    const ln = c.lineage, id = idp + 'p' + (i + 1);
+    ops.push({ id, op: ln.op, params: ln.params || {}, outputs: [c.name], at: ln.at, build: ln.build,
+      ...(ln.op === 'broadcast' && ln.params && ln.params.from ? { inputs: [{ loc: ln.params.from, column: ln.params.column }] } : {}) });
+    columns.push({ loc, name: c.name, type: 'category', from: 'derived', def: id,
+      categories: Object.fromEntries(c.dict.map((nm, k) => [String(k), { name: nm, color: c.colors[k] }]).filter(([k2, v2]) => k2 !== '0' && v2.name != null)) });
   });
   (L.calcCols || []).forEach((c, i) => {                    // derived ƒ: the op IS the definition (no file)
     const id = idp + 'c' + (i + 1);
@@ -12654,18 +12668,21 @@ function buildElementManifest(L) {
 // .holes.json still reads). Cross-location ops (broadcast/aggregate) land on
 // these relations next.
 const dhElementName = (L) => dhSetName(L).replace(/\.holes\.json$/, '.element.json');
+async function peekCollarCols(dh) {                        // header + first-row peek: names + rough types (cached)
+  if (dh._collarCols) return dh._collarCols;
+  try {
+    const head = (await dh.blobs.collar.slice(0, 65536).text()).split(/\r?\n/);
+    const delim = [',', ';', '\t'].reduce((a, b2) => (head[0].split(b2).length > head[0].split(a).length ? b2 : a), ',');
+    const cells2 = (ln) => ln.split(delim).map((x) => x.trim().replace(/^"|"$/g, ''));
+    const names = cells2(head[0]).filter(Boolean), row1 = head[1] ? cells2(head[1]) : [];
+    dh._collarCols = names.map((nm, i) => ({ name: nm, type: row1[i] !== undefined && row1[i] !== '' && Number.isFinite(+row1[i]) ? 'number' : 'string' }));
+  } catch { dh._collarCols = []; }
+  return dh._collarCols;
+}
 async function buildDhSetManifest(members) {
   const rep = members[0], dh = rep.docs.dhDoc, h = dh.header, files = layerFiles(rep);
   const collarName = basename(files[0].name), surveyName = basename(files[1].name);
-  if (!dh._collarCols) {                                   // one header+first-row peek, cached: names + rough types
-    try {
-      const head = (await files[0].blob.slice(0, 65536).text()).split(/\r?\n/);
-      const delim = [',', ';', '\t'].reduce((a, b2) => (head[0].split(b2).length > head[0].split(a).length ? b2 : a), ',');
-      const cells2 = (ln) => ln.split(delim).map((x) => x.trim().replace(/^"|"$/g, ''));
-      const names = cells2(head[0]).filter(Boolean), row1 = head[1] ? cells2(head[1]) : [];
-      dh._collarCols = names.map((nm, i) => ({ name: nm, type: row1[i] !== undefined && row1[i] !== '' && Number.isFinite(+row1[i]) ? 'number' : 'string' }));
-    } catch { dh._collarCols = []; }
-  }
+  await peekCollarCols(dh);
   const ops = [{ id: 'ds1', op: 'desurvey', inputs: [{ loc: 'collars' }, { file: surveyName, format: 'csv' }], params: { ...dh.config }, outputs: [] }];
   const locations = {
     collars: { storage: 'table', count: h.holes || 0, chunk: 1 << 18, source: { file: collarName, format: 'csv', hash: `${(files[0].blob && files[0].blob.size) || 0}:${h.holes || 0}` } },
@@ -12692,6 +12709,74 @@ async function buildDhSetManifest(members) {
     locations, relations, ops, columns,
     ...(rep._elementExtra || {}),
   };
+}
+// ── BROADCAST — the first CROSS-LOCATION op on the dh element's relations:
+// a collar column lands on an interval member BY THE HOLE-ID KEY, so hole-
+// granularity attributes (EOH, COMPANY, campaign dates) become filterable /
+// colorable / GT-able interval columns. Numeric → a MATERIALIZED column
+// (Parquet sidecar; the ops[] entry records inputs [{loc:'collars', column}]);
+// text → a dict paint-style CATEGORY column (persists via the paint channel,
+// lineage kept; the manifest records it as DERIVED with the same op — it is
+// re-derivable from the collar file the element already names). Typed string
+// sidecars are the recorded follow-up that would let text broadcasts
+// materialize like numbers do.
+async function broadcastCollarCol(L, colName) {
+  const dh = L.docs.dhDoc; const h = layerTableHeader(L);
+  if (!dh || !h) { $('#meta').textContent = 'broadcast: not a drillhole layer'; return; }
+  const im = h.intervalMapping || {};
+  if (im.bhid == null) { $('#meta').textContent = 'broadcast: no hole-id column on the intervals'; return; }
+  const taken = new Set([...h.columns, ...(L.calcCols || []).map((c) => c.name), ...(L.paintCols || []).map((c) => c.name)].map((x) => String(x).toLowerCase()));
+  const outName = taken.has(String(colName).toLowerCase()) ? colName + '_C' : colName;
+  if (taken.has(String(outName).toLowerCase())) { $('#meta').textContent = `broadcast: “${outName}” already exists`; return; }
+  const text = await dh.blobs.collar.text();               // the collar table is small — parse it whole
+  const lines = text.split(/\r?\n/).filter((x) => x.trim());
+  const delim = [',', ';', '\t'].reduce((a, b2) => (lines[0].split(b2).length > lines[0].split(a).length ? b2 : a), ',');
+  const cells2 = (ln) => ln.split(delim).map((x) => x.trim().replace(/^"|"$/g, ''));
+  const names = cells2(lines[0]), low = names.map((x) => x.toLowerCase());
+  const ci = low.indexOf(String(colName).toLowerCase());
+  if (ci < 0) { $('#meta').textContent = `broadcast: “${colName}” not in the collar file`; return; }
+  const bhidName = h.columns[im.bhid];
+  let ki = low.indexOf(String(bhidName).toLowerCase()); if (ki < 0) ki = 0;   // convention: the hole id leads the collar file
+  const map = new Map(); let numeric = true, seen = 0;
+  for (let i = 1; i < lines.length; i++) {
+    const c = cells2(lines[i]); if (c.length <= Math.max(ci, ki)) continue;
+    const v = c[ci]; map.set(String(c[ki]).trim(), v);
+    if (v !== '' && v != null) { seen++; if (!Number.isFinite(+v)) numeric = false; }
+  }
+  if (!seen) numeric = false;
+  const n = attrRowCountOf(L) || 0;
+  $('#meta').textContent = `broadcast: ${colName} → ${n.toLocaleString()} intervals…`;
+  const lin = mkLineage('broadcast', { from: 'collars', column: colName, key: bhidName, holes: map.size }, [L.lineage].filter(Boolean));
+  if (numeric) {
+    const vals = new Float32Array(n); let rec = 0;
+    for await (const batch of layerRows(L, null)) { for (const f0 of batch) { if (rec >= n) break; const v = map.get(String(f0[im.bhid] ?? '').trim()); const x = v === '' || v == null ? NaN : +v; vals[rec] = Number.isFinite(x) ? x : NaN; rec++; } await new Promise((r) => setTimeout(r)); }
+    matColSet(L, outName, vals, { lineage: lin });
+    try { await persistElement(L); } catch { /* best-effort */ }
+  } else {
+    const col = createPaintCol(L, outName);
+    if (!col) return;
+    col.lineage = lin;
+    const codeOf = new Map(); let rec = 0, full = false;
+    for await (const batch of layerRows(L, null)) {
+      for (const f0 of batch) {
+        if (rec >= n || full) break;
+        const v = String(map.get(String(f0[im.bhid] ?? '').trim()) ?? '').trim();
+        if (v) {
+          let code = codeOf.get(v);
+          if (code == null) { code = addPaintValue(L, col, v); if (code == null) { full = true; break; } codeOf.set(v, code); }
+          col.codes[rec] = code;
+        }
+        rec++;
+      }
+      if (full) break;
+      await new Promise((r) => setTimeout(r));
+    }
+    paintRecount(col);
+    L._colStats = null; L._calcFns = null;
+  }
+  setLayerColorSel(L, 'paint:' + outName);
+  markProjectDirty(); renderProps(); requestRender();
+  $('#meta').textContent = `broadcast: ${outName} on ${L.label || L.name} — the filter, color ramps, GT/swath, and exports all see it`;
 }
 // a v1 drillhole element manifest → the loader's descriptor shape (the bridge
 // that lets element.json REPLACE .holes.json; returns null for anything else)
@@ -14319,7 +14404,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, buildElementManifest, buildDhSetManifest, descFromElement, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, buildElementManifest, buildDhSetManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
