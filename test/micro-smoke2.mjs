@@ -1155,6 +1155,28 @@ await p.close();
   });
   chk(`inputs: dialog generated (cols ${inp.opts}) + substituted run (${inp.head} · ${inp.rows} rows)`,
     inp.dlg && /FE/.test(inp.opts) && /FE/.test(inp.head || '') && inp.rows === 6);
+
+  // §21d — inline steps (tool: instead of recipe: — a batch from scratch,
+  // nothing pre-recorded) + a routine's own inputs: gate the run
+  const inl = await pr.evaluate(async () => {
+    await window._micro.runRoutine({ name: 'scratch', tool: 'routine', params: {
+      steps: [{ each: [{ g: 'FE' }], steps: [{ tool: 'gt', series: [{ layer: 'm.csv', col: '$g' }], nCut: 4, as: 'inline' }] }],
+    } });
+    const meta = document.querySelector('#meta').textContent;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2routine');
+    const day = new Date().toISOString().slice(0, 10);
+    const rep = await (await dir.getDirectoryHandle('reports')).getDirectoryHandle(day);
+    const names = []; for await (const k of rep.keys()) names.push(k);
+    window._micro._recipesList().push({ name: 'ask-routine', tool: 'routine', file: 'recipes/ar.yaml',
+      inputs: [{ name: 'g2', type: 'column' }],
+      params: { steps: [{ tool: 'gt', series: [{ layer: 'm.csv', col: '$g2' }] }] } });
+    window._micro.runRecipe(window._micro._recipesList().find((x) => x.name === 'ask-routine'), true);
+    const dlg = !!document.querySelector('.fwin[data-inputs-dialog]');
+    document.querySelectorAll('.fwin').forEach((x) => x.remove());
+    return { meta, names: names.join(','), dlg };
+  });
+  chk(`inline step ran from scratch (${inl.names}) + routine inputs gate the run`,
+    /1 report/.test(inl.meta) && /inline-fe\.tsv/.test(inl.names) && inl.dlg);
   await pr.close();
 }
 

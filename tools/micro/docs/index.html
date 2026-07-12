@@ -423,6 +423,7 @@ params:
   <figcaption>The routine editor. The <b>for each row</b> table is the heart of it — variables are columns, runs are rows. <b>Preview</b> lists every step and every report path before anything runs.</figcaption>
 </figure>
 <p>Steps come in two shapes. A plain step runs one recipe, optionally layering <b>overrides</b> on top (a different cutoff count, a series pointed at another column — the <b>⋯</b> button on a step). A <b>for-each block</b> runs its steps once per <b>row of a parameter table</b>: add a variable for each thing that changes, a row for each run, and write <code>"$grade"</code> in a step wherever the value should land. <b>+ row</b> duplicates the last run so you only edit what differs. There is no scripting here — expansion is plain substitution, so the whole run is knowable before anything executes. That is exactly what <b>Preview</b> shows, and what the optional <b>guard</b> checks: stop before step one if any report it would write already exists.</p>
+<p>A step doesn't have to point at a saved recipe at all. Give it <code>tool:</code> instead (<b>+ inline step</b> in the editor: <code>gt</code>, <code>swath</code>, <code>stats</code>, <code>figure</code>, <code>calccols</code>, or <code>interp</code>) and its whole setup lives right in the step — so a batch can be written from scratch, with nothing recorded first. Name a recipe when you'll reuse the setup elsewhere; inline it when it belongs to this routine alone.</p>
 <p>The editor writes a file like this (block style, strings quoted — hand-edit or write them from scratch if you prefer):</p>
 <pre># micro recipe — routine. Hand-edit freely; series reference layers by NAME.
 name: "month-end"
@@ -469,6 +470,7 @@ params:
     - layer: "$model"
       col: "$grade"</pre>
 <p>Five input types: <code>text</code> (the default), <code>number</code>, <code>choice</code> (with <code>options:</code>), <code>layer</code> (a picker over the loaded layers), and <code>column</code> (a picker over the columns of the layer named by <code>of:</code> — it re-fills live when that layer changes). A marker that is exactly <code>"$name"</code> lands <b>typed</b> — a number input arrives as a number — while markers embedded in longer text become text. Answers are remembered for the session, so the next <b>Run…</b> starts from where you left it.</p>
+<p>Routines ask too: declare <code>inputs:</code> on the routine itself — the editor's <b>+ ask first</b> section adds them without touching YAML — and the answers substitute everywhere in the steps <i>before</i> the parameter tables expand. Keep input names distinct from the tables' variable names; the questions come first, the table fans out after.</p>
 <h3>Mesh export</h3>
 <p><b>Export mesh…</b> (right-click a mesh layer; multi-selections and groups get <b>Export N meshes…</b>) writes <b>OBJ</b>, <b>PLY</b>, <b>MSH</b> (Leapfrog/ARANZ), or <b>LFM</b>. OBJ and LFM are multi-mesh — one named object per layer, with each layer's tint carried as the LFM color — while PLY and MSH merge multiple layers into one mesh. Exports re-read the source geometry, so coordinates leave in <b>full double precision</b> (the PLY writer uses <code>double</code> — at UTM northings, float32 would cost half a meter). A Datamine wireframe pair in, an LFM out: micro is also a mesh-format converter.</p>
 
@@ -653,6 +655,7 @@ params:
 <p style="margin:.15em 0">routines (recipes of recipes) — §18</p>
 <p style="margin:.15em 0">routine editor — §18</p>
 <p style="margin:.15em 0">inputs (ask-me-first recipes) — §18</p>
+<p style="margin:.15em 0">inline steps (routines) — §18</p>
 <p style="margin:.15em 0">scenes — §18</p>
 <p style="margin:.15em 0">Sealed — §20, C</p>
 <p style="margin:.15em 0">sections — §4</p>

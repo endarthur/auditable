@@ -3447,6 +3447,11 @@ async function routineReadTable(name) {                    // {from}: a CSV in t
   const heads = cells2(lines[0]);
   return lines.slice(1).map((ln) => { const c = cells2(ln); return Object.fromEntries(heads.map((h, i2) => [h, c[i2] !== undefined && c[i2] !== '' && Number.isFinite(+c[i2]) ? +c[i2] : c[i2]])); });
 }
+function routineCheckStep(st) {                            // inline steps carry `tool:` — must be a runnable one
+  if (!st.recipe && st.tool && (!RECIPE_TOOLS[st.tool] || st.tool === 'routine')) {
+    throw new Error(`unknown tool "${st.tool}" (inline steps take ${Object.keys(RECIPE_TOOLS).filter((t) => t !== 'routine').join(' / ')})`);
+  }
+}
 async function expandRoutine(params) {
   const out = [];
   for (const st of params.steps || []) {
@@ -3457,12 +3462,13 @@ async function expandRoutine(params) {
       for (const row of rows) {
         for (const inner of st.steps || []) {
           const sub = routineSubst(inner, row);
+          routineCheckStep(sub);
           const tag = Object.values(row).map((v) => recipeSlug(String(v))).join('-');
-          out.push({ ...sub, _slug: recipeSlug(sub.as || sub.recipe) + (tag ? '-' + tag : '') });
+          out.push({ ...sub, _slug: recipeSlug(sub.as || sub.recipe || sub.tool) + (tag ? '-' + tag : '') });
         }
       }
-    } else if (st.recipe) out.push({ ...st, _slug: recipeSlug(st.as || st.recipe) });
-    else throw new Error('a step needs `recipe`, `each`, or `guard`');
+    } else if (st.recipe || st.tool) { routineCheckStep(st); out.push({ ...st, _slug: recipeSlug(st.as || st.recipe || st.tool) }); }
+    else throw new Error('a step needs `recipe`, `tool`, `each`, or `guard`');
   }
   return out;
 }
@@ -3490,9 +3496,9 @@ async function runRoutine(r) {
   const loaded = new Set(_layers.map((L) => L.name));
   const missingL = new Set();
   for (const st of steps) {
-    if (!st.recipe) continue;
-    const rc = byName.get(st.recipe);
-    for (const nm of routineLayerNames({ params: { ...rc.params, ...st } })) if (nm && !loaded.has(nm)) missingL.add(nm);
+    if (st.guard) continue;
+    const rc = st.recipe ? byName.get(st.recipe) : null;
+    for (const nm of routineLayerNames({ params: rc ? { ...rc.params, ...st } : st })) if (nm && !loaded.has(nm)) missingL.add(nm);
   }
   if (missingL.size) { $('#meta').textContent = `routine: load these layers first — ${[...missingL].join(', ')} (routines run without prompts)`; return; }
   // output routing
@@ -3502,9 +3508,9 @@ async function runRoutine(r) {
   const guardAt = steps.findIndex((st) => st.guard === 'no-overwrites');
   if (guardAt >= 0) {
     for (const st of steps.slice(guardAt + 1)) {
-      if (!st.recipe) continue;
-      const rc = byName.get(st.recipe);
-      if (!['gt', 'swath', 'stats'].includes(rc.tool)) continue;
+      if (st.guard) continue;
+      const gTool = st.recipe ? byName.get(st.recipe).tool : st.tool;
+      if (!['gt', 'swath', 'stats'].includes(gTool)) continue;
       const exists = await resolveFileHandle(_project.dir, outPath(st._slug)).then(() => true, () => false);
       if (exists) { $('#meta').textContent = `routine: guard stopped — ${outPath(st._slug)} already exists`; return; }
     }
@@ -3512,13 +3518,15 @@ async function runRoutine(r) {
   // run
   let n = 0, wrote = 0;
   for (const st of steps) {
-    if (!st.recipe) { n++; continue; }
+    if (st.guard) { n++; continue; }
     n++;
-    const rc = byName.get(st.recipe);
-    const merged = { name: rc.name, tool: rc.tool, params: { ...rc.params, ...Object.fromEntries(Object.entries(st).filter(([k]) => !['recipe', 'as', '_slug'].includes(k))) } };
+    const rc = st.recipe ? byName.get(st.recipe) : null;   // inline steps (`tool:`) have no recipe — the step IS the setup
+    const tool = rc ? rc.tool : st.tool;
+    const extras = Object.fromEntries(Object.entries(st).filter(([k]) => !['recipe', 'tool', 'as', '_slug'].includes(k)));
+    const merged = { name: rc ? rc.name : st._slug, tool, params: rc ? { ...rc.params, ...extras } : extras };
     $('#meta').textContent = `routine “${r.name}” — step ${n}/${steps.length}: ${st._slug}…`;
     try {
-      if (['gt', 'swath', 'stats'].includes(rc.tool)) {
+      if (['gt', 'swath', 'stats'].includes(tool)) {
         const before = new Set([...document.querySelectorAll('.fwin')]);
         runRecipe(merged, true);
         const el = await new Promise((res, rej) => {
@@ -3534,10 +3542,10 @@ async function runRoutine(r) {
         const w = await fh.createWritable(); await w.write(tsv); await w.close();
         wrote++;
         el.querySelector('.fwin-head button:last-child').click();   // tidy: close the step's window
-      } else if (rc.tool === 'calccols' || rc.tool === 'interp' || rc.tool === 'figure') {
+      } else if (tool === 'calccols' || tool === 'interp' || tool === 'figure') {
         runRecipe(merged, true);
         await new Promise((r2) => setTimeout(r2, 400));     // engine steps settle; figure runs its own flow
-      } else throw new Error(`unsupported tool in a routine: ${rc.tool}`);
+      } else throw new Error(`unsupported tool in a routine: ${tool}`);
     } catch (e) {
       $('#meta').textContent = `routine “${r.name}” STOPPED at step ${n} (${st._slug}) — ${e.message}`;
       return;
@@ -3716,20 +3724,28 @@ function openRoutineWindow(r0) {
     if (Object.keys(o).length) P2.output = o;
     return P2;
   };
-  // ── one step row: run [recipe ▾] as [name] + optional override YAML ──
+  // ── one step row: run [recipe ▾] / do [tool ▾] (inline) + override YAML ──
   function stepRow(st, arr, host, inEach) {
-    const skip = ['recipe', 'as', '_slug'];
+    const inline = st.recipe === undefined && st.tool !== undefined;
+    const skip = inline ? ['tool', 'as', '_slug'] : ['recipe', 'as', '_slug'];
     const row = document.createElement('div'); row.className = 'rw-bar';
-    const lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = 'run';
+    const lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = inline ? 'do' : 'run';
     const sel = document.createElement('select');
-    for (const nm of ['', ...recipeNames()]) { const o = document.createElement('option'); o.value = o.textContent = nm; sel.appendChild(o); }
-    if (st.recipe && ![...sel.options].some((o) => o.value === st.recipe)) { const o = document.createElement('option'); o.value = o.textContent = st.recipe; sel.appendChild(o); }
-    sel.value = st.recipe || '';
-    sel.onchange = () => { st.recipe = sel.value; };
+    if (inline) {
+      for (const t of Object.keys(RECIPE_TOOLS)) { if (t === 'routine') continue; const o = document.createElement('option'); o.value = t; o.textContent = RECIPE_TOOLS[t]; sel.appendChild(o); }
+      sel.value = st.tool;
+      sel.onchange = () => { st.tool = sel.value; };
+      sel.title = 'an inline step — the whole setup lives in the YAML box below, nothing pre-recorded';
+    } else {
+      for (const nm of ['', ...recipeNames()]) { const o = document.createElement('option'); o.value = o.textContent = nm; sel.appendChild(o); }
+      if (st.recipe && ![...sel.options].some((o) => o.value === st.recipe)) { const o = document.createElement('option'); o.value = o.textContent = st.recipe; sel.appendChild(o); }
+      sel.value = st.recipe || '';
+      sel.onchange = () => { st.recipe = sel.value; };
+    }
     const asL = document.createElement('span'); asL.className = 'lbl'; asL.textContent = 'as'; asL.title = 'optional — names the report file instead of the recipe name';
     const asI = document.createElement('input'); asI.type = 'text'; asI.style.width = '8em'; asI.value = st.as || '';
     asI.onchange = () => { if (asI.value.trim()) st.as = asI.value.trim(); else delete st.as; };
-    const ovB = document.createElement('button'); ovB.className = 'rw-x'; ovB.textContent = '⋯'; ovB.title = 'overrides — YAML keys layered over the recipe (where $vars usually land)';
+    const ovB = document.createElement('button'); ovB.className = 'rw-x'; ovB.textContent = '⋯'; ovB.title = inline ? 'the step\'s params (YAML)' : 'overrides — YAML keys layered over the recipe (where $vars usually land)';
     const up = document.createElement('button'); up.className = 'rw-x'; up.textContent = '↑'; up.title = 'move up';
     const dn = document.createElement('button'); dn.className = 'rw-x'; dn.textContent = '↓'; dn.title = 'move down';
     const rm = document.createElement('button'); rm.className = 'rw-x'; rm.textContent = '×'; rm.title = 'remove this step';
@@ -3738,10 +3754,11 @@ function openRoutineWindow(r0) {
     rm.onclick = () => { arr.splice(arr.indexOf(st), 1); render(); };
     row.append(lbl, sel, asL, asI, ovB, up, dn, rm);
     host.appendChild(row);
-    const ovr = document.createElement('textarea'); ovr.className = 'rw-ovr'; ovr.placeholder = 'overrides (YAML, block style, strings quoted) — e.g.  nCut: 20  ·  col: "$grade"';
+    const ovr = document.createElement('textarea'); ovr.className = 'rw-ovr';
+    ovr.placeholder = inline ? 'params (YAML, block style, strings quoted) — e.g.  layer: "model.csv"' : 'overrides (YAML, block style, strings quoted) — e.g.  nCut: 20  ·  col: "$grade"';
     const extras = extrasOf(st, inEach ? skip : [...skip, 'each', 'steps', 'guard']);
     ovr.value = Object.keys(extras).length ? yamlEmit(jsToYamlNode(extras)).trimEnd() : '';
-    ovr.style.display = ovr.value ? '' : 'none';
+    ovr.style.display = inline || ovr.value ? '' : 'none';
     ovB.onclick = () => { ovr.style.display = ovr.style.display === 'none' ? '' : 'none'; if (ovr.style.display === '') ovr.focus(); };
     ovr.onchange = () => {
       const txt = ovr.value.trim();
@@ -3834,6 +3851,49 @@ function openRoutineWindow(r0) {
   const sufL = document.createElement('span'); sufL.className = 'lbl'; sufL.textContent = 'suffix';
   const sufI = document.createElement('input'); sufI.type = 'text'; sufI.style.width = '5em'; sufI.value = (model.params.output && model.params.output.suffix) || '';
   oBar.append(oL, dirI, preL, preI, sufL, sufI); top.appendChild(oBar);
+  // ── asks first: the routine's own `inputs:` (running it opens the
+  // generated dialog; answers land at $name markers BEFORE the parameter
+  // table expands — keep input names distinct from the table's variables) ──
+  model.inputs = Array.isArray(model.inputs) ? model.inputs : [];
+  const inpWrap = document.createElement('div'); win.body.appendChild(inpWrap);
+  const INPUT_TYPES = ['text', 'number', 'choice', 'layer', 'column'];
+  function renderInputs() {
+    inpWrap.textContent = '';
+    model.inputs.forEach((inp, i) => {
+      const row = document.createElement('div'); row.className = 'rw-bar';
+      const ask = document.createElement('span'); ask.className = 'lbl'; ask.textContent = i === 0 ? 'ask' : 'and';
+      const mk = (key, w, ph, num) => {
+        const f = document.createElement('input'); f.type = 'text'; f.style.width = w; f.placeholder = ph;
+        f.value = inp[key] !== undefined ? String(inp[key]) : '';
+        f.onchange = () => { const v = f.value.trim(); if (!v) delete inp[key]; else inp[key] = num ? coerceCell(v) : v; };
+        return f;
+      };
+      const name = mk('name', '6em', '$name');
+      const ty = document.createElement('select');
+      for (const x of INPUT_TYPES) { const o = document.createElement('option'); o.value = o.textContent = x; ty.appendChild(o); }
+      ty.value = INPUT_TYPES.includes(inp.type) ? inp.type : 'text';
+      ty.onchange = () => { if (ty.value === 'text') delete inp.type; else inp.type = ty.value; renderInputs(); };
+      const label = mk('label', '10em', 'the question (label)');
+      row.append(ask, name, ty, label);
+      const t = inp.type || 'text';
+      if (t === 'choice') {
+        const opts = document.createElement('input'); opts.type = 'text'; opts.style.width = '10em'; opts.placeholder = 'options, comma-separated';
+        opts.value = (inp.options || []).join(', ');
+        opts.onchange = () => { const v = opts.value.split(',').map((x) => coerceCell(x.trim())).filter((x) => x !== ''); if (v.length) inp.options = v; else delete inp.options; };
+        row.appendChild(opts);
+      } else if (t === 'column') row.appendChild(mk('of', '6em', 'of: a layer input'));
+      else row.appendChild(mk('default', '6em', 'default', t === 'number'));
+      const rm = document.createElement('button'); rm.className = 'rw-x'; rm.textContent = '×'; rm.title = 'remove this question';
+      rm.onclick = () => { model.inputs.splice(i, 1); renderInputs(); };
+      row.appendChild(rm);
+      inpWrap.appendChild(row);
+    });
+    const add = document.createElement('button'); add.className = 'rw-x'; add.textContent = model.inputs.length ? '+ question' : '+ ask first (inputs)…';
+    add.title = 'running the routine asks these first; answers land at $name markers in the steps';
+    add.onclick = () => { model.inputs.push({ name: 'p' + (model.inputs.length + 1) }); renderInputs(); };
+    inpWrap.appendChild(add);
+  }
+  renderInputs();
   const list = document.createElement('div'); win.body.appendChild(list);
   const foot = document.createElement('div'); win.body.appendChild(foot);
   function render() {
@@ -3854,16 +3914,21 @@ function openRoutineWindow(r0) {
         for (const inner of st.steps) stepRow(inner, st.steps, box, true);
         const add = document.createElement('button'); add.className = 'rw-x'; add.textContent = '+ step in this block';
         add.onclick = () => { st.steps.push({ recipe: '' }); render(); };
-        box.appendChild(add);
+        const addI2 = document.createElement('button'); addI2.className = 'rw-x'; addI2.textContent = '+ inline step';
+        addI2.onclick = () => { st.steps.push({ tool: 'gt' }); render(); };
+        box.append(add, addI2);
       } else stepRow(st, steps, box, false);
       list.appendChild(box);
     }
     const addBar = document.createElement('div'); addBar.className = 'rw-bar';
     const addS = document.createElement('button'); addS.className = 'awin-btn'; addS.textContent = '+ run a recipe';
     addS.onclick = () => { steps.push({ recipe: '' }); render(); };
+    const addI = document.createElement('button'); addI.className = 'awin-btn'; addI.textContent = '+ inline step';
+    addI.title = 'a step configured in place — no saved recipe needed';
+    addI.onclick = () => { steps.push({ tool: 'gt' }); render(); };
     const addE = document.createElement('button'); addE.className = 'awin-btn'; addE.textContent = '+ for-each block';
     addE.onclick = () => { steps.push({ each: [{ var1: '' }], steps: [{ recipe: '' }] }); render(); };
-    addBar.append(addS, addE);
+    addBar.append(addS, addI, addE);
     list.appendChild(addBar);
   }
   render();
@@ -3882,8 +3947,10 @@ function openRoutineWindow(r0) {
       prev.textContent = st2.map((st, i) => {
         if (st.guard) return `${i + 1}. guard — stop if any report below already exists`;
         const rc = _recipes.find((x) => x.name === st.recipe);
-        const wr = rc && ['gt', 'swath', 'stats'].includes(rc.tool);
-        return `${i + 1}. ${st.recipe || '(pick a recipe)'}${wr ? `  →  ${routineOutPath(P2, st._slug)}` : ''}${st.recipe && !rc ? '   ⚠ recipe not found' : ''}`;
+        const tool = st.recipe ? rc && rc.tool : st.tool;
+        const wr = ['gt', 'swath', 'stats'].includes(tool);
+        const label = st.recipe || (st.tool ? `${RECIPE_TOOLS[st.tool]} (inline)` : '(pick a recipe)');
+        return `${i + 1}. ${label}${wr ? `  →  ${routineOutPath(P2, st._slug)}` : ''}${st.recipe && !rc ? '   ⚠ recipe not found' : ''}`;
       }).join('\n') || '(no steps yet)';
     } catch (e) { prev.textContent = '⚠ ' + e.message; }
   };
@@ -3892,7 +3959,8 @@ function openRoutineWindow(r0) {
     if (win.body.querySelector('.rw-ovr.err')) { msg('routine: fix the override YAML first (the red box)'); return null; }
     let name = nameI.value.trim();
     if (!name) { name = ((await microPrompt('routine name', '')) || '').trim(); if (!name) return null; nameI.value = name; }
-    const rec = { name, tool: 'routine', params: collect(), inputs: Array.isArray(model.inputs) && model.inputs.length ? model.inputs : undefined, file: file || 'recipes/' + recipeSlug(name) + '.yaml' };
+    const goodInputs = (model.inputs || []).filter((x) => x && x.name);
+    const rec = { name, tool: 'routine', params: collect(), inputs: goodInputs.length ? goodInputs : undefined, file: file || 'recipes/' + recipeSlug(name) + '.yaml' };
     try {
       const fh = await resolveFileHandle(_project.dir, rec.file, { create: true });
       const w = await fh.createWritable(); await w.write(recipeYaml(rec)); await w.close();
