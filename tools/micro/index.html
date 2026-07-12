@@ -10832,7 +10832,7 @@ function makeDemoBlockCsv() {
 // column conventions per the @gcu/condenser drillhole provider)
 function makeDemoDrillholes() {
   const D = _DEMO, rnd = mulberry32(11);
-  const collar = ['HOLEID,X,Y,Z'], survey = ['HOLEID,DEPTH,AZ,DIP'], assay = ['HOLEID,FROM,TO,FE'];
+  const collar = ['HOLEID,X,Y,Z,EOH,COMPANY'], survey = ['HOLEID,DEPTH,AZ,DIP'], assay = ['HOLEID,FROM,TO,FE'];
   const zc = D.z0 + D.nz * D.dz + 10;                     // collar just above the model top
   let n = 0;
   for (let gy = 0; gy < 3; gy++) {
@@ -10840,13 +10840,20 @@ function makeDemoDrillholes() {
       const id = `DH${String(++n).padStart(3, '0')}`;
       const x = D.x0 + (0.15 + 0.7 * gx / 3) * D.nx * D.dx;
       const y = D.y0 + (0.15 + 0.7 * gy / 2) * D.ny * D.dy;
-      collar.push(`${id},${x.toFixed(1)},${y.toFixed(1)},${zc}`);
+      // two campaigns: PIONEER's early scout holes stopped shallow; MERIDIAN
+      // drilled to the model floor — so the hole filter + broadcast have real
+      // hole-granularity data to work with (EOH, COMPANY)
+      const pioneer = n % 3 === 1;
+      const maxDp = pioneer ? 150 : 500;
       survey.push(`${id},0,0,-90`);                        // vertical hole
-      for (let dp = 0; dp < 500; dp += 5) {
+      let eoh = 0;
+      for (let dp = 0; dp < maxDp; dp += 5) {
         const zmid = zc - (dp + 2.5);
         if (zmid < D.z0) break;
         assay.push(`${id},${dp},${dp + 5},${_demoFeAt(x, y, zmid, rnd).toFixed(2)}`);
+        eoh = dp + 5;
       }
+      collar.push(`${id},${x.toFixed(1)},${y.toFixed(1)},${zc},${eoh},${pioneer ? 'PIONEER' : 'MERIDIAN'}`);
     }
   }
   return {
