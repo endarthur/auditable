@@ -713,6 +713,49 @@ await p.close();
     return document.querySelector('#fdExpr').classList.contains('err') && document.querySelector('#fdErr').textContent.length > 0;
   });
   chk(`editor: live validation flags a bad expression`, edErr);
+  // op dropdowns / clickable joiners / bracket groups — every projected element
+  // rewrites its own source span (ops via the cmp op-token span, and/or via the
+  // joiner token span, groups via paren extents + insert-before-')').
+  await pf.evaluate(async () => {
+    const ed = document.querySelector('#fdExpr');
+    ed.focus(); ed.value = 'FE > 45 and LITO = "HEMATITE"'; ed.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 500));
+    ed.dispatchEvent(new Event('change', { bubbles: true })); ed.blur();
+    await new Promise((r) => setTimeout(r, 200));
+  });
+  const opsw = await pf.evaluate(async () => {
+    const s2 = [...document.querySelectorAll('#fdBody .fd-opsel')].find((x) => x.value === '>');
+    if (!s2) return { text: 'NO OP SELECT' };
+    s2.value = '<='; s2.dispatchEvent(new Event('change'));
+    await new Promise((r) => setTimeout(r, 400));
+    const L = window._micro.layers()[0]; let h = 0; for (const m of L._filterMask) if (m) h++;
+    return { text: document.querySelector('#fdExpr').value, h };
+  });
+  chk(`op dropdown rewrites the op token ("${opsw.text}", ${opsw.h} hits)`,
+    opsw.text === 'FE <= 45 and LITO = "HEMATITE"' && opsw.h > 0);
+  const jsw = await pf.evaluate(async () => {
+    const pill = document.querySelector('#fdBody .fd-op.click');
+    if (!pill) return 'NO CLICKABLE PILL';
+    pill.click();
+    await new Promise((r) => setTimeout(r, 300));
+    return document.querySelector('#fdExpr').value;
+  });
+  chk(`joiner pill click switches and → or ("${jsw}")`, jsw === 'FE <= 45 or LITO = "HEMATITE"');
+  const grp = await pf.evaluate(async () => {
+    let add = [...document.querySelectorAll('#fdBody .fd-add')].pop();       // top-level add: seed an and-group
+    add.querySelector('.fd-opsel').value = 'and ( … )';
+    let col = [...add.querySelectorAll('select')].pop(); col.value = 'n:FE'; col.dispatchEvent(new Event('change'));
+    await new Promise((r) => setTimeout(r, 400));
+    const boxed = !!document.querySelector('#fdBody .fd-group');
+    add = document.querySelector('#fdBody .fd-group .fd-add');               // then add INSIDE the brackets
+    if (!add) return { boxed, text: 'NO GROUP ADD' };
+    const js = add.querySelector('.fd-opsel'); if (js) js.value = 'or';
+    col = [...add.querySelectorAll('select')].pop(); col.value = 'n:FE'; col.dispatchEvent(new Event('change'));
+    await new Promise((r) => setTimeout(r, 400));
+    return { boxed, text: document.querySelector('#fdExpr').value };
+  });
+  chk(`bracket seed + add-inside-group ("${grp.text}")`,
+    grp.boxed && /or LITO = "HEMATITE" and \(FE > [0-9.]+ or FE > [0-9.]+\)$/.test(grp.text));
   await pf.close();
 }
 

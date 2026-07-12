@@ -340,3 +340,21 @@ test('CHUNK ORACLE — multi-row battery: typed + JS columns, blanks interleaved
     }
   }
 });
+
+test('clause spans: op tokens, joiners, extents, paren groups (widget-UI contract)', () => {
+  const src = 'FE >= 4.5 and (LITO = "HEM" or SI between 1 and 2)';
+  const ast = parse(src);
+  // and-node carries its joiner token span
+  assert.equal(ast.t, 'and');
+  assert.equal(src.slice(ast.jStart, ast.jEnd), 'and');
+  // cmp carries its op token span + a whole-clause extent
+  const cmp = ast.l;
+  assert.equal(src.slice(cmp.opStart, cmp.opEnd), '>=');
+  assert.equal(src.slice(cmp.start, cmp.end), 'FE >= 4.5');
+  // the parenthesized group records its paren extent; inner or keeps its joiner
+  const grp = ast.r;
+  assert.equal(grp.t, 'or');
+  assert.equal(src.slice(grp.gStart, grp.gEnd), '(LITO = "HEM" or SI between 1 and 2)');
+  assert.equal(src.slice(grp.jStart, grp.jEnd), 'or');
+  assert.equal(src.slice(grp.r.start, grp.r.end), 'SI between 1 and 2');
+});

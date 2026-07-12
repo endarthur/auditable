@@ -139,6 +139,11 @@
   #fdrawer .fd-row.nw { flex-wrap: nowrap; }
   #fdrawer .fd-row.nw input[type="number"] { width: 68px; flex: 0 0 auto; }
   #fdrawer .fd-row.nw input[type="range"] { min-width: 56px; }
+  #fdrawer .fd-group { border-left: 2px solid var(--bd2); padding: 6px 0 0 10px; margin: 2px 0 8px; }
+  #fdrawer .fd-op.click { cursor: pointer; display: inline-block; border: 1px solid transparent; border-radius: 8px; padding: 0 7px; }
+  #fdrawer .fd-op.click:hover { border-color: var(--bd2); color: var(--text-hi); }
+  #fdrawer select { background: #222; color: var(--text); border: 1px solid var(--bd2); border-radius: 3px; font: inherit; }
+  #fdrawer .fd-opsel { flex: 0 0 auto; color: var(--muted); }
   #bar #filter:focus { outline: none; border-color: var(--info); }
   #bar #filter.err { border-color: #c0584a; }
   #bar #filter::placeholder { color: var(--faint); }
@@ -7526,7 +7531,7 @@ function fdApply(text) {
 function fdReplace(sp, txt) {                              // surgical span edit + shift siblings
   const s0 = fdSrc(), nt = s0.slice(0, sp.start) + txt + s0.slice(sp.end);
   const delta = txt.length - (sp.end - sp.start);
-  for (const o of _fdSpans) { if (o !== sp && o.start >= sp.end) { o.start += delta; o.end += delta; } }
+  for (const o of _fdSpans) { if (o === sp) continue; if (o.start >= sp.end) { o.start += delta; o.end += delta; } else if (o.start <= sp.start && o.end >= sp.end) { o.end += delta; } }   // after: shift; containing extent: stretch
   sp.end = sp.start + txt.length;
   fdApply(nt);
 }
@@ -7551,18 +7556,22 @@ function fdValues(L, col, cur) {
 function fdLeafSpec(n) {                                    // classify a clause → a widget spec
   const isF = (x) => x && x.t === 'field', numLit = (x) => x && (x.t === 'num' || (x.t === 'neg' && x.start != null)) && x.start != null;
   const numVal = (x) => (x.t === 'neg' ? -x.e.v : x.v);
+  const opSp = (x) => (x.opStart != null ? { start: x.opStart, end: x.opEnd } : null);
   if (n.t === 'cmp') {
-    if (isF(n.l) && numLit(n.r)) return { kind: 'slider', col: n.l.name, op: n.op, sp: n.r, v: numVal(n.r) };
-    if (isF(n.r) && numLit(n.l)) return { kind: 'slider', col: n.r.name, op: ({ '<': '>', '>': '<', '<=': '>=', '>=': '<=' }[n.op] || n.op), sp: n.l, v: numVal(n.l), flipped: true };
-    if (isF(n.l) && n.r && n.r.t === 'str' && n.r.start != null && (n.op === '=' || n.op === '!=')) return { kind: 'chips', col: n.l.name, op: n.op, picks: [n.r] };
+    if (isF(n.l) && numLit(n.r)) return { kind: 'slider', col: n.l.name, op: n.op, sp: n.r, v: numVal(n.r), opSp: opSp(n), node: n };
+    if (isF(n.r) && numLit(n.l)) return { kind: 'slider', col: n.r.name, op: ({ '<': '>', '>': '<', '<=': '>=', '>=': '<=' }[n.op] || n.op), sp: n.l, v: numVal(n.l), flipped: true, opSp: opSp(n), node: n };
+    if (isF(n.l) && n.r && n.r.t === 'str' && n.r.start != null && (n.op === '=' || n.op === '!=')) return { kind: 'chips', col: n.l.name, op: n.op, picks: [n.r], node: n };
   }
-  if (n.t === 'between' && isF(n.e) && numLit(n.lo) && numLit(n.hi)) return { kind: 'range', col: n.e.name, lo: n.lo, hi: n.hi, vlo: numVal(n.lo), vhi: numVal(n.hi) };
-  if (n.t === 'in' && isF(n.e) && n.set.every((m2) => m2.t === 'str' && m2.start != null)) return { kind: 'chips', col: n.e.name, op: 'in', picks: n.set };
-  if (n.t === 'isblank' && isF(n.e)) return { kind: 'flag', col: n.e.name, label: 'is blank' };
-  if (n.t === 'isfilled' && isF(n.e)) return { kind: 'flag', col: n.e.name, label: 'is filled' };
+  if (n.t === 'between' && isF(n.e) && numLit(n.lo) && numLit(n.hi)) return { kind: 'range', col: n.e.name, lo: n.lo, hi: n.hi, vlo: numVal(n.lo), vhi: numVal(n.hi), node: n };
+  if (n.t === 'in' && isF(n.e) && n.set.every((m2) => m2.t === 'str' && m2.start != null)) return { kind: 'chips', col: n.e.name, op: 'in', picks: n.set, node: n };
+  if (n.t === 'isblank' && isF(n.e)) return { kind: 'flag', col: n.e.name, label: 'is blank', other: 'filled', node: n };
+  if (n.t === 'isfilled' && isF(n.e)) return { kind: 'flag', col: n.e.name, label: 'is filled', other: 'blank', node: n };
   if ((n.t === 'contains' && isF(n.l) && n.r && n.r.t === 'str' && n.r.start != null)) return { kind: 'text', col: n.l.name, verb: 'contains', sp: n.r, v: n.r.v };
   if (n.t === 'matches' && isF(n.e)) return { kind: 'expr', label: quoteIdent(n.e.name) + ' matches …' };
-  if (n.t === 'not') { const inner = fdLeafSpec(n.e); if (inner && inner.kind !== 'expr') { inner.negated = true; return inner; } }
+  if (n.t === 'not') {                                      // postfix not keeps its extent (op edits stay honest);
+    const inner = fdLeafSpec(n.e);                          // prefix `not (…)` has none → structural edits hidden
+    if (inner && inner.kind !== 'expr') { inner.negated = true; inner.node = n.start != null ? n : null; return inner; }
+  }
   return { kind: 'expr', label: 'expression' };
 }
 // the drawer skeleton (built once per page): header + a MULTILINE expression
@@ -7610,6 +7619,176 @@ function fdValidateUI() {
   ed.classList.toggle('err', !ok); errEl.textContent = msg;
   return ok;
 }
+const FDFLIP = { '<': '>', '>': '<', '<=': '>=', '>=': '<=' };
+// a compact operator <select> that rewrites its clause on pick
+function fdOpSel(opts, cur, onPick) {
+  const s = document.createElement('select'); s.className = 'fd-opsel';
+  for (const o of opts) s.append(new Option(o, o));
+  s.value = cur;
+  s.onchange = () => onPick(s.value);
+  return s;
+}
+// flatten a same-joiner chain — but a PARENTHESIZED child stays a nested group
+// (even same-op), so `A and (B or C)` and `A and (B and C)` both render as boxes.
+function fdChain(n) {
+  if (!n || (n.t !== 'and' && n.t !== 'or')) return { op: null, items: n ? [n] : [], joiners: [] };
+  const op = n.t, items = [], joiners = [];
+  (function walk(x, root) {
+    if (x && x.t === op && (root || x.gStart == null) && x.jStart != null) { walk(x.l); joiners.push({ start: x.jStart, end: x.jEnd }); walk(x.r); }
+    else items.push(x);
+  })(n, true);
+  return { op, items, joiners };
+}
+// the add-condition row: [joiner…] + [column…] → seeds an editable clause
+// (numeric → `col > mid`, category → `col = "first"`; every piece is then
+// changeable in place via the row's own op dropdown / widgets).
+function fdAddRow(AL, insert, defJoin, compact) {
+  const row = document.createElement('div'); row.className = 'fd-row fd-add';
+  let joinSel = null;
+  if (fdSrc().trim()) {
+    const opts = compact ? ['and', 'or'] : ['and', 'or', 'and ( … )', '( all ) or …'];
+    joinSel = document.createElement('select'); joinSel.className = 'fd-opsel';
+    for (const o of opts) joinSel.append(new Option(o, o));
+    joinSel.value = defJoin;
+    row.appendChild(joinSel);
+  }
+  const sel = document.createElement('select');
+  const nums = numericColsOf(AL); const h = layerTableHeader(AL); const mm = h.mapping || {};
+  const catName = mm.cat != null ? h.columns[mm.cat] : null;
+  sel.append(new Option('add condition…', ''));
+  for (const c of nums) sel.append(new Option(c, 'n:' + c));
+  if (catName) sel.append(new Option(catName, 'c:' + catName));
+  sel.onchange = () => {
+    const v = sel.value; if (!v) return;
+    const col = v.slice(2);
+    let clause;
+    if (v[0] === 'c') { const vals = fdValues(AL, col, []); clause = quoteIdent(col) + ' = "' + (vals[0] || '') + '"'; }
+    else { const [lo, hi] = fdBounds(AL, col, 0); clause = quoteIdent(col) + ' > ' + fdNum((lo + hi) / 2, (hi - lo) / 200 || 0.01); }
+    insert(clause, joinSel ? joinSel.value : 'and');
+    clearTimeout(_fdTimer); applyBlockFilter(fdSrc());
+    renderFilterDrawer();
+  };
+  row.appendChild(sel);
+  return row;
+}
+// render one chain level: leaf rows joined by CLICKABLE and/or pills (each pill
+// rewrites its own joiner token); nested/parenthesized groups indent, and a
+// parenthesized group gets its own add row inserting INSIDE the brackets.
+function fdRenderChain(d, n, AL) {
+  const ch = fdChain(n);
+  ch.items.forEach((it, i2) => {
+    if (i2 > 0) {
+      const j = ch.joiners[i2 - 1];
+      const o = document.createElement('div'); o.className = 'fd-op'; o.textContent = ch.op;
+      if (j && j.start != null) {
+        _fdSpans.push(j);
+        o.classList.add('click'); o.title = 'switch and ↔ or';
+        o.onclick = () => { fdReplace(j, ch.op === 'and' ? 'or' : 'and'); renderFilterDrawer(); };
+      }
+      d.appendChild(o);
+    }
+    const nested = it && (it.t === 'and' || it.t === 'or');
+    if (nested || (it && it.gStart != null)) {
+      const g = document.createElement('div'); g.className = 'fd-group';
+      if (nested) fdRenderChain(g, it, AL);
+      else fdRenderLeaf(g, it, AL);
+      if (it.gStart != null && AL && layerTableHeader(AL)) {
+        const at = { start: it.gEnd - 1, end: it.gEnd - 1 };   // just before the group's ')'
+        _fdSpans.push(at);
+        g.appendChild(fdAddRow(AL, (clause, join) => { fdReplace(at, ' ' + join + ' ' + clause); }, it.t === 'or' ? 'or' : 'and', true));
+      }
+      d.appendChild(g);
+    } else fdRenderLeaf(d, it, AL);
+  });
+}
+function fdRenderLeaf(d, leaf, AL) {
+  const spec = fdLeafSpec(leaf);
+  const row = document.createElement('div'); row.className = 'fd-row';
+  const lab = document.createElement('b'); lab.textContent = (spec.negated ? 'not ' : '') + (spec.col || ''); row.appendChild(lab);
+  const extent = spec.node && spec.node.start != null ? spec.node : null;
+  if (extent) _fdSpans.push(extent);
+  if (spec.kind === 'slider' && AL) {
+    row.classList.add('nw');
+    _fdSpans.push(spec.sp);
+    const [lo, hi] = fdBounds(AL, spec.col, spec.v); const step = (hi - lo) / 200 || 0.01;
+    if (spec.opSp) {
+      _fdSpans.push(spec.opSp);
+      const opts = ['>', '>=', '<', '<=', '=', '!=']; if (extent) opts.push('between');
+      row.appendChild(fdOpSel(opts, spec.op, (op2) => {
+        if (op2 === 'between') fdReplace(extent, quoteIdent(spec.col) + ' between ' + fdNum(spec.v, step) + ' and ' + fdNum(hi, step));
+        else fdReplace(spec.opSp, spec.flipped ? (FDFLIP[op2] || op2) : op2);
+        renderFilterDrawer();
+      }));
+    } else { const opEl = document.createElement('span'); opEl.textContent = spec.op; opEl.style.color = 'var(--dim)'; row.appendChild(opEl); }
+    const sl = document.createElement('input'); sl.type = 'range'; sl.min = lo; sl.max = hi; sl.step = step; sl.value = spec.v;
+    const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(spec.v, step);
+    const push = (v) => { fdReplace(spec.sp, fdNum(+v, step)); };
+    sl.oninput = () => { nb.value = fdNum(+sl.value, step); push(sl.value); };
+    sl.onchange = () => renderFilterDrawer();            // drag end → resync spans
+    nb.onchange = () => { push(nb.value); renderFilterDrawer(); };
+    row.append(sl, nb);
+  } else if (spec.kind === 'range' && AL) {
+    row.classList.add('nw');
+    _fdSpans.push(spec.lo, spec.hi);
+    const [lo, hi] = fdBounds(AL, spec.col, (spec.vlo + spec.vhi) / 2); const step = (hi - lo) / 200 || 0.01;
+    if (extent) {
+      row.appendChild(fdOpSel(['between', '>', '>=', '<', '<=', '=', '!='], 'between', (op2) => {
+        if (op2 === 'between') return;
+        fdReplace(extent, quoteIdent(spec.col) + ' ' + op2 + ' ' + fdNum(spec.vlo, step));
+        renderFilterDrawer();
+      }));
+    } else { const opEl = document.createElement('span'); opEl.textContent = 'between'; opEl.style.color = 'var(--dim)'; opEl.style.flex = '0 0 auto'; row.appendChild(opEl); }
+    const mk = (sp, v) => { const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(v, step); nb.onchange = () => { fdReplace(sp, fdNum(+nb.value, step)); renderFilterDrawer(); }; return nb; };
+    const s1 = document.createElement('input'); s1.type = 'range'; s1.min = lo; s1.max = hi; s1.step = step; s1.value = spec.vlo;
+    const s2 = document.createElement('input'); s2.type = 'range'; s2.min = lo; s2.max = hi; s2.step = step; s2.value = spec.vhi;
+    s1.oninput = () => fdReplace(spec.lo, fdNum(+s1.value, step)); s2.oninput = () => fdReplace(spec.hi, fdNum(+s2.value, step));
+    s1.onchange = s2.onchange = () => renderFilterDrawer();
+    row.append(mk(spec.lo, spec.vlo), s1, s2, mk(spec.hi, spec.vhi));   // num | lo-slider | hi-slider | num, one aligned line
+  } else if (spec.kind === 'chips' && AL) {
+    spec.picks.forEach((m2) => _fdSpans.push(m2));
+    const cur = spec.picks.map((m2) => m2.v);
+    const vals = fdValues(AL, spec.col, cur);
+    const q = (x) => '"' + x + '"';
+    const curOp = spec.negated && spec.op === 'in' ? 'not in' : spec.op;
+    if (extent && !(spec.negated && spec.op !== 'in')) {
+      row.appendChild(fdOpSel(['=', '!=', 'in', 'not in'], curOp, (op2) => {
+        const txt = (op2 === 'in' || op2 === 'not in')
+          ? quoteIdent(spec.col) + ' ' + op2 + ' (' + cur.map(q).join(', ') + ')'
+          : quoteIdent(spec.col) + ' ' + op2 + ' ' + q(cur[0]);
+        fdReplace(extent, txt);
+        renderFilterDrawer();
+      }));
+    } else { const opEl = document.createElement('span'); opEl.textContent = curOp; opEl.style.color = 'var(--dim)'; row.appendChild(opEl); }
+    for (const v of vals) {
+      const ch = document.createElement('span'); ch.className = 'fd-chip' + (cur.includes(v) ? ' on' : ''); ch.textContent = v;
+      ch.onclick = () => {
+        if (spec.op === 'in') {                           // multi: rewrite the member-list span
+          const now = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v];
+          if (!now.length) return;
+          const first = spec.picks[0], last = spec.picks[spec.picks.length - 1];
+          fdReplace({ start: first.start, end: last.end }, now.map(q).join(', '));
+        } else fdReplace(spec.picks[0], q(v));            // single: swap the literal
+        renderFilterDrawer();
+      };
+      row.appendChild(ch);
+    }
+  } else if (spec.kind === 'text') {
+    _fdSpans.push(spec.sp);
+    const t = document.createElement('input'); t.type = 'text'; t.value = spec.v; t.style.width = '140px';
+    t.onchange = () => { fdReplace(spec.sp, '"' + t.value.replace(/"/g, '') + '"'); renderFilterDrawer(); };
+    row.append(document.createTextNode(spec.verb), t);
+  } else if (spec.kind === 'flag') {
+    const f = document.createElement('span'); f.className = 'fd-chip on'; f.textContent = spec.label;
+    if (extent && !spec.negated) {                        // click → toggle blank ↔ filled
+      f.title = 'switch blank ↔ filled';
+      f.onclick = () => { fdReplace(extent, quoteIdent(spec.col) + ' is ' + spec.other); renderFilterDrawer(); };
+    }
+    row.appendChild(f);
+  } else {
+    const x = document.createElement('span'); x.className = 'fd-expr'; x.textContent = spec.label || 'expression'; row.appendChild(x);
+  }
+  d.appendChild(row);
+}
 function renderFilterDrawer() {
   fdSkeleton();
   const ed = $('#fdExpr');
@@ -7620,87 +7799,22 @@ function renderFilterDrawer() {
   $('#fdrawer .fd-dot').textContent = fdSrc() === _fdSnap ? '' : '●';
   const src = fdSrc();
   let ast = null; if (src.trim()) { try { ast = parse(src); } catch { ast = null; } }
-  const leaves = [], ops = [];
-  (function split(n) { if (n && (n.t === 'and' || n.t === 'or')) { split(n.l); ops.push(n.t); split(n.r); } else if (n) leaves.push(n); })(ast);
   if (src.trim() && !ast) { const r = document.createElement('div'); r.className = 'fd-row'; r.innerHTML = '<span class="fd-expr">can’t parse — fix the text first</span>'; d.appendChild(r); }
   if (!src.trim()) { const r = document.createElement('div'); r.className = 'fd-hint'; r.textContent = 'no filter yet — type an expression above, or add a condition below'; d.appendChild(r); }
-  leaves.forEach((leaf, li) => {
-    if (li > 0) { const o = document.createElement('div'); o.className = 'fd-op'; o.textContent = ops[li - 1]; d.appendChild(o); }
-    const spec = fdLeafSpec(leaf);
-    const row = document.createElement('div'); row.className = 'fd-row';
-    const lab = document.createElement('b'); lab.textContent = (spec.negated ? 'not ' : '') + (spec.col || ''); row.appendChild(lab);
-    if (spec.kind === 'slider' && AL) {
-      row.classList.add('nw');
-      _fdSpans.push(spec.sp);
-      const [lo, hi] = fdBounds(AL, spec.col, spec.v); const step = (hi - lo) / 200 || 0.01;
-      const opEl = document.createElement('span'); opEl.textContent = spec.op; opEl.style.color = 'var(--dim)';
-      const sl = document.createElement('input'); sl.type = 'range'; sl.min = lo; sl.max = hi; sl.step = step; sl.value = spec.v;
-      const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(spec.v, step);
-      const push = (v) => { fdReplace(spec.sp, fdNum(+v, step)); };
-      sl.oninput = () => { nb.value = fdNum(+sl.value, step); push(sl.value); };
-      sl.onchange = () => renderFilterDrawer();            // drag end → resync spans
-      nb.onchange = () => { push(nb.value); renderFilterDrawer(); };
-      row.append(opEl, sl, nb);
-    } else if (spec.kind === 'range' && AL) {
-      row.classList.add('nw');
-      _fdSpans.push(spec.lo, spec.hi);
-      const [lo, hi] = fdBounds(AL, spec.col, (spec.vlo + spec.vhi) / 2); const step = (hi - lo) / 200 || 0.01;
-      const opEl = document.createElement('span'); opEl.textContent = 'between'; opEl.style.color = 'var(--dim)'; opEl.style.flex = '0 0 auto';
-      const mk = (sp, v) => { const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(v, step); nb.onchange = () => { fdReplace(sp, fdNum(+nb.value, step)); renderFilterDrawer(); }; return nb; };
-      const s1 = document.createElement('input'); s1.type = 'range'; s1.min = lo; s1.max = hi; s1.step = step; s1.value = spec.vlo;
-      const s2 = document.createElement('input'); s2.type = 'range'; s2.min = lo; s2.max = hi; s2.step = step; s2.value = spec.vhi;
-      s1.oninput = () => fdReplace(spec.lo, fdNum(+s1.value, step)); s2.oninput = () => fdReplace(spec.hi, fdNum(+s2.value, step));
-      s1.onchange = s2.onchange = () => renderFilterDrawer();
-      row.append(opEl, mk(spec.lo, spec.vlo), s1, s2, mk(spec.hi, spec.vhi));   // num | lo-slider | hi-slider | num, one aligned line
-    } else if (spec.kind === 'chips' && AL) {
-      spec.picks.forEach((m2) => _fdSpans.push(m2));
-      const cur = spec.picks.map((m2) => m2.v);
-      const vals = fdValues(AL, spec.col, cur);
-      const opEl = document.createElement('span'); opEl.textContent = spec.op; opEl.style.color = 'var(--dim)'; row.appendChild(opEl);
-      for (const v of vals) {
-        const ch = document.createElement('span'); ch.className = 'fd-chip' + (cur.includes(v) ? ' on' : ''); ch.textContent = v;
-        ch.onclick = () => {
-          if (spec.op === 'in') {                           // multi: rewrite the member-list span
-            const now = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v];
-            if (!now.length) return;
-            const first = spec.picks[0], last = spec.picks[spec.picks.length - 1];
-            fdReplace({ start: first.start, end: last.end }, now.map((x) => '"' + x + '"').join(', '));
-          } else fdReplace(spec.picks[0], '"' + v + '"');   // single: swap the literal
-          renderFilterDrawer();
-        };
-        row.appendChild(ch);
-      }
-    } else if (spec.kind === 'text') {
-      _fdSpans.push(spec.sp);
-      const t = document.createElement('input'); t.type = 'text'; t.value = spec.v; t.style.width = '140px';
-      t.onchange = () => { fdReplace(spec.sp, '"' + t.value.replace(/"/g, '') + '"'); renderFilterDrawer(); };
-      row.append(document.createTextNode(spec.verb), t);
-    } else if (spec.kind === 'flag') {
-      const f = document.createElement('span'); f.className = 'fd-chip on'; f.textContent = spec.label; row.appendChild(f);
-    } else {
-      const x = document.createElement('span'); x.className = 'fd-expr'; x.textContent = spec.label || 'expression'; row.appendChild(x);
-    }
-    d.appendChild(row);
-  });
-  // add a condition — numeric → slider-ready clause; category → first value
+  if (ast) fdRenderChain(d, ast, AL);
+  // the top-level add: joiner picker incl. bracket seeds — `and ( … )` opens a
+  // new group after the current text; `( all ) or …` wraps EVERYTHING so far
+  // and starts an alternative branch. A trailing # comment forces a newline
+  // join so the appended clause can't be eaten by it.
   if (AL && layerTableHeader(AL)) {
-    const row = document.createElement('div'); row.className = 'fd-row fd-add';
-    const sel = document.createElement('select');
-    const nums = numericColsOf(AL); const h = layerTableHeader(AL); const mm = h.mapping || {};
-    const catName = mm.cat != null ? h.columns[mm.cat] : null;
-    sel.append(new Option('add condition…', ''));
-    for (const c of nums) sel.append(new Option(c, 'n:' + c));
-    if (catName) sel.append(new Option(catName, 'c:' + catName));
-    sel.onchange = () => {
-      const v = sel.value; if (!v) return;
-      const col = v.slice(2), pre = fdSrc().trim() ? fdSrc() + ' and ' : '';
-      let clause;
-      if (v[0] === 'c') { const vals = fdValues(AL, col, []); clause = quoteIdent(col) + ' = "' + (vals[0] || '') + '"'; }
-      else { const [lo, hi] = fdBounds(AL, col, 0); clause = quoteIdent(col) + ' > ' + fdNum((lo + hi) / 2, (hi - lo) / 200 || 0.01); }
-      fdApply(pre + clause); clearTimeout(_fdTimer); applyBlockFilter(fdSrc());
-      renderFilterDrawer();
-    };
-    row.appendChild(sel); d.appendChild(row);
+    d.appendChild(fdAddRow(AL, (clause, join) => {
+      const cur = fdSrc().trim();
+      if (!cur) { fdApply(clause); return; }
+      const sep = /#[^\n]*$/.test(cur) ? '\n' : ' ';
+      if (join === 'and ( … )') fdApply(cur + sep + 'and (' + clause + ')');
+      else if (join === '( all ) or …') fdApply((cur.includes('\n') || cur.includes('#') ? '(\n' + cur + '\n)' : '(' + cur + ')') + ' or ' + clause);
+      else fdApply(cur + sep + join + ' ' + clause);
+    }, 'and', false));
   }
 }
 function toggleFilterDrawer(force) {

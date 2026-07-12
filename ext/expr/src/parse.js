@@ -113,7 +113,7 @@ export function parse(src) {
   function primary() {
     const t = toks[i];
     if (!t) fail('unexpected end of expression');
-    if (t.k === 'op' && t.v === '(') { i++; const e = expr(); eatOp(')'); return e; }
+    if (t.k === 'op' && t.v === '(') { i++; const e = expr(); eatOp(')'); if (e && typeof e === 'object') { e.gStart = t.start; e.gEnd = toks[i - 1].end; } return e; }   // paren-group extent → grouping UIs
     if (t.k === 'num') { i++; return { t: 'num', v: t.v, start: t.start, end: t.end }; }   // literals carry SOURCE SPANS
     if (t.k === 'str') { i++; return { t: 'str', v: t.v, start: t.start, end: t.end }; }   // (widget UIs rewrite them surgically)
     if (t.k === 'field') { i++; return { t: 'field', name: t.v }; }     // ["…"] bracket escape
@@ -165,35 +165,37 @@ export function parse(src) {
     return l;
   }
   function comparison() {
+    const st = toks[i] ? toks[i].start : 0;                               // clause EXTENT: widget UIs rewrite whole
+    const fin = (n) => { if (n && n.start == null) { n.start = st; n.end = toks[i - 1] ? toks[i - 1].end : st; } return n; };   // leaves (op conversions, grouping)
     const l = add();
     if (op('<') || op('>') || op('<=') || op('>=') || op('=') || op('==') || op('!=') || op('<>')) {
-      let o = toks[i].v; i++; if (o === '==') o = '='; if (o === '<>') o = '!=';     // tolerate C / SQL not-equal
-      return { t: 'cmp', op: o, l, r: add() };
+      const ot = toks[i]; let o = ot.v; i++; if (o === '==') o = '='; if (o === '<>') o = '!=';     // tolerate C / SQL not-equal
+      return fin({ t: 'cmp', op: o, l, r: add(), opStart: ot.start, opEnd: ot.end });   // op token span → op dropdowns
     }
-    if (op('~')) { i++; return { t: 'contains', l, r: add() }; }
-    if (op('!~')) { i++; return { t: 'not', e: { t: 'contains', l, r: add() } }; }
-    if (word('between')) { i++; const lo = add(); if (!(word('and') || op('&&'))) fail("expected 'and' in between"); i++; return { t: 'between', e: l, lo, hi: add() }; }
-    if (word('contains')) { i++; return { t: 'contains', l, r: add() }; }
-    if (word('in')) { i++; return { t: 'in', e: l, set: inList() }; }
-    if (word('like')) { i++; return { t: 'matches', e: l, re: likeToRegex(eatStr()) }; }
-    if (word('matches')) { i++; return { t: 'matches', e: l, re: eatStr() }; }
+    if (op('~')) { i++; return fin({ t: 'contains', l, r: add() }); }
+    if (op('!~')) { i++; return fin({ t: 'not', e: { t: 'contains', l, r: add() } }); }
+    if (word('between')) { i++; const lo = add(); if (!(word('and') || op('&&'))) fail("expected 'and' in between"); i++; return fin({ t: 'between', e: l, lo, hi: add() }); }
+    if (word('contains')) { i++; return fin({ t: 'contains', l, r: add() }); }
+    if (word('in')) { i++; return fin({ t: 'in', e: l, set: inList() }); }
+    if (word('like')) { i++; return fin({ t: 'matches', e: l, re: likeToRegex(eatStr()) }); }
+    if (word('matches')) { i++; return fin({ t: 'matches', e: l, re: eatStr() }); }
     if (word('not')) {                                                    // postfix negation: `x not in/contains/like …`
-      if (peekWord('in')) { i += 2; return { t: 'not', e: { t: 'in', e: l, set: inList() } }; }
-      if (peekWord('contains')) { i += 2; return { t: 'not', e: { t: 'contains', l, r: add() } }; }
-      if (peekWord('like')) { i += 2; return { t: 'not', e: { t: 'matches', e: l, re: likeToRegex(eatStr()) } }; }
+      if (peekWord('in')) { i += 2; return fin({ t: 'not', e: { t: 'in', e: l, set: inList() } }); }
+      if (peekWord('contains')) { i += 2; return fin({ t: 'not', e: { t: 'contains', l, r: add() } }); }
+      if (peekWord('like')) { i += 2; return fin({ t: 'not', e: { t: 'matches', e: l, re: likeToRegex(eatStr()) } }); }
     }
     if (word('is')) {
       i++;
       let neg = false; if (word('not')) { neg = true; i++; }              // `is not blank` / `is not filled`
-      if (word('blank')) { i++; return neg ? { t: 'isfilled', e: l } : { t: 'isblank', e: l }; }
-      if (word('filled')) { i++; return neg ? { t: 'isblank', e: l } : { t: 'isfilled', e: l }; }
+      if (word('blank')) { i++; return fin(neg ? { t: 'isfilled', e: l } : { t: 'isblank', e: l }); }
+      if (word('filled')) { i++; return fin(neg ? { t: 'isblank', e: l } : { t: 'isfilled', e: l }); }
       fail("'is' must be followed by 'blank' or 'filled'");
     }
     return l;
   }
   function notE() { if (word('not')) { i++; return { t: 'not', e: comparison() }; } return comparison(); }
-  function andE() { let l = notE(); while (word('and') || op('&&')) { i++; l = { t: 'and', l, r: notE() }; } return l; }
-  function orE() { let l = andE(); while (word('or') || op('||')) { i++; l = { t: 'or', l, r: andE() }; } return l; }
+  function andE() { let l = notE(); while (word('and') || op('&&')) { const jt = toks[i]; i++; l = { t: 'and', l, r: notE(), jStart: jt.start, jEnd: jt.end }; } return l; }
+  function orE() { let l = andE(); while (word('or') || op('||')) { const jt = toks[i]; i++; l = { t: 'or', l, r: andE(), jStart: jt.start, jEnd: jt.end }; } return l; }
   function expr() { return orE(); }
 
   const ast = expr();
