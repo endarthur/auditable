@@ -97,7 +97,7 @@
   #bar #filterClear { position: absolute; right: 1px; top: 1px; bottom: 1px; width: 22px; padding: 0; background: transparent; border: none; color: var(--dim); font-size: 15px; line-height: 1; cursor: pointer; display: none; }
   #bar #filterClear:hover { color: var(--text-hi); }
   #bar #filterWrap.has #filterClear { display: block; }
-  .exprhl { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; white-space: pre; box-sizing: border-box; border: 1px solid transparent; border-radius: 3px; background: var(--bg-field); font-family: var(--mono); color: transparent; }
+  .exprhl { position: absolute; top: 0; left: 0; bottom: 0; right: 0; z-index: 0; pointer-events: none; overflow: hidden; white-space: pre; box-sizing: border-box; border: 1px solid transparent; border-radius: 3px; background: var(--bg-field); font-family: var(--mono); color: transparent; }
   #filterHL { padding: 4px 24px 4px 8px; font-size: 12px; }
   #bar #filter { color: transparent; caret-color: var(--text-hi); background: transparent; position: relative; z-index: 1; }
   #bar #filter::placeholder { color: var(--dim); }
@@ -105,8 +105,11 @@
   .hl-keyword, .hl-operator { color: #5b7fa6; } .hl-function { color: var(--accent); }
   .hl-boolean { color: #8a6fae; } .hl-punct { color: var(--muted); } .hl-error { color: #b0563a; }
   .hl-comment { color: var(--dim); font-style: italic; }
-  #bar #filterWidgets { position: absolute; right: 20px; top: 1px; bottom: 1px; width: 22px; padding: 0; background: transparent; border: none; color: var(--dim); font-size: 12px; line-height: 1; cursor: pointer; }
+  #bar #filterWidgets { flex: 0 0 auto; width: 24px; padding: 0; background: var(--bg-field); border: 1px solid var(--bd2); border-left: none; border-radius: 0 3px 3px 0; color: var(--dim); font-size: 11px; line-height: 1; cursor: pointer; position: relative; z-index: 2; }
   #bar #filterWidgets:hover, #bar #filterWidgets.on { color: var(--accent); }
+  #bar #filterWrap #filter { border-radius: 3px 0 0 3px; }
+  #bar #filterClear { z-index: 2; right: 25px; }
+  #filterHL { right: 24px; }
   #fdrawer { position: fixed; display: none; z-index: 9; background: #1a1a1a; border: 1px solid var(--bd2); box-shadow: 0 6px 24px rgba(0,0,0,0.5); padding: 10px 12px; font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 340px; max-width: 520px; max-height: 60vh; overflow-y: auto; }
   #fdrawer.show { display: block; }
   #fdrawer .fd-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--accent); }
@@ -649,7 +652,7 @@
     <button class="mb" id="mView">View</button>
     <button class="mb" id="mHelp">Help</button>
     <button class="mb" id="btnCmd" title="command palette (Ctrl/⌘K) — search every action">⌘K</button>
-    <span id="filterWrap"><div id="filterHL" class="exprhl" aria-hidden="true"></div><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterWidgets" title="filter widgets — edit the filter as controls" tabindex="-1">☰</button><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
+    <span id="filterWrap"><div id="filterHL" class="exprhl" aria-hidden="true"></div><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterClear" title="clear the filter" tabindex="-1">×</button><button id="filterWidgets" title="filter widgets — edit the filter as live controls" tabindex="-1">▾</button></span>
     <span class="spacer"></span>
     <button id="btnSelRect" title="select — rectangle (r) · shift adds, alt subtracts · the layers toggle flips to through/volume"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/><path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/></svg></button>
     <button id="btnSelLasso" title="select — lasso (v) · shift adds, alt subtracts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 22a5 5 0 0 1-2-4"/><path d="M3.3 14A6.8 6.8 0 0 1 2 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 0 1-5-1"/><path d="M5 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></button>
@@ -7698,6 +7701,7 @@ function toggleFilterDrawer(force) {
   const d = $('#fdrawer');
   _fdOpen = force !== undefined ? force : !_fdOpen;
   $('#filterWidgets').classList.toggle('on', _fdOpen);
+  $('#filterWidgets').textContent = _fdOpen ? '▴' : '▾';
   if (!_fdOpen) { d.classList.remove('show'); return; }
   { const L = activeLayer(); _fdText = (L && L.filterExpr) || $('#filter').value; }
   _fdSnap = _fdText;

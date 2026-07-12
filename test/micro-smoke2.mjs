@@ -663,8 +663,8 @@ await p.close();
     document.querySelector('#filter').value = e; await window._micro.applyBlockFilter(e);
     const L = window._micro.layers()[0]; let h = 0; for (const m of L._filterMask) if (m) h++; return h;
   }, EXPR);
+  await pf.click('#filterWidgets');                                 // a REAL click — the button must be hittable
   const ui = await pf.evaluate(() => {
-    window._micro.toggleFilterDrawer(true);
     const d = document.querySelector('#fdrawer');
     return { shown: d.classList.contains('show'), sliders: d.querySelectorAll('input[type="range"]').length,
       chips: d.querySelectorAll('.fd-chip').length, on: [...d.querySelectorAll('.fd-chip.on')].map((c) => c.textContent) };
