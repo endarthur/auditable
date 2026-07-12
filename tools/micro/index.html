@@ -133,7 +133,8 @@
   #fdrawer #fdExpr::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 4px; }
   #fdrawer #fdExpr::-webkit-scrollbar-track { background: transparent; }
   #fdrawer .fd-hint { color: var(--dim); margin: 2px 0 8px; }
-  #fdrawer #fdExpr { width: 100%; box-sizing: border-box; position: relative; z-index: 1; color: transparent; caret-color: var(--text-hi); font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; resize: vertical; min-height: 2.6em; margin-bottom: 0; background: transparent; }
+  #fdrawer #fdExpr { width: 100%; box-sizing: border-box; position: relative; z-index: 1; color: transparent; caret-color: var(--text-hi); font-family: var(--mono); font-size: 12px; background: transparent; border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; resize: vertical; min-height: 2.6em; margin-bottom: 0; }
+  #fdrawer #fdExpr::placeholder { color: var(--dim); }
   #fdrawer #fdExpr.err { border-color: #b0563a; }
   #fdrawer #fdErr { color: #b0563a; font-size: 11px; min-height: 14px; margin-bottom: 6px; }
   #fdrawer .fd-row.nw { flex-wrap: nowrap; }
@@ -144,6 +145,23 @@
   #fdrawer .fd-op.click:hover { border-color: var(--bd2); color: var(--text-hi); }
   #fdrawer select { background: #222; color: var(--text); border: 1px solid var(--bd2); border-radius: 3px; font: inherit; }
   #fdrawer .fd-opsel { flex: 0 0 auto; color: var(--muted); }
+  .cw-wrap { display: flex; font-family: var(--mono); font-size: 12px; color: var(--text); }
+  .cw-rail { flex: 0 0 150px; border-right: 1px solid var(--bd2); overflow-y: auto; padding: 6px 0; }
+  .cw-item { padding: 4px 10px; cursor: pointer; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cw-item:hover { color: var(--text-hi); }
+  .cw-item.on { color: var(--accent); background: rgba(255,255,255,0.04); }
+  .cw-item .fx { color: var(--dim); margin-right: 5px; }
+  .cw-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 8px 10px; overflow-y: auto; }
+  .cw-main input[type="text"], .cw-main select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 6px; }
+  .cw-edwrap { position: relative; margin: 6px 0 2px; }
+  .cw-edwrap .exprhl { padding: 4px 6px; font-size: 12px; }
+  .cw-edwrap textarea { width: 100%; box-sizing: border-box; position: relative; z-index: 1; color: transparent; caret-color: var(--text-hi); font-family: var(--mono); font-size: 12px; background: transparent; border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; resize: vertical; min-height: 4em; white-space: pre; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--bd2) transparent; }
+  .cw-edwrap textarea::placeholder { color: var(--dim); }
+  .cw-edwrap textarea.err { border-color: #b0563a; }
+  .cw-err { color: #b0563a; font-size: 11px; min-height: 14px; }
+  .cw-hint { color: var(--dim); font-size: 11px; margin: 2px 0 6px; }
+  .cw-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .cw-row label { color: var(--muted); flex: 0 0 auto; }
   #bar #filter:focus { outline: none; border-color: var(--info); }
   #bar #filter.err { border-color: #c0584a; }
   #bar #filter::placeholder { color: var(--faint); }
@@ -4189,6 +4207,129 @@ function renderLineageTree(container, lin, depth) {
   for (const s of lin.sources || []) renderLineageTree(container, s, depth + 1);
 }
 const _linWins = new Map();
+// ── ƒ CALCULATIONS window — the calc-column authoring workbench (Leapfrog's
+// calculations-editor shape): the column list on a left rail, ONE expression
+// editor on the right — multiline, highlighted, live-validated against the
+// FULL schema (base + stored + the OTHER ƒ columns, so calc-on-calc composes;
+// self-reference is excluded). Typing the expression is the primary interface;
+// the projection widgets (constant sliders, if-ladder case table) layer on top.
+const _calcWins = new Map();
+function openCalcWindow(L, selIdx) {
+  if (!L || !layerTableHeader(L)) { $('#meta').textContent = 'calculations: this layer has no column table'; return; }
+  const ex = _calcWins.get(L.id);
+  if (ex) { raiseWindow(ex.el); if (selIdx != null) ex.select(selIdx); return; }
+  const win = floatWin({ title: `ƒ calculations · ${L.label || L.name}`, sub: '', x: 120, y: 100, w: 620, h: 330, onClose: () => _calcWins.delete(L.id) });
+  win.body.style.cssText += 'display:flex;flex-direction:column;';
+  const wrap = document.createElement('div'); wrap.className = 'cw-wrap'; wrap.style.cssText = 'flex:1;min-height:0;';
+  const rail = document.createElement('div'); rail.className = 'cw-rail';
+  const main = document.createElement('div'); main.className = 'cw-main';
+  wrap.append(rail, main);
+  win.body.appendChild(wrap);
+  let sel = selIdx != null ? selIdx : ((L.calcCols || []).length ? 0 : -1);   // -1 = the add form
+  const select = (k) => { sel = k; render(); };
+  function invalidate() {
+    L._calcFns = null; L._colStats = null; markProjectDirty();
+    if (L === activeLayer() && L.filterExpr) applyBlockFilter(L.filterExpr);   // a live filter picks up the new definition
+    renderProps();
+  }
+  function render() {
+    const cols = L.calcCols || [];
+    if (sel >= cols.length) sel = cols.length ? cols.length - 1 : -1;
+    rail.textContent = '';
+    cols.forEach((c, k) => {
+      const it = document.createElement('div'); it.className = 'cw-item' + (k === sel ? ' on' : '');
+      const fx = document.createElement('span'); fx.className = 'fx'; fx.textContent = 'ƒ';
+      it.append(fx, document.createTextNode(c.name)); it.title = c.expr;
+      it.onclick = () => select(k);
+      rail.appendChild(it);
+    });
+    const add = document.createElement('div'); add.className = 'cw-item' + (sel === -1 ? ' on' : ''); add.textContent = '+ add…';
+    add.onclick = () => select(-1);
+    rail.appendChild(add);
+    renderEditor();
+  }
+  function renderEditor() {
+    main.textContent = '';
+    const h = layerTableHeader(L);
+    const cur = sel >= 0 ? L.calcCols[sel] : null;
+    const nameRow = document.createElement('div'); nameRow.className = 'cw-row';
+    const nameIn = document.createElement('input'); nameIn.type = 'text'; nameIn.placeholder = 'name (e.g. FE_EQ)'; nameIn.style.flex = '1';
+    const tySel = document.createElement('select');
+    for (const [v, t] of [['auto', 'auto'], ['number', 'number'], ['string', 'text']]) tySel.append(new Option(t, v));
+    if (cur) { nameIn.value = cur.name; tySel.value = cur.ty === 'string' ? 'string' : 'number'; }
+    nameRow.append(nameIn, tySel);
+    const edwrap = document.createElement('div'); edwrap.className = 'cw-edwrap';
+    const edhl = document.createElement('div'); edhl.className = 'exprhl'; edhl.setAttribute('aria-hidden', 'true');
+    const ed = document.createElement('textarea'); ed.rows = 3; ed.spellcheck = false; ed.wrap = 'off';
+    ed.placeholder = 'value expression…  e.g.  FE + 0.4 * MN   # comments ok';
+    if (cur) ed.value = cur.expr;
+    edwrap.append(edhl, ed);
+    const err = document.createElement('div'); err.className = 'cw-err';
+    const hint = document.createElement('div'); hint.className = 'cw-hint';
+    hint.textContent = 'a value expression over base + stored + other ƒ columns — if(cond, a, b) · bin(x, breaks…) · math + string fns · # comments';
+    const schemaFor = () => schemaExt(L, h).filter((c) => !cur || String(c.name).toLowerCase() !== String(cur.name).toLowerCase());
+    const check = () => {
+      const t = ed.value.trim();
+      if (!t) { ed.classList.remove('err'); err.textContent = ''; return false; }
+      const v = validate(t, schemaFor());
+      ed.classList.toggle('err', !v.ok);
+      err.textContent = v.ok ? '' : ((v.errors[0] && v.errors[0].message) || 'invalid expression');
+      return v.ok;
+    };
+    const sync = () => syncHL(ed, edhl);
+    for (const ev of ['scroll', 'keyup', 'click']) ed.addEventListener(ev, sync);
+    ed.addEventListener('input', () => { sync(); check(); });
+    const ctr = document.createElement('div'); ctr.className = 'awin-ctrls'; ctr.style.cssText = 'border-top:none;background:none;padding:5px 0;';
+    const saveB = document.createElement('button'); saveB.className = 'awin-btn'; saveB.textContent = cur ? 'save' : 'add column';
+    saveB.onclick = async () => {
+      const name = nameIn.value.trim(), expr = ed.value.trim();
+      const taken = new Set([...h.columns, ...(L.paintCols || []).map((c) => c.name), ...(L.calcCols || []).filter((_, i) => i !== sel).map((c) => c.name)].map((n) => n.toLowerCase()));
+      if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) { err.textContent = 'name: letters/digits/underscore, not starting with a digit'; return; }
+      if (taken.has(name.toLowerCase())) { err.textContent = `"${name}" already exists`; return; }
+      if (!check()) return;
+      try { compileValue(expr, schemaFor(), { decimal: '.' }); } catch (e) { err.textContent = e.message; return; }
+      let ty = tySel.value;
+      if (ty === 'auto') {                                 // infer from a sample row when the expr reads base columns only
+        ty = 'number';
+        try {
+          const ds = deps(expr).map((d) => String(d).toLowerCase());
+          if (ds.every((d) => h.columns.some((c) => String(c).toLowerCase() === d))) {
+            const fnB = compileValue(expr, blockSchema(h), { decimal: '.' });
+            const sample = await sampleRow(L);
+            if (sample) { const val = fnB(sample); ty = typeof val === 'number' && Number.isFinite(val) ? 'number' : 'string'; }
+          }
+        } catch { /* number by default */ }
+      }
+      const entry = { name, expr, ty };
+      L.calcCols = L.calcCols || [];
+      if (sel >= 0) L.calcCols[sel] = entry; else { L.calcCols.push(entry); sel = L.calcCols.length - 1; }
+      invalidate();
+      render();
+      $('#meta').textContent = `ƒ ${name} ${cur ? 'updated' : 'added'} — it works in the filter, color ramps, GT/swath, the record panel, and exports`;
+    };
+    ctr.appendChild(saveB);
+    if (cur) {
+      const rmB = document.createElement('button'); rmB.className = 'awin-btn'; rmB.textContent = 'remove';
+      rmB.onclick = () => { L.calcCols.splice(sel, 1); sel = -1; invalidate(); render(); };
+      const matB = document.createElement('button'); matB.className = 'awin-btn'; matB.textContent = 'materialize → stored';
+      matB.title = 'compute once, store as a real column (survives even if inputs are removed; faster to scan)';
+      matB.onclick = () => materializeCalcCol(L, cur.name);
+      ctr.append(rmB, matB);
+    }
+    const spacer = document.createElement('span'); spacer.className = 'spacer'; spacer.style.flex = '1';
+    ctr.appendChild(spacer);
+    if ((L.calcCols || []).length) {
+      const rcp = document.createElement('button'); rcp.className = 'awin-btn'; rcp.textContent = 'save as recipe…';
+      rcp.title = 'save this calc-column set as a re-runnable recipe — apply the standard derived columns to any fresh model';
+      rcp.onclick = () => saveRecipe('calccols', { layer: L.name, cols: L.calcCols.map((c) => ({ name: c.name, expr: c.expr, ty: c.ty })) }, `${(L.label || L.name).replace(/\.[^.]+$/, '')} columns`);
+      ctr.appendChild(rcp);
+    }
+    main.append(nameRow, edwrap, err, hint, ctr);
+    requestAnimationFrame(sync);
+  }
+  render();
+  _calcWins.set(L.id, { el: win.el, select });
+}
 function openLineageWindow(L) {
   if (!L || !L.lineage) { $('#meta').textContent = 'lineage: none recorded'; return; }
   const ex = _linWins.get(L.id); if (ex) { ex.el.style.zIndex = ++_fwinZ; return; }
@@ -9289,7 +9430,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
   { sep: true },
   { label: 'Layer properties…', action: () => { if (_layers.length) openProps(); } },
   { label: 'Source (mapping / desurvey)…', action: () => openPropsTab('source') },
-  { label: 'Calculated columns…', action: () => openPropsTab('columns') },
+  { label: 'Calculated columns…', action: () => openCalcWindow(activeLayer()) },
   { label: 'Scan columns', action: () => {
     openPropsTab('columns');
     const b = [...document.querySelectorAll('.pp-scan')].find((el) => /scan/.test(el.textContent));
@@ -10958,7 +11099,7 @@ function openProps() {
   if (L && !L._stagePend) L._styleSnap = styleSnap(L);
   renderProps();
 }
-function closeProps() { _propOpen = false; _propFor = null; _calcForm = null; _rampRepaint = null; $('#propPanel').classList.remove('show'); }
+function closeProps() { _propOpen = false; _propFor = null; _rampRepaint = null; $('#propPanel').classList.remove('show'); }
 $('#ppClose').onclick = closeProps;
 function layerHeaderOf(L) {
   const d = L.docs || {};
@@ -10976,7 +11117,7 @@ function renderProps() {
   const L = activeLayer();
   if (!L) { closeProps(); return; }
   if (_propFor !== L.id) {
-    _calcForm = null; _joinForm = null;                    // the forms belong to one layer
+    _joinForm = null;                                      // the form belongs to one layer
     if (!L._stagePend) L._styleSnap = styleSnap(L);        // revert's baseline
   }
   _propFor = L.id;
@@ -12605,6 +12746,10 @@ function renderColumnsTab(body, L) {
     } catch (e) { scan.textContent = `scan failed — ${e.message}`; scan.disabled = false; }
   };
   body.appendChild(scan);
+  const calcB = document.createElement('button'); calcB.className = 'pp-scan';
+  calcB.textContent = (L.calcCols || []).length ? `ƒ calculations… (${L.calcCols.length})` : 'ƒ add calculated column…';
+  calcB.onclick = () => openCalcWindow(L, (L.calcCols || []).length ? 0 : -1);
+  body.appendChild(calcB);
   for (let i = 0; i < h.columns.length; i++) {
     const name = h.columns[i];
     const row = document.createElement('div'); row.className = 'pp-col';
@@ -12645,7 +12790,7 @@ function renderColumnsTab(body, L) {
     const ty = document.createElement('span'); ty.className = 'ty'; ty.textContent = c.ty === 'string' ? 'text' : 'number';
     row.append(fx, nm, ty);
     const openMenu = (x, y) => menuXY(x, y, [
-      { label: 'Edit…', action: () => { _calcForm = { edit: k }; renderProps(); } },
+      { label: 'Edit…', action: () => openCalcWindow(L, k) },
       { label: 'Remove', action: () => { L.calcCols.splice(k, 1); L._calcFns = null; L._colStats = null; markProjectDirty(); renderProps(); } },
     ]);
     const onCtx = (e) => { e.preventDefault(); openMenu(e.clientX, e.clientY); };
@@ -12656,19 +12801,6 @@ function renderColumnsTab(body, L) {
     body.appendChild(row);
     appendColStats(body, L._colStats && L._colStats[c.name], onCtx);
   });
-  if (_calcForm) renderCalcForm(body, L, h);
-  else {
-    const add = document.createElement('button'); add.className = 'pp-scan';
-    add.textContent = 'add calculated column…';
-    add.onclick = () => { _calcForm = { edit: -1 }; renderProps(); };
-    body.appendChild(add);
-    if (calc.length) {
-      const rcp = document.createElement('button'); rcp.className = 'pp-scan';
-      rcp.textContent = 'save columns as recipe…'; rcp.title = 'save this calc-column set as a re-runnable recipe — apply the standard derived columns to any fresh model (replaces same-named, adds new)';
-      rcp.onclick = () => saveRecipe('calccols', { layer: L.name, cols: calc.map((c) => ({ name: c.name, expr: c.expr, ty: c.ty })) }, `${(L.label || L.name).replace(/\.[^.]+$/, '')} columns`);
-      body.appendChild(rcp);
-    }
-  }
   body.appendChild(ppNote('right-click a column: type (number/text — drives the filter and color-by) · use as category / color channel · ƒ columns work in the filter, the scan, and the record panel'));
 }
 function appendColStats(body, stat, onCtx) {
@@ -12685,48 +12817,6 @@ function appendColStats(body, stat, onCtx) {
     d.innerHTML = `n <span class="v">${stat.n.toLocaleString()}</span> · distinct <span class="v">${stat.distinct}${stat.overflow ? '+' : ''}</span> · nulls <span class="v">${stat.nulls.toLocaleString()}</span><br>${top}`;
   }
   body.appendChild(d);
-}
-let _calcForm = null;
-function renderCalcForm(body, L, h) {
-  const cur = _calcForm.edit >= 0 ? L.calcCols[_calcForm.edit] : null;
-  const box = document.createElement('div');
-  box.style.cssText = 'border:1px solid var(--border);padding:8px;margin:6px 0;';
-  const nameIn = document.createElement('input'); nameIn.type = 'text'; nameIn.placeholder = 'name (e.g. FE_EQ)';
-  nameIn.style.cssText = 'width:100%;background:#242424;color:var(--text);border:1px solid var(--border);font:inherit;padding:3px 5px;margin-bottom:6px;';
-  const exprIn = document.createElement('input'); exprIn.type = 'text'; exprIn.placeholder = 'expression (e.g. FE + 0.4 * MN)';
-  exprIn.style.cssText = nameIn.style.cssText;
-  if (cur) { nameIn.value = cur.name; exprIn.value = cur.expr; }
-  const err = document.createElement('div'); err.className = 'pp-note'; err.style.color = 'var(--muted)';
-  err.textContent = 'an @gcu/expr value expression over the columns above';
-  const rowB = document.createElement('div'); rowB.className = 'pp-bulk';
-  const okA = document.createElement('a'); okA.textContent = cur ? 'save' : 'add';
-  const cancelA = document.createElement('a'); cancelA.textContent = 'cancel';
-  cancelA.onclick = () => { _calcForm = null; renderProps(); };
-  okA.onclick = async () => {
-    const name = nameIn.value.trim(), expr = exprIn.value.trim();
-    const taken = new Set([...h.columns, ...(L.calcCols || []).filter((_, i) => i !== _calcForm.edit).map((c) => c.name)].map((n) => n.toLowerCase()));
-    if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) { err.textContent = 'name: letters/digits/underscore, not starting with a digit'; return; }
-    if (taken.has(name.toLowerCase())) { err.textContent = `"${name}" already exists`; return; }
-    const base = blockSchema(h);
-    const v = validate(expr, base);
-    if (!v.ok) { err.textContent = v.errors[0] && v.errors[0].message || 'invalid expression'; return; }
-    let fn;
-    try { fn = compileValue(expr, base, { decimal: '.' }); }
-    catch (e) { err.textContent = e.message; return; }
-    let ty = 'number';
-    const sample = await sampleRow(L);
-    if (sample) { try { const val = fn(sample); ty = typeof val === 'number' && Number.isFinite(val) ? 'number' : 'string'; } catch { /* number by default */ } }
-    const entry = { name, expr, ty };
-    L.calcCols = L.calcCols || [];
-    if (_calcForm.edit >= 0) L.calcCols[_calcForm.edit] = entry; else L.calcCols.push(entry);
-    L._calcFns = null; L._colStats = null;
-    _calcForm = null;
-    markProjectDirty();
-    renderProps();
-  };
-  rowB.append(okA, cancelA);
-  box.append(nameIn, exprIn, err, rowB);
-  body.appendChild(box);
 }
 // re-open a drillhole layer with a patched config (method / dip / category —
 // re-desurveys), keeping the layer's identity + styling; class eyes survive
@@ -13798,7 +13888,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

@@ -760,6 +760,59 @@ await p.close();
 }
 
 
+// ═══ 17. the ƒ CALCULATIONS window — authoring moved out of the columns tab;
+//     validates vs the FULL schema (calc-on-calc composes); live filter pickup ═══
+{
+  const pc = await mkPage('sm2calcwin');
+  const csv = await pc.evaluate(() => {
+    let t = 'X,Y,Z,FE,MN\n';
+    for (let i = 0; i < 20; i++) for (let j = 0; j < 20; j++) t += `${i * 10},${j * 10},0,${(30 + i * 2.5).toFixed(1)},${(1 + j * 0.1).toFixed(2)}\n`;
+    return t;
+  });
+  await pc.evaluate((c) => window._micro.openBlob(new Blob([c]), 'cw.csv', 'replace'), csv);
+  await pc.waitForFunction(() => window._micro.layers().length === 1 && window._micro.layers()[0].docs.blockDoc, null, { timeout: 30000 });
+  const added = await pc.evaluate(async () => {
+    window._micro.openCalcWindow(window._micro.layers()[0]);
+    document.querySelector('.cw-main input[type=text]').value = 'FE_EQ';
+    const ed = document.querySelector('.cw-edwrap textarea'); ed.value = 'FE + 0.4 * MN'; ed.dispatchEvent(new Event('input'));
+    [...document.querySelectorAll('.cw-main .awin-btn')].find((x) => x.textContent === 'add column').click();
+    await new Promise((r) => setTimeout(r, 400));
+    // a second column REFERENCING the first — the old inline form rejected this
+    [...document.querySelectorAll('.cw-item')].find((x) => x.textContent === '+ add…').click();
+    document.querySelector('.cw-main input[type=text]').value = 'DBL';
+    const ed2 = document.querySelector('.cw-edwrap textarea'); ed2.value = 'FE_EQ * 2  # composed'; ed2.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 100));
+    const valid = document.querySelector('.cw-err').textContent === '';
+    [...document.querySelectorAll('.cw-main .awin-btn')].find((x) => x.textContent === 'add column').click();
+    await new Promise((r) => setTimeout(r, 300));
+    const L = window._micro.layers()[0];
+    return { valid, cols: (L.calcCols || []).map((c) => c.name + ':' + c.ty) };
+  });
+  chk(`calc window: add + calc-on-calc composes (${added.cols})`,
+    added.valid && added.cols.join(',') === 'FE_EQ:number,DBL:number');
+  const live = await pc.evaluate(async () => {
+    document.querySelector('#filter').value = 'DBL > 100'; await window._micro.applyBlockFilter('DBL > 100');
+    const count = () => { const L = window._micro.layers()[0]; let h = 0; for (const m of L._filterMask) if (m) h++; return h; };
+    const h0 = count();
+    [...document.querySelectorAll('.cw-item')].find((x) => x.textContent.includes('FE_EQ')).click();
+    const ed = document.querySelector('.cw-edwrap textarea'); ed.value = 'FE + 10 * MN'; ed.dispatchEvent(new Event('input'));
+    await new Promise((r) => setTimeout(r, 100));
+    [...document.querySelectorAll('.cw-main .awin-btn')].find((x) => x.textContent === 'save').click();
+    await new Promise((r) => setTimeout(r, 500));
+    return { h0, h1: count() };
+  });
+  chk(`calc window: saving a definition re-applies the live filter (${live.h0} → ${live.h1} hits)`,
+    live.h0 > 0 && live.h1 > live.h0);
+  const tab = await pc.evaluate(() => {
+    window._micro.openProps(window._micro.layers()[0].id);
+    [...document.querySelectorAll('.pp-tab')].find((t) => t.textContent === 'columns').click();
+    const btns = [...document.querySelectorAll('#ppBody .pp-scan')].map((x) => x.textContent);
+    return { top: btns.some((t) => t.startsWith('ƒ calculations… (2')), oldAdd: btns.some((t) => t === 'add calculated column…') };
+  });
+  chk('columns tab: ƒ button at the top, inline form retired', tab.top && !tab.oldAdd);
+  await pc.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
