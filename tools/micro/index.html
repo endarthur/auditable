@@ -97,6 +97,24 @@
   #bar #filterClear { position: absolute; right: 1px; top: 1px; bottom: 1px; width: 22px; padding: 0; background: transparent; border: none; color: var(--dim); font-size: 15px; line-height: 1; cursor: pointer; display: none; }
   #bar #filterClear:hover { color: var(--text-hi); }
   #bar #filterWrap.has #filterClear { display: block; }
+  #bar #filterWidgets { position: absolute; right: 20px; top: 1px; bottom: 1px; width: 22px; padding: 0; background: transparent; border: none; color: var(--dim); font-size: 12px; line-height: 1; cursor: pointer; }
+  #bar #filterWidgets:hover, #bar #filterWidgets.on { color: var(--accent); }
+  #fdrawer { position: fixed; display: none; z-index: 9; background: #1a1a1a; border: 1px solid var(--bd2); box-shadow: 0 6px 24px rgba(0,0,0,0.5); padding: 10px 12px; font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 340px; max-width: 520px; max-height: 60vh; overflow-y: auto; }
+  #fdrawer.show { display: block; }
+  #fdrawer .fd-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--accent); }
+  #fdrawer .fd-head button { background: none; border: 1px solid var(--bd2); border-radius: 3px; color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 2px 8px; cursor: pointer; }
+  #fdrawer .fd-head button:hover { color: var(--text-hi); }
+  #fdrawer .fd-head .fd-dot { color: var(--warn, #c8a02e); margin-right: 4px; }
+  #fdrawer .fd-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  #fdrawer .fd-row > b { color: var(--text-hi); font-weight: normal; min-width: 60px; }
+  #fdrawer .fd-op { color: var(--dim); font-size: 10px; text-transform: uppercase; margin: -4px 0 4px 2px; }
+  #fdrawer input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); }
+  #fdrawer input[type="number"], #fdrawer input[type="text"] { width: 84px; font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
+  #fdrawer .fd-chip { border: 1px solid var(--bd2); border-radius: 10px; padding: 1px 9px; cursor: pointer; color: var(--muted); user-select: none; }
+  #fdrawer .fd-chip.on { border-color: var(--accent); color: var(--accent); }
+  #fdrawer .fd-expr { color: var(--dim); border: 1px dashed var(--bd2); border-radius: 3px; padding: 1px 8px; }
+  #fdrawer .fd-add { color: var(--dim); }
+  #fdrawer select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
   #bar #filter:focus { outline: none; border-color: var(--info); }
   #bar #filter.err { border-color: #c0584a; }
   #bar #filter::placeholder { color: var(--faint); }
@@ -615,7 +633,7 @@
     <button class="mb" id="mView">View</button>
     <button class="mb" id="mHelp">Help</button>
     <button class="mb" id="btnCmd" title="command palette (Ctrl/⌘K) — search every action">⌘K</button>
-    <span id="filterWrap"><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
+    <span id="filterWrap"><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterWidgets" title="filter widgets — edit the filter as controls" tabindex="-1">☰</button><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
     <span class="spacer"></span>
     <button id="btnSelRect" title="select — rectangle (r) · shift adds, alt subtracts · the layers toggle flips to through/volume"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/><path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/></svg></button>
     <button id="btnSelLasso" title="select — lasso (v) · shift adds, alt subtracts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 22a5 5 0 0 1-2-4"/><path d="M3.3 14A6.8 6.8 0 0 1 2 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 0 1-5-1"/><path d="M5 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></button>
@@ -690,6 +708,7 @@
   <div id="plDlg"><div class="box"><div class="hd"><span>opening project</span><button id="plClose">×</button></div><div class="bd" id="plDlgBody"></div></div></div>
   <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
   <div id="adDlg"><div class="box"><div class="hd"><span>assign domains</span><button id="adCancel">×</button></div><div class="bd" id="adDlgBody"></div><div id="adProg" style="display:none"><div id="adProgFill"></div></div><div class="dh-foot"><span id="adDlgMsg"></span><button id="adGo">Assign</button></div></div></div>
+  <div id="fdrawer"></div>
   <div id="ngDlg"><div class="box"><div class="hd"><span>new grid / block model</span><button id="ngCancel">×</button></div><div class="bd" id="ngDlgBody"></div><div class="dh-foot"><span id="ngDlgMsg"></span><button id="ngGo">Create</button></div></div></div>
   <div id="sfDlg"><div class="box"><div class="hd"><span id="sfTitle">surface tools</span><button id="sfCancel">×</button></div><div class="bd" id="sfDlgBody"></div><div class="dh-foot"><span id="sfDlgMsg"></span><button id="sfGo">Create</button></div></div></div>
   <div id="rgDlg"><div class="box"><div class="hd"><span>mesh → grid</span><button id="rgCancel">×</button></div><div class="bd" id="rgDlgBody"></div><div class="dh-foot"><span id="rgDlgMsg"></span><button id="rgGo">Rasterize</button></div></div></div>
@@ -7438,6 +7457,169 @@ $('#filter').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') applyBlockFilter($('#filter').value);
   else if (e.key === 'Escape') { $('#filter').value = ''; syncFilterClear(); applyBlockFilter(''); }
 });
+// ── the FILTER WIDGET DRAWER ──────────────────────────────────────────────────
+// Renders the CURRENT filter expression as live controls — the EXPRESSION stays
+// the single source of truth: a widget is a projection of its AST clause, and
+// touching one SURGICALLY rewrites its literal's source span in the text (the
+// filter box updates as you drag; user formatting preserved; spans shift by the
+// edit delta so sibling widgets stay bound). Re-filters ride the pin cache →
+// live. Reset restores the snapshot taken when the drawer opened.
+let _fdOpen = false, _fdSnap = null, _fdTimer = null, _fdSpans = [];
+function fdSrc() { return $('#filter').value; }
+function fdApply(text) {
+  $('#filter').value = text; syncFilterClear();
+  clearTimeout(_fdTimer); _fdTimer = setTimeout(() => applyBlockFilter(text), 60);
+  $('#fdrawer .fd-dot').textContent = text === _fdSnap ? '' : '●';
+}
+function fdReplace(sp, txt) {                              // surgical span edit + shift siblings
+  const s0 = fdSrc(), nt = s0.slice(0, sp.start) + txt + s0.slice(sp.end);
+  const delta = txt.length - (sp.end - sp.start);
+  for (const o of _fdSpans) { if (o !== sp && o.start >= sp.end) { o.start += delta; o.end += delta; } }
+  sp.end = sp.start + txt.length;
+  fdApply(nt);
+}
+const fdNum = (v, step) => (step >= 1 ? String(Math.round(v)) : String(+v.toFixed(Math.max(0, Math.ceil(-Math.log10(step)) + 1))));
+// numeric bounds for a column: pinned column → exact; parquet footers; band sidecars; else spread around v
+function fdBounds(L, col, v) {
+  const e = pinGet(L, col);
+  if (e && e.data) { let mn = Infinity, mx = -Infinity; const d = e.data; for (let i = 0; i < d.length; i++) { const x = d[i]; if (x === x) { if (x < mn) mn = x; if (x > mx) mx = x; } } if (mn <= mx) return [mn, mx]; }
+  const P = L.docs.blockDoc && L.docs.blockDoc.parquet;
+  if (P) { let mn = Infinity, mx = -Infinity; for (const rg of P.rowGroups) { const r = pqGroupRanges(rg)[String(col).toLowerCase()]; if (r) { if (r.min < mn) mn = r.min; if (r.max > mx) mx = r.max; } } if (mn <= mx) return [mn, mx]; }
+  const B = L._bands && L._bands.cols && L._bands.cols[String(col).toLowerCase()];
+  if (B) { let mn = Infinity, mx = -Infinity; for (let b = 0; b * 2 < B.length; b++) { const v0 = B[b * 2], v1 = B[b * 2 + 1]; if (v0 != null) { if (v0 < mn) mn = v0; if (v1 > mx) mx = v1; } } if (mn <= mx) return [mn, mx]; }
+  const sp = Math.max(1, Math.abs(v) * 2); return [v - sp, v + sp];
+}
+// category values for a column: pinned dict → header categories → just the current
+function fdValues(L, col, cur) {
+  const e = pinGet(L, col); if (e && e.dict) return e.dict.filter((x) => x !== '');
+  const h = layerTableHeader(L); const mm = h && h.mapping;
+  if (h && h.categories && mm && mm.cat != null && String(h.columns[mm.cat]).toLowerCase() === String(col).toLowerCase()) return h.categories.slice();
+  return [...new Set(cur)];
+}
+function fdLeafSpec(n) {                                    // classify a clause → a widget spec
+  const isF = (x) => x && x.t === 'field', numLit = (x) => x && (x.t === 'num' || (x.t === 'neg' && x.start != null)) && x.start != null;
+  const numVal = (x) => (x.t === 'neg' ? -x.e.v : x.v);
+  if (n.t === 'cmp') {
+    if (isF(n.l) && numLit(n.r)) return { kind: 'slider', col: n.l.name, op: n.op, sp: n.r, v: numVal(n.r) };
+    if (isF(n.r) && numLit(n.l)) return { kind: 'slider', col: n.r.name, op: ({ '<': '>', '>': '<', '<=': '>=', '>=': '<=' }[n.op] || n.op), sp: n.l, v: numVal(n.l), flipped: true };
+    if (isF(n.l) && n.r && n.r.t === 'str' && n.r.start != null && (n.op === '=' || n.op === '!=')) return { kind: 'chips', col: n.l.name, op: n.op, picks: [n.r] };
+  }
+  if (n.t === 'between' && isF(n.e) && numLit(n.lo) && numLit(n.hi)) return { kind: 'range', col: n.e.name, lo: n.lo, hi: n.hi, vlo: numVal(n.lo), vhi: numVal(n.hi) };
+  if (n.t === 'in' && isF(n.e) && n.set.every((m2) => m2.t === 'str' && m2.start != null)) return { kind: 'chips', col: n.e.name, op: 'in', picks: n.set };
+  if (n.t === 'isblank' && isF(n.e)) return { kind: 'flag', col: n.e.name, label: 'is blank' };
+  if (n.t === 'isfilled' && isF(n.e)) return { kind: 'flag', col: n.e.name, label: 'is filled' };
+  if ((n.t === 'contains' && isF(n.l) && n.r && n.r.t === 'str' && n.r.start != null)) return { kind: 'text', col: n.l.name, verb: 'contains', sp: n.r, v: n.r.v };
+  if (n.t === 'matches' && isF(n.e)) return { kind: 'expr', label: quoteIdent(n.e.name) + ' matches …' };
+  if (n.t === 'not') { const inner = fdLeafSpec(n.e); if (inner && inner.kind !== 'expr') { inner.negated = true; return inner; } }
+  return { kind: 'expr', label: 'expression' };
+}
+function renderFilterDrawer() {
+  const d = $('#fdrawer'); d.textContent = ''; _fdSpans = [];
+  const AL = activeLayer();
+  const head = document.createElement('div'); head.className = 'fd-head';
+  const ttl = document.createElement('span'); ttl.innerHTML = '<span class="fd-dot"></span>filter widgets';
+  const btns = document.createElement('span');
+  const rst = document.createElement('button'); rst.textContent = 'reset'; rst.title = 'restore the filter as it was when the drawer opened';
+  rst.onclick = () => { fdApply(_fdSnap); clearTimeout(_fdTimer); applyBlockFilter(_fdSnap); renderFilterDrawer(); };
+  const cls = document.createElement('button'); cls.textContent = '×'; cls.onclick = () => toggleFilterDrawer(false);
+  btns.append(rst, document.createTextNode(' '), cls);
+  head.append(ttl, btns); d.appendChild(head);
+  $('#fdrawer .fd-dot').textContent = fdSrc() === _fdSnap ? '' : '●';
+  const src = fdSrc();
+  let ast = null; if (src.trim()) { try { ast = parse(src); } catch { ast = null; } }
+  const leaves = [], ops = [];
+  (function split(n) { if (n && (n.t === 'and' || n.t === 'or')) { split(n.l); ops.push(n.t); split(n.r); } else if (n) leaves.push(n); })(ast);
+  if (src.trim() && !ast) { const r = document.createElement('div'); r.className = 'fd-row'; r.innerHTML = '<span class="fd-expr">can’t parse — fix the text first</span>'; d.appendChild(r); }
+  leaves.forEach((leaf, li) => {
+    if (li > 0) { const o = document.createElement('div'); o.className = 'fd-op'; o.textContent = ops[li - 1]; d.appendChild(o); }
+    const spec = fdLeafSpec(leaf);
+    const row = document.createElement('div'); row.className = 'fd-row';
+    const lab = document.createElement('b'); lab.textContent = (spec.negated ? 'not ' : '') + (spec.col || ''); row.appendChild(lab);
+    if (spec.kind === 'slider' && AL) {
+      _fdSpans.push(spec.sp);
+      const [lo, hi] = fdBounds(AL, spec.col, spec.v); const step = (hi - lo) / 200 || 0.01;
+      const opEl = document.createElement('span'); opEl.textContent = spec.op; opEl.style.color = 'var(--dim)';
+      const sl = document.createElement('input'); sl.type = 'range'; sl.min = lo; sl.max = hi; sl.step = step; sl.value = spec.v;
+      const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(spec.v, step);
+      const push = (v) => { fdReplace(spec.sp, fdNum(+v, step)); };
+      sl.oninput = () => { nb.value = fdNum(+sl.value, step); push(sl.value); };
+      sl.onchange = () => renderFilterDrawer();            // drag end → resync spans
+      nb.onchange = () => { push(nb.value); renderFilterDrawer(); };
+      row.append(opEl, sl, nb);
+    } else if (spec.kind === 'range' && AL) {
+      _fdSpans.push(spec.lo, spec.hi);
+      const [lo, hi] = fdBounds(AL, spec.col, (spec.vlo + spec.vhi) / 2); const step = (hi - lo) / 200 || 0.01;
+      const mk = (sp, v) => { const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(v, step); nb.onchange = () => { fdReplace(sp, fdNum(+nb.value, step)); renderFilterDrawer(); }; return nb; };
+      const s1 = document.createElement('input'); s1.type = 'range'; s1.min = lo; s1.max = hi; s1.step = step; s1.value = spec.vlo;
+      const s2 = document.createElement('input'); s2.type = 'range'; s2.min = lo; s2.max = hi; s2.step = step; s2.value = spec.vhi;
+      s1.oninput = () => fdReplace(spec.lo, fdNum(+s1.value, step)); s2.oninput = () => fdReplace(spec.hi, fdNum(+s2.value, step));
+      s1.onchange = s2.onchange = () => renderFilterDrawer();
+      row.append(document.createTextNode('between'), mk(spec.lo, spec.vlo), s1, s2, mk(spec.hi, spec.vhi));
+    } else if (spec.kind === 'chips' && AL) {
+      spec.picks.forEach((m2) => _fdSpans.push(m2));
+      const cur = spec.picks.map((m2) => m2.v);
+      const vals = fdValues(AL, spec.col, cur);
+      const opEl = document.createElement('span'); opEl.textContent = spec.op; opEl.style.color = 'var(--dim)'; row.appendChild(opEl);
+      for (const v of vals) {
+        const ch = document.createElement('span'); ch.className = 'fd-chip' + (cur.includes(v) ? ' on' : ''); ch.textContent = v;
+        ch.onclick = () => {
+          if (spec.op === 'in') {                           // multi: rewrite the member-list span
+            const now = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v];
+            if (!now.length) return;
+            const first = spec.picks[0], last = spec.picks[spec.picks.length - 1];
+            fdReplace({ start: first.start, end: last.end }, now.map((x) => '"' + x + '"').join(', '));
+          } else fdReplace(spec.picks[0], '"' + v + '"');   // single: swap the literal
+          renderFilterDrawer();
+        };
+        row.appendChild(ch);
+      }
+    } else if (spec.kind === 'text') {
+      _fdSpans.push(spec.sp);
+      const t = document.createElement('input'); t.type = 'text'; t.value = spec.v; t.style.width = '140px';
+      t.onchange = () => { fdReplace(spec.sp, '"' + t.value.replace(/"/g, '') + '"'); renderFilterDrawer(); };
+      row.append(document.createTextNode(spec.verb), t);
+    } else if (spec.kind === 'flag') {
+      const f = document.createElement('span'); f.className = 'fd-chip on'; f.textContent = spec.label; row.appendChild(f);
+    } else {
+      const x = document.createElement('span'); x.className = 'fd-expr'; x.textContent = spec.label || 'expression'; row.appendChild(x);
+    }
+    d.appendChild(row);
+  });
+  // add a condition — numeric → slider-ready clause; category → first value
+  if (AL && layerTableHeader(AL)) {
+    const row = document.createElement('div'); row.className = 'fd-row fd-add';
+    const sel = document.createElement('select');
+    const nums = numericColsOf(AL); const h = layerTableHeader(AL); const mm = h.mapping || {};
+    const catName = mm.cat != null ? h.columns[mm.cat] : null;
+    sel.append(new Option('add condition…', ''));
+    for (const c of nums) sel.append(new Option(c, 'n:' + c));
+    if (catName) sel.append(new Option(catName, 'c:' + catName));
+    sel.onchange = () => {
+      const v = sel.value; if (!v) return;
+      const col = v.slice(2), pre = fdSrc().trim() ? fdSrc() + ' and ' : '';
+      let clause;
+      if (v[0] === 'c') { const vals = fdValues(AL, col, []); clause = quoteIdent(col) + ' = "' + (vals[0] || '') + '"'; }
+      else { const [lo, hi] = fdBounds(AL, col, 0); clause = quoteIdent(col) + ' > ' + fdNum((lo + hi) / 2, (hi - lo) / 200 || 0.01); }
+      fdApply(pre + clause); clearTimeout(_fdTimer); applyBlockFilter(fdSrc());
+      renderFilterDrawer();
+    };
+    row.appendChild(sel); d.appendChild(row);
+  }
+}
+function toggleFilterDrawer(force) {
+  const d = $('#fdrawer');
+  _fdOpen = force !== undefined ? force : !_fdOpen;
+  $('#filterWidgets').classList.toggle('on', _fdOpen);
+  if (!_fdOpen) { d.classList.remove('show'); return; }
+  _fdSnap = fdSrc();
+  const r = $('#filterWrap').getBoundingClientRect();
+  d.style.left = Math.max(8, Math.min(innerWidth - 540, r.left)) + 'px';
+  d.style.top = (r.bottom + 4) + 'px';
+  d.classList.add('show');
+  renderFilterDrawer();
+}
+$('#filterWidgets').onclick = () => toggleFilterDrawer();
+$('#filter').addEventListener('change', () => { if (_fdOpen) renderFilterDrawer(); });
 
 // ── recents (local · opt-in · clearable) — lamina's pattern verbatim ──
 // LOCAL only: IndexedDB, never transmitted (connect-src 'none' holds). An FSAA
@@ -13402,7 +13584,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

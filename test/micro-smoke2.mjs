@@ -646,6 +646,58 @@ await p.close();
   await pc.close();
 }
 
+// ═══ 16. the FILTER WIDGET DRAWER — the expression projected as live controls;
+//     widgets rewrite literals SURGICALLY; reset restores the snapshot ═══
+{
+  const pf = await mkPage('sm2fdrawer');
+  const csv = await pf.evaluate(() => {
+    let t = 'X,Y,Z,FE,LITO\n'; const LIT = ['HEMATITE', 'ITABIRITE', 'CANGA'];
+    for (let i = 0; i < 20; i++) for (let j = 0; j < 20; j++) for (let k = 0; k < 2; k++)
+      t += `${i * 10},${j * 10},${k * 5},${(30 + i * 2.5).toFixed(1)},${LIT[(i + j) % 3]}\n`;
+    return t;
+  });
+  await pf.evaluate((c) => window._micro.openBlob(new Blob([c]), 'fd.csv', 'replace'), csv);
+  await pf.waitForFunction(() => window._micro.layers().length === 1 && window._micro.layers()[0].docs.blockDoc, null, { timeout: 30000 });
+  const EXPR = 'FE > 45 and LITO = "HEMATITE"';
+  const hits0 = await pf.evaluate(async (e) => {
+    document.querySelector('#filter').value = e; await window._micro.applyBlockFilter(e);
+    const L = window._micro.layers()[0]; let h = 0; for (const m of L._filterMask) if (m) h++; return h;
+  }, EXPR);
+  const ui = await pf.evaluate(() => {
+    window._micro.toggleFilterDrawer(true);
+    const d = document.querySelector('#fdrawer');
+    return { shown: d.classList.contains('show'), sliders: d.querySelectorAll('input[type="range"]').length,
+      chips: d.querySelectorAll('.fd-chip').length, on: [...d.querySelectorAll('.fd-chip.on')].map((c) => c.textContent) };
+  });
+  chk(`filter drawer renders the expression as widgets (${ui.sliders} slider, ${ui.chips} chips, on=${ui.on})`,
+    ui.shown && ui.sliders === 1 && ui.chips >= 3 && ui.on.includes('HEMATITE'));
+  const drag = await pf.evaluate(async () => {
+    const sl = document.querySelector('#fdrawer input[type="range"]');
+    sl.value = 60; sl.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 400));
+    const L = window._micro.layers()[0]; let h = 0; for (const m of L._filterMask) if (m) h++;
+    return { text: document.querySelector('#filter').value, h };
+  });
+  chk(`slider drag rewrites the literal SURGICALLY + re-filters live ("${drag.text}" → ${drag.h} hits)`,
+    /^FE > (59|60|61)[0-9.]* and LITO = "HEMATITE"$/.test(drag.text) && drag.h > 0 && drag.h < hits0);
+  const chip = await pf.evaluate(async () => {
+    const other = [...document.querySelectorAll('#fdrawer .fd-chip')].find((c) => !c.classList.contains('on'));
+    const v = other.textContent; other.click();
+    await new Promise((r) => setTimeout(r, 300));
+    return { v, text: document.querySelector('#filter').value };
+  });
+  chk(`chip click swaps the category literal (→ "${chip.v}")`, chip.text.includes('LITO = "' + chip.v + '"'));
+  const rst = await pf.evaluate(async () => {
+    [...document.querySelectorAll('#fdrawer .fd-head button')].find((b) => b.textContent === 'reset').click();
+    await new Promise((r) => setTimeout(r, 400));
+    const L = window._micro.layers()[0]; let h = 0; for (const m of L._filterMask) if (m) h++;
+    return { text: document.querySelector('#filter').value, h };
+  });
+  chk(`reset restores the snapshot exactly ("${rst.text}", ${rst.h} hits == ${hits0})`, rst.text === EXPR && rst.h === hits0);
+  await pf.close();
+}
+
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
