@@ -97,6 +97,14 @@
   #bar #filterClear { position: absolute; right: 1px; top: 1px; bottom: 1px; width: 22px; padding: 0; background: transparent; border: none; color: var(--dim); font-size: 15px; line-height: 1; cursor: pointer; display: none; }
   #bar #filterClear:hover { color: var(--text-hi); }
   #bar #filterWrap.has #filterClear { display: block; }
+  .exprhl { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; white-space: pre; box-sizing: border-box; border: 1px solid transparent; border-radius: 3px; background: var(--bg-field); font-family: var(--mono); color: transparent; }
+  #filterHL { padding: 4px 24px 4px 8px; font-size: 12px; }
+  #bar #filter { color: transparent; caret-color: var(--text-hi); background: transparent; position: relative; z-index: 1; }
+  #bar #filter::placeholder { color: var(--dim); }
+  .hl-column { color: var(--text-hi); } .hl-string { color: #5c8a5a; } .hl-number { color: #8a6fae; }
+  .hl-keyword, .hl-operator { color: #5b7fa6; } .hl-function { color: var(--accent); }
+  .hl-boolean { color: #8a6fae; } .hl-punct { color: var(--muted); } .hl-error { color: #b0563a; }
+  .hl-comment { color: var(--dim); font-style: italic; }
   #bar #filterWidgets { position: absolute; right: 20px; top: 1px; bottom: 1px; width: 22px; padding: 0; background: transparent; border: none; color: var(--dim); font-size: 12px; line-height: 1; cursor: pointer; }
   #bar #filterWidgets:hover, #bar #filterWidgets.on { color: var(--accent); }
   #fdrawer { position: fixed; display: none; z-index: 9; background: #1a1a1a; border: 1px solid var(--bd2); box-shadow: 0 6px 24px rgba(0,0,0,0.5); padding: 10px 12px; font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 340px; max-width: 520px; max-height: 60vh; overflow-y: auto; }
@@ -115,7 +123,9 @@
   #fdrawer .fd-expr { color: var(--dim); border: 1px dashed var(--bd2); border-radius: 3px; padding: 1px 8px; }
   #fdrawer .fd-add { color: var(--dim); }
   #fdrawer select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
-  #fdrawer #fdExpr { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; resize: vertical; min-height: 2.6em; margin-bottom: 2px; }
+  #fdrawer .fd-edwrap { position: relative; margin-bottom: 2px; }
+  #fdrawer #fdExprHL { padding: 4px 6px; font-size: 12px; white-space: pre; }
+  #fdrawer #fdExpr { width: 100%; box-sizing: border-box; position: relative; z-index: 1; color: transparent; caret-color: var(--text-hi); font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; resize: vertical; min-height: 2.6em; margin-bottom: 0; background: transparent; }
   #fdrawer #fdExpr.err { border-color: #b0563a; }
   #fdrawer #fdErr { color: #b0563a; font-size: 11px; min-height: 14px; margin-bottom: 6px; }
   #fdrawer .fd-row.nw { flex-wrap: nowrap; }
@@ -639,7 +649,7 @@
     <button class="mb" id="mView">View</button>
     <button class="mb" id="mHelp">Help</button>
     <button class="mb" id="btnCmd" title="command palette (Ctrl/⌘K) — search every action">⌘K</button>
-    <span id="filterWrap"><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterWidgets" title="filter widgets — edit the filter as controls" tabindex="-1">☰</button><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
+    <span id="filterWrap"><div id="filterHL" class="exprhl" aria-hidden="true"></div><input id="filter" type="text" spellcheck="false" autocomplete="off" placeholder="filter…  e.g.  FE > 55 and LITO = &quot;HEMATITE&quot;" title="lamina's filter language, over every column in the file — Enter applies, Esc clears"><button id="filterWidgets" title="filter widgets — edit the filter as controls" tabindex="-1">☰</button><button id="filterClear" title="clear the filter" tabindex="-1">×</button></span>
     <span class="spacer"></span>
     <button id="btnSelRect" title="select — rectangle (r) · shift adds, alt subtracts · the layers toggle flips to through/volume"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/><path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/></svg></button>
     <button id="btnSelLasso" title="select — lasso (v) · shift adds, alt subtracts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 22a5 5 0 0 1-2-4"/><path d="M3.3 14A6.8 6.8 0 0 1 2 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 0 1-5-1"/><path d="M5 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></button>
@@ -736,7 +746,7 @@ import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchD
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
-import { compileBool, compileValue, compileChunk, compileChunkBool, validate, complete, parse, deps, canMatch, quoteIdent } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
+import { compileBool, compileValue, compileChunk, compileChunkBool, validate, complete, parse, deps, canMatch, quoteIdent, tokenize } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
@@ -7019,6 +7029,7 @@ function blockSchema(header) {
 }
 async function applyBlockFilter(expr) {
   const inp = $('#filter');
+  syncHL(inp, $('#filterHL'));                             // the input text is overlay-drawn — keep it painted on programmatic sets too
   // the ACTIVE LAYER's docs, never the module aliases — a stale alias once
   // filtered the assay table while the model was active and hung a 7k-bit
   // mask on a 1.8M-block layer
@@ -7453,7 +7464,24 @@ function acAccept(i) {
 }
 attachAutocomplete($('#filter'), filterCtx);
 
-function syncFilterClear() { $('#filterWrap').classList.toggle('has', !!$('#filter').value); }
+// ── expr syntax highlighting (lamina's overlay pattern verbatim): a colored
+// layer driven by expr.tokenize behind a transparent-text input. Monospace +
+// matched padding makes it align by construction; we keep it scroll-synced. ──
+function renderExprHL(hl, src) {
+  if (!hl) return;
+  const escH = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const toks = tokenize(src);
+  let html = '', pos = 0;
+  for (const t of toks) {
+    if (t.start > pos) html += escH(src.slice(pos, t.start));
+    html += `<span class="hl-${t.kind}">${escH(t.value)}</span>`;
+    pos = t.end;
+  }
+  if (pos < src.length) html += escH(src.slice(pos));
+  hl.innerHTML = html;
+}
+function syncHL(input, hl) { if (!hl) return; renderExprHL(hl, input.value); hl.scrollLeft = input.scrollLeft; hl.scrollTop = input.scrollTop || 0; }
+function syncFilterClear() { $('#filterWrap').classList.toggle('has', !!$('#filter').value); syncHL($('#filter'), $('#filterHL')); }
 $('#filter').addEventListener('input', syncFilterClear);
 $('#filterClear').onclick = () => {
   $('#filter').value = ''; syncFilterClear(); acClose();
@@ -7470,10 +7498,19 @@ $('#filter').addEventListener('keydown', (e) => {
 // filter box updates as you drag; user formatting preserved; spans shift by the
 // edit delta so sibling widgets stay bound). Re-filters ride the pin cache →
 // live. Reset restores the snapshot taken when the drawer opened.
-let _fdOpen = false, _fdSnap = null, _fdTimer = null, _fdSpans = [];
-function fdSrc() { return $('#filter').value; }
+let _fdOpen = false, _fdSnap = null, _fdTimer = null, _fdSpans = [], _fdText = null;
+// the AUTHORITATIVE expression (may be multiline + commented). The toolbar's
+// single-line input STRIPS newlines — after which a # comment would eat the rest —
+// so the input only ever shows a semantically-EQUAL flattened mirror (comments
+// stripped, lines joined); the true text lives here / on the layer's filterExpr.
+function fdFlatten(t) { return String(t).replace(/#[^\n]*/g, '').split('\n').map((x) => x.trim()).filter(Boolean).join(' '); }
+function fdSrc() {
+  if (_fdOpen && _fdText != null) return _fdText;
+  const L = activeLayer(); return (L && L.filterExpr) || $('#filter').value;
+}
 function fdApply(text) {
-  $('#filter').value = text; syncFilterClear();
+  _fdText = text;
+  $('#filter').value = fdFlatten(text); syncFilterClear();
   const ed = $('#fdExpr'); if (ed && document.activeElement !== ed) { ed.value = text; fdAutosize(); }
   clearTimeout(_fdTimer); _fdTimer = setTimeout(() => applyBlockFilter(text), 60);
   const dot = $('#fdrawer .fd-dot'); if (dot) dot.textContent = text === _fdSnap ? '' : '●';
@@ -7530,16 +7567,19 @@ function fdSkeleton() {
   const ttl = document.createElement('span'); ttl.innerHTML = '<span class="fd-dot"></span>filter widgets';
   const btns = document.createElement('span');
   const rst = document.createElement('button'); rst.textContent = 'reset'; rst.title = 'restore the filter as it was when the drawer opened';
-  rst.onclick = () => { fdApply(_fdSnap); clearTimeout(_fdTimer); applyBlockFilter(_fdSnap); renderFilterDrawer(); };
+  rst.onclick = () => { _fdText = _fdSnap; fdApply(_fdSnap); clearTimeout(_fdTimer); applyBlockFilter(_fdSnap); renderFilterDrawer(); };
   const cls = document.createElement('button'); cls.textContent = '×'; cls.onclick = () => toggleFilterDrawer(false);
   btns.append(rst, document.createTextNode(' '), cls);
   head.append(ttl, btns);
-  const ed = document.createElement('textarea'); ed.id = 'fdExpr'; ed.rows = 2; ed.spellcheck = false;
-  ed.placeholder = 'filter expression…  e.g.  FE > 55 and LITO = "HEMATITE"';
+  const edwrap = document.createElement('div'); edwrap.className = 'fd-edwrap';
+  const edhl = document.createElement('div'); edhl.id = 'fdExprHL'; edhl.className = 'exprhl'; edhl.setAttribute('aria-hidden', 'true');
+  const ed = document.createElement('textarea'); ed.id = 'fdExpr'; ed.rows = 2; ed.spellcheck = false; ed.wrap = 'off';
+  ed.placeholder = 'filter expression…  e.g.  FE > 55 and LITO = "HEMATITE"  # comments allowed';
+  for (const ev of ['scroll', 'keyup', 'click']) ed.addEventListener(ev, () => syncHL(ed, edhl));
   ed.addEventListener('input', () => {                     // typing: mirror + validate live, apply when valid (debounced)
-    fdAutosize();
-    const t = ed.value;
-    $('#filter').value = t; syncFilterClear();
+    fdAutosize(); syncHL(ed, edhl);
+    const t = _fdText = ed.value;
+    $('#filter').value = fdFlatten(t); syncFilterClear();
     $('#fdrawer .fd-dot').textContent = t === _fdSnap ? '' : '●';
     clearTimeout(_fdTimer);
     if (fdValidateUI()) _fdTimer = setTimeout(() => applyBlockFilter(t), 300);
@@ -7547,12 +7587,13 @@ function fdSkeleton() {
   ed.addEventListener('change', () => renderFilterDrawer());   // commit (blur) -> re-project the widgets
   const err = document.createElement('div'); err.id = 'fdErr';
   const body = document.createElement('div'); body.id = 'fdBody';
-  dr.append(head, ed, err, body);
+  edwrap.append(edhl, ed);
+  dr.append(head, edwrap, err, body);
 }
-function fdAutosize() { const ed = $('#fdExpr'); if (!ed) return; ed.style.height = 'auto'; ed.style.height = Math.min(140, ed.scrollHeight + 2) + 'px'; }
+function fdAutosize() { const ed = $('#fdExpr'); if (!ed) return; ed.style.height = 'auto'; ed.style.height = Math.min(140, ed.scrollHeight + 2) + 'px'; syncHL(ed, $('#fdExprHL')); }
 function fdValidateUI() {
   const ed = $('#fdExpr'), errEl = $('#fdErr'); if (!ed) return true;
-  const t = ed.value; let ok = true, msg = '';
+  const t = _fdOpen && _fdText != null ? _fdText : ed.value; let ok = true, msg = '';
   if (t.trim()) {
     const AL = activeLayer(); const h = AL && layerTableHeader(AL);
     const v = validate(t, h ? schemaExt(AL, h) : undefined);
@@ -7658,7 +7699,8 @@ function toggleFilterDrawer(force) {
   _fdOpen = force !== undefined ? force : !_fdOpen;
   $('#filterWidgets').classList.toggle('on', _fdOpen);
   if (!_fdOpen) { d.classList.remove('show'); return; }
-  _fdSnap = fdSrc();
+  { const L = activeLayer(); _fdText = (L && L.filterExpr) || $('#filter').value; }
+  _fdSnap = _fdText;
   const r = $('#filterWrap').getBoundingClientRect();
   d.style.left = Math.max(8, Math.min(innerWidth - 540, r.left)) + 'px';
   d.style.top = (r.bottom + 4) + 'px';
@@ -7667,6 +7709,7 @@ function toggleFilterDrawer(force) {
 }
 $('#filterWidgets').onclick = () => toggleFilterDrawer();
 $('#filter').addEventListener('change', () => { if (_fdOpen) renderFilterDrawer(); });
+for (const ev of ['scroll', 'keyup', 'click', 'input']) $('#filter').addEventListener(ev, () => syncHL($('#filter'), $('#filterHL')));
 
 // ── recents (local · opt-in · clearable) — lamina's pattern verbatim ──
 // LOCAL only: IndexedDB, never transmitted (connect-src 'none' holds). An FSAA
