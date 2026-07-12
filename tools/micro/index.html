@@ -10812,6 +10812,57 @@ function makeDemoDrillholes() {
     intervals: new File([assay.join('\n') + '\n'], 'demo_assay.csv'),
   };
 }
+// pre-mining topography + three pit phases on ONE small lattice — the SAME
+// gaussian the block generator carves with, taken at fractions, so the final
+// phase matches the deposit's void exactly. Closed-form → generated on demand.
+function makeDemoSurfaces() {
+  const D = _DEMO;
+  const dx = 20, pad = 160;
+  const x0 = D.x0 - pad, yTop = D.y0 + (D.ny - 1) * D.dy + pad;
+  const nx = Math.round((D.nx * D.dx + 2 * pad) / dx) + 1, ny = Math.round((D.ny * D.dy + 2 * pad) / dx) + 1;
+  const zTop = D.z0 + (D.nz - 1) * D.dz;                   // the pre-pit ground the model is carved from
+  const topoAt = (x, y) => zTop + 4 + 9 * Math.sin((x - D.x0) / 260) * Math.cos((y - D.y0) / 210) + 6 * Math.sin((x + y - D.x0 - D.y0) / 610);
+  const pitAt = (x, y) => {
+    const gx = ((x - D.x0) / D.dx - D.nx * 0.5) / (D.nx * 0.42), gy = ((y - D.y0) / D.dy - D.ny * 0.45) / (D.ny * 0.42);
+    return Math.max(0, 240 * Math.exp(-(gx * gx + gy * gy) * 1.9) - 10);
+  };
+  const mk = (f) => {
+    const data = new Float32Array(nx * ny);
+    for (let r = 0; r < ny; r++) for (let c = 0; c < nx; c++) {
+      const x = x0 + c * dx, y = yTop - r * dx;
+      const t = topoAt(x, y);
+      const pd = f == null ? 0 : pitAt(x, y);
+      data[r * nx + c] = f == null ? t : (pd <= 0 ? -9999 : Math.min(t, zTop - 2 - f * pd));   // a shell exists only IN the bowl
+    }
+    return { nx, ny, dx, dy: dx, x0, y0: yTop, data, nodata: -9999 };
+  };
+  return { topo: mk(null), phases: [mk(0.35), mk(0.7), mk(1)] };
+}
+// the ore shell: the block generator's lens ellipsoid (d² < 0.8, sheared with
+// depth — the dip the drillholes chase) as a closed OBJ sphere mesh
+function makeDemoShellObj() {
+  const D = _DEMO;
+  const cx = D.x0 + D.nx * 0.5 * D.dx, cy = D.y0 + D.ny * 0.45 * D.dy, cz = D.z0 + D.nz * 0.55 * D.dz;
+  const q = Math.sqrt(0.8);
+  const rx = D.nx * 0.22 * D.dx * q, ry = D.ny * 0.3 * D.dy * q, rz = D.nz * 0.28 * D.dz * q;
+  const shear = 0.35 * (D.dx / D.dz);
+  const NU = 28, NV = 14, out = ['# demo ore shell\n'];
+  for (let b = 0; b <= NV; b++) {
+    const phi = (b / NV) * Math.PI;
+    for (let a2 = 0; a2 < NU; a2++) {
+      const th = (a2 / NU) * 2 * Math.PI;
+      const px = Math.sin(phi) * Math.cos(th), py = Math.sin(phi) * Math.sin(th), pz = Math.cos(phi);
+      const z = cz + pz * rz;
+      out.push(`v ${(cx + px * rx + shear * (z - cz)).toFixed(2)} ${(cy + py * ry).toFixed(2)} ${z.toFixed(2)}\n`);
+    }
+  }
+  const at = (b, a2) => b * NU + (((a2 % NU) + NU) % NU) + 1;
+  for (let b = 0; b < NV; b++) for (let a2 = 0; a2 < NU; a2++) {
+    out.push(`f ${at(b, a2)} ${at(b + 1, a2)} ${at(b + 1, a2 + 1)}\n`);
+    out.push(`f ${at(b, a2)} ${at(b + 1, a2 + 1)} ${at(b, a2 + 1)}\n`);
+  }
+  return new Blob(out, { type: 'text/plain' });
+}
 async function openDemoProject() {
   $('#empty').style.display = 'none';
   $('#meta').textContent = 'demo project — assembling a block model…';
@@ -10822,6 +10873,32 @@ async function openDemoProject() {
   let dh = null;
   try { await openDrillholeLayer(makeDemoDrillholes(), { radius: 6 }, 'add'); dh = activeLayer(); }
   catch (e) { $('#meta').textContent = `demo drillholes failed — ${e.message}`; }
+  // terrain + mining phases + the ore shell — the story AROUND the model
+  $('#meta').textContent = 'demo project — building terrain, phases, the ore shell…';
+  try {
+    const sf = makeDemoSurfaces();
+    const openSurf = async (grid, name, label) => {
+      await openBlob(new Blob([writeEsriAsc(grid)]), name, 'add');
+      const gl2 = activeLayer();
+      if (gl2) await reopenAs(gl2, 'surface');             // shaded relief, not an elevation point cloud
+      const L = activeLayer();
+      if (L) L.label = label;
+      return L;
+    };
+    const topoL = await openSurf(sf.topo, 'topo.asc', 'topography');
+    if (topoL) { topoL.opacity = 0.35; renderer.setLayerOpacity(topoL.id, 0.35); }   // a veil, not a lid — the grades stay the hero
+    const PH = ['phase 1 — starter pit', 'phase 2 — cutback', 'phase 3 — final pit'];
+    const phIds = [];
+    for (let i = 0; i < 3; i++) {
+      const L = await openSurf(sf.phases[i], `phase${i + 1}.asc`, PH[i]);
+      if (L) { phIds.push(L.id); if (i !== 0) L.visible = false; }   // phase 1 visible: the starter pit hangs in the mined void
+    }
+    if (phIds.length) createLayerGroup('mining phases', phIds, { collapsed: true });
+    applyTreeVisibility();
+    await openBlob(makeDemoShellObj(), 'ore_shell.obj', 'add');
+    const shellL = activeLayer();
+    if (shellL && shellL.kind === 'mesh') { shellL.label = 'ore shell'; setMeshTint(shellL, '#c8722e'); shellL.opacity = 0.45; renderer.setLayerOpacity(shellL.id, 0.45); }
+  } catch (e) { $('#meta').textContent = `demo surfaces — ${e.message}`; }
   // half-cut the model E–W through the ore lens (opens the deposit on the grade
   // interior); the drillholes stay WHOLE (per-layer "don't cut") so they thread
   // the full deposit for context — exactly the section-with-holes view a geologist reads
@@ -10840,7 +10917,7 @@ async function openDemoProject() {
       if (gtWin) { gtWin.style.left = Math.max(0, innerWidth - gtWin.offsetWidth - 14) + 'px'; gtWin.style.top = '70px'; }
     } catch { /* window optional */ }
   }
-  $('#meta').textContent = 'demo project — a block model + drillholes, sectioned, with grade–tonnage. File → Save project as… writes it to a folder you can open and inspect.';
+  $('#meta').textContent = 'demo project — a deposit, drillholes, topography, mining phases and the ore shell, sectioned, with grade–tonnage. File → Save project as… writes it all to a folder.';
 }
 $('#sampleDemo').onclick = () => openDemoProject();
 
