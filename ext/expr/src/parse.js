@@ -110,8 +110,8 @@ export function parse(src) {
     const t = toks[i];
     if (!t) fail('unexpected end of expression');
     if (t.k === 'op' && t.v === '(') { i++; const e = expr(); eatOp(')'); return e; }
-    if (t.k === 'num') { i++; return { t: 'num', v: t.v }; }
-    if (t.k === 'str') { i++; return { t: 'str', v: t.v }; }
+    if (t.k === 'num') { i++; return { t: 'num', v: t.v, start: t.start, end: t.end }; }   // literals carry SOURCE SPANS
+    if (t.k === 'str') { i++; return { t: 'str', v: t.v, start: t.start, end: t.end }; }   // (widget UIs rewrite them surgically)
     if (t.k === 'field') { i++; return { t: 'field', name: t.v }; }     // ["…"] bracket escape
     if (t.k === 'word') {
       const lw = t.v.toLowerCase();
@@ -141,7 +141,13 @@ export function parse(src) {
     return l;
   }
   function unary() {
-    if (op('-') || op('+')) { const neg = op('-'); i++; const e = unary(); return neg ? { t: 'neg', e } : e; }
+    if (op('-') || op('+')) {
+      const neg = op('-'), at = toks[i].start; i++; const e = unary();
+      if (!neg) return e;
+      const n2 = { t: 'neg', e };
+      if (e.end != null) { n2.start = at; n2.end = e.end; }              // span covers the sign (surgical rewrites)
+      return n2;
+    }
     return power();
   }
   function mul() {
