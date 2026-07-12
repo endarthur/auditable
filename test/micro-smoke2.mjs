@@ -860,6 +860,16 @@ await p.close();
   });
   chk(`ƒ round-trip: calc color + ƒ filter survive reload (${rt.sel}, "${rt.filter}", ${rt.hits} hits, ${rt.cols} ƒ)`,
     rt.sel === 'calc:DENS' && /DBL > 100/.test(rt.filter) && rt.hits > 0 && rt.cols === 3);
+  // the ELEMENT MANIFEST (substrate Appendix A): <layer>.element.json is the
+  // data-model artifact — v1, hoisted ops[], ƒ columns as derived defs
+  const em = await pc2.evaluate(async () => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2calcwin');
+    const models = await dir.getDirectoryHandle('models');
+    const man = JSON.parse(await (await (await models.getFileHandle('cw.csv.element.json')).getFile()).text());
+    return { v: man.v, ops: man.ops.filter((o) => o.op === 'calc').length, derived: man.columns.filter((c) => c.from === 'derived').length, loc: Object.keys(man.locations)[0] };
+  });
+  chk(`element.json on disk: v${em.v}, ${em.ops} calc ops → ${em.derived} derived columns at "${em.loc}"`,
+    em.v === 1 && em.ops === 3 && em.derived === 3 && em.loc === 'cells');
   await pc2.close();
 }
 
