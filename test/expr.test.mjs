@@ -269,6 +269,8 @@ test('v0.2 lexical — backticks tokenize as columns; ^ and ** as operators', ()
   assert.ok(tk.some((t) => t.kind === 'operator' && t.value === '^'));
   const tk2 = tokenize('a ** 2');
   assert.ok(tk2.some((t) => t.kind === 'operator' && t.value === '**'));
+  // comments tokenize as their own kind (the highlight overlay dims them)
+  assert.ok(tokenize('AU > 1 # cutoff').some((tk) => tk.kind === 'comment' && tk.value === '# cutoff'));
   // blank literal is a keyword for highlighting
   assert.ok(tokenize('x = blank').some((t) => t.kind === 'keyword' && t.value === 'blank'));
   // complete() emits the backtick form for awkward names

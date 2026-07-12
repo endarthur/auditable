@@ -109,6 +109,10 @@
     { "note": "truth table: blank or false → false-y", "expr": "(AU > 5) or false", "values": {}, "expected": false },
     { "note": "truth table: not not blank-cmp = not true = false", "expr": "not (not (AU > 5))", "values": {}, "expected": false },
     { "note": "truth table: x = blank matches blank rows (the friendly non-SQL choice)", "expr": "AU = blank", "values": {}, "expected": true },
-    { "note": "truth table: filled row fails = blank", "expr": "AU = blank", "values": { "AU": 3 }, "expected": false }
+    { "note": "truth table: filled row fails = blank", "expr": "AU = blank", "values": { "AU": 3 }, "expected": false },
+
+    { "note": "v0.2 comments: # to end of line (pandas-style)", "verb": "calculate", "expr": "AU * 2  # double it", "values": { "AU": 3 }, "expected": 6 },
+    { "note": "v0.2 comments: multiline expression with per-line comments", "expr": "AU > 0.5  # cutoff\n  and LITO = \"OX\"  # oxide only", "values": { "AU": 1, "LITO": "OX" }, "expected": true },
+    { "note": "v0.2 comments: # inside a string is TEXT, not a comment", "verb": "calculate", "expr": "concat(\"a#b\", \"!\")", "values": {}, "expected": "a#b!" }
   ]
 }

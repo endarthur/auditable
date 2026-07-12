@@ -42,6 +42,8 @@ text           code contains "DDH"  ·  code like "DDH%"  ·  code matches "^DDH
 negate         is not blank · not in (…) · not contains · not like
 blank tests    x is blank   x is filled
 literals       42   3.14   .5   1.5e-3   "text"   true   false   blank
+comments       # to end of line (pandas-style) — expressions can span LINES,
+               so a long filter can be formatted and annotated
 columns        bare ident (case-insensitive): AU, fe_pct  —  [A-Za-z_][A-Za-z0-9_]*
                backtick escape for anything else: `Assay Au ppm`, `OK-Indic`, `in`
                (\` for a literal backtick, \\ for a backslash — the pandas

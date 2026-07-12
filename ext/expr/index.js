@@ -60,7 +60,7 @@ function fail(msg) { throw new ExprParseError(msg); }
 // `["…"]` bracket form still parses (shipped lenses) but is undocumented.
 // Strings: "double" (canonical) or 'single' (tolerated). Numbers: ints, decimals,
 // leading-dot (.5) and scientific (1e4, 2.5e-3). `^` and `**` are power.
-const TOKEN_RE = /(\s+)|(\[\s*"[^"]*"\s*\]|`(?:[^`\\]|\\.)*`)|("[^"]*"|'[^']*')|(&&|\|\||\*\*|==|<>|<=|>=|!=|!~|<|>|=|~)|([-+*/(),^])|((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][A-Za-z0-9_]*)/y;
+const TOKEN_RE = /(\s+)|(#[^\n]*)|(\[\s*"[^"]*"\s*\]|`(?:[^`\\]|\\.)*`)|("[^"]*"|'[^']*')|(&&|\|\||\*\*|==|<>|<=|>=|!=|!~|<|>|=|~)|([-+*/(),^])|((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][A-Za-z0-9_]*)/y;
 
 // Lex into tokens carrying source positions. `tolerant` (for highlighting) emits a
 // 1-char 'err' token on an unexpected character instead of throwing.
@@ -76,18 +76,22 @@ function lexAll(src, tolerant) {
     }
     const start = last; last = TOKEN_RE.lastIndex;
     if (m[1] !== undefined) continue;                                        // whitespace
+    if (m[2] !== undefined) {                                                // # comment → end of line (pandas-style;
+      if (tolerant) toks.push({ k: 'comment', v: m[2], start, end: last }); //  '#' was an illegal char pre-v0.2, so
+      continue;                                                              //  this is purely additive). parse skips;
+    }                                                                        //  tokenize keeps them for highlighting.
     let k, v;
-    if (m[2] !== undefined) {
+    if (m[3] !== undefined) {
       k = 'field';
-      v = m[2][0] === '`'
-        ? m[2].slice(1, -1).replace(/\\([`\\])/g, '$1')                    // `…` backtick escape (canonical)
-        : m[2].replace(/^\[\s*"/, '').replace(/"\s*\]$/, '');              // ["…"] legacy bracket form
+      v = m[3][0] === '`'
+        ? m[3].slice(1, -1).replace(/\\([`\\])/g, '$1')                    // `…` backtick escape (canonical)
+        : m[3].replace(/^\[\s*"/, '').replace(/"\s*\]$/, '');              // ["…"] legacy bracket form
     }
-    else if (m[3] !== undefined) { k = 'str'; v = m[3].slice(1, -1); }       // "double" or 'single'
-    else if (m[4] !== undefined) { k = 'op'; v = m[4]; }
+    else if (m[4] !== undefined) { k = 'str'; v = m[4].slice(1, -1); }       // "double" or 'single'
     else if (m[5] !== undefined) { k = 'op'; v = m[5]; }
-    else if (m[6] !== undefined) { k = 'num'; v = parseFloat(m[6]); }
-    else { k = 'word'; v = m[7]; }
+    else if (m[6] !== undefined) { k = 'op'; v = m[6]; }
+    else if (m[7] !== undefined) { k = 'num'; v = parseFloat(m[7]); }
+    else { k = 'word'; v = m[8]; }
     toks.push({ k, v, start, end: last });
   }
   return toks;
@@ -211,6 +215,7 @@ function tokenize(src) {
   return lexAll(String(src == null ? '' : src), true).map((t) => {
     let kind;
     if (t.k === 'err') kind = 'error';
+    else if (t.k === 'comment') kind = 'comment';
     else if (t.k === 'str') kind = 'string';
     else if (t.k === 'num') kind = 'number';
     else if (t.k === 'field') kind = 'column';
