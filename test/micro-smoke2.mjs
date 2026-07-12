@@ -1033,6 +1033,30 @@ await p.close();
   await pj2.close();
 }
 
+// ═══ 20. ARRAY-BACKED grid locations: a grid emits its element manifest —
+//     records are lattice nodes, coords IMPLICIT (no coord columns) ═══
+{
+  const pg = await mkPage('sm2gelem');
+  await pg.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('sm2gelem', { recursive: true }); } catch { } });
+  await pg.evaluate(async () => {
+    let t = 'ncols 12\nnrows 8\nxllcorner 0\nyllcorner 0\ncellsize 50\nNODATA_value -9999\n';
+    for (let r = 0; r < 8; r++) t += Array.from({ length: 12 }, (_, c) => 100 + r + c).join(' ') + '\n';
+    await window._micro.openBlob(new Blob([t]), 'dem.asc', 'replace');
+  });
+  await pg.waitForFunction(() => window._micro.layers().length === 1 && window._micro.layers()[0].docs.gridDoc, null, { timeout: 30000 });
+  await pg.evaluate(() => { window._micro.layers()[0].storage = 'project'; });
+  await saveProject(pg);
+  const ge = await pg.evaluate(async () => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2gelem');
+    const man = JSON.parse(await (await (await (await dir.getDirectoryHandle('grids')).getFileHandle('dem.asc.element.json')).getFile()).text());
+    const n2 = man.locations.nodes;
+    return { v: man.v, kind: man.geometry.kind, storage: n2.storage, count: n2.count, lat: n2.lattice && n2.lattice.nx === 12 && n2.lattice.dx === 50, noCoords: !n2.coords, col: man.columns[0] && man.columns[0].loc === 'nodes' };
+  });
+  chk(`grid element: array-backed nodes (${ge.count} records, coords implicit from the lattice)`,
+    ge.v === 1 && ge.kind === 'grid' && ge.storage === 'array' && ge.count === 96 && ge.lat && ge.noCoords && ge.col);
+  await pg.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
