@@ -873,6 +873,56 @@ await p.close();
   await pc2.close();
 }
 
+// ═══ 18. DRILLHOLES as the first MULTI-LOCATION element (substrate spec A.3):
+//     one <set>.element.json — collars + vertices(producedBy) + one interval
+//     location per break-set (geometryFrom), HOLEID relations, per-location ƒ ═══
+{
+  const pd = await mkPage('sm2dhelem');
+  await pd.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('sm2dhelem', { recursive: true }); } catch { } });
+  await pd.evaluate(async () => {
+    const collar = ['HOLEID,X,Y,Z,EOH'], survey = ['HOLEID,DEPTH,AZ,DIP'], assay = ['HOLEID,FROM,TO,FE'], litho = ['HOLEID,FROM,TO,LITO'];
+    for (let n2 = 1; n2 <= 5; n2++) {
+      const id = 'DH' + n2;
+      collar.push(`${id},${100 + n2 * 40},100,300,${100 + n2 * 10}`); survey.push(`${id},0,0,-90`);
+      for (let d = 0; d < 80; d += 10) { assay.push(`${id},${d},${d + 10},${(30 + n2 + d * 0.1).toFixed(1)}`); litho.push(`${id},${d},${d + 10},${d < 40 ? 'OX' : 'FR'}`); }
+    }
+    const f = (a, nm) => new File([a.join('\n')], nm, { type: 'text/csv' });
+    await window._micro.importDrillholes({ collar: f(collar, 'collars.csv'), survey: f(survey, 'survey.csv'), intervals: f(assay, 'assay.csv') }, {}, 'replace');
+    const A = window._micro.layers()[0]; A._setKey = 'k'; A._intervalName = 'assay.csv'; A.storage = 'project';
+    A.calcCols = [{ name: 'FE2', expr: 'FE * 2', ty: 'number' }];
+    await window._micro.importDrillholes({ collar: f(collar, 'collars.csv'), survey: f(survey, 'survey.csv'), intervals: f(litho, 'litho.csv') }, {}, 'add');
+    const B2 = window._micro.layers()[1]; B2._setKey = 'k'; B2._intervalName = 'litho.csv'; B2.storage = 'project';
+  });
+  await pd.waitForFunction(() => window._micro.layers().length === 2 && window._micro.layers().every((L) => L.docs.dhDoc), null, { timeout: 30000 });
+  await saveProject(pd);
+  const dman = await pd.evaluate(async () => {
+    const dh = await (await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2dhelem')).getDirectoryHandle('drillholes');
+    const names = []; for await (const k of dh.keys()) names.push(k);
+    const el = names.find((n2) => /\.element\.json$/.test(n2));
+    const m2 = el ? JSON.parse(await (await (await dh.getFileHandle(el)).getFile()).text()) : null;
+    return m2 && {
+      locs: Object.keys(m2.locations), holes: m2.locations.collars.count, produced: m2.locations.vertices.producedBy,
+      geomFrom: m2.locations.intervals_assay && m2.locations.intervals_assay.geometryFrom,
+      rels: m2.relations.every((r) => r.parent === 'collars' && r.key === 'HOLEID'),
+      eoh: m2.columns.some((c) => c.loc === 'collars' && c.name === 'EOH' && c.type === 'number'),
+      fe2loc: (m2.columns.find((c) => c.name === 'FE2') || {}).loc,
+    };
+  });
+  chk(`dh SET element.json: 4 locations (${dman && dman.locs}), ${dman && dman.holes} holes, vertices producedBy ${dman && dman.produced}, ƒ at ${dman && dman.fe2loc}`,
+    !!dman && dman.locs.length === 4 && dman.holes === 5 && dman.produced === 'ds1' && dman.geomFrom === 'ds1' && dman.rels && dman.eoh && dman.fe2loc === 'intervals_assay');
+  await pd.close();
+  const pd2 = await mkPage('sm2dhelem');
+  await pd2.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2dhelem'); await window._micro.openProjectDir(dir); });
+  await pd2.waitForFunction(() => window._micro.layers().length === 2 && window._micro.layers().every((L) => L.docs.dhDoc), null, { timeout: 60000 });
+  const dback = await pd2.evaluate(() => {
+    const A = window._micro.layers().find((L) => /assay/.test(L.name)), B2 = window._micro.layers().find((L) => /litho/.test(L.name));
+    return { set: A && A._setPath, a: A ? (A.calcCols || []).map((c) => c.name).join() : '', b: B2 ? (B2.calcCols || []).length : -1 };
+  });
+  chk(`dh set restores from the element descriptor (${dback.set}; ƒ "${dback.a}" on assay only, ${dback.b} on litho)`,
+    /\.element\.json$/.test(dback.set) && dback.a === 'FE2' && dback.b === 0);
+  await pd2.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

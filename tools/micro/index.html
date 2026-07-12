@@ -8648,13 +8648,12 @@ async function saveProject() {
       dhGroups.get(key).push(L);
     }
     for (const members of dhGroups.values()) {
-      const rep = members[0], files = layerFiles(rep);
-      const setRel = joinPath('drillholes', dhSetName(rep));
-      const intervals = members.map((L) => L._intervalName || basename(layerFiles(L)[2].name));
-      const desc = { app: 'micro', kind: 'drillholes', collar: basename(files[0].name), survey: basename(files[1].name), intervals, config: rep.docs.dhDoc.config };
+      const rep = members[0];
+      const setRel = joinPath('drillholes', dhElementName(rep));
       try {
+        const elem = await buildDhSetManifest(members);
         const dh2 = await resolveFileHandle(dir, setRel, { create: true });
-        const w = await dh2.createWritable(); await w.write(JSON.stringify(desc, null, 2) + '\n'); await w.close();
+        const w = await dh2.createWritable(); await w.write(JSON.stringify(elem, null, 2) + '\n'); await w.close();
         for (const L of members) { L._setPath = setRel; L._intervalName = L._intervalName || basename(layerFiles(L)[2].name); }
       } catch { /* inline fallback in the manifest */ }
     }
@@ -8804,7 +8803,8 @@ async function openProjectDir(dir) {
         if (ls.dh.set) {
           try {
             setDir = ls.dh.set.split('/').slice(0, -1).join('/');
-            const desc = JSON.parse(await (await (await resolveFileHandle(dir, ls.dh.set)).getFile()).text());
+            const raw = JSON.parse(await (await (await resolveFileHandle(dir, ls.dh.set)).getFile()).text());
+            const desc = descFromElement(raw) || raw;      // <set>.element.json (v1) or legacy .holes.json
             const ivs = Array.isArray(desc.intervals) ? desc.intervals : [desc.intervals];   // multi-interval sets
             ivName = ls.dh.interval && ivs.includes(ls.dh.interval) ? ls.dh.interval : ivs[0];
             dhRef = { collar: desc.collar, survey: desc.survey, intervals: ivName, config: desc.config };
@@ -9038,11 +9038,17 @@ async function scanFolderForNewData() {
     // show up as loose files)
     const claimed = new Set();
     const newSets = [];
+    found.sort((a, b2) => /\.element\.json$/i.test(b2.name) - /\.element\.json$/i.test(a.name));   // element first: it claims the files an old .holes.json would re-offer
     for (const e of found) {
-      if (!/\.holes\.json$/i.test(e.name)) continue;
-      let desc; try { desc = JSON.parse(await (await e.handle.getFile()).text()); } catch { continue; }
-      if (!desc || desc.kind !== 'drillholes') continue;
+      if (!/\.(holes|element)\.json$/i.test(e.name)) continue;
+      let desc;
+      try {
+        const raw = JSON.parse(await (await e.handle.getFile()).text());
+        desc = /\.element\.json$/i.test(e.name) ? descFromElement(raw) : (raw && raw.kind === 'drillholes' ? raw : null);
+      } catch { continue; }
+      if (!desc) continue;
       const setDir = e.path.split('/').slice(0, -1).join('/');
+      if (claimed.has(joinPath(setDir, desc.collar))) continue;   // the element manifest already owns this set
       const ivs = Array.isArray(desc.intervals) ? desc.intervals : [desc.intervals];
       claimed.add(joinPath(setDir, desc.collar)); claimed.add(joinPath(setDir, desc.survey));
       for (const iv of ivs) claimed.add(joinPath(setDir, iv));
@@ -12582,12 +12588,11 @@ function elementGeometry(L, h) {
   if (h.grid) return { kind: 'block-model', variant: h.subBlocked ? 'sub-blocked' : 'regular', crs: null, origin: null, rotation: null };
   return { kind: 'points', crs: null };
 }
-function buildElementManifest(L) {
-  const h = layerTableHeader(L); if (!h) return null;
-  const loc = (L.dh || h.kind === 'drillholes') ? 'intervals' : 'cells';
+// one layer's column set + ops at a location — shared by the single-location
+// builder and the multi-location drillhole SET builder (idp namespaces op ids)
+function layerColumnsOps(L, h, loc, idp) {
   const m = h.mapping || {};
   const src = basename(L.name);
-  const fmt = /\.parquet$/i.test(src) ? 'parquet' : (h.dm ? 'dm' : 'csv');
   const ops = [], columns = [];
   for (let i = 0; i < h.columns.length; i++) {              // base columns (coords are rows of the source too)
     const col = { loc, name: h.columns[i], type: i === m.cat ? 'category' : (colIsNumeric(L, h, i) ? 'number' : 'string'), from: 'base' };
@@ -12599,7 +12604,7 @@ function buildElementManifest(L) {
     if (c.lineage && c.lineage.op) {
       const ln = c.lineage;
       const kind = ln.op === 'interpolate' ? 'estimate' : (ln.op === 'materialize' && ln.params && ln.params.from === 'calc' ? 'calc' : ln.op);
-      def = 'm' + (i + 1);
+      def = idp + 'm' + (i + 1);
       ops.push({ id: def, op: kind, params: kind === 'calc' ? { expr: ln.params.expr } : (ln.params || {}), outputs: [c.name], at: ln.at, build: ln.build, sources: ln.sources && ln.sources.length ? ln.sources : undefined });
     }
     columns.push({
@@ -12609,10 +12614,19 @@ function buildElementManifest(L) {
     });
   });
   (L.calcCols || []).forEach((c, i) => {                    // derived ƒ: the op IS the definition (no file)
-    const id = 'c' + (i + 1);
+    const id = idp + 'c' + (i + 1);
     ops.push({ id, op: 'calc', params: { expr: c.expr }, outputs: [c.name] });
     columns.push({ loc, name: c.name, type: c.ty === 'string' ? 'string' : 'number', from: 'derived', def: id });
   });
+  return { ops, columns };
+}
+function buildElementManifest(L) {
+  const h = layerTableHeader(L); if (!h) return null;
+  const loc = (L.dh || h.kind === 'drillholes') ? 'intervals' : 'cells';
+  const m = h.mapping || {};
+  const src = basename(L.name);
+  const fmt = /\.parquet$/i.test(src) ? 'parquet' : (h.dm ? 'dm' : 'csv');
+  const { ops, columns } = layerColumnsOps(L, h, loc, '');
   const locSpec = {
     storage: 'table', count: attrRowCountOf(L) || 0, chunk: 1 << 18,
     source: { file: src, format: fmt, hash: matColSourceHash(L) },
@@ -12628,13 +12642,76 @@ function buildElementManifest(L) {
     ...(L._elementExtra || {}),
   };
 }
+// ── the DRILLHOLE SET element (spec A.3 — the first MULTI-LOCATION element):
+// collars (the collar file — hole-granularity attributes like EOH/COMPANY,
+// exactly what a LineSet flattening drops), vertices (producedBy the desurvey
+// op — its records don't exist until the op runs), and one interval location
+// PER break-set (intervals / intervals_<name>), each with geometryFrom (the
+// records are the file's rows; the op computes WHERE they are). Relations bind
+// every child location to collars by the hole-id key. The desurvey op's params
+// ARE the loader config, so this manifest REPLACES .holes.json as the set
+// descriptor (descFromElement maps it back to the loader's shape; legacy
+// .holes.json still reads). Cross-location ops (broadcast/aggregate) land on
+// these relations next.
+const dhElementName = (L) => dhSetName(L).replace(/\.holes\.json$/, '.element.json');
+async function buildDhSetManifest(members) {
+  const rep = members[0], dh = rep.docs.dhDoc, h = dh.header, files = layerFiles(rep);
+  const collarName = basename(files[0].name), surveyName = basename(files[1].name);
+  if (!dh._collarCols) {                                   // one header+first-row peek, cached: names + rough types
+    try {
+      const head = (await files[0].blob.slice(0, 65536).text()).split(/\r?\n/);
+      const delim = [',', ';', '\t'].reduce((a, b2) => (head[0].split(b2).length > head[0].split(a).length ? b2 : a), ',');
+      const cells2 = (ln) => ln.split(delim).map((x) => x.trim().replace(/^"|"$/g, ''));
+      const names = cells2(head[0]).filter(Boolean), row1 = head[1] ? cells2(head[1]) : [];
+      dh._collarCols = names.map((nm, i) => ({ name: nm, type: row1[i] !== undefined && row1[i] !== '' && Number.isFinite(+row1[i]) ? 'number' : 'string' }));
+    } catch { dh._collarCols = []; }
+  }
+  const ops = [{ id: 'ds1', op: 'desurvey', inputs: [{ loc: 'collars' }, { file: surveyName, format: 'csv' }], params: { ...dh.config }, outputs: [] }];
+  const locations = {
+    collars: { storage: 'table', count: h.holes || 0, chunk: 1 << 18, source: { file: collarName, format: 'csv', hash: `${(files[0].blob && files[0].blob.size) || 0}:${h.holes || 0}` } },
+    vertices: { storage: 'table', count: null, producedBy: 'ds1' },
+  };
+  const relations = [{ child: 'vertices', parent: 'collars', by: 'key', key: null }];
+  const columns = dh._collarCols.map((c) => ({ loc: 'collars', name: c.name, type: c.type, from: 'base' }));
+  for (const L of members) {
+    const lh = layerTableHeader(L); if (!lh) continue;
+    const ivFile = basename(layerFiles(L)[2].name);
+    const base = ivFile.replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_');
+    const loc = members.length === 1 ? 'intervals' : 'intervals_' + base;
+    const im = lh.intervalMapping || {};
+    const bhid = im.bhid != null ? lh.columns[im.bhid] : null;
+    locations[loc] = { storage: 'table', count: lh.count || attrRowCountOf(L) || 0, chunk: 1 << 18, source: { file: ivFile, format: 'csv', hash: matColSourceHash(L) }, geometryFrom: 'ds1' };
+    relations.push({ child: loc, parent: 'collars', by: 'key', key: bhid });
+    if (!relations[0].key && bhid) relations[0].key = bhid;
+    const part = layerColumnsOps(L, lh, loc, members.length === 1 ? '' : loc + '.');
+    ops.push(...part.ops); columns.push(...part.columns);
+  }
+  return {
+    v: 1, name: dhSetName(rep).replace(/\.holes\.json$/, ''),
+    geometry: { kind: 'drillhole', crs: null },
+    locations, relations, ops, columns,
+    ...(rep._elementExtra || {}),
+  };
+}
+// a v1 drillhole element manifest → the loader's descriptor shape (the bridge
+// that lets element.json REPLACE .holes.json; returns null for anything else)
+function descFromElement(man) {
+  if (!man || man.v !== 1 || !man.geometry || man.geometry.kind !== 'drillhole' || !man.locations) return null;
+  const ds = (man.ops || []).find((o) => o.op === 'desurvey');
+  const collar = man.locations.collars && man.locations.collars.source && man.locations.collars.source.file;
+  const survey = ds && (ds.inputs || []).map((x) => x && x.file).find(Boolean);
+  const intervals = Object.values(man.locations).filter((l) => l.source && l.source.file && l.geometryFrom).map((l) => l.source.file);
+  if (!collar || !survey || !intervals.length) return null;
+  return { collar, survey, intervals, config: (ds && ds.params) || {} };
+}
 // hydrate the live layer state FROM a v1 element manifest: derived columns →
 // L.calcCols (authoritative over the transitional project.json copy), and the
 // list of materialized columns to read (name + reconstructed lineage stamp).
-function elementHydrate(L, man) {
+function elementHydrate(L, man, lk) {
   const ops = new Map((man.ops || []).map((o) => [o.id, o]));
   const calc = [], mats = [];
   for (const col of man.columns || []) {
+    if (lk && col.loc !== lk) continue;                    // only THIS layer's location
     const op = col.def != null ? ops.get(col.def) : null;
     if (col.from === 'derived' && op && op.op === 'calc') calc.push({ name: col.name, expr: op.params.expr, ty: col.type === 'string' ? 'string' : 'number' });
     else if (col.from === 'materialized') mats.push({ name: col.name, lineage: op ? { op: op.op, at: op.at, build: op.build, params: op.params || {}, sources: op.sources || [] } : null });
@@ -12672,7 +12749,7 @@ async function persistElement(L) {
   if (L.storage === 'project' && _project && _project.dir) {
     const rel = await layerRelpath(L, _project.dir);
     for (const c of cols) { const fh = await resolveFileHandle(_project.dir, `${rel}.cols/${c.name}.parquet`, { create: true }); const w = await fh.createWritable(); await w.write(matColEncode(c)); await w.close(); }
-    const mh = await resolveFileHandle(_project.dir, `${rel}.element.json`, { create: true }); const w = await mh.createWritable(); await w.write(JSON.stringify(elem, null, 2)); await w.close();
+    if (!L.dh) { const mh = await resolveFileHandle(_project.dir, `${rel}.element.json`, { create: true }); const w = await mh.createWritable(); await w.write(JSON.stringify(elem, null, 2)); await w.close(); }   // dh members ride the SET manifest
     return 'project';
   }
   try { const id = matColLooseId(L); for (const c of cols) await _idb.set(`matcol:${id}:col:${c.name}`, matColEncode(c).buffer); await _idb.set(`matcol:${id}:element`, elem); return 'idb'; }
@@ -12683,7 +12760,8 @@ async function loadElement(L, dir) {
   if (dir && L.storage === 'project') {
     const rel = await layerRelpath(L, dir);
     get = async (nm) => { try { return await (await (await resolveFileHandle(dir, `${rel}.cols/${nm}.parquet`)).getFile()).arrayBuffer(); } catch { return await (await (await resolveFileHandle(dir, `${rel}.cols/${nm}.f32`)).getFile()).arrayBuffer(); } };   // legacy .f32 fallback
-    try { elem = JSON.parse(await (await (await resolveFileHandle(dir, `${rel}.element.json`)).getFile()).text()); }
+    const manRel = L.dh && L._setPath && /\.element\.json$/i.test(L._setPath) ? L._setPath : `${rel}.element.json`;   // dh members share the SET manifest
+    try { elem = JSON.parse(await (await (await resolveFileHandle(dir, manRel)).getFile()).text()); }
     catch { try { man = JSON.parse(await (await (await resolveFileHandle(dir, `${rel}.cols/manifest.json`)).getFile()).text()); } catch { get = null; } }   // legacy v2
   }
   if (!elem && !man) {
@@ -12697,9 +12775,11 @@ async function loadElement(L, dir) {
   const cur = matColSourceHash(L);
   let mats = [];
   if (elem && elem.v === 1) {
-    mats = elementHydrate(L, elem);                        // derived ƒ restore even when materialized are stale
-    const locs = elem.locations || {}; const lk = Object.keys(locs)[0];
-    const hash = lk && locs[lk].source && locs[lk].source.hash;
+    const locs = elem.locations || {};
+    let lk = Object.keys(locs)[0];
+    if (L.dh) { const me = basename(L.name); lk = Object.keys(locs).find((k) => locs[k].source && locs[k].source.file === me) || lk; }
+    mats = elementHydrate(L, elem, lk);                    // derived ƒ restore even when materialized are stale
+    const hash = lk && locs[lk] && locs[lk].source && locs[lk].source.hash;
     if (hash && hash !== cur) { if (mats.length) $('#meta').textContent = `${L.name}: materialized columns are stale (source changed) — re-run to refresh`; return 0; }
   } else if (man && man.cols) {
     if (man.sourceHash && man.sourceHash !== cur) { $('#meta').textContent = `${L.name}: materialized columns are stale (source changed) — re-run to refresh`; return 0; }
@@ -14239,7 +14319,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, buildElementManifest, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, buildElementManifest, buildDhSetManifest, descFromElement, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
