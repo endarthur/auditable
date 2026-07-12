@@ -115,6 +115,12 @@
   #fdrawer .fd-expr { color: var(--dim); border: 1px dashed var(--bd2); border-radius: 3px; padding: 1px 8px; }
   #fdrawer .fd-add { color: var(--dim); }
   #fdrawer select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
+  #fdrawer #fdExpr { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; resize: vertical; min-height: 2.6em; margin-bottom: 2px; }
+  #fdrawer #fdExpr.err { border-color: #b0563a; }
+  #fdrawer #fdErr { color: #b0563a; font-size: 11px; min-height: 14px; margin-bottom: 6px; }
+  #fdrawer .fd-row.nw { flex-wrap: nowrap; }
+  #fdrawer .fd-row.nw input[type="number"] { width: 68px; flex: 0 0 auto; }
+  #fdrawer .fd-row.nw input[type="range"] { min-width: 56px; }
   #bar #filter:focus { outline: none; border-color: var(--info); }
   #bar #filter.err { border-color: #c0584a; }
   #bar #filter::placeholder { color: var(--faint); }
@@ -7468,8 +7474,9 @@ let _fdOpen = false, _fdSnap = null, _fdTimer = null, _fdSpans = [];
 function fdSrc() { return $('#filter').value; }
 function fdApply(text) {
   $('#filter').value = text; syncFilterClear();
+  const ed = $('#fdExpr'); if (ed && document.activeElement !== ed) { ed.value = text; fdAutosize(); }
   clearTimeout(_fdTimer); _fdTimer = setTimeout(() => applyBlockFilter(text), 60);
-  $('#fdrawer .fd-dot').textContent = text === _fdSnap ? '' : '●';
+  const dot = $('#fdrawer .fd-dot'); if (dot) dot.textContent = text === _fdSnap ? '' : '●';
 }
 function fdReplace(sp, txt) {                              // surgical span edit + shift siblings
   const s0 = fdSrc(), nt = s0.slice(0, sp.start) + txt + s0.slice(sp.end);
@@ -7513,9 +7520,12 @@ function fdLeafSpec(n) {                                    // classify a clause
   if (n.t === 'not') { const inner = fdLeafSpec(n.e); if (inner && inner.kind !== 'expr') { inner.negated = true; return inner; } }
   return { kind: 'expr', label: 'expression' };
 }
-function renderFilterDrawer() {
-  const d = $('#fdrawer'); d.textContent = ''; _fdSpans = [];
-  const AL = activeLayer();
+// the drawer skeleton (built once per page): header + a MULTILINE expression
+// editor (two-way synced with the widgets; live-validated) + the widget body.
+function fdSkeleton() {
+  const dr = $('#fdrawer');
+  if (dr.querySelector('#fdBody')) return;
+  dr.textContent = '';
   const head = document.createElement('div'); head.className = 'fd-head';
   const ttl = document.createElement('span'); ttl.innerHTML = '<span class="fd-dot"></span>filter widgets';
   const btns = document.createElement('span');
@@ -7523,7 +7533,41 @@ function renderFilterDrawer() {
   rst.onclick = () => { fdApply(_fdSnap); clearTimeout(_fdTimer); applyBlockFilter(_fdSnap); renderFilterDrawer(); };
   const cls = document.createElement('button'); cls.textContent = '×'; cls.onclick = () => toggleFilterDrawer(false);
   btns.append(rst, document.createTextNode(' '), cls);
-  head.append(ttl, btns); d.appendChild(head);
+  head.append(ttl, btns);
+  const ed = document.createElement('textarea'); ed.id = 'fdExpr'; ed.rows = 2; ed.spellcheck = false;
+  ed.placeholder = 'filter expression…  e.g.  FE > 55 and LITO = "HEMATITE"';
+  ed.addEventListener('input', () => {                     // typing: mirror + validate live, apply when valid (debounced)
+    fdAutosize();
+    const t = ed.value;
+    $('#filter').value = t; syncFilterClear();
+    $('#fdrawer .fd-dot').textContent = t === _fdSnap ? '' : '●';
+    clearTimeout(_fdTimer);
+    if (fdValidateUI()) _fdTimer = setTimeout(() => applyBlockFilter(t), 300);
+  });
+  ed.addEventListener('change', () => renderFilterDrawer());   // commit (blur) -> re-project the widgets
+  const err = document.createElement('div'); err.id = 'fdErr';
+  const body = document.createElement('div'); body.id = 'fdBody';
+  dr.append(head, ed, err, body);
+}
+function fdAutosize() { const ed = $('#fdExpr'); if (!ed) return; ed.style.height = 'auto'; ed.style.height = Math.min(140, ed.scrollHeight + 2) + 'px'; }
+function fdValidateUI() {
+  const ed = $('#fdExpr'), errEl = $('#fdErr'); if (!ed) return true;
+  const t = ed.value; let ok = true, msg = '';
+  if (t.trim()) {
+    const AL = activeLayer(); const h = AL && layerTableHeader(AL);
+    const v = validate(t, h ? schemaExt(AL, h) : undefined);
+    ok = v.ok; msg = ok ? '' : ((v.errors[0] && v.errors[0].message) || 'invalid expression');
+  }
+  ed.classList.toggle('err', !ok); errEl.textContent = msg;
+  return ok;
+}
+function renderFilterDrawer() {
+  fdSkeleton();
+  const ed = $('#fdExpr');
+  if (document.activeElement !== ed) { ed.value = fdSrc(); fdAutosize(); }
+  fdValidateUI();
+  const d = $('#fdBody'); d.textContent = ''; _fdSpans = [];
+  const AL = activeLayer();
   $('#fdrawer .fd-dot').textContent = fdSrc() === _fdSnap ? '' : '●';
   const src = fdSrc();
   let ast = null; if (src.trim()) { try { ast = parse(src); } catch { ast = null; } }
@@ -7536,6 +7580,7 @@ function renderFilterDrawer() {
     const row = document.createElement('div'); row.className = 'fd-row';
     const lab = document.createElement('b'); lab.textContent = (spec.negated ? 'not ' : '') + (spec.col || ''); row.appendChild(lab);
     if (spec.kind === 'slider' && AL) {
+      row.classList.add('nw');
       _fdSpans.push(spec.sp);
       const [lo, hi] = fdBounds(AL, spec.col, spec.v); const step = (hi - lo) / 200 || 0.01;
       const opEl = document.createElement('span'); opEl.textContent = spec.op; opEl.style.color = 'var(--dim)';
@@ -7547,14 +7592,16 @@ function renderFilterDrawer() {
       nb.onchange = () => { push(nb.value); renderFilterDrawer(); };
       row.append(opEl, sl, nb);
     } else if (spec.kind === 'range' && AL) {
+      row.classList.add('nw');
       _fdSpans.push(spec.lo, spec.hi);
       const [lo, hi] = fdBounds(AL, spec.col, (spec.vlo + spec.vhi) / 2); const step = (hi - lo) / 200 || 0.01;
+      const opEl = document.createElement('span'); opEl.textContent = 'between'; opEl.style.color = 'var(--dim)'; opEl.style.flex = '0 0 auto';
       const mk = (sp, v) => { const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(v, step); nb.onchange = () => { fdReplace(sp, fdNum(+nb.value, step)); renderFilterDrawer(); }; return nb; };
       const s1 = document.createElement('input'); s1.type = 'range'; s1.min = lo; s1.max = hi; s1.step = step; s1.value = spec.vlo;
       const s2 = document.createElement('input'); s2.type = 'range'; s2.min = lo; s2.max = hi; s2.step = step; s2.value = spec.vhi;
       s1.oninput = () => fdReplace(spec.lo, fdNum(+s1.value, step)); s2.oninput = () => fdReplace(spec.hi, fdNum(+s2.value, step));
       s1.onchange = s2.onchange = () => renderFilterDrawer();
-      row.append(document.createTextNode('between'), mk(spec.lo, spec.vlo), s1, s2, mk(spec.hi, spec.vhi));
+      row.append(opEl, mk(spec.lo, spec.vlo), s1, s2, mk(spec.hi, spec.vhi));   // num | lo-slider | hi-slider | num, one aligned line
     } else if (spec.kind === 'chips' && AL) {
       spec.picks.forEach((m2) => _fdSpans.push(m2));
       const cur = spec.picks.map((m2) => m2.v);

@@ -694,6 +694,25 @@ await p.close();
     return { text: document.querySelector('#filter').value, h };
   });
   chk(`reset restores the snapshot exactly ("${rst.text}", ${rst.h} hits == ${hits0})`, rst.text === EXPR && rst.h === hits0);
+  // the multiline expression editor: typing there applies (debounced) + re-projects the widgets on commit
+  const edt = await pf.evaluate(async () => {
+    const ed = document.querySelector('#fdExpr');
+    ed.focus(); ed.value = 'FE between 40\n  and 60'; ed.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 600));
+    ed.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 200));
+    const L = window._micro.layers()[0]; let h = 0; for (const m of L._filterMask) if (m) h++;
+    return { mirrored: document.querySelector('#filter').value.includes('between 40'), sliders: document.querySelectorAll('#fdBody input[type="range"]').length, h, err: document.querySelector('#fdErr').textContent };
+  });
+  chk(`editor: multiline expr applies + re-projects (mirrored ${edt.mirrored}, ${edt.sliders} range sliders, ${edt.h} hits, err "${edt.err}")`,
+    edt.mirrored && edt.sliders === 2 && edt.h > 0 && edt.err === '');
+  const edErr = await pf.evaluate(async () => {
+    const ed = document.querySelector('#fdExpr');
+    ed.focus(); ed.value = 'FE > and'; ed.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 100));
+    return document.querySelector('#fdExpr').classList.contains('err') && document.querySelector('#fdErr').textContent.length > 0;
+  });
+  chk(`editor: live validation flags a bad expression`, edErr);
   await pf.close();
 }
 
