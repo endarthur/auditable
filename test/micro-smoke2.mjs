@@ -831,7 +831,30 @@ await p.close();
   });
   chk(`calc projection: if-ladder case table (${proj.cases} rows) + value edit auto-saves ("${proj.saved}")`,
     proj.cases === 2 && proj.hasElse && proj.text === 'if(FE > 60, 4.1, 2.8)' && proj.saved === 'if(FE > 60, 4.1, 2.8)');
+  // color-by-ƒ: picking the calc channel realizes it (ephemeral display cache →
+  // the ratio-paint codes path); the choice AND a ƒ filter survive a project
+  // reload (restore order: calcCols land BEFORE filter/color re-apply)
+  const cc0 = await pc.evaluate(async () => {
+    const cb = document.querySelector('#colorBy');
+    const has = [...cb.options].some((o) => o.value === 'calc:DENS');
+    cb.value = 'calc:DENS'; cb.dispatchEvent(new Event('change'));
+    return has;
+  });
+  await pc.waitForFunction(() => { const L = window._micro.layers()[0]; return L._calcDisplay && L._calcDisplay.name === 'DENS' && !L._calcDisplayBusy; }, null, { timeout: 15000 });
+  const cd0 = await pc.evaluate(() => { const c = window._micro.layers()[0]._calcDisplay.col; return { n: c.codes.length, min: c.min, max: c.max }; });
+  chk(`color-by-ƒ: option + realization (${cd0.n} codes, [${cd0.min}, ${cd0.max}])`, cc0 && cd0.n === 400 && Math.abs(cd0.min - 2.8) < 1e-5 && Math.abs(cd0.max - 4.1) < 1e-5);
+  await saveProject(pc);
   await pc.close();
+  const pc2 = await mkPage('sm2calcwin');
+  await pc2.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2calcwin'); await window._micro.openProjectDir(dir); });
+  await pc2.waitForFunction(() => { const L = window._micro.layers()[0]; return L && L._calcDisplay && L._calcDisplay.name === 'DENS' && !L._calcDisplayBusy; }, null, { timeout: 60000 });
+  const rt = await pc2.evaluate(() => {
+    const L = window._micro.layers()[0]; let h = 0; if (L._filterMask) for (const m of L._filterMask) if (m) h++;
+    return { sel: L.colorSel, hits: h, filter: document.querySelector('#filter').value, cols: (L.calcCols || []).length };
+  });
+  chk(`ƒ round-trip: calc color + ƒ filter survive reload (${rt.sel}, "${rt.filter}", ${rt.hits} hits, ${rt.cols} ƒ)`,
+    rt.sel === 'calc:DENS' && /DBL > 100/.test(rt.filter) && rt.hits > 0 && rt.cols === 3);
+  await pc2.close();
 }
 
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');

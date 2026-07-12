@@ -1382,6 +1382,7 @@ function paintApply(L, col, recs, code) {
   if (!idx.length) { $('#meta').textContent = 'paint: nothing new there'; return 0; }
   const st = (L._paintUndo = L._paintUndo || []);
   st.push({ col: col.name, idx: Uint32Array.from(idx), old: Uint8Array.from(old) });
+  L._paintVer = (L._paintVer || 0) + 1;                    // ƒ display realizations that read this paint go stale
   let bytes = 0; for (const u of st) bytes += u.idx.length * 5;
   while (st.length > 1 && bytes > 32e6) { const d = st.shift(); bytes -= d.idx.length * 5; }
   for (let i = 0; i < idx.length; i++) { col.counts[old[i]]--; col.counts[code]++; col.codes[idx[i]] = code; }
@@ -4240,6 +4241,8 @@ function openCalcWindow(L, selIdx) {
   function invalidate() {
     L._calcFns = null; L._colStats = null; markProjectDirty();
     if (L === activeLayer() && L.filterExpr) applyBlockFilter(L.filterExpr);   // a live filter picks up the new definition
+    if (L.id === _activeId) addPaintColorOptions(L);       // ƒ color-by options track the column set
+    if (calcSelOf(L)) { applyRamp(L, true); syncRuleMode(L); }   // a live ƒ color re-realizes (closure-hash gated)
     renderProps();
   }
   function render() {
@@ -4437,7 +4440,7 @@ function openCalcWindow(L, selIdx) {
     ctr.appendChild(saveB);
     if (cur) {
       const rmB = document.createElement('button'); rmB.className = 'awin-btn'; rmB.textContent = 'remove';
-      rmB.onclick = () => { L.calcCols.splice(sel, 1); sel = -1; invalidate(); render(); };
+      rmB.onclick = () => { if (colorSelOf(L) === 'calc:' + cur.name) setLayerColorSel(L, 'elev'); L.calcCols.splice(sel, 1); L._calcDisplay = null; sel = -1; invalidate(); render(); };
       const matB = document.createElement('button'); matB.className = 'awin-btn'; matB.textContent = 'materialize → stored';
       matB.title = 'compute once, store as a real column (survives even if inputs are removed; faster to scan)';
       matB.onclick = () => materializeCalcCol(L, cur.name);
@@ -7294,7 +7297,7 @@ $('#colorBy').addEventListener('change', () => {
   } else requestRender();
 });
 for (const id of ['clipMin', 'clipMax']) $('#' + id).addEventListener('input', () => {
-  const L = activeLayer(); if (L) { L.clip = [$('#clipMin').value, $('#clipMax').value]; const pcR = paintActiveCol(L); if (rampCfgOf(L) || (pcR && pcR.kind === 'ratio')) applyRamp(L, true); }
+  const L = activeLayer(); if (L) { L.clip = [$('#clipMin').value, $('#clipMax').value]; const pcR = paintActiveCol(L) || calcDisplayCol(L); if (rampCfgOf(L) || (pcR && pcR.kind === 'ratio')) applyRamp(L, true); }
   dispatchEvent(new Event('micro:project-dirty'));
 });
 
@@ -8817,12 +8820,12 @@ async function openProjectDir(dir) {
           Ld.storage = 'project';
           if (ls.dh.set) { Ld._setPath = ls.dh.set; Ld._setKey = ls.dh.set; Ld._intervalName = ivName; }   // group siblings; rescan won't re-offer
           if (ls.label) Ld.label = ls.label;
+          if (ls.colTypes) { Ld.colTypes = ls.colTypes; applyColTypes(Ld); }
+          if (ls.calcCols) { Ld.calcCols = ls.calcCols; addPaintColorOptions(Ld); }   // BEFORE filter/color — both may reference ƒ
           if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
           if (ls.visible === false) { Ld.visible = false; renderer.setLayerVisible(Ld.id, false); }
           if (ls.sectioned != null && ls.sectioned !== true) renderer.setLayerSectioned(Ld.id, ls.sectioned);
           restoreHiddenCats(Ld, ls.hiddenCats);
-          if (ls.colTypes) { Ld.colTypes = ls.colTypes; applyColTypes(Ld); }
-          if (ls.calcCols) Ld.calcCols = ls.calcCols;
           if (ls.ramps) { Ld.ramps = ls.ramps; applyRamp(Ld, true); }
           if (ls.catLegend) { Ld.catLegend = ls.catLegend; applyCatLegend(Ld, true); }
           if (ls.colorSel && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) { Ld.colorSel = ls.colorSel; $('#colorBy').value = ls.colorSel; syncRuleMode(Ld); }
@@ -8895,6 +8898,8 @@ async function openProjectDir(dir) {
       if (ls.drape && L.gridSurface) L._pendingDrape = ls.drape;   // apply after ALL layers land (the drape grid may come later)
       if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the styling/statistics UIs wake up scanned
       if (sidecar && sidecar.bands) L._bands = sidecar.bands;            // .dm/CSV filter pushdown substrate
+      if (ls.colTypes) { L.colTypes = ls.colTypes; applyColTypes(L); }
+      if (ls.calcCols) { L.calcCols = ls.calcCols; addPaintColorOptions(L); }   // BEFORE filter/color — both may reference ƒ
       // color channel first (may re-stream), then filter (sweeps), then the rest
       if (ls.colorSel && ls.colorSel !== $('#colorBy').value && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) {
         L.colorSel = ls.colorSel;
@@ -8904,13 +8909,12 @@ async function openProjectDir(dir) {
         }
         if ([...$('#colorBy').options].some((o) => o.value === ls.colorSel)) $('#colorBy').value = ls.colorSel;
       }
+      if (String(L.colorSel || '').startsWith('calc:')) { applyRamp(L, true); syncRuleMode(L); }   // realize + color the ƒ channel
       if (ls.clip && (ls.clip[0] || ls.clip[1])) { L.clip = [String(ls.clip[0] || ''), String(ls.clip[1] || '')]; $('#clipMin').value = L.clip[0]; $('#clipMax').value = L.clip[1]; }
       if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
       if (ls.visible === false) { L.visible = false; applyTreeVisibility(); }
       if (ls.sectioned != null && ls.sectioned !== true) renderer.setLayerSectioned(L.id, ls.sectioned);
       restoreHiddenCats(L, ls.hiddenCats);
-      if (ls.colTypes) { L.colTypes = ls.colTypes; applyColTypes(L); }
-      if (ls.calcCols) L.calcCols = ls.calcCols;
       if (ls.ramps) { L.ramps = ls.ramps; applyRamp(L, true); }
       if (ls.catLegend) { L.catLegend = ls.catLegend; applyCatLegend(L, true); }
       await restoreStyleExtras(L, ls);
@@ -12095,6 +12099,51 @@ function rulesOf(L) { return (L.rules && L.rules.list) || []; }
 // painted-column color channel: colorSel 'paint:<name>' → that column's codes
 // ride the SAME rule texture + palette (rules fill codes by expression,
 // painting fills them by gesture — one GPU path)
+// ── color-by-ƒ: a calc column drives the display via an EPHEMERAL realization —
+// a display CACHE, not data (never serialized, invisible to exports/records;
+// materialize→stored stays the freeze path). Freshness = a hash of the
+// DEFINITION CLOSURE (this expr + every transitively-referenced ƒ expr, via
+// deps) + source identity + the paint version (a brush stroke can feed a calc).
+// Stale → re-realize lazily (one scan) → bake codes → the same ratio-paint
+// palette/codes path materialized columns ride. One realization per layer
+// (the colored one); kept when you color away, replaced when you pick another.
+function calcSelOf(L) { const v = L && colorSelOf(L); return v && typeof v === 'string' && v.startsWith('calc:') ? v.slice(5) : null; }
+function calcDisplayHash(L, name) {
+  const by = new Map((L.calcCols || []).map((c) => [String(c.name).toLowerCase(), c]));
+  const seen = new Set(); const parts = [];
+  (function walk(nm) {
+    const c = by.get(nm); if (!c || seen.has(nm)) return; seen.add(nm);
+    parts.push(c.name + '=' + c.expr);
+    let ds = []; try { ds = deps(c.expr); } catch { /* bad expr → no deps */ }
+    for (const d of ds) walk(String(d).toLowerCase());
+  })(String(name).toLowerCase());
+  return parts.join('\n') + '|' + matColSourceHash(L) + '|' + (L._paintVer || 0);
+}
+function calcDisplayCol(L) {
+  const name = calcSelOf(L); if (!name) return null;
+  const cd = L._calcDisplay;
+  return cd && cd.name === name && cd.hash === calcDisplayHash(L, name) ? cd.col : null;
+}
+async function ensureCalcDisplay(L) {
+  const name = calcSelOf(L); if (!name || calcDisplayCol(L)) return;
+  const cc = (L.calcCols || []).find((c) => c.name === name); if (!cc || cc.ty === 'string') return;
+  const hash = calcDisplayHash(L, name);
+  if (L._calcDisplayBusy === hash) return;                 // this exact state is already being realized
+  L._calcDisplayBusy = hash;
+  $('#meta').textContent = `ƒ ${name}: computing for display…`;
+  let vals;
+  try { vals = await realizeCalc(L, name); }
+  catch (e) { L._calcDisplayBusy = null; $('#meta').textContent = `ƒ ${name}: ${e.message}`; return; }
+  L._calcDisplayBusy = null;
+  if (calcSelOf(L) !== name || hash !== calcDisplayHash(L, name)) { ensureCalcDisplay(L); return; }   // went stale mid-scan
+  let mn = Infinity, mx = -Infinity, nn = 0;
+  for (let i = 0; i < vals.length; i++) { const v = vals[i]; if (Number.isFinite(v)) { if (v < mn) mn = v; if (v > mx) mx = v; nn++; } }
+  if (!nn) { mn = 0; mx = 0; }
+  const col = { name, kind: 'ratio', mat: true, selKey: 'calc:' + name, fvalues: vals, codes: matColCodes(vals, mn, mx), blankColor: PAINT_BLANK, min: mn, max: mx, count: vals.length, nonnull: nn };
+  L._calcDisplay = { name, hash, col };
+  applyRamp(L, true); syncRuleMode(L);
+  $('#meta').textContent = `ƒ ${name}: colored — ${nn.toLocaleString()} values, ${fmtStat(mn)} … ${fmtStat(mx)}`;
+}
 function paintSelOf(L) {
   const v = L && colorSelOf(L);
   return v && typeof v === 'string' && v.startsWith('paint:') ? v.slice(6) : null;
@@ -12109,7 +12158,7 @@ function applyPaintPalette(L, col) {
     // a ratio column is a full numeric channel: preset/classed/breakpoints and
     // the clip window all apply, baked through the palette (codes are absolute
     // v = code/255; the LUT covers the clip range, codes remap into it)
-    const cfg = (L.ramps && L.ramps['paint:' + col.name]) || { preset: 'viridis', classed: false, breaks: [] };
+    const cfg = (L.ramps && L.ramps[col.selKey || ('paint:' + col.name)]) || { preset: 'viridis', classed: false, breaks: [] };
     const clip = [parseFloat(L.clip && L.clip[0]), parseFloat(L.clip && L.clip[1])];
     const lo = Number.isFinite(clip[0]) ? clip[0] : 0, hi = Number.isFinite(clip[1]) ? clip[1] : 1;
     const lut = bakeRampPixels(cfg, lo, hi);
@@ -12153,6 +12202,15 @@ function addPaintColorOptions(L) {
       sel.insertBefore(o, solid || null);
     }
   }
+  for (const cc of (L.calcCols || []).filter((c) => c.ty !== 'string')) {   // ƒ numeric calcs color too
+    const v = 'calc:' + cc.name;
+    if (![...sel.options].some((o) => o.value === v)) {
+      const o = document.createElement('option'); o.value = v; o.textContent = 'ƒ ' + cc.name;
+      const solid = [...sel.options].find((x) => x.value === 'solid');
+      sel.insertBefore(o, solid || null);
+    }
+  }
+  for (const o of [...sel.options]) if (o.value.startsWith('calc:') && !(L.calcCols || []).some((c) => c.ty !== 'string' && 'calc:' + c.name === o.value)) o.remove();
 }
 function ruleDefaultColor(i) {                             // golden-angle hues, same family as the category palette
   const h = (i * 137.508) % 360, s = 0.62, v = 0.86;
@@ -12189,7 +12247,8 @@ function applyRuleVisibility(L, force) {
 // this hand-back)
 function syncRuleMode(L) {
   if (!L) return;
-  const pc = paintActiveCol(L);
+  const pc = paintActiveCol(L) || calcDisplayCol(L);
+  if (!pc && calcSelOf(L)) ensureCalcDisplay(L);           // realize lazily; it re-syncs on completion
   if (ruleModeOf(L)) {
     renderer.setLayerRuleMode(L.id, true);
     applyRulePalette(L, true); applyRuleVisibility(L, true);
@@ -12560,15 +12619,24 @@ async function matColDelete(L, name) {
 // freeze a computed calc column into a stored materialized column (same name):
 // evaluate its expression across every record → matColSet, drop the calc col. Bakes
 // an expensive expression, or keeps a derived column without carrying its inputs.
-async function materializeCalcCol(L, name) {
-  const cc = (L.calcCols || []).find((c) => c.name === name); if (!cc) { $('#meta').textContent = `materialize: no calc column “${name}”`; return; }
-  const h = layerTableHeader(L); if (!h) return;
+async function realizeCalc(L, name) {                      // one pass → per-record Float32 values of ƒ `name`
+  const h = layerTableHeader(L); if (!h) throw new Error('no column table');
   const fn = compileValue(quoteIdent(name), schemaExt(L, h), { decimal: '.' });   // a NAME as an expression → quote
   const n = attrRowCountOf(L) || 0; const vals = new Float32Array(n); let rec = 0;
-  $('#meta').textContent = `materializing “${name}”…`;
   for await (const batch of layerRows(L, null)) { for (const f0 of batch) { if (rec >= n) break; let v; try { v = +fn(extendRow(L, f0, rec)); } catch { v = NaN; } vals[rec] = Number.isFinite(v) ? v : NaN; rec++; } await new Promise((r) => setTimeout(r)); }
+  return vals;
+}
+async function materializeCalcCol(L, name) {
+  const cc = (L.calcCols || []).find((c) => c.name === name); if (!cc) { $('#meta').textContent = `materialize: no calc column “${name}”`; return; }
+  if (!layerTableHeader(L)) return;
+  $('#meta').textContent = `materializing “${name}”…`;
+  const vals = await realizeCalc(L, name);
+  const rec = vals.length;
+  const wasColor = colorSelOf(L) === 'calc:' + name;
   L.calcCols = (L.calcCols || []).filter((c) => c.name !== name); L._calcFns = null;   // computed → stored (no schema collision)
+  L._calcDisplay = null;                                    // the ephemeral realization is superseded by the stored column
   matColSet(L, name, vals, { lineage: mkLineage('materialize', { from: 'calc', expr: cc.expr }, [L.lineage].filter(Boolean)) });
+  if (wasColor) setLayerColorSel(L, 'paint:' + name);
   try { await matColPersist(L); } catch { /* best-effort */ }
   markProjectDirty(); renderLayers(); requestRender();
   $('#meta').textContent = `materialized “${name}” — ${rec.toLocaleString()} values stored`;
@@ -13080,13 +13148,18 @@ function rampRangeFor(L) {
     const lo0 = pc && pc.mat ? pc.min : 0, hi0 = pc && pc.mat ? pc.max : 1;
     return [Number.isFinite(clip[0]) ? clip[0] : lo0, Number.isFinite(clip[1]) ? clip[1] : hi0];
   }
+  if (String(sel).startsWith('calc:')) {                   // ƒ display realization: real [min,max]
+    const cd = calcDisplayCol(L);
+    return [Number.isFinite(clip[0]) ? clip[0] : (cd ? cd.min : 0), Number.isFinite(clip[1]) ? clip[1] : (cd ? cd.max : 1)];
+  }
   const b = _docBbox || [0, 0, 0, 1, 1, 1];
   const o = frame ? frame.origin[2] : 0;
   return [Number.isFinite(clip[0]) ? clip[0] : b[2] + o, Number.isFinite(clip[1]) ? clip[1] : b[5] + o];
 }
 function applyRamp(L, force) {
   if (!force) return stageGate(L, () => applyRamp(L, true));
-  const pcR = paintActiveCol(L);
+  const pcR = paintActiveCol(L) || calcDisplayCol(L);
+  if (!pcR && calcSelOf(L)) ensureCalcDisplay(L);          // realize lazily; it re-applies on completion
   if (pcR && pcR.kind === 'ratio') { applyPaintPalette(L, pcR); return; }   // ramp+clip bake INTO the palette
   const cfg = rampCfgOf(L);
   if (!cfg || (cfg.preset === 'viridis' && !(cfg.breaks && cfg.breaks.length))) {
@@ -14021,7 +14094,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
