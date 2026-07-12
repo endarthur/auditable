@@ -951,6 +951,18 @@ await p.close();
   });
   chk(`hole filter: EOH > 125 → ${hf.holes} holes → ${hf.h0} intervals; AND FE > 34 → ${hf.h1}`,
     hf.holes === 3 && hf.h0 === 24 && hf.h1 > 0 && hf.h1 < 24);
+  // the SET GROUP is the element in the tree: single-interval loads group too,
+  // with collar/survey info rows whose menus carry the location verbs
+  const tg = await pd2.evaluate(() => {
+    const grp = window._micro.layerTree().find((x) => typeof x !== 'number' && x.dhSet);
+    const infoRows = [...document.querySelectorAll('#lpRows .lp-row.lp-info .lp-name')].map((x) => x.textContent);
+    const nd = grp; if (nd) { window._micro.collarsRowMenu(nd, 200, 200); }
+    const menu = [...document.querySelectorAll('.menu .item')].map((x) => x.textContent.trim());
+    document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    return { grp: !!grp, infoRows, hasVerbs: menu.some((x) => /Filter holes/.test(x)) && menu.some((x) => /Broadcast/.test(x)) && menu.some((x) => /Attribute table/.test(x)) };
+  });
+  chk(`dh tree: set group + collar/survey rows (${tg.infoRows.join(', ')}) + collars-row verbs`,
+    tg.grp && tg.infoRows.length >= 2 && tg.hasVerbs);
   await pd2.close();
 }
 

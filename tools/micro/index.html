@@ -239,6 +239,9 @@
   #lpRows .lp-row.active { border-left-color: var(--accent); background: #202020; }
   #lpRows .lp-row.dim .lp-name, #lpRows .lp-row.dim .lp-n { opacity: 0.45; }
   #lpRows .lp-group .lp-name { color: var(--text-hi); }
+  #lpRows .lp-row.lp-info { cursor: context-menu; }
+  #lpRows .lp-row.lp-info .lp-name { color: var(--muted); }
+  #lpRows .lp-row.lp-info .lp-infoico { color: var(--dim); width: 13px; flex: 0 0 auto; text-align: center; }
   #lpRows .lp-caret { color: var(--dim); cursor: pointer; width: 11px; flex: 0 0 auto; }
   #lpRows .lp-drop-above { box-shadow: 0 -2px 0 var(--accent); }
   #lpRows .lp-drop-below { box-shadow: 0 2px 0 var(--accent); }
@@ -6590,6 +6593,7 @@ async function openDrillholeLayer(files, opts = {}, mode = 'add') {
     const warn = header.report.checks.reduce((t, c) => t + c.count, 0);
     _dhDoc.metaLine = `${name} — ${header.placed.toLocaleString()}/${header.count.toLocaleString()} intervals · ${header.holes} holes · ${header.method === 'minimumCurvature' ? 'min curvature' : header.method} · dip ${header.dipConvention}${warn ? ` · ⚠ ${warn} check${warn > 1 ? 's' : ''} (File info)` : ''}`;
     $('#meta').textContent = _dhDoc.metaLine;
+    ensureDhSetGroups();                                   // every dh layer lives in its SET group (the group IS the element)
     renderLayers();
     dispatchEvent(new Event('micro:project-dirty'));
     requestRender();
@@ -6765,7 +6769,7 @@ async function loadDrillholeSet(set, cfg, replaceFirst) {
   }
   // multiple interval tables → nest the siblings under a parent group (the set);
   // reopen restores it via the saved tree, so only group at initial load
-  if (ids.length >= 2) createLayerGroup(dhGroupName(set.collar.name), ids, { collapsed: false, dhSet: true });
+  if (ids.length) createLayerGroup(dhGroupName(set.collar.name), ids, { collapsed: false, dhSet: true });   // ALWAYS a set group — the group IS the element
 }
 // a readable set/group name from the collar filename (drop a trailing _collar(s))
 const dhGroupName = (collarName) => basename(String(collarName)).replace(/\.[^.]+$/, '').replace(/[_-]?collars?$/i, '') || 'drillholes';
@@ -7042,7 +7046,7 @@ $('#dhImport').onclick = async () => {
     const L = activeLayer(); if (L) { L._setKey = key; L._intervalName = iv.name; ids.push(L.id); }
     first = false;
   }
-  if (ids.length >= 2) createLayerGroup(dhGroupName(basename(d.collar.name)), ids, { collapsed: false, dhSet: true });
+  if (ids.length) createLayerGroup(dhGroupName(basename(d.collar.name)), ids, { collapsed: false, dhSet: true });
 };
 $('#dhCancel').onclick = () => $('#dhDlg').classList.remove('show');
 
@@ -8931,6 +8935,7 @@ async function openProjectDir(dir) {
       plRow(i, 'done', 'done');
     }
     if (mf.tree) treeFromManifest(mf.tree, idAt);
+    ensureDhSetGroups();                                   // pre-set-group projects: solo dh layers get their element group
     applyCamera(mf.camera);
     applySection(mf.section);
     // drapes come after ALL layers land — the drape grid may load later than its surface
@@ -9080,7 +9085,7 @@ async function scanFolderForNewData() {
           await openDrillholeLayer({ collar, survey, intervals }, s.desc.config || {}, _layers.length ? 'add' : 'replace');
           const L = activeLayer(); if (L) { L.storage = 'project'; L._setPath = s.e.path; L._setKey = s.e.path; L._intervalName = iv; ids.push(L.id); }
         }
-        if (ids.length >= 2) createLayerGroup(dhGroupName(s.desc.collar), ids, { collapsed: false, dhSet: true });
+        if (ids.length) createLayerGroup(dhGroupName(s.desc.collar), ids, { collapsed: false, dhSet: true });
       } catch (err) { $('#meta').textContent = `scan: “${s.e.name}” — ${err.message}`; }
     }
     if (looseFiles.length) await openFilesDialog(looseFiles);   // the dialog is the confirmation for loose files
@@ -11106,6 +11111,17 @@ function layerMenu(L, x, y) {
     { label: 'Zoom to layer', action: () => fitLayer(L) },
     { label: 'Rename layer…', kbd: 'F2', action: () => renameActiveLayer(L) },
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
+    { sep: true },                                          // ── inspect / analyze ──
+    ...(L.kind !== 'mesh' ? [{ label: 'Attribute table…', kbd: 't', action: () => openAttrTable(L) }] : []),
+    ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
+    ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Stats…', action: () => openStats(L) }] : []),
+    ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }, { label: 'Swath plot…', action: () => openSwath(L) }] : []),
+    ...(L._filterMask ? [{ label: 'Filter → selection', action: () => filterToSelection(L) }] : []),
+    ...(L._selCount ? [{ label: `Selection → column… (${L._selCount.toLocaleString()} rows)`, action: () => selectionToColumn(L) }] : []),
+    { label: 'File info…', action: () => { setActiveLayer(L.id); showFileInfo(); } },
+    ...(L.lineage ? [{ label: 'Lineage…', action: () => openLineageWindow(L) }] : []),
+    ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
+    { sep: true },                                          // ── derive / store ──
     ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Interpolate from this…', action: () => openInterpolateDialog({ srcLayer: L.id }) }] : []),
     ...((L.calcCols || []).length ? [{ label: 'Materialize calc column', submenu: () => (L.calcCols || []).map((c) => ({ label: `${c.name} → stored`, action: () => materializeCalcCol(L, c.name) })) }] : []),
     ...(L.dh && L.docs.dhDoc && !dhSetGroupOf(L.id) ? [{ label: (L.holeFilter ? '✓ ' : '') + 'Filter holes…', action: async () => {
@@ -11114,47 +11130,21 @@ function layerMenu(L, x, y) {
       const r = await applyHoleFilter(L, v);
       $('#meta').textContent = r && r.err ? `hole filter: ${r.err}` : (r && r.holes != null ? `hole filter: ${r.holes} of ${r.total} holes` : 'hole filter cleared');
     } }] : []),
-    ...(L.dh && L.docs.dhDoc ? [{ label: 'Broadcast collar column', submenu: () => {
-      const cols = (L.docs.dhDoc._collarCols || []).filter((c) => c.name);
-      return cols.length ? cols.map((c) => ({ label: `${c.name} → intervals (${c.type})`, action: () => broadcastCollarCol(L, c.name) })) : [{ label: '(reading collar columns…)', action: () => {} }];
+    ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Store as Parquet…', action: async () => { const res = await openOptimizeDialog([L]); if (res && res.layers.length) await convertLayerToParquet(L, { keepOriginal: res.keepOriginal }); } }] : []),
+    ...(L.docs.blockDoc ? [{ label: 'Build index (stats + pushdown)…', action: async () => {
+      await scanColumns(L, (a2, b2) => { $('#meta').textContent = `indexing ${L.label || L.name} — ${b2 ? Math.round(100 * a2 / b2) : 0}%…`; }, { bands: !L.docs.blockDoc.parquet });
+      $('#meta').textContent = `indexed ${L.label || L.name} — stats + band index ready (written as a sidecar on the next project save)`;
+      markProjectDirty();
     } }] : []),
-    ...(L.gridSurface ? [{ label: 'Drape', submenu: () => {
-      const grids = _layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
-      return [{ label: (L.drapeSource ? '' : '✓ ') + 'elevation', action: () => recolorSurface(L, null) },
-        ...(grids.length ? grids.map((g) => ({ label: (L.drapeSource === g.name ? '✓ ' : '') + (g.label || g.name), action: () => recolorSurface(L, g) })) : [{ label: '(load another grid to drape over it)', action: () => {} }])];
-    } }] : []),
-    { label: 'Move up', action: () => treeMoveStep(L.id, -1) },
-    { label: 'Move down', action: () => treeMoveStep(L.id, 1) },
-    { label: 'Move to group…', action: () => setTimeout(() => moveLayerToGroupMenu(L, x, y), 0) },
-    ...(L.docs.gridDoc ? [{ label: 'Flag / ratio by this surface…', action: () => openSolidDialog(L) }] : []),
-    ...(L.docs.gridDoc ? [{ label: 'Extend to footprint…', action: () => openSurfaceTools('extend', L) }] : []),
-    ...(L.docs.gridDoc && surfaceableLayers().length >= 2 ? [{ label: 'Combine surfaces…', action: () => openSurfaceTools('combine', L) }] : []),
-    ...(L.docs.gridDoc ? [{ label: 'Export as ESRI ASCII grid…', action: () => exportGridAsc(L) }] : []),
-    ...(L.docs.gridDoc && L.docs.gridDoc.source && !L.docs.gridDoc.fullRes && _project ? [{ label: 'Build display cache', action: async () => { try { const why = await writeGridDisplayCache(L, _project.dir); $('#meta').textContent = why ? `display cache: ${why}` : `display cache written · ${L.name}.disp.grd`; } catch (e) { $('#meta').textContent = `display cache — ${e.message}`; } } }] : []),
-    ...(L.dh ? [{ label: `Stick radius… (${renderer.layerStickRadius(L.id)} m)`, action: async () => {
-      const v = await microPrompt('stick radius (metres)', String(renderer.layerStickRadius(L.id)));
-      const r = parseFloat(v);
-      if (Number.isFinite(r) && r > 0) {
-        renderer.setLayerStickRadius(L.id, r);             // the context-menu path stays live (no panel involved)
-        if (L.docs.dhDoc) L.docs.dhDoc.config.radius = r;   // persists via the project manifest
-        markProjectDirty(); requestRender();
-      }
-    } }] : []),
-    ...(L.dh && L.docs.dhDoc ? [{ label: 'Add interval table…', action: () => addIntervalToLayer(L) }] : []),
-    ...(L.kind !== 'mesh' && (L.docs.blockDoc || L.dh) ? [{ label: `Opacity (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, submenu: () => opacityMenuItems(L) }] : []),
-    // per-layer block-edge override (tri-state): follow the View toggle, or force
-    ...(L.docs.blockDoc ? [{
-      label: `Block edges: ${L.edges == null ? 'auto' : L.edges ? 'on' : 'off'}`,
-      submenu: () => [[null, `auto (follow View${_blockEdges ? ' — on' : ' — off'})`], [true, 'on'], [false, 'off']].map(([v, t]) => ({
-        label: ((L.edges === v || (v === null && L.edges == null)) ? '✓ ' : '') + t,
-        action: () => { L.edges = v; renderer.setLayerEdges(L.id, v); markProjectDirty(); requestRender(); },
-      })),
-    }] : []),
+    ...(L.docs.gridDoc ? [{ label: 'Surface tools', submenu: () => [
+      { label: 'Flag / ratio by this surface…', action: () => openSolidDialog(L) },
+      { label: 'Extend to footprint…', action: () => openSurfaceTools('extend', L) },
+      ...(surfaceableLayers().length >= 2 ? [{ label: 'Combine surfaces…', action: () => openSurfaceTools('combine', L) }] : []),
+      { label: 'Export as ESRI ASCII grid…', action: () => exportGridAsc(L) },
+      ...(L.docs.gridDoc.source && !L.docs.gridDoc.fullRes && _project ? [{ label: 'Build display cache', action: async () => { try { const why = await writeGridDisplayCache(L, _project.dir); $('#meta').textContent = why ? `display cache: ${why}` : `display cache written · ${L.name}.disp.grd`; } catch (e) { $('#meta').textContent = `display cache — ${e.message}`; } } }] : []),
+    ] }] : []),
     ...(L.kind === 'mesh' ? (() => {
-      const items = [
-        { label: 'Tint…', action: () => setTimeout(() => meshTintMenu(L, x, y), 0) },
-        { label: `Opacity (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, submenu: () => opacityMenuItems(L) },
-      ];
+      const items = [];
       const h = L.docs.meshDoc && L.docs.meshDoc.header;
       if (h && !h.soup) items.push({ label: 'Select by this solid…', action: () => openSolidDialog(L) });
       if (h && !h.soup) items.push({ label: 'Rasterize to grid…', action: () => openMeshGridDialog(L) });
@@ -11173,29 +11163,45 @@ function layerMenu(L, x, y) {
       }
       return items;
     })() : []),
-    { label: 'File info…', action: () => { setActiveLayer(L.id); showFileInfo(); } },
-    ...(L.kind !== 'mesh' ? [{ label: 'Attribute table…', kbd: 't', action: () => openAttrTable(L) }] : []),
-    ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
-    ...(layerTableHeader(L) ? [{ label: 'Export rows…', action: () => openExportDialog(L) }] : []),
-    ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }, { label: 'Swath plot…', action: () => openSwath(L) }] : []),
-    ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Stats…', action: () => openStats(L) }] : []),
-    ...(false && gridAxesOf(L) && drillholeLayers().length ? [{ label: 'Validate vs drillholes…', action: () => openValidation(L) }] : []),   // temporarily disabled pending window rework
-    ...(L._filterMask ? [{ label: 'Filter → selection', action: () => filterToSelection(L) }] : []),
-    ...(L._selCount ? [{ label: `Selection → column… (${L._selCount.toLocaleString()} rows)`, action: () => selectionToColumn(L) }] : []),
-    ...(L.lineage ? [{ label: 'Lineage…', action: () => openLineageWindow(L) }] : []),
-    ...(L.docs.blockDoc && !(L.docs.blockDoc.parquet) ? [{ label: 'Store as Parquet…', action: async () => { const res = await openOptimizeDialog([L]); if (res && res.layers.length) await convertLayerToParquet(L, { keepOriginal: res.keepOriginal }); } }] : []),
-    ...(L.docs.blockDoc ? [{ label: 'Build index (stats + pushdown)…', action: async () => {
-      await scanColumns(L, (a, b) => { $('#meta').textContent = `indexing ${L.label || L.name} — ${b ? Math.round(100 * a / b) : 0}%…`; }, { bands: !L.docs.blockDoc.parquet });
-      $('#meta').textContent = `indexed ${L.label || L.name} — stats + band index ready (written as a sidecar on the next project save)`;
-      markProjectDirty();
+    { sep: true },                                          // ── display ──
+    ...(L.dh ? [{ label: `Stick radius… (${renderer.layerStickRadius(L.id)} m)`, action: async () => {
+      const v = await microPrompt('stick radius (metres)', String(renderer.layerStickRadius(L.id)));
+      const r = parseFloat(v);
+      if (Number.isFinite(r) && r > 0) {
+        renderer.setLayerStickRadius(L.id, r);             // the context-menu path stays live (no panel involved)
+        if (L.docs.dhDoc) L.docs.dhDoc.config.radius = r;   // persists via the project manifest
+        markProjectDirty(); requestRender();
+      }
     } }] : []),
-    { sep: true },
-    { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
+    ...(L.kind !== 'mesh' && (L.docs.blockDoc || L.dh) ? [{ label: `Opacity (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, submenu: () => opacityMenuItems(L) }] : []),
+    ...(L.kind === 'mesh' ? [
+      { label: 'Tint…', action: () => setTimeout(() => meshTintMenu(L, x, y), 0) },
+      { label: `Opacity (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, submenu: () => opacityMenuItems(L) },
+    ] : []),
+    ...(L.gridSurface ? [{ label: 'Drape', submenu: () => {
+      const grids = _layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
+      return [{ label: (L.drapeSource ? '' : '✓ ') + 'elevation', action: () => recolorSurface(L, null) },
+        ...(grids.length ? grids.map((g) => ({ label: (L.drapeSource === g.name ? '✓ ' : '') + (g.label || g.name), action: () => recolorSurface(L, g) })) : [{ label: '(load another grid to drape over it)', action: () => {} }])];
+    } }] : []),
+    ...(L.docs.blockDoc ? [{
+      label: `Block edges: ${L.edges == null ? 'auto' : L.edges ? 'on' : 'off'}`,
+      submenu: () => [[null, `auto (follow View${_blockEdges ? ' — on' : ' — off'})`], [true, 'on'], [false, 'off']].map(([v, t]) => ({
+        label: ((L.edges === v || (v === null && L.edges == null)) ? '✓ ' : '') + t,
+        action: () => { L.edges = v; renderer.setLayerEdges(L.id, v); markProjectDirty(); requestRender(); },
+      })),
+    }] : []),
     { label: (() => { const m = renderer.layerSectioned(L.id); return 'Cut by sections' + (m === true ? '' : m === false ? ' (off)' : ` (${m})`); })(), submenu: () => {
       const m = renderer.layerSectioned(L.id);
       const opt = (v, t) => ({ label: (m === v ? '✓ ' : '') + t, action: () => { renderer.setLayerSectioned(L.id, v); markProjectDirty(); requestRender(); } });
       return [opt(true, 'follow the section'), opt('front', 'keep front only'), opt('behind', 'keep behind only'), opt(false, "don't cut")];
     } },
+    { label: L.visible ? 'Hide layer' : 'Show layer', action: () => { L.visible = !L.visible; applyTreeVisibility(); renderLayers(); } },
+    { sep: true },                                          // ── arrange / lifecycle ──
+    { label: 'Move', submenu: () => [
+      { label: 'Up', action: () => treeMoveStep(L.id, -1) },
+      { label: 'Down', action: () => treeMoveStep(L.id, 1) },
+      { label: 'To group…', action: () => setTimeout(() => moveLayerToGroupMenu(L, x, y), 0) },
+    ] },
     ...(canCopyIntoProject(L) ? [{
       label: `Copy into project (${fmtSize(layerBytes(L))})`,
       action: () => copyLayerIntoProject(L),
@@ -14310,6 +14316,74 @@ async function filterHolesSet(nd) {
     : 'hole filter cleared';
   renderLayers();
 }
+// a lightweight table view over a small CSV blob (the collar/survey tables —
+// hole-granularity data that deserves inspection but isn't a render layer)
+async function openCsvTableWindow(title, blob) {
+  const lines = (await blob.text()).split(/\r?\n/).filter((x) => x.trim());
+  if (!lines.length) { $('#meta').textContent = `${title}: empty file`; return; }
+  const cells2 = collarCells(lines);
+  const CAP = 10000;
+  const win = floatWin({ title, sub: `${(lines.length - 1).toLocaleString()} rows${lines.length - 1 > CAP ? ` · showing ${CAP.toLocaleString()}` : ''}`, x: 140, y: 120, w: 540, h: 340 });
+  win.body.style.cssText += 'display:flex;flex-direction:column;';
+  const wrap = document.createElement('div'); wrap.style.cssText = 'flex:1;overflow:auto;font:11px var(--mono);';
+  const tbl = document.createElement('table'); tbl.style.cssText = 'border-collapse:collapse;white-space:nowrap;';
+  const mkTr = (vals, th) => {
+    const tr = document.createElement('tr');
+    for (const v of vals) {
+      const td = document.createElement(th ? 'th' : 'td');
+      td.textContent = v;
+      td.style.cssText = 'padding:2px 12px 2px 4px;text-align:left;border-bottom:1px solid var(--bd2);font-weight:normal;' + (th ? 'position:sticky;top:0;background:#1a1a1a;color:var(--accent);' : '');
+      tr.appendChild(td);
+    }
+    return tr;
+  };
+  tbl.appendChild(mkTr(cells2(lines[0]), true));
+  for (let i = 1; i < Math.min(lines.length, CAP + 1); i++) tbl.appendChild(mkTr(cells2(lines[i])));
+  wrap.appendChild(tbl);
+  win.body.appendChild(wrap);
+  return win;
+}
+// the COLLARS row: hole-granularity nouns — its menu carries the collar-location
+// verbs (table view, the hole filter, broadcast → every member's intervals)
+function collarsRowMenu(nd, x, y) {
+  const info = dhSetInfo(nd); if (!info) return;
+  const members = groupLayerIds(nd).map(layerById).filter((L2) => L2 && L2.dh && L2.docs.dhDoc);
+  const rep = members[0]; if (!rep) return;
+  const hf = members.find((L2) => L2.holeFilter);
+  menuXY(x, y, [
+    { label: 'Attribute table…', action: () => openCsvTableWindow(`collars · ${basename(info.blobs.collar.name || 'collars')}`, info.blobs.collar) },
+    { label: (hf ? '✓ ' : '') + 'Filter holes…', action: () => filterHolesSet(nd) },
+    { label: 'Broadcast column to intervals', submenu: () => {
+      const cols = (rep.docs.dhDoc._collarCols || []).filter((c) => c.name);
+      return cols.length
+        ? cols.map((c) => ({ label: `${c.name} (${c.type})`, action: async () => { for (const L2 of members) await broadcastCollarCol(L2, c.name); } }))
+        : [{ label: '(reading collar columns…)', action: () => {} }];
+    } },
+  ]);
+}
+// the SURVEY row: the trajectory nouns — table view, desurvey method, traces
+function surveyRowMenu(nd, x, y) {
+  const info = dhSetInfo(nd); if (!info) return;
+  menuXY(x, y, [
+    { label: 'Attribute table…', action: () => openCsvTableWindow(`survey · ${basename(info.blobs.survey.name || 'survey')}`, info.blobs.survey) },
+    { label: 'Re-desurvey set…', action: () => setTimeout(() => redesurveyMenu(nd, x, y), 0) },
+    { label: setHasTraces(nd) ? 'Hide hole traces' : 'Show hole traces', action: () => showHoleTraces(nd) },
+  ]);
+}
+function ensureDhSetGroups() {
+  treeSync();
+  const bySet = new Map();
+  for (const L of _layers) {
+    if (!(L.dh && L.docs.dhDoc) || L.trace || dhSetGroupOf(L.id)) continue;
+    const k = L._setKey || ('solo:' + L.id);
+    if (!bySet.has(k)) bySet.set(k, []);
+    bySet.get(k).push(L);
+  }
+  for (const members of bySet.values()) {
+    const files = layerFiles(members[0]);
+    createLayerGroup(dhGroupName(basename((files[0] && files[0].name) || 'holes')), members.map((L) => L.id), { collapsed: false, dhSet: true });
+  }
+}
 function dhSetInfo(nd) {
   for (const id of groupLayerIds(nd)) { const L = layerById(id); if (L && L.dh && L.docs.dhDoc) return { blobs: L.docs.dhDoc.blobs, config: L.docs.dhDoc.config, setKey: L._setKey }; }
   return null;
@@ -14418,16 +14492,9 @@ const groupOpacityItems = (nd) => {
 };
 function groupMenu(nd, x, y) {
   const items = [];
-  if (nd.dhSet) {
-    const info = dhSetInfo(nd);
-    if (info) {
-      items.push({ label: `collar · ${basename(info.blobs.collar.name)}`, action: () => { $('#meta').textContent = `set collar: ${info.blobs.collar.name} · survey: ${info.blobs.survey.name}`; } });
-      items.push({ label: `survey · ${basename(info.blobs.survey.name)}`, action: () => { $('#meta').textContent = `set collar: ${info.blobs.collar.name} · survey: ${info.blobs.survey.name}`; } });
-    }
+  if (nd.dhSet) {                                          // location verbs live on the collar/survey ROWS now
     items.push({ label: setHasTraces(nd) ? 'Hide hole traces' : 'Show hole traces', action: () => showHoleTraces(nd) });
-    { const hf = groupLayerIds(nd).map(layerById).find((L2) => L2 && L2.holeFilter); items.push({ label: (hf ? '✓ ' : '') + 'Filter holes…', action: () => filterHolesSet(nd) }); }
     items.push({ label: 'Add interval table…', action: () => addIntervalToSet(nd) });
-    items.push({ label: 'Re-desurvey set…', action: () => setTimeout(() => redesurveyMenu(nd, x, y), 0) });
     items.push({ sep: true });
   }
   menuXY(x, y, [
@@ -14565,6 +14632,27 @@ function renderLayers() {
       row.oncontextmenu = (e) => { e.preventDefault(); groupMenu(nd, e.clientX, e.clientY); };
       rows.appendChild(row);
       visual.push({ row, node: nd, isGroup: true });
+      if (!nd.collapsed && nd.dhSet) {                     // the element's other LOCATIONS: collar + survey rows
+        const info = dhSetInfo(nd);
+        const rep = groupLayerIds(nd).map(layerById).find((L2) => L2 && L2.dh && L2.docs.dhDoc);
+        if (info && rep) {
+          const infoRow = (ico, label, tail, menuFor) => {
+            const r2 = document.createElement('div');
+            r2.className = 'lp-row lp-info' + (dim || !nd.visible ? ' dim' : '');
+            r2.style.paddingLeft = `${6 + (depth + 1) * 14}px`;
+            const slot = document.createElement('span'); slot.className = 'lp-caret';
+            const ic = document.createElement('span'); ic.className = 'lp-infoico'; ic.textContent = ico;
+            const nm2 = document.createElement('span'); nm2.className = 'lp-name'; nm2.textContent = label;
+            const n2 = document.createElement('span'); n2.className = 'lp-n'; n2.textContent = tail;
+            r2.append(slot, ic, nm2, n2);
+            const open2 = (e) => { e.preventDefault(); e.stopPropagation(); menuFor(e.clientX, e.clientY); };
+            r2.oncontextmenu = open2; r2.onclick = open2;   // info rows have no activate — the menu IS the row
+            rows.appendChild(r2);
+          };
+          infoRow('◈', basename(info.blobs.collar.name || 'collars'), `${rep.docs.dhDoc.header.holes || ''} holes`, (x, y) => collarsRowMenu(nd, x, y));
+          infoRow('↧', basename(info.blobs.survey.name || 'survey'), rep.docs.dhDoc.config.method === 'minimumCurvature' || !rep.docs.dhDoc.config.method ? 'min curv' : rep.docs.dhDoc.config.method, (x, y) => surveyRowMenu(nd, x, y));
+        }
+      }
       if (!nd.collapsed) walk(nd.children, depth + 1, dim || !nd.visible);
     }
   };
@@ -14769,7 +14857,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
