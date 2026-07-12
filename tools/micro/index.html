@@ -711,7 +711,7 @@ import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchD
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
-import { compileBool, compileValue, validate, complete, parse, deps, canMatch, quoteIdent } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
+import { compileBool, compileValue, compileChunk, compileChunkBool, validate, complete, parse, deps, canMatch, quoteIdent } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
@@ -7079,21 +7079,44 @@ async function applyBlockFilter(expr) {
     //    calc/painted columns are in play (their formulas may reach further)
     const P = fBlockDoc.parquet;
     let ast = null; try { ast = parse(expr); } catch { ast = null; }
-    const hasCalc = !!((AL && AL.calcCols && AL.calcCols.length) || (AL && AL.paintCols && AL.paintCols.length));
+    const needL = ast ? expandedDeps(AL, ast) : null;      // calc-expanded → projection works WITH derived columns now
     let readCols = P.names;
-    if (ast && !hasCalc) {
+    if (ast) {
       const need = new Set(P.coordNames.map((n) => n.toLowerCase()));
       if (P.catName) need.add(P.catName.toLowerCase());
       if (m.chan != null) need.add(P.names[m.chan].toLowerCase());
-      for (const d of deps(ast)) need.add(d.toLowerCase());
+      for (const d of needL) need.add(d);
       readCols = P.names.filter((n) => need.has(n.toLowerCase()));
     }
+    // the CHUNK path: the filter (and any calc it references) evaluates columnar
+    // over each row group via compileChunk — rows are built only for MATCHES
+    const censusSchema = schemaExt(AL, header);
+    const chunkF = ast ? compileChunkBool(ast, censusSchema, { decimal: '.' }) : null;
+    const baseLen = header.columns.length, paintLen = ((AL && AL.paintCols) || []).length;
+    const calcChunkFns = (ast && AL && AL.calcCols && AL.calcCols.length)
+      ? calcOrder(AL).filter((it) => !needL || needL.has(String(it.c.name).toLowerCase()))
+          .map((it) => { let fn; try { fn = compileChunk(it.c.expr, censusSchema, { decimal: '.' }); } catch { fn = () => ({ t: 'raw', buf: [] }); } return { slot: baseLen + paintLen + it.idx, fn }; })
+      : null;
     let start = 0, skipped = 0;
     for (const rg of P.rowGroups) {
       const count = rg.rowCount;
       if (ast && !pqGroupCanMatch(ast, pqGroupRanges(rg))) { start += count; skipped++; continue; }   // pushdown skip
       const cols = await readParquetRange(P.buf, readCols, start, start + count, P.meta);
-      for (let i = 0; i < count; i++) {
+      const cX = cols[P.names[m.x]], cY = cols[P.names[m.y]], cZ = cols[P.names[m.z]];
+      const cChan = m.chan != null ? cols[P.names[m.chan]] : null, cCat = m.cat != null ? cols[P.names[m.cat]] : null;
+      if (chunkF) {
+        const ccols = censusChunkCols(AL, header, cols, start, count, needL, calcChunkFns);
+        const mk = chunkF(ccols, count);
+        for (let i = 0; i < count; i++) {
+          if (mk[i] !== 1) continue;
+          const xv = +cX[i], yv = +cY[i], zv = +cZ[i];
+          if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+          const r = start + i;
+          mask[r] = 1; hits++;
+          const code = catCode && cCat ? (catCode.get(String(cCat[i] ?? '').trim()) ?? 0) : 0;
+          collect(xv, yv, zv, cChan ? +cChan[i] : 0, code, r);
+        }
+      } else for (let i = 0; i < count; i++) {              // no parseable ast — the row path
         const r = start + i;
         const f = new Array(P.names.length);
         for (let ci = 0; ci < P.names.length; ci++) { const c = cols[P.names[ci]]; f[ci] = c ? (c[i] ?? '') : ''; }
@@ -11770,6 +11793,32 @@ function schemaExt(L, h) {
   if (L && L.paintCols && L.paintCols.length) out = out.concat(L.paintCols.map((c) => ({ name: c.name, type: c.kind === 'ratio' ? 'number' : 'string' })));   // stored derived (ratio incl. materialized → number)
   if (L && L.calcCols && L.calcCols.length) out = out.concat(L.calcCols.map((c) => ({ name: c.name, type: c.ty === 'string' ? 'string' : 'number' })));       // computed — LAST, so they can reference everything above
   return out;
+}
+// ── the resolver's CHUNK FACE ── census-aligned column arrays for records
+// [start, start+n): base from decoded columns (zero-copy), materialized as
+// Float32 subarray VIEWS, paint decoded to dict strings, calcs REALIZED
+// chunk-wise (compileChunk) in dependency order. PROJECTED: only `needed`
+// (lowercased) columns materialize; the rest stay null (blank).
+function censusChunkCols(L, h, baseByName, start, n, needed, calcChunkFns) {
+  const base = h.columns, pcs = (L && L.paintCols) || [], ccs = (L && L.calcCols) || [];
+  const out = new Array(base.length + pcs.length + ccs.length).fill(null);
+  for (let i = 0; i < base.length; i++) { const c = baseByName[base[i]]; if (c) out[i] = c; }
+  for (let j = 0; j < pcs.length; j++) {
+    const pc = pcs[j];
+    if (needed && !needed.has(String(pc.name).toLowerCase())) continue;
+    if (pc.mat && pc.fvalues) { out[base.length + j] = pc.fvalues.subarray(start, start + n); continue; }
+    const a = new Array(n);
+    for (let i = 0; i < n; i++) { const code = pc.codes[start + i] || 0; a[i] = pc.kind === 'ratio' ? +(code / 255).toFixed(3) : ((code && pc.dict[code]) || ''); }
+    out[base.length + j] = a;
+  }
+  if (calcChunkFns) for (const { slot, fn } of calcChunkFns) { const { buf } = fn(out, n); out[slot] = buf; }
+  return out;
+}
+// an expression's dependency cone, calc-EXPANDED (lowercased names)
+function expandedDeps(L, ast) {
+  const out = new Set(); const ccs = new Map(((L && L.calcCols) || []).map((c) => [String(c.name).toLowerCase(), c]));
+  const walk = (a) => { let ds = []; try { ds = deps(a); } catch { /* bad expr */ } for (const d of ds) { const k = String(d).toLowerCase(); if (out.has(k)) continue; out.add(k); const cc = ccs.get(k); if (cc) { try { walk(parse(cc.expr)); } catch { /* ignore */ } } } };
+  walk(ast); return out;
 }
 async function sampleRow(L) {
   const d = L.docs || {};
