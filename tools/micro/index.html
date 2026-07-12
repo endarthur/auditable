@@ -11212,6 +11212,7 @@ const COMMANDS = [
   { id: 'filter-sel', group: 'Layer', title: 'Filter → selection', kw: 'matches convert select expression reproducible', when: (c) => !!(c.L && c.L._filterMask), run: (c) => filterToSelection(c.L) },
   { id: 'run-recipe', group: 'Analysis', title: 'Run recipe…', kw: 'saved yaml grade-tonnage swath analysis rerun', when: () => _recipes.length > 0, run: () => setTimeout(() => menuXY(innerWidth / 2 - 130, innerHeight / 3, recipesMenuItems()), 0) },
   { id: 'new-routine', group: 'Analysis', title: 'New routine…', kw: 'recipes sequence batch each parameter table month-end', when: () => !!_project, run: () => openRoutineWindow(null) },
+  { id: 'reload-layer', group: 'Layers', title: 'Reload active layer from disk', kw: 'refresh re-read file changed external edit', when: () => canReloadLayer(activeLayer()), run: () => reloadLayerFromDisk(activeLayer()) },
   { id: 'surf-extend', group: 'Layer', title: 'Extend surface to footprint…', kw: 'grow cover topo grid mesh fill trend', when: () => surfaceableLayers().length > 0, run: (cx) => openSurfaceTools('extend', cx.L) },
   { id: 'surf-combine', group: 'Layer', title: 'Combine surfaces…', kw: 'min max priority mean merge patch topo union overlap', when: () => surfaceableLayers().length >= 2, run: (cx) => openSurfaceTools('combine', cx.L) },
   { id: 'stats', group: 'Analysis', title: 'Stats…', kw: 'summary table group by mean std quantiles domain report', when: (c) => !!(c.L && layerTableHeader(c.L) && numericColsOf(c.L).length), run: (c) => openStats(c.L) },
@@ -11868,6 +11869,7 @@ function layerMenu(L, x, y) {
     { label: 'Zoom to layer', action: () => fitLayer(L) },
     { label: 'Rename layer…', kbd: 'F2', action: () => renameActiveLayer(L) },
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
+    ...(canReloadLayer(L) ? [{ label: 'Reload from disk', action: () => reloadLayerFromDisk(L) }] : []),
     { sep: true },                                          // ── inspect / analyze ──
     ...(L.kind !== 'mesh' ? [{ label: 'Attribute table…', kbd: 't', action: () => openAttrTable(L) }] : []),
     ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
@@ -14274,6 +14276,71 @@ async function reopenAs(L, kind) {
   renderLayers(); markProjectDirty();
 }
 function reinterpretMenu(L, x, y) { menuXY(x, y, reinterpretOptions(L).map((o) => ({ label: `→ ${o.label}`, action: () => reopenAs(L, o.kind) }))); }
+// ── Reload from disk — the missing verb between Scan folder (NEW files only)
+// and Reinterpret-as (re-reads the in-memory blob). Re-getFile()s FRESH bytes
+// from the layer's handle and re-opens through its existing config: mapping,
+// styling, calc/paint columns, surface state, filter all ride through.
+// Out of scope (compound sources): drillhole sets, dm wireframe pairs.
+function canReloadLayer(L) {
+  if (!L || L.dh) return false;                              // compound (collar+survey+intervals)
+  if (!L.handle || !L.handle.getFile) return false;          // drag-dropped blobs are snapshots — no path
+  const md = L.docs && L.docs.meshDoc;
+  if (md && ((md.header && md.header.format) || md.format) === 'dm-wireframe') return false;   // two files
+  return true;
+}
+async function reloadLayerFromDisk(L) {
+  if (!canReloadLayer(L)) {
+    $('#meta').textContent = L && L.dh ? 'reload: a drillhole set is a compound source — use the set menu (re-desurvey / add interval table) or re-import'
+      : 'reload: this layer has no file handle (drag-dropped data is a snapshot — open the file again)';
+    return;
+  }
+  let fresh;
+  try {
+    if (L.handle.queryPermission && (await L.handle.queryPermission({ mode: 'read' })) === 'prompt') await L.handle.requestPermission({ mode: 'read' });
+    fresh = await L.handle.getFile();
+  } catch (e) { $('#meta').textContent = `reload: can't read ${L.name} — ${e.message}`; return; }
+  const old2 = layerBlob(L);
+  const sizeNote = old2 && fresh.size !== old2.size ? ' · size changed — painted/materialized columns may be stale (positional)' : '';
+  const doc = L.docs.blockDoc;
+  closeAttrTable(L.id);
+  if (doc && !doc.header.dm && !doc.parquet) {
+    // delimited blocks/points: IN PLACE, keeping the column mapping (the
+    // reopenWithMapping flow, just with fresh bytes) — identity untouched
+    const style = captureLayerStyling(L);
+    const m = doc.header.mapping;
+    await openBlocksBlob(fresh, L.name, {
+      layer: L.id, first: false, forcePoints: doc.forcePoints,
+      mapping: { x: m.x, y: m.y, z: m.z, chan: m.chan, cat: m.cat },
+    });
+    const L2 = layerById(L.id);
+    applyLayerStyling(L2, style);
+    if (L2 && L2.id === _activeId && L2.filterExpr) await applyBlockFilter(L2.filterExpr);   // before the message — the filter scan posts its own status
+    $('#meta').textContent = `reloaded ${(L2 && (L2.label || L2.name)) || L.name} from disk${sizeNote}`;
+  } else {
+    // dm / parquet / mesh / grid / las / ply: remove → re-open fresh → restore
+    const keep = captureReopenIdentity(L);
+    const style = captureLayerStyling(L);
+    const surf = captureLayerSurface(L);
+    const filterExpr = L.filterExpr;
+    const wasActive = L.id === _activeId;
+    renderer.removeLayer(L.id);
+    _layers = _layers.filter((l) => l.id !== L.id);
+    preregisterReopenHandle(fresh, keep);
+    await openBlob(fresh, L.name, 'add', null, doc && doc.forcePoints ? { asKind: 'points' } : undefined);
+    const L2 = restoreReopenIdentity(activeLayer(), keep);
+    if (L2) {
+      applyLayerStyling(L2, style);
+      await applyLayerSurface(L2, surf);
+      if (keep.visible === false) applyTreeVisibility();
+      L2.filterExpr = filterExpr;
+      if (wasActive && filterExpr) await applyBlockFilter(filterExpr);
+    }
+    renderLayers();
+    $('#meta').textContent = `reloaded ${(L2 && (L2.label || L2.name)) || L.name} from disk${sizeNote}`;
+  }
+  markProjectDirty();
+  if (_propOpen) { _propFor = null; renderProps(); }
+}
 // re-key the class column: the same re-open machinery as re-channeling
 async function useAsCategory(L, i) {
   if (L.dh && L.docs.dhDoc) return reopenDh(L, { cat: i }, { clearCats: true });
@@ -15614,7 +15681,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

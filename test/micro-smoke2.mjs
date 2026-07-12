@@ -1207,6 +1207,25 @@ await p.close();
   });
   chk(`run tracker (✓×${trk.oks}, "${trk.summary.trim()}") + preview click opens the SG row configured (${trk.cfg})`,
     trk.oks === 1 && /1 report/.test(trk.summary) && trk.clicked && /SG/.test(trk.cfg) && !trk.ran);
+
+  // §22 — Reload from disk: fresh bytes through the layer's existing config
+  const rld = await pr.evaluate(async () => {
+    document.querySelectorAll('.fwin').forEach((w) => w.remove());
+    const L = window._micro.layers()[0];
+    const can = window._micro.canReloadLayer(L);
+    L.calcCols = [{ name: 'FE2', expr: 'FE * 2', ty: 'number' }];
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2routine');
+    const models = await dir.getDirectoryHandle('models');
+    const fh = await models.getFileHandle('m.csv');
+    let t = 'X,Y,Z,FE,SG\n';
+    for (let i = 0; i < 15; i++) for (let j = 0; j < 15; j++) t += `${5 + i * 10},${5 + j * 10},5,${(70 + i).toFixed(1)},${(2.5 + i * 0.05).toFixed(2)}\n`;
+    const w = await fh.createWritable(); await w.write(t); await w.close();
+    await window._micro.reloadLayerFromDisk(L);
+    const row = await window._micro.fetchCsvRecord(0, window._micro.layers()[0].docs.blockDoc);
+    return { can, fe: +row[3], calc: (window._micro.layers()[0].calcCols || []).map((c) => c.name).join(','), meta: document.querySelector('#meta').textContent };
+  });
+  chk(`reload from disk: fresh bytes (FE ${rld.fe}) + calc column kept + "${rld.meta}"`,
+    rld.can && rld.fe === 70 && rld.calc === 'FE2' && /reloaded/.test(rld.meta));
   await pr.close();
 }
 
