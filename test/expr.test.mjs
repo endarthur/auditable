@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parse, evaluate, evalBool, constraintValid, compile, compileBool, deps, validate, tokenize, complete } from '../ext/expr/src/main.js';
+import { parse, evaluate, evalBool, constraintValid, compile, compileBool, deps, validate, canMatch, quoteIdent, tokenize, complete } from '../ext/expr/src/main.js';
 
 const fx = JSON.parse(readFileSync(new URL('./fixtures/expr.json', import.meta.url), 'utf8'));
 
@@ -76,7 +76,7 @@ test('validate — parse + unknown-column check', () => {
 });
 
 test('compile — case-insensitive field binding + zero per-row allocation shape', () => {
-  const f = compileBool('AU > 0.5 and OK-Indic = 1', ['au', 'ok-indic']);
+  const f = compileBool('AU > 0.5 and `OK-Indic` = 1', ['au', 'ok-indic']);   // v0.2: hyphenated name takes backticks (bare `-` is subtraction)
   assert.equal(f([0.9, 1]), true);
   assert.equal(f([0.2, 1]), false);
   assert.equal(f([0.9, 0]), false);
@@ -148,10 +148,10 @@ test('complete — context-aware suggestions (columns / functions / values / ope
   const ctx = { columns: [{ name: 'grade', type: 'number' }, { name: 'lito', type: 'string' }, { name: 'Cu (ppm)', type: 'number' }], values: { lito: ['OXIDE', 'SULF', 'TRANS'] } };
   const vals = (s, p) => complete(s, p == null ? s.length : p, ctx).options.map((o) => o.value);
 
-  // operand position (start) → columns + functions; awkward name bracketed
+  // operand position (start) → columns + functions; awkward name backticked (v0.2)
   const start = complete('', 0, ctx).options;
   assert.ok(start.some((o) => o.value === 'grade' && o.kind === 'column'));
-  assert.ok(start.some((o) => o.value === '["Cu (ppm)"]'));
+  assert.ok(start.some((o) => o.value === '`Cu (ppm)`'));
   assert.ok(start.some((o) => o.value === 'sqrt(' && o.kind === 'function'));
 
   // prefix filters columns
@@ -188,4 +188,90 @@ test('blank-propagation invariant — a missing grade never becomes 0', () => {
   assert.equal(compile('grade * tonnes', ['grade', 'tonnes'])([null, 100]), null);
   // …unless explicitly cast
   assert.equal(evaluate('ifnum(grade, 0) * tonnes', { tonnes: 100 }), 0);
+});
+
+// ── v0.2 additions ────────────────────────────────────────────────────────────
+
+test('canMatch — conservative chunk push-down over per-column stats', () => {
+  const R = { au: { min: 0.1, max: 2.5 }, z: { min: 100, max: 200 } };
+  // provably impossible → false (skip the chunk)
+  assert.equal(canMatch('AU > 3', R), false);
+  assert.equal(canMatch('AU >= 2.6', R), false);
+  assert.equal(canMatch('AU < 0.1', R), false);
+  assert.equal(canMatch('AU <= 0.05', R), false);
+  assert.equal(canMatch('AU = 5', R), false);
+  assert.equal(canMatch('AU between 3 and 4', R), false);
+  assert.equal(canMatch('AU in (3, 4.5)', R), false);
+  // possibly matching → true (scan)
+  assert.equal(canMatch('AU > 1', R), true);
+  assert.equal(canMatch('AU = 2.5', R), true);
+  assert.equal(canMatch('AU between 2 and 3', R), true);
+  assert.equal(canMatch('AU in (0.5, 9)', R), true);
+  // flipped side: constant OP field
+  assert.equal(canMatch('3 < AU', R), false);
+  assert.equal(canMatch('1 < AU', R), true);
+  // constant folding on the compare side
+  assert.equal(canMatch('AU > 1.5 * 2', R), false);
+  // and: either side impossible kills the conjunction; or needs both impossible
+  assert.equal(canMatch('AU > 3 and Z > 150', R), false);
+  assert.equal(canMatch('AU > 3 or Z > 150', R), true);
+  assert.equal(canMatch('AU > 3 or Z > 300', R), false);
+  // != soundness: blanks match != and stats say nothing about blanks
+  const allFives = { au: { min: 5, max: 5 } };
+  assert.equal(canMatch('AU != 5', allFives), true);                       // may hold blanks → must scan
+  assert.equal(canMatch('AU != 5', { au: { min: 5, max: 5, hasBlank: false } }), false);   // provably all 5, no blanks
+  assert.equal(canMatch('AU != 5', { au: { min: 4, max: 5, hasBlank: false } }), true);
+  // unknowns stay conservative: missing stats, string compares, not, calls, parse errors
+  assert.equal(canMatch('CU > 3', R), true);
+  assert.equal(canMatch('LITO = "OX"', R), true);
+  assert.equal(canMatch('not (AU > 3)', R), true);
+  assert.equal(canMatch('sqrt(AU) > 9', R), true);
+  assert.equal(canMatch('AU >', R), true);
+  // case-insensitive stats lookup (the language is)
+  assert.equal(canMatch('au > 3', { AU: { min: 0, max: 1 } }), false);
+});
+
+test('quoteIdent — plain names pass, everything else backticks', () => {
+  assert.equal(quoteIdent('AU'), 'AU');
+  assert.equal(quoteIdent('fe_pct'), 'fe_pct');
+  assert.equal(quoteIdent('OK-Indic'), '`OK-Indic`');
+  assert.equal(quoteIdent('Assay Au ppm'), '`Assay Au ppm`');
+  assert.equal(quoteIdent('in'), '`in`');                                  // reserved word
+  assert.equal(quoteIdent('IN'), '`IN`');                                  // reserved check is case-insensitive
+  assert.equal(quoteIdent('we`ird'), '`we\\`ird`');                        // inner backtick escaped
+  assert.equal(quoteIdent('a\\b'), '`a\\\\b`');                            // backslash escaped
+  // and the quoted form round-trips through the parser
+  for (const name of ['OK-Indic', 'Assay Au ppm', 'in', 'we`ird', 'a\\b']) {
+    assert.equal(evaluate(quoteIdent(name), { [name]: 42 }), 42, name);
+  }
+});
+
+test('validate — did-you-mean suggestions', () => {
+  // typo → nearest known column
+  const t = validate('gradee > 1', ['grade', 'lito']);
+  assert.equal(t.ok, false);
+  assert.equal(t.errors[0].suggestion, 'grade');
+  assert.match(t.errors[0].message, /did you mean grade\?/);
+  // the hyphen migration: OK-Indic typed bare parses as OK − Indic → both unknown,
+  // and the known hyphenated column is suggested in backticks
+  const h = validate('OK-Indic = 1', ['OK-Indic', 'AU']);
+  assert.equal(h.ok, false);
+  assert.ok(h.errors.some((e) => e.suggestion === '`OK-Indic`'), JSON.stringify(h.errors));
+  // no candidate → no suggestion field
+  const n = validate('zzzqqq > 1', ['grade']);
+  assert.equal(n.errors[0].suggestion, undefined);
+});
+
+test('v0.2 lexical — backticks tokenize as columns; ^ and ** as operators', () => {
+  const tk = tokenize('`Assay Au` > 2^3');
+  assert.equal(tk[0].kind, 'column');
+  assert.equal(tk[0].value, '`Assay Au`');
+  assert.ok(tk.some((t) => t.kind === 'operator' && t.value === '^'));
+  const tk2 = tokenize('a ** 2');
+  assert.ok(tk2.some((t) => t.kind === 'operator' && t.value === '**'));
+  // blank literal is a keyword for highlighting
+  assert.ok(tokenize('x = blank').some((t) => t.kind === 'keyword' && t.value === 'blank'));
+  // complete() emits the backtick form for awkward names
+  const c = complete('', 0, { columns: ['grade', 'Cu (ppm)'] });
+  assert.ok(c.options.some((o) => o.value === '`Cu (ppm)`'));
 });

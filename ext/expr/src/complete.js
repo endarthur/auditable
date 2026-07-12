@@ -10,12 +10,11 @@
 // shapes people actually type. Returns { from, to, options:[{value,kind,detail}] };
 // the host replaces src[from..to] with a chosen option.value.
 
-import { tokenize, CALLFNS } from './parse.js';
+import { tokenize, CALLFNS, quoteIdent } from './parse.js';
 
 const CMP_OPS = ['=', '!=', '<', '>', '<=', '>=', '==', '<>'];
 const VALUE_KW = ['in', 'contains', 'like', 'matches'];
 const RESET_KW = ['and', 'or', 'not', 'between'];        // crossing one of these ends "this comparison"
-const needsBracket = (n) => !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(n);
 const quoteVal = (v) => '"' + String(v).replace(/"/g, '') + '"';
 
 // Is the nearest enclosing `(` an `in (` list (vs a grouping / function paren)?
@@ -57,7 +56,10 @@ export function complete(src, pos, ctx = {}) {
     : (ctx.values ? (n) => ctx.values[n] || ctx.values[String(n).toLowerCase()] || [] : () => []);
 
   const before = src.slice(0, pos);
-  const fm = before.match(/(["']?)([A-Za-z0-9_-]*)$/) || ['', '', ''];
+  // NB the fragment class keeps `-` (and backtick as an open quote) so typing
+  // `OK-Ind` still prefix-matches the column OK-Indic even though idents can't
+  // contain `-` — this is a UI heuristic, not the grammar.
+  const fm = before.match(/(["'`]?)([A-Za-z0-9_-]*)$/) || ['', '', ''];
   const quote = fm[1] || '', frag = fm[2] || '';
   const from = pos - quote.length - frag.length;
   let to = pos;
@@ -91,8 +93,9 @@ export function complete(src, pos, ctx = {}) {
     return { from, to, options: opts.slice(0, 50) };
   }
 
-  // default: an operand position → columns + functions (+ leading `not`)
-  for (const c of columns) if (pre(c.name)) opts.push({ value: needsBracket(c.name) ? `["${c.name}"]` : c.name, kind: 'column', detail: c.type });
+  // default: an operand position → columns + functions (+ leading `not`).
+  // Non-plain names emit the backtick escape (quoteIdent — the pandas convention).
+  for (const c of columns) if (pre(c.name)) opts.push({ value: quoteIdent(c.name), kind: 'column', detail: c.type });
   for (const fn of Object.keys(CALLFNS)) if (pre(fn)) opts.push({ value: fn + '(', kind: 'function' });
   if (pre('not')) opts.push({ value: 'not', kind: 'keyword' });
   return { from, to, options: opts.slice(0, 50) };

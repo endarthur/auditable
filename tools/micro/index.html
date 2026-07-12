@@ -711,7 +711,7 @@ import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchD
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
-import { compileBool, compileValue, validate, complete, parse, deps } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
+import { compileBool, compileValue, validate, complete, parse, deps, canMatch, quoteIdent } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 import { buildBVH, windingBVH, Winding } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
@@ -3017,7 +3017,7 @@ function openGradeTonnage(L, ropts) {
       const Lx = layerById(s.layerId); if (!Lx) return null;
       const h = layerTableHeader(Lx); if (!h) return null;
       const schema = schemaExt(Lx, h);
-      let gradeFn; try { gradeFn = compileValue(s.col, schema, { decimal: '.' }); } catch { return null; }
+      let gradeFn; try { gradeFn = compileValue(quoteIdent(s.col), schema, { decimal: '.' }); } catch { return null; }   // a NAME as an expression → quote (spaces/hyphens)
       let weightFn = null, filterFn = null;
       if (s.weight && s.weight.trim()) { try { weightFn = compileValue(s.weight, schema, { decimal: '.' }); } catch { throw new Error(`series weight "${s.weight}": invalid`); } }
       if (s.filter && s.filter.trim()) { try { filterFn = compileBool(s.filter, schema, { decimal: '.' }); } catch { throw new Error(`series filter "${s.filter}": invalid`); } }
@@ -3499,7 +3499,7 @@ async function scanSwath(st, onProgress) {
     const L = layerById(s.layerId); if (!L) return null;
     const h = layerTableHeader(L); if (!h || !h.mapping) return null;
     const m = h.mapping, schema = schemaExt(L, h);
-    let gradeFn; try { gradeFn = compileValue(s.col, schema, { decimal: '.' }); } catch { return null; }
+    let gradeFn; try { gradeFn = compileValue(quoteIdent(s.col), schema, { decimal: '.' }); } catch { return null; }   // a NAME as an expression → quote
     let weightFn = null, filterFn = null;
     if (s.weight && s.weight.trim()) { try { weightFn = compileValue(s.weight, schema, { decimal: '.' }); } catch { throw new Error(`series weight "${s.weight}": invalid`); } }
     if (s.filter && s.filter.trim()) { try { filterFn = compileBool(s.filter, schema, { decimal: '.' }); } catch { throw new Error(`series filter "${s.filter}": invalid`); } }
@@ -3928,7 +3928,7 @@ function openStats(L, ropts) {
   };
   const scanStats = async (onProgress) => {
     const h = layerTableHeader(L), schema = schemaExt(L, h);
-    const colFns = st.cols.map((c) => { try { return { c, fn: compileValue(c, schema, { decimal: '.' }) }; } catch { return null; } }).filter(Boolean);
+    const colFns = st.cols.map((c) => { try { return { c, fn: compileValue(quoteIdent(c), schema, { decimal: '.' }) }; } catch { return null; } }).filter(Boolean);   // NAMES as expressions → quote
     if (!colFns.length) throw new Error('no valid columns');
     let groupFn = null, weightFn = null;
     if (st.groupBy) { try { groupFn = compileValue(st.groupBy, schema, { decimal: '.' }); } catch { throw new Error(`group by "${st.groupBy}": invalid`); } }
@@ -6727,33 +6727,12 @@ $('#dhCancel').onclick = () => $('#dhDlg').classList.remove('show');
 // next step; this is the working opener.
 const _pqNum = (t) => /INT|FLOAT|DOUBLE|DECIMAL/.test(t || '');
 // predicate pushdown: can the filter be true for SOME row whose NUMERIC columns
-// lie in `ranges` ({ lowerName: {min,max} }, from the footer stats)? Conservative
-// — returns true whenever it can't prove otherwise, so a group is skipped ONLY
-// when it provably holds no match. Handles and/or + numeric cmp/between/in; other
-// nodes (not, string ops, calc columns) fall through to "keep".
-function _pqLit(n) { if (!n) return null; if (n.t === 'num') return n.v; if (n.t === 'neg' && n.e && n.e.t === 'num') return -n.e.v; return null; }
-function _pqRange(n, ranges) { return n && n.t === 'field' ? (ranges[n.name.toLowerCase()] || null) : null; }
-function pqGroupCanMatch(node, ranges) {
-  if (!node) return true;
-  if (node.t === 'and') return pqGroupCanMatch(node.l, ranges) && pqGroupCanMatch(node.r, ranges);
-  if (node.t === 'or') return pqGroupCanMatch(node.l, ranges) || pqGroupCanMatch(node.r, ranges);
-  if (node.t === 'cmp') {
-    let fr = _pqRange(node.l, ranges), k = _pqLit(node.r), flipped = false;
-    if (!fr || k == null) { fr = _pqRange(node.r, ranges); k = _pqLit(node.l); flipped = true; }
-    if (!fr || k == null) return true;
-    const op = flipped ? ({ '>': '<', '<': '>', '>=': '<=', '<=': '>=' }[node.op] || node.op) : node.op;
-    if (op === '>') return fr.max > k;
-    if (op === '>=') return fr.max >= k;
-    if (op === '<') return fr.min < k;
-    if (op === '<=') return fr.min <= k;
-    if (op === '=' || op === '==') return fr.min <= k && k <= fr.max;
-    if (op === '!=' || op === '<>') return !(fr.min === k && fr.max === k);
-    return true;
-  }
-  if (node.t === 'between') { const fr = _pqRange(node.e, ranges), lo = _pqLit(node.lo), hi = _pqLit(node.hi); return (!fr || lo == null || hi == null) ? true : (fr.max >= lo && fr.min <= hi); }
-  if (node.t === 'in') { const fr = _pqRange(node.e, ranges); if (!fr || !Array.isArray(node.set)) return true; const nums = node.set.map(_pqLit); return nums.some((v) => v == null) ? true : nums.some((v) => v >= fr.min && v <= fr.max); }
-  return true;
-}
+// lie in `ranges`? Now @gcu/expr's canMatch (v0.2) — the hand-rolled walker moved
+// into expr as a first-class analysis beside deps(). Conservative — a group is
+// skipped ONLY when it provably holds no match — and SOUNDER than the old copy:
+// `!=` no longer prunes unless the stats assert hasBlank:false (a blank row
+// matches `!=`, and min/max stats say nothing about blanks).
+const pqGroupCanMatch = canMatch;
 // numeric {min,max} ranges from a row group's footer column stats
 function pqGroupRanges(rg) {
   const ranges = {};
@@ -11738,7 +11717,7 @@ async function matColDelete(L, name) {
 async function materializeCalcCol(L, name) {
   const cc = (L.calcCols || []).find((c) => c.name === name); if (!cc) { $('#meta').textContent = `materialize: no calc column “${name}”`; return; }
   const h = layerTableHeader(L); if (!h) return;
-  const fn = compileValue(name, schemaExt(L, h), { decimal: '.' });
+  const fn = compileValue(quoteIdent(name), schemaExt(L, h), { decimal: '.' });   // a NAME as an expression → quote
   const n = attrRowCountOf(L) || 0; const vals = new Float32Array(n); let rec = 0;
   $('#meta').textContent = `materializing “${name}”…`;
   for await (const batch of layerRows(L, null)) { for (const f0 of batch) { if (rec >= n) break; let v; try { v = +fn(extendRow(L, f0, rec)); } catch { v = NaN; } vals[rec] = Number.isFinite(v) ? v : NaN; rec++; } await new Promise((r) => setTimeout(r)); }

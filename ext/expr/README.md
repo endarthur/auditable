@@ -33,6 +33,7 @@ documented/highlighted form is SQL.
 
 ```
 arithmetic     a + b - c * d / e        (unary -, parens; * / bind tighter than + -)
+power          au^2   2**10             (right-assoc; -2^2 = -4, 2^-3 = 0.125 — Python/pandas)
 compare        =  !=  <  >  <=  >=       (blank-aware: blank = blank → true; NO SQL NULL trap)
 boolean        and  or  not             (case-insensitive; short-circuit)
 range          grade between 1 and 5
@@ -40,11 +41,14 @@ set            lito in ("OXIDE", "SULF")
 text           code contains "DDH"  ·  code like "DDH%"  ·  code matches "^DDH"
 negate         is not blank · not in (…) · not contains · not like
 blank tests    x is blank   x is filled
-literals       42   3.14   .5   1.5e-3   "text"   true   false
-columns        bare ident (case-insensitive): AU, fe_pct, OK-Indic
-               bracket escape for awkward names: ["Cu (ppm)"]
+literals       42   3.14   .5   1.5e-3   "text"   true   false   blank
+columns        bare ident (case-insensitive): AU, fe_pct  —  [A-Za-z_][A-Za-z0-9_]*
+               backtick escape for anything else: `Assay Au ppm`, `OK-Indic`, `in`
+               (\` for a literal backtick, \\ for a backslash — the pandas
+               df.query() convention)
 
 tolerated (parse, not the canonical form):  ==  <>  &&  ||  ~  !~  'single quotes'  in "a","b"
+                                            ["…"] (the legacy bracket escape)
 ```
 
 > A **bare word is a column**, a **quoted word is text** — like SQL — so `fe > cu`
@@ -53,20 +57,28 @@ tolerated (parse, not the canonical form):  ==  <>  &&  ||  ~  !~  'single quote
 > `blank = blank → true` and there's no `= NULL`-returns-nothing trap; use
 > `is blank` / `is filled`.
 
-> **Subtraction needs spaces.** `-` is a valid identifier character (so a column
-> like `OK-Indic` lexes as one name), therefore write `a - 5`, not `a-5` (which is
-> the single identifier `a-5`).
+> **`-` is always subtraction** (v0.2): `AU-CU` is arithmetic, as SQL/pandas
+> fingers expect. A hyphenated column name takes backticks — `` `OK-Indic` `` —
+> and `validate` suggests exactly that when you type it bare.
 
 ### Functions (all total — blank/bad input → blank)
 
 | group | functions |
 |---|---|
-| control | `if(cond, then, else)` |
-| rounding | `round(x[, n])` · `int(x)` · `abs(x)` |
+| control | `if(cond, then, else)` — the `blank` literal makes `if(AU = -99, blank, AU)` work |
+| rounding | `round(x[, n])` · `int(x)` (truncates) · `floor(x)` · `ceil(x)` · `abs(x)` · `mod(x, y)` (floored, Excel: `mod(-7,3)=2`) |
+| binning | `bin(x, w[, origin])` · `clamp(x, lo, hi)` |
 | dates | `year(s)` · `month(s)` · `day(s)` — off an ISO `YYYY-MM-DD` string |
-| math | `log` · `exp` · `sqrt` · `pow(x, y)` · `min(…)` · `max(…)` · `clamp(x, lo, hi)` |
+| math | `log` (ln) · `log10` (the geochem transform) · `exp` · `sqrt` · `pow(x, y)` · `min(…)` · `max(…)` |
 | casts | `ifnum(x, default)` · `coalesce(a, b, …)` — the **only** way a blank becomes a value |
+| sentinels | `nullif(x, v)` — `nullif(AU, -99)` scrubs the −99/−999 missing-value convention to blank |
 | tests | `isnum(x)` · `isnan(x)` (present but non-numeric) · `isblank(x)` · `isfilled(x)` |
+| strings | `upper` · `lower` · `trim` · `len` · `left(s,n)` · `right(s,n)` · `substr(s,start[,len])` (1-based, SQL MID) · `replace(s,find,repl)` (literal, all) · `concat(…)` (skips blanks) |
+
+String semantics: blank in → blank out (`len(blank)` is blank, not 0); results
+that come out empty fold to blank (`''` ≡ blank in this model); numbers stringify
+(`concat("DDH-", 23)` → `"DDH-23"`). Join-key cleanup is the intended use:
+`upper(trim(HOLEID))`.
 
 ### The blank model (load-bearing)
 
@@ -75,6 +87,19 @@ NaN** together. **Blank propagates by default and never auto-casts to 0** — a
 missing grade silently becoming 0 corrupts means and estimates. To opt out
 explicitly, use `ifnum`/`coalesce`. `=`/`!=` already do sane missing-equality
 (`blank = blank → true`).
+
+**The boolean truth table (deliberate, not SQL 3VL).** `not` is a **set
+complement**: a filter and its negation always partition all rows — blanks land
+on the `not` side instead of vanishing from both (SQL's most confusing habit).
+
+| where AU is blank | result | note |
+|---|---|---|
+| `AU > 5` | false | a blank never satisfies an ordering |
+| `not (AU > 5)` | **true** | the complement picks it up |
+| `AU <= 5` | false | ⇒ `not (AU > 5)` ≠ `AU <= 5` **on blanks** — by design |
+| `(AU > 5) and true` | false | `and`/`or` are boolean-strict |
+| `(AU > 5) or true` | true | |
+| `AU = blank` | true | the friendly non-SQL choice; `is blank` is the idiomatic spelling |
 
 ## API
 
@@ -94,8 +119,16 @@ compileBool(srcOrAst, columns, opts) // → (fields[]) => boolean
 //   opts.decimal: ',' reads comma-decimal field strings numerically (BR/EU files);
 //   evaluate(src, values, {decimal:','}) does the same on the tree-walk path.
 
-deps(srcOrAst)                   // → ['AU','OK-Indic',…]  (free column refs)
-validate(srcOrAst, columns?)     // → { ok, errors: [{kind:'parse'|'column', message, name?}] }
+deps(srcOrAst)                   // → ['AU','Assay Au ppm',…]  (free column refs)
+validate(srcOrAst, columns?)     // → { ok, errors: [{kind, message, name?, suggestion?}] }
+//   unknown columns get a did-you-mean: nearest known name (edit distance ≤ 2), or
+//   the backticked form when you typed a hyphenated name bare (`OK-Indic`).
+canMatch(srcOrAst, ranges)       // → false ONLY if provably no row can match — chunk /
+//   row-group push-down over per-column stats: { name: {min, max, hasBlank?} }.
+//   Conservative (unknown shapes → true). `!=` prunes only under hasBlank:false —
+//   a blank row matches `!=`, and min/max stats say nothing about blanks.
+quoteIdent(name)                 // → the name as an expression: plain idents pass,
+//   anything else backticked. REQUIRED when treating a column NAME as an expression.
 tokenize(src)                    // → [{kind, value, start, end}] — classified, positioned, tolerant
 //   kinds: column · string · number · operator · punct · keyword · function · boolean · error.
 //   For syntax highlighting + autocomplete; works on a half-typed expression.

@@ -17,20 +17,35 @@
 // `tokenize` analyze it. Blank is `null`.
 //
 // Precedence ladder (low→high): or < and < not < comparison < additive <
-// multiplicative < unary < primary.
+// multiplicative < unary < power < primary. Power (`^` / `**`) is right-associative
+// and binds looser than unary on the left, tighter on the right — Python/pandas
+// semantics: -2^2 = -4, 2^-3 = 0.125, 2^3^2 = 512. (Excel disagrees on -2^2; the
+// Python convention wins because pandas.query is this audience's muscle memory.)
 
 // Keyword operators / words — matched case-insensitively. A column literally named
-// one of these needs the ["…"] bracket escape.
+// one of these needs the `…` backtick escape.
 const RESERVED = new Set(['and', 'or', 'not', 'between', 'contains', 'in', 'like', 'matches', 'is', 'blank', 'filled', 'true', 'false']);
 
 // Pure total functions: name → [minArgs, maxArgs]. `if` is special (lazy branches)
 // but listed for arity + call-syntax recognition.
 const CALLFNS = {
-  if: [3, 3], round: [1, 2], int: [1, 1], abs: [1, 1],
+  if: [3, 3], round: [1, 2], int: [1, 1], abs: [1, 1], floor: [1, 1], ceil: [1, 1], mod: [2, 2],
   year: [1, 1], month: [1, 1], day: [1, 1],
-  log: [1, 1], exp: [1, 1], sqrt: [1, 1], pow: [2, 2], min: [1, Infinity], max: [1, Infinity], clamp: [3, 3], bin: [2, 3],
-  ifnum: [2, 2], coalesce: [1, Infinity], isnum: [1, 1], isnan: [1, 1], isblank: [1, 1], isfilled: [1, 1],
+  log: [1, 1], log10: [1, 1], exp: [1, 1], sqrt: [1, 1], pow: [2, 2], min: [1, Infinity], max: [1, Infinity], clamp: [3, 3], bin: [2, 3],
+  ifnum: [2, 2], coalesce: [1, Infinity], nullif: [2, 2], isnum: [1, 1], isnan: [1, 1], isblank: [1, 1], isfilled: [1, 1],
+  upper: [1, 1], lower: [1, 1], trim: [1, 1], len: [1, 1], left: [2, 2], right: [2, 2], substr: [2, 3], replace: [3, 3], concat: [1, Infinity],
 };
+
+// Is `name` writable as a bare identifier? (Used by quoteIdent + complete.)
+const PLAIN_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// Quote a column name for use in an expression: plain idents pass through, anything
+// else (spaces, hyphens, reserved words) gets the backtick escape with \` / \\.
+// Consumers that treat a column NAME as an expression (stats pickers, materialize)
+// MUST route through this — `OK-Indic` bare is subtraction now.
+function quoteIdent(name) {
+  const s = String(name);
+  return PLAIN_IDENT.test(s) && !RESERVED.has(s.toLowerCase()) ? s : '`' + s.replace(/\\/g, '\\\\').replace(/`/g, '\\`') + '`';
+}
 
 class ExprParseError extends Error {
   constructor(msg) { super('expr parse error: ' + msg); this.name = 'ExprParseError'; }
@@ -38,11 +53,14 @@ class ExprParseError extends Error {
 function fail(msg) { throw new ExprParseError(msg); }
 
 // ── lexer ──────────────────────────────────────────────────────────────────
-// Bare field refs are case-insensitive idents (`-` is a valid ident char, so a
-// column like OK-Indic lexes as one token → SUBTRACTION needs spaces: `a - 5`).
+// Bare field refs are case-insensitive idents of [A-Za-z_][A-Za-z0-9_]* — `-` is
+// ALWAYS subtraction (v0.2; `AU-CU` is arithmetic, as pandas/SQL fingers expect).
+// Any other column name takes the BACKTICK escape — `Assay Au ppm` — the pandas
+// df.query() convention; \` escapes a literal backtick, \\ a backslash. The legacy
+// `["…"]` bracket form still parses (shipped lenses) but is undocumented.
 // Strings: "double" (canonical) or 'single' (tolerated). Numbers: ints, decimals,
-// leading-dot (.5) and scientific (1e4, 2.5e-3). `["…"]` escapes any column name.
-const TOKEN_RE = /(\s+)|(\[\s*"[^"]*"\s*\])|("[^"]*"|'[^']*')|(&&|\|\||==|<>|<=|>=|!=|!~|<|>|=|~)|([-+*/(),])|((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][A-Za-z0-9_-]*)/y;
+// leading-dot (.5) and scientific (1e4, 2.5e-3). `^` and `**` are power.
+const TOKEN_RE = /(\s+)|(\[\s*"[^"]*"\s*\]|`(?:[^`\\]|\\.)*`)|("[^"]*"|'[^']*')|(&&|\|\||\*\*|==|<>|<=|>=|!=|!~|<|>|=|~)|([-+*/(),^])|((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][A-Za-z0-9_]*)/y;
 
 // Lex into tokens carrying source positions. `tolerant` (for highlighting) emits a
 // 1-char 'err' token on an unexpected character instead of throwing.
@@ -59,7 +77,12 @@ function lexAll(src, tolerant) {
     const start = last; last = TOKEN_RE.lastIndex;
     if (m[1] !== undefined) continue;                                        // whitespace
     let k, v;
-    if (m[2] !== undefined) { k = 'field'; v = m[2].replace(/^\[\s*"/, '').replace(/"\s*\]$/, ''); }
+    if (m[2] !== undefined) {
+      k = 'field';
+      v = m[2][0] === '`'
+        ? m[2].slice(1, -1).replace(/\\([`\\])/g, '$1')                    // `…` backtick escape (canonical)
+        : m[2].replace(/^\[\s*"/, '').replace(/"\s*\]$/, '');              // ["…"] legacy bracket form
+    }
     else if (m[3] !== undefined) { k = 'str'; v = m[3].slice(1, -1); }       // "double" or 'single'
     else if (m[4] !== undefined) { k = 'op'; v = m[4]; }
     else if (m[5] !== undefined) { k = 'op'; v = m[5]; }
@@ -109,14 +132,22 @@ function parse(src) {
       i++;
       if (lw === 'true') return { t: 'bool', v: true };
       if (lw === 'false') return { t: 'bool', v: false };
+      if (lw === 'blank') return { t: 'blank' };                        // the blank LITERAL: if(AU = -99, blank, AU)
       if (RESERVED.has(lw)) fail(`unexpected keyword '${t.v}'`);
       return { t: 'field', name: t.v };                                 // bare ident → column (original case kept)
     }
     fail(`unexpected '${t.v}'`);
   }
+  // power: right-assoc, desugars to the existing pow() call (zero new eval code).
+  // The exponent re-enters unary so 2^-3 works; -2^2 = -(2^2) (Python/pandas).
+  function power() {
+    const l = primary();
+    if (op('^') || op('**')) { i++; return { t: 'call', fn: 'pow', args: [l, unary()] }; }
+    return l;
+  }
   function unary() {
     if (op('-') || op('+')) { const neg = op('-'); i++; const e = unary(); return neg ? { t: 'neg', e } : e; }
-    return primary();
+    return power();
   }
   function mul() {
     let l = unary();
@@ -231,6 +262,10 @@ function compare(a, b, o, N = num) {
 }
 
 const fin = (x) => (Number.isFinite(x) ? x : null);   // ±Inf / NaN → blank (totality)
+// String coercion: blank/boolean/object → blank; numbers stringify. The single
+// string-coercion point (the S to num's N). NB '' folds to blank in this model, so
+// string results that come out empty are returned as blank (|| null below).
+const S = (v) => (isBlank(v) || typeof v === 'boolean' || typeof v === 'object' ? null : String(v));
 
 // Eager pure functions: name → (args[], N) => value. Args are already-evaluated
 // values; N is the decimal-bound num. `if` is NOT here (lazy branches — handled in
@@ -250,12 +285,36 @@ const FN = {
   year: (a) => datePart(a[0], 1),
   month: (a) => datePart(a[0], 2),
   day: (a) => datePart(a[0], 3),
+  floor: (a, N) => { const x = N(a[0]); return x === null ? null : Math.floor(x); },   // int() truncates — differs on negatives
+  ceil: (a, N) => { const x = N(a[0]); return x === null ? null : Math.ceil(x); },
+  mod: (a, N) => { const x = N(a[0]), y = N(a[1]); return (x === null || y === null || y === 0) ? null : ((x % y) + y) % y; },   // FLOORED (Excel MOD): mod(-7,3)=2
+  log10: (a, N) => { const x = N(a[0]); return x === null ? null : fin(Math.log10(x)); },   // log() is ln; grades are lognormal — log10 is the geochem transform
   ifnum: (a, N) => { const x = N(a[0]); return x === null ? a[1] : x; },          // x if numeric, else the default
   coalesce: (a) => { for (const v of a) if (!isBlank(v)) return v; return null; }, // first non-blank
+  nullif: (a, N) => (eq(a[0], a[1], N) ? null : a[0]),    // sentinel scrub: nullif(AU, -99)
   isnum: (a, N) => N(a[0]) !== null,
   isnan: (a, N) => !isBlank(a[0]) && N(a[0]) === null,    // present but not a number (junk cell)
   isblank: (a) => isBlank(a[0]),
   isfilled: (a) => !isBlank(a[0]),
+  // ── strings (hole-ID munging, join-key cleanup). Blank in → blank out, except
+  // where noted; empty results fold to blank ('' ≡ blank in this model).
+  upper: (a) => { const s = S(a[0]); return s === null ? null : s.toUpperCase(); },
+  lower: (a) => { const s = S(a[0]); return s === null ? null : s.toLowerCase(); },
+  trim: (a) => { const s = S(a[0]); return s === null ? null : (s.trim() || null); },
+  len: (a) => { const s = S(a[0]); return s === null ? null : s.length; },        // len(blank) = blank, not 0
+  left: (a, N) => { const s = S(a[0]), n = N(a[1]); return (s === null || n === null) ? null : (s.slice(0, Math.max(0, Math.trunc(n))) || null); },
+  right: (a, N) => { const s = S(a[0]), n = N(a[1]); return (s === null || n === null || n <= 0) ? null : (s.slice(-Math.trunc(n)) || null); },
+  substr: (a, N) => {                                     // 1-BASED start (SQL/Excel MID), optional length
+    const s = S(a[0]), st = N(a[1]); if (s === null || st === null) return null;
+    const b = Math.max(0, Math.trunc(st) - 1); const ln = a.length > 2 ? N(a[2]) : null;
+    return (ln === null ? s.slice(b) : s.slice(b, b + Math.max(0, Math.trunc(ln)))) || null;
+  },
+  replace: (a) => {                                       // literal replace-ALL. find blank → unchanged; repl blank → delete
+    const s = S(a[0]); if (s === null) return null;
+    const f = S(a[1]); if (f === null) return s;
+    return s.split(f).join(S(a[2]) ?? '') || null;
+  },
+  concat: (a) => a.map((v) => S(v) ?? '').join('') || null,   // blanks skipped (join-key building); all-blank → blank
 };
 
 function datePart(v, g) {
@@ -299,6 +358,7 @@ function makeRegExp(src) { try { return new RegExp(src); } catch { return null; 
 function ev(n, V, N) {
   switch (n.t) {
     case 'num': case 'str': case 'bool': return n.v;
+    case 'blank': return null;                            // the blank literal
     case 'field': { const x = V[n.name]; return x === undefined ? null : x; }
     case 'neg': { const a = N(ev(n.e, V, N)); return a === null ? null : -a; }
     case '+': case '-': case '*': case '/': return arith(n.t, N(ev(n.l, V, N)), N(ev(n.r, V, N)));
@@ -373,6 +433,7 @@ function indexMap(columns) {
 function walk(n, idx, N) {
   switch (n.t) {
     case 'num': case 'str': case 'bool': { const v = n.v; return () => v; }
+    case 'blank': return BLANK;                            // the blank literal
     case 'field': {
       const i = idx.get(String(n.name).toLowerCase());
       if (i === undefined) return BLANK;                       // unknown column → blank (validate() reports it)
@@ -421,8 +482,10 @@ function compileBool(exprOrAst, columns, opts) {
 // ── src/analyze.js ──
 
 // @gcu/expr — static analysis over the AST: `deps` (the free column references, for
-// reactive wiring + lamina's parseFields column-pushdown) and `validate` (parse +
-// unknown-column check, for the filter box / calc-column editor's live feedback).
+// reactive wiring + column-pushdown projection), `validate` (parse + unknown-column
+// check with did-you-mean, for the filter box / calc editor's live feedback), and
+// `canMatch` (conservative interval analysis for chunk/row-group push-down — "could
+// any row in a chunk with these per-column stats match this predicate?").
 
 
 // Free field references — the expression's source columns (original case, deduped).
@@ -438,22 +501,108 @@ function deps(exprOrAst) {
   return [...out];
 }
 
+// Small bounded Levenshtein for did-you-mean (early-out above `cap`).
+function editDist(a, b, cap = 3) {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]; let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < best) best = cur[j];
+    }
+    if (best > cap) return cap + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
 // Parse + (when `columns` is given) check every field ref resolves, case-insensitively.
-// → { ok, errors: [{ kind, message, name? }] }. Never throws.
+// → { ok, errors: [{ kind, message, name?, suggestion? }] }. Never throws. Unknown
+// columns get a did-you-mean: nearest known name by edit distance, or — the hyphen
+// migration case — a known name that *starts with* the unknown + '-' (`OK` typed
+// bare where `OK-Indic` exists → suggest the backticked form; `-` is subtraction).
 function validate(exprOrAst, columns) {
   let ast;
   try { ast = asAst(exprOrAst); }
   catch (e) { return { ok: false, errors: [{ kind: 'parse', message: (e instanceof ExprParseError ? e.message : String(e && e.message || e)) }] }; }
   const errors = [];
   if (columns) {
-    const known = new Set((columns || []).map((c) => String(typeof c === 'string' ? c : (c && c.name)).toLowerCase()));
+    const names = (columns || []).map((c) => String(typeof c === 'string' ? c : (c && c.name)));
+    const known = new Set(names.map((n) => n.toLowerCase()));
     const seen = new Set();
     for (const name of deps(ast)) {
       const key = name.toLowerCase();
-      if (!known.has(key) && !seen.has(key)) { seen.add(key); errors.push({ kind: 'column', name, message: `unknown column: ${name}` }); }
+      if (known.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      let best = null, bestD = 3;                                     // fuzzy: nearest known within distance 2
+      for (const k of names) {
+        if (k.toLowerCase().startsWith(key + '-')) { best = k; break; }   // the hyphen case wins outright
+        const d = editDist(key, k.toLowerCase(), 2);
+        if (d < bestD) { bestD = d; best = k; }
+      }
+      const suggestion = best ? quoteIdent(best) : undefined;
+      errors.push({ kind: 'column', name, suggestion, message: `unknown column: ${name}${suggestion ? ` — did you mean ${suggestion}?` : ''}` });
     }
   }
   return { ok: errors.length === 0, errors };
+}
+
+// ── canMatch: chunk push-down ────────────────────────────────────────────────
+// canMatch(expr, ranges) → false ONLY when provably no row in the chunk can match;
+// true means "must scan". `ranges` = { columnName → { min, max, hasBlank? } } from
+// chunk/row-group stats (Parquet footers, .dm band sidecars); lookup is
+// case-insensitive (the language is). Conservative by construction: unknown node
+// shapes, non-constant compare sides, parse errors, missing stats → true.
+//
+// Soundness note (`!=`): a BLANK row matches `AU != 5` (eq(blank,5) is false), and
+// min/max stats don't describe blanks — so `!=` prunes only when the stats assert
+// `hasBlank: false`. (Hand-rolled pushdowns typically miss this.)
+const FLIP = { '<': '>', '>': '<', '<=': '>=', '>=': '<=', '=': '=', '!=': '!=' };
+function canMatch(exprOrAst, ranges) {
+  let ast;
+  try { ast = asAst(exprOrAst); } catch { return true; }
+  const R = new Map(Object.entries(ranges || {}).map(([k, v]) => [String(k).toLowerCase(), v]));
+  const rangeOf = (n) => (n && n.t === 'field' ? (R.get(n.name.toLowerCase()) || null) : null);
+  const cnum = (n) => {                                               // constant-fold a field-free subtree to a finite number
+    if (deps(n).length) return null;
+    const v = evaluate(n, {});
+    return (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+  };
+  const usable = (fr) => fr && Number.isFinite(fr.min) && Number.isFinite(fr.max);
+  function m(n) {
+    switch (n.t) {
+      case 'and': return m(n.l) && m(n.r);                            // either side impossible → the conjunction is
+      case 'or': return m(n.l) || m(n.r);
+      case 'cmp': {
+        let fr = rangeOf(n.l), k = cnum(n.r), o = n.op;
+        if (!usable(fr) || k === null) {
+          const fr2 = rangeOf(n.r), k2 = cnum(n.l);
+          if (usable(fr2) && k2 !== null) { fr = fr2; k = k2; o = FLIP[o]; }
+          else return true;
+        }
+        switch (o) {
+          case '>': return fr.max > k;
+          case '>=': return fr.max >= k;
+          case '<': return fr.min < k;
+          case '<=': return fr.min <= k;
+          case '=': return fr.min <= k && k <= fr.max;
+          case '!=': return fr.hasBlank === false ? !(fr.min === k && fr.max === k) : true;
+          default: return true;
+        }
+      }
+      case 'between': {
+        const fr = rangeOf(n.e), lo = cnum(n.lo), hi = cnum(n.hi);
+        return (usable(fr) && lo !== null && hi !== null) ? (fr.max >= lo && fr.min <= hi) : true;
+      }
+      case 'in': {
+        const fr = rangeOf(n.e); if (!usable(fr)) return true;
+        return n.set.some((s) => { const k = cnum(s); return k === null ? true : (fr.min <= k && k <= fr.max); });
+      }
+      default: return true;                                           // not / contains / matches / calls / is blank — no pruning
+    }
+  }
+  return m(ast);
 }
 
 // ── src/complete.js ──
@@ -474,7 +623,6 @@ function validate(exprOrAst, columns) {
 const CMP_OPS = ['=', '!=', '<', '>', '<=', '>=', '==', '<>'];
 const VALUE_KW = ['in', 'contains', 'like', 'matches'];
 const RESET_KW = ['and', 'or', 'not', 'between'];        // crossing one of these ends "this comparison"
-const needsBracket = (n) => !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(n);
 const quoteVal = (v) => '"' + String(v).replace(/"/g, '') + '"';
 
 // Is the nearest enclosing `(` an `in (` list (vs a grouping / function paren)?
@@ -516,7 +664,10 @@ function complete(src, pos, ctx = {}) {
     : (ctx.values ? (n) => ctx.values[n] || ctx.values[String(n).toLowerCase()] || [] : () => []);
 
   const before = src.slice(0, pos);
-  const fm = before.match(/(["']?)([A-Za-z0-9_-]*)$/) || ['', '', ''];
+  // NB the fragment class keeps `-` (and backtick as an open quote) so typing
+  // `OK-Ind` still prefix-matches the column OK-Indic even though idents can't
+  // contain `-` — this is a UI heuristic, not the grammar.
+  const fm = before.match(/(["'`]?)([A-Za-z0-9_-]*)$/) || ['', '', ''];
   const quote = fm[1] || '', frag = fm[2] || '';
   const from = pos - quote.length - frag.length;
   let to = pos;
@@ -550,8 +701,9 @@ function complete(src, pos, ctx = {}) {
     return { from, to, options: opts.slice(0, 50) };
   }
 
-  // default: an operand position → columns + functions (+ leading `not`)
-  for (const c of columns) if (pre(c.name)) opts.push({ value: needsBracket(c.name) ? `["${c.name}"]` : c.name, kind: 'column', detail: c.type });
+  // default: an operand position → columns + functions (+ leading `not`).
+  // Non-plain names emit the backtick escape (quoteIdent — the pandas convention).
+  for (const c of columns) if (pre(c.name)) opts.push({ value: quoteIdent(c.name), kind: 'column', detail: c.type });
   for (const fn of Object.keys(CALLFNS)) if (pre(fn)) opts.push({ value: fn + '(', kind: 'function' });
   if (pre('not')) opts.push({ value: 'not', kind: 'keyword' });
   return { from, to, options: opts.slice(0, 50) };
@@ -569,6 +721,7 @@ export {
   parse,
   asAst,
   tokenize,
+  quoteIdent,
   CALLFNS,
   ExprParseError,
   evaluate,
@@ -579,6 +732,7 @@ export {
   compileBool,
   deps,
   validate,
+  canMatch,
   complete,
   isBlank,
   num,

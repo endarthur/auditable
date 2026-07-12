@@ -32,6 +32,7 @@ function indexMap(columns) {
 function walk(n, idx, N) {
   switch (n.t) {
     case 'num': case 'str': case 'bool': { const v = n.v; return () => v; }
+    case 'blank': return BLANK;                            // the blank literal
     case 'field': {
       const i = idx.get(String(n.name).toLowerCase());
       if (i === undefined) return BLANK;                       // unknown column → blank (validate() reports it)

@@ -9,6 +9,7 @@ import { makeNum, compare, contains, inSet, matches, makeRegExp, arith, FN, isBl
 function ev(n, V, N) {
   switch (n.t) {
     case 'num': case 'str': case 'bool': return n.v;
+    case 'blank': return null;                            // the blank literal
     case 'field': { const x = V[n.name]; return x === undefined ? null : x; }
     case 'neg': { const a = N(ev(n.e, V, N)); return a === null ? null : -a; }
     case '+': case '-': case '*': case '/': return arith(n.t, N(ev(n.l, V, N)), N(ev(n.r, V, N)));

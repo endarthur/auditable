@@ -12,20 +12,35 @@
 // `tokenize` analyze it. Blank is `null`.
 //
 // Precedence ladder (low→high): or < and < not < comparison < additive <
-// multiplicative < unary < primary.
+// multiplicative < unary < power < primary. Power (`^` / `**`) is right-associative
+// and binds looser than unary on the left, tighter on the right — Python/pandas
+// semantics: -2^2 = -4, 2^-3 = 0.125, 2^3^2 = 512. (Excel disagrees on -2^2; the
+// Python convention wins because pandas.query is this audience's muscle memory.)
 
 // Keyword operators / words — matched case-insensitively. A column literally named
-// one of these needs the ["…"] bracket escape.
+// one of these needs the `…` backtick escape.
 const RESERVED = new Set(['and', 'or', 'not', 'between', 'contains', 'in', 'like', 'matches', 'is', 'blank', 'filled', 'true', 'false']);
 
 // Pure total functions: name → [minArgs, maxArgs]. `if` is special (lazy branches)
 // but listed for arity + call-syntax recognition.
 export const CALLFNS = {
-  if: [3, 3], round: [1, 2], int: [1, 1], abs: [1, 1],
+  if: [3, 3], round: [1, 2], int: [1, 1], abs: [1, 1], floor: [1, 1], ceil: [1, 1], mod: [2, 2],
   year: [1, 1], month: [1, 1], day: [1, 1],
-  log: [1, 1], exp: [1, 1], sqrt: [1, 1], pow: [2, 2], min: [1, Infinity], max: [1, Infinity], clamp: [3, 3], bin: [2, 3],
-  ifnum: [2, 2], coalesce: [1, Infinity], isnum: [1, 1], isnan: [1, 1], isblank: [1, 1], isfilled: [1, 1],
+  log: [1, 1], log10: [1, 1], exp: [1, 1], sqrt: [1, 1], pow: [2, 2], min: [1, Infinity], max: [1, Infinity], clamp: [3, 3], bin: [2, 3],
+  ifnum: [2, 2], coalesce: [1, Infinity], nullif: [2, 2], isnum: [1, 1], isnan: [1, 1], isblank: [1, 1], isfilled: [1, 1],
+  upper: [1, 1], lower: [1, 1], trim: [1, 1], len: [1, 1], left: [2, 2], right: [2, 2], substr: [2, 3], replace: [3, 3], concat: [1, Infinity],
 };
+
+// Is `name` writable as a bare identifier? (Used by quoteIdent + complete.)
+const PLAIN_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// Quote a column name for use in an expression: plain idents pass through, anything
+// else (spaces, hyphens, reserved words) gets the backtick escape with \` / \\.
+// Consumers that treat a column NAME as an expression (stats pickers, materialize)
+// MUST route through this — `OK-Indic` bare is subtraction now.
+export function quoteIdent(name) {
+  const s = String(name);
+  return PLAIN_IDENT.test(s) && !RESERVED.has(s.toLowerCase()) ? s : '`' + s.replace(/\\/g, '\\\\').replace(/`/g, '\\`') + '`';
+}
 
 export class ExprParseError extends Error {
   constructor(msg) { super('expr parse error: ' + msg); this.name = 'ExprParseError'; }
@@ -33,11 +48,14 @@ export class ExprParseError extends Error {
 function fail(msg) { throw new ExprParseError(msg); }
 
 // ── lexer ──────────────────────────────────────────────────────────────────
-// Bare field refs are case-insensitive idents (`-` is a valid ident char, so a
-// column like OK-Indic lexes as one token → SUBTRACTION needs spaces: `a - 5`).
+// Bare field refs are case-insensitive idents of [A-Za-z_][A-Za-z0-9_]* — `-` is
+// ALWAYS subtraction (v0.2; `AU-CU` is arithmetic, as pandas/SQL fingers expect).
+// Any other column name takes the BACKTICK escape — `Assay Au ppm` — the pandas
+// df.query() convention; \` escapes a literal backtick, \\ a backslash. The legacy
+// `["…"]` bracket form still parses (shipped lenses) but is undocumented.
 // Strings: "double" (canonical) or 'single' (tolerated). Numbers: ints, decimals,
-// leading-dot (.5) and scientific (1e4, 2.5e-3). `["…"]` escapes any column name.
-const TOKEN_RE = /(\s+)|(\[\s*"[^"]*"\s*\])|("[^"]*"|'[^']*')|(&&|\|\||==|<>|<=|>=|!=|!~|<|>|=|~)|([-+*/(),])|((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][A-Za-z0-9_-]*)/y;
+// leading-dot (.5) and scientific (1e4, 2.5e-3). `^` and `**` are power.
+const TOKEN_RE = /(\s+)|(\[\s*"[^"]*"\s*\]|`(?:[^`\\]|\\.)*`)|("[^"]*"|'[^']*')|(&&|\|\||\*\*|==|<>|<=|>=|!=|!~|<|>|=|~)|([-+*/(),^])|((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][A-Za-z0-9_]*)/y;
 
 // Lex into tokens carrying source positions. `tolerant` (for highlighting) emits a
 // 1-char 'err' token on an unexpected character instead of throwing.
@@ -54,7 +72,12 @@ function lexAll(src, tolerant) {
     const start = last; last = TOKEN_RE.lastIndex;
     if (m[1] !== undefined) continue;                                        // whitespace
     let k, v;
-    if (m[2] !== undefined) { k = 'field'; v = m[2].replace(/^\[\s*"/, '').replace(/"\s*\]$/, ''); }
+    if (m[2] !== undefined) {
+      k = 'field';
+      v = m[2][0] === '`'
+        ? m[2].slice(1, -1).replace(/\\([`\\])/g, '$1')                    // `…` backtick escape (canonical)
+        : m[2].replace(/^\[\s*"/, '').replace(/"\s*\]$/, '');              // ["…"] legacy bracket form
+    }
     else if (m[3] !== undefined) { k = 'str'; v = m[3].slice(1, -1); }       // "double" or 'single'
     else if (m[4] !== undefined) { k = 'op'; v = m[4]; }
     else if (m[5] !== undefined) { k = 'op'; v = m[5]; }
@@ -104,14 +127,22 @@ export function parse(src) {
       i++;
       if (lw === 'true') return { t: 'bool', v: true };
       if (lw === 'false') return { t: 'bool', v: false };
+      if (lw === 'blank') return { t: 'blank' };                        // the blank LITERAL: if(AU = -99, blank, AU)
       if (RESERVED.has(lw)) fail(`unexpected keyword '${t.v}'`);
       return { t: 'field', name: t.v };                                 // bare ident → column (original case kept)
     }
     fail(`unexpected '${t.v}'`);
   }
+  // power: right-assoc, desugars to the existing pow() call (zero new eval code).
+  // The exponent re-enters unary so 2^-3 works; -2^2 = -(2^2) (Python/pandas).
+  function power() {
+    const l = primary();
+    if (op('^') || op('**')) { i++; return { t: 'call', fn: 'pow', args: [l, unary()] }; }
+    return l;
+  }
   function unary() {
     if (op('-') || op('+')) { const neg = op('-'); i++; const e = unary(); return neg ? { t: 'neg', e } : e; }
-    return primary();
+    return power();
   }
   function mul() {
     let l = unary();
