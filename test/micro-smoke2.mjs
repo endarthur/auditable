@@ -790,6 +790,12 @@ await p.close();
   });
   chk(`calc window: add + calc-on-calc composes (${added.cols})`,
     added.valid && added.cols.join(',') === 'FE_EQ:number,DBL:number');
+  // a calccols RECIPE composes in listed order too (schema recomputed per entry)
+  const rcp = await pc.evaluate(() => window._micro.applyCalcCols(window._micro.layers()[0],
+    [{ name: 'A1', expr: 'FE * 2' }, { name: 'A2', expr: 'A1 + MN' }]));
+  const rcpClean = await pc.evaluate(() => { const L = window._micro.layers()[0]; L.calcCols = L.calcCols.filter((c) => !/^A[12]$/.test(c.name)); L._calcFns = null; return true; });
+  chk(`calccols recipe: same-set composition (A2 references A1; ${rcp.applied} applied, bad: [${rcp.bad}])`,
+    rcp.applied === 2 && !rcp.bad.length && rcpClean);
   const live = await pc.evaluate(async () => {
     document.querySelector('#filter').value = 'DBL > 100'; await window._micro.applyBlockFilter('DBL > 100');
     const count = () => { const L = window._micro.layers()[0]; let h = 0; for (const m of L._filterMask) if (m) h++; return h; };

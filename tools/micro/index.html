@@ -3361,12 +3361,12 @@ const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath', stats: 'stats', figu
 // skipped and named. The recipe-facing form of Properties → columns.
 function applyCalcCols(L, cols) {
   const h = layerTableHeader(L); if (!h) return { applied: 0, bad: [] };
-  const schema = schemaExt(L, h);
   L.calcCols = L.calcCols || [];
   let applied = 0; const bad = [];
   for (const c of cols || []) {
     if (!c || !c.name || !c.expr) continue;
-    try { compileValue(String(c.expr), schema, { decimal: '.' }); } catch { bad.push(c.name); continue; }
+    // schema recomputed PER entry — a recipe composes in listed order (DBL may reference the FE_EQ two lines up)
+    try { compileValue(String(c.expr), schemaExt(L, h), { decimal: '.' }); } catch { bad.push(c.name); continue; }
     const entry = { name: String(c.name), expr: String(c.expr), ty: c.ty === 'string' ? 'string' : 'number' };
     const at = L.calcCols.findIndex((x) => x.name.toLowerCase() === entry.name.toLowerCase());
     if (at >= 0) L.calcCols[at] = entry; else L.calcCols.push(entry);
@@ -3376,6 +3376,9 @@ function applyCalcCols(L, cols) {
     L._calcFns = null; L._colStats = null;
     const t2 = _attrTables.get(L.id); if (t2 && t2.invalidate) t2.invalidate();
     markProjectDirty();
+    if (L.id === _activeId) addPaintColorOptions(L);       // new ƒ columns reach color-by now, not on the next layer switch
+    if (L === activeLayer() && L.filterExpr) applyBlockFilter(L.filterExpr);   // a live ƒ filter picks up replaced definitions
+    if (calcSelOf(L)) { applyRamp(L, true); syncRuleMode(L); }   // a live ƒ color re-realizes (closure-hash gated)
     if (_propOpen && _propFor === L.id) renderProps();
   }
   return { applied, bad };
