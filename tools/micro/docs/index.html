@@ -41,6 +41,8 @@
   nav.toc a:hover { color:var(--orange); }
   nav.toc a .n { color:var(--dim); display:inline-block; width:1.6em; }
   .lead { font-size:1.08em; color:#333; }
+  pre.tree { border-left-color:var(--dim); }
+  pre.tree i { color:var(--dim); font-style:normal; }
   footer { border-top:1px solid var(--line); margin-top:3em; padding-top:1.4em; color:var(--dim); font-size:.86em; }
   @media (max-width:640px){ nav.toc{column-count:1;} h1{font-size:1.6em;} }
 
@@ -78,7 +80,7 @@
   <div class="badges"><b>🔒 Sealed</b> — no network, nothing leaves your machine · single self-contained HTML file · <a href="../micro.html" download>download micro.html</a> · <a href="../">open the app ↗</a><span class="no-print"> · <a href="micro-manual.pdf">download this manual (PDF) ↓</a> · <a href="card.html">printable shortcut card ✂</a></span></div>
 </header>
 
-<p class="lead">micro opens a point cloud, block model, grid, or set of drillholes — however large — in about a second, with no import step, and lets you view, query, derive, join, reconcile, validate, and produce report-ready figures from it. Every derived column and layer carries a provenance trail, and nothing ever touches the network.</p>
+<p class="lead">micro opens a point cloud, block model, grid, or set of drillholes — however large — in about a second, with no import step. From there you view, query, derive, join, reconcile, validate, and produce report-ready figures. Every derived column and layer carries a provenance trail, and nothing ever touches the network.</p>
 
 <figure>
   <img src="shots/overview.png" alt="A block model in micro, coloured by iron grade, showing a high-grade shoot.">
@@ -121,7 +123,7 @@
   <li><b>Meshes</b> — <code>.msh</code> (Leapfrog), OBJ, PLY-with-faces, LFM, Datamine wireframe pairs</li>
   <li><b>Drillholes</b> — collar + survey + interval tables (desurveyed on load); a set can carry <b>several interval tables</b> (assays, lithology, geotech) sharing one geometry — see <a href="#dh">Drillholes</a></li>
 </ul>
-<p>Beyond viewing, it does the everyday resource-geology work: filter and section; derive columns by expression, lookup, broadcast, resampling, or interpolation; domain by a solid; join and reconcile model versions; grade–tonnage, swath, and validation analysis; and figure export — all against the source file, all with a provenance trail, all offline.</p>
+<p>Beyond viewing, it does the everyday resource-geology work: filter and section; derive columns by expression, lookup, broadcast, resampling, or interpolation; domain by a solid; join and reconcile model versions; grade–tonnage, swath, and validation analysis; figure export. All of it runs against the source file, offline, with the provenance kept.</p>
 <p class="tip"><b>Tip —</b> The fastest way to reach anything is the <b>command palette</b>: <span class="kbd">Ctrl/⌘K</span> (or the <span class="kbd">⌘K</span> button). It searches every action and shows only what applies to the layer you have selected.</p>
 
 <h2 id="start"><span class="n">2</span>Getting started</h2>
@@ -146,6 +148,10 @@
 
 <h2 id="tour"><span class="n">3</span>A guided tour</h2>
 <p>Twenty minutes, no data needed, every major idea once. Open <a href="../">micro</a> and click <b>&#9656; open the demo project</b> on the empty state &mdash; it generates a small mining scene locally: a 1.8M-block iron deposit (cut open on an E&ndash;W section), a twelve-hole drilling program threading it, pre-mining topography, three pit-phase shells, and the orange ore-shell mesh. A grade&ndash;tonnage window is already computed on the right.</p>
+<figure>
+  <img src="shots/demoscene.png" alt="The demo project: the sectioned iron deposit with drillholes, topography, and the ore-shell trace ring on the cut face.">
+  <figcaption>The demo project as it opens: the deposit cut on an E&ndash;W section, drillholes threading it whole, the ore shell tracing an orange ring around the high-grade zone.</figcaption>
+</figure>
 <h3>1 &middot; Look around</h3>
 <p>Drag to orbit, wheel to zoom, <span class="kbd">f</span> to fit. The deposit is coloured by iron grade &mdash; the yellow core is the lens. Hold <b>Ctrl</b> and roll the wheel: the <b>section scrubs</b> through the deposit, and watch the orange ring on the cut face &mdash; that is the ore shell's <b>trace</b>, the mesh drawn where the plane cuts it, with the topography a thin line above. Press <span class="kbd">l</span> to face the section square-on. In the layers panel (<span class="kbd">p</span>), open <b>mining phases</b> and toggle the phase shells; every layer has its own eye.</p>
 <h3>2 &middot; Ask a question &mdash; the filter</h3>
@@ -188,7 +194,7 @@
 AU_OK between 0.5 and 3  or  DOMAIN in ("ORE", "HALO")
 SIO2 &gt; 10 and not (LITO = "CANGA")   # comments are fine</pre>
 <p>Matching elements isolate; everything else drops out of the render, the table, and any analysis. <span class="kbd">Enter</span> applies, <span class="kbd">Esc</span> clears. The box is <b>syntax-highlighted</b> as you type, autocomplete offers columns, functions, and category values, and unknown names get a <i>did-you-mean</i>. The full language — operators, functions, quoting, comments — is in the <a href="#ref">reference</a>.</p>
-<p>On big files the filter is engineered to be <b>live</b>: Parquet models skip whole row-groups their footers prove can't match, CSV and <code>.dm</code> files skip stretches via the project's band index, and after one complete scan the touched columns stay <b>pinned in memory</b> (see <a href="#parquet">the project store</a>) — so dragging a widget re-filters millions of blocks in milliseconds.</p>
+<p>On big files the filter stays fast for three reasons: Parquet models skip whole row-groups their footers prove can't match; CSV and <code>.dm</code> files skip stretches via the project's band index; and after one complete scan the touched columns stay <b>pinned in memory</b> (see <a href="#parquet">the project store</a>). The result is that dragging a widget re-filters millions of blocks in milliseconds.</p>
 <h3>The filter drawer — the expression as live controls</h3>
 <p>The <b>▾</b> button glued to the filter box opens the <b>drawer</b>: your current expression projected as widgets. The expression stays the single source of truth — every control rewrites its own span of the text, so the box updates as you drag and your formatting survives.</p>
 <ul>
@@ -228,7 +234,7 @@ SIO2 &gt; 10 and not (LITO = "CANGA")   # comments are fine</pre>
 </figure>
 <p>Widget edits auto-save an existing column; typed edits wait for the explicit save. <b>materialize → stored</b> freezes a ƒ into a real Parquet column (it survives even if its inputs are later removed, and scans get faster); <b>save as recipe…</b> writes the whole column set as a re-runnable YAML — apply your standard derived columns to next month's model in one click.</p>
 <h3>Colour by ƒ</h3>
-<p>Pick <code>ƒ NAME</code> in the colour dropdown and micro computes the column once for display (a cached realization — recomputed automatically when the definition or anything it references changes, and never written to disk: the definition is the provenance). Combined with the constant sliders this closes a satisfying loop: drag the coefficient, the model recolours.</p>
+<p>Pick <code>ƒ NAME</code> in the colour dropdown and micro computes the column once for display — a cached realization, recomputed automatically when the definition or anything it references changes, never written to disk (the definition is the provenance). With the constant sliders this closes the loop: drag the coefficient, the model recolours.</p>
 <h3>Interpolate onto a layer</h3>
 <p><b>Interpolate from this…</b> (right-click the source points/holes) estimates a value onto <b>any</b> spatial target layer — nearest-neighbour or IDW, with a full anisotropy ellipsoid (ranges + dip-direction / dip / pitch), min/max samples, and expression filters on both the input samples and the output records. The result is a <b>materialized column on the target</b> — not a new layer — with the method and parameters recorded. Run several estimates as separate columns, then compose the final with a ƒ (<code>coalesce(AU_domA, AU_domB)</code>): every step stays auditable. If you need a fresh lattice first, <b>New… → grid / block model</b> creates one, and interpolation targets it like any layer.</p>
 
@@ -247,6 +253,10 @@ SIO2 &gt; 10 and not (LITO = "CANGA")   # comments are fine</pre>
 </figure>
 <h3>The hole filter — filter by collar data</h3>
 <p><b>Filter holes…</b> takes an expression over the <b>collar</b> columns — <code>EOH &gt; 200</code>, <code>COMPANY = "ACME"</code>, a campaign year — and applies the verdict through the whole set: only the matching holes' intervals stay visible (in every interval table at once), the traces redraw for the matching holes only, and the interval filter box then works <i>within</i> the kept holes. Nothing is copied or materialized — it's a live mask driven by the hole relation, and it persists with the project.</p>
+<figure>
+  <img src="shots/holefilter.png" alt="The demo drillhole set filtered by company: only the deep campaign's holes and traces remain.">
+  <figcaption>The hole filter at work: <code>COMPANY = "MERIDIAN"</code> on the collars keeps that campaign's holes — the interval count drops and the traces redraw for the matching holes only, across the whole set.</figcaption>
+</figure>
 <h3>Broadcast — collar data on the intervals</h3>
 <p><b>Broadcast column to intervals</b> lands a collar column on every interval, matched by hole id — so <code>EOH</code>, the logging company, or a campaign field becomes a real interval column you can filter, colour, and export by. Numeric columns materialize to the project's column store; text columns become category columns with a legend. The operation is recorded with its inputs, like every derivation.</p>
 <h3>Display</h3>
@@ -330,11 +340,30 @@ SIO2 &gt; 10 and not (LITO = "CANGA")   # comments are fine</pre>
   <li><b>Band</b> — for a <b>multi-band GeoTIFF</b>, a picker to choose which band is shown (a GeoTIFF's bands are like a grid's columns). Switch it anytime; it re-reads that sample.</li>
 </ul>
 <p>Surface, drape, flat, and band all <b>persist in the project</b> — reopen and the terrain comes back exactly as you left it. Sectioned surfaces draw their trace on the cut face (see <a href="#view">Sections</a>), and layer opacity applies — a translucent topo over an opened pit.</p>
+<figure>
+  <img src="shots/surfaces.png" alt="The demo terrain and pit-phase shells as shaded relief surfaces over the opened deposit.">
+  <figcaption>Relief surfaces in the demo: the pre-mining topography and the pit-phase shells over the opened deposit, each an ordinary layer with its own eye, opacity, and section behaviour.</figcaption>
+</figure>
 <h3>Surface tools: extend &amp; combine</h3>
 <p><b>Extend to footprint…</b> (right-click a surface — mesh or grid) grows it to cover a chosen extent: <b>nearest</b> holds the boundary z flat (the "extend the outer ring" move), <b>trend</b> continues the fitted dip. A topo that stops short of the model no longer leaves blocks unclassified — extend it, then flag above/below covers everything. <b>Combine surfaces…</b> rasterizes two or more surfaces onto one lattice and resolves the overlap by a rule: <b>min</b> (topo ∧ weathering base — take the lower), <b>max</b>, <b>first</b> (list order is priority — patch an end-of-month survey into the original topo), or <b>mean</b>. Both produce <b>grid layers</b> — exact and fast for flags and reconcile — with the rule recorded in the layer name and its lineage; export .asc anytime.</p>
 
 <h2 id="parquet"><span class="n">16</span>The project store, inside</h2>
-<p>A micro project is a plain folder you can read without micro. This section is its anatomy — because auditability means being able to open the hood.</p>
+<p>A micro project is a plain folder, readable without micro. This section is its anatomy, because auditability means being able to open the hood:</p>
+<pre class="tree">my-project/
+├─ project.json                  <i>view state — layers, styling, camera, windows</i>
+├─ models/
+│  ├─ deposit.parquet            <i>the model, Morton-sorted (spatially indexed)</i>
+│  ├─ deposit.parquet.element.json   <i>the DATA MODEL — columns, ops, provenance</i>
+│  ├─ deposit.parquet.meta.json  <i>cache: discovery + stats + band index</i>
+│  └─ deposit.parquet.cols/
+│     ├─ AU_OK.parquet           <i>an estimate — one Parquet file per column</i>
+│     └─ DOMAIN.parquet          <i>a category column, strings</i>
+├─ drillholes/
+│  ├─ collars.csv · survey.csv · assay.csv
+│  └─ dh.element.json            <i>the SET: locations, hole relation, desurvey op</i>
+├─ grids/  ·  meshes/  ·  clouds/
+├─ bookmarks/  ·  scenes/        <i>one small JSON per saved view</i>
+└─ recipes/                      <i>analysis setups as commented YAML</i></pre>
 <h3>Parquet — the model store</h3>
 <p><b>Store as Parquet…</b> (right-click a CSV/<code>.dm</code> model) converts it Morton-sorted, so each row-group's footer becomes a tight spatial index and queries skip whole row-groups they can't match. The dialog says exactly what will happen — per-layer rows, sizes, and a <b>keep original</b> option — and the same conversion runs <b>when you save a project</b> (a one-time, remembered choice: always / ask / off). Painting stays editable through the reorder, the file self-describes (grid, extents, categories in its metadata, so it reopens with no discovery pass), and the whole thing round-trips. Parquet block models also open <b>streamed</b>, holding nothing decoded, with predicate and spatial push-down on the filter.</p>
 <h3>The element manifest — the data model on disk</h3>

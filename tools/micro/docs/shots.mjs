@@ -121,6 +121,36 @@ const shot = async (name, opts = {}) => {
 const layerReady = (nm) => p.waitForFunction((n) => { const L = window._micro.layers().find((x) => x.name === n); return L && window._micro.renderer.layerElementCount(L.id) > 0; }, nm, { timeout: 60000 });
 const openModel = (csv, name, mode = 'replace') => p.evaluate(([c, n, m]) => window._micro.openBlob(new Blob([c]), n, m), [csv, name, mode]);
 
+// 0a ── the demo project scene (the guided tour's opening view)
+await p.evaluate(() => window._micro.openDemoProject());
+await p.waitForFunction(() => window._micro.layers().length >= 6 && window._micro.layers().some((L) => L.dh && L.docs.dhDoc), null, { timeout: 90000 });
+await p.evaluate(() => { const w = [...document.querySelectorAll('.fwin')].pop(); if (w) w.querySelector('.fwin-head button:last-child').click(); });
+await shot('demoscene', { wait: 2600 });
+
+// 0b ── the hole filter: a collars predicate thins the set (sticks + intervals)
+await p.evaluate(async () => {
+  const dh = window._micro.layers().find((L) => L.dh && L.docs.dhDoc);
+  window._micro.setActiveLayer(dh.id);
+  await window._micro.applyHoleFilter(dh, 'COMPANY = "MERIDIAN"');
+  const nd = window._micro.layerTree().find((x) => typeof x !== 'number' && x.dhSet);
+  if (nd) await window._micro.showHoleTraces(nd);         // traces desurvey the MATCHING holes only
+});
+await shot('holefilter', { wait: 2000 });
+
+// 0c ── terrain + phases as relief surfaces over the opened pit
+await p.evaluate(async () => {
+  const dh = window._micro.layers().find((L) => L.dh && L.docs.dhDoc);
+  await window._micro.applyHoleFilter(dh, '');
+  { const nd = window._micro.layerTree().find((x) => typeof x !== 'number' && x.dhSet); const tr = window._micro.layers().find((L) => L.trace); if (nd && tr) await window._micro.showHoleTraces(nd); }   // toggle traces OFF for the surfaces shot
+  for (const L of window._micro.layers()) {
+    if (/phase/.test(L.label || L.name)) { L.visible = true; }
+  }
+  window._micro.applyTreeVisibility();
+  window._micro.requestRender();
+});
+await shot('surfaces', { wait: 2000 });
+await p.evaluate(() => { window._micro.closeAllWindows(); });
+
 // 0 ── sub-blocked model: octree boxes at their true sizes, coloured by grade
 await openModel(genSubblocks(), 'subblocks.csv', 'replace');
 await layerReady('subblocks.csv');
