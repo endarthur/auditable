@@ -964,7 +964,44 @@ await p.close();
   });
   chk(`join → columns: spatial ${jc.outs} + key ${jc.kOuts} (${jc.matched} matched), NO new layer, filter ${jc.hits} hits, ops [${jc.xel}]`,
     jc.outs.join() === 'AU' && jc.kOuts.join() === 'right_AU' && jc.matched === 100 && jc.layers === 2 && jc.hits === 40 && jc.xel.join() === 'estimate,key-lookup');
+  // TYPED sidecars: an op-produced CATEGORY column materializes to a STRING
+  // Parquet in .cols/ (not project.json RLE) and reloads with dict + lineage
+  await pj.evaluate(async () => {
+    const [L, R] = window._micro.layers();
+    let b2 = 'X,Y,Z,DOM,ID\n';
+    for (let i = 0; i < 10; i++) for (let j = 0; j < 10; j++) b2 += `${5 + i * 10},${5 + j * 10},5,${i < 5 ? 'OX' : 'FR'},R${i}_${j}\n`;
+    await window._micro.openBlob(new Blob([b2]), 'doms.csv', 'add');
+    await new Promise((r) => setTimeout(r, 400));
+    const D = window._micro.layers()[2];
+    window._micro.setActiveLayer(L.id);
+    await window._micro.keyJoinToCols(L, D, { leftKey: 'ID', rightKey: 'ID', bring: ['DOM'], dup: 'first' });
+    L.storage = 'project';
+  });
+  await saveProject(pj);
+  const tc = await pj.evaluate(async () => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2join');
+    const models = await dir.getDirectoryHandle('models');
+    const cols = await models.getDirectoryHandle('left.csv.cols');
+    const names = []; for await (const k of cols.keys()) names.push(k);
+    const pj2 = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
+    const rle = ((pj2.layers.find((l) => /left/.test(l.source)) || {}).paintCols || []).map((c) => c.name);
+    return { hasDom: names.includes('DOM.parquet'), rle };
+  });
+  chk(`typed sidecar: DOM.parquet written as a STRING column, not RLE (rle: [${tc.rle}])`, tc.hasDom && !tc.rle.includes('DOM'));
   await pj.close();
+  const pj2 = await mkPage('sm2join');
+  await pj2.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2join'); await window._micro.openProjectDir(dir); });
+  await pj2.waitForFunction(() => { const L = window._micro.layers().find((x) => /left/.test(x.name)); return L && (L.paintCols || []).some((c) => c.name === 'DOM' && c.dict.length > 2); }, null, { timeout: 60000 });
+  const tr = await pj2.evaluate(async () => {
+    const L = window._micro.layers().find((x) => /left/.test(x.name));
+    window._micro.setActiveLayer(L.id);
+    const dom = L.paintCols.find((c) => c.name === 'DOM');
+    await window._micro.applyBlockFilter('DOM = "FR"');
+    let h = 0; for (const m of L._filterMask) if (m) h++;
+    return { dict: dom.dict.slice(1).sort().join(), lin: dom.lineage && dom.lineage.op, hits: h };
+  });
+  chk(`typed sidecar reload: dict [${tr.dict}], lineage ${tr.lin}, filter ${tr.hits} hits`, tr.dict === 'FR,OX' && tr.lin === 'key-lookup' && tr.hits === 50);
+  await pj2.close();
 }
 
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');

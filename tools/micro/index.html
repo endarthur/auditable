@@ -8421,8 +8421,8 @@ function projectManifest() {
       catLegend: L.catLegend || undefined,
       rules: L.rules && L.rules.list && L.rules.list.length ? L.rules : undefined,
       ruleHidden: L.ruleHidden && L.ruleHidden.size ? [...L.ruleHidden] : undefined,
-      paintCols: L.paintCols && L.paintCols.some((c) => !c.mat)      // materialized cols persist via the .cols sidecar, not RLE codes
-        ? L.paintCols.filter((c) => !c.mat).map((c) => ({ name: c.name, kind: c.kind, dict: c.dict, colors: c.colors, blankColor: c.blankColor, lineage: c.lineage || undefined, rle: rleEncodeBytes(c.codes) }))
+      paintCols: L.paintCols && L.paintCols.some((c) => !c.mat && !isStoredCat(c))   // sidecar columns (matcols + stored categories) persist as Parquet, not RLE
+        ? L.paintCols.filter((c) => !c.mat && !isStoredCat(c)).map((c) => ({ name: c.name, kind: c.kind, dict: c.dict, colors: c.colors, blankColor: c.blankColor, lineage: c.lineage || undefined, rle: rleEncodeBytes(c.codes) }))
         : undefined,
       sel: L._selMask && L._selCount ? rleEncode(L._selMask) : undefined,
       lineage: L.lineage || undefined,                     // provenance chain (how this layer was made)
@@ -8728,7 +8728,9 @@ async function restoreStyleExtras(L, ls) {
   }
   if (ls.paintCols) {
     const n2 = attrRowCountOf(L);
-    L.paintCols = ls.paintCols.map((c) => ({ name: c.name, kind: c.kind || undefined, dict: c.dict.slice(), colors: (c.colors || []).slice(), blankColor: c.blankColor, lineage: c.lineage || undefined, codes: rleDecodeBytes(c.rle || [], n2) }));
+    const restored = ls.paintCols.map((c) => ({ name: c.name, kind: c.kind || undefined, dict: c.dict.slice(), colors: (c.colors || []).slice(), blankColor: c.blankColor, lineage: c.lineage || undefined, codes: rleDecodeBytes(c.rle || [], n2) }));
+    const names = new Set(restored.map((c) => c.name.toLowerCase()));
+    L.paintCols = [...restored, ...(L.paintCols || []).filter((c) => !names.has(c.name.toLowerCase()))];   // MERGE — sidecar-loaded columns survive
     for (const pc of L.paintCols) paintRecount(pc);
     addPaintColorOptions(L);
     // colorSel 'paint:…' couldn't land earlier (its option only exists now)
@@ -12559,6 +12561,10 @@ function calcFns(L) {
 function matColSourceHash(L) { const b = layerBlob(L); return `${(b && b.size) || 0}:${attrRowCountOf(L) || 0}`; }
 function matColLooseId(L) { const b = layerBlob(L); return `${L.name}:${(b && b.size) || 0}`; }
 function matColList(L) { return ((L && L.paintCols) || []).filter((c) => c.mat); }
+// everything the .cols/ sidecar stores: numeric matcols + OP-PRODUCED category
+// columns (they carry lineage; hand-paint stays the project.json RLE chore)
+function storedCols(L) { return ((L && L.paintCols) || []).filter((c) => c.mat || (c.lineage && c.lineage.op && c.kind !== 'ratio')); }
+const isStoredCat = (c) => !c.mat && c.lineage && c.lineage.op && c.kind !== 'ratio';
 function matColGet(L, name) { return matColList(L).find((c) => c.name === name) || null; }
 // derive 256-level display codes (1..255) from fvalues over [min,max]; NaN → 0 (blank)
 function matColCodes(fvalues, min, max) {
@@ -12624,13 +12630,16 @@ function layerColumnsOps(L, h, loc, idp) {
       stats: { min: c.min, max: c.max, count: c.count, nonnull: c.nonnull, hasBlank: c.nonnull < c.count },
     });
   });
-  (L.paintCols || []).forEach((c, i) => {                   // op-produced CATEGORY columns (text broadcast): derived,
-    if (c.mat || !c.lineage || !c.lineage.op) return;       // re-derivable from the op; plain hand-paint stays the RLE chore
+  (L.paintCols || []).forEach((c, i) => {                   // op-produced CATEGORY columns (text broadcast/join):
+    if (!isStoredCat(c)) return;                            // MATERIALIZED string sidecars; hand-paint stays the RLE chore
     const ln = c.lineage, id = idp + 'p' + (i + 1);
     ops.push({ id, op: ln.op, params: ln.params || {}, outputs: [c.name], at: ln.at, build: ln.build,
       ...(ln.op === 'broadcast' && ln.params && ln.params.from ? { inputs: [{ loc: ln.params.from, column: ln.params.column }] } : {}),
       ...(ln.params && ln.params.fromElement ? { inputs: [{ element: ln.params.fromElement, loc: 'cells', column: ln.params.column }] } : {}) });
-    columns.push({ loc, name: c.name, type: 'category', from: 'derived', def: id,
+    const nonnull = (c.counts || []).reduce((t, x, k) => (k ? t + x : t), 0);
+    columns.push({ loc, name: c.name, type: 'category', from: 'materialized', def: id,
+      file: `${src}.cols/${c.name}.parquet`, storage: 'dense',
+      stats: { count: c.codes.length, nonnull, hasBlank: nonnull < c.codes.length },
       categories: Object.fromEntries(c.dict.map((nm, k) => [String(k), { name: nm, color: c.colors[k] }]).filter(([k2, v2]) => k2 !== '0' && v2.name != null)) });
   });
   (L.calcCols || []).forEach((c, i) => {                    // derived ƒ: the op IS the definition (no file)
@@ -12805,7 +12814,7 @@ function elementHydrate(L, man, lk) {
     if (lk && col.loc !== lk) continue;                    // only THIS layer's location
     const op = col.def != null ? ops.get(col.def) : null;
     if (col.from === 'derived' && op && op.op === 'calc') calc.push({ name: col.name, expr: op.params.expr, ty: col.type === 'string' ? 'string' : 'number' });
-    else if (col.from === 'materialized') mats.push({ name: col.name, lineage: op ? { op: op.op, at: op.at, build: op.build, params: op.params || {}, sources: op.sources || [] } : null });
+    else if (col.from === 'materialized') mats.push({ name: col.name, type: col.type, categories: col.categories, lineage: op ? { op: op.op, at: op.at, build: op.build, params: op.params || {}, sources: op.sources || [] } : null });
   }
   if (calc.length || (L.calcCols || []).length) { L.calcCols = calc; L._calcFns = null; }
   const known = ['v', 'name', 'geometry', 'locations', 'relations', 'ops', 'columns'];
@@ -12817,11 +12826,20 @@ function elementHydrate(L, man, lk) {
 // SNAPPY, canonical 256K row groups with footer stats — a materialized column reads
 // like any base column and gains push-down. Legacy raw .f32 still loads (PAR1 sniff).
 function matColEncode(c) {
+  const data = c.mat
+    ? Array.from(c.fvalues, (v) => (Number.isFinite(v) ? v : null))
+    : Array.from(c.codes, (code) => (code ? (c.dict[code] ?? null) : null));   // category: dict-decoded strings
   return writeParquet({
-    columnData: [{ name: c.name, data: Array.from(c.fvalues, (v) => (Number.isFinite(v) ? v : null)) }],
+    columnData: [{ name: c.name, data }],
     codec: 'SNAPPY', rowGroupSize: 1 << 18,
     kvMetadata: [{ key: 'micro:lineage', value: JSON.stringify(c.lineage || null) }],
   });
+}
+async function matColDecodeStr(bytes) {
+  const u8v = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const info = parquetInfo(u8v);
+  const name = info.columns[0].name || info.columns[0];
+  return (await readParquetRange(u8v, [name], 0, info.rowCount, info.meta))[name];
 }
 async function matColDecode(bytes) {
   const u8v = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -12834,7 +12852,7 @@ async function matColDecode(bytes) {
   return out;
 }
 async function persistElement(L) {
-  const cols = matColList(L);
+  const cols = storedCols(L);
   const elem = buildElementManifest(L);
   if (!elem) return 'none';
   if (L.storage === 'project' && _project && _project.dir) {
@@ -12878,7 +12896,30 @@ async function loadElement(L, dir) {
   }
   if (!mats.length || !get) return 0;
   let loaded = 0;
-  for (const cm of mats) { try { const buf = await get(cm.name); if (!buf) continue; matColSet(L, cm.name, await matColDecode(buf), { lineage: cm.lineage }); loaded++; } catch { /* skip a missing file */ } }
+  for (const cm of mats) {
+    try {
+      const buf = await get(cm.name); if (!buf) continue;
+      if (cm.type === 'category') {                        // stored category: string column → dict/codes, legend from the manifest
+        const vals = await matColDecodeStr(buf);
+        const dict = [''], colors = [PAINT_BLANK];
+        for (const [, v] of Object.entries(cm.categories || {}).sort((a, b2) => +a[0] - +b2[0])) { dict.push(v.name); colors.push(v.color || ruleDefaultColor(dict.length - 2)); }
+        const codeOf = new Map(dict.map((d, i2) => [d, i2]));
+        const codes = new Uint8Array(vals.length);
+        for (let i2 = 0; i2 < vals.length; i2++) {
+          const v = vals[i2]; if (v == null || v === '') continue;
+          let code = codeOf.get(v);
+          if (code == null) { if (dict.length >= 256) continue; code = dict.length; dict.push(v); colors.push(ruleDefaultColor(dict.length - 2)); codeOf.set(v, code); }
+          codes[i2] = code;
+        }
+        const col = { name: cm.name, dict, colors, blankColor: PAINT_BLANK, codes, lineage: cm.lineage };
+        paintRecount(col);
+        L.paintCols = ((L.paintCols || []).filter((c) => c.name !== cm.name)); L.paintCols.push(col);
+        L._colStats = null; L._calcFns = null;
+        if (L.id === _activeId) addPaintColorOptions(L);
+      } else matColSet(L, cm.name, await matColDecode(buf), { lineage: cm.lineage });
+      loaded++;
+    } catch { /* skip a missing file */ }
+  }
   return loaded;
 }
 async function matColDelete(L, name) {
