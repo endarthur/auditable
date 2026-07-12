@@ -266,5 +266,73 @@ await p.evaluate(() => window._micro.closeAllWindows());
 await p.evaluate(() => window._micro.sealedInfo());
 await shot('sealed', { wait: 700 });
 
+// 10 ── the routine editor: for-each table filled, Preview listing the run
+await p.keyboard.press('Escape');                            // dismiss the Sealed popover
+await p.evaluate(() => { document.querySelectorAll('.menu, .popover, #sealPop').forEach((x) => x.remove()); window._micro.closeAllWindows(); });
+await p.evaluate(() => {
+  const rl = window._micro._recipesList();
+  if (!rl.some((x) => x.name === 'refresh calc columns')) rl.push(
+    { name: 'refresh calc columns', tool: 'calccols', file: 'recipes/rc.yaml', params: { layer: 'model_A.csv', cols: [{ name: 'FE_EQ', expr: 'FE' }] } },
+    { name: 'drift check', tool: 'swath', file: 'recipes/dc.yaml', params: { layer: 'model_A.csv', series: [{ layer: 'model_A.csv', col: 'FE' }] } },
+  );
+  window._micro.openRoutineWindow(null);
+  const el = document.querySelector('.fwin[data-routine]');
+  el.style.left = '120px'; el.style.top = '60px'; el.style.width = '620px'; el.style.height = '640px';
+  el.querySelector('input[placeholder="month-end"]').value = 'month-end';
+  el.querySelector('#rwGuard').checked = true; el.querySelector('#rwGuard').dispatchEvent(new Event('change'));
+  const bars = [...el.querySelectorAll('.rw-bar')];
+  bars.find((x) => /reports/.test(x.textContent)).querySelectorAll('input')[1].value = 'm-';
+  const s1 = el.querySelector('.rw-step select');
+  s1.value = 'refresh calc columns'; s1.dispatchEvent(new Event('change'));
+  [...el.querySelectorAll('button')].find((x) => x.textContent === '+ for-each block').click();
+});
+await p.evaluate(() => {
+  const el = document.querySelector('.fwin[data-routine]');
+  const th = el.querySelector('.rw-grid th input');
+  th.value = 'grade'; th.dispatchEvent(new Event('change'));
+});
+await p.evaluate(() => {
+  const el = document.querySelector('.fwin[data-routine]');
+  const c1 = el.querySelector('.rw-grid td input');
+  c1.value = 'FE'; c1.dispatchEvent(new Event('change'));
+  [...el.querySelectorAll('button')].find((x) => x.textContent === '+ row').click();
+});
+await p.evaluate(() => {
+  const el = document.querySelector('.fwin[data-routine]');
+  const rows = [...el.querySelectorAll('.rw-grid tr')];
+  const c2 = rows[2].querySelector('td input');
+  c2.value = 'SIO2'; c2.dispatchEvent(new Event('change'));
+  const box = [...el.querySelectorAll('.rw-step')].find((x) => x.querySelector('.rw-grid'));
+  const inner = box.querySelectorAll('select')[1];
+  inner.value = 'drift check'; inner.dispatchEvent(new Event('change'));
+  [...box.querySelectorAll('button')].find((x) => x.textContent === '⋯').click();
+  const ta = box.querySelector('.rw-ovr');
+  ta.value = 'series:\n  - layer: "model_A.csv"\n    col: "$grade"';
+  ta.style.height = '60px';
+  ta.dispatchEvent(new Event('change'));
+  [...el.querySelectorAll('button')].find((x) => x.textContent === 'Preview').click();
+});
+await shot('routineeditor', { el: '.fwin[data-routine]', wait: 900 });
+
+// 11 ── the generated inputs dialog (ask-me-first recipes)
+await p.evaluate(() => {
+  document.querySelectorAll('.fwin').forEach((w) => w.remove());
+  const rl = window._micro._recipesList();
+  rl.push({ name: 'GT — any model', tool: 'gt', file: 'recipes/gt-any.yaml',
+    inputs: [
+      { name: 'model', label: 'Block model', type: 'layer' },
+      { name: 'grade', label: 'Grade column', type: 'column', of: 'model' },
+      { name: 'ncut', label: 'How many cutoffs', type: 'number', default: 15 },
+    ],
+    params: { nCut: '$ncut', series: [{ layer: '$model', col: '$grade' }] } });
+  window._micro.runRecipe(rl.find((x) => x.name === 'GT — any model'), true);
+  const el = document.querySelector('.fwin[data-inputs-dialog]');
+  el.style.left = '340px'; el.style.top = '180px'; el.style.width = '420px';
+  const gradeSel = [...el.querySelectorAll('.rw-bar')][1].querySelector('select');
+  gradeSel.value = 'FE';
+});
+await shot('inputsdialog', { el: '.fwin[data-inputs-dialog]', wait: 700 });
+await p.evaluate(() => { document.querySelectorAll('.fwin').forEach((w) => w.remove()); });
+
 console.log('done →', OUT);
 await b.close(); server.close();

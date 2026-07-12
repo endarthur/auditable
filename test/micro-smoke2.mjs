@@ -1100,6 +1100,61 @@ await p.close();
   });
   chk(`routine: each-expansion runs + report written (${rt.names}) + guard stops the re-run`,
     /1 report/.test(rt.meta1) && rt.names.join() === 'gt-std-fe.tsv' && /guard stopped/.test(rt.meta2));
+
+  // §21b — the routine EDITOR: Save writes YAML that loadRecipes reads back;
+  // reopening restores the guard (the file is the truth, the window a view)
+  const ed = await pr.evaluate(async () => {
+    window._micro.openRoutineWindow(null);
+    const el = document.querySelector('.fwin[data-routine]');
+    el.querySelector('input[placeholder="month-end"]').value = 'edited';
+    el.querySelector('#rwGuard').checked = true; el.querySelector('#rwGuard').dispatchEvent(new Event('change'));
+    const sel = el.querySelector('.rw-step select');
+    sel.value = 'gt std'; sel.dispatchEvent(new Event('change'));
+    [...el.querySelectorAll('button')].find((x) => x.textContent === 'Save').click();
+    await new Promise((r) => { const iv = setInterval(() => { if (/saved routine/.test(document.querySelector('#meta').textContent)) { clearInterval(iv); r(); } }, 100); });
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2routine');
+    const yml = await (await (await (await dir.getDirectoryHandle('recipes')).getFileHandle('edited.yaml')).getFile()).text();
+    window._micro._recipesList().length = 0;
+    await window._micro.loadRecipes(dir);
+    const back = window._micro._recipesList().find((x) => x.name === 'edited');
+    el.remove();
+    let guardBack = false;
+    if (back) {
+      window._micro.openRoutineWindow(back);
+      const el2 = document.querySelector('.fwin[data-routine]');
+      guardBack = el2 && el2.querySelector('#rwGuard').checked;
+      if (el2) el2.remove();
+    }
+    return { hasTool: /tool: "routine"/.test(yml), hasGuard: /guard: "no-overwrites"/.test(yml), loaded: !!back, guardBack };
+  });
+  chk('routine editor: Save → YAML → loadRecipes → reopen restores the guard',
+    ed.hasTool && ed.hasGuard && ed.loaded && ed.guardBack);
+
+  // §21c — inputs: a recipe with `inputs:` generates the ask-me-first dialog;
+  // Run substitutes $vars (typed for number inputs) and executes
+  const inp = await pr.evaluate(async () => {
+    window._micro._recipesList().push({ name: 'ask', tool: 'gt', file: 'recipes/ask.yaml',
+      inputs: [{ name: 'grade', type: 'column' }, { name: 'n', type: 'number', default: 5 }],
+      params: { layer: 'm.csv', series: [{ layer: 'm.csv', col: '$grade' }], nCut: '$n' } });
+    window._micro.runRecipe(window._micro._recipesList().find((x) => x.name === 'ask'), true);
+    const dlg = document.querySelector('.fwin[data-inputs-dialog]');
+    if (!dlg) return { dlg: false };
+    const opts = [...dlg.querySelector('select').options].map((o) => o.value);
+    dlg.querySelector('select').value = 'FE';
+    [...dlg.querySelectorAll('button')].find((x) => x.textContent === 'Run').click();
+    const t0 = Date.now();
+    let w;
+    while (Date.now() - t0 < 60000) {
+      w = [...document.querySelectorAll('.fwin')].find((x) => x._tableTSV && x._tableTSV());
+      if (w) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const tsv = w ? w._tableTSV() : '';
+    document.querySelectorAll('.fwin').forEach((x) => x.remove());
+    return { dlg: true, opts: opts.join(','), head: tsv.split('\n')[0], rows: tsv.split('\n').length - 1 };
+  });
+  chk(`inputs: dialog generated (cols ${inp.opts}) + substituted run (${inp.head} · ${inp.rows} rows)`,
+    inp.dlg && /FE/.test(inp.opts) && /FE/.test(inp.head || '') && inp.rows === 6);
   await pr.close();
 }
 

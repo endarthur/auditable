@@ -417,21 +417,58 @@ params:
       col: "FE"
       weight: "SG"</pre>
 <h3>Routines — recipes that run recipes</h3>
-<p>A <b>routine</b> (<code>tool: "routine"</code>) is a recipe file whose steps are other recipes — the month-end sequence as one runnable document. Plain steps run once; an <b>each block</b> runs a group of steps once per <b>row of a parameter table</b>, written inline as rows (<code>- { grade: FE, cutoff: 55 }</code>), as equal-length columns (zipped, never a cross-product), or pulled <code>from:</code> a CSV in the project. <code>$grade</code>-style markers show exactly where each value lands.</p>
-<pre># the month-end pack — reports/&lt;date&gt;/ fills with dated TSVs
-name: "Month-end"
+<p>A <b>routine</b> chains saved recipes into one runnable document: refresh the calc columns, then a drift check for each grade of interest, every table filed under <code>reports/</code>. It is the month-end close as a file — and you don't have to write it. <b>Tools → Recipes → New routine…</b> opens the routine editor; what it saves is a small YAML file you can read back in one glance.</p>
+<figure>
+  <img src="shots/routineeditor.png" alt="The routine editor: name, guard checkbox, report naming, a step list, and a for-each parameter table with grade rows FE and SIO2, with the Preview pane listing every step and its report path.">
+  <figcaption>The routine editor. The <b>for each row</b> table is the heart of it — variables are columns, runs are rows. <b>Preview</b> lists every step and every report path before anything runs.</figcaption>
+</figure>
+<p>Steps come in two shapes. A plain step runs one recipe, optionally layering <b>overrides</b> on top (a different cutoff count, a series pointed at another column — the <b>⋯</b> button on a step). A <b>for-each block</b> runs its steps once per <b>row of a parameter table</b>: add a variable for each thing that changes, a row for each run, and write <code>"$grade"</code> in a step wherever the value should land. <b>+ row</b> duplicates the last run so you only edit what differs. There is no scripting here — expansion is plain substitution, so the whole run is knowable before anything executes. That is exactly what <b>Preview</b> shows, and what the optional <b>guard</b> checks: stop before step one if any report it would write already exists.</p>
+<p>The editor writes a file like this (block style, strings quoted — hand-edit or write them from scratch if you prefer):</p>
+<pre># micro recipe — routine. Hand-edit freely; series reference layers by NAME.
+name: "month-end"
 tool: "routine"
 params:
+  output:
+    prefix: "m-"
   steps:
-    - guard: "no-overwrites"        # optional: stop BEFORE running if outputs exist
+    - guard: "no-overwrites"
     - recipe: "refresh calc columns"
     - each:
-        - { grade: FE }
-        - { grade: SIO2 }
+        - grade: "FE"
+        - grade: "SIO2"
       steps:
         - recipe: "drift check"
-          series: [{ layer: "model.parquet", col: $grade }]</pre>
-<p>Analysis steps write their tables to <code>reports/&lt;date&gt;/&lt;step&gt;.tsv</code> in the project — dated folders diff month over month — with <code>output: {dir, prefix, suffix}</code> to steer the naming. Routines never prompt mid-run: every referenced recipe and layer is checked up front, and a failed step stops visibly with its window open. Expansion is a macro, not a program — the whole run is enumerable before anything executes, which is what the guard checks.</p>
+          series:
+            - layer: "model_A.csv"
+              col: "$grade"</pre>
+<p>The parameter table has two more spellings for hand-writers: <b>equal-length columns</b> (<code>each:</code> holding one list per variable, zipped row by row — never a cross-product; unequal lengths are an error, not a guess) and <code>from: "params.csv"</code>, which reads the rows from a table file in the project — keep the quarter's run matrix as a CSV and the routine stays two lines.</p>
+<p>Analysis steps (grade–tonnage, swath, stats) write their tables to <code>reports/&lt;date&gt;/&lt;step&gt;.tsv</code> — dated folders diff month over month — and <code>output:</code> takes <code>dir</code>, <code>prefix</code>, and <code>suffix</code> to steer the naming. Calc-column, interpolation, and figure steps run their engines directly. Routines never prompt mid-run: every referenced recipe and layer is checked up front and missing ones are named before anything starts; a failed step stops the routine visibly, its window left open for inspection.</p>
+<h3>Ask-me-first recipes — <code>inputs:</code></h3>
+<figure>
+  <img src="shots/inputsdialog.png" alt="A small generated dialog with three questions — block model, grade column, and cutoff count — and a Run button.">
+  <figcaption>A recipe with <code>inputs:</code> asks its questions first. The column picker follows whichever layer is chosen above it.</figcaption>
+</figure>
+<p>Any recipe or routine can declare <code>inputs:</code> — a short list of questions. Running it then opens a small generated form instead of executing immediately: pick the model, pick the column, accept or change the defaults, press <b>Run</b>. The answers flow into the recipe through the same <code>$name</code> markers the for-each table uses, so one saved setup serves every model and grade in the project.</p>
+<pre>name: "GT — any model"
+tool: "gt"
+inputs:
+  - name: "model"
+    label: "Block model"
+    type: "layer"
+  - name: "grade"
+    label: "Grade column"
+    type: "column"
+    of: "model"
+  - name: "ncut"
+    label: "How many cutoffs"
+    type: "number"
+    default: 15
+params:
+  nCut: "$ncut"
+  series:
+    - layer: "$model"
+      col: "$grade"</pre>
+<p>Five input types: <code>text</code> (the default), <code>number</code>, <code>choice</code> (with <code>options:</code>), <code>layer</code> (a picker over the loaded layers), and <code>column</code> (a picker over the columns of the layer named by <code>of:</code> — it re-fills live when that layer changes). A marker that is exactly <code>"$name"</code> lands <b>typed</b> — a number input arrives as a number — while markers embedded in longer text become text. Answers are remembered for the session, so the next <b>Run…</b> starts from where you left it.</p>
 <h3>Mesh export</h3>
 <p><b>Export mesh…</b> (right-click a mesh layer; multi-selections and groups get <b>Export N meshes…</b>) writes <b>OBJ</b>, <b>PLY</b>, <b>MSH</b> (Leapfrog/ARANZ), or <b>LFM</b>. OBJ and LFM are multi-mesh — one named object per layer, with each layer's tint carried as the LFM color — while PLY and MSH merge multiple layers into one mesh. Exports re-read the source geometry, so coordinates leave in <b>full double precision</b> (the PLY writer uses <code>double</code> — at UTM northings, float32 would cost half a meter). A Datamine wireframe pair in, an LFM out: micro is also a mesh-format converter.</p>
 
@@ -614,6 +651,8 @@ params:
 <p style="margin:.15em 0">reconcile (Δ map) — §9</p>
 <p style="margin:.15em 0">rename (batch) — §2</p>
 <p style="margin:.15em 0">routines (recipes of recipes) — §18</p>
+<p style="margin:.15em 0">routine editor — §18</p>
+<p style="margin:.15em 0">inputs (ask-me-first recipes) — §18</p>
 <p style="margin:.15em 0">scenes — §18</p>
 <p style="margin:.15em 0">Sealed — §20, C</p>
 <p style="margin:.15em 0">sections — §4</p>
