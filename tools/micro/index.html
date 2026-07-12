@@ -145,6 +145,8 @@
   .fdw .fd-op.click:hover { border-color: var(--bd2); color: var(--text-hi); }
   .fdw select { background: #222; color: var(--text); border: 1px solid var(--bd2); border-radius: 3px; font: inherit; }
   .fdw .fd-opsel { flex: 0 0 auto; color: var(--muted); }
+  .fdw .fd-x { flex: 0 0 auto; margin-left: auto; background: none; border: none; color: var(--dim); font: inherit; font-size: 13px; cursor: pointer; padding: 0 3px; }
+  .fdw .fd-x:hover { color: #b0563a; }
   .cw-wrap { display: flex; font-family: var(--mono); font-size: 12px; color: var(--text); }
   .cw-rail { flex: 0 0 150px; border-right: 1px solid var(--bd2); overflow-y: auto; padding: 6px 0; }
   .cw-item { padding: 4px 10px; cursor: pointer; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -894,7 +896,7 @@ function currentSection() {
     // H is big enough to swallow any scene yet small enough that the f32
     // uniform still places the near face exactly at d0.
     const H = Math.max(1e5, 8 * (hi - lo || 1));
-    return { on: true, n, d: clip === 'front' ? d0 + H : d0 - H, half: H, d0, clip };
+    return { on: true, n, d: clip === 'front' ? d0 + H : d0 - H, half: H, d0, clip, traceHalf: Math.max(0.01, +$('#secHalf').value) };   // meshes trace at the TRUE plane, this wide
   }
   return { on: true, n, d: d0, half: Math.max(0.01, +$('#secHalf').value), d0, clip: 'slab' };
 }
@@ -7861,8 +7863,7 @@ function fdSkeleton() {
   const btns = document.createElement('span');
   const rst = document.createElement('button'); rst.textContent = 'reset'; rst.title = 'restore the filter as it was when the drawer opened';
   rst.onclick = () => { _fdText = _fdSnap; fdApply(_fdSnap); clearTimeout(_fdTimer); applyBlockFilter(_fdSnap); renderFilterDrawer(); };
-  const cls = document.createElement('button'); cls.textContent = '×'; cls.onclick = () => toggleFilterDrawer(false);
-  btns.append(rst, document.createTextNode(' '), cls);
+  btns.append(rst);                                        // no ×: the toolbar ▾/▴ toggles the drawer (an × reads as "clear")
   head.append(ttl, btns);
   const edwrap = document.createElement('div'); edwrap.className = 'fd-edwrap';
   const edhl = document.createElement('div'); edhl.id = 'fdExprHL'; edhl.className = 'exprhl'; edhl.setAttribute('aria-hidden', 'true');
@@ -7954,9 +7955,10 @@ function fdAddRow(AL, insert, defJoin, compact) {
 // addRow? } — the filter drawer's default edits the filter text; the calc
 // window passes its own so the SAME widgets edit a calc expression instead.
 const FD_CTX = { push: (sp) => _fdSpans.push(sp), replace: (sp, txt) => fdReplace(sp, txt), rerender: () => renderFilterDrawer(), addRow: (...a2) => fdAddRow(...a2) };
-function fdRenderChain(d, n, AL, ctx) {
+function fdRenderChain(d, n, AL, ctx, delSelf) {
   const cx = ctx || FD_CTX;
   const ch = fdChain(n);
+  const extOf = (x) => (x && x.gStart != null ? { start: x.gStart, end: x.gEnd } : (x && x.start != null ? { start: x.start, end: x.end } : null));
   ch.items.forEach((it, i2) => {
     if (i2 > 0) {
       const j = ch.joiners[i2 - 1];
@@ -7968,21 +7970,34 @@ function fdRenderChain(d, n, AL, ctx) {
       }
       d.appendChild(o);
     }
+    // this item's REMOVE: the clause + its adjoining joiner; a lone item
+    // cascades to delSelf (the parent removes the whole group / clears)
+    let del = null;
+    if (ch.items.length === 1) del = delSelf || null;
+    else {
+      const ext = extOf(it);
+      const j = i2 > 0 ? ch.joiners[i2 - 1] : ch.joiners[0];
+      if (ext && j && j.start != null) {
+        const cut = i2 > 0 ? { start: j.start, end: ext.end } : { start: ext.start, end: j.end };
+        cx.push(cut);
+        del = () => { cx.replace(cut, ''); cx.rerender(); };
+      }
+    }
     const nested = it && (it.t === 'and' || it.t === 'or');
     if (nested || (it && it.gStart != null)) {
       const g = document.createElement('div'); g.className = 'fd-group';
-      if (nested) fdRenderChain(g, it, AL, cx);
-      else fdRenderLeaf(g, it, AL, cx);
+      if (nested) fdRenderChain(g, it, AL, cx, del);
+      else fdRenderLeaf(g, it, AL, cx, del);
       if (it.gStart != null && AL && layerTableHeader(AL) && cx.addRow) {
         const at = { start: it.gEnd - 1, end: it.gEnd - 1 };   // just before the group's ')'
         cx.push(at);
         g.appendChild(cx.addRow(AL, (clause, join) => { cx.replace(at, ' ' + join + ' ' + clause); }, it.t === 'or' ? 'or' : 'and', true));
       }
       d.appendChild(g);
-    } else fdRenderLeaf(d, it, AL, cx);
+    } else fdRenderLeaf(d, it, AL, cx, del);
   });
 }
-function fdRenderLeaf(d, leaf, AL, ctx) {
+function fdRenderLeaf(d, leaf, AL, ctx, del) {
   const cx = ctx || FD_CTX;
   const spec = fdLeafSpec(leaf);
   const row = document.createElement('div'); row.className = 'fd-row';
@@ -8069,6 +8084,11 @@ function fdRenderLeaf(d, leaf, AL, ctx) {
   } else {
     const x = document.createElement('span'); x.className = 'fd-expr'; x.textContent = spec.label || 'expression'; row.appendChild(x);
   }
+  if (del) {
+    const xb = document.createElement('button'); xb.className = 'fd-x'; xb.textContent = '×'; xb.title = 'remove this condition';
+    xb.onclick = del;
+    row.appendChild(xb);
+  }
   d.appendChild(row);
 }
 function renderFilterDrawer() {
@@ -8083,7 +8103,7 @@ function renderFilterDrawer() {
   let ast = null; if (src.trim()) { try { ast = parse(src); } catch { ast = null; } }
   if (src.trim() && !ast) { const r = document.createElement('div'); r.className = 'fd-row'; r.innerHTML = '<span class="fd-expr">can’t parse — fix the text first</span>'; d.appendChild(r); }
   if (!src.trim()) { const r = document.createElement('div'); r.className = 'fd-hint'; r.textContent = 'no filter yet — type an expression above, or add a condition below'; d.appendChild(r); }
-  if (ast) fdRenderChain(d, ast, AL);
+  if (ast) fdRenderChain(d, ast, AL, null, () => { fdApply(''); clearTimeout(_fdTimer); applyBlockFilter(''); renderFilterDrawer(); });
   // the top-level add: joiner picker incl. bracket seeds — `and ( … )` opens a
   // new group after the current text; `( all ) or …` wraps EVERYTHING so far
   // and starts an alternative branch. A trailing # comment forces a newline

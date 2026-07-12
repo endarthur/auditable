@@ -230,9 +230,18 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     if (!sec || m === false) return m === false ? null : sec;
     if ((m === 'front' || m === 'behind') && sec.d0 !== undefined) {
       const H = Math.max(1e5, 8 * (sec.half || 1));
-      return { ...sec, d: m === 'front' ? sec.d0 + H : sec.d0 - H, half: H, clip: m };
+      return { ...sec, d: m === 'front' ? sec.d0 + H : sec.d0 - H, half: H, clip: m, traceHalf: sec.traceHalf || (sec.half < 9e4 ? sec.half : 1) };
     }
     return sec;
+  };
+  // meshes render their section as a TRACE flattened onto the wall — for a
+  // half-space clip the slab half is ~1e5 (it swallows the scene), so the
+  // trace band narrows to the TRUE plane ± traceHalf; slab sections already
+  // carry the right width
+  const meshSecOf = (ls, sec) => {
+    const s2 = layerSecOf(ls, sec);
+    if (!s2 || !(s2.clip === 'front' || s2.clip === 'behind') || s2.d0 === undefined) return s2;
+    return { ...s2, d: s2.d0, half: Math.max(0.01, s2.traceHalf || 1) };
   };
   function layerOf(id) {
     let l = layers.get(id);
@@ -672,7 +681,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         for (const [id, group] of byLayer(msh)) {
           if (!group.some((c) => moving || c.cursor === 0)) continue;
           const ls = layerOf(id);
-          meshPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: layerSecOf(ls, sec),
+          meshPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: meshSecOf(ls, sec),
             vcolor: group.some((c) => c.hasColor), vnormal: group.some((c) => c.hasNormal) });   // heightfield drape + smooth normals
           for (const c of group) {
             if (!(moving || c.cursor === 0)) continue;
@@ -691,7 +700,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       if (soup.length) {
         for (const [id, group] of byLayer(soup)) {
           const ls = layerOf(id);
-          soupPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: layerSecOf(ls, sec) });
+          soupPipe.begin(cam, { tint: ls.meshTint, opacity: ls.meshOpacity, section: meshSecOf(ls, sec) });
           for (const c of group) {
             const [first, k] = allot(c);
             if (k > 0) {
