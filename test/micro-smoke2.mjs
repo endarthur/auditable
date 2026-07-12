@@ -484,92 +484,91 @@ await p.close();
 //     of interpolateLattice on synthetic points, convention-free where it matters ═══
 {
   const pi = await mkPage('sm2interp');
-  // a lattice of samples carrying a pure x-ramp field (v = x) → IDW must reproduce it
+  // samples carrying a pure x-ramp field (v = x) → IDW at query points must reproduce it
   const lin = await pi.evaluate(async () => {
     const px = [], py = [], pz = [], pv = [];
     for (let x = 0; x <= 100; x += 20) for (let y = 0; y <= 100; y += 20) { px.push(x); py.push(y); pz.push(0); pv.push(x); }
     const pts = { px: Float64Array.from(px), py: Float64Array.from(py), pz: Float64Array.from(pz), pv: Float64Array.from(pv) };
-    const geom = { x0: 0, y0: 100, z0: 0, dx: 10, dy: 10, dz: 10, nx: 11, ny: 11, nz: 1 };
-    const idw = await window._micro.interpolateLattice({ pts, geom, mode2d: true, method: 'idw', power: 2, ranges: [40, 40, 40], orient: {}, minPts: 1, maxPts: 24 });
-    const at = (i, j) => idw[j * 11 + i];                                // node x=i*10, y=100−j*10
-    const nn = await window._micro.interpolateLattice({ pts, geom, mode2d: true, method: 'nn', ranges: [40, 40, 40], orient: {}, minPts: 1, maxPts: 24 });
-    return { x10: at(1, 5), x50: at(5, 5), x90: at(9, 5), nn40: nn[4 * 11 + 4], sampleVals: [...new Set(pv)] };
+    const idw = await window._micro.estimateAtPoints({ pts, qx: Float64Array.from([10, 50, 90]), qy: Float64Array.from([50, 50, 50]), qz: null, method: 'idw', power: 2, ranges: [40, 40, 40], orient: {}, minPts: 1, maxPts: 24 });
+    const nn = await window._micro.estimateAtPoints({ pts, qx: Float64Array.from([40]), qy: Float64Array.from([60]), qz: null, method: 'nn', ranges: [40, 40, 40], orient: {}, minPts: 1, maxPts: 24 });
+    return { x10: idw[0], x50: idw[1], x90: idw[2], nn40: nn[0], sampleVals: [...new Set(pv)] };
   });
   chk(`IDW reproduces a linear field (x=10→${lin.x10.toFixed(1)}, x=50→${lin.x50.toFixed(1)}, x=90→${lin.x90.toFixed(1)})`,
     Math.abs(lin.x10 - 10) < 4 && Math.abs(lin.x50 - 50) < 2 && Math.abs(lin.x90 - 90) < 4);
-  chk(`NN returns the nearest sample's exact value (node (40,60) → ${lin.nn40})`, lin.nn40 === 40 && lin.sampleVals.includes(lin.nn40));
+  chk(`NN returns the nearest sample's exact value ((40,60) → ${lin.nn40})`, lin.nn40 === 40 && lin.sampleVals.includes(lin.nn40));
   // anisotropy steers the neighbourhood: query at origin, B(0,50)=100 due N, C(50,0)=20 due E.
   // a long/thin ellipse (major 60, minor 12) major→N includes only B; major→E only C.
   const aniso = await pi.evaluate(async () => {
     const pts = { px: Float64Array.from([0, 50]), py: Float64Array.from([50, 0]), pz: Float64Array.from([0, 0]), pv: Float64Array.from([100, 20]) };
-    const geom = { x0: 0, y0: 0, z0: 0, dx: 10, dy: 10, dz: 10, nx: 1, ny: 1, nz: 1 };
-    const run = (orient) => window._micro.interpolateLattice({ pts, geom, mode2d: true, method: 'idw', power: 2, ranges: [60, 12, 12], orient, minPts: 1, maxPts: 8 });
-    const towardB = (await run({ dipAzimuth: 90 }))[0];                  // major N–S → reaches B only
-    const towardC = (await run({ dipAzimuth: 0 }))[0];                   // major E–W → reaches C only
-    const iso = (await window._micro.interpolateLattice({ pts, geom, mode2d: true, method: 'idw', power: 2, ranges: [60, 60, 60], orient: {}, minPts: 1, maxPts: 8 }))[0];
+    const qx = Float64Array.from([0]), qy = Float64Array.from([0]);
+    const run = (orient, ranges) => window._micro.estimateAtPoints({ pts, qx, qy, qz: null, method: 'idw', power: 2, ranges, orient, minPts: 1, maxPts: 8 });
+    const towardB = (await run({ dipAzimuth: 90 }, [60, 12, 12]))[0];   // major N–S → reaches B only
+    const towardC = (await run({ dipAzimuth: 0 }, [60, 12, 12]))[0];    // major E–W → reaches C only
+    const iso = (await run({}, [60, 60, 60]))[0];
     return { towardB, towardC, iso };
   });
   chk(`anisotropy steers the neighbourhood (major→B ${aniso.towardB.toFixed(1)}, major→C ${aniso.towardC.toFixed(1)}, iso ${aniso.iso.toFixed(1)})`,
     Math.abs(aniso.towardB - 100) < 1 && Math.abs(aniso.towardC - 20) < 1 && Math.abs(aniso.iso - 60) < 1);
-  // output filter: blank result cells whose (X,Y,Z,value) fails the predicate
+  // output filter: blank result cells whose (X,Y,Z,value) fails the predicate (per record)
   const outf = await pi.evaluate(() => {
-    const vals = new Float32Array([10, 20, 30, 40]);                   // a 2×2 grid at z=0
-    const geom = { x0: 0, y0: 10, z0: 0, dx: 10, dy: 10, dz: 10, nx: 2, ny: 2, nz: 1 };
-    window._micro.applyOutputFilter(vals, geom, true, 'VAL', 'VAL > 25');
+    const vals = new Float32Array([10, 20, 30, 40]);
+    window._micro.applyOutputFilterPoints(vals, Float64Array.from([0, 10, 0, 10]), Float64Array.from([0, 0, 10, 10]), null, 'VAL', 'VAL > 25');
     return [...vals].map((v) => (Number.isNaN(v) ? 'x' : v));
   });
   chk(`output filter blanks cells failing the predicate (VAL>25 → ${JSON.stringify(outf)})`, outf[0] === 'x' && outf[1] === 'x' && outf[2] === 30 && outf[3] === 40);
   await pi.close();
 }
 
-// ═══ 13. scatter → grid INTEGRATION: a real points layer → the interpolate dialog
-//     → a produced grid layer (reader + dialog wiring + produce-layer + lineage) ═══
+// ═══ 13. INTERPOLATE ONTO A TARGET: source samples → an existing block model →
+//     a materialized column ON the target (decoupled from grid creation) ═══
 {
   const pg = await mkPage('sm2interp2');
-  const csv = await pg.evaluate(() => {
-    let s = 'X,Y,Z,GRADE\n';                                            // off-lattice (deterministic jitter) so it opens as POINTS, not a grid
+  const src = await pg.evaluate(() => {
+    let s = 'X,Y,Z,GRADE\n';                                            // off-lattice jitter → opens as POINTS; GRADE = x
     for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) { const x = i * 20 + ((i * 3 + j * 7) % 5 - 2) * 1.5, y = j * 20 + ((i * 5 + j * 2) % 5 - 2) * 1.5; s += `${x.toFixed(2)},${y.toFixed(2)},0,${x.toFixed(2)}\n`; }
     return s;
   });
-  await pg.evaluate((c) => window._micro.openBlob(new Blob([c]), 'samples.csv', 'replace'), csv);
-  await pg.waitForFunction(() => window._micro.layers().length && window._micro.layers()[0].docs && (window._micro.layers()[0].docs.blockDoc || window._micro.layers()[0].docs.gridDoc), null, { timeout: 30000 });
-  // the layer-agnostic reader pulls x/y + the GRADE column
-  const rd = await pg.evaluate(async () => { const L = window._micro.layers()[0]; const pts = await window._micro.readLayerPoints(L, 'GRADE'); return { n: pts ? pts.px.length : 0, matchesX: pts ? Math.abs(pts.pv[0] - pts.px[0]) < 0.01 : false }; });
-  chk(`readLayerPoints reads a real layer (${rd.n} points, GRADE == X)`, rd.n === 36 && rd.matchesX);
-  // open the interpolate dialog pre-set to this source and assert the estimator UI rendered
+  await pg.evaluate((c) => window._micro.openBlob(new Blob([c]), 'samples.csv', 'replace'), src);
+  await pg.waitForFunction(() => window._micro.layers().length === 1, null, { timeout: 30000 });
+  const tgt = await pg.evaluate(() => { let s = 'X,Y,Z,DUMMY\n'; for (let i = 0; i <= 10; i++) for (let j = 0; j <= 10; j++) s += `${i * 10},${j * 10},0,0\n`; return s; });   // a REGULAR 11×11 block model target
+  await pg.evaluate((c) => window._micro.openBlob(new Blob([c]), 'model.csv', 'add'), tgt);
+  await pg.waitForFunction(() => window._micro.layers().some((L) => L.name === 'model.csv' && L.docs.blockDoc), null, { timeout: 30000 });
+  // the readers: source samples + the TARGET's own record coordinates
+  const rd = await pg.evaluate(async () => {
+    const S = window._micro.layers().find((x) => x.name === 'samples.csv'), T = window._micro.layers().find((x) => x.name === 'model.csv');
+    const pts = await window._micro.readLayerPoints(S, 'GRADE'); const tq = await window._micro.readLayerCoords(T);
+    return { sn: pts.px.length, srcX: Math.abs(pts.pv[0] - pts.px[0]) < 0.01, tn: tq.n };
+  });
+  chk(`readers: ${rd.sn} source samples (GRADE==X) + ${rd.tn} target records`, rd.sn === 36 && rd.srcX && rd.tn === 121);
+  // the standalone dialog shows Source + onto-target + method + range + output column
   const ui = await pg.evaluate(() => {
-    const L = window._micro.layers()[0]; window._micro.openNewDialog({ estimate: true, srcLayer: L.id });
-    const body = document.querySelector('#ngDlgBody'); const txt = body.textContent;
-    return { shown: document.querySelector('#ngDlg').classList.contains('show'), hasRange: /range \(m\)/.test(txt), hasMethod: /IDW/.test(txt) && /nearest/.test(txt), hasSource: /from/.test(txt) };
+    window._micro.openInterpolateDialog(); const txt = document.querySelector('#ngDlgBody').textContent;
+    return { shown: document.querySelector('#ngDlg').classList.contains('show'), src: /source/.test(txt), onto: /onto/.test(txt), method: /IDW/.test(txt) && /nearest/.test(txt), range: /range \(m\)/.test(txt), col: /column/.test(txt) };
   });
-  chk(`interpolate dialog shows the estimator UI (source + method + range)`, ui.shown && ui.hasRange && ui.hasMethod && ui.hasSource);
-  // Run it end-to-end (defaults: IDW, range 50, cover all, cell 10) → a produced grid layer
-  await pg.evaluate(() => document.querySelector('#ngGo').click());
-  await pg.waitForFunction(() => window._micro.layers().some((L) => L.name === 'estimate_grid.asc' && L.docs.gridDoc), null, { timeout: 30000 });
-  const out = await pg.evaluate(() => { const L = window._micro.layers().find((x) => x.name === 'estimate_grid.asc'); return { grid: !!(L.docs.gridDoc && L.docs.gridDoc.grid), lin: L.lineage && L.lineage.op, method: L.lineage && L.lineage.params && L.lineage.params.method }; });
-  chk(`interpolate dialog produces a grid layer with lineage (op ${out.lin}, method ${out.method})`, out.grid && out.lin === 'interpolate' && out.method === 'idw');
-  // INPUT filter: the reader drops samples failing the predicate before estimating
-  const inf = await pg.evaluate(async () => {
-    const L = window._micro.layers().find((x) => x.name === 'samples.csv');
-    const all = await window._micro.readLayerPoints(L, 'GRADE');
-    const hi = await window._micro.readLayerPoints(L, 'GRADE', null, 'GRADE > 50');
-    return { all: all.px.length, hi: hi.px.length, minKept: Math.min(...hi.pv) };
+  chk(`interpolate dialog: source + onto + method + range + column`, ui.shown && ui.src && ui.onto && ui.method && ui.range && ui.col);
+  await pg.evaluate(() => document.querySelector('#ngCancel').click());
+  // estimate GRADE onto the model → a materialized column ON the target (the recipe-run path)
+  const out = await pg.evaluate(async () => {
+    const cfg = { srcName: 'samples.csv', srcCol: 'GRADE', tgtName: 'model.csv', method: 'idw', power: 2, aniso: false, rMaj: 60, rSemi: 60, rMin: 60, dip: 0, dipAz: 0, pitch: 0, minPts: 1, maxPts: 12, inFilter: '', outFilter: '', outName: 'GRADE_IDW' };
+    await window._micro.estimateOntoTarget(cfg, () => {});
+    const T = window._micro.layers().find((x) => x.name === 'model.csv');
+    const col = window._micro.matColList(T).find((c) => c.name === 'GRADE_IDW');
+    const inOpts = [...document.querySelectorAll('#colorBy option')].some((o) => o.value === 'paint:GRADE_IDW');
+    const lin = col && col.lineage;                                    // the estimate's provenance rides on the COLUMN, not the target layer
+    return { has: !!col, mat: !!(col && col.mat), at50: col ? col.fvalues[5 * 11 + 5] : null, op: lin && lin.op, target: lin && lin.params.target, column: lin && lin.params.column, colorSel: T.colorSel, inOpts };
   });
-  chk(`input filter drops samples before estimating (${inf.all} → ${inf.hi} with GRADE>50, min kept ${inf.minKept.toFixed(1)})`, inf.hi < inf.all && inf.hi > 0 && inf.minKept > 50);
-  // RECIPE run path: runEstimate from a plain config (what the `interp` recipe verb calls),
-  // with input + output filters, resolving the source BY NAME → a produced grid with lineage
-  const rec = await pg.evaluate(async () => {
-    const cfg = { srcName: 'samples.csv', srcCol: 'GRADE', method: 'idw', power: 2, aniso: false, rMaj: 60, rSemi: 60, rMin: 60, dip: 0, dipAz: 0, pitch: 0, minPts: 1, maxPts: 12, inFilter: 'GRADE > 20', outFilter: 'GRADE > 40', valName: 'GRADE', isBM: false, geom: { x0: 0, y0: 100, z0: 0, dx: 10, dy: 10, dz: 10, nx: 11, ny: 11, nz: 1 } };
-    const before = window._micro.layers().length;
-    await window._micro.runEstimate(cfg, () => {});
-    const L = window._micro.layers().find((x) => x.name === 'estimate_grid.asc' && x !== window._micro.layers()[0]);
-    const L2 = window._micro.layers()[window._micro.layers().length - 1];   // the just-added layer
-    const g = L2.docs.gridDoc && L2.docs.gridDoc.grid;
-    let valid = 0, blank = 0; if (g && g.data) for (const v of g.data) (v === g.nodata ? blank++ : valid++);
-    return { grew: window._micro.layers().length > before, op: L2.lineage && L2.lineage.op, inF: L2.lineage.params.inFilter, outF: L2.lineage.params.outFilter, valid, blank };
+  chk(`estimate lands a materialized column ON the target (mat ${out.mat}, block(50,50)≈${(out.at50 || 0).toFixed(1)}, coloured ${out.colorSel})`,
+    out.has && out.mat && Math.abs(out.at50 - 50) < 6 && out.op === 'interpolate' && out.target === 'model.csv' && out.column === 'GRADE_IDW' && out.colorSel === 'paint:GRADE_IDW' && out.inOpts);
+  // input + output filters compose: drop low samples, blank low results → some blocks unestimated
+  const flt = await pg.evaluate(async () => {
+    const cfg = { srcName: 'samples.csv', srcCol: 'GRADE', tgtName: 'model.csv', method: 'idw', power: 2, aniso: false, rMaj: 80, rSemi: 80, rMin: 80, dip: 0, dipAz: 0, pitch: 0, minPts: 1, maxPts: 12, inFilter: 'GRADE > 20', outFilter: 'GRADE_F > 40', outName: 'GRADE_F' };
+    await window._micro.estimateOntoTarget(cfg, () => {});
+    const T = window._micro.layers().find((x) => x.name === 'model.csv'); const col = window._micro.matColList(T).find((c) => c.name === 'GRADE_F');
+    let valid = 0, blank = 0; for (const v of col.fvalues) (Number.isFinite(v) ? valid++ : blank++);
+    return { inF: col.lineage.params.inFilter, outF: col.lineage.params.outFilter, valid, blank, min: col.min };
   });
-  chk(`recipe run path (runEstimate) produces a grid with both filters in lineage (in "${rec.inF}", out "${rec.outF}"; ${rec.valid} valid · ${rec.blank} blank)`,
-    rec.grew && rec.op === 'interpolate' && rec.inF === 'GRADE > 20' && rec.outF === 'GRADE > 40' && rec.valid > 0 && rec.blank > 0);
+  chk(`filters compose on the target (in "${flt.inF}", out "${flt.outF}"; ${flt.valid} valid · ${flt.blank} blank, min ${(flt.min || 0).toFixed(1)})`,
+    flt.inF === 'GRADE > 20' && flt.outF === 'GRADE_F > 40' && flt.valid > 0 && flt.blank > 0 && flt.min > 40);
   await pg.close();
 }
 

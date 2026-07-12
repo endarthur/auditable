@@ -3362,33 +3362,21 @@ async function renameRecipe(r) {
 // run (or just open configured): resolve the primary layer from the first
 // series; a missing primary gets the remap menu — every series whose layer is
 // missing then falls back to the substitute
-// rebuild the New… dialog state from a saved interpolate recipe (target as explicit
-// params so replay is exact; source resolved by name)
-function interpDlgFromParams(p, srcLayer) {
-  const g = p.geom || {};
+// rebuild the interpolate dialog state from a saved recipe (source + target by name)
+function interpDlgFromParams(p, srcLayer, tgtLayer) {
   return {
-    type: p.isBM ? 'block' : 'grid', mode: 'params',
-    x0: g.x0, y0: g.y0, z0: g.z0, dx: g.dx, dy: g.dy, dz: g.dz, nx: g.nx, ny: g.ny, nz: g.nz,
-    fill: 0, valName: p.valName || 'VAL', align: false, ax: 0, ay: 0, az: 0, res: 'finest', compatSel: new Set(),
-    fillMode: 'estimate', srcLayer, srcCol: p.srcCol, method: p.method || 'idw', power: p.power != null ? p.power : 2,
+    kind: 'interp', srcLayer, srcCol: p.srcCol, tgtLayer, method: p.method || 'idw', power: p.power != null ? p.power : 2,
     rMaj: p.rMaj, rSemi: p.rSemi, rMin: p.rMin, aniso: !!p.aniso, dip: p.dip || 0, dipAz: p.dipAz || 0, pitch: p.pitch || 0,
-    minPts: p.minPts != null ? p.minPts : 1, maxPts: p.maxPts != null ? p.maxPts : 12, inFilter: p.inFilter || '', outFilter: p.outFilter || '',
+    minPts: p.minPts != null ? p.minPts : 1, maxPts: p.maxPts != null ? p.maxPts : 12, inFilter: p.inFilter || '', outFilter: p.outFilter || '', outName: p.outName || '',
   };
 }
 function runInterpRecipe(r, andRun) {
   const p = r.params;
-  const go = (L) => {
-    if (andRun) runEstimate({ ...p, srcName: L.name }, (m) => { $('#meta').textContent = m; }).then(() => { $('#meta').textContent = `recipe “${r.name}”: done`; }).catch((e) => { $('#meta').textContent = `recipe “${r.name}”: ${e.message}`; });
-    else { _ngDlg = interpDlgFromParams(p, L.id); renderNewDialog(); $('#ngDlg').classList.add('show'); }
-  };
-  const L = _layers.find((x) => x.name === p.srcName);
-  if (L) { go(L); return; }
-  const cands = ngPointLayers();
-  if (!cands.length) { $('#meta').textContent = `recipe “${r.name}”: wants “${p.srcName}” and no point source is loaded`; return; }
-  setTimeout(() => menuXY(innerWidth / 2 - 140, innerHeight / 3, [
-    ...cands.map((c) => ({ label: `“${r.name}” wants ${p.srcName} — use ${c.label || c.name}`, action: () => go(c) })),
-    { label: 'Cancel', action: () => {} },
-  ]), 0);
+  const src = _layers.find((x) => x.name === p.srcName), tgt = _layers.find((x) => x.name === p.tgtName);
+  if (!src) { $('#meta').textContent = `recipe “${r.name}”: source “${p.srcName}” not loaded`; return; }
+  if (!tgt) { $('#meta').textContent = `recipe “${r.name}”: target “${p.tgtName}” not loaded`; return; }
+  if (andRun) estimateOntoTarget(p, (m) => { $('#meta').textContent = m; }).catch((e) => { $('#meta').textContent = `recipe “${r.name}”: ${e.message}`; });
+  else { const hd = $('#ngDlg .hd span'); if (hd) hd.textContent = 'interpolate → target'; $('#ngGo').textContent = 'Run'; _ngDlg = interpDlgFromParams(p, src.id, tgt.id); renderNewDialog(); $('#ngDlg').classList.add('show'); }
 }
 function runRecipe(r, andRun = true) {
   if (r.tool === 'figure') { runFigureRecipe(r.params); return; }   // camera-based — no layer to resolve
@@ -4695,38 +4683,40 @@ async function readLayerPoints(L, valName, onProgress, filterExpr) {
   return { px: Float64Array.from(px), py: Float64Array.from(py), pz: Float64Array.from(pz), pv: Float64Array.from(pv) };
 }
 // optional OUTPUT filter (@gcu/expr) — null a result cell whose (X,Y,Z,value) fails
-// the predicate. schema is [X,Y,Z,<valName>]; records are passed positionally.
-function applyOutputFilter(values, geom, mode2d, valName, expr) {
+// the predicate, evaluated per record against the target's own coordinates.
+function applyOutputFilterPoints(values, qx, qy, qz, valName, expr) {
   const schema = [{ name: 'X', type: 'number' }, { name: 'Y', type: 'number' }, { name: 'Z', type: 'number' }, { name: valName, type: 'number' }];
   const v = validate(expr, schema); if (!v.ok) throw new Error(`output filter: ${(v.errors[0] && v.errors[0].message) || 'invalid expression'}`);
   const fn = compileBool(expr, schema, { decimal: '.' });
-  const { nx, ny, x0, y0, z0, dx, dy, dz } = geom; const nz = mode2d ? 1 : geom.nz;
-  for (let k = 0; k < nz; k++) { const z = mode2d ? 0 : z0 + k * dz;
-    for (let j = 0; j < ny; j++) { const y = mode2d ? y0 - j * dx : y0 + j * dy;
-      for (let i = 0; i < nx; i++) { const idx = (k * ny + j) * nx + i; const val = values[idx]; if (!Number.isFinite(val)) continue; try { if (!fn([x0 + i * dx, y, z, val])) values[idx] = NaN; } catch { /* keep on eval error */ } } } }
+  for (let i = 0; i < values.length; i++) { const val = values[i]; if (!Number.isFinite(val)) continue; try { if (!fn([qx[i], qy[i], qz ? qz[i] : 0, val])) values[i] = NaN; } catch { /* keep on eval error */ } }
 }
 // interpolate flat points onto a lattice. mode2d → ignore z (plan grid). ranges =
 // [major, semi, minor] (world units); orient = {dip, dipAzimuth, pitch}. Returns a
 // Float32Array (NaN = no estimate: fewer than minPts inside the ellipsoid). Chunked
 // + yields so the UI stays live; a uniform bucket index keeps per-node cost tiny.
-async function interpolateLattice({ pts, geom, mode2d, method, power, ranges, orient, minPts, maxPts, onProgress, signal }) {
+// estimate the source field at an arbitrary list of query points (the TARGET's own
+// locations). qz falsy → 2D (ignore z). Returns a Float32Array aligned to the query
+// arrays (NaN = no estimate: fewer than minPts inside the ellipsoid). A uniform
+// bucket index over the source keeps per-query cost tiny; chunked + yields.
+async function estimateAtPoints({ pts, qx, qy, qz, method, power, ranges, orient, minPts, maxPts, onProgress, signal }) {
   const { px, py, pz, pv } = pts; const N = px.length;
+  const mode2d = !(qz && qz.length);
   const a1 = Math.max(ranges[0], 1e-9), a2 = Math.max(ranges[1], 1e-9), a3 = Math.max(ranges[2], 1e-9);
   const R = _anisApply(_anisRotmat(orient), a2 / a1, a3 / a1); const a1sq = a1 * a1;
   const cell = a1, inv = 1 / cell;                                   // bucket ≈ major range (ellipsoid ⊂ sphere r=major)
   const buckets = new Map(); const bkey = (bx, by, bz) => bx + ',' + by + ',' + bz;
   for (let i = 0; i < N; i++) { const k = bkey(Math.floor(px[i] * inv), Math.floor(py[i] * inv), mode2d ? 0 : Math.floor(pz[i] * inv)); let a = buckets.get(k); if (!a) buckets.set(k, a = []); a.push(i); }
-  const { nx, ny, x0, y0, z0, dx, dy, dz } = geom; const nz = mode2d ? 1 : geom.nz;
-  const out = new Float32Array(nx * ny * nz); const p = power || 2; const mp = minPts || 1, kp = maxPts || 64;
+  const M = qx.length; const out = new Float32Array(M); const p = power || 2; const mp = minPts || 1, kp = maxPts || 64;
   const ci = [], ch = [];                                           // candidate index / h² scratch (reused)
-  const estimate = (qx, qy, qz) => {
+  const estimate = (x, y, z) => {
+    if (!(Number.isFinite(x) && Number.isFinite(y))) return NaN;
     ci.length = 0; ch.length = 0;
-    const bx0 = Math.floor((qx - a1) * inv), bx1 = Math.floor((qx + a1) * inv);
-    const by0 = Math.floor((qy - a1) * inv), by1 = Math.floor((qy + a1) * inv);
-    const bz0 = mode2d ? 0 : Math.floor((qz - a1) * inv), bz1 = mode2d ? 0 : Math.floor((qz + a1) * inv);
+    const bx0 = Math.floor((x - a1) * inv), bx1 = Math.floor((x + a1) * inv);
+    const by0 = Math.floor((y - a1) * inv), by1 = Math.floor((y + a1) * inv);
+    const bz0 = mode2d ? 0 : Math.floor((z - a1) * inv), bz1 = mode2d ? 0 : Math.floor((z + a1) * inv);
     for (let bx = bx0; bx <= bx1; bx++) for (let by = by0; by <= by1; by++) for (let bz = bz0; bz <= bz1; bz++) {
       const arr = buckets.get(bkey(bx, by, bz)); if (!arr) continue;
-      for (const i of arr) { const h2 = _anisSqdist(qx, qy, qz, px[i], py[i], mode2d ? 0 : pz[i], R); if (h2 <= a1sq) { ci.push(i); ch.push(h2); } }
+      for (const i of arr) { const h2 = _anisSqdist(x, y, z, px[i], py[i], mode2d ? 0 : pz[i], R); if (h2 <= a1sq) { ci.push(i); ch.push(h2); } }
     }
     const m = ci.length; if (m < mp) return NaN;
     if (method === 'nn') { let bi = 0, bh = ch[0]; for (let t = 1; t < m; t++) if (ch[t] < bh) { bh = ch[t]; bi = t; } return pv[ci[bi]]; }
@@ -4736,27 +4726,31 @@ async function interpolateLattice({ pts, geom, mode2d, method, power, ranges, or
     for (let t = 0; t < K; t++) { const idx = ord ? ord[t] : t; const h2 = ch[idx]; if (h2 <= 1e-12) return pv[ci[idx]]; const w = 1 / Math.pow(Math.sqrt(h2), p); sw += w; swv += w * pv[ci[idx]]; }
     return sw > 0 ? swv / sw : NaN;
   };
-  if (mode2d) {
-    for (let j = 0; j < ny; j++) { const qy = y0 - j * dx; for (let i = 0; i < nx; i++) out[j * nx + i] = estimate(x0 + i * dx, qy, 0);
-      if ((j & 31) === 0) { if (onProgress) onProgress(j / ny); await new Promise((r) => setTimeout(r)); if (signal && signal.aborted) return out; } }
-  } else {
-    for (let k = 0; k < nz; k++) { const qz = z0 + k * dz;
-      for (let j = 0; j < ny; j++) { const qy = y0 + j * dy; for (let i = 0; i < nx; i++) out[(k * ny + j) * nx + i] = estimate(x0 + i * dx, qy, qz); }
-      if (onProgress) onProgress(k / nz); await new Promise((r) => setTimeout(r)); if (signal && signal.aborted) return out; }
+  for (let i = 0; i < M; i++) {
+    out[i] = estimate(qx[i], qy[i], mode2d ? 0 : qz[i]);
+    if ((i & 16383) === 0) { if (onProgress) onProgress(i / M); await new Promise((r) => setTimeout(r)); if (signal && signal.aborted) return out; }
   }
   return out;
 }
-// a lattice of computed values → a block-model CSV, skipping NaN nodes (no
-// estimate → no block). x0/y0/z0 = block-0 centre. chunked for the UI.
-async function latticeToBlockCsv(geom, values, valName, onProgress) {
-  const { x0, y0, z0, dx, dy, dz, nx, ny, nz } = geom; const parts = [`XC,YC,ZC,${valName}\n`]; let buf = '';
-  for (let k = 0; k < nz; k++) { const z = z0 + k * dz;
-    for (let j = 0; j < ny; j++) { const y = y0 + j * dy;
-      for (let i = 0; i < nx; i++) { const v = values[(k * ny + j) * nx + i]; if (!Number.isFinite(v)) continue; buf += `${(x0 + i * dx).toPrecision(9)},${y.toPrecision(9)},${z.toPrecision(9)},${v}\n`; } }
-    if (buf.length > (1 << 20)) { parts.push(buf); buf = ''; }
-    if (onProgress && (k & 7) === 0) { onProgress(k / nz); await new Promise((r) => setTimeout(r)); }
+// read a TARGET layer's per-record coordinates as flat arrays, aligned by record
+// index (attrRowCountOf) so a materialized column lands on the right records. Grid
+// targets read node centres; table targets read each record's xyz via layerRows.
+async function readLayerCoords(L, onProgress) {
+  if (L.docs && L.docs.gridDoc && !L.docs.blockDoc) {               // grid: node centres (nx×ny, y descends from y0)
+    const g = L.docs.gridDoc.grid; const n = g.nx * g.ny; const qx = new Float64Array(n), qy = new Float64Array(n);
+    const o = frame ? frame.origin : [0, 0, 0];
+    for (let r = 0; r < g.ny; r++) for (let c = 0; c < g.nx; c++) { const k = r * g.nx + c; qx[k] = g.x0 + c * g.dx + o[0]; qy[k] = g.y0 - r * g.dy + o[1]; }
+    return { qx, qy, qz: null, grid: g, n };
   }
-  parts.push(buf); return new Blob(parts, { type: 'text/csv' });
+  const h = layerTableHeader(L); if (!h) return null;
+  const m = h.mapping || {}; if (m.x == null || m.y == null) return null;
+  const n = attrRowCountOf(L) || 0; const qx = new Float64Array(n), qy = new Float64Array(n), qz = m.z != null ? new Float64Array(n) : null;
+  let i = 0, done = 0;
+  for await (const rows of layerRows(L, null)) {
+    for (const r of rows) { if (i >= n) break; qx[i] = +r[m.x]; qy[i] = +r[m.y]; if (qz) qz[i] = +r[m.z]; i++; }
+    done += rows.length; if (onProgress) onProgress(done, n);
+  }
+  return { qx, qy, qz, n: i };
 }
 const surfCellOf = (L) => (L.docs.gridDoc ? L.docs.gridDoc.grid.dx : (L.bboxLocal ? niceStep(Math.max(L.bboxLocal[3] - L.bboxLocal[0], L.bboxLocal[4] - L.bboxLocal[1]) / 400) : 10));
 let _sfDlg = null;
@@ -5074,58 +5068,114 @@ function resolveGeom(d) {
   else { nx = Math.max(1, d.nx | 0); ny = Math.max(1, d.ny | 0); nz = isBM ? Math.max(1, d.nz | 0) : 1; x0 = d.x0; y0 = d.y0; z0 = d.z0; }
   return { isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz };
 }
-// a serializable estimate config (source by NAME so a recipe re-resolves it)
-function estimateCfg(d, gv, srcName) {
-  return { srcName, srcCol: d.srcCol, method: d.method, power: d.power, aniso: d.aniso, rMaj: d.rMaj, rSemi: d.rSemi, rMin: d.rMin, dip: d.dip, dipAz: d.dipAz, pitch: d.pitch, minPts: d.minPts, maxPts: d.maxPts, inFilter: d.inFilter || '', outFilter: d.outFilter || '', valName: d.valName || d.srcCol, isBM: gv.isBM, geom: { x0: gv.x0, y0: gv.y0, z0: gv.z0, dx: gv.dx, dy: gv.dy, dz: gv.dz, nx: gv.nx, ny: gv.ny, nz: gv.nz } };
+// a serializable estimate config (source + target by NAME so a recipe re-resolves them)
+function estimateCfg(d) {
+  const src = layerById(d.srcLayer), tgt = layerById(d.tgtLayer);
+  return { srcName: src ? src.name : null, srcCol: d.srcCol, tgtName: tgt ? tgt.name : null, method: d.method, power: d.power, aniso: d.aniso, rMaj: d.rMaj, rSemi: d.rSemi, rMin: d.rMin, dip: d.dip, dipAz: d.dipAz, pitch: d.pitch, minPts: d.minPts, maxPts: d.maxPts, inFilter: d.inFilter || '', outFilter: d.outFilter || '', outName: d.outName || '' };
 }
-// run an interpolation from a resolved config → a produced grid / block layer.
-// shared by the dialog Run button and the `interp` recipe verb.
-async function runEstimate(cfg, onMsg = () => {}) {
-  const src = _layers.find((L) => L.name === cfg.srcName) || (cfg._srcLayer != null && layerById(cfg._srcLayer)) || null;
+// estimate the source column onto the TARGET's own locations → a materialized column
+// on the target (colour/filter/GT/export it). shared by the dialog Run + `interp` recipe.
+async function estimateOntoTarget(cfg, onMsg = () => {}) {
+  const src = _layers.find((L) => L.name === cfg.srcName);
+  const tgt = _layers.find((L) => L.name === cfg.tgtName);
   if (!src) throw new Error(`source layer “${cfg.srcName}” not loaded`);
-  if (!cfg.srcCol) throw new Error('no value column');
-  onMsg('reading points…');
-  const pts = await readLayerPoints(src, cfg.srcCol, (done) => onMsg(`reading points… ${done.toLocaleString()}`), cfg.inFilter);
-  if (!pts || !pts.px.length) throw new Error(`no usable x/y/${cfg.srcCol} rows${cfg.inFilter && cfg.inFilter.trim() ? ' after the input filter' : ''}`);
+  if (!tgt) throw new Error(`target layer “${cfg.tgtName}” not loaded`);
+  if (!cfg.srcCol) throw new Error('no source value column');
+  const outName = (cfg.outName || `${cfg.srcCol}_${cfg.method}`).trim();
+  onMsg('reading samples…');
+  const pts = await readLayerPoints(src, cfg.srcCol, (done) => onMsg(`reading samples… ${done.toLocaleString()}`), cfg.inFilter);
+  if (!pts || !pts.px.length) throw new Error(`no usable x/y/${cfg.srcCol} samples${cfg.inFilter && cfg.inFilter.trim() ? ' after the input filter' : ''}`);
+  onMsg('reading target…');
+  const tq = await readLayerCoords(tgt, (done) => onMsg(`reading target… ${done.toLocaleString()}`));
+  if (!tq || !tq.n) throw new Error('the target has no queryable locations');
   const ranges = cfg.aniso ? [cfg.rMaj, cfg.rSemi, cfg.rMin] : [cfg.rMaj, cfg.rMaj, cfg.rMaj];
   const orient = cfg.aniso ? { dip: cfg.dip, dipAzimuth: cfg.dipAz, pitch: cfg.pitch } : {};
-  const g = cfg.geom, isBM = cfg.isBM;
-  const geom = { x0: g.x0, y0: g.y0, z0: g.z0, dx: g.dx, dy: isBM ? g.dy : g.dx, dz: g.dz, nx: g.nx, ny: g.ny, nz: g.nz };
-  const values = await interpolateLattice({ pts, geom, mode2d: !isBM, method: cfg.method, power: cfg.power, ranges, orient, minPts: cfg.minPts, maxPts: cfg.maxPts, onProgress: (f) => onMsg(`estimating ${Math.round(f * 100)}%…`) });
-  const valName = cfg.valName || cfg.srcCol;
-  if (cfg.outFilter && cfg.outFilter.trim()) applyOutputFilter(values, geom, !isBM, valName, cfg.outFilter);
-  const lin = mkLineage('interpolate', { method: cfg.method, power: cfg.method === 'idw' ? cfg.power : undefined, ranges, orient: cfg.aniso ? orient : undefined, source: `${cfg.srcName}:${cfg.srcCol}`, samples: pts.px.length, inFilter: (cfg.inFilter || '').trim() || undefined, outFilter: (cfg.outFilter || '').trim() || undefined, block: [geom.dx, geom.dy, geom.dz], count: [geom.nx, geom.ny, geom.nz], minPts: cfg.minPts, maxPts: cfg.maxPts }, [src.lineage].filter(Boolean));
-  if (isBM) {
-    onMsg('writing…');
-    const blob = await latticeToBlockCsv(geom, values, valName, (f) => onMsg(`writing ${Math.round(f * 100)}%…`));
-    await openBlob(blob, 'estimate_model.csv', _layers.length ? 'add' : 'replace', null, { lineage: lin });
-  } else {
-    const data = new Float32Array(values.length); for (let i = 0; i < values.length; i++) data[i] = Number.isFinite(values[i]) ? values[i] : -9999;
-    const grid = { nx: geom.nx, ny: geom.ny, x0: geom.x0, y0: geom.y0, dx: geom.dx, dy: geom.dx, data, nodata: -9999, crs: null, form: 'estimate' };
-    await openBlob(new Blob([writeEsriAsc(grid)]), 'estimate_grid.asc', _layers.length ? 'add' : 'replace', null, { lineage: lin });
-  }
+  const values = await estimateAtPoints({ pts, qx: tq.qx, qy: tq.qy, qz: tq.qz, method: cfg.method, power: cfg.power, ranges, orient, minPts: cfg.minPts, maxPts: cfg.maxPts, onProgress: (f) => onMsg(`estimating ${Math.round(f * 100)}%…`) });
+  if (cfg.outFilter && cfg.outFilter.trim()) applyOutputFilterPoints(values, tq.qx, tq.qy, tq.qz, outName, cfg.outFilter);
+  let est = 0; for (let i = 0; i < values.length; i++) if (Number.isFinite(values[i])) est++;
+  const lin = mkLineage('interpolate', { method: cfg.method, power: cfg.method === 'idw' ? cfg.power : undefined, ranges, orient: cfg.aniso ? orient : undefined, source: `${cfg.srcName}:${cfg.srcCol}`, target: cfg.tgtName, column: outName, samples: pts.px.length, estimated: est, inFilter: (cfg.inFilter || '').trim() || undefined, outFilter: (cfg.outFilter || '').trim() || undefined, minPts: cfg.minPts, maxPts: cfg.maxPts }, [src.lineage, tgt.lineage].filter(Boolean));
+  const col = matColSet(tgt, outName, values, { lineage: lin });
+  try { await matColPersist(tgt); } catch { /* persistence best-effort */ }
+  setActiveLayer(tgt.id); setLayerColorSel(tgt, 'paint:' + outName);   // show it
+  markProjectDirty(); renderLayers(); requestRender();
+  $('#meta').textContent = `${cfg.tgtName} ← ${outName}: ${est.toLocaleString()} of ${tq.n.toLocaleString()} estimated (${cfg.method.toUpperCase()})`;
+  return col;
 }
-function openNewDialog(opts = {}) {
+function openNewDialog() {
   const bb = _docBbox && frame ? unionWorldBbox(_layers.map(layerWorldBbox)) : null;
   _ngDlg = {
+    kind: 'create',
     type: 'grid', mode: _layers.length ? 'cover' : 'params',
     src: _layers.length ? 'all' : null,
     x0: bb ? +bb[0].toFixed(2) : 0, y0: bb ? +bb[4].toFixed(2) : 0, z0: bb ? +bb[2].toFixed(2) : 0,
     dx: 10, dy: 10, dz: 10, nx: 50, ny: 50, nz: 20, fill: 0, valName: 'VAL',
     align: false, ax: 0, ay: 0, az: 0,
     res: 'finest', compatSel: new Set(),
-    // fill-mode: a constant, or an interpolated estimate from a point source
-    fillMode: opts.estimate ? 'estimate' : 'const',
-    srcLayer: opts.srcLayer || null, srcCol: null, method: 'idw', power: 2,
-    rMaj: 50, rSemi: 50, rMin: 50, aniso: false, dip: 0, dipAz: 0, pitch: 0, minPts: 1, maxPts: 12,
-    inFilter: '', outFilter: '',
   };
+  const hd = $('#ngDlg .hd span'); if (hd) hd.textContent = 'new grid / block model'; $('#ngGo').textContent = 'Create';
   renderNewDialog();
   $('#ngDlg').classList.add('show');
+}
+// standalone interpolation: estimate a SOURCE column onto an EXISTING target layer's
+// own locations → a materialized column on the target (decoupled from grid creation).
+function openInterpolateDialog(opts = {}) {
+  _ngDlg = {
+    kind: 'interp',
+    srcLayer: opts.srcLayer || null, srcCol: null, tgtLayer: opts.tgtLayer || null,
+    method: 'idw', power: 2, rMaj: 50, rSemi: 50, rMin: 50, aniso: false, dip: 0, dipAz: 0, pitch: 0,
+    minPts: 1, maxPts: 12, inFilter: '', outFilter: '', outName: '',
+  };
+  const hd = $('#ngDlg .hd span'); if (hd) hd.textContent = 'interpolate → target'; $('#ngGo').textContent = 'Run';
+  renderNewDialog();
+  $('#ngDlg').classList.add('show');
+}
+function renderInterpDialog(d, body) {
+  const row = (label, ...els) => { const r = document.createElement('div'); r.className = 'ex-row'; const b = document.createElement('b'); b.textContent = label; r.append(b, ...els); body.appendChild(r); return r; };
+  const num = (key, w = 70) => { const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any'; inp.value = String(d[key]); inp.style.width = w + 'px'; inp.oninput = () => { d[key] = +inp.value; }; return inp; };
+  const radios = (r, group, pairs, cur, pick) => { for (const [k, lab] of pairs) { const l = document.createElement('label'); const rb = document.createElement('input'); rb.type = 'radio'; rb.name = group; rb.checked = cur === k; rb.onchange = () => pick(k); l.append(rb, lab); r.appendChild(l); } };
+  const txt = (key, ph) => { const t = document.createElement('input'); t.type = 'text'; t.value = d[key] || ''; t.placeholder = ph; t.style.cssText = 'width:210px'; t.spellcheck = false; t.oninput = () => { d[key] = t.value; }; return t; };
+  const sources = ngPointLayers();
+  const targets = _layers.filter((L) => (layerTableHeader(L) && attrRowCountOf(L) > 0) || (L.docs && L.docs.gridDoc && !L.docs.blockDoc));
+  if (!sources.length) { body.appendChild(ppNote('no sample source loaded — open drillholes, a points CSV, or a block model with a numeric column')); $('#ngGo').disabled = true; return; }
+  if (!targets.length) { body.appendChild(ppNote('no target loaded — an existing block model, points layer, or grid to estimate onto (make one with New…)')); $('#ngGo').disabled = true; return; }
+  $('#ngGo').disabled = false;
+  if (!d.srcLayer || !sources.some((L) => L.id === d.srcLayer)) { d.srcLayer = sources[0].id; d.srcCol = null; }
+  const srcSel = document.createElement('select');
+  for (const L of sources) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; srcSel.appendChild(o); }
+  srcSel.value = String(d.srcLayer); srcSel.onchange = () => { d.srcLayer = +srcSel.value; d.srcCol = null; renderNewDialog(); };
+  const SL = layerById(d.srcLayer); const cols = SL ? numericColsOf(SL) : [];
+  if (!d.srcCol || !cols.includes(d.srcCol)) d.srcCol = cols[0] || null;
+  const colSel = document.createElement('select'); for (const c of cols) { const o = document.createElement('option'); o.value = c; o.textContent = c; colSel.appendChild(o); } colSel.value = d.srcCol || ''; colSel.onchange = () => { d.srcCol = colSel.value; };
+  row('source', srcSel, colSel);
+  if (!d.tgtLayer || !targets.some((L) => L.id === d.tgtLayer)) d.tgtLayer = (targets.find((L) => L.id !== d.srcLayer) || targets[0]).id;
+  const tgtSel = document.createElement('select'); for (const L of targets) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; tgtSel.appendChild(o); } tgtSel.value = String(d.tgtLayer); tgtSel.onchange = () => { d.tgtLayer = +tgtSel.value; renderNewDialog(); };
+  row('onto', tgtSel);
+  const tgt = layerById(d.tgtLayer); const isGridT = tgt && tgt.docs.gridDoc && !tgt.docs.blockDoc; const tn = tgt ? (isGridT ? tgt.docs.gridDoc.grid.nx * tgt.docs.gridDoc.grid.ny : attrRowCountOf(tgt)) : 0;
+  if (tn) body.appendChild(ppNote(`estimates onto ${tn.toLocaleString()} ${isGridT ? 'grid nodes' : 'records'} of “${tgt.label || tgt.name}” → a new column on it`));
+  const mr = row('method'); radios(mr, 'ipmethod', [['idw', 'IDW'], ['nn', 'nearest']], d.method, (k) => { d.method = k; renderNewDialog(); });
+  if (d.method === 'idw') mr.append(document.createTextNode(' power '), num('power', 56));
+  const sr = row('range (m)', num('rMaj', 80));
+  const anl = document.createElement('label'); const acb = document.createElement('input'); acb.type = 'checkbox'; acb.checked = d.aniso; acb.onchange = () => { d.aniso = acb.checked; renderNewDialog(); }; anl.append(acb, 'anisotropy'); sr.append(anl);
+  if (d.aniso) {
+    row('semi · minor', num('rSemi', 80), num('rMin', 80));
+    row('dip·dip-az·pitch', num('dip', 64), num('dipAz', 64), num('pitch', 64));
+    body.appendChild(ppNote('search ellipsoid — major range along the structure, shortened across it. dip / dip-azimuth / pitch orient the major axis (structural convention).'));
+  }
+  row('min · max pts', num('minPts', 64), num('maxPts', 64));
+  row('filter in', txt('inFilter', `samples, e.g. DOMAIN=="ORE"`));
+  row('filter out', txt('outFilter', `result cells, e.g. ${d.srcCol || 'VAL'}>0`));
+  const onRow = row('column'); const onIn = document.createElement('input'); onIn.type = 'text'; onIn.value = d.outName || ''; onIn.placeholder = `${d.srcCol || 'val'}_${d.method}`; onIn.style.width = '160px'; onIn.oninput = () => { d.outName = onIn.value; }; onRow.appendChild(onIn);
+  body.appendChild(ppNote(`${d.method === 'nn' ? 'nearest sample' : 'inverse-distance'} within the ellipsoid; records with fewer than ${d.minPts} sample${d.minPts === 1 ? '' : 's'} in range are left blank. The result is a materialized column ON the target — colour / filter / GT / export it; compose several with a calc column.`));
+  const rr = row('recipe'); const rb = document.createElement('button'); rb.textContent = 'Save as recipe…'; rb.className = 'pp-btn'; rb.onclick = async () => {
+    try { const src = layerById(d.srcLayer), tg = layerById(d.tgtLayer); if (!src || !d.srcCol || !tg) { $('#ngDlgMsg').textContent = 'pick a source column + target first'; return; } await saveRecipe('interp', estimateCfg(d), `estimate ${d.srcCol} → ${tg.label || tg.name}`); }
+    catch (e) { $('#ngDlgMsg').textContent = e.message; }
+  }; rr.appendChild(rb);
+  $('#ngDlgMsg').textContent = '';
 }
 function renderNewDialog() {
   const d = _ngDlg; if (!d) return;
   const body = $('#ngDlgBody'); body.textContent = '';
+  if (d.kind === 'interp') { renderInterpDialog(d, body); return; }
   const isBM = d.type === 'block' || d.mode === 'compat';
   const row = (label, ...els) => { const r = document.createElement('div'); r.className = 'ex-row'; const b = document.createElement('b'); b.textContent = label; r.append(b, ...els); body.appendChild(r); return r; };
   const num = (key, w = 90) => { const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any'; inp.value = String(d[key]); inp.style.width = w + 'px'; inp.oninput = () => { d[key] = +inp.value; updTally(); }; return inp; };
@@ -5167,45 +5217,8 @@ function renderNewDialog() {
     row(isBM ? 'counts' : 'counts', num('nx', 64), num('ny', 64), ...(isBM ? [num('nz', 64)] : []));
   }
   if (d.mode !== 'compat') { if (isBM) row('block (m)', num('dx', 60), num('dy', 60), num('dz', 60)); else row('cell (m)', num('dx', 90)); }
-  // values: a constant fill, or an interpolated estimate from a point source (NN · IDW, anisotropic)
-  radios(row('values'), 'ngfill', [['const', 'constant'], ['estimate', 'estimate from points']], d.fillMode, (k) => { d.fillMode = k; renderNewDialog(); });
-  if (d.fillMode === 'const') {
-    const fillRow = row(isBM ? 'fill VAL' : 'fill Z', num('fill'));
-    if (isBM) { const nm = document.createElement('input'); nm.type = 'text'; nm.value = d.valName; nm.style.width = '80px'; nm.oninput = () => { d.valName = nm.value.trim() || 'VAL'; }; fillRow.append(document.createTextNode(' column '), nm); }
-  } else {
-    const pls = ngPointLayers();
-    if (!pls.length) { body.appendChild(ppNote('no point source loaded — open drillholes, a points CSV, or a block model to estimate from')); }
-    else {
-      if (!d.srcLayer || !pls.some((L) => L.id === d.srcLayer)) { d.srcLayer = pls[0].id; d.srcCol = null; }
-      const srcSel = document.createElement('select');
-      for (const L of pls) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; srcSel.appendChild(o); }
-      srcSel.value = String(d.srcLayer); srcSel.onchange = () => { d.srcLayer = +srcSel.value; d.srcCol = null; renderNewDialog(); };
-      const L = layerById(d.srcLayer); const cols = L ? numericColsOf(L) : [];
-      if (!d.srcCol || !cols.includes(d.srcCol)) d.srcCol = cols[0] || null;
-      const colSel = document.createElement('select');
-      for (const c of cols) { const o = document.createElement('option'); o.value = c; o.textContent = c; colSel.appendChild(o); }
-      colSel.value = d.srcCol || ''; colSel.onchange = () => { d.srcCol = colSel.value; };
-      row('from', srcSel, colSel);
-      const mr = row('method'); radios(mr, 'ngmethod', [['idw', 'IDW'], ['nn', 'nearest']], d.method, (k) => { d.method = k; renderNewDialog(); });
-      if (d.method === 'idw') mr.append(document.createTextNode(' power '), num('power', 56));
-      const sr = row('range (m)', num('rMaj', 80));
-      const anl = document.createElement('label'); const acb = document.createElement('input'); acb.type = 'checkbox'; acb.checked = d.aniso; acb.onchange = () => { d.aniso = acb.checked; renderNewDialog(); }; anl.append(acb, 'anisotropy'); sr.append(anl);
-      if (d.aniso) {
-        row('semi · minor', num('rSemi', 80), num('rMin', 80));
-        row('dip·dip-az·pitch', num('dip', 64), num('dipAz', 64), num('pitch', 64));
-        body.appendChild(ppNote('search ellipsoid — major range along the structure, shortened across it. dip / dip-azimuth / pitch orient the major axis (structural convention). isotropic uses the major range on all axes.'));
-      }
-      row('min · max pts', num('minPts', 64), num('maxPts', 64));
-      const txt = (key, ph) => { const t = document.createElement('input'); t.type = 'text'; t.value = d[key] || ''; t.placeholder = ph; t.style.cssText = 'width:210px'; t.spellcheck = false; t.oninput = () => { d[key] = t.value; }; return t; };
-      row('filter in', txt('inFilter', `samples, e.g. DOMAIN=="ORE"`));
-      row('filter out', txt('outFilter', `result cells, e.g. ${d.srcCol || 'VAL'}>0`));
-      body.appendChild(ppNote(`${d.method === 'nn' ? 'nearest sample' : 'inverse-distance'} within the ellipsoid; nodes with fewer than ${d.minPts} sample${d.minPts === 1 ? '' : 's'} in range stay ${isBM ? 'empty (no block)' : 'nodata'}. Input filter drops samples before estimating; output filter blanks result cells. Both use the filter language.`));
-      const rr = row('recipe'); const rb = document.createElement('button'); rb.textContent = 'Save as recipe…'; rb.className = 'pp-btn'; rb.onclick = async () => {
-        try { const gv = resolveGeom(d); const src = layerById(d.srcLayer); if (!src || !d.srcCol) { $('#ngDlgMsg').textContent = 'pick a source layer + value column first'; return; } await saveRecipe('interp', estimateCfg(d, gv, src.name), `estimate ${d.srcCol}`); }
-        catch (e) { $('#ngDlgMsg').textContent = e.message; }
-      }; rr.appendChild(rb);
-    }
-  }
+  const fillRow = row(isBM ? 'fill VAL' : 'fill Z', num('fill'));
+  if (isBM) { const nm = document.createElement('input'); nm.type = 'text'; nm.value = d.valName; nm.style.width = '80px'; nm.oninput = () => { d.valName = nm.value.trim() || 'VAL'; }; fillRow.append(document.createTextNode(' column '), nm); }
   const tally = document.createElement('div'); tally.className = 'pp-note'; tally.id = 'ngTally'; body.appendChild(tally);
   function dims() {
     if (d.mode === 'compat') { const ca = compatAxes(d); return ca.ok ? { nx: ca.x.count, ny: ca.y.count, nz: ca.z.count } : null; }
@@ -5233,19 +5246,16 @@ function renderNewDialog() {
 $('#ngCancel').onclick = () => { $('#ngDlg').classList.remove('show'); _ngDlg = null; };
 $('#ngGo').onclick = async () => {
   const d = _ngDlg; if (!d) return;
-  let isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz;
-  try { ({ isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz } = resolveGeom(d)); }
-  catch (e) { $('#ngDlgMsg').textContent = e.message; return; }
   const btn = $('#ngGo'); btn.disabled = true;
   for (const el of $('#ngDlgBody').querySelectorAll('input, select')) el.disabled = true;
   try {
-    if (d.fillMode === 'estimate') {
-      const src = layerById(d.srcLayer);
-      if (!src || !d.srcCol) throw new Error('pick a source layer + value column');
-      await runEstimate(estimateCfg(d, { isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz }, src.name), (m) => { $('#ngDlgMsg').textContent = m; });
+    if (d.kind === 'interp') {
+      await estimateOntoTarget(estimateCfg(d), (m) => { $('#ngDlgMsg').textContent = m; });
       $('#ngDlg').classList.remove('show'); _ngDlg = null;
       return;
     }
+    let isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz;
+    ({ isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz } = resolveGeom(d));
     const gridLin = d.mode === 'compat'
       ? mkLineage('grid-cover', { resolution: d.res, block: [dx, dy, dz], count: [nx, ny, nz] }, ngBlockLayers().filter((L2) => d.compatSel.has(L2.id)).map((L2) => L2.lineage))
       : mkLineage('grid-new', { mode: d.mode, block: [dx, dy, dz], count: [nx, ny, nz], origin: [x0, y0, z0] }, d.mode === 'cover' && d.src && d.src[0] === 'L' ? [layerById(+d.src.slice(1)) && layerById(+d.src.slice(1)).lineage] : []);
@@ -8758,7 +8768,7 @@ const openPropsTab = (tab) => {
 $('#mData').onclick = () => menuAt($('#mData'), [
   { label: 'Import drillholes…', action: () => openDhDialog(null) },
   { label: 'New grid / block model…', action: () => openNewDialog() },
-  { label: 'Interpolate points → grid / model…', action: () => openNewDialog({ estimate: true }) },
+  { label: 'Interpolate onto a target…', action: () => openInterpolateDialog() },
   { sep: true },
   { label: 'Layer properties…', action: () => { if (_layers.length) openProps(); } },
   { label: 'Source (mapping / desurvey)…', action: () => openPropsTab('source') },
@@ -9718,7 +9728,7 @@ window.addEventListener('wheel', (e) => {
 const COMMANDS = [
   { id: 'open', group: 'File', title: 'Open file…', kw: 'load import csv las ply parquet dm tif grd xyz obj msh', run: () => openFilePicker() },
   { id: 'new', group: 'File', title: 'New grid / block model…', kw: 'create empty cover common lattice', run: () => openNewDialog() },
-  { id: 'interp', group: 'File', title: 'Interpolate points → grid / model…', kw: 'estimate idw nearest neighbour nn kriging scatter grid anisotropy', run: () => openNewDialog({ estimate: true }) },
+  { id: 'interp', group: 'File', title: 'Interpolate points → grid / model…', kw: 'estimate idw nearest neighbour nn kriging scatter grid anisotropy', run: () => openInterpolateDialog() },
   { id: 'newproj', group: 'File', title: 'New project (clear)', kw: 'reset slate', run: () => newProject() },
   { id: 'save', group: 'File', title: 'Save project', kw: 'store', when: () => hasFSAA, run: () => saveProject() },
   { id: 'tidy', group: 'File', title: 'Tidy project folder', kw: 'organize subfolders kind reorganize move drillholes models clouds meshes grids', when: () => hasFSAA && !!_project, run: () => tidyProject() },
@@ -10287,7 +10297,7 @@ function layerMenu(L, x, y) {
     { label: 'Zoom to layer', action: () => fitLayer(L) },
     { label: 'Rename layer…', kbd: 'F2', action: () => renameActiveLayer(L) },
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
-    ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Interpolate to grid / model…', action: () => openNewDialog({ estimate: true, srcLayer: L.id }) }] : []),
+    ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Interpolate from this…', action: () => openInterpolateDialog({ srcLayer: L.id }) }] : []),
     ...(L.gridSurface ? [{ label: 'Drape', submenu: () => {
       const grids = _layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
       return [{ label: (L.drapeSource ? '' : '✓ ') + 'elevation', action: () => recolorSurface(L, null) },
@@ -13101,7 +13111,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, interpolateLattice, readLayerPoints, latticeToBlockCsv, runEstimate, applyOutputFilter, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
