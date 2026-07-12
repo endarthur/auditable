@@ -1,0 +1,16 @@
+{
+  "steps": [
+    { "guard": "no-overwrites" },
+    { "recipe": "gt std" },
+    {
+      "each": [{ "grade": "FE" }, { "grade": "SIO2" }],
+      "steps": [
+        {
+          "recipe": "gt std",
+          "series": [{ "layer": "model.csv", "col": "$grade" }]
+        }
+      ]
+    },
+    { "nestedmap": { "k": "v", "deeper": [1, 2] } }
+  ]
+}

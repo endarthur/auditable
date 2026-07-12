@@ -1127,10 +1127,12 @@ function parseSeqEntry(ctx, indent, leadingComments) {
   if (looksLikeMapKey(rest)) {
     // Parse this line as a map entry at indent + 2, and continue collecting
     // further map entries at the same indent.
+    // advanceFirstLine=true: the entry parser must consume the opener line
+    // BEFORE it looks for a nested block, or `- key:` followed by indented
+    // children would see the opener's own shallow indent and reject it.
     const firstEntry = parseMapEntryFromContent(
-      ctx, rest, ln.lineNumber, restCol, indent + 4, [], /*advanceFirstLine=*/false
+      ctx, rest, ln.lineNumber, restCol, indent + 4, [], /*advanceFirstLine=*/true
     );
-    ctx.pos++;  // consume the current line (parseMapEntryFromContent didn't)
     const trailingFirst = comment;
     if (trailingFirst) firstEntry.value.trailingComment = trailingFirst;
 
