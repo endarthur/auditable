@@ -8415,7 +8415,7 @@ function projectManifest() {
         ? [...L.catHidden].map((c) => { const h2 = layerHeaderOf(L); return h2 && h2.categories && h2.categories[c] != null ? h2.categories[c] : c; })
         : undefined,
       colTypes: L.colTypes && Object.keys(L.colTypes).length ? L.colTypes : undefined,
-      calcCols: L.calcCols && L.calcCols.length ? L.calcCols : undefined,
+      // calcCols live in the ELEMENT manifest (spec rule 10) — read here only as legacy
       ramps: L.ramps && Object.keys(L.ramps).length ? L.ramps : undefined,
       catLegend: L.catLegend || undefined,
       rules: L.rules && L.rules.list && L.rules.list.length ? L.rules : undefined,
@@ -8825,7 +8825,9 @@ async function openProjectDir(dir) {
           if (ls.dh.set) { Ld._setPath = ls.dh.set; Ld._setKey = ls.dh.set; Ld._intervalName = ivName; }   // group siblings; rescan won't re-offer
           if (ls.label) Ld.label = ls.label;
           if (ls.colTypes) { Ld.colTypes = ls.colTypes; applyColTypes(Ld); }
-          if (ls.calcCols) { Ld.calcCols = ls.calcCols; addPaintColorOptions(Ld); }   // BEFORE filter/color — both may reference ƒ
+          try { await loadElement(Ld, dir); } catch { /* derived — never block a load */ }   // ƒ + matcols BEFORE filter/color (both may reference them)
+          if (ls.calcCols && !(Ld.calcCols || []).length) Ld.calcCols = ls.calcCols;   // legacy projects (no element manifest)
+          addPaintColorOptions(Ld);
           if (ls.filter && ls.filter.trim()) { $('#filter').value = ls.filter; syncFilterClear(); await applyBlockFilter(ls.filter); }
           if (ls.visible === false) { Ld.visible = false; renderer.setLayerVisible(Ld.id, false); }
           if (ls.sectioned != null && ls.sectioned !== true) renderer.setLayerSectioned(Ld.id, ls.sectioned);
@@ -8903,7 +8905,9 @@ async function openProjectDir(dir) {
       if (sidecar && sidecar.colStats) L._colStats = sidecar.colStats;   // the styling/statistics UIs wake up scanned
       if (sidecar && sidecar.bands) L._bands = sidecar.bands;            // .dm/CSV filter pushdown substrate
       if (ls.colTypes) { L.colTypes = ls.colTypes; applyColTypes(L); }
-      if (ls.calcCols) { L.calcCols = ls.calcCols; addPaintColorOptions(L); }   // BEFORE filter/color — both may reference ƒ
+      try { await loadElement(L, dir); } catch { /* derived — never block a load */ }   // ƒ + matcols BEFORE filter/color (both may reference them)
+      if (ls.calcCols && !(L.calcCols || []).length) L.calcCols = ls.calcCols;   // legacy projects (no element manifest)
+      addPaintColorOptions(L);
       // color channel first (may re-stream), then filter (sweeps), then the rest
       if (ls.colorSel && ls.colorSel !== $('#colorBy').value && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) {
         L.colorSel = ls.colorSel;
@@ -8935,7 +8939,6 @@ async function openProjectDir(dir) {
       L._pendingDrape = null;
       if (g) { try { recolorSurface(L, g); } catch { /* drape grid gone/incompatible → stays elevation */ } }
     }
-    for (const L of _layers) { try { await loadElement(L, dir); } catch { /* sidecar cols are derived — never block a load */ } }   // materialized <layer>.cols/
     await loadRecipes(dir);                                // recipes/ *.yaml → Tools → Recipes
     // pinned analysis windows come back configured (after ALL layers landed —
     // series may reference other layers). Run stays manual: no surprise scans.
@@ -12582,8 +12585,8 @@ function matColSet(L, name, fvalues, meta = {}) {
 // computation stored as DATA (closed vocabulary, never code): a derived column
 // realizes by executing its op, a materialized one records how it was baked.
 // Boundaries held here: manifest = data model, project.json = view state
-// (ls.calcCols stays there TRANSITIONALLY for restore ordering — the manifest
-// is authoritative on conflict); paint columns stay in project.json RLE (the
+// (calcCols live ONLY here now; ls.calcCols reads as the legacy fallback for
+// pre-manifest projects); paint columns stay in project.json RLE (the
 // sparse-patch migration is a recorded chore); layers without a column table
 // (grids/meshes) don't emit one yet — array-backed + multi-location land with
 // the drillhole consolidation. Additive evolution: unknown top-level fields
