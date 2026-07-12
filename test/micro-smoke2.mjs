@@ -570,17 +570,29 @@ await p.close();
   });
   chk(`GT + swath compute on the materialized column (numericColsOf offers it ${gtsw.offered}; GT ${gtsw.gtCuts} cuts, gmax ${(gtsw.gtMax || 0).toFixed(0)}; swath ${gtsw.swBands} bands, rising ${gtsw.rising})`,
     gtsw.offered && gtsw.gtCuts === 9 && gtsw.gtMax > 50 && gtsw.swBands > 2 && gtsw.rising);
-  // materialize a calc column (compute → stored): DBL = X*2 → freeze it into a stored column
+  // THE COMPOSITION GAP (resolver): a calc column referencing the ESTIMATED column,
+  // then materialized — the exact case that failed pre-resolver (calc saw base only)
   const matc = await pg.evaluate(async () => {
     const T = window._micro.layers().find((x) => x.name === 'model.csv');
-    window._micro.applyCalcCols(T, [{ name: 'DBL', expr: 'X * 2', ty: 'number' }]);
+    window._micro.applyCalcCols(T, [{ name: 'DBL', expr: 'GRADE_IDW * 2', ty: 'number' }]);
     const wasCalc = (T.calcCols || []).some((c) => c.name === 'DBL');
     await window._micro.materializeCalcCol(T, 'DBL');
     const col = window._micro.matColList(T).find((c) => c.name === 'DBL');
     return { wasCalc, mat: !!(col && col.mat), stillCalc: (T.calcCols || []).some((c) => c.name === 'DBL'), at50: col ? col.fvalues[5 * 11 + 5] : null, from: col && col.lineage && col.lineage.params.from };
   });
-  chk(`materialize a calc column → stored (was calc ${matc.wasCalc}, now mat ${matc.mat}, calc dropped ${!matc.stillCalc}, DBL(X=50)≈${(matc.at50 || 0).toFixed(0)})`,
-    matc.wasCalc && matc.mat && !matc.stillCalc && Math.abs(matc.at50 - 100) < 2 && matc.from === 'calc');
+  chk(`calc REFERENCES the estimated column + materializes (DBL = GRADE_IDW*2 → (50,50)≈${(matc.at50 || 0).toFixed(0)})`,
+    matc.wasCalc && matc.mat && !matc.stillCalc && Math.abs(matc.at50 - 100) < 12 && matc.from === 'calc');
+  // calc-on-calc, dependency-ordered regardless of input order (B2 defined referencing A2)
+  const chain = await pg.evaluate(async () => {
+    const T = window._micro.layers().find((x) => x.name === 'model.csv');
+    window._micro.applyCalcCols(T, [{ name: 'B2', expr: 'A2 * 10', ty: 'number' }, { name: 'A2', expr: 'GRADE_IDW + 1', ty: 'number' }]);
+    window._micro.setActiveLayer(T.id);
+    document.querySelector('#filter').value = 'B2 > 500'; await window._micro.applyBlockFilter('B2 > 500');
+    const hits = T._filterMask ? T._filterMask.reduce((a, b) => a + b, 0) : -1;
+    await window._micro.applyBlockFilter('');
+    return { hits };
+  });
+  chk(`calc-on-calc chains through the resolver, out of input order (B2=A2*10, A2=GRADE_IDW+1; B2>500 → ${chain.hits} blocks)`, chain.hits > 50 && chain.hits < 80);
   // input + output filters compose: drop low samples, blank low results → some blocks unestimated
   const flt = await pg.evaluate(async () => {
     const cfg = { srcName: 'samples.csv', srcCol: 'GRADE', tgtName: 'model.csv', method: 'idw', power: 2, aniso: false, rMaj: 80, rSemi: 80, rMin: 80, dip: 0, dipAz: 0, pitch: 0, minPts: 1, maxPts: 12, inFilter: 'GRADE > 20', outFilter: 'GRADE_F > 40', outName: 'GRADE_F' };

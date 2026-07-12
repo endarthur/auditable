@@ -1564,8 +1564,8 @@ function exportColumnsOf(L) {
   const h = layerTableHeader(L);
   if (!h) return null;
   const cols = h.columns.map((name, i) => ({ name, num: colIsNumeric(L, h, i), badge: '' }));
+  for (const c of L.paintCols || []) cols.push({ name: c.name, num: c.kind === 'ratio', badge: c.kind === 'ratio' ? '%' : '✎' });   // census order: stored derived before calc (must match extendRow)
   for (const c of L.calcCols || []) cols.push({ name: c.name, num: (c.ty || 'number') === 'number', badge: 'ƒ' });
-  for (const c of L.paintCols || []) cols.push({ name: c.name, num: c.kind === 'ratio', badge: c.kind === 'ratio' ? '%' : '✎' });
   return cols;
 }
 let _exportEpoch = 0;
@@ -10095,8 +10095,8 @@ function attrColumnsOf(L) {
   const h = layerTableHeader(L);
   if (h) {
     const cols = h.columns.map((name, i) => ({ name, num: colIsNumeric(L, h, i) }));
+    for (const c of L.paintCols || []) cols.push({ name: (c.kind === 'ratio' ? '% ' : '✎ ') + c.name, num: c.kind === 'ratio' });   // census order: stored before calc (matches extendRow)
     for (const c of L.calcCols || []) cols.push({ name: 'ƒ ' + c.name, num: (c.ty || 'number') === 'number' });
-    for (const c of L.paintCols || []) cols.push({ name: (c.kind === 'ratio' ? '% ' : '✎ ') + c.name, num: c.kind === 'ratio' });
     return cols;
   }
   if (L.docs.gridDoc) return [{ name: 'X', num: true }, { name: 'Y', num: true }, { name: 'Z', num: true }, { name: 'row', num: true }, { name: 'col', num: true }];
@@ -11635,15 +11635,36 @@ function colIsNumeric(L, h, i) {
 // expression evaluated as an EXTENSION OF THE ROW wherever rows are decoded
 // (filter sweeps, the columns scan, the record panel). Cheap when absent:
 // extendRow returns the row untouched.
+// ── the COLUMN RESOLVER core (substrate step 1, in-micro) ─────────────────────
+// ONE census of a layer's columns in ONE order — base (source) → STORED derived
+// (paint + materialized) → COMPUTED (calc, input order) — shared by schemaExt /
+// extendRow / exportColumnsOf so positions can never drift. Calc expressions
+// compile against the FULL census, so a calc can reference an ESTIMATED
+// (materialized) column, a paint column, or another calc — composition:
+// coalesce(AU_domA, AU_domB) over two estimates. Calc→calc references EVALUATE
+// in dependency (topo) order into their census slots; cycles yield blank.
+function calcOrder(L) {
+  const items = ((L && L.calcCols) || []).map((c, idx) => ({ c, idx }));
+  if (items.length < 2) return items;
+  const byName = new Map(items.map((it) => [String(it.c.name).toLowerCase(), it]));
+  const state = new Map(), out = [];
+  const visit = (it) => {
+    const k = String(it.c.name).toLowerCase();
+    if (state.has(k)) return;                              // done, or in-progress (a cycle) → later refs read blank
+    state.set(k, 0);
+    let ds = []; try { ds = deps(it.c.expr); } catch { /* bad expr → no deps */ }
+    for (const d of ds) { const dep = byName.get(String(d).toLowerCase()); if (dep && state.get(String(d).toLowerCase()) !== 0) visit(dep); }
+    state.set(k, 1); out.push(it);
+  };
+  for (const it of items) visit(it);
+  return out;
+}
 function calcFns(L) {
   if (!L || !L.calcCols || !L.calcCols.length) return null;
-  if (L._calcFns && L._calcFns.length === L.calcCols.length) return L._calcFns;
+  if (L._calcFns && L._calcFns.n === L.calcCols.length) return L._calcFns;
   const h = layerTableHeader(L); if (!h) return null;
-  const base = blockSchema(h);
-  L._calcFns = L.calcCols.map((c) => {
-    try { return compileValue(c.expr, base, { decimal: '.' }); }
-    catch { return () => null; }
-  });
+  const schema = schemaExt(L, h);                          // the FULL census — calcs see base + paint + materialized + calcs
+  L._calcFns = { n: L.calcCols.length, ordered: calcOrder(L).map((it) => { let fn; try { fn = compileValue(it.c.expr, schema, { decimal: '.' }); } catch { fn = () => null; } return { idx: it.idx, fn }; }) };
   return L._calcFns;
 }
 // rec (the renderer record index) keys painted-column lookups; callers that
@@ -11728,22 +11749,26 @@ async function materializeCalcCol(L, name) {
   $('#meta').textContent = `materialized “${name}” — ${rec.toLocaleString()} values stored`;
 }
 function extendRow(L, f, rec) {
-  const fns = calcFns(L);
   const pcs = L && L.paintCols && L.paintCols.length ? L.paintCols : null;
-  if ((!fns && !pcs) || !f) return f;
+  const cf = calcFns(L);
+  if ((!cf && !pcs) || !f) return f;
   const out = f.slice();
-  if (fns) for (const fn of fns) { let v; try { v = fn(f); } catch { v = null; } out.push(v); }
-  if (pcs) for (const pc of pcs) {
+  if (pcs) for (const pc of pcs) {                          // STORED derived first — calcs may reference them
     if (pc.mat && pc.fvalues) { const v = rec != null && rec < pc.fvalues.length ? pc.fvalues[rec] : NaN; out.push(Number.isFinite(v) ? v : null); continue; }   // materialized: full precision
     const c = rec != null && rec < pc.codes.length ? pc.codes[rec] : 0;
     out.push(pc.kind === 'ratio' ? +(c / 255).toFixed(3) : ((c && pc.dict[c]) || ''));
+  }
+  if (cf) {
+    const start = out.length;                               // calc census slots (input order), filled in DEPENDENCY order
+    for (let i = 0; i < cf.n; i++) out.push(null);
+    for (const { idx, fn } of cf.ordered) { let v; try { v = fn(out); } catch { v = null; } out[start + idx] = v === undefined ? null : v; }
   }
   return out;
 }
 function schemaExt(L, h) {
   let out = blockSchema(h);
-  if (L && L.calcCols && L.calcCols.length) out = out.concat(L.calcCols.map((c) => ({ name: c.name, type: c.ty === 'string' ? 'string' : 'number' })));
-  if (L && L.paintCols && L.paintCols.length) out = out.concat(L.paintCols.map((c) => ({ name: c.name, type: c.kind === 'ratio' ? 'number' : 'string' })));   // ratio (incl. materialized) → number
+  if (L && L.paintCols && L.paintCols.length) out = out.concat(L.paintCols.map((c) => ({ name: c.name, type: c.kind === 'ratio' ? 'number' : 'string' })));   // stored derived (ratio incl. materialized → number)
+  if (L && L.calcCols && L.calcCols.length) out = out.concat(L.calcCols.map((c) => ({ name: c.name, type: c.ty === 'string' ? 'string' : 'number' })));       // computed — LAST, so they can reference everything above
   return out;
 }
 async function sampleRow(L) {
