@@ -416,6 +416,22 @@ params:
     - layer: "model.parquet"
       col: "FE"
       weight: "SG"</pre>
+<h3>Routines — recipes that run recipes</h3>
+<p>A <b>routine</b> (<code>tool: "routine"</code>) is a recipe file whose steps are other recipes — the month-end sequence as one runnable document. Plain steps run once; an <b>each block</b> runs a group of steps once per <b>row of a parameter table</b>, written inline as rows (<code>- { grade: FE, cutoff: 55 }</code>), as equal-length columns (zipped, never a cross-product), or pulled <code>from:</code> a CSV in the project. <code>$grade</code>-style markers show exactly where each value lands.</p>
+<pre># the month-end pack — reports/&lt;date&gt;/ fills with dated TSVs
+name: "Month-end"
+tool: "routine"
+params:
+  steps:
+    - guard: "no-overwrites"        # optional: stop BEFORE running if outputs exist
+    - recipe: "refresh calc columns"
+    - each:
+        - { grade: FE }
+        - { grade: SIO2 }
+      steps:
+        - recipe: "drift check"
+          series: [{ layer: "model.parquet", col: $grade }]</pre>
+<p>Analysis steps write their tables to <code>reports/&lt;date&gt;/&lt;step&gt;.tsv</code> in the project — dated folders diff month over month — with <code>output: {dir, prefix, suffix}</code> to steer the naming. Routines never prompt mid-run: every referenced recipe and layer is checked up front, and a failed step stops visibly with its window open. Expansion is a macro, not a program — the whole run is enumerable before anything executes, which is what the guard checks.</p>
 <h3>Mesh export</h3>
 <p><b>Export mesh…</b> (right-click a mesh layer; multi-selections and groups get <b>Export N meshes…</b>) writes <b>OBJ</b>, <b>PLY</b>, <b>MSH</b> (Leapfrog/ARANZ), or <b>LFM</b>. OBJ and LFM are multi-mesh — one named object per layer, with each layer's tint carried as the LFM color — while PLY and MSH merge multiple layers into one mesh. Exports re-read the source geometry, so coordinates leave in <b>full double precision</b> (the PLY writer uses <code>double</code> — at UTM northings, float32 would cost half a meter). A Datamine wireframe pair in, an LFM out: micro is also a mesh-format converter.</p>
 
@@ -568,6 +584,7 @@ params:
 <p style="margin:.15em 0">drillholes — §7</p>
 <p style="margin:.15em 0">element manifest — §16, C</p>
 <p style="margin:.15em 0">export (rows / mesh / grid) — §18, §15</p>
+<p style="margin:.15em 0">each blocks / parameter tables — §18</p>
 <p style="margin:.15em 0">figures &amp; decorations — §17</p>
 <p style="margin:.15em 0">file info — §22, App. B</p>
 <p style="margin:.15em 0">filter — §5</p>
@@ -596,6 +613,7 @@ params:
 <p style="margin:.15em 0">recipes — §18</p>
 <p style="margin:.15em 0">reconcile (Δ map) — §9</p>
 <p style="margin:.15em 0">rename (batch) — §2</p>
+<p style="margin:.15em 0">routines (recipes of recipes) — §18</p>
 <p style="margin:.15em 0">scenes — §18</p>
 <p style="margin:.15em 0">Sealed — §20, C</p>
 <p style="margin:.15em 0">sections — §4</p>

@@ -1069,6 +1069,40 @@ await p.close();
   await pg.close();
 }
 
+// ═══ 21. the ROUTINE: recipes running recipes — each-block expansion,
+//     $var substitution, dated report routing, the no-overwrites guard ═══
+{
+  const pr = await mkPage('sm2routine');
+  await pr.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('sm2routine', { recursive: true }); } catch { } });
+  await pr.evaluate(() => {
+    let t = 'X,Y,Z,FE,SG\n';
+    for (let i = 0; i < 15; i++) for (let j = 0; j < 15; j++) t += `${5 + i * 10},${5 + j * 10},5,${(30 + i * 2).toFixed(1)},${(2.5 + i * 0.05).toFixed(2)}\n`;
+    return window._micro.openBlob(new Blob([t]), 'm.csv', 'replace');
+  });
+  await pr.waitForFunction(() => window._micro.layers().length === 1 && window._micro.layers()[0].docs.blockDoc, null, { timeout: 30000 });
+  await pr.evaluate(() => { window._micro.layers()[0].storage = 'project'; });
+  await saveProject(pr);
+  const rt = await pr.evaluate(async () => {
+    window._micro._recipesList().push({ name: 'gt std', tool: 'gt', params: { layer: 'm.csv', series: [{ layer: 'm.csv', col: 'FE' }], nCut: 6 } });
+    await window._micro.runRoutine({ name: 'month', tool: 'routine', params: {
+      steps: [{ each: { grade: ['FE'] }, steps: [{ recipe: 'gt std', series: [{ layer: 'm.csv', col: '$grade' }] }] }],
+    } });
+    const meta1 = document.querySelector('#meta').textContent;
+    await window._micro.runRoutine({ name: 'month', tool: 'routine', params: {
+      steps: [{ guard: 'no-overwrites' }, { each: { grade: ['FE'] }, steps: [{ recipe: 'gt std', series: [{ layer: 'm.csv', col: '$grade' }] }] }],
+    } });
+    const meta2 = document.querySelector('#meta').textContent;
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2routine');
+    const day = new Date().toISOString().slice(0, 10);
+    const rep = await (await dir.getDirectoryHandle('reports')).getDirectoryHandle(day);
+    const names = []; for await (const k of rep.keys()) names.push(k);
+    return { meta1, meta2, names };
+  });
+  chk(`routine: each-expansion runs + report written (${rt.names}) + guard stops the re-run`,
+    /1 report/.test(rt.meta1) && rt.names.join() === 'gt-std-fe.tsv' && /guard stopped/.test(rt.meta2));
+  await pr.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

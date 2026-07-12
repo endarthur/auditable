@@ -3294,6 +3294,7 @@ function rangesFromCfg(r) {
 // export / copy a chart canvas (PNG at its dpr-scaled resolution); tableFn,
 // when given, adds a TSV copy of the computed NUMBERS (what lands in memos)
 function plotExportBtns(cv, nameFn, tableFn) {
+  if (tableFn) setTimeout(() => { const h = cv.closest('.fwin'); if (h) h._tableTSV = tableFn; });   // routines read the table from here
   const wrap = document.createElement('span'); wrap.className = 'pp-exp';
   const save = document.createElement('button'); save.className = 'awin-btn'; save.textContent = '⤓ png'; save.title = 'save the plot as PNG';
   save.onclick = () => cv.toBlob((blob) => { if (!blob) return; const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nameFn(); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); $('#meta').textContent = `saved ${nameFn()}`; }, 'image/png');
@@ -3363,7 +3364,7 @@ function applyAnalysisGeo(L, kind, win) {
 // in and Scan folder picks it up. Series reference layers BY NAME; a missing
 // primary gets a one-question remap — that prompt IS the parameter binding. ──
 let _recipes = [];                                          // { name, tool, params, file }
-const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath', stats: 'stats', figure: 'figure', calccols: 'calc columns', interp: 'interpolate' };
+const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath', stats: 'stats', figure: 'figure', calccols: 'calc columns', interp: 'interpolate', routine: 'routine' };
 // apply a calc-column SET to a layer — REPLACE on same name (idempotency is
 // gospel: run-twice == run-once), append the new; invalid expressions are
 // skipped and named. The recipe-facing form of Properties → columns.
@@ -3392,6 +3393,144 @@ function applyCalcCols(L, cols) {
   return { applied, bad };
 }
 const recipeSlug = (name) => (String(name).toLowerCase().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'recipe');
+// ── the ROUTINE — a recipe that runs recipes (the automation ladder, layer 2).
+// tool: "routine", params.steps: plain steps ({recipe, …overrides, as}) and
+// `each` blocks — a group of steps run once per ROW of a parameter table.
+// `each` takes rows (a list of maps), columns (a map of EQUAL-length lists,
+// zipped — never a cross-product), or {from: "params.csv"} (a table file in
+// the project). $var marks where each value lands. Expansion is a MACRO —
+// static, no expressions, enumerable before anything runs — so the opt-in
+// guard ({guard: "no-overwrites"}) can dry-pass every output first.
+// Analysis steps write reports/<date>/<slug>.tsv into the project (the
+// month-over-month diffable folder); params.output = {dir, prefix, suffix}
+// overrides. A failed step stops the routine visibly, window left open.
+function routineEachRows(each) {
+  if (Array.isArray(each)) return each.map((r) => ({ ...r }));         // rows
+  if (each && each.from) return { from: String(each.from) };           // resolved async by the runner
+  if (each && typeof each === 'object') {                              // columns (zipped)
+    const keys = Object.keys(each);
+    const lens = keys.map((k) => (Array.isArray(each[k]) ? each[k].length : -1));
+    if (!keys.length || lens.some((l2) => l2 < 0)) throw new Error('each: column form needs lists');
+    if (new Set(lens).size !== 1) throw new Error(`each: column lists must be EQUAL length (got ${lens.join(' / ')})`);
+    return Array.from({ length: lens[0] }, (_, i) => Object.fromEntries(keys.map((k) => [k, each[k][i]])));
+  }
+  throw new Error('each: rows (a list), columns (a map of lists), or {from: "file.csv"}');
+}
+function routineSubst(v, row) {
+  if (typeof v === 'string') {
+    if (v.startsWith('$') && row[v.slice(1)] !== undefined) return row[v.slice(1)];   // exact → typed value
+    return v.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, k) => (row[k] !== undefined ? String(row[k]) : m));
+  }
+  if (Array.isArray(v)) return v.map((x) => routineSubst(x, row));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, routineSubst(x, row)]));
+  return v;
+}
+async function routineReadTable(name) {                    // {from}: a CSV in the project → rows
+  const fh = await resolveFileHandle(_project.dir, name).catch(() => resolveFileHandle(_project.dir, 'recipes/' + name));
+  const lines = (await (await fh.getFile()).text()).split(/\r?\n/).filter((x) => x.trim());
+  const cells2 = collarCells(lines);
+  const heads = cells2(lines[0]);
+  return lines.slice(1).map((ln) => { const c = cells2(ln); return Object.fromEntries(heads.map((h, i2) => [h, c[i2] !== undefined && c[i2] !== '' && Number.isFinite(+c[i2]) ? +c[i2] : c[i2]])); });
+}
+async function expandRoutine(params) {
+  const out = [];
+  for (const st of params.steps || []) {
+    if (st.guard) { out.push({ guard: String(st.guard) }); continue; }
+    if (st.each !== undefined) {
+      let rows = routineEachRows(st.each);
+      if (rows.from) rows = await routineReadTable(rows.from);
+      for (const row of rows) {
+        for (const inner of st.steps || []) {
+          const sub = routineSubst(inner, row);
+          const tag = Object.values(row).map((v) => recipeSlug(String(v))).join('-');
+          out.push({ ...sub, _slug: recipeSlug(sub.as || sub.recipe) + (tag ? '-' + tag : '') });
+        }
+      }
+    } else if (st.recipe) out.push({ ...st, _slug: recipeSlug(st.as || st.recipe) });
+    else throw new Error('a step needs `recipe`, `each`, or `guard`');
+  }
+  return out;
+}
+function routineLayerNames(rc) {                           // the layer names a recipe's params reference
+  const p2 = rc.params || {};
+  const names = [];
+  if (p2.layer) names.push(p2.layer);
+  for (const ser of p2.series || []) if (ser.layer) names.push(ser.layer);
+  if (p2.source) names.push(String(p2.source).split(':')[0]);
+  if (p2.target) names.push(p2.target);
+  return names;
+}
+async function runRoutine(r) {
+  if (!_project || !_project.dir) { $('#meta').textContent = 'routine: reports/ needs a project — open or save one first'; return; }
+  const P = r.params || {};
+  let steps;
+  try { steps = await expandRoutine(P); } catch (e) { $('#meta').textContent = `routine: ${e.message}`; return; }
+  const byName = new Map(_recipes.map((x) => [x.name, x]));
+  // pre-flight 1: every referenced recipe exists
+  const missingR = [...new Set(steps.filter((st) => st.recipe && !byName.get(st.recipe)).map((st) => st.recipe))];
+  if (missingR.length) { $('#meta').textContent = `routine: missing recipe${missingR.length > 1 ? 's' : ''} — ${missingR.join(', ')}`; return; }
+  // pre-flight 2: every referenced layer is loaded (routines never prompt mid-run)
+  const loaded = new Set(_layers.map((L) => L.name));
+  const missingL = new Set();
+  for (const st of steps) {
+    if (!st.recipe) continue;
+    const rc = byName.get(st.recipe);
+    for (const nm of routineLayerNames({ params: { ...rc.params, ...st } })) if (nm && !loaded.has(nm)) missingL.add(nm);
+  }
+  if (missingL.size) { $('#meta').textContent = `routine: load these layers first — ${[...missingL].join(', ')} (routines run without prompts)`; return; }
+  // output routing
+  const day = new Date().toISOString().slice(0, 10);
+  const outDir = (P.output && P.output.dir) || `reports/${day}`;
+  const prefix = (P.output && P.output.prefix) || '', suffix = (P.output && P.output.suffix) || '';
+  const outPath = (slug) => `${outDir}/${prefix}${slug}${suffix}.tsv`;
+  // the opt-in GUARD: stop before ANYTHING runs if a write target exists
+  const guardAt = steps.findIndex((st) => st.guard === 'no-overwrites');
+  if (guardAt >= 0) {
+    for (const st of steps.slice(guardAt + 1)) {
+      if (!st.recipe) continue;
+      const rc = byName.get(st.recipe);
+      if (!['gt', 'swath', 'stats'].includes(rc.tool)) continue;
+      const exists = await resolveFileHandle(_project.dir, outPath(st._slug)).then(() => true, () => false);
+      if (exists) { $('#meta').textContent = `routine: guard stopped — ${outPath(st._slug)} already exists`; return; }
+    }
+  }
+  // run
+  let n = 0, wrote = 0;
+  for (const st of steps) {
+    if (!st.recipe) { n++; continue; }
+    n++;
+    const rc = byName.get(st.recipe);
+    const merged = { name: rc.name, tool: rc.tool, params: { ...rc.params, ...Object.fromEntries(Object.entries(st).filter(([k]) => !['recipe', 'as', '_slug'].includes(k))) } };
+    $('#meta').textContent = `routine “${r.name}” — step ${n}/${steps.length}: ${st._slug}…`;
+    try {
+      if (['gt', 'swath', 'stats'].includes(rc.tool)) {
+        const before = new Set([...document.querySelectorAll('.fwin')]);
+        runRecipe(merged, true);
+        const el = await new Promise((res, rej) => {
+          const t0 = Date.now();
+          const iv = setInterval(() => {
+            const w = [...document.querySelectorAll('.fwin')].find((x) => !before.has(x) && x._tableTSV && x._tableTSV());
+            if (w) { clearInterval(iv); res(w); }
+            else if (Date.now() - t0 > 600000) { clearInterval(iv); rej(new Error('timed out')); }
+          }, 400);
+        });
+        const tsv = el._tableTSV();
+        const fh = await resolveFileHandle(_project.dir, outPath(st._slug), { create: true });
+        const w = await fh.createWritable(); await w.write(tsv); await w.close();
+        wrote++;
+        el.querySelector('.fwin-head button:last-child').click();   // tidy: close the step's window
+      } else if (rc.tool === 'calccols' || rc.tool === 'interp' || rc.tool === 'figure') {
+        runRecipe(merged, true);
+        await new Promise((r2) => setTimeout(r2, 400));     // engine steps settle; figure runs its own flow
+      } else throw new Error(`unsupported tool in a routine: ${rc.tool}`);
+    } catch (e) {
+      $('#meta').textContent = `routine “${r.name}” STOPPED at step ${n} (${st._slug}) — ${e.message}`;
+      return;
+    }
+  }
+  markProjectDirty();
+  $('#meta').textContent = `routine “${r.name}” — ${n} steps done, ${wrote} report${wrote === 1 ? '' : 's'} → ${outDir}/`;
+}
 // plain JS ⇄ @gcu/yaml AST (the emitter is AST-only; nulls are simply omitted)
 function jsToYamlNode(v) {
   if (Array.isArray(v)) return yamlSeq(v.map(jsToYamlNode));
@@ -3475,6 +3614,7 @@ function runInterpRecipe(r, andRun) {
   else { const hd = $('#ngDlg .hd span'); if (hd) hd.textContent = 'interpolate → target'; $('#ngGo').textContent = 'Run'; _ngDlg = interpDlgFromParams(p, src.id, tgt.id); renderNewDialog(); $('#ngDlg').classList.add('show'); }
 }
 function runRecipe(r, andRun = true) {
+  if (r.tool === 'routine') { runRoutine(r); return; }             // a sequence of recipes (see the routine block below)
   if (r.tool === 'figure') { runFigureRecipe(r.params); return; }   // camera-based — no layer to resolve
   if (r.tool === 'interp') { runInterpRecipe(r, andRun); return; }
   const open2 = (Lp) => {
@@ -4096,6 +4236,7 @@ function openStats(L, ropts) {
     scRow.append(scL, seg); vSec.append(scRow);
     const exRow = document.createElement('div'); exRow.className = 'sw-row';
     const tblB = document.createElement('button'); tblB.className = 'awin-btn'; tblB.textContent = '⧉ table'; tblB.title = 'copy the table as TSV (paste into a spreadsheet)';
+    setTimeout(() => { const h = tblB.closest('.fwin'); if (h) h._tableTSV = tableTSV; });
     tblB.onclick = async () => { const tsv = tableTSV(); if (!tsv) { $('#meta').textContent = 'table: nothing computed yet — Run first'; return; } try { await navigator.clipboard.writeText(tsv); $('#meta').textContent = `table copied (${tsv.split('\n').length - 1} rows, TSV)`; } catch (e) { $('#meta').textContent = `copy failed (${e.message})`; } };
     exRow.append(tblB); vSec.append(exRow);
     rail.append(vSec);
@@ -14984,7 +15125,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
