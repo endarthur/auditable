@@ -6,6 +6,7 @@
 export { parse, asAst, tokenize, quoteIdent, CALLFNS, ExprParseError } from './parse.js';
 export { evaluate, evalBool, constraintValid } from './eval.js';
 export { compile, compileValue, compileBool } from './compile.js';
+export { compileChunk, compileChunkBool } from './compile-chunk.js';
 export { deps, validate, canMatch } from './analyze.js';
 export { complete } from './complete.js';
 export { isBlank, num, FN } from './runtime.js';

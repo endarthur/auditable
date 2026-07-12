@@ -20,7 +20,8 @@ import { makeNum, compare, contains, inSet, matches, makeRegExp, arith, FN, isBl
 const BLANK = () => null;
 
 // columns: array of names (strings) or { name } objects. → lower(name) → index.
-function indexMap(columns) {
+// (exported for compile-chunk.js — one binding convention across both compilers)
+export function indexMap(columns) {
   const m = new Map();
   (columns || []).forEach((c, i) => {
     const name = typeof c === 'string' ? c : (c && c.name);

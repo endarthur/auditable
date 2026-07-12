@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parse, evaluate, evalBool, constraintValid, compile, compileBool, deps, validate, canMatch, quoteIdent, tokenize, complete } from '../ext/expr/src/main.js';
+import { parse, evaluate, evalBool, constraintValid, compile, compileBool, compileChunk, compileChunkBool, deps, validate, canMatch, quoteIdent, tokenize, complete } from '../ext/expr/src/main.js';
 
 const fx = JSON.parse(readFileSync(new URL('./fixtures/expr.json', import.meta.url), 'utf8'));
 
@@ -274,4 +274,60 @@ test('v0.2 lexical — backticks tokenize as columns; ^ and ** as operators', ()
   // complete() emits the backtick form for awkward names
   const c = complete('', 0, { columns: ['grade', 'Cu (ppm)'] });
   assert.ok(c.options.some((o) => o.value === '`Cu (ppm)`'));
+});
+
+test('CHUNK ORACLE — compileChunk ≡ tree-walk on every fixture vector (1-row chunks)', () => {
+  for (const v of fx.vectors) {
+    if (v.verb === 'constrain') continue;
+    const columns = Object.keys(v.values);
+    const cols = columns.map((c) => [v.values[c]]);        // 1-row chunk, JS-array columns
+    const ast = parse(v.expr);
+    const tree = evaluate(ast, v.values);
+    const { t, buf } = compileChunk(ast, columns)(cols, 1);
+    const got = t === 'num' ? (buf[0] !== buf[0] ? null : buf[0])
+      : t === 'bool' ? (buf[0] === 2 ? null : buf[0] === 1)
+      : (buf[0] === undefined ? null : buf[0]);
+    assert.deepEqual(got, tree, `chunk≠treewalk for: ${v.expr}`);
+    assert.equal(compileChunkBool(ast, columns)(cols, 1)[0] === 1, tree === true, `chunkBool≠ for: ${v.expr}`);
+  }
+});
+
+test('CHUNK ORACLE — multi-row battery: typed + JS columns, blanks interleaved ≡ per-row compile', () => {
+  const N2 = 257;                                          // odd size, exercises buffer reuse across two calls
+  const auT = new Float64Array(N2), auJ = new Array(N2), lito = new Array(N2), depth = new Float64Array(N2);
+  for (let i = 0; i < N2; i++) {
+    const blank = i % 11 === 3;
+    auT[i] = blank ? NaN : (i % 100) / 20;
+    auJ[i] = blank ? null : String(auT[i]);                // CSV-shaped: numeric strings
+    lito[i] = i % 7 === 2 ? null : ['OX', 'TR', 'SULF'][i % 3];
+    depth[i] = i % 13 === 5 ? NaN : i * 1.5 - 50;
+  }
+  const columns = ['AU', 'LITO', 'DEPTH'];
+  const exprs = [
+    'AU > 2', 'AU > 2 and LITO = "OX"', 'not (AU > 2)', 'AU <= 2', 'AU != 2',
+    'AU between 1 and 3 or DEPTH < 0', 'LITO in ("OX", "TR")', 'LITO not in ("OX")',
+    'AU is blank', 'DEPTH is filled', '(AU > 2) is blank',
+    'AU * 2 + DEPTH / 4', '-AU^2', 'coalesce(nullif(AU, 2), 0.5)',
+    'if(LITO = "OX", AU * 1.1, AU)', 'log10(AU * 100)', 'mod(DEPTH, 10)',
+    'upper(LITO)', 'concat(LITO, "-", AU)', 'clamp(AU, 1, 3) + min(AU, DEPTH)',
+    'LITO contains "X"', 'AU > DEPTH', 'bin(DEPTH, 25)',
+  ];
+  for (const colsSet of [[auT, lito, depth], [auJ, lito, depth]]) {   // typed AND string-y AU
+    for (const e of exprs) {
+      const ast = parse(e);
+      const rowFn = compile(ast, columns);
+      const chunkFn = compileChunk(ast, columns);
+      for (const n of [N2, 64]) {                          // second, smaller call reuses buffers
+        const { t, buf } = chunkFn(colsSet, n);
+        for (let i = 0; i < n; i++) {
+          const row = [colsSet[0][i], colsSet[1][i], colsSet[2][i]];
+          const want = rowFn(row);
+          const got = t === 'num' ? (buf[i] !== buf[i] ? null : buf[i])
+            : t === 'bool' ? (buf[i] === 2 ? null : buf[i] === 1)
+            : (buf[i] === undefined ? null : buf[i]);
+          assert.deepEqual(got, want, `row ${i} of "${e}" (typed=${colsSet[0] === auT}, n=${n})`);
+        }
+      }
+    }
+  }
 });
