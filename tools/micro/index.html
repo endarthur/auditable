@@ -2877,7 +2877,13 @@ function reconcilePairs(cols) {
   for (const c of cols) if (c.startsWith('this_') && cols.includes('ref_' + c.slice(5))) out.push({ base: c.slice(5), ref: 'ref_' + c.slice(5), self: c });
   return out;
 }
-function numericColsOf(L) { const h = layerTableHeader(L); if (!h) return []; const m = h.mapping || {}; return h.columns.filter((_, i) => colIsNumeric(L, h, i) && ![m.x, m.y, m.z].includes(i)); }
+function numericColsOf(L) {
+  const h = layerTableHeader(L); if (!h) return []; const m = h.mapping || {};
+  const base = h.columns.filter((_, i) => colIsNumeric(L, h, i) && ![m.x, m.y, m.z].includes(i));
+  const calc = (L.calcCols || []).filter((c) => c.ty !== 'string').map((c) => c.name);       // computed columns
+  const paintNum = (L.paintCols || []).filter((c) => c.kind === 'ratio').map((c) => c.name);   // ratio incl. MATERIALIZED (estimated) columns
+  return [...base, ...calc, ...paintNum];                                                       // GT/swath/stats read these via schemaExt + extendRow
+}
 function blockVolumeOf(L) { const a = gridAxesOf(L); return a ? (Math.abs((a.x.pitch || 1) * (a.y.pitch || 1) * (a.z.pitch || 1)) || 1) : 1; }
 // grade-tonnage: for each series column, cutoff → (tonnage above, mean grade above)
 // weight: a column name (back-compat) or { col?, const?, unit? } — `unit` is a
@@ -2886,15 +2892,17 @@ function blockVolumeOf(L) { const a = gridAxesOf(L); return a ? (Math.abs((a.x.p
 // for models without a density column.
 async function computeGT(L, cols, weightCol, nCut, onProgress, selMask) {
   const wspec = typeof weightCol === 'string' ? { col: weightCol } : (weightCol || {});
-  const h = layerTableHeader(L), idx = cols.map((n) => h.columns.indexOf(n));
-  const wi = wspec.col ? h.columns.indexOf(wspec.col) : -1, vol = blockVolumeOf(L);
+  const h = layerTableHeader(L), schema = schemaExt(L, h), nameIdx = (nm) => schema.findIndex((c) => c.name === nm);
+  const idx = cols.map(nameIdx);                            // via schemaExt → source AND derived (calc/estimated) columns
+  const wi = wspec.col ? nameIdx(wspec.col) : -1, vol = blockVolumeOf(L);
   const dScale = wspec.unit ? unitConvert(1, wspec.unit, 't/m3') : 1;
   const dConst = wspec.const != null && Number.isFinite(+wspec.const) ? +wspec.const : null;
   const ser = cols.map(() => ({ g: [], w: [] }));
   let gmin = Infinity, gmax = -Infinity, rc = 0, rec = 0;
   for await (const batch of layerRows(L, null)) {
-    for (const f of batch) {
-      const inSel = !selMask || (rec < selMask.length && selMask[rec]); rec++;
+    for (const f0 of batch) {
+      const inSel = !selMask || (rec < selMask.length && selMask[rec]);
+      const f = extendRow(L, f0, rec); rec++;              // append calc/paint/materialized values at their schema positions
       if (!inSel) continue;
       const wt = (wi >= 0 ? (+f[wi] || 0) : dConst != null ? dConst : 1) * dScale * vol;
       for (let s = 0; s < idx.length; s++) { const v = +f[idx[s]]; if (Number.isFinite(v)) { ser[s].g.push(v); ser[s].w.push(wt); if (v < gmin) gmin = v; if (v > gmax) gmax = v; } }
@@ -3448,12 +3456,14 @@ function projRange(L, dir) {
 }
 // per band along dir: tonnage-weighted mean grade for each series + count/tonnage
 async function computeSwath(L, cols, dir, bandWidth, offset, weightCol, onProgress, selMask) {
-  const h = layerTableHeader(L), m = h.mapping, idx = cols.map((n) => h.columns.indexOf(n));
-  const wi = weightCol ? h.columns.indexOf(weightCol) : -1, vol = blockVolumeOf(L);
+  const h = layerTableHeader(L), m = h.mapping, schema = schemaExt(L, h), nameIdx = (nm) => schema.findIndex((c) => c.name === nm);
+  const idx = cols.map(nameIdx);                            // source AND derived (calc/estimated) columns
+  const wi = weightCol ? nameIdx(weightCol) : -1, vol = blockVolumeOf(L);
   const bands = new Map(); let rc = 0, rec = 0;
   for await (const batch of layerRows(L, null)) {
-    for (const f of batch) {
-      const inSel = !selMask || (rec < selMask.length && selMask[rec]); rec++;
+    for (const f0 of batch) {
+      const inSel = !selMask || (rec < selMask.length && selMask[rec]);
+      const f = extendRow(L, f0, rec); rec++;              // m.x/y/z stay valid (source indices); grades read via schema
       if (!inSel) continue;
       const x = +f[m.x], y = +f[m.y], z = +f[m.z]; if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
       const t = x * dir[0] + y * dir[1] + z * dir[2], bi = Math.floor((t - offset) / bandWidth);
@@ -10298,6 +10308,7 @@ function layerMenu(L, x, y) {
     { label: 'Rename layer…', kbd: 'F2', action: () => renameActiveLayer(L) },
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
     ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Interpolate from this…', action: () => openInterpolateDialog({ srcLayer: L.id }) }] : []),
+    ...((L.calcCols || []).length ? [{ label: 'Materialize calc column', submenu: () => (L.calcCols || []).map((c) => ({ label: `${c.name} → stored`, action: () => materializeCalcCol(L, c.name) })) }] : []),
     ...(L.gridSurface ? [{ label: 'Drape', submenu: () => {
       const grids = _layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
       return [{ label: (L.drapeSource ? '' : '✓ ') + 'elevation', action: () => recolorSurface(L, null) },
@@ -11721,6 +11732,22 @@ async function matColDelete(L, name) {
     else { const id = matColLooseId(L); await _idb.set(`matcol:${id}:manifest`, matColManifest(L)); }
   } catch { /* best-effort */ }
 }
+// freeze a computed calc column into a stored materialized column (same name):
+// evaluate its expression across every record → matColSet, drop the calc col. Bakes
+// an expensive expression, or keeps a derived column without carrying its inputs.
+async function materializeCalcCol(L, name) {
+  const cc = (L.calcCols || []).find((c) => c.name === name); if (!cc) { $('#meta').textContent = `materialize: no calc column “${name}”`; return; }
+  const h = layerTableHeader(L); if (!h) return;
+  const fn = compileValue(name, schemaExt(L, h), { decimal: '.' });
+  const n = attrRowCountOf(L) || 0; const vals = new Float32Array(n); let rec = 0;
+  $('#meta').textContent = `materializing “${name}”…`;
+  for await (const batch of layerRows(L, null)) { for (const f0 of batch) { if (rec >= n) break; let v; try { v = +fn(extendRow(L, f0, rec)); } catch { v = NaN; } vals[rec] = Number.isFinite(v) ? v : NaN; rec++; } await new Promise((r) => setTimeout(r)); }
+  L.calcCols = (L.calcCols || []).filter((c) => c.name !== name); L._calcFns = null;   // computed → stored (no schema collision)
+  matColSet(L, name, vals, { lineage: mkLineage('materialize', { from: 'calc', expr: cc.expr }, [L.lineage].filter(Boolean)) });
+  try { await matColPersist(L); } catch { /* best-effort */ }
+  markProjectDirty(); renderLayers(); requestRender();
+  $('#meta').textContent = `materialized “${name}” — ${rec.toLocaleString()} values stored`;
+}
 function extendRow(L, f, rec) {
   const fns = calcFns(L);
   const pcs = L && L.paintCols && L.paintCols.length ? L.paintCols : null;
@@ -13111,7 +13138,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, materializeCalcCol, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

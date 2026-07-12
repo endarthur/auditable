@@ -559,6 +559,28 @@ await p.close();
   });
   chk(`estimate lands a materialized column ON the target (mat ${out.mat}, block(50,50)≈${(out.at50 || 0).toFixed(1)}, coloured ${out.colorSel})`,
     out.has && out.mat && Math.abs(out.at50 - 50) < 6 && out.op === 'interpolate' && out.target === 'model.csv' && out.column === 'GRADE_IDW' && out.colorSel === 'paint:GRADE_IDW' && out.inOpts);
+  // GT + swath now SEE the materialized column (schemaExt + extendRow); numericColsOf offers it
+  const gtsw = await pg.evaluate(async () => {
+    const T = window._micro.layers().find((x) => x.name === 'model.csv');
+    const offered = window._micro.numericColsOf(T).includes('GRADE_IDW');
+    const gt = await window._micro.computeGT(T, ['GRADE_IDW'], null, 8, () => {});
+    const sw = await window._micro.computeSwath(T, ['GRADE_IDW'], [1, 0, 0], 12, 0, null, () => {});
+    const means = sw ? sw.profile.map((b) => b.mean[0]).filter(Number.isFinite) : [];
+    return { offered, gtCuts: gt ? gt.gt[0].length : 0, gtMax: gt ? gt.gmax : 0, swBands: sw ? sw.profile.length : 0, rising: means.length > 2 && means[means.length - 1] > means[0] };
+  });
+  chk(`GT + swath compute on the materialized column (numericColsOf offers it ${gtsw.offered}; GT ${gtsw.gtCuts} cuts, gmax ${(gtsw.gtMax || 0).toFixed(0)}; swath ${gtsw.swBands} bands, rising ${gtsw.rising})`,
+    gtsw.offered && gtsw.gtCuts === 9 && gtsw.gtMax > 50 && gtsw.swBands > 2 && gtsw.rising);
+  // materialize a calc column (compute → stored): DBL = X*2 → freeze it into a stored column
+  const matc = await pg.evaluate(async () => {
+    const T = window._micro.layers().find((x) => x.name === 'model.csv');
+    window._micro.applyCalcCols(T, [{ name: 'DBL', expr: 'X * 2', ty: 'number' }]);
+    const wasCalc = (T.calcCols || []).some((c) => c.name === 'DBL');
+    await window._micro.materializeCalcCol(T, 'DBL');
+    const col = window._micro.matColList(T).find((c) => c.name === 'DBL');
+    return { wasCalc, mat: !!(col && col.mat), stillCalc: (T.calcCols || []).some((c) => c.name === 'DBL'), at50: col ? col.fvalues[5 * 11 + 5] : null, from: col && col.lineage && col.lineage.params.from };
+  });
+  chk(`materialize a calc column → stored (was calc ${matc.wasCalc}, now mat ${matc.mat}, calc dropped ${!matc.stillCalc}, DBL(X=50)≈${(matc.at50 || 0).toFixed(0)})`,
+    matc.wasCalc && matc.mat && !matc.stillCalc && Math.abs(matc.at50 - 100) < 2 && matc.from === 'calc');
   // input + output filters compose: drop low samples, blank low results → some blocks unestimated
   const flt = await pg.evaluate(async () => {
     const cfg = { srcName: 'samples.csv', srcCol: 'GRADE', tgtName: 'model.csv', method: 'idw', power: 2, aniso: false, rMaj: 80, rSemi: 80, rMin: 80, dip: 0, dipAz: 0, pitch: 0, minPts: 1, maxPts: 12, inFilter: 'GRADE > 20', outFilter: 'GRADE_F > 40', outName: 'GRADE_F' };
