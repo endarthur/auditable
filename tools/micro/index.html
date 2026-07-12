@@ -128,6 +128,11 @@
   #fdrawer select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
   #fdrawer .fd-edwrap { position: relative; margin-bottom: 2px; }
   #fdrawer #fdExprHL { padding: 4px 6px; font-size: 12px; white-space: pre; }
+  #fdrawer #fdExpr { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--bd2) transparent; }
+  #fdrawer #fdExpr::-webkit-scrollbar { height: 7px; width: 7px; }
+  #fdrawer #fdExpr::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 4px; }
+  #fdrawer #fdExpr::-webkit-scrollbar-track { background: transparent; }
+  #fdrawer .fd-hint { color: var(--dim); margin: 2px 0 8px; }
   #fdrawer #fdExpr { width: 100%; box-sizing: border-box; position: relative; z-index: 1; color: transparent; caret-color: var(--text-hi); font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; resize: vertical; min-height: 2.6em; margin-bottom: 0; background: transparent; }
   #fdrawer #fdExpr.err { border-color: #b0563a; }
   #fdrawer #fdErr { color: #b0563a; font-size: 11px; min-height: 14px; margin-bottom: 6px; }
@@ -7577,7 +7582,7 @@ function fdSkeleton() {
   const edwrap = document.createElement('div'); edwrap.className = 'fd-edwrap';
   const edhl = document.createElement('div'); edhl.id = 'fdExprHL'; edhl.className = 'exprhl'; edhl.setAttribute('aria-hidden', 'true');
   const ed = document.createElement('textarea'); ed.id = 'fdExpr'; ed.rows = 2; ed.spellcheck = false; ed.wrap = 'off';
-  ed.placeholder = 'filter expression…  e.g.  FE > 55 and LITO = "HEMATITE"  # comments allowed';
+  ed.placeholder = 'filter expression…  # comments ok';
   for (const ev of ['scroll', 'keyup', 'click']) ed.addEventListener(ev, () => syncHL(ed, edhl));
   ed.addEventListener('input', () => {                     // typing: mirror + validate live, apply when valid (debounced)
     fdAutosize(); syncHL(ed, edhl);
@@ -7618,6 +7623,7 @@ function renderFilterDrawer() {
   const leaves = [], ops = [];
   (function split(n) { if (n && (n.t === 'and' || n.t === 'or')) { split(n.l); ops.push(n.t); split(n.r); } else if (n) leaves.push(n); })(ast);
   if (src.trim() && !ast) { const r = document.createElement('div'); r.className = 'fd-row'; r.innerHTML = '<span class="fd-expr">can’t parse — fix the text first</span>'; d.appendChild(r); }
+  if (!src.trim()) { const r = document.createElement('div'); r.className = 'fd-hint'; r.textContent = 'no filter yet — type an expression above, or add a condition below'; d.appendChild(r); }
   leaves.forEach((leaf, li) => {
     if (li > 0) { const o = document.createElement('div'); o.className = 'fd-op'; o.textContent = ops[li - 1]; d.appendChild(o); }
     const spec = fdLeafSpec(leaf);
