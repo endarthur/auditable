@@ -174,11 +174,11 @@ export function parse(src) {
     }
     if (op('~')) { i++; return fin({ t: 'contains', l, r: add() }); }
     if (op('!~')) { i++; return fin({ t: 'not', e: { t: 'contains', l, r: add() } }); }
-    if (word('between')) { i++; const lo = add(); if (!(word('and') || op('&&'))) fail("expected 'and' in between"); i++; return fin({ t: 'between', e: l, lo, hi: add() }); }
-    if (word('contains')) { i++; return fin({ t: 'contains', l, r: add() }); }
-    if (word('in')) { i++; return fin({ t: 'in', e: l, set: inList() }); }
-    if (word('like')) { i++; return fin({ t: 'matches', e: l, re: likeToRegex(eatStr()) }); }
-    if (word('matches')) { i++; return fin({ t: 'matches', e: l, re: eatStr() }); }
+    if (word('between')) { const kt = toks[i]; i++; const lo = add(); if (!(word('and') || op('&&'))) fail("expected 'and' in between"); i++; return fin({ t: 'between', e: l, lo, hi: add(), opStart: kt.start, opEnd: kt.end }); }
+    if (word('contains')) { const kt = toks[i]; i++; return fin({ t: 'contains', l, r: add(), opStart: kt.start, opEnd: kt.end }); }
+    if (word('in')) { const kt = toks[i]; i++; return fin({ t: 'in', e: l, set: inList(), opStart: kt.start, opEnd: kt.end }); }
+    if (word('like')) { const kt = toks[i]; i++; return fin({ t: 'matches', e: l, re: likeToRegex(eatStr()), opStart: kt.start, opEnd: kt.end }); }
+    if (word('matches')) { const kt = toks[i]; i++; return fin({ t: 'matches', e: l, re: eatStr(), opStart: kt.start, opEnd: kt.end }); }
     if (word('not')) {                                                    // postfix negation: `x not in/contains/like …`
       if (peekWord('in')) { i += 2; return fin({ t: 'not', e: { t: 'in', e: l, set: inList() } }); }
       if (peekWord('contains')) { i += 2; return fin({ t: 'not', e: { t: 'contains', l, r: add() } }); }

@@ -395,7 +395,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     layerMeshStyle(layer) { const ls = layerOf(layer); return { tint: ls.meshTint, opacity: ls.meshOpacity }; },
     // per-layer opacity for blocks (box impostors) + sticks (drillholes) — applied
     // as a screen-door dither in their shaders (see-through, no alpha-blend ordering).
-    setLayerOpacity(layer, opacity) { const ls = layerOf(layer); ls.opacity = Math.max(0.02, Math.min(1, +opacity)); needClear = true; },
+    setLayerOpacity(layer, opacity) { const ls = layerOf(layer); const v = Math.max(0.02, Math.min(1, +opacity)); ls.opacity = v; ls.meshOpacity = v; needClear = true; },   // ONE knob: mesh-family layers read meshOpacity
     // block-edge override: null = follow the draw-level blockEdges flag, true/false = force
     setLayerEdges(layer, v) { const ls = layerOf(layer); const nv = v == null ? null : !!v; if (ls.edges !== nv) { ls.edges = nv; needClear = true; } },
     layerEdges(layer) { const v = layerOf(layer).edges; return v === undefined ? null : v; },

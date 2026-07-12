@@ -10937,7 +10937,7 @@ async function openDemoProject() {
     applyTreeVisibility();
     await openBlob(makeDemoShellObj(), 'ore_shell.obj', 'add');
     const shellL = activeLayer();
-    if (shellL && shellL.kind === 'mesh') { shellL.label = 'ore shell'; setMeshTint(shellL, '#c8722e'); shellL.opacity = 0.45; renderer.setLayerOpacity(shellL.id, 0.45); }
+    if (shellL && shellL.kind === 'mesh') { shellL.label = 'ore shell'; setMeshTint(shellL, '#c8722e'); shellL.opacity = 0.7; renderer.setLayerOpacity(shellL.id, 0.7); }
   } catch (e) { $('#meta').textContent = `demo surfaces — ${e.message}`; }
   // half-cut the model E–W through the ore lens (opens the deposit on the grade
   // interior); the drillholes stay WHOLE (per-layer "don't cut") so they thread

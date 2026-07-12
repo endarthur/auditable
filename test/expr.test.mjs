@@ -358,3 +358,14 @@ test('clause spans: op tokens, joiners, extents, paren groups (widget-UI contrac
   assert.equal(src.slice(grp.jStart, grp.jEnd), 'or');
   assert.equal(src.slice(grp.r.start, grp.r.end), 'SI between 1 and 2');
 });
+
+test('keyword operator spans: between/in/contains carry opStart/opEnd', () => {
+  const src = 'A between 1 and 2 or B in ("x") or C contains "y"';
+  const ast = parse(src);
+  const flat = [];
+  (function walk(n) { if (!n || typeof n !== 'object') return; flat.push(n); for (const k of ['l', 'r', 'e', 'lo', 'hi']) if (n[k]) walk(n[k]); if (n.set) n.set.forEach(walk); })(ast);
+  const opOf = (t) => flat.find((n) => n.t === t);
+  assert.equal(src.slice(opOf('between').opStart, opOf('between').opEnd), 'between');
+  assert.equal(src.slice(opOf('in').opStart, opOf('in').opEnd), 'in');
+  assert.equal(src.slice(opOf('contains').opStart, opOf('contains').opEnd), 'contains');
+});
