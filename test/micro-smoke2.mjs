@@ -938,6 +938,35 @@ await p.close();
   await pd2.close();
 }
 
+// ═══ 19. JOIN → COLUMNS (the cardinality rule): key joins and own-lattice
+//     spatial joins land as columns ON the layer, never a new layer; ops
+//     record cross-ELEMENT inputs ═══
+{
+  const pj = await mkPage('sm2join');
+  await pj.evaluate(async () => {
+    let a = 'X,Y,Z,FE,ID\n', b2 = 'X,Y,Z,AU,ID\n';
+    for (let i = 0; i < 10; i++) for (let j = 0; j < 10; j++) { a += `${5 + i * 10},${5 + j * 10},5,${30 + i},R${i}_${j}\n`; b2 += `${5 + i * 10},${5 + j * 10},5,${(i * 0.1).toFixed(1)},R${i}_${j}\n`; }
+    await window._micro.openBlob(new Blob([a]), 'left.csv', 'replace');
+    await new Promise((r) => setTimeout(r, 300));
+    await window._micro.openBlob(new Blob([b2]), 'right.csv', 'add');
+  });
+  await pj.waitForFunction(() => window._micro.layers().length === 2 && window._micro.layers()[1].docs.blockDoc, null, { timeout: 30000 });
+  const jc = await pj.evaluate(async () => {
+    const [L, R] = window._micro.layers();
+    window._micro.setActiveLayer(L.id);
+    const outs = await window._micro.spatialJoinToCols(L, R, { target: 'left', cols: ['right:AU'], ops: {}, weights: {} });
+    const { outs: kOuts, matched } = await window._micro.keyJoinToCols(L, R, { leftKey: 'ID', rightKey: 'ID', bring: ['AU'], dup: 'first' });
+    await window._micro.applyBlockFilter('AU > 0.55 and ' + kOuts[0] + ' > 0.55');
+    let h = 0; for (const m of L._filterMask) if (m) h++;
+    const man2 = window._micro.buildElementManifest(L);
+    const xel = man2.ops.filter((o) => o.inputs && o.inputs[0].element === 'right.csv').map((o) => o.op).sort();
+    return { outs, kOuts, matched, layers: window._micro.layers().length, hits: h, xel };
+  });
+  chk(`join → columns: spatial ${jc.outs} + key ${jc.kOuts} (${jc.matched} matched), NO new layer, filter ${jc.hits} hits, ops [${jc.xel}]`,
+    jc.outs.join() === 'AU' && jc.kOuts.join() === 'right_AU' && jc.matched === 100 && jc.layers === 2 && jc.hits === 40 && jc.xel.join() === 'estimate,key-lookup');
+  await pj.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

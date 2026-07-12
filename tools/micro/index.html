@@ -2762,7 +2762,7 @@ function gridAxesOf(L) {
 // target grid T, build a target block model (a CSV blob — real data columns),
 // and open it as a NEW layer. columns: [{ src:'left'|'right', name, out, op,
 // num, weight }]. op for numeric: 'mean'|'sum'|'count'; categorical → majority.
-async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], coverage = true, label = 'join', onProgress = null }) {
+async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], coverage = true, label = 'join', onProgress = null, asCells = false }) {
   const T = target;
   const nx = T.x.count, ny = T.y.count, nz = T.z.count, cells = nx * ny * nz;
   if (cells > 40_000_000) throw new Error(`target grid is ${cells.toLocaleString()} cells — too large`);
@@ -2826,6 +2826,7 @@ async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], co
   const present = new Uint8Array(cells); let nPresent = 0;
   for (let i = 0; i < cells; i++) { let any = 0; for (const c of columns) if (c._present[i]) { any = 1; break; } if (any) { present[i] = 1; nPresent++; } }
   if (!nPresent) throw new Error('no overlapping cells between the sources and the target grid');
+  if (asCells) return { cells, nPresent, columns, present };   // the join-to-COLUMNS path attaches these positionally
   // coverage columns only where an aggregate actually lost coverage
   const covCols = coverage ? columns.filter((c) => c.num && c._cov && [...c._present].some((p, i) => p && c._cov[i] < 0.999)) : [];
   // derived columns: a value computed per cell from the finalized columns
@@ -12614,7 +12615,8 @@ function layerColumnsOps(L, h, loc, idp) {
       const kind = ln.op === 'interpolate' ? 'estimate' : (ln.op === 'materialize' && ln.params && ln.params.from === 'calc' ? 'calc' : ln.op);
       def = idp + 'm' + (i + 1);
       ops.push({ id: def, op: kind, params: kind === 'calc' ? { expr: ln.params.expr } : (ln.params || {}), outputs: [c.name], at: ln.at, build: ln.build, sources: ln.sources && ln.sources.length ? ln.sources : undefined,
-        ...(kind === 'broadcast' && ln.params && ln.params.from ? { inputs: [{ loc: ln.params.from, column: ln.params.column }] } : {}) });   // cross-location inputs are explicit (rule 6)
+        ...(kind === 'broadcast' && ln.params && ln.params.from ? { inputs: [{ loc: ln.params.from, column: ln.params.column }] } : {}),
+        ...(ln.params && ln.params.fromElement ? { inputs: [{ element: ln.params.fromElement, loc: 'cells', column: ln.params.column }] } : {}) });   // cross-location/-element inputs are explicit (rule 6)
     }
     columns.push({
       loc, name: c.name, type: 'number', from: 'materialized', ...(def ? { def } : {}),
@@ -12626,7 +12628,8 @@ function layerColumnsOps(L, h, loc, idp) {
     if (c.mat || !c.lineage || !c.lineage.op) return;       // re-derivable from the op; plain hand-paint stays the RLE chore
     const ln = c.lineage, id = idp + 'p' + (i + 1);
     ops.push({ id, op: ln.op, params: ln.params || {}, outputs: [c.name], at: ln.at, build: ln.build,
-      ...(ln.op === 'broadcast' && ln.params && ln.params.from ? { inputs: [{ loc: ln.params.from, column: ln.params.column }] } : {}) });
+      ...(ln.op === 'broadcast' && ln.params && ln.params.from ? { inputs: [{ loc: ln.params.from, column: ln.params.column }] } : {}),
+      ...(ln.params && ln.params.fromElement ? { inputs: [{ element: ln.params.fromElement, loc: 'cells', column: ln.params.column }] } : {}) });
     columns.push({ loc, name: c.name, type: 'category', from: 'derived', def: id,
       categories: Object.fromEntries(c.dict.map((nm, k) => [String(k), { name: nm, color: c.colors[k] }]).filter(([k2, v2]) => k2 !== '0' && v2.name != null)) });
   });
@@ -13538,7 +13541,7 @@ function renderSpatialJoinUI(body, L, R, jf) {
   // target grid
   const tSel = document.createElement('select');
   for (const [v, lab] of [['left', `${shortName(L)} (this)`], ['right', shortName(R)], ['finest', 'common — finest'], ['coarsest', 'common — coarsest']]) { const o = document.createElement('option'); o.value = v; o.textContent = lab; tSel.appendChild(o); }
-  tSel.value = jf.target; tSel.onchange = () => { jf.target = tSel.value; };
+  tSel.value = jf.target; tSel.onchange = () => { jf.target = tSel.value; renderProps(); };
   body.appendChild(mkRow('target grid', tSel));
   // per-source column pickers
   const lh = layerTableHeader(L), rh = layerTableHeader(R);
@@ -13567,8 +13570,15 @@ function renderSpatialJoinUI(body, L, R, jf) {
   addSourceCols('left', L, lh); addSourceCols('right', R, rh);
   // run + reconcile
   const btns = document.createElement('div'); btns.style.cssText = 'display:flex;gap:6px;margin-top:10px';
-  const run = document.createElement('button'); run.className = 'pp-scan'; run.style.flex = '1'; run.textContent = `Join → new layer`;
+  const rightPicked = jf.cols.some((k) => k.startsWith('right:'));
+  const runC = document.createElement('button'); runC.className = 'pp-scan'; runC.style.flex = '1'; runC.textContent = 'Join → columns here';
+  runC.disabled = !(jf.target === 'left' && rightPicked);
+  runC.title = jf.target === 'left' ? `resample ${shortName(R)}'s picked columns onto this model's own cells — real columns, no new layer` : 'columns land here only when the target grid is THIS model (other targets change the record set → a new layer)';
+  runC.onclick = async () => { try { const outs = await spatialJoinToCols(L, R, jf); $('#meta').textContent = `join: ${outs.join(', ')} on ${L.label || L.name} — filter, color, GT and export all see ${outs.length > 1 ? 'them' : 'it'}`; } catch (e) { $('#meta').textContent = `join: ${e.message}`; } };
+  btns.appendChild(runC);
+  const run = document.createElement('button'); run.className = 'pp-scan'; run.textContent = `→ new layer`;
   run.disabled = !jf.cols.length;
+  run.title = 'a new block-model layer on the target grid';
   run.onclick = () => runSpatialJoinUI(L, R, jf);
   btns.appendChild(run);
   // reconcile enabled when a numeric column exists in BOTH
@@ -13611,6 +13621,131 @@ async function runSpatialJoinUI(L, R, jf) {
     await openBlob(blob, name, 'add', null, { lineage: lin });
     $('#meta').textContent = `joined ${cells.toLocaleString()} cells → ${name}`;
   } catch (e) { $('#meta').textContent = `join: ${e.message}`; }
+}
+// ── JOIN → COLUMNS (the cardinality rule in code): an op that PRESERVES the
+// left table's record count produces COLUMNS on it, never a new layer. Two
+// cases qualify — a spatial join whose target is THIS model's own lattice
+// (one resampled value per existing cell) and a key join (left rows unchanged).
+// Numeric results → materialized columns (Parquet sidecar); text → dict
+// category columns via the paint channel. Ops land in the element manifest
+// with explicit CROSS-ELEMENT inputs ({element, loc, column} — rule 6):
+// 'estimate' (method: resample) and 'key-lookup'. Joins onto a THIRD lattice
+// and reconcile Δ change cardinality → they correctly stay new layers.
+function joinOutName(taken, name, R) {
+  let out = name;
+  while (taken.has(out.toLowerCase())) out = shortName(R).replace(/\W+/g, '_') + '_' + out;
+  taken.add(out.toLowerCase());
+  return out;
+}
+async function spatialJoinToCols(L, R, jf) {
+  const T = gridAxesOf(L); if (!T) throw new Error('this layer has no regular grid');
+  const columns = joinColumnsFromForm(jf, L, R).filter((c) => c.src === 'right');
+  if (!columns.length) throw new Error('pick right-side columns (the left ones are already here)');
+  const res = await runSpatialJoin({ leftL: null, rightL: R, target: T, columns, coverage: false, label: 'join', asCells: true });
+  const h = layerTableHeader(L), m = h.mapping;
+  const nx = T.x.count, ny = T.y.count;
+  const n = attrRowCountOf(L) || 0;
+  const taken = new Set([...h.columns, ...(L.calcCols || []).map((c) => c.name), ...(L.paintCols || []).map((c) => c.name)].map((x) => String(x).toLowerCase()));
+  const outs = res.columns.map((c) => {
+    const out = joinOutName(taken, c.out || c.name, R);
+    const o = { c, out };
+    if (c.num) o.vals = new Float32Array(n);
+    else { o.pc = createPaintCol(L, out); if (!o.pc) throw new Error('column limit'); o.pc._noAutoColor = true; o.codeOf = new Map(); }
+    return o;
+  });
+  let rec = 0;
+  for await (const batch of layerRows(L, null)) {
+    for (const f of batch) {
+      if (rec >= n) break;
+      const wx = +f[m.x], wy = +f[m.y], wz = +f[m.z];
+      let idx = -1;
+      if (Number.isFinite(wx) && Number.isFinite(wy) && Number.isFinite(wz)) {
+        const i = Math.round((wx - T.x.origin) / (T.x.pitch || 1)), j = Math.round((wy - T.y.origin) / (T.y.pitch || 1)), k = T.z.pitch ? Math.round((wz - T.z.origin) / T.z.pitch) : 0;
+        if (i >= 0 && i < nx && j >= 0 && j < ny && k >= 0 && k < T.z.count) idx = i + nx * (j + ny * k);
+      }
+      for (const o of outs) {
+        const c = o.c;
+        if (idx < 0 || !c._present[idx]) { if (c.num) o.vals[rec] = NaN; continue; }
+        if (c.num) o.vals[rec] = c._out[idx];
+        else {
+          const lbl = c._dict[c._codes[idx]] || '';
+          if (lbl) { let code = o.codeOf.get(lbl); if (code == null) { code = addPaintValue(L, o.pc, lbl); if (code == null) continue; o.codeOf.set(lbl, code); } o.pc.codes[rec] = code; }
+        }
+      }
+      rec++;
+    }
+    $('#meta').textContent = `join: attaching ${rec.toLocaleString()} records…`;
+    await new Promise((r) => setTimeout(r));
+  }
+  for (const o of outs) {
+    const lin = mkLineage('estimate', { method: 'resample', fromElement: R.name, column: o.c.name, op: o.c.op || (o.c.num ? 'mean' : 'majority'), weight: o.c.weight || undefined }, [L.lineage, R.lineage].filter(Boolean));
+    if (o.c.num) matColSet(L, o.out, o.vals, { lineage: lin });
+    else { o.pc.lineage = lin; paintRecount(o.pc); }
+  }
+  L._colStats = null; L._calcFns = null;
+  try { await persistElement(L); } catch { /* best-effort */ }
+  setLayerColorSel(L, 'paint:' + outs[0].out);
+  markProjectDirty(); renderProps(); requestRender();
+  return outs.map((o) => o.out);
+}
+async function keyJoinToCols(L, R, { leftKey, rightKey, bring, dup = 'first' }) {
+  const lh = layerTableHeader(L), rh = layerTableHeader(R);
+  const lki = lh.columns.indexOf(leftKey), rki = rh.columns.indexOf(rightKey);
+  if (lki < 0 || rki < 0) throw new Error('key column not found');
+  const bringIdx = bring.map((n2) => rh.columns.indexOf(n2)).filter((i) => i >= 0);
+  const rNum = bringIdx.map((i) => colIsNumeric(R, rh, i));
+  const map = new Map();
+  let rc = 0, dupSeen = false;
+  for await (const batch of layerRows(R, null)) {
+    for (const f of batch) {
+      const k = f[rki] == null ? '' : String(f[rki]);
+      const vals = bringIdx.map((i) => f[i]);
+      const e = map.get(k);
+      if (!e) map.set(k, { vals, n: 1 });
+      else { dupSeen = true; e.n++; if (dup === 'aggregate') for (let b = 0; b < vals.length; b++) { if (rNum[b]) { const nv = +vals[b], cur = +e.vals[b]; if (Number.isFinite(nv)) e.vals[b] = Number.isFinite(cur) ? (cur * (e.n - 1) + nv) / e.n : nv; } } }
+      rc++;
+    }
+    $('#meta').textContent = `join: indexing right ${rc.toLocaleString()}…`;
+    await new Promise((r) => setTimeout(r));
+  }
+  if (dup === 'error' && dupSeen) throw new Error(`right key “${rightKey}” has duplicate values — pick first/aggregate or a unique key`);
+  const n = attrRowCountOf(L) || 0;
+  const taken = new Set([...lh.columns, ...(L.calcCols || []).map((c) => c.name), ...(L.paintCols || []).map((c) => c.name)].map((x) => String(x).toLowerCase()));
+  const outs = bringIdx.map((bi, b) => {
+    const out = joinOutName(taken, rh.columns[bi], R);
+    const o = { bi, b, num: rNum[b], out };
+    if (o.num) o.vals = new Float32Array(n);
+    else { o.pc = createPaintCol(L, out); if (!o.pc) throw new Error('column limit'); o.codeOf = new Map(); }
+    return o;
+  });
+  let rec = 0, matched = 0;
+  for await (const batch of layerRows(L, null)) {
+    for (const f of batch) {
+      if (rec >= n) break;
+      const e = map.get(f[lki] == null ? '' : String(f[lki]));
+      if (e) matched++;
+      for (const o of outs) {
+        if (o.num) { const v = e ? +e.vals[o.b] : NaN; o.vals[rec] = Number.isFinite(v) ? v : NaN; }
+        else {
+          const lbl = e ? String(e.vals[o.b] ?? '').trim() : '';
+          if (lbl) { let code = o.codeOf.get(lbl); if (code == null) { code = addPaintValue(L, o.pc, lbl); if (code == null) continue; o.codeOf.set(lbl, code); } o.pc.codes[rec] = code; }
+        }
+      }
+      rec++;
+    }
+    $('#meta').textContent = `join: attaching ${rec.toLocaleString()}…`;
+    await new Promise((r) => setTimeout(r));
+  }
+  for (const o of outs) {
+    const lin = mkLineage('key-lookup', { fromElement: R.name, leftKey, rightKey, column: rh.columns[o.bi], dup }, [L.lineage, R.lineage].filter(Boolean));
+    if (o.num) matColSet(L, o.out, o.vals, { lineage: lin });
+    else { o.pc.lineage = lin; paintRecount(o.pc); }
+  }
+  L._colStats = null; L._calcFns = null;
+  try { await persistElement(L); } catch { /* best-effort */ }
+  setLayerColorSel(L, 'paint:' + outs[0].out);
+  markProjectDirty(); renderProps(); requestRender();
+  return { outs: outs.map((o) => o.out), matched, rows: rec };
 }
 function openReconcileMenu(L, R, jf, shared, anchor) {
   const r = anchor.getBoundingClientRect();
@@ -13677,8 +13812,20 @@ function renderKeyJoinUI(body, L, R, jf) {
   }
   const dupSel = document.createElement('select'); for (const [v, lab] of [['first', 'first match'], ['aggregate', 'average dups'], ['error', 'error on dups']]) { const o = document.createElement('option'); o.value = v; o.textContent = lab; dupSel.appendChild(o); } dupSel.value = jf.dup; dupSel.onchange = () => { jf.dup = dupSel.value; };
   body.appendChild(mkRow('duplicate keys', dupSel));
-  const run = document.createElement('button'); run.className = 'pp-scan'; run.style.marginTop = '8px'; run.textContent = 'Join → new layer';
+  const btns = document.createElement('div'); btns.style.cssText = 'display:flex;gap:6px;margin-top:8px';
+  const runC = document.createElement('button'); runC.className = 'pp-scan'; runC.style.flex = '1'; runC.textContent = 'Join → columns here';
+  runC.disabled = !(jf.keyL && jf.keyR && jf.bring.size);
+  runC.title = 'the brought columns land ON this layer (rows unchanged — a key join never needs a new layer)';
+  runC.onclick = async () => {
+    try {
+      const { outs, matched, rows } = await keyJoinToCols(L, R, { leftKey: jf.keyL, rightKey: jf.keyR, bring: [...jf.bring], dup: jf.dup });
+      $('#meta').textContent = `key join: ${matched.toLocaleString()} of ${rows.toLocaleString()} rows matched — ${outs.join(', ')} on ${L.label || L.name}`;
+    } catch (e) { $('#meta').textContent = `key join: ${e.message}`; }
+  };
+  btns.appendChild(runC);
+  const run = document.createElement('button'); run.className = 'pp-scan'; run.textContent = '→ new layer';
   run.disabled = !(jf.keyL && jf.keyR && jf.bring.size);
+  run.title = 'export-shaped: a new layer/file of this layer’s rows + the brought columns';
   run.onclick = async () => {
     try {
       const { blob, rows, matched } = await runKeyJoin({ leftL: L, rightL: R, leftKey: jf.keyL, rightKey: jf.keyR, bring: [...jf.bring], dup: jf.dup, prefix: shortName(R).replace(/\W+/g, '_') + '_', label: 'join' });
@@ -13688,8 +13835,9 @@ function renderKeyJoinUI(body, L, R, jf) {
       $('#meta').textContent = `key join: ${matched.toLocaleString()} of ${rows.toLocaleString()} rows matched → ${name}`;
     } catch (e) { $('#meta').textContent = `key join: ${e.message}`; }
   };
-  body.appendChild(run);
-  body.appendChild(ppNote('a new layer = this layer’s rows + the brought columns (matched by key; unmatched → blank)'));
+  btns.appendChild(run);
+  body.appendChild(btns);
+  body.appendChild(ppNote('columns land HERE by default (matched by key; unmatched → blank) — “new layer” writes a joined copy instead'));
 }
 function renderSourceTab(body, L) {
   const d = L.docs || {};
@@ -14407,7 +14555,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, buildElementManifest, buildDhSetManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, buildElementManifest, buildDhSetManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
