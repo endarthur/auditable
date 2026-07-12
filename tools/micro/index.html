@@ -7252,9 +7252,15 @@ async function applyBlockFilter(expr) {
       }
     }
   } else {
+    let teeAcc = null; const pinNames = [];                 // pin-cache tee state (set up below)
     const scanRow = (f) => {
       const xv = +f[m.x], yv = +f[m.y], zv = +f[m.z];
       if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) return;   // same rows sweep 2 kept
+      if (teeAcc) for (const tn of pinNames) {
+        const e = teeAcc[tn.k]; if (!e) continue; const v = f[e.bi];
+        if (e.data) { const x = +v; e.data[rec] = (v == null || v === '' || !Number.isFinite(x)) ? NaN : x; }
+        else { const sv = v == null ? '' : String(v); let c = e.map.get(sv); if (c === undefined) { if (e.dict.length > 65535) { teeAcc[tn.k] = null; continue; } c = e.dict.length; e.dict.push(sv); e.map.set(sv, c); } e.codes[rec] = c; }
+      }
       if (fn(extendRow(AL, f, rec))) {
         mask[rec] = 1; hits++;
         const code = catCode ? (catCode.get((f[m.cat] || '').trim()) ?? 0) : 0;
@@ -7267,6 +7273,49 @@ async function applyBlockFilter(expr) {
     // accepted-row order — so a band the stats prove can't match is skipped by
     // SEEKING past its bytes, with the record numbering advanced exactly.
     let astC = null; try { astC = parse(expr); } catch { astC = null; }
+    // ── TIER 3 (pin cache): needed columns pinned → evaluate with NO file read ──
+    window.__pinUsed = false;
+    const needL = astC ? expandedDeps(AL, astC) : null;
+    const censusSchema = schemaExt(AL, header);
+    const chunkF = astC ? compileChunkBool(astC, censusSchema, { decimal: '.' }) : null;
+    const baseLen = header.columns.length, paintLen = ((AL && AL.paintCols) || []).length;
+    const calcChunkFns = (astC && AL && AL.calcCols && AL.calcCols.length)
+      ? calcOrder(AL).filter((it) => !needL || needL.has(String(it.c.name).toLowerCase()))
+          .map((it) => { let cfn; try { cfn = compileChunk(it.c.expr, censusSchema, { decimal: '.' }); } catch { cfn = () => ({ t: 'raw', buf: [] }); } return { slot: baseLen + paintLen + it.idx, fn: cfn }; })
+      : null;
+    if (chunkF) {                                          // the needed BASE columns, by name (coords + cat + chan + the dep cone)
+      const want = new Set([m.x, m.y, m.z]); if (m.cat != null) want.add(m.cat); if (m.chan != null) want.add(m.chan);
+      const lowById = new Map(header.columns.map((nm, i) => [String(nm).toLowerCase(), i]));
+      if (needL) for (const d of needL) { const bi = lowById.get(d); if (bi !== undefined) want.add(bi); }
+      for (const bi of want) if (bi != null && header.columns[bi] != null) pinNames.push({ k: header.columns[bi], bi });
+    }
+    if (chunkF && pinNames.length && pinNames.every((tn) => pinGet(AL, tn.k))) {
+      window.__pinUsed = true;
+      const total = header.count, scr = {};
+      const gx = pinGet(AL, header.columns[m.x]), gy = pinGet(AL, header.columns[m.y]), gz = pinGet(AL, header.columns[m.z]);
+      const gch = m.chan != null ? pinGet(AL, header.columns[m.chan]) : null, gca = m.cat != null ? pinGet(AL, header.columns[m.cat]) : null;
+      for (let at = 0; at < total; at += (1 << 18)) {
+        const n = Math.min(1 << 18, total - at);
+        const byName = {};
+        pinNames.forEach((tn, ci2) => { byName[tn.k] = pinWindow(pinGet(AL, tn.k), at, n, scr[ci2] || (scr[ci2] = [])); });
+        const ccols = censusChunkCols(AL, header, byName, at, n, needL, calcChunkFns);
+        const mk = chunkF(ccols, n);
+        const wX = pinWindow(gx, at, n), wY = pinWindow(gy, at, n), wZ = pinWindow(gz, at, n);
+        const wCh = gch ? pinWindow(gch, at, n) : null, wCa = gca ? pinWindow(gca, at, n, scr._c || (scr._c = [])) : null;
+        for (let i = 0; i < n; i++) {
+          if (mk[i] !== 1) continue;
+          const xv = +wX[i], yv = +wY[i], zv = +wZ[i];
+          if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;
+          const r = at + i;
+          mask[r] = 1; hits++;
+          const code = catCode && wCa ? (catCode.get(String(wCa[i] ?? '').trim()) ?? 0) : 0;
+          collect(xv, yv, zv, wCh ? +wCh[i] : 0, code, r);
+        }
+        rec = at + n;
+        await new Promise((r2) => setTimeout(r2)); if (epoch !== _filterEpoch) return;
+      }
+    }
+    if (!window.__pinUsed) {
     const BB = AL && AL._bands, idxC = header.index;
     const perBand = BB && idxC && idxC.k ? Math.round(BB.size / idxC.k) : 0;
     if (BB && idxC && astC && perBand > 0 && idxC.offsets && idxC.offsets.length > 0) {
@@ -7292,10 +7341,19 @@ async function applyBlockFilter(expr) {
       window.__csvBandsSkipped = bandsSkipped;             // smoke hook
       if (bandsSkipped) $('#meta').textContent = `filter: ${bandsSkipped} of ${nBands} bands skipped by the sidecar index…`;
     } else {
+    if (chunkF && pinBudgetBytes() > 0 && pinNames.length) {   // a COMPLETE scan → tee into the pin cache
+      teeAcc = {};
+      for (const tn of pinNames) {
+        const ty = (censusSchema.find((c2) => c2.name === tn.k) || {}).type;
+        teeAcc[tn.k] = ty === 'number' ? { bi: tn.bi, data: new Float64Array(header.count).fill(NaN) } : { bi: tn.bi, codes: new Uint16Array(header.count), dict: [''], map: new Map([['', 0]]) };
+      }
+    }
     for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow !== undefined ? header.hasHeaderRow : !!header.columns)) {
       for (const f of batch) scanRow(f);
       await new Promise((r) => setTimeout(r));
       if (epoch !== _filterEpoch) return;                  // superseded — stop before pushing more compact chunks
+    }
+    if (teeAcc && epoch === _filterEpoch) { for (const tn of pinNames) { const e = teeAcc[tn.k]; if (!e) continue; delete e.map; delete e.bi; pinPut(AL, tn.k, e); } teeAcc = null; }
     }
     }
   }
@@ -13218,13 +13276,14 @@ function attrTableReveal(lid, rec) { const t2 = _attrTables.get(lid); if (t2) t2
 function appendCalcRows(rows, L, f, h, rec) {
   if (!L || ((!L.calcCols || !L.calcCols.length) && (!L.paintCols || !L.paintCols.length))) return;
   const ext = extendRow(L, f, rec);
-  (L.calcCols || []).forEach((c, k) => {
-    const v = ext[h.columns.length + k];
-    rows.push([`ƒ ${c.name}`, v == null ? '—' : (typeof v === 'number' && !Number.isInteger(v) ? +v.toFixed(4) : v)]);
-  });
+  // census order: base → STORED (paint/materialized) → calc (matches extendRow)
   (L.paintCols || []).forEach((c, k) => {
-    const v = ext[h.columns.length + (L.calcCols || []).length + k];
-    rows.push([`${c.kind === 'ratio' ? '%' : '✎'} ${c.name}`, v === '' || v == null ? '—' : v]);
+    const v = ext[h.columns.length + k];
+    rows.push([`${c.kind === 'ratio' ? '%' : '✎'} ${c.name}`, v === '' || v == null ? '—' : (typeof v === 'number' && !Number.isInteger(v) ? +v.toFixed(4) : v)]);
+  });
+  (L.calcCols || []).forEach((c, k) => {
+    const v = ext[h.columns.length + (L.paintCols || []).length + k];
+    rows.push([`ƒ ${c.name}`, v == null ? '—' : (typeof v === 'number' && !Number.isInteger(v) ? +v.toFixed(4) : v)]);
   });
 }
 async function showRecord(fullId) {
