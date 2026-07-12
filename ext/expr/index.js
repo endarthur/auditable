@@ -131,7 +131,7 @@ function parse(src) {
         eatOp(')');
         const [lo, hi] = CALLFNS[lw];
         if (args.length < lo || args.length > hi) fail(`${lw}() expects ${lo === hi ? lo : (hi === Infinity ? `${lo}+` : `${lo}–${hi}`)} argument(s), got ${args.length}`);
-        return { t: 'call', fn: lw, args };
+        return { t: 'call', fn: lw, args, start: t.start, end: toks[i - 1].end };   // full call extent
       }
       i++;
       if (lw === 'true') return { t: 'bool', v: true };
@@ -201,7 +201,7 @@ function parse(src) {
   function notE() { if (word('not')) { i++; return { t: 'not', e: comparison() }; } return comparison(); }
   function andE() { let l = notE(); while (word('and') || op('&&')) { const jt = toks[i]; i++; l = { t: 'and', l, r: notE(), jStart: jt.start, jEnd: jt.end }; } return l; }
   function orE() { let l = andE(); while (word('or') || op('||')) { const jt = toks[i]; i++; l = { t: 'or', l, r: andE(), jStart: jt.start, jEnd: jt.end }; } return l; }
-  function expr() { return orE(); }
+  function expr() { const st = toks[i] ? toks[i].start : 0; const n = orE(); if (n && typeof n === 'object' && n.start == null) { n.start = st; n.end = toks[i - 1] ? toks[i - 1].end : st; } return n; }   // extent on anything span-less (args, and/or)
 
   const ast = expr();
   if (i < toks.length) fail(`trailing input near '${toks[i].v}'`);

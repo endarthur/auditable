@@ -112,39 +112,39 @@
   #filterHL { right: 24px; }
   #fdrawer { position: fixed; display: none; z-index: 9; background: #1a1a1a; border: 1px solid var(--bd2); box-shadow: 0 6px 24px rgba(0,0,0,0.5); padding: 10px 12px; font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 340px; max-width: 520px; max-height: 60vh; overflow-y: auto; }
   #fdrawer.show { display: block; }
-  #fdrawer .fd-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--accent); }
-  #fdrawer .fd-head button { background: none; border: 1px solid var(--bd2); border-radius: 3px; color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 2px 8px; cursor: pointer; }
-  #fdrawer .fd-head button:hover { color: var(--text-hi); }
-  #fdrawer .fd-head .fd-dot { color: var(--warn, #c8a02e); margin-right: 4px; }
-  #fdrawer .fd-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
-  #fdrawer .fd-row > b { color: var(--text-hi); font-weight: normal; min-width: 60px; }
-  #fdrawer .fd-op { color: var(--dim); font-size: 10px; text-transform: uppercase; margin: -4px 0 4px 2px; }
-  #fdrawer input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); }
-  #fdrawer input[type="number"], #fdrawer input[type="text"] { width: 84px; font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
-  #fdrawer .fd-chip { border: 1px solid var(--bd2); border-radius: 10px; padding: 1px 9px; cursor: pointer; color: var(--muted); user-select: none; }
-  #fdrawer .fd-chip.on { border-color: var(--accent); color: var(--accent); }
-  #fdrawer .fd-expr { color: var(--dim); border: 1px dashed var(--bd2); border-radius: 3px; padding: 1px 8px; }
-  #fdrawer .fd-add { color: var(--dim); }
-  #fdrawer select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
-  #fdrawer .fd-edwrap { position: relative; margin-bottom: 2px; }
+  .fdw .fd-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--accent); }
+  .fdw .fd-head button { background: none; border: 1px solid var(--bd2); border-radius: 3px; color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 2px 8px; cursor: pointer; }
+  .fdw .fd-head button:hover { color: var(--text-hi); }
+  .fdw .fd-head .fd-dot { color: var(--warn, #c8a02e); margin-right: 4px; }
+  .fdw .fd-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .fdw .fd-row > b { color: var(--text-hi); font-weight: normal; min-width: 60px; }
+  .fdw .fd-op { color: var(--dim); font-size: 10px; text-transform: uppercase; margin: -4px 0 4px 2px; }
+  .fdw input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); }
+  .fdw input[type="number"], .fdw input[type="text"] { width: 84px; font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
+  .fdw .fd-chip { border: 1px solid var(--bd2); border-radius: 10px; padding: 1px 9px; cursor: pointer; color: var(--muted); user-select: none; }
+  .fdw .fd-chip.on { border-color: var(--accent); color: var(--accent); }
+  .fdw .fd-expr { color: var(--dim); border: 1px dashed var(--bd2); border-radius: 3px; padding: 1px 8px; }
+  .fdw .fd-add { color: var(--dim); }
+  .fdw select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
+  .fdw .fd-edwrap { position: relative; margin-bottom: 2px; }
   #fdrawer #fdExprHL { padding: 4px 6px; font-size: 12px; white-space: pre; }
   #fdrawer #fdExpr { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--bd2) transparent; }
   #fdrawer #fdExpr::-webkit-scrollbar { height: 7px; width: 7px; }
   #fdrawer #fdExpr::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 4px; }
   #fdrawer #fdExpr::-webkit-scrollbar-track { background: transparent; }
-  #fdrawer .fd-hint { color: var(--dim); margin: 2px 0 8px; }
+  .fdw .fd-hint { color: var(--dim); margin: 2px 0 8px; }
   #fdrawer #fdExpr { width: 100%; box-sizing: border-box; position: relative; z-index: 1; color: transparent; caret-color: var(--text-hi); font-family: var(--mono); font-size: 12px; background: transparent; border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; resize: vertical; min-height: 2.6em; margin-bottom: 0; }
   #fdrawer #fdExpr::placeholder { color: var(--dim); }
   #fdrawer #fdExpr.err { border-color: #b0563a; }
   #fdrawer #fdErr { color: #b0563a; font-size: 11px; min-height: 14px; margin-bottom: 6px; }
-  #fdrawer .fd-row.nw { flex-wrap: nowrap; }
-  #fdrawer .fd-row.nw input[type="number"] { width: 68px; flex: 0 0 auto; }
-  #fdrawer .fd-row.nw input[type="range"] { min-width: 56px; }
-  #fdrawer .fd-group { border-left: 2px solid var(--bd2); padding: 6px 0 0 10px; margin: 2px 0 8px; }
-  #fdrawer .fd-op.click { cursor: pointer; display: inline-block; border: 1px solid transparent; border-radius: 8px; padding: 0 7px; }
-  #fdrawer .fd-op.click:hover { border-color: var(--bd2); color: var(--text-hi); }
-  #fdrawer select { background: #222; color: var(--text); border: 1px solid var(--bd2); border-radius: 3px; font: inherit; }
-  #fdrawer .fd-opsel { flex: 0 0 auto; color: var(--muted); }
+  .fdw .fd-row.nw { flex-wrap: nowrap; }
+  .fdw .fd-row.nw input[type="number"] { width: 68px; flex: 0 0 auto; }
+  .fdw .fd-row.nw input[type="range"] { min-width: 56px; }
+  .fdw .fd-group { border-left: 2px solid var(--bd2); padding: 6px 0 0 10px; margin: 2px 0 8px; }
+  .fdw .fd-op.click { cursor: pointer; display: inline-block; border: 1px solid transparent; border-radius: 8px; padding: 0 7px; }
+  .fdw .fd-op.click:hover { border-color: var(--bd2); color: var(--text-hi); }
+  .fdw select { background: #222; color: var(--text); border: 1px solid var(--bd2); border-radius: 3px; font: inherit; }
+  .fdw .fd-opsel { flex: 0 0 auto; color: var(--muted); }
   .cw-wrap { display: flex; font-family: var(--mono); font-size: 12px; color: var(--text); }
   .cw-rail { flex: 0 0 150px; border-right: 1px solid var(--bd2); overflow-y: auto; padding: 6px 0; }
   .cw-item { padding: 4px 10px; cursor: pointer; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -162,6 +162,16 @@
   .cw-hint { color: var(--dim); font-size: 11px; margin: 2px 0 6px; }
   .cw-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .cw-row label { color: var(--muted); flex: 0 0 auto; }
+  .cw-proj { margin: 2px 0 6px; }
+  .cw-proj .cw-case { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
+  .cw-proj .cw-cond { flex: 1; min-width: 0; }
+  .cw-proj .cw-cond .fd-row { margin-bottom: 4px; }
+  .cw-proj .fd-row > b { min-width: 0; }
+  .cw-proj .cw-val { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding-top: 2px; }
+  .cw-proj .cw-val input[type="range"] { width: 90px; min-width: 90px; flex: 0 0 auto; }
+  .cw-proj .cw-else { color: var(--muted); min-width: 60px; padding: 2px 0; }
+  .cw-proj .cw-klabel { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; flex: 1; }
+  .cw-proj .cw-sect { color: var(--dim); font-size: 10px; text-transform: uppercase; margin: 4px 0 4px; }
   #bar #filter:focus { outline: none; border-color: var(--info); }
   #bar #filter.err { border-color: #c0584a; }
   #bar #filter::placeholder { color: var(--faint); }
@@ -755,7 +765,7 @@
   <div id="plDlg"><div class="box"><div class="hd"><span>opening project</span><button id="plClose">×</button></div><div class="bd" id="plDlgBody"></div></div></div>
   <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
   <div id="adDlg"><div class="box"><div class="hd"><span>assign domains</span><button id="adCancel">×</button></div><div class="bd" id="adDlgBody"></div><div id="adProg" style="display:none"><div id="adProgFill"></div></div><div class="dh-foot"><span id="adDlgMsg"></span><button id="adGo">Assign</button></div></div></div>
-  <div id="fdrawer"></div>
+  <div id="fdrawer" class="fdw"></div>
   <div id="ngDlg"><div class="box"><div class="hd"><span>new grid / block model</span><button id="ngCancel">×</button></div><div class="bd" id="ngDlgBody"></div><div class="dh-foot"><span id="ngDlgMsg"></span><button id="ngGo">Create</button></div></div></div>
   <div id="sfDlg"><div class="box"><div class="hd"><span id="sfTitle">surface tools</span><button id="sfCancel">×</button></div><div class="bd" id="sfDlgBody"></div><div class="dh-foot"><span id="sfDlgMsg"></span><button id="sfGo">Create</button></div></div></div>
   <div id="rgDlg"><div class="box"><div class="hd"><span>mesh → grid</span><button id="rgCancel">×</button></div><div class="bd" id="rgDlgBody"></div><div class="dh-foot"><span id="rgDlgMsg"></span><button id="rgGo">Rasterize</button></div></div></div>
@@ -4265,6 +4275,7 @@ function openCalcWindow(L, selIdx) {
     if (cur) ed.value = cur.expr;
     edwrap.append(edhl, ed);
     const err = document.createElement('div'); err.className = 'cw-err';
+    const proj = document.createElement('div'); proj.className = 'cw-proj fdw';
     const hint = document.createElement('div'); hint.className = 'cw-hint';
     hint.textContent = 'a value expression over base + stored + other ƒ columns — if(cond, a, b) · bin(x, breaks…) · math + string fns · # comments';
     const schemaFor = () => schemaExt(L, h).filter((c) => !cur || String(c.name).toLowerCase() !== String(cur.name).toLowerCase());
@@ -4278,10 +4289,122 @@ function openCalcWindow(L, selIdx) {
     };
     const sync = () => syncHL(ed, edhl);
     for (const ev of ['scroll', 'keyup', 'click']) ed.addEventListener(ev, sync);
-    ed.addEventListener('input', () => { sync(); check(); });
-    const ctr = document.createElement('div'); ctr.className = 'awin-ctrls'; ctr.style.cssText = 'border-top:none;background:none;padding:5px 0;';
-    const saveB = document.createElement('button'); saveB.className = 'awin-btn'; saveB.textContent = cur ? 'save' : 'add column';
-    saveB.onclick = async () => {
+    ed.addEventListener('input', () => { sync(); if (check()) project(); });
+    // ── the PROJECTION: the expression rendered as widgets (same contract as the
+    // filter drawer — every element rewrites its own source span in the editor).
+    // An if() ladder projects as a CASE TABLE (condition | value — density by
+    // domain, recovery by lithology); anything else lists its numeric constants
+    // as sliders (tune a coefficient, watch a live filter/ramp move). Widget
+    // edits AUTO-SAVE an existing column (debounced); typed edits wait for save.
+    let cwSpans = []; let saveT = null;
+    const cwReplace = (sp, txt) => {
+      const s0 = ed.value, nt = s0.slice(0, sp.start) + txt + s0.slice(sp.end);
+      const delta = txt.length - (sp.end - sp.start);
+      for (const o of cwSpans) { if (o === sp) continue; if (o.start >= sp.end) { o.start += delta; o.end += delta; } else if (o.start <= sp.start && o.end >= sp.end) { o.end += delta; } }
+      sp.end = sp.start + txt.length;
+      ed.value = nt; sync(); check();
+      if (cur) { clearTimeout(saveT); saveT = setTimeout(() => doSave(true), 400); }
+    };
+    const cwCtx = { push: (sp) => cwSpans.push(sp), replace: cwReplace, rerender: () => project() };
+    const ladderOf = (n) => {
+      if (!(n && n.t === 'call' && n.fn === 'if')) return null;
+      const rows = []; let x = n;
+      while (x && x.t === 'call' && x.fn === 'if' && x.args.length === 3) { rows.push({ cond: x.args[0], val: x.args[1] }); x = x.args[2]; }
+      return { rows, els: x };
+    };
+    const numOf = (x) => (x && x.t === 'num' ? x.v : (x && x.t === 'neg' && x.e && x.e.t === 'num' ? -x.e.v : null));
+    function valCell(v, lo, hi) {                          // a value slot: number+slider / text / read-only expr
+      const cell = document.createElement('span'); cell.className = 'cw-val';
+      const nv = numOf(v);
+      if (nv != null && v.start != null) {
+        cwSpans.push(v);
+        const step = (hi - lo) / 200 || 0.01;
+        const sl = document.createElement('input'); sl.type = 'range'; sl.min = lo; sl.max = hi; sl.step = step; sl.value = nv;
+        const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(nv, step);
+        sl.oninput = () => { nb.value = fdNum(+sl.value, step); cwReplace(v, fdNum(+sl.value, step)); };
+        sl.onchange = () => project();
+        nb.onchange = () => { cwReplace(v, fdNum(+nb.value, step)); project(); };
+        cell.append(sl, nb);
+      } else if (v && v.t === 'str' && v.start != null) {
+        cwSpans.push(v);
+        const t = document.createElement('input'); t.type = 'text'; t.value = v.v; t.style.width = '90px';
+        t.onchange = () => { cwReplace(v, '"' + t.value.replace(/"/g, '') + '"'); project(); };
+        cell.appendChild(t);
+      } else {
+        const x = document.createElement('span'); x.className = 'fd-expr';
+        x.textContent = v && v.start != null ? ed.value.slice(v.start, v.end) : '…';
+        cell.appendChild(x);
+      }
+      return cell;
+    }
+    function project() {
+      proj.textContent = ''; cwSpans = [];
+      const t = ed.value.trim(); if (!t) return;
+      let ast = null; try { ast = parse(t); } catch { return; }
+      const lad = ladderOf(ast);
+      if (lad) {
+        const sect = document.createElement('div'); sect.className = 'cw-sect'; sect.textContent = 'cases'; proj.appendChild(sect);
+        const nums = [...lad.rows.map((r) => numOf(r.val)), numOf(lad.els)].filter((x) => x != null);
+        let lo = Math.min(...nums), hi = Math.max(...nums);
+        if (!nums.length || lo === hi) { const v = nums[0] || 0, sp2 = Math.max(1, Math.abs(v)); lo = v - sp2; hi = v + sp2; }
+        else { const pad = (hi - lo) * 0.5; lo -= pad; hi += pad; }
+        for (const r of lad.rows) {
+          const row = document.createElement('div'); row.className = 'cw-case';
+          const cond = document.createElement('div'); cond.className = 'cw-cond';
+          if (r.cond && (r.cond.t === 'and' || r.cond.t === 'or')) fdRenderChain(cond, r.cond, L, cwCtx);
+          else fdRenderLeaf(cond, r.cond, L, cwCtx);
+          row.append(cond, valCell(r.val, lo, hi));
+          proj.appendChild(row);
+        }
+        const erow = document.createElement('div'); erow.className = 'cw-case';
+        const elab = document.createElement('div'); elab.className = 'cw-else'; elab.textContent = 'else';
+        erow.append(elab, valCell(lad.els, lo, hi));
+        proj.appendChild(erow);
+        if (lad.els && lad.els.start != null) {            // add a case ABOVE the else (rewrites the else slot)
+          const at = { start: lad.els.start, end: lad.els.end };
+          cwSpans.push(at);
+          const addRow = document.createElement('div'); addRow.className = 'fd-row fd-add';
+          const selC = document.createElement('select');
+          selC.append(new Option('add case…', ''));
+          const mm = h.mapping || {}; const catName = mm.cat != null ? h.columns[mm.cat] : null;
+          if (catName) selC.append(new Option(catName, 'c:' + catName));
+          for (const c of numericColsOf(L)) selC.append(new Option(c, 'n:' + c));
+          selC.onchange = () => {
+            const v = selC.value; if (!v) return;
+            const col = v.slice(2);
+            let clause;
+            if (v[0] === 'c') { const vals = fdValues(L, col, []); clause = quoteIdent(col) + ' = "' + (vals[0] || '') + '"'; }
+            else { const [blo, bhi] = fdBounds(L, col, 0); clause = quoteIdent(col) + ' > ' + fdNum((blo + bhi) / 2, (bhi - blo) / 200 || 0.01); }
+            const elsTxt = ed.value.slice(at.start, at.end);
+            cwReplace(at, 'if(' + clause + ', ' + elsTxt + ', ' + elsTxt + ')');
+            project();
+          };
+          addRow.appendChild(selC);
+          proj.appendChild(addRow);
+        }
+        return;
+      }
+      // constants: every numeric literal becomes a tunable slider, labelled by context
+      const lits = [];
+      (function walk(n) {
+        if (!n || typeof n !== 'object') return;
+        if (numOf(n) != null && n.start != null) { lits.push(n); return; }
+        for (const k of ['l', 'r', 'e', 'lo', 'hi']) if (n[k]) walk(n[k]);
+        if (n.args) n.args.forEach(walk);
+        if (n.set) n.set.forEach(walk);
+      })(ast);
+      if (!lits.length || lits.length > 8) return;
+      const sect = document.createElement('div'); sect.className = 'cw-sect'; sect.textContent = 'constants'; proj.appendChild(sect);
+      for (const v of lits) {
+        const nv = numOf(v), sp2 = Math.max(1, Math.abs(nv) * 2);
+        const row = document.createElement('div'); row.className = 'cw-case';
+        const klab = document.createElement('span'); klab.className = 'cw-klabel';
+        klab.textContent = (v.start > 12 ? '…' : '') + ed.value.slice(Math.max(0, v.start - 12), Math.min(ed.value.length, v.end + 12)).replace(/\n/g, ' ') + (v.end + 12 < ed.value.length ? '…' : '');
+        row.append(klab, valCell(v, nv - sp2, nv + sp2));
+        proj.appendChild(row);
+      }
+    }
+    async function doSave(auto) {
       const name = nameIn.value.trim(), expr = ed.value.trim();
       const taken = new Set([...h.columns, ...(L.paintCols || []).map((c) => c.name), ...(L.calcCols || []).filter((_, i) => i !== sel).map((c) => c.name)].map((n) => n.toLowerCase()));
       if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) { err.textContent = 'name: letters/digits/underscore, not starting with a digit'; return; }
@@ -4304,9 +4427,13 @@ function openCalcWindow(L, selIdx) {
       L.calcCols = L.calcCols || [];
       if (sel >= 0) L.calcCols[sel] = entry; else { L.calcCols.push(entry); sel = L.calcCols.length - 1; }
       invalidate();
-      render();
+      if (auto) { const it = rail.children[sel]; if (it) it.title = expr; }   // keep focus/drag alive — no rebuild
+      else render();
       $('#meta').textContent = `ƒ ${name} ${cur ? 'updated' : 'added'} — it works in the filter, color ramps, GT/swath, the record panel, and exports`;
-    };
+    }
+    const ctr = document.createElement('div'); ctr.className = 'awin-ctrls'; ctr.style.cssText = 'border-top:none;background:none;padding:5px 0;';
+    const saveB = document.createElement('button'); saveB.className = 'awin-btn'; saveB.textContent = cur ? 'save' : 'add column';
+    saveB.onclick = () => doSave(false);
     ctr.appendChild(saveB);
     if (cur) {
       const rmB = document.createElement('button'); rmB.className = 'awin-btn'; rmB.textContent = 'remove';
@@ -4324,8 +4451,8 @@ function openCalcWindow(L, selIdx) {
       rcp.onclick = () => saveRecipe('calccols', { layer: L.name, cols: L.calcCols.map((c) => ({ name: c.name, expr: c.expr, ty: c.ty })) }, `${(L.label || L.name).replace(/\.[^.]+$/, '')} columns`);
       ctr.appendChild(rcp);
     }
-    main.append(nameRow, edwrap, err, hint, ctr);
-    requestAnimationFrame(sync);
+    main.append(nameRow, edwrap, err, proj, hint, ctr);
+    requestAnimationFrame(() => { sync(); project(); });
   }
   render();
   _calcWins.set(L.id, { el: win.el, select });
@@ -7667,7 +7794,7 @@ function fdApply(text) {
   $('#filter').value = fdFlatten(text); syncFilterClear();
   const ed = $('#fdExpr'); if (ed && document.activeElement !== ed) { ed.value = text; fdAutosize(); }
   clearTimeout(_fdTimer); _fdTimer = setTimeout(() => applyBlockFilter(text), 60);
-  const dot = $('#fdrawer .fd-dot'); if (dot) dot.textContent = text === _fdSnap ? '' : '●';
+  const dot = $('.fdw .fd-dot'); if (dot) dot.textContent = text === _fdSnap ? '' : '●';
 }
 function fdReplace(sp, txt) {                              // surgical span edit + shift siblings
   const s0 = fdSrc(), nt = s0.slice(0, sp.start) + txt + s0.slice(sp.end);
@@ -7738,7 +7865,7 @@ function fdSkeleton() {
     fdAutosize(); syncHL(ed, edhl);
     const t = _fdText = ed.value;
     $('#filter').value = fdFlatten(t); syncFilterClear();
-    $('#fdrawer .fd-dot').textContent = t === _fdSnap ? '' : '●';
+    $('.fdw .fd-dot').textContent = t === _fdSnap ? '' : '●';
     clearTimeout(_fdTimer);
     if (fdValidateUI()) _fdTimer = setTimeout(() => applyBlockFilter(t), 300);
   });
@@ -7815,78 +7942,84 @@ function fdAddRow(AL, insert, defJoin, compact) {
 // render one chain level: leaf rows joined by CLICKABLE and/or pills (each pill
 // rewrites its own joiner token); nested/parenthesized groups indent, and a
 // parenthesized group gets its own add row inserting INSIDE the brackets.
-function fdRenderChain(d, n, AL) {
+// `ctx` is the rewrite context: { push(span), replace(span, txt), rerender(),
+// addRow? } — the filter drawer's default edits the filter text; the calc
+// window passes its own so the SAME widgets edit a calc expression instead.
+const FD_CTX = { push: (sp) => _fdSpans.push(sp), replace: (sp, txt) => fdReplace(sp, txt), rerender: () => renderFilterDrawer(), addRow: (...a2) => fdAddRow(...a2) };
+function fdRenderChain(d, n, AL, ctx) {
+  const cx = ctx || FD_CTX;
   const ch = fdChain(n);
   ch.items.forEach((it, i2) => {
     if (i2 > 0) {
       const j = ch.joiners[i2 - 1];
       const o = document.createElement('div'); o.className = 'fd-op'; o.textContent = ch.op;
       if (j && j.start != null) {
-        _fdSpans.push(j);
+        cx.push(j);
         o.classList.add('click'); o.title = 'switch and ↔ or';
-        o.onclick = () => { fdReplace(j, ch.op === 'and' ? 'or' : 'and'); renderFilterDrawer(); };
+        o.onclick = () => { cx.replace(j, ch.op === 'and' ? 'or' : 'and'); cx.rerender(); };
       }
       d.appendChild(o);
     }
     const nested = it && (it.t === 'and' || it.t === 'or');
     if (nested || (it && it.gStart != null)) {
       const g = document.createElement('div'); g.className = 'fd-group';
-      if (nested) fdRenderChain(g, it, AL);
-      else fdRenderLeaf(g, it, AL);
-      if (it.gStart != null && AL && layerTableHeader(AL)) {
+      if (nested) fdRenderChain(g, it, AL, cx);
+      else fdRenderLeaf(g, it, AL, cx);
+      if (it.gStart != null && AL && layerTableHeader(AL) && cx.addRow) {
         const at = { start: it.gEnd - 1, end: it.gEnd - 1 };   // just before the group's ')'
-        _fdSpans.push(at);
-        g.appendChild(fdAddRow(AL, (clause, join) => { fdReplace(at, ' ' + join + ' ' + clause); }, it.t === 'or' ? 'or' : 'and', true));
+        cx.push(at);
+        g.appendChild(cx.addRow(AL, (clause, join) => { cx.replace(at, ' ' + join + ' ' + clause); }, it.t === 'or' ? 'or' : 'and', true));
       }
       d.appendChild(g);
-    } else fdRenderLeaf(d, it, AL);
+    } else fdRenderLeaf(d, it, AL, cx);
   });
 }
-function fdRenderLeaf(d, leaf, AL) {
+function fdRenderLeaf(d, leaf, AL, ctx) {
+  const cx = ctx || FD_CTX;
   const spec = fdLeafSpec(leaf);
   const row = document.createElement('div'); row.className = 'fd-row';
   const lab = document.createElement('b'); lab.textContent = (spec.negated ? 'not ' : '') + (spec.col || ''); row.appendChild(lab);
   const extent = spec.node && spec.node.start != null ? spec.node : null;
-  if (extent) _fdSpans.push(extent);
+  if (extent) cx.push(extent);
   if (spec.kind === 'slider' && AL) {
     row.classList.add('nw');
-    _fdSpans.push(spec.sp);
+    cx.push(spec.sp);
     const [lo, hi] = fdBounds(AL, spec.col, spec.v); const step = (hi - lo) / 200 || 0.01;
     if (spec.opSp) {
-      _fdSpans.push(spec.opSp);
+      cx.push(spec.opSp);
       const opts = ['>', '>=', '<', '<=', '=', '!=']; if (extent) opts.push('between');
       row.appendChild(fdOpSel(opts, spec.op, (op2) => {
-        if (op2 === 'between') fdReplace(extent, quoteIdent(spec.col) + ' between ' + fdNum(spec.v, step) + ' and ' + fdNum(hi, step));
-        else fdReplace(spec.opSp, spec.flipped ? (FDFLIP[op2] || op2) : op2);
-        renderFilterDrawer();
+        if (op2 === 'between') cx.replace(extent, quoteIdent(spec.col) + ' between ' + fdNum(spec.v, step) + ' and ' + fdNum(hi, step));
+        else cx.replace(spec.opSp, spec.flipped ? (FDFLIP[op2] || op2) : op2);
+        cx.rerender();
       }));
     } else { const opEl = document.createElement('span'); opEl.textContent = spec.op; opEl.style.color = 'var(--dim)'; row.appendChild(opEl); }
     const sl = document.createElement('input'); sl.type = 'range'; sl.min = lo; sl.max = hi; sl.step = step; sl.value = spec.v;
     const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(spec.v, step);
-    const push = (v) => { fdReplace(spec.sp, fdNum(+v, step)); };
+    const push = (v) => { cx.replace(spec.sp, fdNum(+v, step)); };
     sl.oninput = () => { nb.value = fdNum(+sl.value, step); push(sl.value); };
-    sl.onchange = () => renderFilterDrawer();            // drag end → resync spans
-    nb.onchange = () => { push(nb.value); renderFilterDrawer(); };
+    sl.onchange = () => cx.rerender();                     // drag end → resync spans
+    nb.onchange = () => { push(nb.value); cx.rerender(); };
     row.append(sl, nb);
   } else if (spec.kind === 'range' && AL) {
     row.classList.add('nw');
-    _fdSpans.push(spec.lo, spec.hi);
+    cx.push(spec.lo); cx.push(spec.hi);
     const [lo, hi] = fdBounds(AL, spec.col, (spec.vlo + spec.vhi) / 2); const step = (hi - lo) / 200 || 0.01;
     if (extent) {
       row.appendChild(fdOpSel(['between', '>', '>=', '<', '<=', '=', '!='], 'between', (op2) => {
         if (op2 === 'between') return;
-        fdReplace(extent, quoteIdent(spec.col) + ' ' + op2 + ' ' + fdNum(spec.vlo, step));
-        renderFilterDrawer();
+        cx.replace(extent, quoteIdent(spec.col) + ' ' + op2 + ' ' + fdNum(spec.vlo, step));
+        cx.rerender();
       }));
     } else { const opEl = document.createElement('span'); opEl.textContent = 'between'; opEl.style.color = 'var(--dim)'; opEl.style.flex = '0 0 auto'; row.appendChild(opEl); }
-    const mk = (sp, v) => { const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(v, step); nb.onchange = () => { fdReplace(sp, fdNum(+nb.value, step)); renderFilterDrawer(); }; return nb; };
+    const mk = (sp, v) => { const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(v, step); nb.onchange = () => { cx.replace(sp, fdNum(+nb.value, step)); cx.rerender(); }; return nb; };
     const s1 = document.createElement('input'); s1.type = 'range'; s1.min = lo; s1.max = hi; s1.step = step; s1.value = spec.vlo;
     const s2 = document.createElement('input'); s2.type = 'range'; s2.min = lo; s2.max = hi; s2.step = step; s2.value = spec.vhi;
-    s1.oninput = () => fdReplace(spec.lo, fdNum(+s1.value, step)); s2.oninput = () => fdReplace(spec.hi, fdNum(+s2.value, step));
-    s1.onchange = s2.onchange = () => renderFilterDrawer();
+    s1.oninput = () => cx.replace(spec.lo, fdNum(+s1.value, step)); s2.oninput = () => cx.replace(spec.hi, fdNum(+s2.value, step));
+    s1.onchange = s2.onchange = () => cx.rerender();
     row.append(mk(spec.lo, spec.vlo), s1, s2, mk(spec.hi, spec.vhi));   // num | lo-slider | hi-slider | num, one aligned line
   } else if (spec.kind === 'chips' && AL) {
-    spec.picks.forEach((m2) => _fdSpans.push(m2));
+    spec.picks.forEach((m2) => cx.push(m2));
     const cur = spec.picks.map((m2) => m2.v);
     const vals = fdValues(AL, spec.col, cur);
     const q = (x) => '"' + x + '"';
@@ -7896,8 +8029,8 @@ function fdRenderLeaf(d, leaf, AL) {
         const txt = (op2 === 'in' || op2 === 'not in')
           ? quoteIdent(spec.col) + ' ' + op2 + ' (' + cur.map(q).join(', ') + ')'
           : quoteIdent(spec.col) + ' ' + op2 + ' ' + q(cur[0]);
-        fdReplace(extent, txt);
-        renderFilterDrawer();
+        cx.replace(extent, txt);
+        cx.rerender();
       }));
     } else { const opEl = document.createElement('span'); opEl.textContent = curOp; opEl.style.color = 'var(--dim)'; row.appendChild(opEl); }
     for (const v of vals) {
@@ -7907,22 +8040,22 @@ function fdRenderLeaf(d, leaf, AL) {
           const now = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v];
           if (!now.length) return;
           const first = spec.picks[0], last = spec.picks[spec.picks.length - 1];
-          fdReplace({ start: first.start, end: last.end }, now.map(q).join(', '));
-        } else fdReplace(spec.picks[0], q(v));            // single: swap the literal
-        renderFilterDrawer();
+          cx.replace({ start: first.start, end: last.end }, now.map(q).join(', '));
+        } else cx.replace(spec.picks[0], q(v));           // single: swap the literal
+        cx.rerender();
       };
       row.appendChild(ch);
     }
   } else if (spec.kind === 'text') {
-    _fdSpans.push(spec.sp);
+    cx.push(spec.sp);
     const t = document.createElement('input'); t.type = 'text'; t.value = spec.v; t.style.width = '140px';
-    t.onchange = () => { fdReplace(spec.sp, '"' + t.value.replace(/"/g, '') + '"'); renderFilterDrawer(); };
+    t.onchange = () => { cx.replace(spec.sp, '"' + t.value.replace(/"/g, '') + '"'); cx.rerender(); };
     row.append(document.createTextNode(spec.verb), t);
   } else if (spec.kind === 'flag') {
     const f = document.createElement('span'); f.className = 'fd-chip on'; f.textContent = spec.label;
     if (extent && !spec.negated) {                        // click → toggle blank ↔ filled
       f.title = 'switch blank ↔ filled';
-      f.onclick = () => { fdReplace(extent, quoteIdent(spec.col) + ' is ' + spec.other); renderFilterDrawer(); };
+      f.onclick = () => { cx.replace(extent, quoteIdent(spec.col) + ' is ' + spec.other); cx.rerender(); };
     }
     row.appendChild(f);
   } else {
@@ -7937,7 +8070,7 @@ function renderFilterDrawer() {
   fdValidateUI();
   const d = $('#fdBody'); d.textContent = ''; _fdSpans = [];
   const AL = activeLayer();
-  $('#fdrawer .fd-dot').textContent = fdSrc() === _fdSnap ? '' : '●';
+  $('.fdw .fd-dot').textContent = fdSrc() === _fdSnap ? '' : '●';
   const src = fdSrc();
   let ast = null; if (src.trim()) { try { ast = parse(src); } catch { ast = null; } }
   if (src.trim() && !ast) { const r = document.createElement('div'); r.className = 'fd-row'; r.innerHTML = '<span class="fd-expr">can’t parse — fix the text first</span>'; d.appendChild(r); }

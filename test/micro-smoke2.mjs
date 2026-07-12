@@ -810,6 +810,27 @@ await p.close();
     return { top: btns.some((t) => t.startsWith('ƒ calculations… (2')), oldAdd: btns.some((t) => t === 'add calculated column…') };
   });
   chk('columns tab: ƒ button at the top, inline form retired', tab.top && !tab.oldAdd);
+  // the projection widgets: an if() ladder → a CASE TABLE (condition chips |
+  // value slider | else | add case); widget edits rewrite the expression text
+  // and AUTO-SAVE an existing column. Arithmetic → tunable constant sliders.
+  const proj = await pc.evaluate(async () => {
+    const L = window._micro.layers()[0];
+    L.calcCols.push({ name: 'DENS', expr: 'if(FE > 60, 3.9, 2.8)', ty: 'number' });
+    L._calcFns = null;
+    [...document.querySelectorAll('.cw-item')].pop();       // rail is stale — rerender via select
+    window._micro.openCalcWindow(L, 2);
+    // openCalcWindow reuses the live window: select(2) re-renders
+    await new Promise((r) => setTimeout(r, 300));
+    const cases = document.querySelectorAll('.cw-proj .cw-case').length;
+    const hasElse = !!document.querySelector('.cw-proj .cw-else');
+    // edit the first case's value via its number input → text rewrite + auto-save
+    const nb = document.querySelectorAll('.cw-proj .cw-val input[type=number]')[0];
+    nb.value = '4.1'; nb.dispatchEvent(new Event('change'));
+    await new Promise((r) => setTimeout(r, 700));
+    return { cases, hasElse, text: document.querySelector('.cw-edwrap textarea').value, saved: L.calcCols[2].expr };
+  });
+  chk(`calc projection: if-ladder case table (${proj.cases} rows) + value edit auto-saves ("${proj.saved}")`,
+    proj.cases === 2 && proj.hasElse && proj.text === 'if(FE > 60, 4.1, 2.8)' && proj.saved === 'if(FE > 60, 4.1, 2.8)');
   await pc.close();
 }
 
