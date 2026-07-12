@@ -5427,7 +5427,7 @@ async function estimateOntoTarget(cfg, onMsg = () => {}) {
   let est = 0; for (let i = 0; i < values.length; i++) if (Number.isFinite(values[i])) est++;
   const lin = mkLineage('interpolate', { method: cfg.method, power: cfg.method === 'idw' ? cfg.power : undefined, ranges, orient: cfg.aniso ? orient : undefined, source: `${cfg.srcName}:${cfg.srcCol}`, target: cfg.tgtName, column: outName, samples: pts.px.length, estimated: est, inFilter: (cfg.inFilter || '').trim() || undefined, outFilter: (cfg.outFilter || '').trim() || undefined, minPts: cfg.minPts, maxPts: cfg.maxPts }, [src.lineage, tgt.lineage].filter(Boolean));
   const col = matColSet(tgt, outName, values, { lineage: lin });
-  try { await matColPersist(tgt); } catch { /* persistence best-effort */ }
+  try { await persistElement(tgt); } catch { /* persistence best-effort */ }
   setActiveLayer(tgt.id); setLayerColorSel(tgt, 'paint:' + outName);   // show it
   markProjectDirty(); renderLayers(); requestRender();
   $('#meta').textContent = `${cfg.tgtName} ← ${outName}: ${est.toLocaleString()} of ${tq.n.toLocaleString()} estimated (${cfg.method.toUpperCase()})`;
@@ -8662,7 +8662,7 @@ async function saveProject() {
     // as compact Surfer binary so a huge DEM's project reopens WITHOUT
     // re-decimating the source (eval still windows the source at full res)
     for (const L of _layers) { try { await writeGridDisplayCache(L, dir); } catch { /* cache, never a failure */ } }
-    for (const L of _layers) { try { if (layerTableHeader(L)) await matColPersist(L); } catch { /* the element manifest + sidecar cols are derived — never a save failure */ } }
+    for (const L of _layers) { try { if (layerTableHeader(L)) await persistElement(L); } catch { /* the element manifest + sidecar cols are derived — never a save failure */ } }
     // derived-cache sidecars (spec section 12): the discovery header + column
     // stats + BAND min/max travel WITH the data — reopening skips the discovery
     // sweep, the styling/statistics UIs wake up already scanned, and .dm filters
@@ -8934,7 +8934,7 @@ async function openProjectDir(dir) {
       L._pendingDrape = null;
       if (g) { try { recolorSurface(L, g); } catch { /* drape grid gone/incompatible → stays elevation */ } }
     }
-    for (const L of _layers) { try { await matColLoad(L, dir); } catch { /* sidecar cols are derived — never block a load */ } }   // materialized <layer>.cols/
+    for (const L of _layers) { try { await loadElement(L, dir); } catch { /* sidecar cols are derived — never block a load */ } }   // materialized <layer>.cols/
     await loadRecipes(dir);                                // recipes/ *.yaml → Tools → Recipes
     // pinned analysis windows come back configured (after ALL layers landed —
     // series may reference other layers). Run stays manual: no surprise scans.
@@ -12665,7 +12665,7 @@ async function matColDecode(bytes) {
   for (let i = 0; i < info.rowCount; i++) { const v = a[i]; out[i] = v == null ? NaN : v; }
   return out;
 }
-async function matColPersist(L) {
+async function persistElement(L) {
   const cols = matColList(L);
   const elem = buildElementManifest(L);
   if (!elem) return 'none';
@@ -12678,7 +12678,7 @@ async function matColPersist(L) {
   try { const id = matColLooseId(L); for (const c of cols) await _idb.set(`matcol:${id}:col:${c.name}`, matColEncode(c).buffer); await _idb.set(`matcol:${id}:element`, elem); return 'idb'; }
   catch { return 'memory'; }
 }
-async function matColLoad(L, dir) {
+async function loadElement(L, dir) {
   let elem = null, man = null, get = null;
   if (dir && L.storage === 'project') {
     const rel = await layerRelpath(L, dir);
@@ -12713,15 +12713,59 @@ async function matColLoad(L, dir) {
 async function matColDelete(L, name) {
   L.paintCols = (L.paintCols || []).filter((c) => c.name !== name); L._colStats = null; L._calcFns = null; addPaintColorOptions(L);
   try {
-    if (L.storage === 'project' && _project && _project.dir) { const rel = await layerRelpath(L, _project.dir); try { await removeFileAt(_project.dir, `${rel}.cols/${name}.parquet`); } catch { /* absent */ } try { await removeFileAt(_project.dir, `${rel}.cols/${name}.f32`); } catch { /* absent */ } await matColPersist(L); }
+    if (L.storage === 'project' && _project && _project.dir) { const rel = await layerRelpath(L, _project.dir); try { await removeFileAt(_project.dir, `${rel}.cols/${name}.parquet`); } catch { /* absent */ } try { await removeFileAt(_project.dir, `${rel}.cols/${name}.f32`); } catch { /* absent */ } await persistElement(L); }
     else { const id = matColLooseId(L); const e2 = buildElementManifest(L); if (e2) await _idb.set(`matcol:${id}:element`, e2); }
   } catch { /* best-effort */ }
 }
 // freeze a computed calc column into a stored materialized column (same name):
 // evaluate its expression across every record → matColSet, drop the calc col. Bakes
 // an expensive expression, or keeps a derived column without carrying its inputs.
+// FAST PATH: when every BASE column in the target's dependency cone is PINNED
+// (a prior complete filter scan teed it), realize via compileChunk over 256K
+// typed windows — the tier-3 filter engine (~100× the row path, no file read).
+// Materialized/paint inputs come from RAM inside censusChunkCols; ƒ inputs
+// realize chunk-wise in dependency order. Any unpinned base dep → null (the
+// row path takes over, and the next complete filter scan may pin it).
+function realizeCalcPinned(L, name) {
+  const h = layerTableHeader(L); if (!h) return null;
+  if (!(L.calcCols || []).some((c) => c.name === name)) return null;
+  let ast; try { ast = parse(quoteIdent(name)); } catch { return null; }
+  const needL = expandedDeps(L, ast); needL.add(String(name).toLowerCase());
+  const baseLow = new Map(h.columns.map((c, i) => [String(c).toLowerCase(), c]));
+  const pcsLow = new Set((L.paintCols || []).map((c) => String(c.name).toLowerCase()));
+  const ccsLow = new Set((L.calcCols || []).map((c) => String(c.name).toLowerCase()));
+  const baseNames = [];
+  for (const k of needL) {
+    if (ccsLow.has(k) || pcsLow.has(k)) continue;          // resolved from RAM by censusChunkCols
+    const bn = baseLow.get(k); if (!bn) continue;          // unknown name → blank, same as everywhere
+    if (!pinGet(L, bn)) return null;
+    baseNames.push(bn);
+  }
+  const censusSchema = schemaExt(L, h);
+  const baseLen = h.columns.length, paintLen = (L.paintCols || []).length;
+  let chunkFns;
+  try {
+    chunkFns = calcOrder(L).filter((it) => needL.has(String(it.c.name).toLowerCase()))
+      .map((it) => ({ slot: baseLen + paintLen + it.idx, fn: compileChunk(it.c.expr, censusSchema, { decimal: '.' }) }));
+  } catch { return null; }
+  const target = (L.calcCols || []).findIndex((c) => c.name === name);
+  const total = attrRowCountOf(L) || 0; if (!total) return null;
+  const vals = new Float32Array(total); const scr = {};
+  for (let at = 0; at < total; at += (1 << 18)) {
+    const n = Math.min(1 << 18, total - at);
+    const byName = {};
+    baseNames.forEach((bn, ci) => { byName[bn] = pinWindow(pinGet(L, bn), at, n, scr[ci] || (scr[ci] = [])); });
+    const ccols = censusChunkCols(L, h, byName, at, n, needL, chunkFns);
+    const col = ccols[baseLen + paintLen + target];
+    if (!col) return null;
+    for (let i = 0; i < n; i++) { const v = +col[i]; vals[at + i] = Number.isFinite(v) ? v : NaN; }
+  }
+  return vals;
+}
 async function realizeCalc(L, name) {                      // one pass → per-record Float32 values of ƒ `name`
   const h = layerTableHeader(L); if (!h) throw new Error('no column table');
+  const fast = realizeCalcPinned(L, name);
+  if (fast) return fast;
   const fn = compileValue(quoteIdent(name), schemaExt(L, h), { decimal: '.' });   // a NAME as an expression → quote
   const n = attrRowCountOf(L) || 0; const vals = new Float32Array(n); let rec = 0;
   for await (const batch of layerRows(L, null)) { for (const f0 of batch) { if (rec >= n) break; let v; try { v = +fn(extendRow(L, f0, rec)); } catch { v = NaN; } vals[rec] = Number.isFinite(v) ? v : NaN; rec++; } await new Promise((r) => setTimeout(r)); }
@@ -12738,7 +12782,7 @@ async function materializeCalcCol(L, name) {
   L._calcDisplay = null;                                    // the ephemeral realization is superseded by the stored column
   matColSet(L, name, vals, { lineage: mkLineage('materialize', { from: 'calc', expr: cc.expr }, [L.lineage].filter(Boolean)) });
   if (wasColor) setLayerColorSel(L, 'paint:' + name);
-  try { await matColPersist(L); } catch { /* best-effort */ }
+  try { await persistElement(L); } catch { /* best-effort */ }
   markProjectDirty(); renderLayers(); requestRender();
   $('#meta').textContent = `materialized “${name}” — ${rec.toLocaleString()} values stored`;
 }
@@ -14195,7 +14239,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, matColPersist, matColLoad, matColDelete, buildElementManifest, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, buildElementManifest, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
