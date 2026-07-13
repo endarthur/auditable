@@ -818,7 +818,7 @@
 
 <script type="module">
 import { openLas, decodeLasRecords, openPly, openBlockModel, openTable, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, buildHeightfieldMesh, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH, layerOfId, faceOfId, isMiss, FACE_NAMES, FACE_NORMALS, FACE_CUT } from '../../ext/condenser/src/main.js';
-import { deriveVocab as nlDeriveVocab, trainSession as nlTrainSession } from '../../ext/dispatch/index.js';   // @gcu/dispatch — session-trained NL → command. EXPERIMENTAL, off by default.
+import { deriveVocab as nlDeriveVocab, trainSession as nlTrainSession, tokenize as nlTokenize } from '../../ext/dispatch/index.js';   // @gcu/dispatch — session-trained NL → command. EXPERIMENTAL, off by default.
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
@@ -11898,16 +11898,16 @@ const NL_TOOLS = [
 
 // tool → what it SAYS it will do, and what it does when you press Enter.
 const NL_RUN = {
-  'micro.colorBy': (a) => ({ say: `Colour by ${a.column}`,
-    run: () => { const sel = $('#colorBy'); const o = [...sel.options].find((x) => x.textContent === a.column || x.value === a.column); if (!o) return nlMsg(`no column "${a.column}" to colour by`); sel.value = o.value; sel.dispatchEvent(new Event('change')); } }),
-  'micro.filterBlocks': (a) => { const e = nlClausesToExpr(a.clauses); return { say: `Filter blocks:  ${e}`, run: () => { $('#filter').value = e; applyBlockFilter(e); } }; },
-  'micro.clearFilter': () => ({ say: 'Clear the block filter', run: () => { $('#filter').value = ''; applyBlockFilter(''); } }),
+  'micro.colorBy': (a, L) => ({ say: `Colour by ${a.column}${nlOn(L)}`,
+    run: () => { nlFocus(L); const sel = $('#colorBy'); const o = [...sel.options].find((x) => x.textContent === a.column || x.value === a.column); if (!o) return nlMsg(`no column "${a.column}" on ${L ? (L.label || L.name) : 'this layer'}`); sel.value = o.value; sel.dispatchEvent(new Event('change')); } }),
+  'micro.filterBlocks': (a, L) => { const e = nlClausesToExpr(a.clauses); return { say: `Filter blocks:  ${e}${nlOn(L)}`, run: () => { nlFocus(L); $('#filter').value = e; applyBlockFilter(e); } }; },
+  'micro.clearFilter': (a, L) => ({ say: `Clear the block filter${nlOn(L)}`, run: () => { nlFocus(L); $('#filter').value = ''; applyBlockFilter(''); } }),
   'micro.sectionAt': (a) => ({ say: `Section on ${a.axis} at ${a.position}`, run: () => nlSectionAt(a.axis, a.position) }),
   'micro.clearSection': () => ({ say: 'Clear the section', run: () => { const m = $('#secMode'); m.value = 'off'; m.dispatchEvent(new Event('input')); } }),
   'micro.setSectionThickness': (a) => ({ say: `Section thickness ${a.thickness} m`, run: () => { const h = $('#secHalf'); h.value = a.thickness / 2; h.dispatchEvent(new Event('input')); } }),
   'micro.setZExag': (a) => ({ say: `Vertical exaggeration ×${a.factor}`, run: () => setZExag(a.factor) }),
   'micro.setBackground': (a) => ({ say: `Background: ${a.color}`, run: () => setBg(a.color) }),
-  'micro.openGradeTonnage': (a) => ({ say: `Grade–tonnage${a.column ? ' for ' + a.column : ''}`, run: () => { const L = activeLayer(); if (L) openGradeTonnage(L, a.column || null); } }),
+  'micro.openGradeTonnage': (a, L) => ({ say: `Grade–tonnage${a.column ? ' for ' + a.column : ''}${nlOn(L)}`, run: () => { if (L) { nlFocus(L); openGradeTonnage(L, a.column || null); } } }),
   'micro.setLayerVisibility': (a) => ({ say: `${a.action === 'hide' ? 'Hide' : 'Show'} ${a.layer}`,
     run: () => { const L = _layers.find((x) => (x.label || x.name) === a.layer || x.name === a.layer); if (!L) return nlMsg(`no layer "${a.layer}"`); L.visible = a.action !== 'hide'; applyTreeVisibility(); requestRender(); } }),
 };
@@ -11928,27 +11928,41 @@ function nlSectionAt(axis, position) {
   requestRender();
 }
 
-// The vocabulary IS the session: this project's columns, categories and layers.
+// The vocabulary IS the session: the WHOLE project's columns, categories and layers.
+// Scoping columns to the active layer would have been the easy dodge — it makes
+// "colour by FE" unsayable while the copper model is active — but the project is
+// the thing you are working on, not one layer of it. So the vocabulary spans every
+// layer, a phrase may NAME its layer ("colour iron_model by FE"), and when it
+// doesn't, nlResolveTarget() decides (active → the only layer with that column).
+// The proposal always says which layer it will touch.
+//
+// The ranges are FIXED, deliberately: rampRangeFor() is a DISPLAY artifact that may
+// or may not have been computed yet, so feeding it here made the training corpus —
+// and therefore the weights, and therefore the answers — depend on what the UI
+// happened to have done. dispatch itself is fully seeded; the instability was mine.
+// A range only shapes the example numbers in generated utterances, and the tagger
+// learns "a number after an operator is a value", so magnitudes barely matter while
+// STABILITY matters a great deal.
 function nlSessionVocab() {
   const numCols = {}, catCols = {}, catValues = {}, layers = {};
   for (const L of _layers) {
     const nm = L.label || L.name;
     layers[nm] = [nm.toLowerCase(), ...(/\.(csv|dm|parquet)$/i.test(nm) ? ['the model', 'the block model'] : []),
       ...(L.kind === 'mesh' ? ['the mesh', 'the surface'] : []), ...(L.kind === 'dh' ? ['the drillholes', 'the holes'] : [])];
-    for (const c of numericColsOf(L) || []) {
-      const r = rampRangeFor(L, c.name || c) || [0, 100];
-      numCols[c.name || c] = { lo: +(+r[0]).toFixed(2), hi: +(+r[1]).toFixed(2), dec: 2 };
-    }
-    const hdr = layerTableHeader(L);
-    const cats = hdr && hdr.categories;
+    for (const c of numericColsOf(L) || []) numCols[c.name || c] = { lo: 0, hi: 100, dec: 2 };
+    const cats = (layerTableHeader(L) || {}).categories;
     if (cats) for (const [col, dict] of Object.entries(cats)) {
       catCols[col] = [col.toLowerCase()];
-      catValues[col] = {};
+      catValues[col] = catValues[col] || {};
       for (const v of Object.values(dict || {})) if (v) catValues[col][String(v)] = [String(v).toLowerCase()];
     }
   }
   return { numCols, catCols, catValues, layers, idCols: [] };
 }
+// …so switching the active layer re-derives the vocabulary (a ~0.9 s retrain, lazily,
+// the next time you actually use the bar).
+// The vocabulary depends on the LAYER SET, not on which one is active — so switching
+// the active layer costs nothing (the target is resolved per phrase, not per model).
 function nlSessionKey() {
   return _layers.map((L) => `${L.id}:${L.label || L.name}:${(numericColsOf(L) || []).length}`).join('|');
 }
@@ -11971,6 +11985,53 @@ async function nlEnsureTrained() {
     return null;
   } finally { _nlBusy = false; }
 }
+// WHICH LAYER does a phrase mean?
+// Commands act on ONE layer, but a project holds many — and the vocabulary spans
+// all of them, so "colour by FE" is sayable while the copper model is active.
+// Resolution, in order:
+//   1. the phrase NAMES a layer (the tagger marks it LAYER) → that one
+//   2. the active layer, if it has the column                → "what I'm looking at"
+//   3. exactly one layer HAS that column                     → that one, and say so
+//   4. otherwise the active layer (run() will say what's missing)
+// The proposal always NAMES the target when more than one layer is open, so you
+// read which model you are about to touch before you press Enter.
+function nlLayerFromTags(q, tags) {
+  if (!tags) return null;
+  const toks = nlTokenize(q);
+  const span = [];
+  for (let i = 0; i < toks.length && i < tags.length; i++) if (tags[i] === 'LAYER') span.push(toks[i]);
+  if (!span.length) return null;
+  const text = span.join(' ').toLowerCase().trim();
+  // Match the SAME synonyms the vocabulary was built from — exactly. (Splitting
+  // names into fragments made "model" match every *_model.csv, so the first layer
+  // always won and "colour copper_model by CU" resolved to iron_model.)
+  const hits = [];
+  for (const L of _layers) {
+    const nm = (L.label || L.name);
+    const syns = [nm.toLowerCase(), nm.toLowerCase().replace(/\.[a-z0-9]+$/, '')];
+    if (syns.some((sy) => sy === text) || text === nm.toLowerCase()) hits.push(L);
+  }
+  if (hits.length === 1) return hits[0];
+  // 0 hits, or AMBIGUOUS ("the model", with two block models open) → do not guess;
+  // let the column decide, and failing that, the active layer.
+  return null;
+}
+function nlResolveTarget(q, tags, column) {
+  const named = nlLayerFromTags(q, tags);
+  if (named) return named;
+  const A = activeLayer();
+  if (!column) return A;
+  const has = (L) => layerHasColumn(column, L.label || L.name) || layerHasColumn(column, L.name);   // (column, layer) — that order
+  if (A && has(A)) return A;
+  const have = _layers.filter(has);
+  if (have.length === 1) return have[0];                     // only one layer HAS it → obviously that one
+  return A;                                                  // absent everywhere, or ambiguous → active; run() says what's missing
+}
+// name the layer in the proposal whenever the project holds more than one
+const nlOn = (L) => (_layers.length > 1 && L ? ` on ${L.label || L.name}` : '');
+// act on the resolved layer: micro's controls follow the ACTIVE layer, so make it active first
+function nlFocus(L) { if (L && L.id !== _activeId) setActiveLayer(L.id); }
+
 // A phrase → ONE proposal row. Never runs anything.
 function nlPropose(q) {
   if (!_nlOn || !_nlDispatcher || q.length < 4) return null;
@@ -11982,8 +12043,11 @@ function nlPropose(q) {
   if (!call || !call.name) return null;
   const mk = NL_RUN[call.name];
   if (!mk) return null;                                                  // declared but unwired → say nothing
+  const args = call.arguments || {};
+  const col = args.column || (args.clauses && args.clauses[0] && args.clauses[0].column) || null;
+  const target = nlResolveTarget(q, r.tags, col);
   let act = null;
-  try { act = mk(call.arguments || {}); } catch { return null; }
+  try { act = mk(args, target); } catch { return null; }
   if (!act || !act.say) return null;
   return { id: 'nl:' + call.name, group: 'suggested', title: act.say, nl: true, run: () => act.run() };
 }
