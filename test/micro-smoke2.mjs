@@ -1493,7 +1493,7 @@ await p.close();
   await pg.close();
 }
 
-// ── §31: a table renders nothing → it must not hold a scarce element id ──
+// ── §31: layers are no longer a scarce resource (the id left the pick record) ──
 {
   const pl = await mkPage('sm2pool');
   const pool = await pl.evaluate(async () => {
@@ -1508,10 +1508,41 @@ await p.close();
     }
     const Ls = window._micro.layers();
     const tabs = Ls.filter((L) => L.kind === 'table');
-    return { tables: tabs.length, tableIds: tabs.every((L) => L.id >= 8), opened };
+
+    // …and a HIGH layer id is still PICKABLE. The old scheme packed the layer into
+    // three spare bits of the 32-bit pick id, so a model with id 8 was unreachable
+    // by the ID buffer. The layer rides a per-draw uniform now (pick target RG32UI:
+    // R = record, G = layer), so id has no ceiling — prove it end-to-end.
+    const hi = Ls.filter((L) => /^own-/.test(L.name)).sort((a, b) => b.id - a.id)[0];
+    window._micro.setActiveLayer(hi.id);
+    window._micro.showRecord({ layer: hi.id, rec: 1 });
+    await new Promise((r) => setTimeout(r, 600));
+    const rows = [...document.querySelectorAll('#recPanel .rp-row')].map((r) => [r.querySelector('.k').textContent, r.querySelector('.v').textContent]);
+    const au = rows.find(([k]) => k === 'AU');
+
+    // the ID buffer itself: every lit pixel names a layer that actually exists
+    document.querySelector('#btnFit').click();
+    await new Promise((r) => setTimeout(r, 800));
+    const cv = document.querySelector('#cv'), r = cv.getBoundingClientRect();
+    const region = window._micro.renderer.pickRegion({ x: 0, y: 0, w: Math.floor(r.width), h: Math.floor(r.height) },
+      window._micro.cam, { pointPx: 8, blocksAsPoints: false, section: null });
+    const known = new Set(Ls.map((L) => L.id));
+    let lit = 0, bogus = 0;
+    const data = region ? region.data : new Uint32Array(0);
+    for (let i = 0; i < data.length; i += 4) {
+      const lid = data[i + 1] >>> 0;
+      if (lid === 0xFFFFFFFF) continue;                     // miss
+      lit++;
+      if (!known.has(lid)) bogus++;                         // a packed-id ghost would land here
+    }
+    return { tables: tabs.length, opened, hiId: hi.id, hiName: hi.name, au: au && au[1], lit, bogus };
   });
-  chk(`table layers hold non-rendering ids (${pool.tables} tables, all id>=8): eight results + five models coexist (${pool.opened}/5 opened)`,
-    pool.tables === 8 && pool.tableIds && pool.opened === 5);
+  chk(`no layer partition: ${pool.tables} result tables + five of the visitor's models coexist (${pool.opened}/5 opened) — the old 7-slot ceiling is gone`,
+    pool.tables === 8 && pool.opened === 5);
+  chk(`a high layer id is pickable: layer ${pool.hiId} (${pool.hiName}) record 1 → AU ${pool.au} — its OWN data, not a neighbour's`,
+    pool.hiId >= 8 && pool.au === '2');
+  chk(`the ID buffer names only real layers (${pool.lit} lit pixels, ${pool.bogus} ghosts)`,
+    pool.lit > 20 && pool.bogus === 0);
   await pl.close();
 }
 

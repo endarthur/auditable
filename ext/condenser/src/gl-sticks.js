@@ -42,7 +42,9 @@ uniform sampler2D uCatVis;
 uniform float uCatVisOn;
 uniform sampler2D uRule;                // rule-code byte by record index (8192-wide)
 uniform float uRuleOn;                  // rule mode: the code replaces the category
-uniform uint uPicked;
+uniform uint uPicked;                   // picked RECORD (0xFFFFFFFF = none)
+uniform uint uPickedLayer;              // …and the layer it belongs to
+uniform uint uLayer;                    // this draw's layer (per-draw, not per-element)
 uniform uvec2 uRepaint;
 uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
@@ -70,7 +72,7 @@ void main() {
   float demoted = max(pxR < uDemotePx ? 1.0 : 0.0, uFixedSplat);
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec & 0x1FFFFFFFu);
+    int rec = int(aRec);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
   // section cull: keep any capsule that TOUCHES the slab (segment support along
@@ -80,7 +82,7 @@ void main() {
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float cls = aCat;
   if (uRuleOn > 0.5) {
-    int rr = int(aRec & 0x1FFFFFFFu);
+    int rr = int(aRec);
     cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
   }
   if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
@@ -108,11 +110,11 @@ void main() {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
   }
   if (uSelOn > 0.5) {
-    int rs = int(aRec & 0x1FFFFFFFu);
+    int rs = int(aRec);
     if (texelFetch(uSel, ivec2(rs & 8191, rs >> 13), 0).r > 0.5) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.85, 0.3), 0.55), vColor.a);
   }
   if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);
-  if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);
+  if (aRec == uPicked && uLayer == uPickedLayer) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);
   if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
 }`;
 
@@ -241,7 +243,7 @@ export function createSticksPipeline(gl) {
       perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'), fixedSplat: U('uFixedSplat'),
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
-      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), picked: U('uPicked'), repaint: U('uRepaint'),
+      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), picked: U('uPicked'), pickedLayer: U('uPickedLayer'), layer: U('uLayer'), repaint: U('uRepaint'),
       catVis: U('uCatVis'), catVisOn: U('uCatVisOn'), sel: U('uSel'), selOn: U('uSelOn'),
       rule: U('uRule'), ruleOn: U('uRuleOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
@@ -295,7 +297,7 @@ export function createSticksPipeline(gl) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
   }
 
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null, selTex = null, ruleTex = null, opacity = 1 }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, pickedLayer = 0xFFFFFFFF, layer = 0, section = null, radius = 1, catVisTex = null, selTex = null, ruleTex = null, opacity = 1 }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -328,6 +330,8 @@ export function createSticksPipeline(gl) {
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
       gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
       gl.uniform1ui(uni.picked, picked >>> 0);
+      gl.uniform1ui(uni.pickedLayer, pickedLayer >>> 0);
+      gl.uniform1ui(uni.layer, layer >>> 0);              // this draw's layer — the id no longer hides in aRec
       gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
       gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
       gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);

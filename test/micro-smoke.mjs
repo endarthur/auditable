@@ -225,7 +225,7 @@ chk(`Sealed badge: visible, popover states no-network + verifier link, toggles c
 // ── 2. pick reads a record ──
 await p.evaluate(() => { document.querySelector('#compass').dispatchEvent(new MouseEvent('click')); document.querySelector('#btnFit').click(); const px = document.querySelector('#ptPx'); px.value = 6; px.dispatchEvent(new Event('input')); });
 await p.waitForFunction(() => /converged/.test(document.querySelector('#stats').textContent), null, { timeout: 60000 });
-await p.evaluate(() => window._micro.showRecord((window._micro.layers()[0].id << 29) | 100));
+await p.evaluate(() => window._micro.showRecord({ layer: window._micro.layers()[0].id, rec: 100 }));   // a pick is a (layer, record) pair now
 await p.waitForFunction(() => document.querySelector('#recPanel').classList.contains('show'), null, { timeout: 10000 });
 const rec = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('#recPanel .rp-row')].map((r) => [r.querySelector('.k').textContent, r.querySelector('.v').textContent])));
 chk(`pick record 100: XC ${rec.XC}, LITO ${rec.LITO}`, +rec.XC === 612100 && rec.LITO === 'ITABIRITE');
@@ -681,16 +681,24 @@ chk(`recipes: hand-authored YAML lists (${rcp && rcp.menu}) + auto-runs (${rcp &
   await pv.click('#sampleDemo');
   await pv.waitForFunction(() => window._micro.layers().length > 5, null, { timeout: 60000 });
   await pv.waitForTimeout(1500);
+  // The demo used to spend six of seven PICKABLE-layer slots, because the layer id
+  // was packed into the pick record (3 bits → 7 layers). It isn't any more, so
+  // there is one pool and plenty of room. What matters to a visitor: after the
+  // demo, THEIR data still opens.
   const budget = await pv.evaluate(async () => {
-    const elems = window._micro.layers().filter((L) => L.id <= 6).length;
-    let t = 'X,Y,Z,AU\n';
-    for (let i = 0; i < 20; i++) t += `${i * 5},0,0,${1 + i * 0.01}\n`;
-    await window._micro.openBlob(new Blob([t]), 'mine.csv', 'add');
-    await new Promise((r) => setTimeout(r, 700));
-    return { elems, opened: window._micro.layers().some((L) => L.name === 'mine.csv'), meta: document.querySelector('#meta').textContent };
+    const after = window._micro.layers().length;
+    let opened = 0;
+    for (let i = 0; i < 5; i++) {
+      let t = 'X,Y,Z,AU\n';
+      for (let k = 0; k < 20; k++) t += `${k * 5},${i * 10},0,${1 + k * 0.01}\n`;
+      await window._micro.openBlob(new Blob([t]), `mine-${i}.csv`, 'add');
+      await new Promise((r) => setTimeout(r, 400));
+      if (window._micro.layers().some((L) => L.name === `mine-${i}.csv`)) opened++;
+    }
+    return { after, opened, meta: document.querySelector('#meta').textContent };
   });
-  chk(`cold visitor: the demo leaves room (${budget.elems} of 7 element layers) and their own file still opens`,
-    budget.elems <= 3 && budget.opened && !/limit reached/.test(budget.meta));
+  chk(`cold visitor: after the demo (${budget.after} layers) the visitor's own files still open (${budget.opened}/5, no limit)`,
+    budget.opened === 5 && !/limit reached/.test(budget.meta));
 
   // a bad file fails with DIGNITY: it says what is wrong instead of a lie
   const bad = await pv.evaluate(async () => {

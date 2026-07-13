@@ -2376,7 +2376,9 @@ uniform sampler2D uCatVis;
 uniform float uCatVisOn;
 uniform sampler2D uRule;                // rule-code byte by record index (8192-wide)
 uniform float uRuleOn;                  // rule mode: the code replaces the category
-uniform uint uPicked;
+uniform uint uPicked;                   // picked RECORD (0xFFFFFFFF = none)
+uniform uint uPickedLayer;              // …and the layer it belongs to
+uniform uint uLayer;                    // this draw's layer (per-draw, not per-element)
 uniform uvec2 uRepaint;
 uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
@@ -2404,7 +2406,7 @@ void main() {
   float demoted = max(pxR < uDemotePx ? 1.0 : 0.0, uFixedSplat);
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec & 0x1FFFFFFFu);
+    int rec = int(aRec);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
   // section cull: keep any capsule that TOUCHES the slab (segment support along
@@ -2414,7 +2416,7 @@ void main() {
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float cls = aCat;
   if (uRuleOn > 0.5) {
-    int rr = int(aRec & 0x1FFFFFFFu);
+    int rr = int(aRec);
     cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
   }
   if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
@@ -2442,11 +2444,11 @@ void main() {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
   }
   if (uSelOn > 0.5) {
-    int rs = int(aRec & 0x1FFFFFFFu);
+    int rs = int(aRec);
     if (texelFetch(uSel, ivec2(rs & 8191, rs >> 13), 0).r > 0.5) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.85, 0.3), 0.55), vColor.a);
   }
   if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);
-  if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);
+  if (aRec == uPicked && uLayer == uPickedLayer) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);
   if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
 }`;
 
@@ -2575,7 +2577,7 @@ function createSticksPipeline(gl) {
       perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'), fixedSplat: U('uFixedSplat'),
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
-      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), picked: U('uPicked'), repaint: U('uRepaint'),
+      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), picked: U('uPicked'), pickedLayer: U('uPickedLayer'), layer: U('uLayer'), repaint: U('uRepaint'),
       catVis: U('uCatVis'), catVisOn: U('uCatVisOn'), sel: U('uSel'), selOn: U('uSelOn'),
       rule: U('uRule'), ruleOn: U('uRuleOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
@@ -2629,7 +2631,7 @@ function createSticksPipeline(gl) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
   }
 
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, radius = 1, catVisTex = null, selTex = null, ruleTex = null, opacity = 1 }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, pickedLayer = 0xFFFFFFFF, layer = 0, section = null, radius = 1, catVisTex = null, selTex = null, ruleTex = null, opacity = 1 }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -2662,6 +2664,8 @@ function createSticksPipeline(gl) {
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
       gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
       gl.uniform1ui(uni.picked, picked >>> 0);
+      gl.uniform1ui(uni.pickedLayer, pickedLayer >>> 0);
+      gl.uniform1ui(uni.layer, layer >>> 0);              // this draw's layer — the id no longer hides in aRec
       gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
       gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
       gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
@@ -4272,7 +4276,9 @@ uniform sampler2D uRule;                // rule-code byte by record index (8192-
 uniform float uRuleOn;                  // rule mode: the code replaces the category
 uniform float uForceSplat;              // 1 = whole chunk demoted (cheap far-field path)
 uniform float uFixedSplat;              // 1 = points view: fixed-px splats regardless of block size
-uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
+uniform uint uPicked;                   // picked RECORD (0xFFFFFFFF = none)
+uniform uint uPickedLayer;              // …and the layer it belongs to
+uniform uint uLayer;                    // this draw's layer (per-draw, not per-element)                   // record index to highlight (0xFFFFFFFF = none)
 uniform uvec2 uRepaint;                 // repaint pass: draw ONLY these two records (both 0xFFFFFFFF = off)
 uniform vec4 uSecPlane;                 // section plane: xyz = unit normal, w = offset (frame-local)
 uniform vec2 uSecCfg;                   // x: 0 = off, 1 = slab; y: slab half-thickness
@@ -4295,7 +4301,7 @@ void main() {
   // filter mask: dim (default) or cull (isolate)
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
+    int rec = int(aRec);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
   // section cull: keep any box that TOUCHES the slab (support radius of the box
@@ -4307,7 +4313,7 @@ void main() {
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float cls = aCat;
   if (uRuleOn > 0.5) {
-    int rr = int(aRec & 0x1FFFFFFFu);
+    int rr = int(aRec);
     cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
   }
   if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
@@ -4331,11 +4337,11 @@ void main() {
     vColor = vec4(0.62, 0.63, 0.66, 1.0);
   }
   if (uSelOn > 0.5) {
-    int rs = int(aRec & 0x1FFFFFFFu);
+    int rs = int(aRec);
     if (texelFetch(uSel, ivec2(rs & 8191, rs >> 13), 0).r > 0.5) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.85, 0.3), 0.55), vColor.a);
   }
   if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);   // context mode: dim non-matching (still legible)
-  if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
+  if (aRec == uPicked && uLayer == uPickedLayer) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
   if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);   // repaint pass: everything else clips out
 }`;
 
@@ -4481,7 +4487,7 @@ function createBlocksPipeline(gl) {
       perspScale: U('uPerspScale'), demotePx: U('uDemotePx'), pointPx: U('uPointPx'),
       colorMode: U('uColorMode'), zRange: U('uZRange'), chanChunk: U('uChanChunk'), chanDoc: U('uChanDoc'),
       ramp: U('uRamp'), palette: U('uPalette'), lightDir: U('uLightDir'),
-      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'), repaint: U('uRepaint'),
+      mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'), pickedLayer: U('uPickedLayer'), layer: U('uLayer'), repaint: U('uRepaint'),
       catVis: U('uCatVis'), catVisOn: U('uCatVisOn'), sel: U('uSel'), selOn: U('uSelOn'),
       rule: U('uRule'), ruleOn: U('uRuleOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'), edges: U('uEdges'),
@@ -4571,7 +4577,7 @@ function createBlocksPipeline(gl) {
 
   // Per-frame program state (called once before the chunk loop) — set on BOTH
   // programs so drawSlice can switch freely between full and cheap.
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, section = null, catVisTex = null, selTex = null, ruleTex = null, opacity = 1, edges = false }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, pickedLayer = 0xFFFFFFFF, layer = 0, section = null, catVisTex = null, selTex = null, ruleTex = null, opacity = 1, edges = false }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -4608,6 +4614,8 @@ function createBlocksPipeline(gl) {
       gl.uniform1f(uni.opacity, Math.max(0.02, Math.min(1, opacity)));   // per-layer screen-door opacity
       gl.uniform1f(uni.fixedSplat, pointsView ? 1 : 0);
       gl.uniform1ui(uni.picked, picked >>> 0);
+      gl.uniform1ui(uni.pickedLayer, pickedLayer >>> 0);
+      gl.uniform1ui(uni.layer, layer >>> 0);              // this draw's layer — the id no longer hides in aRec
       gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
       gl.uniform4f(uni.secPlane, section ? section.n[0] : 0, section ? section.n[1] : 0, section ? section.n[2] : 1, section ? section.d : 0);
       gl.uniform2f(uni.secCfg, section ? 1 : 0, section ? section.half : 0);
@@ -4648,10 +4656,9 @@ function createBlocksPipeline(gl) {
 // row number in the source file.
 
 
-const ENCODE = `
-vec4 encodeRec(uint r) {
-  return vec4(float(r & 255u), float((r >> 8) & 255u), float((r >> 16) & 255u), float((r >> 24) & 255u)) / 255.0;
-}`;
+// no encoder: the pick target is RG32UI (R = record, G = layer), so the ids go
+// out as integers instead of being smeared across four bytes and reassembled
+const ENCODE = '';
 
 // ── points ──
 const PICK_VERT_PTS = `#version 300 es
@@ -4679,12 +4686,12 @@ void main() {
   vRec = aRec;
   vCull = (uSecCfg.x > 0.5 && abs(dot(p, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
   if (uFilterOn > 0.5 && uIsolate > 0.5) {
-    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
+    int rec = int(aRec);
     if (texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r < 0.5) vCull = 1.0;   // isolated-away isn't pickable
   }
   float cls = aClass;
   if (uRuleOn > 0.5) {
-    int rr = int(aRec & 0x1FFFFFFFu);
+    int rr = int(aRec);
     cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
   }
   if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
@@ -4693,13 +4700,13 @@ const PICK_FRAG_PTS = `#version 300 es
 precision highp float;
 flat in uint vRec;
 flat in float vCull;
-out vec4 outColor;
-${ENCODE}
+uniform uint uLayer;                    // the layer is per-DRAW, not per-element
+out uvec4 outId;                        // R = record (full uint32), G = layer
 void main() {
   if (vCull > 0.5) discard;
   vec2 d = gl_PointCoord - 0.5;
   if (dot(d, d) > 0.25) discard;
-  outColor = encodeRec(vRec);
+  outId = uvec4(vRec, uLayer, 0u, 0u);
 }`;
 
 // ── blocks (geometry identical to gl-blocks; color replaced by the encoded id) ──
@@ -4746,7 +4753,7 @@ void main() {
   gl_Position = uViewProj * vec4(wp, 1.0);
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
+    int rec = int(aRec);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
   // touch-the-slab cull (support radius) — the fragment clips exactly, matching
@@ -4756,7 +4763,7 @@ void main() {
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);   // hidden (isolated or sectioned) isn't pickable
   float cls = aCat;
   if (uRuleOn > 0.5) {
-    int rr = int(aRec & 0x1FFFFFFFu);
+    int rr = int(aRec);
     cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
   }
   if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
@@ -4778,14 +4785,14 @@ uniform float uBackoff;
 uniform mat4 uViewProj;
 uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
-out vec4 outColor;
-${ENCODE}
+uniform uint uLayer;
+out uvec4 outId;
 void main() {
   if (vCull > 0.5) discard;
   if (vMode > 0.5) {
     if (dot(vCorner, vCorner) > 1.0) discard;
     gl_FragDepth = gl_FragCoord.z;
-    outColor = encodeRec(vRec);
+    outId = uvec4(vRec, uLayer, 0u, 0u);
     return;
   }
   vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
@@ -4812,7 +4819,7 @@ void main() {
   float t = tin > 0.0 ? tin : tout;
   vec4 clip = uViewProj * vec4(ro + rd * t, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
-  outColor = encodeRec(vRec);
+  outId = uvec4(vRec, uLayer, 0u, 0u);
 }`;
 
 // ── sticks (capsule geometry identical to gl-sticks; color = the encoded id) ──
@@ -4856,7 +4863,7 @@ void main() {
   float demoted = max(pxR < uDemotePx ? 1.0 : 0.0, uFixedSplat);
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec & 0x1FFFFFFFu);
+    int rec = int(aRec);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
   }
   float secSupp = demoted > 0.5 ? 0.0 : (abs(dot(axis, uSecPlane.xyz)) * 0.5 + uRadius);
@@ -4864,7 +4871,7 @@ void main() {
   vCull = max((uIsolate > 0.5 && m < 0.5) ? 1.0 : 0.0, secCull);
   float cls = aCat;
   if (uRuleOn > 0.5) {
-    int rr = int(aRec & 0x1FFFFFFFu);
+    int rr = int(aRec);
     cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
   }
   if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
@@ -4897,14 +4904,14 @@ uniform float uRadius;
 uniform mat4 uViewProj;
 uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
-out vec4 outColor;
-${ENCODE}
+uniform uint uLayer;
+out uvec4 outId;
 void main() {
   if (vCull > 0.5) discard;
   if (vMode > 0.5) {
     if (dot(vCorner, vCorner) > 1.0) discard;
     gl_FragDepth = gl_FragCoord.z;
-    outColor = encodeRec(vRec);
+    outId = uvec4(vRec, uLayer, 0u, 0u);
     return;
   }
   vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
@@ -4955,18 +4962,20 @@ void main() {
   }
   vec4 clip = uViewProj * vec4(ro + rd * t, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
-  outColor = encodeRec(vRec);
+  outId = uvec4(vRec, uLayer, 0u, 0u);
 }`;
 
-const NO_HIT = 0xFFFFFFFF;                                 // the clear color decodes to this
+const NO_LAYER = 0xFFFFFFFF;                                // the layer channel's miss sentinel
+const MISS_CLEAR = new Uint32Array([0xFFFFFFFF, 0xFFFFFFFF, 0, 0]);
 
 function createPickPipeline(gl) {
   const pts = makeProgram(gl, PICK_VERT_PTS, PICK_FRAG_PTS);
   const blk = makeProgram(gl, PICK_VERT_BLK, PICK_FRAG_BLK);
   const stk = makeProgram(gl, PICK_VERT_STK, PICK_FRAG_STK);
   const U = (p, n) => gl.getUniformLocation(p, n);
-  const uPts = { viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg'), mask: U(pts, 'uMask'), filterOn: U(pts, 'uFilterOn'), isolate: U(pts, 'uIsolate'), catVis: U(pts, 'uCatVis'), catVisOn: U(pts, 'uCatVisOn'), rule: U(pts, 'uRule'), ruleOn: U(pts, 'uRuleOn') };
+  const uPts = { layer: U(pts, 'uLayer'), viewProj: U(pts, 'uViewProj'), boxMin: U(pts, 'uBoxMin'), boxSpan: U(pts, 'uBoxSpan'), pointPx: U(pts, 'uPointPx'), secPlane: U(pts, 'uSecPlane'), secCfg: U(pts, 'uSecCfg'), mask: U(pts, 'uMask'), filterOn: U(pts, 'uFilterOn'), isolate: U(pts, 'uIsolate'), catVis: U(pts, 'uCatVis'), catVisOn: U(pts, 'uCatVisOn'), rule: U(pts, 'uRule'), ruleOn: U(pts, 'uRuleOn') };
   const uBlk = {
+    layer: U(blk, 'uLayer'),
     viewProj: U(blk, 'uViewProj'), eye: U(blk, 'uEye'), right: U(blk, 'uRight'), up: U(blk, 'uUp'),
     gridOrigin: U(blk, 'uGridOrigin'), gridSize: U(blk, 'uGridSize'),
     dimPalette: U(blk, 'uDimPalette'), subBlock: U(blk, 'uSubBlock'),
@@ -4977,6 +4986,7 @@ function createPickPipeline(gl) {
     secPlane: U(blk, 'uSecPlane'), secCfg: U(blk, 'uSecCfg'),
   };
   const uStk = {
+    layer: U(stk, 'uLayer'),
     viewProj: U(stk, 'uViewProj'), eye: U(stk, 'uEye'), radius: U(stk, 'uRadius'),
     perspScale: U(stk, 'uPerspScale'), demotePx: U(stk, 'uDemotePx'), pointPx: U(stk, 'uPointPx'), fixedSplat: U(stk, 'uFixedSplat'),
     ortho: U(stk, 'uOrtho'), fwd: U(stk, 'uFwd'), orthoRay: U(stk, 'uOrthoRay'), backoff: U(stk, 'uBackoff'),
@@ -4992,8 +5002,11 @@ function createPickPipeline(gl) {
     if (fbo) { gl.deleteFramebuffer(fbo); gl.deleteTexture(colorTex); gl.deleteRenderbuffer(depthRb); }
     colorTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, colorTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    // RG32UI: R = record (a full uint32), G = layer. Integer target → the ids are
+    // read back as integers, with no byte packing anywhere.
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32UI, w, h, 0, gl.RG_INTEGER, gl.UNSIGNED_INT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     depthRb = gl.createRenderbuffer();
     gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
     gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
@@ -5043,8 +5056,8 @@ function createPickPipeline(gl) {
     gl.viewport(0, 0, w, h);
     gl.enable(gl.SCISSOR_TEST);
     gl.scissor(px, py, w2, h2);
-    gl.clearColor(1, 1, 1, 1);                             // decodes to NO_HIT
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.clearBufferuiv(gl.COLOR, 0, MISS_CLEAR);            // layer = NO_LAYER → "nothing here"
+    gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
     const s = cam.state;
     const dpp = pointPx * (window.devicePixelRatio || 1);
@@ -5056,6 +5069,7 @@ function createPickPipeline(gl) {
       gl.uniform1f(uPts.pointPx, dpp);
       for (const [id, group] of byLayer(ptsChunks)) {
       const st = stateOf(id);
+      gl.uniform1ui(uPts.layer, id >>> 0);
       setSec(uPts, st);
       setCatVis(uPts, st);
       setRule(uPts, st);
@@ -5097,6 +5111,7 @@ function createPickPipeline(gl) {
       gl.uniform1f(uBlk.fixedSplat, blocksAsPoints ? 1 : 0);
       gl.uniform1i(uBlk.dimPalette, 2);                     // unit 2 = sub-block half-dims (per-chunk below)
       for (const [id, group] of byLayer(blkChunks)) {
+        gl.uniform1ui(uBlk.layer, id >>> 0);
       const st = stateOf(id);
       setSec(uBlk, st);
       setCatVis(uBlk, st);
@@ -5155,6 +5170,7 @@ function createPickPipeline(gl) {
       gl.uniform1f(uStk.pointPx, dpp);
       gl.uniform1f(uStk.fixedSplat, blocksAsPoints ? 1 : 0);
       for (const [id, group] of byLayer(stkChunks)) {
+        gl.uniform1ui(uStk.layer, id >>> 0);
       const st2 = stateOf(id);
       setSec(uStk, st2);
       setCatVis(uStk, st2);
@@ -5188,29 +5204,33 @@ function createPickPipeline(gl) {
     gl.disable(gl.SCISSOR_TEST);
   }
 
+  // → { layer, rec } or null. Both come straight out of the integer target: no
+  // byte reassembly, and the RECORD may use the full 32-bit range because the
+  // miss sentinel now lives in the LAYER channel.
   function pick(px, py, chunks, cam, opts) {
     renderInto(px, py, 1, 1, chunks, cam, opts);
-    const px4 = new Uint8Array(4);
-    gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px4);
+    const out = new Uint32Array(4);
+    gl.readPixels(px, py, 1, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, out);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.bindVertexArray(null);
-    const rec = (px4[0] | (px4[1] << 8) | (px4[2] << 16) | (px4[3] << 24)) >>> 0;
-    return rec === NO_HIT ? null : rec;
+    return out[1] === NO_LAYER ? null : { layer: out[1] >>> 0, rec: out[0] >>> 0 };
   }
 
   // one ID-buffer pass over a RECT (device px, GL bottom-left origin) — the
   // marquee/lasso read. Same programs, same per-layer gates; returns the raw
   // RGBA block (rows bottom-up); the caller masks by polygon and decodes.
+  // the marquee/lasso read: a Uint32Array of 4 components per pixel (rows
+  // bottom-up) — [0] = record, [1] = layer (NO_LAYER = nothing there)
   function pickRegion(px, py, w2, h2, chunks, cam, opts) {
     renderInto(px, py, w2, h2, chunks, cam, opts);
-    const out = new Uint8Array(w2 * h2 * 4);
-    gl.readPixels(px, py, w2, h2, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    const out = new Uint32Array(w2 * h2 * 4);
+    gl.readPixels(px, py, w2, h2, gl.RGBA_INTEGER, gl.UNSIGNED_INT, out);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.bindVertexArray(null);
     return out;
   }
 
-  return { pick, pickRegion };
+  return { pick, pickRegion, NO_LAYER };
 }
 
 // ── ../dm/src/dm.js ──
@@ -6058,7 +6078,9 @@ layout(location=1) in float aIntensity; // uint16 normalized
 layout(location=2) in float aClass;     // uint8, raw (0..255)
 layout(location=3) in vec3 aRgb;        // uint8 normalized
 layout(location=4) in uint aRec;        // uint32 record index (highlight + mask lookups)
-uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
+uniform uint uPicked;                   // picked RECORD (0xFFFFFFFF = none)
+uniform uint uPickedLayer;              // …and the layer it belongs to
+uniform uint uLayer;                    // this draw's layer (per-draw, not per-element)                   // record index to highlight (0xFFFFFFFF = none)
 uniform uvec2 uRepaint;                 // repaint pass: draw ONLY these two records (both 0xFFFFFFFF = off)
 uniform vec4 uSecPlane;                 // section plane: xyz = unit normal, w = offset (frame-local)
 uniform vec2 uSecCfg;                   // x: 0 = off, 1 = slab; y: slab half-thickness
@@ -6088,19 +6110,19 @@ void main() {
   vCull = (uSecCfg.x > 0.5 && abs(dot(p, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
+    int rec = int(aRec);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
     if (uIsolate > 0.5 && m < 0.5) vCull = 1.0;
   }
   float cls = aClass;
   if (uRuleOn > 0.5) {
-    int rr = int(aRec & 0x1FFFFFFFu);
+    int rr = int(aRec);
     cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
   }
   if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
   float selHit = 0.0;
   if (uSelOn > 0.5) {
-    int rs = int(aRec & 0x1FFFFFFFu);
+    int rs = int(aRec);
     selHit = texelFetch(uSel, ivec2(rs & 8191, rs >> 13), 0).r;
   }
   if (uColorMode == 0) {
@@ -6116,7 +6138,7 @@ void main() {
   }
   if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);   // context mode: dim non-matching
   if (selHit > 0.5) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.85, 0.3), 0.55), vColor.a);   // selected: warm gold wash
-  if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
+  if (aRec == uPicked && uLayer == uPickedLayer) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
   if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);   // repaint pass: everything else clips out
 }`;
 
@@ -6230,7 +6252,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   const uni = {
     viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
     pointPx: U('uPointPx'), colorMode: U('uColorMode'), zRange: U('uZRange'),
-    intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'), repaint: U('uRepaint'),
+    intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'), pickedLayer: U('uPickedLayer'), layer: U('uLayer'), repaint: U('uRepaint'),
     secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
     mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), paletteN: U('uPaletteN'),
     catVis: U('uCatVis'), catVisOn: U('uCatVisOn'),
@@ -6247,7 +6269,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
   const chunks = [];
   let docBbox = null;                                     // scene bbox (fit + the shared elevation ramp)
-  let pickedRec = 0xFFFFFFFF;                             // highlighted record (sentinel = none; FULL partitioned id)
+  let pickedRec = 0xFFFFFFFF;                             // highlighted RECORD (sentinel = none)
+  let pickedLayer = 0xFFFFFFFF;                           // …and its layer (the pair IS the identity now)
   const repaintSet = new Set();                           // records to repaint over a converged frame
   let lastConverged = false;
   // ── layers (micro-layers spec §1): each opened dataset is a layer with its own
@@ -6320,10 +6343,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     get accumulated() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.cursor : 0), 0); },   // elements in the current accumulation
     addChunk(chunk, set = 'base', layer = 0) {
       const ls = layerOf(layer);
-      if (layer && chunk.recIdx) {                        // partition the record ids (layer 0 shifts by zero)
-        const base = (layer << 29) >>> 0, r = chunk.recIdx;
-        for (let i = 0; i < r.length; i++) r[i] = (r[i] | base) >>> 0;
-      }
+      // recIdx stays RAW — the layer rides a per-draw uniform, so there is no
+      // per-element rewrite here any more (and no 3-bit ceiling on layers)
       // honest VRAM accounting: every typed array in the CPU chunk becomes a
       // GPU buffer (bboxLocal's 48 B is noise) — summed here, read as vramBytes
       let cb = 0;
@@ -6580,11 +6601,14 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     // (a depth-LEQUAL pass where everything else clips out) instead of
     // restarting the accumulation — same total vertex work, none of the
     // de-densify blink. Mid-accumulation falls back to the clear.
-    setPicked(rec) {
-      const next = rec == null ? 0xFFFFFFFF : rec >>> 0;
-      if (next === pickedRec) return;
+    // { layer, rec } — or null for "nothing picked". The pair IS the identity:
+    // record 5 of layer 2 and record 5 of layer 3 are different elements.
+    setPicked(pick) {
+      const next = pick == null ? 0xFFFFFFFF : (pick.rec >>> 0);
+      const nextL = pick == null ? 0xFFFFFFFF : (pick.layer >>> 0);
+      if (next === pickedRec && nextL === pickedLayer) return;
       const prev = pickedRec;
-      pickedRec = next;
+      pickedRec = next; pickedLayer = nextL;
       if (lastConverged && !needClear) {
         if (prev !== 0xFFFFFFFF) repaintSet.add(prev);
         if (next !== 0xFFFFFFFF) repaintSet.add(next);
@@ -6754,12 +6778,14 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         gl.uniformMatrix4fv(uni.viewProj, false, vp);
         gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
         gl.uniform1ui(uni.picked, pickedRec);
+        gl.uniform1ui(uni.pickedLayer, pickedLayer);
         gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
         // per-layer uniforms + slices (front-to-back preserved within each group)
         const setupPtsLayer = (id) => {
           const ls = layerOf(id), o = lopt(id), zr = zRangeOf(o);
+          gl.uniform1ui(uni.layer, id >>> 0);
           const lsec = layerSecOf(ls, sec);
           gl.uniform4f(uni.secPlane, lsec ? lsec.n[0] : 0, lsec ? lsec.n[1] : 0, lsec ? lsec.n[2] : 1, lsec ? lsec.d : 0);
           gl.uniform2f(uni.secCfg, lsec ? 1 : 0, lsec ? lsec.half : 0);
@@ -6836,7 +6862,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
-            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
+            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, pickedLayer, layer: id,
             section: layerSecOf(ls, sec),
             catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
             opacity: ls.opacity, edges: ls.edges != null ? ls.edges : blockEdges,   // per-layer override, else the View toggle
@@ -6885,7 +6911,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
-            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
+            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, pickedLayer, layer: id,
             section: layerSecOf(ls, sec),
             radius: ls.stickRadius, catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
             opacity: ls.opacity,

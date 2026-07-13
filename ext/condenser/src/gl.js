@@ -22,7 +22,9 @@ layout(location=1) in float aIntensity; // uint16 normalized
 layout(location=2) in float aClass;     // uint8, raw (0..255)
 layout(location=3) in vec3 aRgb;        // uint8 normalized
 layout(location=4) in uint aRec;        // uint32 record index (highlight + mask lookups)
-uniform uint uPicked;                   // record index to highlight (0xFFFFFFFF = none)
+uniform uint uPicked;                   // picked RECORD (0xFFFFFFFF = none)
+uniform uint uPickedLayer;              // …and the layer it belongs to
+uniform uint uLayer;                    // this draw's layer (per-draw, not per-element)                   // record index to highlight (0xFFFFFFFF = none)
 uniform uvec2 uRepaint;                 // repaint pass: draw ONLY these two records (both 0xFFFFFFFF = off)
 uniform vec4 uSecPlane;                 // section plane: xyz = unit normal, w = offset (frame-local)
 uniform vec2 uSecCfg;                   // x: 0 = off, 1 = slab; y: slab half-thickness
@@ -52,19 +54,19 @@ void main() {
   vCull = (uSecCfg.x > 0.5 && abs(dot(p, uSecPlane.xyz) - uSecPlane.w) > uSecCfg.y) ? 1.0 : 0.0;
   float m = 1.0;
   if (uFilterOn > 0.5) {
-    int rec = int(aRec & 0x1FFFFFFFu);  // low 29 bits = the record (top 3 = layer)
+    int rec = int(aRec);
     m = texelFetch(uMask, ivec2(rec & 8191, rec >> 13), 0).r > 0.5 ? 1.0 : 0.0;
     if (uIsolate > 0.5 && m < 0.5) vCull = 1.0;
   }
   float cls = aClass;
   if (uRuleOn > 0.5) {
-    int rr = int(aRec & 0x1FFFFFFFu);
+    int rr = int(aRec);
     cls = floor(texelFetch(uRule, ivec2(rr & 8191, rr >> 13), 0).r * 255.0 + 0.5);
   }
   if (uCatVisOn > 0.5 && texelFetch(uCatVis, ivec2(int(cls) & 255, 0), 0).r < 0.5) vCull = 1.0;
   float selHit = 0.0;
   if (uSelOn > 0.5) {
-    int rs = int(aRec & 0x1FFFFFFFu);
+    int rs = int(aRec);
     selHit = texelFetch(uSel, ivec2(rs & 8191, rs >> 13), 0).r;
   }
   if (uColorMode == 0) {
@@ -80,7 +82,7 @@ void main() {
   }
   if (uFilterOn > 0.5 && m < 0.5) vColor = vec4(vColor.rgb * 0.3, vColor.a);   // context mode: dim non-matching
   if (selHit > 0.5) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.85, 0.3), 0.55), vColor.a);   // selected: warm gold wash
-  if (aRec == uPicked) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
+  if (aRec == uPicked && uLayer == uPickedLayer) vColor = vec4(mix(vColor.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, vColor.a);   // picked: hot magenta — the hue viridis doesn't have
   if ((uRepaint.x != 0xFFFFFFFFu || uRepaint.y != 0xFFFFFFFFu) && aRec != uRepaint.x && aRec != uRepaint.y) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);   // repaint pass: everything else clips out
 }`;
 
@@ -196,7 +198,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   const uni = {
     viewProj: U('uViewProj'), boxMin: U('uBoxMin'), boxSpan: U('uBoxSpan'),
     pointPx: U('uPointPx'), colorMode: U('uColorMode'), zRange: U('uZRange'),
-    intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'), repaint: U('uRepaint'),
+    intensityScale: U('uIntensityScale'), ramp: U('uRamp'), palette: U('uPalette'), picked: U('uPicked'), pickedLayer: U('uPickedLayer'), layer: U('uLayer'), repaint: U('uRepaint'),
     secPlane: U('uSecPlane'), secCfg: U('uSecCfg'),
     mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), paletteN: U('uPaletteN'),
     catVis: U('uCatVis'), catVisOn: U('uCatVisOn'),
@@ -213,7 +215,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
   const chunks = [];
   let docBbox = null;                                     // scene bbox (fit + the shared elevation ramp)
-  let pickedRec = 0xFFFFFFFF;                             // highlighted record (sentinel = none; FULL partitioned id)
+  let pickedRec = 0xFFFFFFFF;                             // highlighted RECORD (sentinel = none)
+  let pickedLayer = 0xFFFFFFFF;                           // …and its layer (the pair IS the identity now)
   const repaintSet = new Set();                           // records to repaint over a converged frame
   let lastConverged = false;
   // ── layers (micro-layers spec §1): each opened dataset is a layer with its own
@@ -286,10 +289,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     get accumulated() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.cursor : 0), 0); },   // elements in the current accumulation
     addChunk(chunk, set = 'base', layer = 0) {
       const ls = layerOf(layer);
-      if (layer && chunk.recIdx) {                        // partition the record ids (layer 0 shifts by zero)
-        const base = (layer << 29) >>> 0, r = chunk.recIdx;
-        for (let i = 0; i < r.length; i++) r[i] = (r[i] | base) >>> 0;
-      }
+      // recIdx stays RAW — the layer rides a per-draw uniform, so there is no
+      // per-element rewrite here any more (and no 3-bit ceiling on layers)
       // honest VRAM accounting: every typed array in the CPU chunk becomes a
       // GPU buffer (bboxLocal's 48 B is noise) — summed here, read as vramBytes
       let cb = 0;
@@ -546,11 +547,14 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     // (a depth-LEQUAL pass where everything else clips out) instead of
     // restarting the accumulation — same total vertex work, none of the
     // de-densify blink. Mid-accumulation falls back to the clear.
-    setPicked(rec) {
-      const next = rec == null ? 0xFFFFFFFF : rec >>> 0;
-      if (next === pickedRec) return;
+    // { layer, rec } — or null for "nothing picked". The pair IS the identity:
+    // record 5 of layer 2 and record 5 of layer 3 are different elements.
+    setPicked(pick) {
+      const next = pick == null ? 0xFFFFFFFF : (pick.rec >>> 0);
+      const nextL = pick == null ? 0xFFFFFFFF : (pick.layer >>> 0);
+      if (next === pickedRec && nextL === pickedLayer) return;
       const prev = pickedRec;
-      pickedRec = next;
+      pickedRec = next; pickedLayer = nextL;
       if (lastConverged && !needClear) {
         if (prev !== 0xFFFFFFFF) repaintSet.add(prev);
         if (next !== 0xFFFFFFFF) repaintSet.add(next);
@@ -720,12 +724,14 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         gl.uniformMatrix4fv(uni.viewProj, false, vp);
         gl.uniform1f(uni.pointPx, pointPx * (window.devicePixelRatio || 1));
         gl.uniform1ui(uni.picked, pickedRec);
+        gl.uniform1ui(uni.pickedLayer, pickedLayer);
         gl.uniform2ui(uni.repaint, 0xFFFFFFFF, 0xFFFFFFFF);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ramp); gl.uniform1i(uni.ramp, 0);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palette); gl.uniform1i(uni.palette, 1);
         // per-layer uniforms + slices (front-to-back preserved within each group)
         const setupPtsLayer = (id) => {
           const ls = layerOf(id), o = lopt(id), zr = zRangeOf(o);
+          gl.uniform1ui(uni.layer, id >>> 0);
           const lsec = layerSecOf(ls, sec);
           gl.uniform4f(uni.secPlane, lsec ? lsec.n[0] : 0, lsec ? lsec.n[1] : 0, lsec ? lsec.n[2] : 1, lsec ? lsec.d : 0);
           gl.uniform2f(uni.secCfg, lsec ? 1 : 0, lsec ? lsec.half : 0);
@@ -802,7 +808,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
-            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
+            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, pickedLayer, layer: id,
             section: layerSecOf(ls, sec),
             catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
             opacity: ls.opacity, edges: ls.edges != null ? ls.edges : blockEdges,   // per-layer override, else the View toggle
@@ -851,7 +857,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
             chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
-            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec,
+            maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, pickedLayer, layer: id,
             section: layerSecOf(ls, sec),
             radius: ls.stickRadius, catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
             opacity: ls.opacity,
