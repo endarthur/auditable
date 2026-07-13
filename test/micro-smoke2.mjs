@@ -1493,6 +1493,28 @@ await p.close();
   await pg.close();
 }
 
+// ── §31: a table renders nothing → it must not hold a scarce element id ──
+{
+  const pl = await mkPage('sm2pool');
+  const pool = await pl.evaluate(async () => {
+    await window._micro.openBlob(new Blob(['X,Y,Z,FE\n0,0,0,50\n10,0,0,60\n']), 'm.csv', 'replace');
+    await new Promise((r) => setTimeout(r, 500));
+    for (let i = 0; i < 8; i++) await window._micro.resultToLayer(`swaths/run ${i + 1}`, 'band\tmean\n1\t55\n');
+    let opened = 0;
+    for (let i = 0; i < 5; i++) {
+      await window._micro.openBlob(new Blob([`X,Y,Z,AU\n${i},0,0,1\n${i + 1},0,0,2\n`]), `own-${i}.csv`, 'add');
+      await new Promise((r) => setTimeout(r, 250));
+      if (window._micro.layers().some((L) => L.name === `own-${i}.csv`)) opened++;
+    }
+    const Ls = window._micro.layers();
+    const tabs = Ls.filter((L) => L.kind === 'table');
+    return { tables: tabs.length, tableIds: tabs.every((L) => L.id >= 8), opened };
+  });
+  chk(`table layers hold non-rendering ids (${pool.tables} tables, all id>=8): eight results + five models coexist (${pool.opened}/5 opened)`,
+    pool.tables === 8 && pool.tableIds && pool.opened === 5);
+  await pl.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

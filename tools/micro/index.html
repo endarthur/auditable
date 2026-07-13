@@ -6633,10 +6633,11 @@ let _activeId = 0;
 const layerById = (id) => _layers.find((l) => l.id === id) || null;
 const activeLayer = () => layerById(_activeId);
 const allocLayerId = (pool) => {
-  // element layers live in the recIdx partition (3 bits → ids 0..6 with the
-  // status quo cap); MESH layers never join it (no records, no pick-by-row),
-  // so they draw from 8.. — a 12-domain solids file doesn't starve the model
-  if (pool === 'mesh') { for (let i = 8; i <= 31; i++) if (!layerById(i)) return i; return null; }
+  // ELEMENT layers live in the recIdx partition (3 bits → ids 0..6): anything
+  // whose records are drawn and pickable (blocks, points, drillholes, grids).
+  // MESHES and TABLES never join it — a mesh has no pick-by-row, and a table
+  // renders nothing at all — so they draw from 8.. and cost the model nothing.
+  if (pool === 'mesh' || pool === 'table') { for (let i = 8; i <= 31; i++) if (!layerById(i)) return i; return null; }
   for (let i = 0; i <= 6; i++) if (!layerById(i)) return i;
   return null;
 };
@@ -6743,8 +6744,12 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   const isMesh = over.asKind === 'mesh'
     ? /\.(msh|obj|lfm|ply)$/i.test(name)
     : (over.asKind == null && (/\.(msh|obj|lfm)$/i.test(name) || (/\.ply$/i.test(name) && !forcePoints && await plyHasFaces(blob))));
-  const lid = allocLayerId(isMesh ? 'mesh' : 'element');
-  if (lid == null) { $('#meta').textContent = isMesh ? 'mesh layer limit reached — remove one first' : 'layer limit reached (7 element layers) — remove one first'; return; }
+  // a table is decided before allocation: an explicit asKind, a workbook, or a
+  // delimited file with no coordinate columns
+  const isTable = over.asKind === 'table' || /\.xlsx$/i.test(name)
+    || (/\.(csv|txt|dat|tsv)$/i.test(name) && !over.mapping && !over.discovered && !isMesh && over.asKind == null && !await delimitedHasCoords(blob));
+  const lid = allocLayerId(isMesh ? 'mesh' : isTable ? 'table' : 'element');
+  if (lid == null) { $('#meta').textContent = (isMesh || isTable) ? `${isTable ? 'table' : 'mesh'} layer limit reached (24) — remove one first` : 'layer limit reached (7 models / clouds / drillholes / grids) — remove one first'; return; }
   const first = _layers.length === 0;
   _layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: (typeof File !== 'undefined' && blob instanceof File && _fileHandles.get(blob)) || null, storage: 'loose', lineage: over.lineage || openLineage(name, blob) });
   _activeId = lid;
@@ -6761,10 +6766,9 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     // .xyz/.pts default to POINTS (2-decimal coords form a fake lattice); a
     // block/points asKind override rides forcePoints for every delimited file.
     else if (/\.xlsx$/i.test(name)) { await openXlsxBlob(blob, name, { layer: lid, first, sheet: over.sheet }); }
-    else if (over.asKind === 'table' && /\.(csv|txt|dat|tsv)$/i.test(name)) { await openTableBlob(blob, name, { layer: lid, first }); }
     // a delimited file with NO X/Y/Z is a TABLE, not an error (unless a mapping
     // was passed, which asserts the coordinates by hand)
-    else if (/\.(csv|txt|dat|tsv)$/i.test(name) && !over.mapping && !over.discovered && !await delimitedHasCoords(blob)) { await openTableBlob(blob, name, { layer: lid, first }); }
+    else if (isTable && /\.(csv|txt|dat|tsv)$/i.test(name)) { await openTableBlob(blob, name, { layer: lid, first }); }
     else if (/\.(csv|txt|dat|asc|xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping, discovered: over.discovered }); }
     else if (/\.ply$/i.test(name)) { await openPlyBlob(blob, name, { layer: lid, first }); }
     else if (/\.laz$/i.test(name)) throw new Error('LAZ (compressed LAS) isn’t supported — export as .las, or use lasZip to convert');
