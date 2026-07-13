@@ -700,6 +700,17 @@ chk(`recipes: hand-authored YAML lists (${rcp && rcp.menu}) + auto-runs (${rcp &
   chk(`cold visitor: after the demo (${budget.after} layers) the visitor's own files still open (${budget.opened}/5, no limit)`,
     budget.opened === 5 && !/limit reached/.test(budget.meta));
 
+  // Every demo layer must live in the SAME neighbourhood. A grid's nodata is a
+  // finite SENTINEL (-9999), so a mesh built from one without honouring it grows
+  // "legs" — sliver triangles draping off the pit rim to a floor 10 km down. It
+  // shipped once; the z-spread catches it whether the sentinel is -9999 or -1e30.
+  const zs = await pv.evaluate(() => window._micro.layers()
+    .filter((L) => L.bboxLocal).map((L) => ({ name: L.name, zmin: Math.round(L.bboxLocal[2]), zmax: Math.round(L.bboxLocal[5]) })));
+  const lo = Math.min(...zs.map((z) => z.zmin)), hi = Math.max(...zs.map((z) => z.zmax));
+  const strays = zs.filter((z) => z.zmin < hi - 2000);
+  chk(`cold visitor: no demo layer grows legs — every z sits in one neighbourhood (${lo}…${hi} m${strays.length ? ', stray: ' + strays.map((z) => z.name).join(',') : ''})`,
+    zs.length >= 6 && strays.length === 0 && hi - lo < 2000);
+
   // a bad file fails with DIGNITY: it says what is wrong instead of a lie
   const bad = await pv.evaluate(async () => {
     const out = {};

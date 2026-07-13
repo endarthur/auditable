@@ -12037,13 +12037,15 @@ function makeDemoShellObj() {
 // layer pool instead of spending one of the seven element slots)
 function gridToObjBlob(g) {
   const { nx, ny, x0, y0, dx, dy, data } = g;
+  const nd = Number.isFinite(g.nodata) ? g.nodata : null;   // a SENTINEL is finite — honour it, or the
+  const hole = (v) => !Number.isFinite(v) || v === nd;      // holes become vertices on a floor 10 km down
   const idx = new Int32Array(nx * ny).fill(-1);
   const out = [];
   let n = 0;
   for (let r = 0; r < ny; r++) {
     for (let c = 0; c < nx; c++) {
       const v = data[r * nx + c];
-      if (!Number.isFinite(v)) continue;
+      if (hole(v)) continue;
       idx[r * nx + c] = ++n;                               // OBJ is 1-based
       out.push(`v ${(x0 + c * dx).toFixed(3)} ${(y0 - r * dy).toFixed(3)} ${v.toFixed(3)}`);
     }
