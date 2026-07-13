@@ -177,11 +177,10 @@ const e5 = await p.evaluate(async () => {
   const dmin = Math.min(...vals), dmax = Math.max(...vals);
   let fin = 0, inRange = 0, mn = Infinity, mx = -Infinity;
   for (const v of R.real) if (Number.isFinite(v) && v > -1e20) { fin++; if (v >= dmin - 1e-9 && v <= dmax + 1e-9) inRange++; if (v < mn) mn = v; if (v > mx) mx = v; }
-  // a second seed must give a DIFFERENT realization
-  document.querySelector('#sgReal').value = 2;
-  window._gslib.runSim();
-  await new Promise((r) => setTimeout(r, 900));
-  const R2 = window._gslib.S.realization;
+  // realizations must genuinely DIFFER — one runSim now yields the whole batch
+  // (seeds seed0..seed0+n-1), so compare the first two of S.realizations.list
+  const RL = window._gslib.S.realizations.list;
+  const R2 = { real: RL[1] || RL[0] };
   let diff = 0; for (let i = 0; i < R.real.length; i++) if (Math.abs(R.real[i] - R2.real[i]) > 1e-9) diff++;
   return { n: R.real.length, fin, inRange, mn, mx, diff, msg: document.querySelector('#sgMsg').textContent };
 });

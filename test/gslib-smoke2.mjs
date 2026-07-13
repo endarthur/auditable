@@ -17,9 +17,10 @@ const errs = []; p.on('pageerror', (e) => errs.push(e.message));
 await p.goto(`http://127.0.0.1:${PORT}/gslib.html`);
 await p.waitForFunction(() => window._gslib, null, { timeout: 20000 });
 
-console.log('1. cluster.dat — the book, through the button, judged by the book');
+console.log('1. cluster.dat — the book, through the samples MENU, judged by the book');
 const c1 = await p.evaluate(async () => {
-  document.querySelector('#btnCluster').click();
+  document.querySelector('#btnSamples').click();            // the dedicated button became a menu item
+  document.querySelector('[data-smp="book"]').click();
   await new Promise((r) => setTimeout(r, 1200));
   const S = window._gslib.S;
   const v = S.rows.map((r) => r[S.map.v]);
@@ -109,7 +110,71 @@ const c4 = await p.evaluate(() => {
 });
 ok(/3 directions/.test(c4.msg) && c4.plots === 3, `${c4.msg} → ${c4.plots} plots`);
 
-console.log('5. page errors');
+console.log('5. the variogram MAP — anisotropy at a glance');
+const c5 = await p.evaluate(() => {
+  const before = document.querySelectorAll('#vgPlots canvas').length;
+  window._gslib.runVarmap();
+  const figs = document.querySelectorAll('#vgPlots figure');
+  return { before, after: document.querySelectorAll('#vgPlots canvas').length,
+           cap: figs[0] ? figs[0].querySelector('figcaption').textContent.slice(0, 60) : '' };
+});
+ok(c5.after === c5.before + 1 && /variogram map/.test(c5.cap), `the map renders and prepends (${c5.cap}…)`);
+
+console.log('6. multiple realizations: e-type mean is SMOOTHER than any one realization');
+const c6 = await p.evaluate(async () => {
+  document.querySelector('#kNx').value = 20; document.querySelector('#kNy').value = 20;
+  document.querySelector('#kSx').value = 2.5; document.querySelector('#kSy').value = 2.5;
+  document.querySelector('#kRad').value = 25; document.querySelector('#kMax').value = 16;
+  document.querySelector('#sgNsim').value = 4;
+  window._gslib.runSim();
+  await new Promise((r) => setTimeout(r, 2500));
+  const R = window._gslib.S.realizations;
+  if (!R || R.list.length !== 4) return null;
+  const varOf = (a) => { let s = 0, n2 = 0; for (const v of a) if (Number.isFinite(v)) { s += v; n2++; }
+    const m = s / n2; let q = 0; for (const v of a) if (Number.isFinite(v)) q += (v - m) ** 2; return q / n2; };
+  document.querySelector('#sgShow').value = 'mean';
+  document.querySelector('#sgShow').dispatchEvent(new Event('change'));
+  await new Promise((r) => setTimeout(r, 400));
+  const et = window._gslib.simViewArray();
+  return { n: R.list.length, vReal: varOf(R.list[0]), vMean: varOf(et), viewRow: document.querySelector('#sgViewRow').style.display !== 'none' };
+});
+ok(c6 && c6.n === 4 && c6.viewRow, `4 realizations from one click, the view row appears`);
+// the DIRECTION is the testable property; the magnitude depends on how much the
+// realizations share through the conditioning data (4 realizations ≈ 25% here)
+ok(c6 && c6.vMean < c6.vReal * 0.95, `e-type mean variance ${c6.vMean.toFixed(3)} < realization ${c6.vReal.toFixed(3)} — averaging smooths, as it must`);
+
+console.log('7. the keyboard: x toggles the section, , and . scrub it');
+const c7 = await p.evaluate(async () => {
+  const key = (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+  key('x');
+  const on = document.querySelector('#vSec').value;
+  const p0 = +document.querySelector('#vSecPos').value;
+  key('.'); key('.'); key('.');
+  const p1 = +document.querySelector('#vSecPos').value;
+  key(',');
+  const p2 = +document.querySelector('#vSecPos').value;
+  key('x');
+  const off = document.querySelector('#vSec').value;
+  return { on, off, p0, p1, p2 };
+});
+ok(c7.on !== 'off' && c7.off === 'off', `x toggles (off → ${c7.on} → off)`);
+ok(Math.abs(c7.p1 - c7.p0 - 0.03) < 1e-9 && Math.abs(c7.p2 - c7.p1 + 0.01) < 1e-9, `. and , scrub the slab (${c7.p0} → ${c7.p1} → ${c7.p2})`);
+
+console.log('8. a Brazilian CSV: semicolons + decimal COMMAS');
+const c8 = await p.evaluate(async () => {
+  const csv = 'X;Y;TEOR\n1,5;2,5;0,42\n3,5;4,5;1,10\n5,0;6,0;2,30\n';
+  document.querySelector('#csvDec').value = ',';
+  window._gslib.openText('teores.csv', csv);
+  await new Promise((r) => setTimeout(r, 600));
+  const S = window._gslib.S;
+  const out = { rows: S.rows.length, first: S.rows[0], knobs: document.querySelector('#csvRow').style.display !== 'none' };
+  document.querySelector('#csvDec').value = '.';             // leave the page as found
+  return out;
+});
+ok(c8.rows === 3 && c8.first[0] === 1.5 && c8.first[2] === 0.42, `decimal-comma CSV reads true (row 1 = ${JSON.stringify(c8.first)})`);
+ok(c8.knobs, 'the CSV knobs appear for a CSV (and not for GeoEAS)');
+
+console.log('9. page errors');
 ok(errs.length === 0, errs.length ? errs.slice(0, 3).join(' | ') : 'none');
 console.log(`\n${pass} passed, ${fail} failed`);
 await p.close(); await b.close(); srv.close();

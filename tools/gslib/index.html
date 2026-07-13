@@ -6,7 +6,7 @@
 <!-- networkless: the app never talks to a network. WASM is allowed and AUDITABLE —
      the .atra source and the compiler live in the repo; the bytecode is reproducible. -->
 <meta http-equiv="Content-Security-Policy" content="connect-src 'none'">
-<title>gslib.wasm</title>
+<title>gslib.atra</title>
 <style>
 :root {
   --bg: #16181a; --panel: #1d2023; --panel2: #24282c; --line: #34393e;
@@ -87,6 +87,11 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   border-radius: 6px; padding: 5px 8px;
 }
 #vbar label { color: var(--muted); font-size: 11.5px; display: flex; gap: 5px; align-items: center; }
+#smpMenu { display: none; position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 250px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
+#smpMenu.show { display: flex; flex-direction: column; gap: 2px; }
+#smpMenu button { border: none; background: none; text-align: left; padding: 6px 10px; border-radius: 4px; }
+#smpMenu button:hover { background: var(--panel); }
 #vhint { position: absolute; left: 12px; bottom: 10px; color: var(--faint); font: 11px var(--mono); pointer-events: none; }
 #vfoot { position: absolute; right: 12px; bottom: 10px; color: var(--faint); font: 10.5px var(--mono); pointer-events: none; }
 </style>
@@ -100,11 +105,17 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
 </head>
 <body>
 <header>
-  <h1><b>gslib</b>.wasm</h1>
+  <h1><b>gslib</b>.atra</h1>
   <span class="sp"></span>
   <button id="btnOpen">Open… (.dat / .csv)</button>
-  <button id="btnSample">▸ sample data</button>
-  <button id="btnCluster" title="the GSLIB book's canonical 140-sample dataset">▸ cluster.dat</button>
+  <span style="position:relative">
+    <button id="btnSamples">▸ samples ▾</button>
+    <div id="smpMenu">
+      <button data-smp="2d">clustered deposit (2D synthetic)</button>
+      <button data-smp="3d">drillhole campaign (3D synthetic)</button>
+      <button data-smp="book">cluster.dat — the book's 140 samples</button>
+    </div>
+  </span>
 </header>
 <div id="app">
 <nav id="rail">
@@ -113,7 +124,6 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   <button data-step="secVario" disabled><span class="n">3</span>Variography</button>
   <button data-step="secKrige" disabled><span class="n">4</span>Kriging</button>
   <button data-step="secSim" disabled><span class="n">5</span>Simulation</button>
-  <button data-step="secExport" disabled><span class="n">6</span>Export</button>
 </nav>
 <div id="dock">
 
@@ -123,12 +133,16 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   <div id="drop">drop a file anywhere — or <b>Open…</b>, or <b>▸ sample data</b> for a clustered synthetic deposit</div>
   <div class="row">
     <button id="btnDh">Import drillholes…</button>
-    <button id="btnDhSample">▸ sample drillholes (3D)</button>
     <span class="msg" id="dhMsg"></span>
   </div>
   <div class="row">
     <button id="btnPar">Import .par…</button>
     <span class="msg" id="parMsg"></span>
+  </div>
+  <div class="row" id="csvRow" style="display:none">
+    <label>delimiter <select id="csvDelim"><option value="auto">auto</option><option value=",">,</option><option value=";">;</option><option value="\t">tab</option><option value=" ">space</option></select></label>
+    <label>decimal <select id="csvDec"><option value=".">.</option><option value=",">,</option></select></label>
+    <span class="msg">changes re-read the file in place</span>
   </div>
   <div class="row" id="mapRow" style="display:none">
     <label>X <select id="mapX"></select></label>
@@ -150,6 +164,7 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   </div>
   <div class="row">
     <button id="btnDeclus" class="primary">run declus</button>
+    <button id="btnParDeclus">declus.par</button>
     <span class="msg" id="dcMsg"></span>
   </div>
   <div class="plots" id="dcPlots"></div>
@@ -170,6 +185,9 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   <div class="row">
     <button id="btnAddDir">+ direction</button>
     <button id="btnVario" class="primary">run gamv</button>
+    <button id="btnVarmap" title="γ over a fan of azimuths — anisotropy at a glance">variogram map</button>
+    <button id="btnParGamv">gamv.par</button>
+    <button id="btnExpModel">model → JSON</button>
     <span class="msg" id="vgMsg"></span>
   </div>
 
@@ -210,6 +228,8 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   </div>
   <div class="row">
     <button id="btnKrige" class="primary">krige</button>
+    <button id="btnExpGrid">grid → CSV</button>
+    <button id="btnParKt3d">kt3d.par</button>
     <span class="msg" id="kMsg"></span>
   </div>
 </section>
@@ -222,28 +242,19 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   proper practice fits the normal-scores variogram itself; this is the teaching shortcut, and it is labelled as one.</p>
   <div class="row">
     <label>seed <input type="number" id="sgSeed" value="69069"></label>
-    <label>realization <input type="number" id="sgReal" value="1" min="1" max="999"></label>
+    <label>realizations <input type="number" id="sgNsim" value="5" min="1" max="100"></label>
   </div>
   <div class="row">
     <button id="btnSim" class="primary">simulate</button>
     <span class="msg" id="sgMsg"></span>
   </div>
-  <div class="plots" id="sgPlots"></div>
-</section>
-
-<section id="secExport">
-  <h2>Export</h2>
-  <div class="row">
-    <button id="btnExpGrid">grid → CSV</button>
-    <button id="btnExpModel">model → JSON</button>
-  </div>
-  <div class="row">
-    <button id="btnParGamv">gamv.par</button>
-    <button id="btnParKt3d">kt3d.par</button>
+  <div class="row" id="sgViewRow" style="display:none">
+    <label>view <select id="sgShow"><option value="real">realization</option><option value="mean">e-type mean</option><option value="std">std dev</option></select></label>
+    <label># <input type="number" id="sgReal" value="1" min="1"></label>
+    <button id="btnExpSim">realizations → CSV</button>
     <button id="btnParSgsim">sgsim.par</button>
-    <button id="btnParDeclus">declus.par</button>
   </div>
-  <div class="row"><span class="msg" id="exMsg"></span></div>
+  <div class="plots" id="sgPlots"></div>
 </section>
 
 </div>
@@ -258,7 +269,7 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
     <button id="vFit" title="frame the data">⛶ fit</button>
   </div>
   <div id="vhint">drag orbit · wheel zoom · right-drag pan</div>
-  <div id="vfoot">gslib.wasm · build <span id="build">__GSLIB_BUILD__</span></div>
+  <div id="vfoot">gslib.atra · build <span id="build">__GSLIB_BUILD__</span></div>
 </div>
 </div>
 
@@ -429,13 +440,17 @@ function parseGeoEAS(text) {
   }
   return { cols, rows };
 }
-function parseCSV(text) {
+function parseCSV(text, opts = {}) {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  const delim = [',', ';', '\t'].map((d) => [d, lines[0].split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
-  const cols = lines[0].split(delim).map((c) => c.trim().replace(/^"|"$/g, ''));
+  const delim = (opts.delim && opts.delim !== 'auto') ? opts.delim
+    : [',', ';', '\t', ' '].map((d) => [d, lines[0].split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
+  const dec = opts.decimal || '.';
+  const num = (x) => Number(dec === ',' ? x.trim().replace(',', '.') : x.trim());
+  const split = (l) => (delim === ' ' ? l.trim().split(/\s+/) : l.split(delim));
+  const cols = split(lines[0]).map((c) => c.trim().replace(/^"|"$/g, ''));
   const rows = [];
   for (let i = 1; i < lines.length; i++) {
-    const f = lines[i].split(delim).map((x) => Number(x.trim()));
+    const f = split(lines[i]).map(num);
     if (f.length === cols.length && f.every(Number.isFinite)) rows.push(f);
   }
   return { cols, rows };
@@ -446,16 +461,20 @@ function resetDerived() {
   S.weights = null; S.declusMean = null; S.vario = null; S.krige = null;
   S.model.structures = [];                                   // reseeded from the NEW data's variance in onData
   for (const id of ['#dcPlots', '#vgPlots']) $(id).textContent = '';
-  for (const id of ['#dcMsg', '#vgMsg', '#kMsg', '#exMsg']) { $(id).textContent = ''; $(id).className = 'msg'; }
+  for (const id of ['#dcMsg', '#vgMsg', '#kMsg', '#sgMsg', '#parMsg']) { $(id).textContent = ''; $(id).className = 'msg'; }
+  S.realizations = null; $('#sgViewRow').style.display = 'none';
   S.realization = null;
   if (_sg) { try { _sg.handle.dispose(); } catch { /* already gone */ } _sg = null; }
   if (V.renderer) { V.renderer.removeLayer(1); V.renderer.removeLayer(2); V.renderer.removeLayer(3); requestRender(); }
 }
 function openText(name, text) {
-  let d;
-  try { d = /\.dat$/i.test(name) ? parseGeoEAS(text) : parseCSV(text); }
-  catch { try { d = parseCSV(text); } catch { d = null; } }
+  const csvOpts = { delim: $('#csvDelim').value, decimal: $('#csvDec').value };
+  let d, kind = 'csv';
+  try { if (/\.dat$/i.test(name)) { d = parseGeoEAS(text); kind = 'geoeas'; } else d = parseCSV(text, csvOpts); }
+  catch { try { d = parseCSV(text, csvOpts); kind = 'csv'; } catch { d = null; } }
   if (!d || !d.rows.length) { $('#dataMsg').textContent = `couldn't read ${name} — GeoEAS .dat or numeric CSV`; $('#dataMsg').className = 'msg bad'; return; }
+  S.raw = { name, text, kind };                              // kept so the CSV knobs can re-read in place
+  $('#csvRow').style.display = kind === 'csv' ? '' : 'none';
   S.cols = d.cols; S.rows = d.rows;
   resetDerived();
   guessMapping();
@@ -716,11 +735,11 @@ $('#btnExpGrid').onclick = () => {
     out += `${g.xmn + ix * g.xsiz},${g.ymn + iy * g.ysiz},${est[i] > -1e20 ? est[i] : ''},${kv[i] > -1e20 ? kv[i] : ''}\n`;
   }
   download('kriged_grid.csv', out);
-  $('#exMsg').textContent = 'saved kriged_grid.csv';
+  $('#kMsg').textContent = 'saved kriged_grid.csv'; $('#kMsg').className = 'msg go';
 };
 $('#btnExpModel').onclick = () => {
   download('variogram_model.json', JSON.stringify(modelSpec(), null, 2), 'application/json');
-  $('#exMsg').textContent = 'saved variogram_model.json';
+  $('#vgMsg').textContent = 'saved variogram_model.json'; $('#vgMsg').className = 'msg go';
 };
 
 // ── drillholes: collar + survey + intervals → desurveyed composites as the data ──
@@ -794,7 +813,7 @@ function sampleDrillholes() {
     new File([collar], 'collars.csv'), new File([survey], 'surveys.csv'), new File([assay], 'assays.csv'),
   ], 'sample drillholes');
 }
-$('#btnDhSample').onclick = sampleDrillholes;
+
 
 // ── simulation: nscore → sgsim → backtr, on the kriging grid ──────────────────
 function runSim() {
@@ -818,27 +837,66 @@ function runSim() {
       if (_sg) _sg.handle.dispose();
       _sg = { handle: sgsim({ grid, variogram: vario1, search: { radius: +$('#kRad').value, ndmin: 0, ndmax: +$('#kMax').value, nodmax: 12 }, data: simData }), key };
     }
-    const seed = (+$('#sgSeed').value || 69069) + (+$('#sgReal').value - 1);
-    const gauss = _sg.handle.run(seed);
-    // 4. back through the score table; linear tails pinned to the DATA extremes
-    const real = backtr({ scores: gauss, table: ns.table, tails: { lower: { type: 1, param: dmin }, upper: { type: 1, param: dmax } } });
+    const seed0 = (+$('#sgSeed').value || 69069);
+    const nsim = Math.max(1, Math.min(100, +$('#sgNsim').value || 1));
+    const list = [];
+    for (let k = 0; k < nsim; k++) {
+      const gauss = _sg.handle.run(seed0 + k);
+      list.push(backtr({ scores: gauss, table: ns.table, tails: { lower: { type: 1, param: dmin }, upper: { type: 1, param: dmax } } }));
+    }
     const ms = performance.now() - t0;
-    S.realization = { real, grid };
-    gridToLayer(grid, real, 3);
-    $('#vMode').value = 'real';
-    applyViewMode();
-    V.cam.fit(V.bbox);
-    requestRender();
-    $('#sgMsg').textContent = `realization ${+$('#sgReal').value} (seed ${seed}) · ${real.length.toLocaleString()} nodes · ${ms.toFixed(0)} ms`;
+    S.realization = { real: list[0], grid };                  // kept for the smokes' contract
+    S.realizations = { grid, list, seed0 };
+    $('#sgReal').max = nsim; if (+$('#sgReal').value > nsim) $('#sgReal').value = 1;
+    $('#sgViewRow').style.display = '';
+    showSimView();
+    $('#sgMsg').textContent = `${nsim} realization${nsim > 1 ? 's' : ''} (seeds ${seed0}…${seed0 + nsim - 1}) · ${list[0].length.toLocaleString()} nodes · ${ms.toFixed(0)} ms`;
     $('#sgMsg').className = 'msg go';
     const d = $('#sgPlots'); d.textContent = '';
-    fig(d, 'realization vs data — histograms should agree', (ax) => {
+    fig(d, 'realization 1 vs data — histograms should agree', (ax) => {
       ax.hist(values, { bins: 24 });
-      ax.hist(Array.from(real).filter(Number.isFinite), { bins: 24, alpha: 0.55 });
+      ax.hist(Array.from(list[0]).filter(Number.isFinite), { bins: 24, alpha: 0.55 });
     }, 360, 220);
   } catch (e) { $('#sgMsg').textContent = `simulation failed: ${e.message}`; $('#sgMsg').className = 'msg bad'; }
 }
 $('#btnSim').onclick = runSim;
+// which array the viewer shows: one realization, or a REDUCTION across all of them
+function simViewArray() {
+  const R = S.realizations; if (!R) return null;
+  const mode = $('#sgShow').value;
+  if (mode === 'real') return R.list[Math.max(0, Math.min(R.list.length - 1, +$('#sgReal').value - 1))];
+  const n = R.list[0].length, k = R.list.length;
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let s2 = 0; for (const r of R.list) s2 += r[i];
+    const m = s2 / k;
+    if (mode === 'mean') out[i] = m;
+    else { let v = 0; for (const r of R.list) v += (r[i] - m) ** 2; out[i] = Math.sqrt(v / k); }
+  }
+  return out;
+}
+function showSimView() {
+  const arr = simViewArray(); if (!arr) return;
+  gridToLayer(S.realizations.grid, arr, 3);
+  $('#vMode').value = 'real';
+  applyViewMode();
+  V.cam.fit(V.bbox);
+  requestRender();
+}
+$('#sgShow').onchange = () => { $('#sgReal').disabled = $('#sgShow').value !== 'real'; showSimView(); };
+$('#sgReal').onchange = showSimView;
+$('#btnExpSim').onclick = () => {
+  const R = S.realizations;
+  if (!R) { $('#sgMsg').textContent = 'simulate first'; return; }
+  const g = R.grid;
+  let out = 'x,y,z,' + R.list.map((_, i) => 'r' + (i + 1)).join(',') + '\n';
+  for (let iz = 0; iz < g.nz; iz++) for (let iy = 0; iy < g.ny; iy++) for (let ix = 0; ix < g.nx; ix++) {
+    const i = iz * g.nx * g.ny + iy * g.nx + ix;
+    out += `${g.xmn + ix * g.xsiz},${g.ymn + iy * g.ysiz},${g.zmn + iz * g.zsiz},` + R.list.map((r) => (Number.isFinite(r[i]) && r[i] > -1e20 ? r[i] : '')).join(',') + '\n';
+  }
+  download('realizations.csv', out);
+  $('#sgMsg').textContent = `saved realizations.csv (${R.list.length} columns)`;
+};
 
 // ── GSLIB .par files: decades of course material and site workflows, readable ──
 // A .par is line-ORDERED: values first, free comment after. The PARAMETERS travel;
@@ -983,7 +1041,9 @@ function exportPar(kind) {
     t = `                  Parameters for DECLUS\n                  *********************\n\nSTART OF PARAMETERS:\n${label}                        -file with data\n${ic.x}   ${ic.y}   ${ic.z}   ${ic.v}               -columns for X, Y, Z, and variable\n-1.0e21   1.0e21               -trimming limits\ndeclus.sum                     -file for summary output\ndeclus.out                     -file for output with data & weights\n1.0   1.0                      -Y and Z cell anisotropy (Ysize=size*Yanis)\n0                              -0=look for minimum declustered mean (1=max)\n${$('#dcN').value}  ${$('#dcMin').value}  ${$('#dcMax').value}               -number of cell sizes, min size, max size\n8                              -number of origin offsets\n`;
   }
   download(kind + '.par', t, 'text/plain');
-  $('#exMsg').textContent = `saved ${kind}.par — runnable by real GSLIB (against your exported data)`;
+  const home = { gamv: '#vgMsg', kt3d: '#kMsg', sgsim: '#sgMsg', declus: '#dcMsg' }[kind];
+  $(home).textContent = `saved ${kind}.par — runnable by real GSLIB (against your exported data)`;
+  $(home).className = 'msg go';
 }
 
 // cluster.dat — the GSLIB book's canonical dataset (Deutsch & Journel), embedded
@@ -1171,11 +1231,61 @@ function sampleData() {
 }
 
 // ── wiring ────────────────────────────────────────────────────────────────────
-$('#btnSample').onclick = sampleData;
-$('#btnCluster').onclick = () => openText('cluster.dat', CLUSTER_DAT);
+const smpMenu = $('#smpMenu');
+$('#btnSamples').onclick = (e) => { e.stopPropagation(); smpMenu.classList.toggle('show'); };
+document.addEventListener('click', () => smpMenu.classList.remove('show'));
+smpMenu.addEventListener('click', (e) => {
+  const k = e.target.dataset && e.target.dataset.smp;
+  if (!k) return;
+  smpMenu.classList.remove('show');
+  if (k === '2d') sampleData();
+  else if (k === '3d') sampleDrillholes();
+  else openText('cluster.dat', CLUSTER_DAT);
+});
 for (const k of ['gamv', 'kt3d', 'sgsim', 'declus']) $('#btnPar' + k[0].toUpperCase() + k.slice(1)).onclick = () => exportPar(k);
 $('#btnDeclus').onclick = runDeclus;
 $('#btnVario').onclick = runVario;
+function runVarmap() {
+  const lags = { n: +$('#vgNlag').value, size: +$('#vgLag').value, tolerance: +$('#vgTol').value };
+  const NAZ = 24, half = 180 / NAZ;                          // 24 azimuths × the lag rings; γ(h) = γ(−h) mirrors the rest
+  const dirs = Array.from({ length: NAZ }, (_, k) => ({ azimuth: k * (180 / NAZ), tolerance: half, bandwidthH: 1e21, dip: 0, dipTolerance: is3D() ? 22.5 : 90 }));
+  const t0 = performance.now();
+  const r = gamv({ data: gdata(), lags, directions: dirs });
+  const nlp2 = lags.n + 2;
+  let gmax = 0;
+  for (let i = 0; i < r.value.length; i++) if (r.npairs[i] > 0 && r.value[i] > gmax) gmax = r.value[i];
+  const size = 320, c = size / 2, rmax = c - 24;
+  const cv2 = document.createElement('canvas'); cv2.width = size; cv2.height = size;
+  const ctx = cv2.getContext('2d');
+  ctx.fillStyle = '#17191c'; ctx.fillRect(0, 0, size, size);
+  for (let id = 0; id < NAZ; id++) for (let k = 0; k < nlp2; k++) {
+    const i = id * nlp2 + k;
+    if (r.npairs[i] < 1 || r.distance[i] <= 0) continue;
+    const [cr, cg, cb] = rampColor(gmax > 0 ? r.value[i] / gmax : 0);
+    ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+    const r0 = rmax * Math.max(0, (r.distance[i] - lags.size / 2)) / (lags.n * lags.size);
+    const r1 = rmax * (r.distance[i] + lags.size / 2) / (lags.n * lags.size);
+    const az = dirs[id].azimuth;
+    for (const flip of [0, 180]) {                            // γ is symmetric: paint both halves
+      const a0 = ((az + flip - half) - 90) * Math.PI / 180, a1 = ((az + flip + half) - 90) * Math.PI / 180;
+      ctx.beginPath();
+      ctx.arc(c, c, Math.min(r1, rmax), a0, a1);
+      ctx.arc(c, c, r0, a1, a0, true);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  ctx.strokeStyle = '#5c646b'; ctx.beginPath(); ctx.arc(c, c, rmax, 0, 2 * Math.PI); ctx.stroke();
+  ctx.fillStyle = '#8b939b'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('N', c, 13); ctx.fillText('E', size - 8, c + 4);
+  const d = $('#vgPlots');
+  const f = document.createElement('figure');
+  f.appendChild(cv2);
+  const cap = document.createElement('figcaption');
+  cap.textContent = `variogram map — γ over ${NAZ} azimuths (dark = low γ = the CONTINUOUS direction) · max γ ${gmax.toFixed(3)} · ${(performance.now() - t0).toFixed(0)} ms`;
+  f.appendChild(cap);
+  d.prepend(f);
+}
+$('#btnVarmap').onclick = runVarmap;
 $('#btnKrige').onclick = runKrige;
 $('#btnAddDir').onclick = () => addDir(0, 22.5, 0, is3D() ? 22.5 : 90);
 $('#btnOpen').onclick = () => {
@@ -1183,6 +1293,7 @@ $('#btnOpen').onclick = () => {
   inp.onchange = async () => { const f = inp.files[0]; if (f) openText(f.name, await f.text()); };
   inp.click();
 };
+for (const id of ['#csvDelim', '#csvDec']) $(id).onchange = () => { if (S.raw && S.raw.kind === 'csv') openText(S.raw.name, S.raw.text); };
 const drop = $('#drop');
 document.body.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('hot'); });
 document.body.addEventListener('dragleave', () => drop.classList.remove('hot'));
@@ -1190,10 +1301,27 @@ document.body.addEventListener('drop', async (e) => {
   e.preventDefault(); drop.classList.remove('hot');
   const f = e.dataTransfer.files[0]; if (f) openText(f.name, await f.text());
 });
+let _lastSecAxis = 'Z';
+window.addEventListener('keydown', (e) => {
+  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === ',' || e.key === '.') {
+    if ($('#vSec').value === 'off') return;
+    const el = $('#vSecPos');
+    el.value = Math.max(0, Math.min(1, (+el.value) + (e.key === ',' ? -0.01 : 0.01)));
+    el.dispatchEvent(new Event('input'));
+    e.preventDefault();
+  } else if (e.key === 'x' || e.key === 'X') {               // micro's toggle: off ↔ the last axis
+    const sel = $('#vSec');
+    if (sel.value === 'off') sel.value = _lastSecAxis;
+    else { _lastSecAxis = sel.value; sel.value = 'off'; }
+    sel.dispatchEvent(new Event('change'));
+  }
+});
+
 addDir(0, 90);                                               // omnidirectional default
 
 // the automation surface (the smokes drive this)
-window._gslib = { openText, sampleData, sampleDrillholes, importDrillholes, runDeclus, runVario, runKrige, runSim, addDir, showStep, S, modelSpec, importPar, exportPar, CLUSTER_DAT,
+window._gslib = { openText, sampleData, sampleDrillholes, importDrillholes, runDeclus, runVario, runKrige, runSim, runVarmap, showSimView, simViewArray, addDir, showStep, S, modelSpec, importPar, exportPar, CLUSTER_DAT,
   viewerInfo: () => ({ chunks: V.renderer ? V.renderer.chunkCount : 0, hasBlocks: !!S.krige, hasReal: !!S.realization }) };
 </script>
 </body>
