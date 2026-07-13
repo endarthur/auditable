@@ -1301,6 +1301,45 @@ await p.close();
   await px.close();
 }
 
+// ── §25: routine params — a key→value sheet is a SCALAR scope, not a fan-out ──
+{
+  const pp = await mkPage('sm2params');
+  await pp.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('sm2params', { recursive: true }); } catch { } });
+  await pp.evaluate(() => window._micro.openBlob(new Blob(['X,Y,Z,FE\n0,0,0,50\n10,0,0,55\n20,0,0,60\n']), 'm.csv', 'replace'));
+  await pp.waitForFunction(() => window._micro.layers()[0] && window._micro.layers()[0].docs.blockDoc, null, { timeout: 20000 });
+  await pp.evaluate(() => { window._micro.layers()[0].storage = 'project'; });
+  await saveProject(pp);
+  const pr = await pp.evaluate(async () => {
+    const m = await import('/ext/sheet/index.js');
+    const bytes = await m.sheet.write({ sheets: [
+      // a General series WITH a blank cell — Excel types that column as text,
+      // so the routine reader must coerce or $g.cutoff arrives as "55"
+      { name: 'General', columns: { parameter: ['cutoff', 'density', 'spare'], value: [55, 2.75, ''] } },
+      { name: 'Benches', columns: { grade: ['FE', 'SIO2'], nCut: [12, 8] } },
+    ] });
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2params');
+    const fh = await dir.getFileHandle('params.xlsx', { create: true });
+    const w = await fh.createWritable(); await w.write(bytes); await w.close();
+    const steps = await window._micro.expandRoutine({
+      params: [{ from: 'params.xlsx#General', as: 'g', fill: 0 }],
+      steps: [
+        { tool: 'gt', layer: 'm.csv', nCut: '$g.cutoff', dens: '$g.density', spare: '$g.spare' },
+        { each: { from: 'params.xlsx#Benches' }, steps: [{ tool: 'gt', series: [{ layer: 'm.csv', col: '$grade' }], nCut: '$nCut', floor: '$g.cutoff' }] },
+      ],
+    });
+    return {
+      scalar: steps[0].nCut, type: typeof steps[0].nCut, dens: steps[0].dens, spare: steps[0].spare,
+      fan: steps.slice(1).map((x) => `${x.series[0].col}:${x.nCut}:${x.floor}`).join(','),
+      n: steps.length,
+    };
+  });
+  chk(`routine params: a key→value sheet is a scalar scope ($g.cutoff=${pr.scalar} ${pr.type}, fill→${pr.spare}), one run not three`,
+    pr.n === 3 && pr.scalar === 55 && pr.type === 'number' && pr.dens === 2.75 && pr.spare === 0);
+  chk(`routine params: the scope reaches each-blocks too (${pr.fan})`,
+    pr.fan === 'FE:12:55,SIO2:8:55');
+  await pp.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

@@ -482,6 +482,27 @@ params:
           series:
             - layer: "model_A.csv"
               col: "$grade"</pre>
+<h3>Parameters that don't fan out</h3>
+<p>A real parameter workbook holds two kinds of sheet: <b>run tables</b> (one row per run — that's <code>each</code>) and a <b>key&rarr;value sheet</b>, usually called <i>General</i>, with a <code>parameter</code> column and a <code>value</code> column. That second kind is a <i>series</i>, not a fan-out: you want its numbers available to every step, not a run per row. That is what <b>params</b> is.</p>
+<pre>name: "Month-end"
+tool: "routine"
+params:
+  params:
+    - from: "params.xlsx#General"    # parameter | value  →  $g.cutoff, $g.density
+      as: g                          # namespace (default: the sheet name; "" merges flat)
+      index: parameter               # key column   (default: the first)
+      value: value                   # value column (default: the second, when there are two)
+      fill: 0                        # what an empty cell means
+  steps:
+    - recipe: "drift check"
+      nCut: $g.cutoff                # a scalar, everywhere
+    - each: { from: "params.xlsx#Benches" }
+      steps:
+        - recipe: "grade tonnage"
+          series: [{ layer: "model.parquet", col: $grade }]
+          floor: $g.cutoff           # scalars reach inside each blocks too</pre>
+<p>If the sheet has <b>more than two columns</b> and you don't name a <code>value</code>, the whole row stays reachable: a <i>Domains</i> sheet keyed by domain gives you <code>$d.hem.cutoff</code> and <code>$d.hem.price</code>. Keys are made safe for use as names — <i>dilution factor</i> becomes <code>$g.dilution_factor</code>. A variable from an <code>each</code> row <b>shadows</b> a scalar of the same name, so a run table can override a global. And <b>Preview</b> lists what the params resolved to, so the scope is never invisible.</p>
+<p>One Excel quirk worth knowing: a value column with a single blank cell is typed as <i>text</i> by Excel, so micro coerces numeric-looking parameters back to numbers when it reads a routine's tables — <code>55</code> stays a number even if the sheet has a gap.</p>
 <p>The parameter table has two more spellings for hand-writers: <b>equal-length columns</b> (<code>each:</code> holding one list per variable, zipped row by row — never a cross-product; unequal lengths are an error, not a guess) and <code>from: "params.csv"</code>, which reads the rows from a table file in the project — keep the quarter's run matrix as a CSV and the routine stays two lines.</p>
 <p>Analysis steps (grade–tonnage, swath, stats) write their tables to <code>reports/&lt;date&gt;/&lt;step&gt;.tsv</code> — dated folders diff month over month — and <code>output:</code> takes <code>dir</code>, <code>prefix</code>, and <code>suffix</code> to steer the naming. Calc-column, interpolation, and figure steps run their engines directly. Routines never prompt mid-run: every referenced recipe and layer is checked up front and missing ones are named before anything starts; a failed step stops the routine visibly, its window left open for inspection.</p>
 <figure>
@@ -705,6 +726,7 @@ params:
 <p style="margin:.15em 0">reload from disk — §18</p>
 <p style="margin:.15em 0">tables (no geometry) — §18</p>
 <p style="margin:.15em 0">Excel (.xlsx) workbooks — §18</p>
+<p style="margin:.15em 0">params (routine scalars) — §18</p>
 <p style="margin:.15em 0">scenes — §18</p>
 <p style="margin:.15em 0">Sealed — §20, C</p>
 <p style="margin:.15em 0">sections — §4</p>

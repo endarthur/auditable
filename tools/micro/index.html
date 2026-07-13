@@ -3441,32 +3441,97 @@ function routineEachRows(each) {
   }
   throw new Error('each: rows (a list), columns (a map of lists), or {from: "file.csv"}');
 }
-function routineSubst(v, row) {
+const PATH_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*$/;
+const routineLookup = (scope, path) => path.split('.').reduce((o, k) => (o != null && typeof o === 'object' && k in o ? o[k] : undefined), scope);
+function routineSubst(v, scope) {
   if (typeof v === 'string') {
-    if (v.startsWith('$') && row[v.slice(1)] !== undefined) return row[v.slice(1)];   // exact → typed value
-    return v.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, k) => (row[k] !== undefined ? String(row[k]) : m));
-  }
-  if (Array.isArray(v)) return v.map((x) => routineSubst(x, row));
-  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, routineSubst(x, row)]));
-  return v;
-}
-async function routineReadTable(name) {                    // {from}: a CSV or worksheet in the project → rows
-  // "params.xlsx#Bench targets" — the sheet rides after the hash
-  const [path, sheetName] = String(name).split('#');
-  const fh0 = await resolveFileHandle(_project.dir, path).catch(() => resolveFileHandle(_project.dir, 'recipes/' + path));
-  if (/\.xlsx$/i.test(path)) {
-    const doc = await xlsxOpenSheet(await fh0.getFile(), { sheet: sheetName || null });
-    const h = doc.header;
-    return Array.from({ length: h.count }, (_, r) => {
-      const row = doc.at(r);
-      return Object.fromEntries(h.columns.map((c, i) => [c, row[i]]));   // types come from Excel
+    if (v.startsWith('$') && PATH_RE.test(v.slice(1))) {   // exact "$g.cutoff" → the TYPED value
+      const hit = routineLookup(scope, v.slice(1));
+      if (hit !== undefined) return hit;
+    }
+    return v.replace(/\$([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)/g, (m, k) => {   // embedded → text
+      const hit = routineLookup(scope, k);
+      return hit !== undefined && typeof hit !== 'object' ? String(hit) : m;
     });
   }
-  const fh = fh0;
+  if (Array.isArray(v)) return v.map((x) => routineSubst(x, scope));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, routineSubst(x, scope)]));
+  return v;
+}
+// {from}: a CSV or worksheet in the project → { columns, rows, sheet }.
+// "params.xlsx#Bench targets" — the sheet rides after the hash.
+async function routineReadTableFull(name) {
+  const [path, sheetName] = String(name).split('#');
+  const fh = await resolveFileHandle(_project.dir, path).catch(() => resolveFileHandle(_project.dir, 'recipes/' + path));
+  if (/\.xlsx$/i.test(path)) {
+    const doc = await xlsxOpenSheet(await fh.getFile(), { sheet: sheetName || null });
+    const h = doc.header;
+    // Excel types a column by its CONTENTS: one blank cell in a value column and
+    // the whole column reads as text ('55'), which would quietly feed a string
+    // to a numeric parameter. A parameter/run table is heterogeneous by nature,
+    // so numeric-looking values coerce here — the same rule the CSV path uses.
+    // (Data tables keep Excel's types untouched; this is the ROUTINE reader.)
+    const coerce = (v) => (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v) ? +v : v);
+    const rows = Array.from({ length: h.count }, (_, r) => {
+      const row = doc.at(r);
+      return Object.fromEntries(h.columns.map((c, i) => [c, coerce(row[i])]));
+    });
+    return { columns: h.columns, rows, sheet: h.sheet };
+  }
   const lines = (await (await fh.getFile()).text()).split(/\r?\n/).filter((x) => x.trim());
   const cells2 = collarCells(lines);
-  const heads = cells2(lines[0]);
-  return lines.slice(1).map((ln) => { const c = cells2(ln); return Object.fromEntries(heads.map((h, i2) => [h, c[i2] !== undefined && c[i2] !== '' && Number.isFinite(+c[i2]) ? +c[i2] : c[i2]])); });
+  const columns = cells2(lines[0]);
+  const rows = lines.slice(1).map((ln) => { const c = cells2(ln); return Object.fromEntries(columns.map((h, i2) => [h, c[i2] !== undefined && c[i2] !== '' && Number.isFinite(+c[i2]) ? +c[i2] : c[i2]])); });
+  return { columns, rows, sheet: basename(path).replace(/\.[^.]+$/, '') };
+}
+const routineReadTable = async (name) => (await routineReadTableFull(name)).rows;
+// ── the PARAMS block: a parameter SHEET, not a run table ─────────────────────
+// The workbook you actually keep has run tables (one row per run) AND a
+// key→value sheet — "General", parameter | value — that is a series, not a
+// fan-out. `params:` reads one into a SCALAR SCOPE the whole routine sees:
+//
+//   params:
+//     - from: "params.xlsx#General"     # → $general.cutoff, $general.density
+//       as: g                           # namespace (default: the sheet name)
+//       index: parameter                # key column (default: the first)
+//       value: value                    # value column (default: the second,
+//                                       #   when the sheet has exactly two)
+//       fill: 0                         # what an empty cell means
+//
+// More than two columns and no `value:` → the whole row is reachable:
+// $g.hem.cutoff, $g.hem.price. `value: [cutoff, price]` restricts to those.
+// An `each` row's variables SHADOW these, so a run table can override a global.
+const routineKey = (v) => String(v == null ? '' : v).trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+async function routineLoadParams(specs) {
+  const scope = {};
+  const report = [];
+  for (const spec of (Array.isArray(specs) ? specs : [specs]).filter(Boolean)) {
+    if (!spec.from) throw new Error('params: needs `from` (a table or worksheet in the project)');
+    const { columns, rows, sheet } = await routineReadTableFull(spec.from);
+    if (!columns.length) throw new Error(`params: "${spec.from}" has no columns`);
+    const idxCol = spec.index || columns[0];
+    if (!columns.includes(idxCol)) throw new Error(`params: index column "${idxCol}" is not in ${spec.from} (${columns.join(', ')})`);
+    let valCols;
+    if (spec.value) {
+      valCols = (Array.isArray(spec.value) ? spec.value : [spec.value]);
+      for (const c of valCols) if (!columns.includes(c)) throw new Error(`params: value column "${c}" is not in ${spec.from} (${columns.join(', ')})`);
+    } else if (columns.length === 2) valCols = [columns.find((c) => c !== idxCol)];   // the classic parameter|value sheet
+    else valCols = columns.filter((c) => c !== idxCol);                               // wide sheet → the whole row, dotted
+    const single = valCols.length === 1 && (spec.value ? !Array.isArray(spec.value) : true);
+    const fill = spec.fill;
+    const val = (v) => (v === '' || v == null || (typeof v === 'number' && Number.isNaN(v)) ? (fill !== undefined ? fill : '') : v);
+    const obj = {};
+    for (const r of rows) {
+      const k = routineKey(r[idxCol]);
+      if (!k) continue;
+      obj[k] = single ? val(r[valCols[0]]) : Object.fromEntries(valCols.map((c) => [routineKey(c), val(r[c])]));
+    }
+    const ns = spec.as === '' || spec.as === null ? '' : (spec.as || routineKey(sheet) || 'params');
+    if (ns) scope[ns] = { ...(scope[ns] || {}), ...obj };
+    else Object.assign(scope, obj);                        // as: "" → merged flat ($cutoff, not $g.cutoff)
+    report.push(`${spec.from} → ${ns ? '$' + ns + '.' : '$'}${Object.keys(obj).slice(0, 3).join(', ')}${Object.keys(obj).length > 3 ? '…' : ''}`);
+  }
+  return { scope, report };
 }
 function routineCheckStep(st) {                            // inline steps carry `tool:` — must be a runnable one
   if (!st.recipe && st.tool && (!RECIPE_TOOLS[st.tool] || st.tool === 'routine')) {
@@ -3475,20 +3540,28 @@ function routineCheckStep(st) {                            // inline steps carry
 }
 async function expandRoutine(params) {
   const out = [];
+  // the routine's SCALAR scope (params: blocks) — visible to every step; an
+  // each-row's variables shadow it, so a run table can override a global
+  const base = params.params ? (await routineLoadParams(params.params)).scope : {};
   for (const st of params.steps || []) {
     if (st.guard) { out.push({ guard: String(st.guard) }); continue; }
     if (st.each !== undefined) {
       let rows = routineEachRows(st.each);
       if (rows.from) rows = await routineReadTable(rows.from);
       for (const row of rows) {
+        const scope = { ...base, ...row };                 // row shadows the scalars
         for (const inner of st.steps || []) {
-          const sub = routineSubst(inner, row);
+          const sub = routineSubst(inner, scope);
           routineCheckStep(sub);
           const tag = Object.values(row).map((v) => recipeSlug(String(v))).join('-');
           out.push({ ...sub, _slug: recipeSlug(sub.as || sub.recipe || sub.tool) + (tag ? '-' + tag : '') });
         }
       }
-    } else if (st.recipe || st.tool) { routineCheckStep(st); out.push({ ...st, _slug: recipeSlug(st.as || st.recipe || st.tool) }); }
+    } else if (st.recipe || st.tool) {
+      const sub = routineSubst(st, base);                  // plain steps see the scalars too
+      routineCheckStep(sub);
+      out.push({ ...sub, _slug: recipeSlug(sub.as || sub.recipe || sub.tool) });
+    }
     else throw new Error('a step needs `recipe`, `tool`, `each`, or `guard`');
   }
   return out;
@@ -4047,6 +4120,20 @@ function openRoutineWindow(r0) {
         P2 = { ...P2, steps: routineSubst(P2.steps, values) };
       }
       const st2 = await expandRoutine(P2);
+      if (P2.params) {
+        try {
+          const { report } = await routineLoadParams(P2.params);
+          for (const line of report) {
+            const pr = document.createElement('div'); pr.className = 'rw-prevline dim';
+            pr.textContent = 'params: ' + line;
+            prev.appendChild(pr);
+          }
+        } catch (e2) {
+          const pr = document.createElement('div'); pr.className = 'rw-prevline fail';
+          pr.textContent = '⚠ ' + e2.message;
+          prev.appendChild(pr);
+        }
+      }
       if (assumed.length || unresolved.length) {
         const a = document.createElement('div'); a.className = 'rw-prevline dim';
         a.textContent = (assumed.length ? `assuming ${assumed.join(', ')} (defaults / last answers)` : '')
@@ -15892,7 +15979,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
