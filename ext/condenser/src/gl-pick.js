@@ -362,7 +362,79 @@ export const FACE_NORMALS = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0
 export const FACE_NAMES = ['−X (west)', '+X (east)', '−Y (south)', '+Y (north)', '−Z (bottom)', '+Z (top)', 'section cut', '—'];
 const MISS_CLEAR = new Uint32Array([0xFFFFFFFF, 0xFFFFFFFF, 0, 0]);
 
+// ── meshes ──
+// A mesh has NO per-row records: it is a bag of triangles, not rows of a table.
+// So the ID buffer answers only WHICH mesh (record = 0), and the CPU raycasts
+// that mesh's BVH for the triangle + the exact point (winding's raycastBVH).
+// WebGL2 has no gl_PrimitiveID, and un-indexing a mesh purely to carry a
+// per-vertex triangle id would triple its vertex memory — for a click.
+//
+// The geometry and the SECTION behaviour mirror gl-mesh exactly (including the
+// trace-over-the-wall depth flatten): you must pick what you see, or the ID
+// buffer is lying.
+const PICK_VERT_MSH = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+uniform mat4 uViewProj;
+uniform vec4 uSecPlane;
+out vec3 vWorldPos;
+out float vSecDist;
+void main() {
+  gl_Position = uViewProj * vec4(aPos, 1.0);
+  vWorldPos = aPos;
+  vSecDist = dot(aPos, uSecPlane.xyz) - uSecPlane.w;
+}`;
+const PICK_FRAG_MSH = `#version 300 es
+precision highp float;
+in vec3 vWorldPos;
+in float vSecDist;
+uniform vec4 uSecPlane;
+uniform vec2 uSecCfg;
+uniform mat4 uViewProj;
+uniform vec3 uEye, uFwd;
+uniform float uOrtho;
+uniform uint uLayer;
+out uvec4 outId;
+${PACK}
+void main() {
+  if (uSecCfg.x > 0.5 && abs(vSecDist) > uSecCfg.y) discard;
+  gl_FragDepth = gl_FragCoord.z;
+  if (uSecCfg.x > 0.5) {                                   // the visual flattens the in-slab trace onto the
+    float dcEye = dot(uEye, uSecPlane.xyz) - uSecPlane.w;  // camera-side wall; the pick must agree or you
+    if (abs(dcEye) > uSecCfg.y) {                          // would see a trace you cannot click
+      float side = sign(dcEye);
+      vec3 q; bool front = false;
+      if (uOrtho > 0.5) {
+        float den = dot(uFwd, uSecPlane.xyz);
+        if (abs(den) > 1e-9) {
+          float t = (vSecDist - side * uSecCfg.y) / den;
+          if (t > 0.0) { q = vWorldPos - uFwd * t; front = true; }
+        }
+      } else {
+        vec3 rdm = vWorldPos - uEye;
+        float den = dot(rdm, uSecPlane.xyz);
+        if (abs(den) > 1e-9) {
+          float tF = (side * uSecCfg.y - dcEye) / den;
+          if (tF > 0.0 && tF < 1.0) { q = uEye + rdm * tF; front = true; }
+        }
+      }
+      if (front) {
+        vec4 clipQ = uViewProj * vec4(q, 1.0);
+        gl_FragDepth = clamp(clipQ.z / clipQ.w * 0.5 + 0.5, 0.0, 1.0) - 3e-5;
+      }
+    }
+  }
+  outId = uvec4(0u, packId(uLayer, NO_FACE), 0u, 0u);      // record 0: the CPU resolves the triangle
+}`;
+
 export function createPickPipeline(gl) {
+  const msh = makeProgram(gl, PICK_VERT_MSH, PICK_FRAG_MSH);
+  const uMsh = {
+    viewProj: gl.getUniformLocation(msh, 'uViewProj'), secPlane: gl.getUniformLocation(msh, 'uSecPlane'),
+    secCfg: gl.getUniformLocation(msh, 'uSecCfg'), eye: gl.getUniformLocation(msh, 'uEye'),
+    fwd: gl.getUniformLocation(msh, 'uFwd'), ortho: gl.getUniformLocation(msh, 'uOrtho'),
+    layer: gl.getUniformLocation(msh, 'uLayer'),
+  };
   const pts = makeProgram(gl, PICK_VERT_PTS, PICK_FRAG_PTS);
   const blk = makeProgram(gl, PICK_VERT_BLK, PICK_FRAG_BLK);
   const stk = makeProgram(gl, PICK_VERT_STK, PICK_FRAG_STK);
@@ -432,6 +504,19 @@ export function createPickPipeline(gl) {
       if (s && (pm === 'front' || pm === 'behind') && s.d0 !== undefined) { const H = Math.max(1e5, 8 * (s.half || 1)); s = { ...s, d: pm === 'front' ? s.d0 + H : s.d0 - H, half: H }; }
       gl.uniform4f(u.secPlane, s ? s.n[0] : 0, s ? s.n[1] : 0, s ? s.n[2] : 1, s ? s.d : 0);
       gl.uniform2f(u.secCfg, s ? 1 : 0, s ? s.half : 0);
+    };
+    // a mesh's section is a TRACE band at the true plane, not the fat half-space
+    // slab the blocks use (gl.js meshSecOf) — mirror it or the pick disagrees
+    // with the picture on exactly the views geologists spend their day in.
+    const setSecMesh = (u, st) => {
+      let s2 = st && st.sectioned === false ? null : section;
+      const pm = st ? st.sectioned : true;
+      const clip = s2 && (pm === 'front' || pm === 'behind' ? pm : s2.clip);
+      if (s2 && (clip === 'front' || clip === 'behind') && s2.d0 !== undefined) {
+        s2 = { ...s2, d: s2.d0, half: Math.max(0.01, s2.traceHalf || 1) };
+      }
+      gl.uniform4f(u.secPlane, s2 ? s2.n[0] : 0, s2 ? s2.n[1] : 0, s2 ? s2.n[2] : 1, s2 ? s2.d : 0);
+      gl.uniform2f(u.secCfg, s2 ? 1 : 0, s2 ? s2.half : 0);
     };
     // hidden classes aren't pickable (same texture the visual pass culls by)
     const setCatVis = (u, st) => {
@@ -592,6 +677,33 @@ export function createPickPipeline(gl) {
         gl.vertexAttribDivisor(4, 1);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.cursor);
       }
+      }
+    }
+
+    // ── meshes: WHICH mesh, not which triangle (the CPU's job) ──
+    // Policy lives with the app: a layer may declare itself pickable. The default
+    // is OPAQUE-ONLY, and that is deliberate — you make a context surface
+    // see-through precisely so you can work on what is behind it, so a 50%
+    // topography must not steal the click meant for the block under it.
+    const mshChunks = chunks.filter((c) => c.kind === 'mesh' && c.idxCount > 0);
+    if (mshChunks.length) {
+      gl.useProgram(msh);
+      gl.uniformMatrix4fv(uMsh.viewProj, false, s.viewProj);
+      gl.uniform3f(uMsh.eye, s.eye[0], s.eye[1], s.eye[2]);
+      const f = [s.target[0] - s.eye[0], s.target[1] - s.eye[1], s.target[2] - s.eye[2]];
+      const fl = Math.hypot(...f) || 1;
+      gl.uniform3f(uMsh.fwd, f[0] / fl, f[1] / fl, f[2] / fl);
+      gl.uniform1f(uMsh.ortho, s.ortho ? 1 : 0);
+      for (const [id, group] of byLayer(mshChunks)) {
+        const st = stateOf(id);
+        const pickable = st.meshPickable != null ? st.meshPickable : (st.meshOpacity == null || st.meshOpacity >= 0.95);
+        if (!pickable) continue;
+        gl.uniform1ui(uMsh.layer, id >>> 0);
+        setSecMesh(uMsh, st);                              // the TRACE band, exactly as gl.js's meshSecOf draws it
+        for (const c of group) {
+          gl.bindVertexArray(c.vao);
+          gl.drawElements(gl.TRIANGLES, c.idxCount, gl.UNSIGNED_INT, 0);
+        }
       }
     }
 

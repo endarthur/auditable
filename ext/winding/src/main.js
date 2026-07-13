@@ -149,3 +149,6 @@ class Winding {
 export { Winding, buildBVH };
 // CPU math helpers — part of the curated public surface (matches the old footer).
 export { evaluateCPU, solidAngle, windingBrute, windingBVH } from './cpu.js';
+// Ray → mesh over the same BVH: the CPU half of mesh picking (the GPU ID-buffer
+// says WHICH mesh; this says which triangle, where, and which way it faces).
+export { raycastBVH } from './ray.js';

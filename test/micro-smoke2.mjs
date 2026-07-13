@@ -1549,6 +1549,80 @@ await p.close();
   await pl.close();
 }
 
+// ── §32: surfaces are pickable — WHICH mesh from the GPU, WHICH TRIANGLE from the CPU ──
+{
+  const pk = await mkPage('sm2mesh');
+  const r = await pk.evaluate(async () => {
+    let t = 'XC,YC,ZC,FE\n';
+    for (let k = 0; k < 4; k++) for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++)
+      t += `${5 + i * 10},${5 + j * 10},${5 + k * 10},${40 + k * 3}\n`;
+    await window._micro.openBlob(new Blob([t]), 'cube.csv', 'replace');
+    await new Promise((z) => setTimeout(z, 1200));
+    const obj = ['v 0 0 80', 'v 80 0 80', 'v 80 80 80', 'v 0 80 80', 'f 1 2 3', 'f 1 3 4'].join('\n') + '\n';
+    await window._micro.openBlob(new Blob([obj]), 'lid.obj', 'add');
+    await new Promise((z) => setTimeout(z, 1500));
+
+    const m = document.querySelector('#secMode'); m.value = 'off'; m.dispatchEvent(new Event('input'));
+    const st = window._micro.cam.state;
+    window._micro.cam.orbit(0, (Math.PI / 2 - 0.03) - st.phi);      // straight down (phi is FROM the XY plane)
+    document.querySelector('#btnFit').click();
+    window._micro.requestRender();
+    await new Promise((z) => setTimeout(z, 1200));
+
+    const cv = document.querySelector('#cv'), rc = cv.getBoundingClientRect();
+    const cx = rc.width * 0.5, cy = rc.height * 0.5;
+    const P = () => window._micro.renderer.pick(cx, cy, window._micro.cam, { pointPx: 6, blocksAsPoints: false, section: null });
+    const kindOf = (h) => { const L = h && window._micro.layers().find((x) => x.id === h.layer); return L && L.kind; };
+
+    const mesh = window._micro.layers().find((x) => x.kind === 'mesh');
+    const blocks = window._micro.layers().find((x) => x.kind === 'blocks');
+
+    const hOpaque = P();                                             // the lid ships opaque → it picks
+    const mh = kindOf(hOpaque) === 'mesh' ? await window._micro.meshHitAt(mesh, cx, cy) : null;
+
+    // see-through → the click must reach the blocks (you made it see-through to see past it)
+    mesh.opacity = 0.4; window._micro.renderer.setLayerOpacity(mesh.id, 0.4);
+    window._micro.setActiveLayer(blocks.id);
+    window._micro.requestRender();
+    await new Promise((z) => setTimeout(z, 800));
+    const hThrough = P();
+
+    // …but selecting it says "I mean this surface"
+    window._micro.setActiveLayer(mesh.id);
+    window._micro.requestRender();
+    await new Promise((z) => setTimeout(z, 800));
+    const hSelected = P();
+
+    // the FACE code, sampled over several pixels: looking straight down, the top
+    // face must dominate. (One centre pixel is brittle — at a near-vertical view a
+    // block's side sliver is a fraction of a degree wide and can own that pixel.)
+    window._micro.setActiveLayer(blocks.id);
+    mesh.visible = false; window._micro.applyTreeVisibility();
+    window._micro.requestRender();
+    await new Promise((z) => setTimeout(z, 800));
+    const faces = [];
+    for (const [fx, fy] of [[0.5, 0.5], [0.45, 0.45], [0.55, 0.55], [0.48, 0.53], [0.53, 0.47]]) {
+      const h = window._micro.renderer.pick(rc.width * fx, rc.height * fy, window._micro.cam,
+        { pointPx: 6, blocksAsPoints: false, section: null });
+      if (h) faces.push(h.face);
+    }
+    return {
+      opaqueKind: kindOf(hOpaque), tri: mh && mh.tri, z: mh && mh.point[2], nz: mh && mh.normal[2],
+      throughKind: kindOf(hThrough), throughFace: hThrough && hThrough.face,
+      selectedKind: kindOf(hSelected),
+      faces, tops: faces.filter((f) => f === 5).length,
+    };
+  });
+  chk(`mesh pick: an opaque surface picks, and the CPU names the triangle (tri ${r.tri} at z=${r.z}, normal z=${r.nz && r.nz.toFixed(2)})`,
+    r.opaqueKind === 'mesh' && r.tri != null && Math.abs(r.z - 80) < 0.01 && Math.abs(r.nz - 1) < 0.01);
+  chk(`mesh pick: a 40%-opaque surface does NOT steal the click — it reaches the BLOCKS under it (${r.throughKind}, face ${r.throughFace})`,
+    r.throughKind === 'blocks' && r.throughFace <= 5);
+  chk(`face code: looking straight down, the top face dominates (${r.tops}/${r.faces.length} are +Z: [${r.faces.join(',')}])`,
+    r.faces.length >= 4 && r.tops >= r.faces.length - 1);
+  chk(`mesh pick: selecting that surface makes it clickable again (${r.selectedKind})`, r.selectedKind === 'mesh');
+  await pk.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

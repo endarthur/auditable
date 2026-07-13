@@ -396,6 +396,12 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     layerMeshStyle(layer) { const ls = layerOf(layer); return { tint: ls.meshTint, opacity: ls.meshOpacity }; },
     // per-layer opacity for blocks (box impostors) + sticks (drillholes) — applied
     // as a screen-door dither in their shaders (see-through, no alpha-blend ordering).
+    // Is this mesh layer PICKABLE? null = the default (opaque meshes pick, see-through
+    // ones don't — you made it see-through to work on what is behind it). The app
+    // overrides per layer: micro turns the ACTIVE mesh on, so selecting a surface in
+    // the tree is what makes it clickable.
+    setLayerPickable(layer, v) { layerOf(layer).meshPickable = v == null ? null : !!v; },
+    layerPickable(layer) { const v = layerOf(layer).meshPickable; return v === undefined ? null : v; },
     setLayerOpacity(layer, opacity) { const ls = layerOf(layer); const v = Math.max(0.02, Math.min(1, +opacity)); ls.opacity = v; ls.meshOpacity = v; needClear = true; },   // ONE knob: mesh-family layers read meshOpacity
     // block-edge override: null = follow the draw-level blockEdges flag, true/false = force
     setLayerEdges(layer, v) { const ls = layerOf(layer); const nv = v == null ? null : !!v; if (ls.edges !== nv) { ls.edges = nv; needClear = true; } },
