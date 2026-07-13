@@ -1229,6 +1229,39 @@ await p.close();
   await pr.close();
 }
 
+// ── §23: the TABLE kind — a coordinate-less CSV is a first-class layer ──
+{
+  const pt = await mkPage('sm2table');
+  await pt.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('sm2table', { recursive: true }); } catch { } });
+  await pt.evaluate(() => window._micro.openBlob(new Blob(['DOMAIN,CUTOFF,PRICE\nHEM,55,105\nITA,50,98\nCANGA,45,80\nWASTE,0,0\n']), 'cutoffs.csv', 'replace'));
+  await pt.waitForFunction(() => window._micro.layers()[0] && window._micro.layers()[0].kind === 'table', null, { timeout: 20000 });
+  const tb = await pt.evaluate(async () => {
+    const L = window._micro.layers()[0];
+    window._micro.setActiveLayer(L.id);
+    await window._micro.applyBlockFilter('CUTOFF > 45');
+    const hits = L._filterCount;
+    window._micro.applyCalcCols(L, [{ name: 'NET', expr: 'PRICE * 0.9', ty: 'number' }]);
+    L.storage = 'project';
+    return { kind: L.kind, rows: L.docs.tableDoc.header.count, hits, spatial: !!window._micro.gridAxesOf(L), calc: (L.calcCols || []).length };
+  });
+  await saveProject(pt);
+  const rt = await pt.evaluate(async () => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2table');
+    const man = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
+    const names = []; for await (const k of (await dir.getDirectoryHandle('tables')).keys()) names.push(k);
+    window.showDirectoryPicker = async () => dir;
+    await window._micro.openProjectDir();
+    await new Promise((r) => setTimeout(r, 1500));
+    const L = window._micro.layers()[0];
+    return { manKind: man.layers[0].kind, inTables: names.includes('cutoffs.csv'), kind: L.kind, filter: L.filterExpr, calc: (L.calcCols || []).length };
+  });
+  chk(`table kind: coordinate-less CSV → table layer (${tb.rows} rows), filter ${tb.hits}/4, ƒ column, no spatial verbs`,
+    tb.kind === 'table' && tb.rows === 4 && tb.hits === 2 && !tb.spatial && tb.calc === 1);
+  chk(`table kind: project round-trip (manifest kind=${rt.manKind}, tables/ folder, filter + ƒ restored)`,
+    rt.manKind === 'table' && rt.inTables && rt.kind === 'table' && rt.filter === 'CUTOFF > 45' && rt.calc === 1);
+  await pt.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

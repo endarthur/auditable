@@ -3,7 +3,7 @@
 // synthetic LAS buffers built by test/las-make.mjs (no real data, no writer shipped).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLasHeader, openLas, documentFrame, createChunkBuilder, buildChunk, chunkLocalPosition, mulberry32, shuffledIndices, createOrbitCamera, transformPoint, mortonKey, mortonKeys, radixSortIndices, frustumPlanes, aabbInFrustum } from '../ext/condenser/src/main.js';
+import { parseLasHeader, openLas, documentFrame, createChunkBuilder, buildChunk, chunkLocalPosition, mulberry32, shuffledIndices, createOrbitCamera, transformPoint, mortonKey, mortonKeys, radixSortIndices, frustumPlanes, aabbInFrustum, openTable } from '../ext/condenser/src/main.js';
 import { makeLas, makeTerrainPoints } from './las-make.mjs';
 
 const PTS = [
@@ -953,4 +953,21 @@ test('soup: openPlySoup binary — streamed parity with openPlyMesh (counts + ce
     wx += (whole.vertices[3 * a] + whole.vertices[3 * b2] + whole.vertices[3 * c]) / 3;
   }
   assert.ok(Math.abs(cx - wx) < 1e-3, `${cx} vs ${wx}`);
+});
+
+test('openTable: a coordinate-less delimited file reads as a plain table', async () => {
+  const csv = 'DOMAIN,CUTOFF,RECOVERY,NOTE\nHEM,55,0.92,good\nITA,50,0.88,\nCANGA,45,0.75,marginal\nWASTE,0,0,n/a\n';
+  const { header } = await openTable(new Blob([csv]));
+  assert.equal(header.table, true);
+  assert.equal(header.count, 4);
+  assert.deepEqual(header.columns, ['DOMAIN', 'CUTOFF', 'RECOVERY', 'NOTE']);
+  assert.equal(header.mapping, null);                      // no geometry
+  assert.equal(header.grid, null);
+  assert.deepEqual(header.numericColumns.map((c) => c.name), ['CUTOFF', 'RECOVERY']);   // DOMAIN + NOTE stay text
+});
+
+test('openTable: a headerless file gets synthetic column names', async () => {
+  const { header } = await openTable(new Blob(['1,2,3\n4,5,6\n']));
+  assert.deepEqual(header.columns, ['col1', 'col2', 'col3']);
+  assert.equal(header.count, 2);
 });

@@ -354,3 +354,36 @@ export async function openBlockModel(blob, { mapping = null, discovered = null, 
 
   return { header, streamChunks };
 }
+
+// ── the TABLE provider: a delimited file with NO geometry ─────────────────────
+// Not every table in a project is spatial — a join source, a parameter table, a
+// cut-off/density lookup, a price deck, an analysis result. This reads one as a
+// plain tabular document: columns, a row count, numeric-column detection, and
+// the line index `fetchDelimitedRecord` needs. No coordinates, no bbox, no
+// chunks — nothing here reaches the renderer.
+export async function openTable(blob, { signal, onProgress } = {}) {
+  const sniff = sniffDelimited(await blob.slice(0, 64 * 1024).text());   // { delim, header: [names]|null, columns: n }
+  const hasHeaderRow = !!sniff.header;
+  const columns = sniff.header
+    ? sniff.header.map((h, i) => String(h).trim() || `col${i + 1}`)
+    : Array.from({ length: sniff.columns }, (_, i) => `col${i + 1}`);
+  // one pass: count the rows and sample each column's type (a column is numeric
+  // when ≥90% of its non-empty values parse — the same tolerance the block
+  // provider uses, so mixed columns with a stray 'n/a' still read as numbers)
+  const stat = columns.map(() => ({ n: 0, num: 0 }));
+  let count = 0;
+  for await (const batch of lineFields(blob, sniff.delim, hasHeaderRow, { signal, onProgress })) {
+    for (const f of batch) {
+      for (let i = 0; i < columns.length && i < f.length; i++) {
+        const v = f[i];
+        if (v === '' || v == null) continue;
+        stat[i].n++;
+        if (Number.isFinite(+v)) stat[i].num++;
+      }
+      count++;
+    }
+  }
+  const numericColumns = [];
+  for (let i = 0; i < columns.length; i++) if (stat[i].n && stat[i].num / stat[i].n >= 0.9) numericColumns.push({ i, name: columns[i] });
+  return { header: { table: true, columns, count, delim: sniff.delim, hasHeaderRow, numericColumns, mapping: null, grid: null, bbox: null } };
+}

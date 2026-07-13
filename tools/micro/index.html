@@ -812,7 +812,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, buildHeightfieldMesh, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openTable, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, buildHeightfieldMesh, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH } from '../../ext/condenser/src/main.js';
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
@@ -6436,6 +6436,10 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     else if (/\.(parquet|pq)$/i.test(name)) { await openParquetBlocks(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping, cached: over.cached }); }
     // .xyz/.pts default to POINTS (2-decimal coords form a fake lattice); a
     // block/points asKind override rides forcePoints for every delimited file.
+    else if (over.asKind === 'table' && /\.(csv|txt|dat|tsv)$/i.test(name)) { await openTableBlob(blob, name, { layer: lid, first }); }
+    // a delimited file with NO X/Y/Z is a TABLE, not an error (unless a mapping
+    // was passed, which asserts the coordinates by hand)
+    else if (/\.(csv|txt|dat|tsv)$/i.test(name) && !over.mapping && !over.discovered && !await delimitedHasCoords(blob)) { await openTableBlob(blob, name, { layer: lid, first }); }
     else if (/\.(csv|txt|dat|asc|xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping, discovered: over.discovered }); }
     else if (/\.ply$/i.test(name)) { await openPlyBlob(blob, name, { layer: lid, first }); }
     else {
@@ -7786,6 +7790,68 @@ async function openParquetBlocks(blob, name, opts = {}) {
 // Block-model path (.csv etc.): two-sweep provider → regular grid → box impostors.
 // Not a regular grid → the points pipeline still shows the centroids.
 let _blockDoc = null, _lasDoc = null, _dhDoc = null;
+// ── the TABLE kind: a tabular layer with NO geometry ─────────────────────────
+// A join source, a routine's parameter table, a cut-off / density lookup, an
+// analysis result. It lives in the layer list, opens an attribute table, filters
+// with @gcu/expr, takes calc columns, and exports — but it has no bbox, draws
+// nothing, and never enters the 3D budget. Everything spatial is gated off it by
+// the absence of a mapping (gridAxesOf → null, so GT/swath/interpolate never
+// offer it) rather than by scattered kind checks.
+async function openTableBlob(blob, name, opts = {}) {
+  const lid = opts.layer != null ? opts.layer : _activeId;
+  $('#meta').textContent = `${name} — reading table…`;
+  const { header } = await openTable(blob);
+  const L = layerById(lid);
+  if (!L) return;
+  L.kind = 'table';
+  L.docs = { tableDoc: { blob, name, header, metaLine: '' } };
+  L.bboxLocal = null;                                      // no geometry — nothing to fit, nothing to draw
+  const line = `${name} — ${header.count.toLocaleString()} rows · ${header.columns.length} columns · table (no coordinates)`;
+  L.docs.tableDoc.metaLine = line;
+  $('#meta').textContent = line;
+  renderLayers();
+}
+// does a delimited file carry X/Y/Z? (mapColumns is the same test the block
+// provider uses — null means "no centroid columns", i.e. it is a plain table)
+async function delimitedHasCoords(blob) {
+  try {
+    const sniff = sniffDelimited(await blob.slice(0, 64 * 1024).text());
+    return !!(sniff.header && mapColumns(sniff.header));
+  } catch { return false; }
+}
+// the table filter: the same @gcu/expr sweep, but the mask only drives the
+// attribute table + export (a table has nothing on screen to hide)
+async function applyTableFilter(L, expr) {
+  L.filterExpr = expr;
+  dispatchEvent(new Event('micro:project-dirty'));
+  const inp = $('#filter');
+  const h = layerTableHeader(L);
+  if (!expr.trim()) {
+    L._filterMask = null; L._filterCount = 0;
+    inp.classList.remove('err');
+    attrTableFilterChanged(L.id);
+    $('#meta').textContent = L.docs.tableDoc.metaLine;
+    return;
+  }
+  let fn;
+  try { fn = compileBool(expr, schemaExt(L, h), { decimal: '.' }); }
+  catch (e) { inp.classList.add('err'); $('#meta').textContent = `filter: ${e.message}`; return; }
+  inp.classList.remove('err');
+  const mask = new Uint8Array(h.count);
+  let hits = 0, rec = 0;
+  for await (const batch of layerRows(L, null)) {
+    for (const f0 of batch) {
+      const f = extendRow(L, f0, rec);
+      let keep = false;
+      try { keep = !!fn(f); } catch { keep = false; }
+      if (keep) { mask[rec] = 1; hits++; }
+      rec++;
+    }
+  }
+  L._filterMask = mask; L._filterCount = hits;
+  attrTableFilterChanged(L.id);
+  $('#meta').textContent = `${L.label || L.name} — ${hits.toLocaleString()} of ${h.count.toLocaleString()} rows match`;
+}
 async function openBlocksBlob(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : _activeId;
   _lasDoc = null; _plyDoc = null;
@@ -7951,7 +8017,8 @@ let _filterExpr = '';
 let _filterEpoch = 0;                                      // guards overlapping sweeps (a newer filter aborts the older one)
 function blockSchema(header) {
   const numeric = new Set((header.numericColumns || []).map((c) => c.i));
-  [header.mapping.x, header.mapping.y, header.mapping.z].forEach((i) => numeric.add(i));
+  const m = header.mapping;                                // a TABLE has no mapping — its numeric columns are the whole story
+  if (m) [m.x, m.y, m.z].forEach((i) => numeric.add(i));
   return header.columns.map((name, i) => ({ name, type: numeric.has(i) ? 'number' : 'string' }));
 }
 async function applyBlockFilter(expr) {
@@ -7961,6 +8028,7 @@ async function applyBlockFilter(expr) {
   // filtered the assay table while the model was active and hung a 7k-bit
   // mask on a 1.8M-block layer
   const AL = activeLayer();
+  if (AL && AL.kind === 'table') return applyTableFilter(AL, expr);   // no geometry to mask — the table view is the whole effect
   const fBlockDoc = AL ? AL.docs.blockDoc : _blockDoc;
   const fDhDoc = AL ? AL.docs.dhDoc : _dhDoc;
   if (!fBlockDoc && !fDhDoc) { $('#meta').textContent = 'filter: open a block model or drillholes first'; return; }
@@ -9051,7 +9119,7 @@ function projectManifest() {
       external: L.storage === 'external' || undefined,
       colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible,
       sectioned: (() => { const m = renderer.layerSectioned(L.id); return m === true ? undefined : m; })(),
-      kind: (L.kind === 'mesh' && !L.gridSurface) ? 'mesh' : undefined,   // a grid-surface is kind 'mesh' but reopens as a grid (gridSurface flag)
+      kind: (L.kind === 'mesh' && !L.gridSurface) ? 'mesh' : (L.kind === 'table' ? 'table' : undefined),   // a grid-surface is kind 'mesh' but reopens as a grid (gridSurface flag)
       tint: L.kind === 'mesh' ? L.tint : undefined,
       opacity: (L.opacity != null && L.opacity !== 1) ? L.opacity : undefined,   // any kind (mesh/blocks/drillholes)
       recHide: (L._recHide && L._recHide.size) ? [...L._recHide] : undefined,   // record-panel hidden fields (view pref)
@@ -9117,7 +9185,7 @@ async function saveProjectAs() {
 // on reopen. One compact menu covers all outside layers per save.
 const fmtSize = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + ' GB' : b >= 1 << 20 ? (b / (1 << 20)).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
 const layerBytes = (L) => layerFiles(L).reduce((t, fd) => t + (fd.blob && fd.blob.size || 0), 0);
-const layerBlob = (L) => { const d = L.docs.blockDoc || L.docs.plyDoc || L.docs.lasDoc || L.docs.meshDoc || L.docs.gridDoc; return d && d.blob || null; };
+const layerBlob = (L) => { const d = L.docs.blockDoc || L.docs.tableDoc || L.docs.plyDoc || L.docs.lasDoc || L.docs.meshDoc || L.docs.gridDoc; return d && d.blob || null; };
 // every file a layer depends on — one for most kinds, three for drillholes
 function layerFiles(L) {
   if (L.dh && L.docs.dhDoc) {
@@ -9138,6 +9206,7 @@ const joinPath = (a, b) => (a ? a.replace(/\/$/, '') + '/' + b : b);
 function kindDir(L) {
   if (L.dh) return 'drillholes';
   const d = L.docs || {};
+  if (d.tableDoc) return 'tables';
   if (d.meshDoc) return 'meshes';
   if (d.gridDoc) return 'grids';
   if (d.blockDoc) return 'models';
@@ -9522,7 +9591,9 @@ async function openProjectDir(dir) {
       // a mesh-bearing .ply saved as a POINTS layer must reopen as points
       const overR = ls.kind === 'mesh'
         ? { tint: ls.tint, opacity: ls.opacity, forceSoup: !!ls.soup }
-        : (/\.ply$/i.test(ls.source) ? { forcePoints: true } : (ls.mapping ? { mapping: ls.mapping } : {}));
+        : ls.kind === 'table'
+          ? { asKind: 'table' }
+          : (/\.ply$/i.test(ls.source) ? { forcePoints: true } : (ls.mapping ? { mapping: ls.mapping } : {}));
       if (ls.gridSurface) { overR.asKind = 'surface'; if (ls.flatZ != null) overR.flatZ = ls.flatZ; if (ls.faceted) overR.smooth = false; }   // a grid saved as a surface reopens as one (relief/flat, smooth/faceted; drape applied post-load)
       if (ls.band) overR.band = ls.band;                    // multi-band GeoTIFF: the chosen band
       // grid display-cache: matching source size → display from the sidecar,
@@ -11659,6 +11730,7 @@ async function fetchLayerRow(L, rec) {
     const r = (i / g.grid.nx) | 0, c = i % g.grid.nx;
     return [+(g.grid.x0 + c * g.grid.dx).toFixed(3), +(g.grid.y0 - r * g.grid.dy).toFixed(3), +g.grid.data[i].toFixed(3), r, c];
   }
+  if (d.tableDoc) return await fetchDelimitedRecord(d.tableDoc.blob, d.tableDoc.header, rec);
   if (d.dhDoc) return d.dhDoc.fetchRecord(rec);
   if (d.tracesDoc) return d.tracesDoc.fetchRecord(rec);    // pick a trace → its collar record
   if (d.blockDoc && d.blockDoc.parquet) { const row = await readParquetRow(d.blockDoc.parquet.buf, rec, d.blockDoc.parquet.meta); return row ? d.blockDoc.parquet.names.map((n) => { const v = row[n]; return v == null ? '' : v; }) : null; }
@@ -11866,7 +11938,7 @@ function layerMenu(L, x, y) {
       })(),
       { sep: true },
     ] : []),
-    { label: 'Zoom to layer', action: () => fitLayer(L) },
+    ...(L.kind === 'table' ? [] : [{ label: 'Zoom to layer', action: () => fitLayer(L) }]),
     { label: 'Rename layer…', kbd: 'F2', action: () => renameActiveLayer(L) },
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
     ...(canReloadLayer(L) ? [{ label: 'Reload from disk', action: () => reloadLayerFromDisk(L) }] : []),
@@ -12029,12 +12101,13 @@ function closeProps() { _propOpen = false; _propFor = null; _rampRepaint = null;
 $('#ppClose').onclick = closeProps;
 function layerHeaderOf(L) {
   const d = L.docs || {};
-  return (d.blockDoc || d.dhDoc || d.meshDoc || d.plyDoc || d.lasDoc || {}).header || null;
+  return (d.blockDoc || d.dhDoc || d.tableDoc || d.meshDoc || d.plyDoc || d.lasDoc || {}).header || null;
 }
 function propKindLine(L) {
   const h = layerHeaderOf(L);
   const n = renderer.layerElementCount(L.id) || 0;
   if (L.kind === 'mesh') return `${h && h.soup ? 'streamed' : 'context'} mesh · ${n.toLocaleString()} triangles`;
+  if (L.kind === 'table') return `table · ${(h ? h.count : 0).toLocaleString()} rows · ${h ? h.columns.length : 0} columns · no geometry`;
   if (L.dh) return `drillholes · ${n.toLocaleString()} intervals`;
   if (L.docs.blockDoc && L.docs.blockDoc.header.grid) return `block model · ${n.toLocaleString()} blocks`;
   return `points · ${n.toLocaleString()}`;
@@ -13271,7 +13344,7 @@ function renderClassList(body, L, info) {
 // the sparkline — and later feed the style tab's breakpoints editor. ──
 function layerTableHeader(L) {
   const d = L.docs || {};
-  const h = (d.blockDoc || d.dhDoc || {}).header;
+  const h = (d.blockDoc || d.dhDoc || d.tableDoc || {}).header;
   return h && h.columns ? h : null;
 }
 function colIsNumeric(L, h, i) {
@@ -14032,6 +14105,14 @@ async function* layerRows(L, onProgress) {
       done += count;
       if (onProgress) onProgress(done, d.blockDoc.header.count);
     }
+  } else if (d.tableDoc) {
+    const { blob, header } = d.tableDoc;
+    let done = 0;
+    for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow)) {
+      yield batch;
+      done += batch.length;
+      if (onProgress) onProgress(done, header.count);
+    }
   } else if (d.blockDoc) {
     const { blob, header } = d.blockDoc;
     let done = 0;
@@ -14258,8 +14339,9 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
 function reinterpretOptions(L) {
   if (!L || L.dh) return [];
   const d = L.docs || {};
+  if (d.tableDoc) return L._hasCoords ? [{ kind: 'blocks', label: 'block model' }, { kind: 'points', label: 'points' }] : [];
   if (d.gridDoc) return L.gridSurface ? [{ kind: 'points', label: 'points (elevation)' }] : [{ kind: 'surface', label: 'surface (shaded relief)' }];
-  if (d.blockDoc) return d.blockDoc.forcePoints ? [{ kind: 'blocks', label: 'block model' }] : [{ kind: 'points', label: 'points' }];
+  if (d.blockDoc) return [...(d.blockDoc.forcePoints ? [{ kind: 'blocks', label: 'block model' }] : [{ kind: 'points', label: 'points' }]), { kind: 'table', label: 'table (drop the geometry)' }];
   if (d.plyDoc) return [{ kind: 'mesh', label: 'mesh' }];
   if (d.meshDoc && /\.ply$/i.test(L.name)) return [{ kind: 'points', label: 'points' }];
   return [];
@@ -15402,14 +15484,20 @@ function renderLayers() {
     row.className = 'lp-row' + (L.id === _activeId ? ' active' : '') + (_lpSel.has(L.id) ? ' sel' : '') + (L.visible ? '' : ' off') + (dim ? ' dim' : '');
     row.dataset.lid = L.id;
     row.style.paddingLeft = `${6 + depth * 14}px`;
-    const eye = document.createElement('input');
-    eye.type = 'checkbox'; eye.checked = L.visible; eye.title = 'visible (a disabled group greys the row — the eye stays yours)';
-    eye.onclick = (e) => { e.stopPropagation(); L.visible = eye.checked; applyTreeVisibility(); renderLayers(); dispatchEvent(new Event('micro:project-dirty')); };
+    let eye;
+    if (L.kind === 'table') {                              // no geometry → nothing to show or hide; the glyph names the kind
+      eye = document.createElement('span'); eye.className = 'lp-infoico'; eye.textContent = '▦';
+      eye.title = 'table — rows and columns, no geometry';
+    } else {
+      eye = document.createElement('input');
+      eye.type = 'checkbox'; eye.checked = L.visible; eye.title = 'visible (a disabled group greys the row — the eye stays yours)';
+      eye.onclick = (e) => { e.stopPropagation(); L.visible = eye.checked; applyTreeVisibility(); renderLayers(); dispatchEvent(new Event('micro:project-dirty')); };
+    }
     const name = document.createElement('span'); name.className = 'lp-name';
     name.textContent = (L.storage === 'external' ? '↗ ' : '') + (L.label || L.name);
     name.title = (L.label && L.label !== L.name ? `${L.label} (${L.name})` : L.name) + (L.storage === 'external' ? ' — linked from outside the project folder' : '');
     const n = document.createElement('span'); n.className = 'lp-n';
-    n.textContent = (renderer.layerElementCount(L.id) || 0).toLocaleString();
+    n.textContent = (L.kind === 'table' ? ((layerTableHeader(L) || {}).count || 0) : (renderer.layerElementCount(L.id) || 0)).toLocaleString();
     armDrag(row, L.id);
     // every row carries the caret SLOT (leaves get it empty) so checkboxes
     // column-align per depth — a group's eye sits level with its siblings,
@@ -15681,7 +15769,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
