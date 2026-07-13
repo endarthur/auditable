@@ -1418,6 +1418,56 @@ await p.close();
   await pf.close();
 }
 
+// ── §29: the guard knows COLUMNS · results become table layers · resume ──
+{
+  const p3 = await mkPage('sm2r3');
+  await p3.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('sm2r3', { recursive: true }); } catch { } });
+  await p3.evaluate(() => {
+    let t = 'X,Y,Z,FE\n';
+    for (let i = 0; i < 10; i++) for (let j = 0; j < 10; j++) t += `${i * 10},${j * 10},5,${45 + i}\n`;
+    return window._micro.openBlob(new Blob([t]), 'm.csv', 'replace');
+  });
+  await p3.waitForFunction(() => window._micro.layers()[0] && window._micro.layers()[0].docs.blockDoc, null, { timeout: 20000 });
+  await p3.evaluate(() => { window._micro.layers()[0].storage = 'project'; });
+  await saveProject(p3);
+  const g3 = await p3.evaluate(async () => {
+    const L = window._micro.layers()[0];
+    // the guard must catch a COLUMN overwrite, not just a report file
+    window._micro.applyCalcCols(L, [{ name: 'FE_EQ', expr: 'FE * 1.1', ty: 'number' }]);
+    window._micro._recipesList().length = 0;
+    window._micro._recipesList().push({ name: 'cols', tool: 'calccols', params: { layer: 'm.csv', cols: [{ name: 'FE_EQ', expr: 'FE * 1.1' }] } });
+    await window._micro.runRoutine({ name: 'guarded', tool: 'routine', params: { steps: [{ guard: 'no-overwrites' }, { recipe: 'cols' }] } });
+    const guardMeta = document.querySelector('#meta').textContent;
+    // createPaintCol replaces on name (run-twice == run-once), still refuses to shadow source
+    window._micro.createPaintCol(L, 'DOM');
+    window._micro.createPaintCol(L, 'DOM');
+    const paintN = (L.paintCols || []).filter((c) => c.name === 'DOM').length;
+    const shadow = window._micro.createPaintCol(L, 'FE') === null;
+    // an analysis result becomes a table layer
+    const T = await window._micro.resultToLayer('gt · m.csv', 'cutoff\ttonnes\n0\t900\n55\t300\n');
+    return { guardMeta, paintN, shadow, tKind: T.kind, tRows: T.docs.tableDoc.header.count, tLabel: T.label };
+  });
+  chk(`guard sees COLUMNS ("${g3.guardMeta.slice(0, 60)}…"); paint replaces on name (${g3.paintN}); source still protected`,
+    /guard stopped/.test(g3.guardMeta) && /FE_EQ/.test(g3.guardMeta) && g3.paintN === 1 && g3.shadow);
+  chk(`analysis result → table layer ("${g3.tLabel}", ${g3.tRows} rows)`,
+    g3.tKind === 'table' && g3.tRows === 2);
+  const r3 = await p3.evaluate(async () => {
+    window._micro._recipesList().length = 0;
+    window._micro._recipesList().push({ name: 'gt std', tool: 'gt', params: { layer: 'm.csv', series: [{ layer: 'm.csv', col: 'FE' }], nCut: 4 } });
+    await window._micro.runRoutine({ name: 'resumed', tool: 'routine', params: { output: { prefix: 'z-' }, steps: [
+      { each: [{ g: 'FE' }, { g: 'FE' }], steps: [{ recipe: 'gt std', series: [{ layer: 'm.csv', col: '$g' }] }] },
+    ] } }, { from: 1 });
+    const el = document.querySelector('.fwin[data-routine-run]');
+    const icons = [...el.querySelectorAll('.rw-state')].map((x) => x.textContent).join('');
+    const meta = document.querySelector('#meta').textContent;
+    document.querySelectorAll('.fwin').forEach((w) => w.remove());
+    return { icons, meta };
+  });
+  chk(`resume from a step: the tracker marks the skipped ones (${r3.icons}) and the summary is honest ("${r3.meta.split('—')[1] || ''}".trim())`,
+    r3.icons === '–✓' && /1 step run \(1 skipped\)/.test(r3.meta));
+  await p3.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
