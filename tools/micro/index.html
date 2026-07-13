@@ -3538,32 +3538,45 @@ function routineCheckStep(st) {                            // inline steps carry
     throw new Error(`unknown tool "${st.tool}" (inline steps take ${Object.keys(RECIPE_TOOLS).filter((t) => t !== 'routine').join(' / ')})`);
   }
 }
-async function expandRoutine(params) {
-  const out = [];
-  // the routine's SCALAR scope (params: blocks) — visible to every step; an
-  // each-row's variables shadow it, so a run table can override a global
-  const base = params.params ? (await routineLoadParams(params.params)).scope : {};
-  for (const st of params.steps || []) {
+// `each` is a STEP, and its body is steps — so an each INSIDE an each simply
+// nests, and nesting is a CROSS PRODUCT (every bench × every domain). One each
+// with two equal-length columns is a ZIP (paired, not crossed): that is the
+// difference, and both show plainly in Preview because expansion is a macro.
+// `as` on an each/params step names a SCOPE (→ $b.grade); `as` on a recipe/tool
+// step names the REPORT (they are different kinds of step).
+async function expandSteps(steps, scope, tags, out) {
+  for (const st of steps || []) {
     if (st.guard) { out.push({ guard: String(st.guard) }); continue; }
+    if (st.params !== undefined) {                         // binds names FORWARD (and only within this block)
+      const { scope: add } = await routineLoadParams(st.params);
+      scope = { ...scope, ...add };
+      continue;
+    }
     if (st.each !== undefined) {
       let rows = routineEachRows(st.each);
       if (rows.from) rows = await routineReadTable(rows.from);
       for (const row of rows) {
-        const scope = { ...base, ...row };                 // row shadows the scalars
-        for (const inner of st.steps || []) {
-          const sub = routineSubst(inner, scope);
-          routineCheckStep(sub);
-          const tag = Object.values(row).map((v) => recipeSlug(String(v))).join('-');
-          out.push({ ...sub, _slug: recipeSlug(sub.as || sub.recipe || sub.tool) + (tag ? '-' + tag : '') });
-        }
+        const bound = st.as ? { [String(st.as)]: row } : row;   // as: b → $b.grade; absent → $grade
+        const tag = Object.values(row).map((v) => recipeSlug(String(v))).join('-');
+        await expandSteps(st.steps, { ...scope, ...bound }, tag ? [...tags, tag] : tags, out);
       }
-    } else if (st.recipe || st.tool) {
-      const sub = routineSubst(st, base);                  // plain steps see the scalars too
-      routineCheckStep(sub);
-      out.push({ ...sub, _slug: recipeSlug(sub.as || sub.recipe || sub.tool) });
+      continue;
     }
-    else throw new Error('a step needs `recipe`, `tool`, `each`, or `guard`');
+    if (st.recipe || st.tool) {
+      const sub = routineSubst(st, scope);
+      routineCheckStep(sub);
+      const base = recipeSlug(sub.as || sub.recipe || sub.tool);
+      out.push({ ...sub, _slug: [base, ...tags].join('-') });   // the slug carries every enclosing row
+      continue;
+    }
+    throw new Error('a step needs `recipe`, `tool`, `each`, `params`, or `guard`');
   }
+}
+async function expandRoutine(params) {
+  const out = [];
+  // top-level `params:` is a PRELUDE — sugar for a params step at the front
+  const base = params.params ? (await routineLoadParams(params.params)).scope : {};
+  await expandSteps(params.steps, base, [], out);
   return out;
 }
 const routineOutDir = (P) => (P.output && P.output.dir) || `reports/${new Date().toISOString().slice(0, 10)}`;
@@ -3587,7 +3600,7 @@ function routineLineInfo(st, i, P) {
 // or the inline step's own params)
 function routineStepOp(st) {
   const rc = st.recipe ? _recipes.find((x) => x.name === st.recipe) : null;
-  const extras = Object.fromEntries(Object.entries(st).filter(([k]) => !['recipe', 'tool', 'as', '_slug'].includes(k)));
+  const extras = Object.fromEntries(Object.entries(st).filter(([k]) => !['recipe', 'tool', 'as', '_slug', 'each', 'steps', 'params', 'guard'].includes(k)));
   return { name: rc ? rc.name : st._slug, tool: rc ? rc.tool : st.tool, params: rc ? { ...rc.params, ...extras } : extras };
 }
 // the run tracker: the expanded list with live per-step state (· ▶ ✓ ✗),
@@ -3862,14 +3875,17 @@ function openRoutineWindow(r0) {
   let file = r0 ? r0.file : null;
   const steps = (model.params.steps || []).filter((st) => st && !st.guard);
   let guard = (model.params.steps || []).some((st) => st && st.guard === 'no-overwrites');
-  for (const st of steps) {                                 // normalize for editing
-    if (st.each !== undefined) {
+  const normalize = (arr) => {                              // normalize for editing (recursively — blocks nest)
+    for (const st of arr || []) {
+      if (st.each === undefined) continue;
       st.steps = st.steps || [];
       if (!Array.isArray(st.each) && !(st.each && st.each.from)) {
         try { st.each = routineEachRows(st.each); } catch { st.each = [{ var1: '' }]; }
       } else if (Array.isArray(st.each) && !st.each.length) st.each = [{ var1: '' }];
+      normalize(st.steps);
     }
-  }
+  };
+  normalize(steps);
   const win = floatWin({ title: r0 ? `routine — ${r0.name}` : 'new routine', sub: file || 'unsaved', x: innerWidth / 2 - 300, y: 80, w: 600, h: Math.min(560, innerHeight - 110) });
   win.el.dataset.routine = '1';
   win.body.className += ' rw-body';
@@ -3918,7 +3934,7 @@ function openRoutineWindow(r0) {
     host.appendChild(row);
     const ovr = document.createElement('textarea'); ovr.className = 'rw-ovr';
     ovr.placeholder = inline ? 'params (YAML, block style, strings quoted) — e.g.  layer: "model.csv"' : 'overrides (YAML, block style, strings quoted) — e.g.  nCut: 20  ·  col: "$grade"';
-    const extras = extrasOf(st, inEach ? skip : [...skip, 'each', 'steps', 'guard']);
+    const extras = extrasOf(st, [...skip, 'each', 'steps', 'guard', 'params']);
     ovr.value = Object.keys(extras).length ? yamlEmit(jsToYamlNode(extras)).trimEnd() : '';
     ovr.style.display = inline || ovr.value ? '' : 'none';
     ovB.onclick = () => { ovr.style.display = ovr.style.display === 'none' ? '' : 'none'; if (ovr.style.display === '') ovr.focus(); };
@@ -3927,7 +3943,7 @@ function openRoutineWindow(r0) {
       try {
         const obj = txt ? yamlToJs(yamlParse(txt)) : {};
         if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('a map');
-        setExtras(st, inEach ? skip : [...skip, 'each', 'steps', 'guard'], obj);
+        setExtras(st, [...skip, 'each', 'steps', 'guard', 'params'], obj);
         ovr.classList.remove('err');
       } catch { ovr.classList.add('err'); }
     };
@@ -4058,30 +4074,64 @@ function openRoutineWindow(r0) {
   renderInputs();
   const list = document.createElement('div'); win.body.appendChild(list);
   const foot = document.createElement('div'); win.body.appendChild(foot);
-  function render() {
-    list.textContent = '';
-    for (const st of steps) {
+  // an `each` block's body is a step list, so it can hold another `each` — the
+  // editor renders the tree the same way the runner expands it. Nesting is a
+  // CROSS PRODUCT (every outer row × every inner row); one `each` with two
+  // equal-length columns is a ZIP. The block header says which, out loud.
+  function renderSteps(arr, host, depth) {
+    for (const st of arr) {
       const box = document.createElement('div'); box.className = 'rw-step';
+      if (depth) box.style.marginLeft = '10px';
       if (st.each !== undefined) {
         const hd = document.createElement('div'); hd.className = 'rw-bar';
-        const t = document.createElement('span'); t.className = 'lbl'; t.textContent = 'for each row —';
+        const t = document.createElement('span'); t.className = 'lbl';
+        t.textContent = depth ? 'and for each row of —' : 'for each row —';
+        if (depth) t.title = 'nested: every row of the outer block × every row of this one (a cross product)';
+        const asL = document.createElement('span'); asL.className = 'lbl'; asL.textContent = 'as';
+        asL.title = 'optional — namespaces this table\'s columns ($b.grade instead of $grade); keeps nested tables apart';
+        const asI = document.createElement('input'); asI.type = 'text'; asI.style.width = '4em'; asI.value = st.as || '';
+        asI.onchange = () => { if (asI.value.trim()) st.as = asI.value.trim(); else delete st.as; };
         const up = document.createElement('button'); up.className = 'rw-x'; up.textContent = '↑';
         const dn = document.createElement('button'); dn.className = 'rw-x'; dn.textContent = '↓';
         const rm = document.createElement('button'); rm.className = 'rw-x'; rm.textContent = '×'; rm.title = 'remove the whole block';
-        up.onclick = () => { const i = steps.indexOf(st); if (i > 0) { steps.splice(i, 1); steps.splice(i - 1, 0, st); render(); } };
-        dn.onclick = () => { const i = steps.indexOf(st); if (i < steps.length - 1) { steps.splice(i, 1); steps.splice(i + 1, 0, st); render(); } };
-        rm.onclick = () => { steps.splice(steps.indexOf(st), 1); render(); };
-        hd.append(t, up, dn, rm); box.appendChild(hd);
+        up.onclick = () => { const i = arr.indexOf(st); if (i > 0) { arr.splice(i, 1); arr.splice(i - 1, 0, st); render(); } };
+        dn.onclick = () => { const i = arr.indexOf(st); if (i < arr.length - 1) { arr.splice(i, 1); arr.splice(i + 1, 0, st); render(); } };
+        rm.onclick = () => { arr.splice(arr.indexOf(st), 1); render(); };
+        hd.append(t, asL, asI, up, dn, rm); box.appendChild(hd);
         eachGrid(st, box);
-        for (const inner of st.steps) stepRow(inner, st.steps, box, true);
+        st.steps = st.steps || [];
+        renderSteps(st.steps, box, depth + 1);             // ← the nesting
         const add = document.createElement('button'); add.className = 'rw-x'; add.textContent = '+ step in this block';
         add.onclick = () => { st.steps.push({ recipe: '' }); render(); };
         const addI2 = document.createElement('button'); addI2.className = 'rw-x'; addI2.textContent = '+ inline step';
         addI2.onclick = () => { st.steps.push({ tool: 'gt' }); render(); };
-        box.append(add, addI2);
-      } else stepRow(st, steps, box, false);
-      list.appendChild(box);
+        const addN = document.createElement('button'); addN.className = 'rw-x'; addN.textContent = '+ nested for-each';
+        addN.title = 'a table inside this one — every row × every row (a cross product)';
+        addN.onclick = () => { st.steps.push({ each: [{ var1: '' }], steps: [{ recipe: '' }] }); render(); };
+        box.append(add, addI2, addN);
+      } else if (st.params !== undefined) {
+        const hd = document.createElement('div'); hd.className = 'rw-bar';
+        const t = document.createElement('span'); t.className = 'lbl'; t.textContent = 'bind params —';
+        const spec = Array.isArray(st.params) ? st.params[0] || {} : st.params;
+        const fromI = document.createElement('input'); fromI.type = 'text'; fromI.style.flex = '1'; fromI.placeholder = 'params.xlsx#General'; fromI.value = spec.from || '';
+        fromI.onchange = () => { spec.from = fromI.value.trim(); st.params = spec; };
+        const asL = document.createElement('span'); asL.className = 'lbl'; asL.textContent = 'as';
+        const asI = document.createElement('input'); asI.type = 'text'; asI.style.width = '4em'; asI.value = spec.as || '';
+        asI.onchange = () => { if (asI.value.trim()) spec.as = asI.value.trim(); else delete spec.as; st.params = spec; };
+        const rm = document.createElement('button'); rm.className = 'rw-x'; rm.textContent = '×';
+        rm.onclick = () => { arr.splice(arr.indexOf(st), 1); render(); };
+        hd.append(t, fromI, asL, asI, rm);
+        box.appendChild(hd);
+        const hint = document.createElement('div'); hint.className = 'lbl'; hint.style.paddingLeft = '10px';
+        hint.textContent = 'a key→value sheet → scalars every step below can read ($g.cutoff)';
+        box.appendChild(hint);
+      } else stepRow(st, arr, box, depth > 0);
+      host.appendChild(box);
     }
+  }
+  function render() {
+    list.textContent = '';
+    renderSteps(steps, list, 0);
     const addBar = document.createElement('div'); addBar.className = 'rw-bar';
     const addS = document.createElement('button'); addS.className = 'awin-btn'; addS.textContent = '+ run a recipe';
     addS.onclick = () => { steps.push({ recipe: '' }); render(); };
@@ -4090,7 +4140,10 @@ function openRoutineWindow(r0) {
     addI.onclick = () => { steps.push({ tool: 'gt' }); render(); };
     const addE = document.createElement('button'); addE.className = 'awin-btn'; addE.textContent = '+ for-each block';
     addE.onclick = () => { steps.push({ each: [{ var1: '' }], steps: [{ recipe: '' }] }); render(); };
-    addBar.append(addS, addI, addE);
+    const addP = document.createElement('button'); addP.className = 'awin-btn'; addP.textContent = '+ params';
+    addP.title = 'bind a key→value sheet as scalars for the steps below';
+    addP.onclick = () => { steps.push({ params: { from: '', as: 'g' } }); render(); };
+    addBar.append(addS, addI, addE, addP);
     list.appendChild(addBar);
   }
   render();

@@ -1340,6 +1340,37 @@ await p.close();
   await pp.close();
 }
 
+// ── §26: nested each (cross product) vs one each (zip); params as a step ──
+{
+  const pn = await mkPage('sm2nest');
+  await pn.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('sm2nest', { recursive: true }); } catch { } });
+  await pn.evaluate(() => window._micro.openBlob(new Blob(['X,Y,Z,FE\n0,0,0,50\n10,0,0,60\n']), 'm.csv', 'replace'));
+  await pn.waitForFunction(() => window._micro.layers()[0] && window._micro.layers()[0].docs.blockDoc, null, { timeout: 20000 });
+  const nx = await pn.evaluate(async () => {
+    // nested = CROSS PRODUCT
+    const cross = await window._micro.expandRoutine({ steps: [
+      { each: [{ bench: 1040 }, { bench: 1060 }], as: 'b', steps: [
+        { each: [{ grade: 'FE' }, { grade: 'SIO2' }], as: 'g', steps: [
+          { tool: 'gt', layer: 'm.csv', b: '$b.bench', g: '$g.grade' },
+        ] },
+      ] },
+    ] });
+    // one each, two columns = ZIP
+    const zip = await window._micro.expandRoutine({ steps: [
+      { each: { bench: [1040, 1060], grade: ['FE', 'SIO2'] }, steps: [{ tool: 'gt', layer: 'm.csv', b: '$bench', g: '$grade' }] },
+    ] });
+    return {
+      cross: cross.map((x) => `${x.g}@${x.b}`).join(','), crossSlugs: cross.map((x) => x._slug).join(','),
+      zip: zip.map((x) => `${x.g}@${x.b}`).join(','),
+    };
+  });
+  chk(`routine nesting: nested each = CROSS product (${nx.cross})`,
+    nx.cross === 'FE@1040,SIO2@1040,FE@1060,SIO2@1060' && nx.crossSlugs === 'gt-1040-fe,gt-1040-sio2,gt-1060-fe,gt-1060-sio2');
+  chk(`routine nesting: one each with two columns stays a ZIP (${nx.zip})`,
+    nx.zip === 'FE@1040,SIO2@1060');
+  await pn.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
