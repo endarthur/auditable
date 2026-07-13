@@ -46,6 +46,30 @@
   footer { border-top:1px solid var(--line); margin-top:3em; padding-top:1.4em; color:var(--dim); font-size:.86em; }
   @media (max-width:640px){ nav.toc{column-count:1;} h1{font-size:1.6em;} }
 
+  /* ── the sticky section rail (screen only; the inline nav.toc above still
+        carries the contents into the PDF). Built from the h2s at load, so it
+        cannot drift from the document. Appears only when there is room beside
+        the 860px column — below that the page is unchanged. ── */
+  #rail { display:none; }
+  @media screen and (min-width:1200px) {
+    #rail {
+      display:block; position:fixed; top:0; left:max(12px, calc(50% - 640px));
+      width:230px; max-height:100vh; overflow-y:auto; overscroll-behavior:contain;
+      padding:24px 10px 40px 0; font-size:.82em; line-height:1.45;
+      scrollbar-width:thin; scrollbar-color:var(--line) transparent;
+    }
+    #rail .rail-t { color:var(--dim); text-transform:uppercase; letter-spacing:.08em; font-size:.85em; margin:0 0 .7em; }
+    #rail a {
+      display:block; color:var(--dim); text-decoration:none; padding:2.5px 0 2.5px 10px;
+      border-left:2px solid transparent; transition:color .12s, border-color .12s;
+    }
+    #rail a:hover { color:var(--ink); }
+    #rail a.on { color:var(--orange); border-left-color:var(--orange); }
+    #rail a .n { display:inline-block; width:1.7em; color:var(--line); }
+    #rail a.on .n { color:var(--orange); }
+    #rail .sep { height:1px; background:var(--line); margin:.7em 0 .7em 10px; }
+  }
+
   /* ── print / PDF profile (used by page.pdf() and Ctrl+P → Save as PDF) ──
      A4, a full-page cover, each section on a fresh page, figures/tables kept
      whole. Running page numbers come from the PDF footer (Chromium), so the
@@ -53,6 +77,7 @@
   @page { size: A4; margin: 18mm 16mm 20mm; }
   @media print {
     html, body { background:#fff; }
+    #rail { display:none !important; }
     .wrap { max-width:none; padding:0; }
     a { color:var(--ink); text-decoration:none; }
     .no-print { display:none !important; }
@@ -72,6 +97,7 @@
 </style>
 </head>
 <body>
+<nav id="rail" class="no-print" aria-label="Sections"></nav>
 <div class="wrap">
 
 <header class="hero">
@@ -690,5 +716,59 @@ params:
 </footer>
 
 </div>
+<script>
+// Build the sticky rail from the document's own h2s (so it can never drift),
+// and light the current section as you scroll. Screen-only; the printed
+// manual keeps the inline contents list.
+(function () {
+  var rail = document.getElementById('rail');
+  var heads = [].slice.call(document.querySelectorAll('h2[id]'));
+  if (!rail || !heads.length) return;
+  var t = document.createElement('p');
+  t.className = 'rail-t';
+  t.textContent = 'Contents';
+  rail.appendChild(t);
+  var links = heads.map(function (h, i) {
+    var num = h.querySelector('.n');
+    var n = num ? num.textContent : '';
+    // a divider where the appendices start (the numbering turns alphabetic)
+    if (i && /^[A-Z]$/.test(n) && !/^[A-Z]$/.test(heads[i - 1].querySelector('.n').textContent)) {
+      var sep = document.createElement('div');
+      sep.className = 'sep';
+      rail.appendChild(sep);
+    }
+    var a = document.createElement('a');
+    a.href = '#' + h.id;
+    var title = h.textContent.replace(n, '').trim();
+    a.innerHTML = '<span class="n">' + n + '</span>';
+    a.appendChild(document.createTextNode(title));
+    a.title = title;
+    rail.appendChild(a);
+    return a;
+  });
+  var current = -1;
+  function sync() {
+    // rect-based: correct regardless of offsetParent, and immune to the layout
+    // shifting under us as figures load
+    var k = 0;
+    for (var i = 0; i < heads.length; i++) if (heads[i].getBoundingClientRect().top <= 90) k = i;
+    if (k === current) return;
+    if (current >= 0) links[current].classList.remove('on');
+    links[k].classList.add('on');
+    current = k;
+    // keep the active entry in view when the rail itself overflows
+    var a = links[k], top = a.offsetTop, bot = top + a.offsetHeight;
+    if (top < rail.scrollTop + 30) rail.scrollTop = Math.max(0, top - 60);
+    else if (bot > rail.scrollTop + rail.clientHeight - 20) rail.scrollTop = bot - rail.clientHeight + 40;
+  }
+  var tick = false;
+  addEventListener('scroll', function () {
+    if (tick) return;
+    tick = true;
+    requestAnimationFrame(function () { sync(); tick = false; });
+  }, { passive: true });
+  sync();
+})();
+</script>
 </body>
 </html>
