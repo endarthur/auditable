@@ -219,6 +219,11 @@
   }
   #empty b { color: var(--muted); }
   #empty a { color: var(--accent); pointer-events: auto; cursor: pointer; text-decoration: none; border-bottom: 1px solid rgba(200,155,60,.35); }
+  #empty a.cta {
+    display: inline-block; margin: 2px 0 1px; padding: 7px 16px; border: 1px solid var(--accent); border-radius: 4px;
+    color: var(--accent); font-size: 13px; letter-spacing: .02em; background: rgba(200,155,60,.06); transition: background .12s, color .12s;
+  }
+  #empty a.cta:hover { background: var(--accent); color: #14110c; }
   #empty .empty-sec { margin-top: 16px; color: var(--muted); }
   #empty .empty-dl { margin-top: -4px; }   /* sits tight under the security notice, not a new section */
   /* installed PWA already IS the offline copy — the "download micro.html" line is redundant there */
@@ -777,7 +782,7 @@
   </div>
   <div id="barTools"></div>
   <div id="view"><canvas id="cv"></canvas><canvas id="decoCv" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><svg id="knifeSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="knifeLine" stroke="#c89b3c" stroke-width="1.5" stroke-dasharray="6 4"/></svg><svg id="secSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="secPoly" fill="rgba(200,155,60,0.05)" stroke="#c89b3c" stroke-width="1.2" stroke-dasharray="7 5"/></svg><svg id="bandSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="bandPolyA" fill="rgba(74,120,176,0.10)" stroke="#4a78b0" stroke-width="1.4"/><polygon id="bandPolyB" fill="none" stroke="#4a78b0" stroke-width="1.4" stroke-dasharray="4 3"/><text id="bandLabel" fill="#fff" font-size="11" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3"></text></svg><svg id="selSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><polygon id="selShape" fill="rgba(255,217,77,0.08)" stroke="#ffd94d" stroke-width="1.2" stroke-dasharray="5 4"/></svg><svg id="measureSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none"><line id="mLineCase" stroke="#121212" stroke-width="4" stroke-linecap="round"/><line id="mLine" stroke="#ff26b3" stroke-width="1.5"/><circle id="mA" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><circle id="mB" r="4" fill="#ff26b3" stroke="#121212" stroke-width="1.5"/><text id="mLabel" fill="#fff" font-size="12" font-family="monospace" paint-order="stroke" stroke="#121212" stroke-width="3.5"></text></svg></div>
-  <div id="empty"><b>open a block model, drillholes, or point cloud</b><span>Open… or drag .csv / .dm / .parquet / .las / .ply / .xyz / .msh / .obj / .lfm / .tif / .grd anywhere — several at once become layers</span><span>nothing handy? <a id="sampleDemo">▸ open the demo project</a> — a block model + drillholes, sectioned, with a grade–tonnage curve</span><span>or just <a id="sampleBlocks">▸ a 2M-block model</a> · a bench scan at <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points — all made locally</span><span style="color:var(--faint)">new here? &nbsp;Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
+  <div id="empty"><b>open a block model, drillholes, or point cloud</b><span>Open… or drag .csv / .dm / .parquet / .las / .ply / .xyz / .msh / .obj / .lfm / .tif / .grd anywhere — several at once become layers</span><span>nothing handy? <a id="sampleDemo" class="cta">▸ open the demo project</a></span><span style="margin-top:-4px">a block model + drillholes + topography, sectioned, with a grade–tonnage curve — nothing is downloaded, it is all made here</span><span>or just <a id="sampleBlocks">▸ a 2M-block model</a> · a bench scan at <a data-sample="2000000">▸ 2M</a> · <a data-sample="10000000">▸ 10M</a> · <a data-sample="50000000">▸ 50M</a> points — all made locally</span><span style="color:var(--faint)">new here? &nbsp;<a href="https://gentropic.org/micro/docs/" target="_blank" rel="noopener noreferrer">read the manual</a> &nbsp;·&nbsp; Help → Keyboard &amp; mouse — the whole vocabulary</span><span class="empty-sec">Evaluating this for work? → <a href="https://gentropic.org/security" target="_blank" rel="noopener noreferrer">gentropic.org/security</a> — verify it, and how to bring it through approval</span><span class="empty-sec empty-dl">One file, no install — <a href="https://gentropic.org/micro/micro.html" download="micro.html">download micro.html</a> to keep, share, or run offline</span><div id="emptyRecents" class="empty-recents"></div><div id="emptyProjects" class="empty-recents"></div></div>
   <div id="drop-hint">drop to open</div>
   <div id="acPopup"></div>
   <div id="help"><div class="box"><div class="hd"><span id="helpTitle">help</span><button id="helpClose">×</button></div><div class="bd" id="helpBody"></div></div></div>
@@ -2949,7 +2954,11 @@ function plotChart(cv, spec) {
   const mL = 52, mR = hasRight ? 50 : 12, mT = 14 + (spec.series.length > 1 ? 12 : 0), mB = 30;
   const px0 = mL, px1 = W - mR, py0 = H - mB, py1 = mT;
   const allX = spec.series.flatMap((s) => s.data.map((d) => d[0]));
-  if (!allX.length) { g.fillStyle = dim; g.font = '12px monospace'; g.textAlign = 'center'; g.fillText('no data', W / 2, H / 2); return null; }
+  if (!allX.length) {
+    g.fillStyle = dim; g.font = '12px monospace'; g.textAlign = 'center';
+    g.fillText(spec.placeholder || 'no data', W / 2, H / 2);   // "scanning…" while the sweep runs — not "no data"
+    return null;
+  }
   // manual range overrides merge PER BOUND ([lo, hi], null = auto) so "just pin the max" works
   const mrg = (auto, man) => { const r = man ? [man[0] != null ? man[0] : auto[0], man[1] != null ? man[1] : auto[1]] : auto.slice(); if (r[0] === r[1]) r[1] = r[0] + 1; return r; };
   const xr = mrg([Math.min(...allX), Math.max(...allX)], spec.xRange);
@@ -3096,7 +3105,12 @@ function openGradeTonnage(L, ropts) {
   // derive every curve from the cached cumulative arrays — cutoffs / ranges /
   // units are display-time (a binary search per cut), Run owns the streaming
   const plot = () => {
-    if (!st.scan || !st.scan.series.length) { win.sub.textContent = st.stale ? (saved ? 'restored — Run to compute' : 'configure, then Run') : 'no data'; plotChart(cv, { series: [] }); win._spec = null; win.el._gtSpec = null; return; }
+    if (!st.scan || !st.scan.series.length) {
+      const busy = /scanning/i.test(win.sub.textContent || '');
+      win.sub.textContent = busy ? win.sub.textContent : (st.stale ? (saved ? 'restored — Run to compute' : 'configure, then Run') : 'no data');
+      plotChart(cv, { series: [], placeholder: busy ? 'scanning…' : (st.stale ? 'press Run' : 'no data') });
+      win._spec = null; win.el._gtSpec = null; return;
+    }
     let gmin = Infinity, gmax = -Infinity, weighted = false;
     for (const se of st.scan.series) { const f = gradeUnitFactor(se.s.unit, st.gradeUnit); if (se.gmin * f < gmin) gmin = se.gmin * f; if (se.gmax * f > gmax) gmax = se.gmax * f; if (se.weighted) weighted = true; }
     if (!Number.isFinite(gmin) || gmin === Infinity) { win.sub.textContent = 'no data'; plotChart(cv, { series: [] }); win._spec = null; win.el._gtSpec = null; return; }
@@ -6753,6 +6767,8 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     else if (/\.(csv|txt|dat|tsv)$/i.test(name) && !over.mapping && !over.discovered && !await delimitedHasCoords(blob)) { await openTableBlob(blob, name, { layer: lid, first }); }
     else if (/\.(csv|txt|dat|asc|xyz|pts)$/i.test(name)) { await openBlocksBlob(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping, discovered: over.discovered }); }
     else if (/\.ply$/i.test(name)) { await openPlyBlob(blob, name, { layer: lid, first }); }
+    else if (/\.laz$/i.test(name)) throw new Error('LAZ (compressed LAS) isn’t supported — export as .las, or use lasZip to convert');
+    else if (!/\.(las)$/i.test(name)) throw new Error(`micro doesn’t read ${(name.match(/\.[^.]+$/) || ['this file'])[0]} — it reads .csv .txt .dat .tsv .xlsx .dm .parquet .las .ply .xyz .pts .msh .obj .lfm .tif .grd .asc`);
     else {
       const { header, streamChunks } = await openLas(blob);
       _lasDoc = { blob, header }; _blockDoc = null; _plyDoc = null;
@@ -12016,6 +12032,30 @@ function makeDemoShellObj() {
   }
   return new Blob(out, { type: 'text/plain' });
 }
+// a heightfield grid → an OBJ mesh (so a context surface can live in the MESH
+// layer pool instead of spending one of the seven element slots)
+function gridToObjBlob(g) {
+  const { nx, ny, x0, y0, dx, dy, data } = g;
+  const idx = new Int32Array(nx * ny).fill(-1);
+  const out = [];
+  let n = 0;
+  for (let r = 0; r < ny; r++) {
+    for (let c = 0; c < nx; c++) {
+      const v = data[r * nx + c];
+      if (!Number.isFinite(v)) continue;
+      idx[r * nx + c] = ++n;                               // OBJ is 1-based
+      out.push(`v ${(x0 + c * dx).toFixed(3)} ${(y0 - r * dy).toFixed(3)} ${v.toFixed(3)}`);
+    }
+  }
+  for (let r = 0; r < ny - 1; r++) {
+    for (let c = 0; c < nx - 1; c++) {
+      const a = idx[r * nx + c], b = idx[r * nx + c + 1], d = idx[(r + 1) * nx + c], e = idx[(r + 1) * nx + c + 1];
+      if (a < 0 || b < 0 || d < 0 || e < 0) continue;
+      out.push(`f ${a} ${d} ${e}`, `f ${a} ${e} ${b}`);
+    }
+  }
+  return new Blob([out.join('\n') + '\n'], { type: 'text/plain' });
+}
 async function openDemoProject() {
   $('#empty').style.display = 'none';
   $('#meta').textContent = 'demo project — assembling a block model…';
@@ -12042,9 +12082,10 @@ async function openDemoProject() {
     if (topoL) { topoL.opacity = 0.35; renderer.setLayerOpacity(topoL.id, 0.35); }   // a veil, not a lid — the grades stay the hero
     const PH = ['phase 1 — starter pit', 'phase 2 — cutback', 'phase 3 — final pit'];
     const phIds = [];
-    for (let i = 0; i < 3; i++) {
-      const L = await openSurf(sf.phases[i], `phase${i + 1}.asc`, PH[i]);
-      if (L) { phIds.push(L.id); if (i !== 0) L.visible = false; }   // phase 1 visible: the starter pit hangs in the mined void
+    for (let i = 0; i < 3; i++) {                          // phases are CONTEXT → meshes, not grids: they must not
+      await openBlob(gridToObjBlob(sf.phases[i]), `phase${i + 1}.obj`, 'add');   // spend the visitor's element-layer budget
+      const L = activeLayer();
+      if (L) { L.label = PH[i]; setMeshTint(L, '#7a8794'); L.opacity = 0.5; renderer.setLayerOpacity(L.id, 0.5); phIds.push(L.id); if (i !== 0) L.visible = false; }
     }
     if (phIds.length) createLayerGroup('mining phases', phIds, { collapsed: true });
     applyTreeVisibility();

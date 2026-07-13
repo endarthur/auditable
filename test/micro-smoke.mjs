@@ -656,6 +656,66 @@ const rcp = await pr2.evaluate(async () => {
 chk(`recipes: hand-authored YAML lists (${rcp && rcp.menu}) + auto-runs (${rcp && rcp.cuts} cuts from nCut 12)`,
   rcp && /Check GT · grade-tonnage/.test(rcp.menu) && rcp.cuts === 13);
 
+// ── the first-sixty-seconds contract (from the cold-visitor audit, 2026-07-13) ──
+// A fresh page: what a stranger meets, what the demo costs them, and whether a
+// bad file fails with dignity.
+{
+  const pv = await ctx.newPage();
+  await pv.goto(`http://127.0.0.1:${PORT}/tools/micro/index.html`, { waitUntil: 'load' });
+  await pv.waitForFunction(() => window._micro, null, { timeout: 20000 });
+
+  const cold = await pv.evaluate(() => {
+    const e = document.querySelector('#empty');
+    const demo = e.querySelector('#sampleDemo');
+    return {
+      visible: getComputedStyle(e).display !== 'none',
+      cta: !!(demo && demo.classList.contains('cta')),
+      manual: !!e.querySelector('a[href*="/docs/"]'),
+    };
+  });
+  chk('cold visitor: the empty state offers the demo as a CTA + a link to the manual',
+    cold.visible && cold.cta && cold.manual);
+
+  // the demo must NOT eat the 7-slot element-layer budget: its context surfaces
+  // are meshes, so a visitor can still open their own data afterwards
+  await pv.click('#sampleDemo');
+  await pv.waitForFunction(() => window._micro.layers().length > 5, null, { timeout: 60000 });
+  await pv.waitForTimeout(1500);
+  const budget = await pv.evaluate(async () => {
+    const elems = window._micro.layers().filter((L) => L.id <= 6).length;
+    let t = 'X,Y,Z,AU\n';
+    for (let i = 0; i < 20; i++) t += `${i * 5},0,0,${1 + i * 0.01}\n`;
+    await window._micro.openBlob(new Blob([t]), 'mine.csv', 'add');
+    await new Promise((r) => setTimeout(r, 700));
+    return { elems, opened: window._micro.layers().some((L) => L.name === 'mine.csv'), meta: document.querySelector('#meta').textContent };
+  });
+  chk(`cold visitor: the demo leaves room (${budget.elems} of 7 element layers) and their own file still opens`,
+    budget.elems <= 3 && budget.opened && !/limit reached/.test(budget.meta));
+
+  // a bad file fails with DIGNITY: it says what is wrong instead of a lie
+  const bad = await pv.evaluate(async () => {
+    const out = {};
+    for (const [name, body] of [
+      ['scan.laz', 'not really a laz file'],
+      ['notes.txt', 'just some prose about a deposit with no columns at all'],
+      ['report.docx', 'PK not a word file'],
+    ]) {
+      const before = window._micro.layers().length;
+      try { await window._micro.openBlob(new Blob([body]), name, 'add'); } catch { /* the message lands in #meta */ }
+      await new Promise((r) => setTimeout(r, 500));
+      out[name] = { added: window._micro.layers().length - before, msg: document.querySelector('#meta').textContent };
+    }
+    return out;
+  });
+  chk('cold visitor: .laz names itself (not "file too small for a LAS header")',
+    bad['scan.laz'].added === 0 && /LAZ/i.test(bad['scan.laz'].msg));
+  chk('cold visitor: prose is refused, not opened as a 0-row table',
+    bad['notes.txt'].added === 0 && /not look like a table/.test(bad['notes.txt'].msg));
+  chk('cold visitor: an unknown format names itself (not a bogus LAS error)',
+    bad['report.docx'].added === 0 && /doesn’t read \.docx/.test(bad['report.docx'].msg));
+  await pv.close();
+}
+
 console.log(ok && process.exitCode !== 1 ? '\nMICRO SMOKE: PASS' : '\nMICRO SMOKE: FAIL');
 await b.close(); server.close();
 process.exit(ok && process.exitCode !== 1 ? 0 : 1);

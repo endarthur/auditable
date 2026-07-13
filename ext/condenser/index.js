@@ -1467,6 +1467,9 @@ async function openTable(blob, { signal, onProgress } = {}) {
   }
   const numericColumns = [];
   for (let i = 0; i < columns.length; i++) if (stat[i].n && stat[i].num / stat[i].n >= 0.9) numericColumns.push({ i, name: columns[i] });
+  // a table needs ROWS. Prose lands here with a plausible-looking delimiter and
+  // no data — "0 rows · 10 columns" is not a table, it is a misread file.
+  if (!count) throw new Error('no data rows — this does not look like a table');
   return { header: { table: true, columns, count, delim: sniff.delim, hasHeaderRow, numericColumns, mapping: null, grid: null, bbox: null } };
 }
 
