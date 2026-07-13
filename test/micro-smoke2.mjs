@@ -1262,6 +1262,45 @@ await p.close();
   await pt.close();
 }
 
+// ── §24: Excel — a worksheet is a table (typed), geometry only when asked ──
+{
+  const px = await mkPage('sm2xlsx');
+  await px.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('sm2xlsx', { recursive: true }); } catch { } });
+  // build the workbook IN THE PAGE with @gcu/sheet's writer (micro bundles it)
+  const built = await px.evaluate(async () => {
+    const m = await import('/ext/sheet/index.js');
+    const bytes = await m.sheet.write({ sheets: [
+      { name: 'Cutoffs', columns: { DOMAIN: ['HEM', 'ITA', 'WASTE'], CUTOFF: [55, 50, 0], PRICE: [105.5, 98, 0] } },
+      { name: 'Grid', columns: { X: [0, 10, 20], Y: [0, 0, 10], Z: [5, 5, 5], FE: [61, 58, 44] } },
+    ] });
+    window._wb = new Blob([bytes]);
+    return true;
+  });
+  const xl = await px.evaluate(async () => {
+    await window._micro.openBlob(window._wb, 'book.xlsx', 'replace', null, { sheet: 'Cutoffs' });
+    await new Promise((r) => setTimeout(r, 600));
+    const L = window._micro.layers()[0];
+    const h = L.docs.tableDoc.header;
+    window._micro.setActiveLayer(L.id);
+    await window._micro.applyBlockFilter('CUTOFF > 45');
+    // the COORDINATE sheet must ALSO open as a table — a workbook is not a coordinate system
+    await window._micro.openBlob(window._wb, 'book.xlsx', 'add', null, { sheet: 'Grid' });
+    await new Promise((r) => setTimeout(r, 600));
+    const G = window._micro.layers()[1];
+    return {
+      kind: L.kind, sheet: h.sheet, rows: h.count, num: h.numericColumns.map((c) => c.name).join(),
+      typed: typeof L.docs.tableDoc.xlsx.at(0)[2], hits: L._filterCount,
+      gridKind: G.kind, gridSpatial: !!window._micro.gridAxesOf(G),
+      promote: window._micro.reinterpretOptions(G).map((o) => o.kind).join(),
+    };
+  });
+  chk(`xlsx: sheet "${xl.sheet}" → table (${xl.rows} rows, numeric ${xl.num} typed from Excel), filter ${xl.hits}/3`,
+    xl.kind === 'table' && xl.rows === 3 && xl.num === 'CUTOFF,PRICE' && xl.typed === 'number' && xl.hits === 2);
+  chk(`xlsx: an X/Y/Z sheet still opens as a table (geometry offered, never guessed: ${xl.promote})`,
+    xl.gridKind === 'table' && !xl.gridSpatial && xl.promote === 'blocks,points');
+  await px.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

@@ -5,9 +5,10 @@ import { tag, escape, parseXml, find, findAll } from './xml.js';
 import { colLetter, colIndex, cellRef, parseRef, dateToSerial, serialToDate } from './util.js';
 import { read } from './reader.js';
 import { write } from './writer.js';
+import { census, openSheet } from './table.js';
 
 export const sheet = {
-  read, write,
+  read, write, census, openSheet,
   colLetter, colIndex, cellRef, parseRef,
   dateToSerial, serialToDate,
   // internals for testing

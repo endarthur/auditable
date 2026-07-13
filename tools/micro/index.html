@@ -816,6 +816,7 @@ import { openLas, decodeLasRecords, openPly, openBlockModel, openTable, openDmMo
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
+import { census as xlsxCensus, openSheet as xlsxOpenSheet } from '../../ext/sheet/index.js';   // @gcu/sheet — worksheets as table documents (typed columns; no CSV round-trip)
 import { compileBool, compileValue, compileChunk, compileChunkBool, validate, complete, parse, deps, canMatch, quoteIdent, tokenize } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
@@ -3449,8 +3450,19 @@ function routineSubst(v, row) {
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, routineSubst(x, row)]));
   return v;
 }
-async function routineReadTable(name) {                    // {from}: a CSV in the project → rows
-  const fh = await resolveFileHandle(_project.dir, name).catch(() => resolveFileHandle(_project.dir, 'recipes/' + name));
+async function routineReadTable(name) {                    // {from}: a CSV or worksheet in the project → rows
+  // "params.xlsx#Bench targets" — the sheet rides after the hash
+  const [path, sheetName] = String(name).split('#');
+  const fh0 = await resolveFileHandle(_project.dir, path).catch(() => resolveFileHandle(_project.dir, 'recipes/' + path));
+  if (/\.xlsx$/i.test(path)) {
+    const doc = await xlsxOpenSheet(await fh0.getFile(), { sheet: sheetName || null });
+    const h = doc.header;
+    return Array.from({ length: h.count }, (_, r) => {
+      const row = doc.at(r);
+      return Object.fromEntries(h.columns.map((c, i) => [c, row[i]]));   // types come from Excel
+    });
+  }
+  const fh = fh0;
   const lines = (await (await fh.getFile()).text()).split(/\r?\n/).filter((x) => x.trim());
   const cells2 = collarCells(lines);
   const heads = cells2(lines[0]);
@@ -6436,6 +6448,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     else if (/\.(parquet|pq)$/i.test(name)) { await openParquetBlocks(blob, name, { layer: lid, first, forcePoints, mapping: over.mapping, cached: over.cached }); }
     // .xyz/.pts default to POINTS (2-decimal coords form a fake lattice); a
     // block/points asKind override rides forcePoints for every delimited file.
+    else if (/\.xlsx$/i.test(name)) { await openXlsxBlob(blob, name, { layer: lid, first, sheet: over.sheet }); }
     else if (over.asKind === 'table' && /\.(csv|txt|dat|tsv)$/i.test(name)) { await openTableBlob(blob, name, { layer: lid, first }); }
     // a delimited file with NO X/Y/Z is a TABLE, not an error (unless a mapping
     // was passed, which asserts the coordinates by hand)
@@ -7270,6 +7283,16 @@ async function reopenDhChan(chan) {
 let _ofDlg = null;
 async function describeFile(f) {
   const name = f.name || 'file';
+  if (/\.xlsx$/i.test(name)) {
+    const d0 = { file: f, name, load: true, kind: 'xlsx', desc: 'Excel workbook', columns: null, mapping: null, forcePoints: false, dhRole: null };
+    try {
+      const cs = await xlsxCensus(f);
+      const live = cs.sheets.filter((sh) => !sh.empty);
+      d0.sheets = live.map((sh) => sh.name);
+      d0.desc = `Excel workbook · ${live.length} sheet${live.length === 1 ? '' : 's'}${live.length ? ` · ${live[0].rows.toLocaleString()} rows in “${live[0].name}”` : ''} → table${live.length === 1 ? '' : 's'}`;
+    } catch (e2) { d0.desc = `Excel workbook — ${e2.message}`; }
+    return d0;
+  }
   const d = { file: f, name, load: true, kind: 'unknown', desc: '', columns: null, mapping: null, forcePoints: /\.(xyz|pts)$/i.test(name), dhRole: null };
   try {
     if (/\.las$/i.test(name)) {
@@ -7356,7 +7379,8 @@ async function describeFile(f) {
   } catch (e) { d.desc = `unreadable — ${e.message}`; d.load = false; }
   // valid "Open as" interpretations (grid-from-table isn't a provider yet, so
   // delimited/parquet don't offer grid). Drillhole roles arrive in stage 2b.
-  d.interps = d.kind === 'ply' ? [['mesh', 'mesh'], ['points', 'points']]
+  d.interps = d.kind === 'xlsx' ? [['table', 'tables (one per sheet)']]
+    : d.kind === 'ply' ? [['mesh', 'mesh'], ['points', 'points']]
     : d.kind === 'mesh' ? [['mesh', 'mesh']]
     : d.kind === 'dm-wireframe' ? [['wireframe', 'wireframe (mesh)']]
     : d.kind === 'grid' ? [['grid', 'grid']]
@@ -7365,7 +7389,8 @@ async function describeFile(f) {
     : d.kind === 'blocks' ? [['blocks', 'block model'], ['points', 'points']]
     : d.kind === 'delimited' ? [['blocks', 'block model'], ['points', 'points'], ['collar', 'DH collar'], ['survey', 'DH survey'], ['intervals', 'DH intervals']]
     : [['points', 'points']];
-  d.asKind = d.kind === 'ply' ? (d.plyFaces ? 'mesh' : 'points')
+  d.asKind = d.kind === 'xlsx' ? 'table'
+    : d.kind === 'ply' ? (d.plyFaces ? 'mesh' : 'points')
     : d.kind === 'dm-wireframe' ? 'wireframe'
     : d.kind === 'mesh' ? 'mesh' : d.kind === 'grid' ? 'grid' : d.kind === 'dm' ? 'blocks'
     : d.kind === 'las' ? 'points'
@@ -7556,6 +7581,8 @@ $('#ofOpen').onclick = async () => {
     if (r.objGroups && r.objGroups.length > 1 && r.split !== false) {
       if (/\.lfm$/i.test(r.name)) await openLfmSplit(r.file, r.name, first ? 'replace' : 'add');
       else await openObjSplit(r.file, r.name, first ? 'replace' : 'add');
+    } else if (/\.xlsx$/i.test(r.name)) {
+      await openWorkbook(r.file, r.name, first ? 'replace' : 'add');
     } else await openBlob(r.file, r.name, first ? 'replace' : 'add', null, over);
     first = false;
   }
@@ -7810,6 +7837,78 @@ async function openTableBlob(blob, name, opts = {}) {
   L.docs.tableDoc.metaLine = line;
   $('#meta').textContent = line;
   renderLayers();
+}
+// ── Excel: a worksheet opens as a TABLE, always ──────────────────────────────
+// @gcu/sheet resolves a sheet into typed columns (Excel's own types — numbers,
+// dates, booleans), and `openSheet` hands that over as a table document. No CSV
+// in the middle, nothing re-sniffed. Geometry is NEVER inferred from a
+// spreadsheet: a sheet with columns called X/Y/Z might be a block model or a
+// table about something else entirely, so promoting one is the user's explicit
+// act ("Interpret as…" on the layer), not ours.
+async function openXlsxBlob(blob, name, opts = {}) {
+  const lid = opts.layer != null ? opts.layer : _activeId;
+  $('#meta').textContent = `${name} — reading workbook…`;
+  const doc = await xlsxOpenSheet(blob, { sheet: opts.sheet || null });
+  const L = layerById(lid);
+  if (!L) return;
+  L.kind = 'table';
+  L.docs = { tableDoc: { blob, name, header: doc.header, metaLine: '', xlsx: doc, sheet: doc.header.sheet } };
+  L.bboxLocal = null;
+  L._sheet = doc.header.sheet;                             // the manifest reopens THIS sheet
+  if (!L.label || L.label === L.name) L.label = `${basename(name).replace(/\.xlsx$/i, '')} · ${doc.header.sheet}`;
+  const line = `${name} · ${doc.header.sheet} — ${doc.header.count.toLocaleString()} rows · ${doc.header.columns.length} columns · table`;
+  L.docs.tableDoc.metaLine = line;
+  $('#meta').textContent = line;
+  renderLayers();
+}
+// open a workbook: one sheet, several, or all of them (a group per workbook)
+async function openWorkbook(blob, name, mode = 'add') {
+  let cs;
+  try { cs = await xlsxCensus(blob); } catch (e) { $('#meta').textContent = `${name} — ${e.message}`; return; }
+  const sheets = cs.sheets.filter((sh) => !sh.empty);
+  if (!sheets.length) { $('#meta').textContent = `${name} — no sheets with data`; return; }
+  if (sheets.length === 1) { await openBlob(blob, name, mode, null, { sheet: sheets[0].name }); return; }
+  const picked = await pickSheets(name, sheets);
+  if (!picked || !picked.length) return;
+  const ids = [];
+  for (let i = 0; i < picked.length; i++) {
+    await openBlob(blob, name, i === 0 ? mode : 'add', null, { sheet: picked[i] });
+    const L = activeLayer();
+    if (L) ids.push(L.id);
+  }
+  if (ids.length > 1) createLayerGroup(basename(name), ids, { collapsed: false });   // the workbook IS the group
+  $('#meta').textContent = `${name} — ${ids.length} sheet${ids.length === 1 ? '' : 's'} opened as table${ids.length === 1 ? '' : 's'}`;
+}
+// the sheet picker: which sheets to open (all, by default)
+function pickSheets(name, sheets) {
+  return new Promise((res) => {
+    const win = floatWin({ title: basename(name), sub: `${sheets.length} sheets`, x: innerWidth / 2 - 200, y: innerHeight / 3, w: 400, h: Math.min(150 + sheets.length * 24, innerHeight - 140) });
+    win.body.className += ' rw-body';
+    const boxes = sheets.map((sh) => {
+      const row = document.createElement('label');
+      row.className = 'rw-bar';
+      row.style.cursor = 'pointer';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = true;
+      const nm = document.createElement('span'); nm.style.flex = '1'; nm.textContent = sh.name;
+      const n = document.createElement('span'); n.className = 'lbl';
+      n.textContent = `${sh.rows.toLocaleString()} rows · ${sh.columns} cols`;
+      row.append(cb, nm, n);
+      win.body.appendChild(row);
+      return { cb, name: sh.name };
+    });
+    const bar = document.createElement('div'); bar.className = 'rw-bar'; bar.style.marginTop = '8px';
+    const note = document.createElement('span'); note.className = 'lbl'; note.style.flex = '1';
+    note.textContent = 'sheets open as tables';
+    const ok = document.createElement('button'); ok.className = 'awin-btn'; ok.textContent = 'Open';
+    const cancel = document.createElement('button'); cancel.className = 'awin-btn'; cancel.textContent = 'Cancel';
+    bar.append(note, cancel, ok);
+    win.body.appendChild(bar);
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; win.close(); res(v); };
+    ok.onclick = () => finish(boxes.filter((b) => b.cb.checked).map((b) => b.name));
+    cancel.onclick = () => finish(null);
+    win.el._onClose = () => finish(null);
+  });
 }
 // does a delimited file carry X/Y/Z? (mapColumns is the same test the block
 // provider uses — null means "no centroid columns", i.e. it is a plain table)
@@ -9119,7 +9218,8 @@ function projectManifest() {
       external: L.storage === 'external' || undefined,
       colorSel: L.colorSel, clip: L.clip, filter: L.filterExpr || '', visible: L.visible,
       sectioned: (() => { const m = renderer.layerSectioned(L.id); return m === true ? undefined : m; })(),
-      kind: (L.kind === 'mesh' && !L.gridSurface) ? 'mesh' : (L.kind === 'table' ? 'table' : undefined),   // a grid-surface is kind 'mesh' but reopens as a grid (gridSurface flag)
+      kind: (L.kind === 'mesh' && !L.gridSurface) ? 'mesh' : (L.kind === 'table' ? 'table' : undefined),
+      sheet: L._sheet || undefined,                        // an xlsx layer reopens THIS worksheet   // a grid-surface is kind 'mesh' but reopens as a grid (gridSurface flag)
       tint: L.kind === 'mesh' ? L.tint : undefined,
       opacity: (L.opacity != null && L.opacity !== 1) ? L.opacity : undefined,   // any kind (mesh/blocks/drillholes)
       recHide: (L._recHide && L._recHide.size) ? [...L._recHide] : undefined,   // record-panel hidden fields (view pref)
@@ -9592,7 +9692,7 @@ async function openProjectDir(dir) {
       const overR = ls.kind === 'mesh'
         ? { tint: ls.tint, opacity: ls.opacity, forceSoup: !!ls.soup }
         : ls.kind === 'table'
-          ? { asKind: 'table' }
+          ? (ls.sheet ? { sheet: ls.sheet } : { asKind: 'table' })
           : (/\.ply$/i.test(ls.source) ? { forcePoints: true } : (ls.mapping ? { mapping: ls.mapping } : {}));
       if (ls.gridSurface) { overR.asKind = 'surface'; if (ls.flatZ != null) overR.flatZ = ls.flatZ; if (ls.faceted) overR.smooth = false; }   // a grid saved as a surface reopens as one (relief/flat, smooth/faceted; drape applied post-load)
       if (ls.band) overR.band = ls.band;                    // multi-band GeoTIFF: the chosen band
@@ -11730,6 +11830,7 @@ async function fetchLayerRow(L, rec) {
     const r = (i / g.grid.nx) | 0, c = i % g.grid.nx;
     return [+(g.grid.x0 + c * g.grid.dx).toFixed(3), +(g.grid.y0 - r * g.grid.dy).toFixed(3), +g.grid.data[i].toFixed(3), r, c];
   }
+  if (d.tableDoc && d.tableDoc.xlsx) return d.tableDoc.xlsx.at(rec);
   if (d.tableDoc) return await fetchDelimitedRecord(d.tableDoc.blob, d.tableDoc.header, rec);
   if (d.dhDoc) return d.dhDoc.fetchRecord(rec);
   if (d.tracesDoc) return d.tracesDoc.fetchRecord(rec);    // pick a trace → its collar record
@@ -14105,6 +14206,13 @@ async function* layerRows(L, onProgress) {
       done += count;
       if (onProgress) onProgress(done, d.blockDoc.header.count);
     }
+  } else if (d.tableDoc && d.tableDoc.xlsx) {
+    let done = 0;
+    for await (const batch of d.tableDoc.xlsx.rows({ batch: 4096 })) {
+      yield batch;
+      done += batch.length;
+      if (onProgress) onProgress(done, d.tableDoc.header.count);
+    }
   } else if (d.tableDoc) {
     const { blob, header } = d.tableDoc;
     let done = 0;
@@ -14339,7 +14447,10 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
 function reinterpretOptions(L) {
   if (!L || L.dh) return [];
   const d = L.docs || {};
-  if (d.tableDoc) return L._hasCoords ? [{ kind: 'blocks', label: 'block model' }, { kind: 'points', label: 'points' }] : [];
+  if (d.tableDoc) {
+    const cols = (layerTableHeader(L) || {}).columns || [];
+    return mapColumns(cols) ? [{ kind: 'blocks', label: 'block model (use its X/Y/Z)' }, { kind: 'points', label: 'points (use its X/Y/Z)' }] : [];
+  }
   if (d.gridDoc) return L.gridSurface ? [{ kind: 'points', label: 'points (elevation)' }] : [{ kind: 'surface', label: 'surface (shaded relief)' }];
   if (d.blockDoc) return [...(d.blockDoc.forcePoints ? [{ kind: 'blocks', label: 'block model' }] : [{ kind: 'points', label: 'points' }]), { kind: 'table', label: 'table (drop the geometry)' }];
   if (d.plyDoc) return [{ kind: 'mesh', label: 'mesh' }];
@@ -14347,8 +14458,20 @@ function reinterpretOptions(L) {
   return [];
 }
 async function reopenAs(L, kind) {
-  const blob = layerBlob(L); if (!blob) { $('#meta').textContent = 'reinterpret: no source for this layer'; return; }
-  const name = L.name, keep = captureReopenIdentity(L);
+  let blob = layerBlob(L); if (!blob) { $('#meta').textContent = 'reinterpret: no source for this layer'; return; }
+  let name = L.name;
+  // an XLSX sheet promoted to geometry: the block provider streams bytes, so the
+  // sheet materializes to a delimited blob AT THIS MOMENT — the explicit act,
+  // not on the way in (opening a workbook never guesses at coordinates)
+  if (L.docs.tableDoc && L.docs.tableDoc.xlsx && (kind === 'blocks' || kind === 'points')) {
+    const doc = L.docs.tableDoc.xlsx, h = doc.header;
+    const esc = (v) => { const t = String(v == null ? '' : v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    let csv = h.columns.map(esc).join(',') + '\n';
+    for (let r = 0; r < h.count; r++) csv += doc.at(r).map(esc).join(',') + '\n';
+    blob = new Blob([csv], { type: 'text/csv' });
+    name = `${basename(L.name).replace(/\.xlsx$/i, '')}-${h.sheet}.csv`;
+  }
+  const keep = captureReopenIdentity(L);
   renderer.removeLayer(L.id);
   _layers = _layers.filter((l) => l.id !== L.id);
   preregisterReopenHandle(blob, keep);
@@ -15769,7 +15892,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

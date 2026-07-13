@@ -461,3 +461,55 @@ describe('write with tables', () => {
     assert.deepEqual(result.sheets[0].columns.Name, ['Alice', 'Bob']);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// table-document adapter (census + openSheet)
+// ═════════════════════════════════════════════════════════════════════
+
+describe('census / openSheet', () => {
+  const CUTOFFS = {
+    sheets: [
+      { name: 'Cutoffs', columns: { DOMAIN: ['HEM', 'ITA', 'WASTE'], CUTOFF: [55, 50, 0], PRICE: [105.5, 98, 0] } },
+      { name: 'Notes', columns: { NOTE: ['nothing here'] } },
+    ],
+  };
+
+  it('census names every sheet with its size', async () => {
+    const c = await sheet.census(await sheet.write(CUTOFFS));
+    assert.equal(c.sheets.length, 2);
+    assert.equal(c.sheets[0].name, 'Cutoffs');
+    assert.equal(c.sheets[0].rows, 3);
+    assert.equal(c.sheets[0].columns, 3);
+    assert.deepEqual(c.sheets[0].headers, ['DOMAIN', 'CUTOFF', 'PRICE']);
+    assert.equal(c.sheets[1].name, 'Notes');
+    assert.equal(c.sheets[1].rows, 1);
+  });
+
+  it('a worksheet IS a table document — types from Excel, no CSV round-trip', async () => {
+    const doc = await sheet.openSheet(await sheet.write(CUTOFFS), { sheet: 'Cutoffs' });
+    assert.equal(doc.header.table, true);
+    assert.equal(doc.header.sheet, 'Cutoffs');
+    assert.equal(doc.header.count, 3);
+    assert.deepEqual(doc.header.columns, ['DOMAIN', 'CUTOFF', 'PRICE']);
+    assert.equal(doc.header.mapping, null);                // a workbook is not a coordinate system
+    // numeric because EXCEL said so — never because a string happened to parse
+    assert.deepEqual(doc.header.numericColumns.map((c) => c.name), ['CUTOFF', 'PRICE']);
+    assert.deepEqual(doc.at(0), ['HEM', 55, 105.5]);
+    assert.equal(typeof doc.at(0)[2], 'number');
+  });
+
+  it('batched rows stream like any other table', async () => {
+    const names = [], vals = [];
+    for (let i = 0; i < 10; i++) { names.push(`r${i}`); vals.push(i); }
+    const doc = await sheet.openSheet(await sheet.write({ sheets: [{ name: 'S', columns: { A: names, B: vals } }] }));
+    const seen = [];
+    for await (const batch of doc.rows({ batch: 4 })) seen.push(batch.length);
+    assert.deepEqual(seen, [4, 4, 2]);
+    assert.equal(doc.header.count, 10);
+  });
+
+  it('a named sheet that is not there fails loudly', async () => {
+    const wb = await sheet.write({ sheets: [{ name: 'Only', columns: { A: [1] } }] });
+    await assert.rejects(() => sheet.openSheet(wb, { sheet: 'Missing' }), /not found/);
+  });
+});
