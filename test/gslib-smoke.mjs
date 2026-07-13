@@ -105,7 +105,93 @@ const d6 = await p.evaluate(() => {
 });
 ok(d6.rows === 30 && d6.cols === 'Xloc,Yloc,Grade', `GeoEAS parsed: ${d6.rows} rows, cols [${d6.cols}]`);
 
-console.log('\n7. page errors');
+// ── the 3D arc: drillholes → 3D variography → kt3d → section → sgsim ──
+console.log('\n8. sample DRILLHOLES: 3 CSVs → sniff → desurvey → 3D composites');
+const e1 = await p.evaluate(async () => {
+  window._gslib.sampleDrillholes();
+  await new Promise((r) => setTimeout(r, 1500));
+  const S = window._gslib.S;
+  const zs = S.rows.map((r) => r[S.map.z]);
+  return { rows: S.rows.length, cols: S.cols.join(','), is3d: S.map.z >= 0,
+           zSpan: Math.max(...zs) - Math.min(...zs), drop: document.querySelector('#drop').textContent };
+});
+console.log(`    ${e1.drop}`);
+ok(e1.rows === 480 && e1.is3d, `${e1.rows} composites, 3D mapped (cols ${e1.cols})`);
+ok(e1.zSpan > 50, `real vertical extent (${e1.zSpan.toFixed(0)} m of hole)`);
+
+console.log('\n9. 3D variography: a horizontal AND a vertical direction differ');
+const e2 = await p.evaluate(() => {
+  window._gslib.addDir(0, 22.5, 0, 22.5);                   // horizontal N–S
+  window._gslib.addDir(0, 90, -90, 22.5);                   // straight DOWN the holes
+  window._gslib.runVario();
+  const { r, lags } = window._gslib.S.vario;
+  const nlp2 = lags.n + 2;
+  const dirGamma = (id) => { const g = []; for (let k = 0; k < nlp2; k++) if (r.npairs[id * nlp2 + k] > 0 && r.distance[id * nlp2 + k] > 0) g.push(r.value[id * nlp2 + k]); return g; };
+  return { omni: dirGamma(0).length, horiz: dirGamma(1).length, vert: dirGamma(2).length,
+           canvases: document.querySelectorAll('#vgPlots canvas').length };
+});
+ok(e2.vert >= 5 && e2.horiz >= 3, `populated lags — omni ${e2.omni}, horizontal ${e2.horiz}, downhole ${e2.vert}`);
+ok(e2.canvases === 3, `${e2.canvases} direction plots (each with its model curve)`);
+
+console.log('\n10. kt3d on a REAL 3D grid');
+const e3 = await p.evaluate(async () => {
+  document.querySelector('#kNx').value = 24; document.querySelector('#kNy').value = 24; document.querySelector('#kNz').value = 16;
+  const e = (id) => document.querySelector(id);
+  e('#kSx').value = 2; e('#kSy').value = 2; e('#kSz').value = 3.6;
+  window._gslib.runKrige();
+  await new Promise((r) => setTimeout(r, 800));
+  const K = window._gslib.S.krige;
+  let inf = 0, mn = Infinity, mx = -Infinity;
+  for (const v of K.est) if (v > -1e20) { inf++; if (v < mn) mn = v; if (v > mx) mx = v; }
+  return { nz: K.grid.nz, n: K.est.length, inf, mn, mx, msg: document.querySelector('#kMsg').textContent };
+});
+console.log(`    ${e3.msg}`);
+ok(e3.nz === 16 && e3.n === 24 * 24 * 16, `a true 3D grid (${e3.n.toLocaleString()} blocks, nz=${e3.nz})`);
+ok(e3.inf > e3.n * 0.5 && e3.mn > 0 && e3.mx < 10, `${e3.inf.toLocaleString()} estimated, range ${e3.mn.toFixed(2)}…${e3.mx.toFixed(2)}`);
+
+console.log('\n11. a SECTION through the 3D model');
+const e4 = await p.evaluate(async () => {
+  const cv = document.querySelector('#cv'), g2 = cv.getContext('webgl2');
+  const count = () => { const px = new Uint8Array(4 * 400);
+    g2.readPixels((cv.width / 2 - 200) | 0, (cv.height / 2) | 0, 400, 1, g2.RGBA, g2.UNSIGNED_BYTE, px);
+    let lit = 0; for (let i = 0; i < 400; i++) if (px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2] > 60) lit++; return lit; };
+  await new Promise((r) => setTimeout(r, 500));
+  const before = count();
+  const sec = document.querySelector('#vSec'); sec.value = 'Y'; sec.dispatchEvent(new Event('change'));
+  document.querySelector('#vSecPos').value = 0.5; document.querySelector('#vSecPos').dispatchEvent(new Event('input'));
+  await new Promise((r) => setTimeout(r, 600));
+  const during = count();
+  sec.value = 'off'; sec.dispatchEvent(new Event('change'));
+  await new Promise((r) => setTimeout(r, 400));
+  return { before, during };
+});
+ok(e4.before > 100 && e4.during < e4.before, `the slab hides blocks (${e4.before} lit → ${e4.during} in section)`);
+
+console.log('\n12. simulation: nscore → sgsim → backtr');
+const e5 = await p.evaluate(async () => {
+  window._gslib.runSim();
+  await new Promise((r) => setTimeout(r, 1200));
+  const R = window._gslib.S.realization;
+  if (!R) return { msg: document.querySelector('#sgMsg').textContent };
+  const vals = window._gslib.S.rows.map((r) => r[window._gslib.S.map.v]);
+  const dmin = Math.min(...vals), dmax = Math.max(...vals);
+  let fin = 0, inRange = 0, mn = Infinity, mx = -Infinity;
+  for (const v of R.real) if (Number.isFinite(v) && v > -1e20) { fin++; if (v >= dmin - 1e-9 && v <= dmax + 1e-9) inRange++; if (v < mn) mn = v; if (v > mx) mx = v; }
+  // a second seed must give a DIFFERENT realization
+  document.querySelector('#sgReal').value = 2;
+  window._gslib.runSim();
+  await new Promise((r) => setTimeout(r, 900));
+  const R2 = window._gslib.S.realization;
+  let diff = 0; for (let i = 0; i < R.real.length; i++) if (Math.abs(R.real[i] - R2.real[i]) > 1e-9) diff++;
+  return { n: R.real.length, fin, inRange, mn, mx, diff, msg: document.querySelector('#sgMsg').textContent };
+});
+console.log(`    ${e5.msg}`);
+ok(e5.fin > e5.n * 0.9, `${e5.fin}/${e5.n} nodes simulated`);
+ok(e5.inRange > e5.fin * 0.99, `back-transform honours the data range (${e5.mn && e5.mn.toFixed(2)}…${e5.mx && e5.mx.toFixed(2)})`);
+ok(e5.diff > e5.n * 0.5, `seed 2 is a genuinely different realization (${e5.diff.toLocaleString()} nodes differ)`);
+
+
+console.log('\n13. page errors');
 ok(errs.length === 0, errs.length ? errs.slice(0, 3).join(' | ') : 'none');
 
 console.log(`\n${pass} passed, ${fail} failed`);

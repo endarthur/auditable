@@ -111,7 +111,8 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   <button data-step="secDeclus" disabled><span class="n">2</span>Decluster</button>
   <button data-step="secVario" disabled><span class="n">3</span>Variography</button>
   <button data-step="secKrige" disabled><span class="n">4</span>Kriging</button>
-  <button data-step="secExport" disabled><span class="n">5</span>Export</button>
+  <button data-step="secSim" disabled><span class="n">5</span>Simulation</button>
+  <button data-step="secExport" disabled><span class="n">6</span>Export</button>
 </nav>
 <div id="dock">
 
@@ -119,6 +120,11 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   <h2>Data</h2>
   <p class="why">GeoEAS <b>.dat</b> (the book's format) or CSV. Everything stays on this machine — the page cannot make a network request.</p>
   <div id="drop">drop a file anywhere — or <b>Open…</b>, or <b>▸ sample data</b> for a clustered synthetic deposit</div>
+  <div class="row">
+    <button id="btnDh">Import drillholes…</button>
+    <button id="btnDhSample">▸ sample drillholes (3D)</button>
+    <span class="msg" id="dhMsg"></span>
+  </div>
   <div class="row" id="mapRow" style="display:none">
     <label>X <select id="mapX"></select></label>
     <label>Y <select id="mapY"></select></label>
@@ -183,6 +189,10 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
     <label>cell x <input type="number" id="kSx" step="any"></label>
     <label>cell y <input type="number" id="kSy" step="any"></label>
   </div>
+  <div class="row" id="kZRow" style="display:none">
+    <label>nz <input type="number" id="kNz" value="20" min="1"></label>
+    <label>cell z <input type="number" id="kSz" step="any"></label>
+  </div>
   <div class="row">
     <label>radius <input type="number" id="kRad" step="any"></label>
     <label>min <input type="number" id="kMin" value="2" min="1"></label>
@@ -199,6 +209,23 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   </div>
 </section>
 
+<section id="secSim">
+  <h2>Simulation</h2>
+  <p class="why"><code>nscore</code> → <code>sgsim</code> → <code>backtr</code>: the data goes to normal scores
+  (declustering weights applied if you ran declus), one realization is simulated in Gaussian space on the kriging
+  grid, and back-transformed through the score table. The model is your fitted one <b>rescaled to unit sill</b> —
+  proper practice fits the normal-scores variogram itself; this is the teaching shortcut, and it is labelled as one.</p>
+  <div class="row">
+    <label>seed <input type="number" id="sgSeed" value="69069"></label>
+    <label>realization <input type="number" id="sgReal" value="1" min="1" max="999"></label>
+  </div>
+  <div class="row">
+    <button id="btnSim" class="primary">simulate</button>
+    <span class="msg" id="sgMsg"></span>
+  </div>
+  <div class="plots" id="sgPlots"></div>
+</section>
+
 <section id="secExport">
   <h2>Export</h2>
   <div class="row">
@@ -212,8 +239,11 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
 <div id="stage">
   <canvas id="cv"></canvas>
   <div id="vbar">
-    <label>colour <select id="vMode"><option value="est">estimate</option><option value="var">variance</option><option value="none">samples only</option></select></label>
+    <label>colour <select id="vMode"><option value="est">estimate</option><option value="var">variance</option><option value="real">realization</option><option value="none">samples only</option></select></label>
     <label>samples <input type="checkbox" id="vPts" checked></label>
+    <label>section <select id="vSec"><option value="off">off</option><option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option></select></label>
+    <input type="range" id="vSecPos" min="0" max="1" step="0.002" value="0.5" style="width:110px;display:none" title="scrub the section">
+    <input type="number" id="vSecHalf" step="any" style="width:60px;display:none" title="slab half-thickness">
     <button id="vFit" title="frame the data">⛶ fit</button>
   </div>
   <div id="vhint">drag orbit · wheel zoom · right-drag pan</div>
@@ -222,11 +252,12 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
 </div>
 
 <script type="module">
-import { gamv, declus, kb2d, kt3d, vmodel } from '@gcu/gslib';
+import { gamv, declus, kb2d, kt3d, vmodel, nscore, sgsim, backtr } from '@gcu/gslib';
 import { subplots } from '@gcu/plot';
-import { createRenderer, createOrbitCamera, attachOrbitInput, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, rampPixels, createEdl } from '@gcu/condenser';
+import { createRenderer, createOrbitCamera, attachOrbitInput, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, rampPixels, createEdl, openDrillholes, sniffDrillholeFiles } from '@gcu/condenser';
 
 const $ = (s) => document.querySelector(s);
+let _sg = null;                                              // sgsim handle cache (hoisted: resetDerived touches it)
 const S = {                                                  // the pipeline's state, start → finish
   cols: [], rows: [],
   map: { x: -1, y: -1, z: -1, v: -1 },
@@ -265,7 +296,8 @@ function initViewer() {
     if (V.dirty) {
       V.dirty = false;
       V.edl.render(cv.width, cv.height, V.cam,
-        () => V.renderer.draw(V.cam, { pointPx: 7, layerOpts: { 0: { colorMode: 3 }, 1: { colorMode: 1 }, 2: { colorMode: 1 } } }),   // points by rgb; blocks by GRADE (mode 0 is elevation — uniform on a 2D slab)
+        () => V.renderer.draw(V.cam, { pointPx: 7, section: currentSection(),
+          layerOpts: { 0: { colorMode: 3 }, 1: { colorMode: 1 }, 2: { colorMode: 1 }, 3: { colorMode: 1 } } }),   // points by rgb; blocks by GRADE (mode 0 is elevation — uniform on a 2D slab)
         { enabled: true, strength: 0.8 });                   // gentle EDL — depth cue on the blocks
     }
     requestAnimationFrame(loop);
@@ -302,39 +334,68 @@ function viewerPoints() {
   V.cam.fit(V.bbox);
   requestRender();
 }
-function viewerBlocks() {
-  const { grid: g, est, var: kv } = S.krige;
-  V.renderer.removeLayer(1); V.renderer.removeLayer(2);
+function gridToLayer(g, chanSrc, layer) {                    // one grid array → one block layer
+  V.renderer.removeLayer(layer);
   const axes = [
     { origin: g.xmn, pitch: g.xsiz, count: g.nx },
     { origin: g.ymn, pitch: g.ysiz, count: g.ny },
     { origin: g.zmn ?? 0, pitch: g.zsiz ?? 1, count: g.nz ?? 1 },
   ];
   const bgrid = makeBlockGrid(axes, V.frame);
-  for (const [layer, chanSrc] of [[1, est], [2, kv]]) {
-    const bld = createBlockChunkBuilder({ frame: V.frame, grid: bgrid, onChunk: (c) => V.renderer.addChunk(c, 'base', layer) });
-    const nxyz = chanSrc.length;
-    const xs = new Float64Array(nxyz), ys = new Float64Array(nxyz), zs = new Float64Array(nxyz), ch = new Float64Array(nxyz);
-    let m = 0;
-    for (let iz = 0; iz < (g.nz ?? 1); iz++) for (let iy = 0; iy < g.ny; iy++) for (let ix = 0; ix < g.nx; ix++) {
-      const i = iz * g.nx * g.ny + iy * g.nx + ix;
-      if (chanSrc[i] <= -1e20) continue;                     // UNEST stays out of the model
-      xs[m] = g.xmn + ix * g.xsiz; ys[m] = g.ymn + iy * g.ysiz; zs[m] = (g.zmn ?? 0) + iz * (g.zsiz ?? 1);
-      ch[m] = chanSrc[i]; m++;
-    }
-    bld.push({ x: xs.subarray(0, m), y: ys.subarray(0, m), z: zs.subarray(0, m), chan: ch.subarray(0, m), count: m, recStart: 0 });
-    bld.flush();
-    bboxUnion(bld.doc.bboxLocal);
+  const bld = createBlockChunkBuilder({ frame: V.frame, grid: bgrid, onChunk: (c) => V.renderer.addChunk(c, 'base', layer) });
+  const nxyz = chanSrc.length;
+  const xs = new Float64Array(nxyz), ys = new Float64Array(nxyz), zs = new Float64Array(nxyz), ch = new Float64Array(nxyz);
+  let m = 0;
+  for (let iz = 0; iz < (g.nz ?? 1); iz++) for (let iy = 0; iy < g.ny; iy++) for (let ix = 0; ix < g.nx; ix++) {
+    const i = iz * g.nx * g.ny + iy * g.nx + ix;
+    if (chanSrc[i] <= -1e20 || !Number.isFinite(chanSrc[i])) continue;   // UNEST stays out of the model
+    xs[m] = g.xmn + ix * g.xsiz; ys[m] = g.ymn + iy * g.ysiz; zs[m] = (g.zmn ?? 0) + iz * (g.zsiz ?? 1);
+    ch[m] = chanSrc[i]; m++;
   }
+  bld.push({ x: xs.subarray(0, m), y: ys.subarray(0, m), z: zs.subarray(0, m), chan: ch.subarray(0, m), count: m, recStart: 0 });
+  bld.flush();
+  bboxUnion(bld.doc.bboxLocal);
+  return m;
+}
+function viewerBlocks() {
+  const { grid: g, est, var: kv } = S.krige;
+  gridToLayer(g, est, 1);
+  gridToLayer(g, kv, 2);
   applyViewMode();
   V.cam.fit(V.bbox);
   requestRender();
 }
+// ── the section: an axis-aligned slab in FRAME-LOCAL coords (the shaders test
+// local positions). d scrubs the local bbox along the chosen axis. ──
+function currentSection() {
+  const ax = $('#vSec').value;
+  if (ax === 'off' || !V.bbox) return null;
+  const i = ax === 'X' ? 0 : ax === 'Y' ? 1 : 2;
+  const lo = V.bbox[i], hi = V.bbox[i + 3];
+  const d = lo + (+$('#vSecPos').value) * (hi - lo);
+  const n = [0, 0, 0]; n[i] = 1;
+  const half = Math.max(0.01, +$('#vSecHalf').value || 1);
+  return { on: true, n, d, half };
+}
+$('#vSec').onchange = () => {
+  const on = $('#vSec').value !== 'off';
+  $('#vSecPos').style.display = on ? '' : 'none';
+  $('#vSecHalf').style.display = on ? '' : 'none';
+  if (on && !+$('#vSecHalf').value && V.bbox) {
+    const span = Math.max(V.bbox[3] - V.bbox[0], V.bbox[4] - V.bbox[1], V.bbox[5] - V.bbox[2]);
+    $('#vSecHalf').value = +(span / 60).toPrecision(2);
+  }
+  requestRender();
+};
+$('#vSecPos').oninput = requestRender;
+$('#vSecHalf').oninput = requestRender;
+
 function applyViewMode() {
   if (!V.renderer) return;
   const m = $('#vMode').value;
   V.renderer.setLayerVisible(1, m === 'est');
   V.renderer.setLayerVisible(2, m === 'var');
+  V.renderer.setLayerVisible(3, m === 'real');
   V.renderer.setLayerVisible(0, $('#vPts').checked);
   requestRender();
 }
@@ -375,7 +436,9 @@ function resetDerived() {
   S.model.structures = [];                                   // reseeded from the NEW data's variance in onData
   for (const id of ['#dcPlots', '#vgPlots']) $(id).textContent = '';
   for (const id of ['#dcMsg', '#vgMsg', '#kMsg', '#exMsg']) { $(id).textContent = ''; $(id).className = 'msg'; }
-  if (V.renderer) { V.renderer.removeLayer(1); V.renderer.removeLayer(2); requestRender(); }
+  S.realization = null;
+  if (_sg) { try { _sg.handle.dispose(); } catch { /* already gone */ } _sg = null; }
+  if (V.renderer) { V.renderer.removeLayer(1); V.renderer.removeLayer(2); V.renderer.removeLayer(3); requestRender(); }
 }
 function openText(name, text) {
   let d;
@@ -413,7 +476,23 @@ function gdata() {
 const vals = () => S.rows.map((r) => r[S.map.v]);
 function extent() {
   const xs = S.rows.map((r) => r[S.map.x]), ys = S.rows.map((r) => r[S.map.y]);
-  return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+  const e = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+  if (is3D()) { const zs = S.rows.map((r) => r[S.map.z]); e.z0 = Math.min(...zs); e.z1 = Math.max(...zs); }
+  return e;
+}
+// the grid the kriging AND the simulation share, from the panel inputs
+function gridFromInputs() {
+  const e = extent();
+  const g = {
+    nx: +$('#kNx').value, ny: +$('#kNy').value,
+    xsiz: +$('#kSx').value, ysiz: +$('#kSy').value,
+    xmn: e.x0 + (+$('#kSx').value) / 2, ymn: e.y0 + (+$('#kSy').value) / 2,
+  };
+  if (is3D()) {
+    g.nz = Math.max(1, +$('#kNz').value); g.zsiz = +$('#kSz').value;
+    g.zmn = e.z0 + g.zsiz / 2;
+  } else { g.nz = 1; g.zsiz = 1; g.zmn = 0; }
+  return g;
 }
 
 // ── plotting helpers (@gcu/plot; each figure is its own canvas) ───────────────
@@ -456,6 +535,8 @@ function onData() {
   $('#kSx').value = +((e.x1 - e.x0) / $('#kNx').value).toPrecision(3);
   $('#kSy').value = +((e.y1 - e.y0) / $('#kNy').value).toPrecision(3);
   $('#kRad').value = +(span / 2).toPrecision(2);
+  $('#kZRow').style.display = is3D() ? '' : 'none';
+  if (is3D()) $('#kSz').value = +(Math.max(1e-6, (e.z1 - e.z0)) / $('#kNz').value).toPrecision(3);
   if (!S.model.structures.length) S.model.structures.push({ type: 'spherical', contribution: +va.toPrecision(3), range: +(span / 4).toPrecision(2), rangeMinor: null, angle: 0 });
   renderStructures();
   enableSteps();
@@ -589,23 +670,20 @@ $('#btnAddSt').onclick = () => { S.model.structures.push({ type: 'spherical', co
 
 // ── 5. kriging → the viewer ───────────────────────────────────────────────────
 function runKrige() {
-  const e = extent();
-  const grid = {
-    nx: +$('#kNx').value, ny: +$('#kNy').value,
-    xsiz: +$('#kSx').value, ysiz: +$('#kSy').value,
-    xmn: e.x0 + (+$('#kSx').value) / 2, ymn: e.y0 + (+$('#kSy').value) / 2,
-  };
+  const grid = gridFromInputs();
   const search = { radius: +$('#kRad').value, ndmin: +$('#kMin').value, ndmax: +$('#kMax').value };
   const nd = +$('#kDisc').value;
-  const opts = { data: gdata(), grid, variogram: modelSpec(), search, discretization: { nx: nd, ny: nd }, ktype: $('#kType').value, skmean: +$('#kMean').value || 0 };
+  const disc = is3D() ? { nx: nd, ny: nd, nz: nd } : { nx: nd, ny: nd };
+  const opts = { data: gdata(), grid, variogram: modelSpec(), search, discretization: disc, ktype: $('#kType').value, skmean: +$('#kMean').value || 0 };
   const t0 = performance.now();
   let r;
-  try { r = is3D() ? kt3d({ ...opts, grid: { ...grid, nz: 1, zsiz: 1, zmn: 0 } }) : kb2d(opts); }
+  try { r = is3D() ? kt3d(opts) : kb2d(opts); }               // a REAL 3D grid now, not nz:1
   catch (err) { $('#kMsg').textContent = `kriging failed: ${err.message}`; $('#kMsg').className = 'msg bad'; return; }
   const ms = performance.now() - t0;
   let informed = 0; for (let i = 0; i < r.est.length; i++) if (r.est[i] > -1e20) informed++;
   S.krige = { ...r, grid };
-  $('#kMsg').textContent = `${grid.nx}×${grid.ny} = ${(grid.nx * grid.ny).toLocaleString()} blocks · ${informed.toLocaleString()} estimated · ${ms.toFixed(0)} ms`;
+  const nxyz = grid.nx * grid.ny * grid.nz;
+  $('#kMsg').textContent = `${grid.nx}×${grid.ny}${grid.nz > 1 ? '×' + grid.nz : ''} = ${nxyz.toLocaleString()} blocks · ${informed.toLocaleString()} estimated · ${ms.toFixed(0)} ms`;
   $('#kMsg').className = 'msg go';
   viewerBlocks();
 }
@@ -633,6 +711,123 @@ $('#btnExpModel').onclick = () => {
   download('variogram_model.json', JSON.stringify(modelSpec(), null, 2), 'application/json');
   $('#exMsg').textContent = 'saved variogram_model.json';
 };
+
+// ── drillholes: collar + survey + intervals → desurveyed composites as the data ──
+// condenser's openDrillholes does the desurveying (min curvature); the composites
+// arrive as records with a POSITION (interval midpoint) + the interval columns.
+async function importDrillholes(files, label) {
+  try {
+    const roles = await sniffDrillholeFiles(files);
+    for (const need of ['collar', 'survey', 'intervals']) if (!roles[need]) throw new Error(`no ${need} file recognised (need BHID+XYZ / BHID+AZ+DIP / BHID+FROM+TO)`);
+    const doc = await openDrillholes({ collar: roles.collar.blob, survey: roles.survey.blob, intervals: roles.intervals.blob });
+    const n = doc.header.count;
+    const cols = doc.header.columns.map((c) => String(c));
+    // numeric interval columns become the assay columns (sampled, not assumed)
+    const probe = Math.min(n, 60);
+    const numeric = cols.map((_, ci) => {
+      let seen = 0;
+      for (let r = 0; r < probe; r++) { const f = doc.fetchRecord(r); if (f && f[ci] !== '' && f[ci] != null) { if (!Number.isFinite(+f[ci])) return false; seen++; } }
+      return seen > 0;
+    });
+    const keep = cols.map((c, ci) => ({ c, ci })).filter(({ c, ci }) => numeric[ci] && !/^(from|to|bhid|hole)/i.test(c));
+    if (!keep.length) throw new Error('no numeric assay columns in the interval file');
+    const rows = [];
+    for (let r = 0; r < n; r++) {
+      const pos = doc.recordPosition(r); const f = doc.fetchRecord(r);
+      if (!pos || !f) continue;
+      const vs = keep.map(({ ci }) => +f[ci]);
+      if (!pos.every(Number.isFinite) || !vs.every(Number.isFinite)) continue;
+      rows.push([pos[0], pos[1], pos[2], ...vs]);
+    }
+    if (!rows.length) throw new Error('no usable composites after desurvey');
+    S.cols = ['X', 'Y', 'Z', ...keep.map(({ c }) => c)]; S.rows = rows;
+    resetDerived();
+    guessMapping();
+    S.map.x = 0; S.map.y = 1; S.map.z = 2; S.map.v = 3;      // the shape is OURS — no guessing needed
+    for (const [k, el] of [['x', '#mapX'], ['y', '#mapY'], ['z', '#mapZ'], ['v', '#mapV']]) $(el).value = S.map[k];
+    $('#drop').innerHTML = `<b>${label}</b> — ${doc.header.holes ?? ''} holes · ${rows.length.toLocaleString()} composites (desurveyed)`;
+    $('#dhMsg').textContent = ''; $('#dhMsg').className = 'msg';
+    onData();
+  } catch (e) { $('#dhMsg').textContent = e.message; $('#dhMsg').className = 'msg bad'; }
+}
+$('#btnDh').onclick = () => {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.accept = '.csv,.txt,.dat';
+  inp.onchange = () => { if (inp.files.length) importDrillholes([...inp.files], 'drillholes'); };
+  inp.click();
+};
+// A synthetic 3D campaign — 16 near-vertical holes, 2 m composites, an enriched
+// sub-horizontal horizon that undulates (so the Z variogram differs from XY).
+// It goes through the REAL import path: three CSVs → sniff → desurvey.
+function sampleDrillholes() {
+  let a = 424242;
+  const rnd = () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const horizon = (x, y) => 28 + 6 * Math.sin(x / 12) + 4 * Math.cos(y / 15);
+  const grade = (x, y, z) => {
+    const lateral = Math.exp(0.7 * Math.sin(x / 10) * Math.cos(y / 12));
+    const dz = z - horizon(x, y);
+    return +(0.15 + 2.4 * lateral * Math.exp(-(dz * dz) / (2 * 6 * 6)) * (0.75 + 0.5 * rnd())).toFixed(3);
+  };
+  let collar = 'BHID,X,Y,Z\n', survey = 'BHID,AT,AZ,DIP\n', assay = 'BHID,FROM,TO,AU\n';
+  let hole = 0;
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    const id = 'DH' + String(++hole).padStart(2, '0');
+    const cx = 8 + i * 11 + (rnd() - 0.5) * 3, cy = 8 + j * 11 + (rnd() - 0.5) * 3;
+    collar += `${id},${cx.toFixed(2)},${cy.toFixed(2)},60\n`;
+    survey += `${id},0,${(rnd() * 360).toFixed(0)},-89\n`;   // near-vertical
+    for (let from = 0; from < 60; from += 2) {
+      const zMid = 60 - (from + 1);
+      assay += `${id},${from},${from + 2},${grade(cx, cy, zMid)}\n`;
+    }
+  }
+  importDrillholes([
+    new File([collar], 'collars.csv'), new File([survey], 'surveys.csv'), new File([assay], 'assays.csv'),
+  ], 'sample drillholes');
+}
+$('#btnDhSample').onclick = sampleDrillholes;
+
+// ── simulation: nscore → sgsim → backtr, on the kriging grid ──────────────────
+function runSim() {
+  if (!S.model.structures.length) { $('#sgMsg').textContent = 'fit a model first (step 3)'; return; }
+  const grid = gridFromInputs();
+  const values = vals();
+  const dmin = Math.min(...values), dmax = Math.max(...values);
+  const t0 = performance.now();
+  // 1. normal scores (declustering weights honoured if declus ran)
+  const ns = nscore({ data: values, weights: S.weights ? Array.from(S.weights) : null });
+  // 2. the fitted model, rescaled to UNIT SILL (the labelled teaching shortcut)
+  const m = modelSpec();
+  const total = (m.nugget || 0) + m.structures.reduce((a2, st) => a2 + st.contribution, 0) || 1;
+  const vario1 = { nugget: (m.nugget || 0) / total, structures: m.structures.map((st) => ({ ...st, contribution: st.contribution / total })) };
+  // 3. conditioning data in gaussian space, at the composite positions
+  const { x, y, z } = S.map;
+  const simData = S.rows.map((r, i) => [r[x], r[y], z >= 0 ? r[z] : grid.zmn, ns.scores[i]]);
+  const key = JSON.stringify([grid, vario1, +$('#kRad').value, S.rows.length]);
+  try {
+    if (!_sg || _sg.key !== key) {
+      if (_sg) _sg.handle.dispose();
+      _sg = { handle: sgsim({ grid, variogram: vario1, search: { radius: +$('#kRad').value, ndmin: 0, ndmax: +$('#kMax').value, nodmax: 12 }, data: simData }), key };
+    }
+    const seed = (+$('#sgSeed').value || 69069) + (+$('#sgReal').value - 1);
+    const gauss = _sg.handle.run(seed);
+    // 4. back through the score table; linear tails pinned to the DATA extremes
+    const real = backtr({ scores: gauss, table: ns.table, tails: { lower: { type: 1, param: dmin }, upper: { type: 1, param: dmax } } });
+    const ms = performance.now() - t0;
+    S.realization = { real, grid };
+    gridToLayer(grid, real, 3);
+    $('#vMode').value = 'real';
+    applyViewMode();
+    V.cam.fit(V.bbox);
+    requestRender();
+    $('#sgMsg').textContent = `realization ${+$('#sgReal').value} (seed ${seed}) · ${real.length.toLocaleString()} nodes · ${ms.toFixed(0)} ms`;
+    $('#sgMsg').className = 'msg go';
+    const d = $('#sgPlots'); d.textContent = '';
+    fig(d, 'realization vs data — histograms should agree', (ax) => {
+      ax.hist(values, { bins: 24 });
+      ax.hist(Array.from(real).filter(Number.isFinite), { bins: 24, alpha: 0.55 });
+    }, 360, 220);
+  } catch (e) { $('#sgMsg').textContent = `simulation failed: ${e.message}`; $('#sgMsg').className = 'msg bad'; }
+}
+$('#btnSim').onclick = runSim;
 
 // ── the sample: a clustered synthetic deposit (seeded — same numbers every time) ──
 function sampleData() {
@@ -682,8 +877,8 @@ document.body.addEventListener('drop', async (e) => {
 addDir(0, 90);                                               // omnidirectional default
 
 // the automation surface (the smokes drive this)
-window._gslib = { openText, sampleData, runDeclus, runVario, runKrige, addDir, showStep, S, modelSpec,
-  viewerInfo: () => ({ chunks: V.renderer ? V.renderer.chunkCount : 0, hasBlocks: !!S.krige }) };
+window._gslib = { openText, sampleData, sampleDrillholes, importDrillholes, runDeclus, runVario, runKrige, runSim, addDir, showStep, S, modelSpec,
+  viewerInfo: () => ({ chunks: V.renderer ? V.renderer.chunkCount : 0, hasBlocks: !!S.krige, hasReal: !!S.realization }) };
 </script>
 </body>
 </html>
