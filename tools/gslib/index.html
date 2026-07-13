@@ -6,7 +6,7 @@
 <!-- networkless: the app never talks to a network. WASM is allowed and AUDITABLE —
      the .atra source and the compiler live in the repo; the bytecode is reproducible. -->
 <meta http-equiv="Content-Security-Policy" content="connect-src 'none'">
-<title>gslib.wasm — GSLIB in your browser</title>
+<title>gslib.wasm</title>
 <style>
 :root {
   --bg: #16181a; --panel: #1d2023; --panel2: #24282c; --line: #34393e;
@@ -16,14 +16,14 @@
   --sans: Barlow, system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); display: flex; flex-direction: column; overflow: hidden; }
 header {
-  position: sticky; top: 0; z-index: 10; display: flex; align-items: baseline; gap: 14px;
-  padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 12px; flex: 0 0 auto;
+  padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line);
 }
-header h1 { margin: 0; font: 700 17px var(--mono); color: var(--ink); }
+header h1 { margin: 0; font: 700 16px var(--mono); }
 header h1 b { color: var(--act); }
-header .sub { color: var(--muted); font-size: 12.5px; }
 header .sp { flex: 1; }
 button, select, input {
   background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
@@ -32,58 +32,85 @@ button, select, input {
 button { cursor: pointer; }
 button:hover { border-color: var(--act); }
 button.primary { background: var(--act); color: #16181a; font-weight: 700; border-color: var(--act); }
-input[type=number], input[type=text] { width: 84px; font-family: var(--mono); font-size: 12.5px; }
-main { max-width: 1180px; margin: 0 auto; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
-section.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; }
-section.card.off { opacity: .45; pointer-events: none; }
-section h2 { margin: 0 0 4px; font: 700 13px var(--mono); color: var(--act); letter-spacing: .06em; text-transform: uppercase; }
-section h2 .n { color: var(--faint); margin-right: 8px; }
-section .why { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
-.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0; }
-.row label { color: var(--muted); font-size: 12.5px; display: flex; gap: 6px; align-items: center; }
-.plots { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
+input[type=number], input[type=text] { width: 82px; font-family: var(--mono); font-size: 12.5px; }
+#app { flex: 1; display: flex; min-height: 0; }
+
+nav#rail { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; padding: 8px 6px; background: var(--panel); border-right: 1px solid var(--line); }
+nav#rail button {
+  border: 1px solid transparent; background: none; color: var(--muted); text-align: left;
+  font: 12px var(--mono); padding: 7px 10px; border-radius: 5px; white-space: nowrap;
+}
+nav#rail button .n { color: var(--faint); margin-right: 7px; }
+nav#rail button.on { background: var(--panel2); color: var(--ink); border-color: var(--line); }
+nav#rail button.on .n { color: var(--act); }
+nav#rail button:disabled { opacity: .35; cursor: default; }
+
+#dock { flex: 0 0 392px; overflow-y: auto; padding: 12px 14px; background: var(--panel); border-right: 1px solid var(--line); }
+#dock section { display: none; }
+#dock section.on { display: block; }
+#dock h2 { margin: 0 0 4px; font: 700 12.5px var(--mono); color: var(--act); letter-spacing: .06em; text-transform: uppercase; }
+#dock .why { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.row label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.plots { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
 .plots figure { margin: 0; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
-.plots figcaption { font: 11.5px var(--mono); color: var(--muted); padding: 4px 2px 0; }
+.plots figcaption { font: 11px var(--mono); color: var(--muted); padding: 4px 2px 0; }
 .plots canvas { max-width: 100%; height: auto; display: block; }
-table.stats { border-collapse: collapse; font: 12.5px var(--mono); }
-table.stats td { padding: 2px 14px 2px 0; }
+table.stats { border-collapse: collapse; font: 12px var(--mono); }
+table.stats td { padding: 2px 12px 2px 0; }
 table.stats td:first-child { color: var(--muted); }
-table.dirs { border-collapse: collapse; font: 12.5px var(--mono); margin: 6px 0; }
-table.dirs th { color: var(--muted); font-weight: 400; text-align: left; padding: 2px 10px 2px 0; }
-table.dirs td { padding: 2px 10px 2px 0; }
-table.dirs input, table.dirs select { width: 76px; }
-#drop { border: 2px dashed var(--line); border-radius: 8px; padding: 26px; text-align: center; color: var(--muted); }
+table.dirs { border-collapse: collapse; font: 12px var(--mono); margin: 6px 0; }
+table.dirs th { color: var(--muted); font-weight: 400; text-align: left; padding: 2px 8px 2px 0; }
+table.dirs td { padding: 2px 8px 2px 0; }
+table.dirs input, table.dirs select { width: 70px; }
+#drop { border: 2px dashed var(--line); border-radius: 8px; padding: 20px; text-align: center; color: var(--muted); font-size: 12.5px; }
 #drop.hot { border-color: var(--act); color: var(--ink); }
 #drop b { color: var(--ink); }
-.msg { font: 12px var(--mono); color: var(--muted); }
+.msg { font: 11.5px var(--mono); color: var(--muted); }
 .msg.bad { color: var(--bad); }
 .msg.go { color: var(--go); }
-footer { text-align: center; color: var(--faint); font: 11.5px var(--mono); padding: 18px; }
-footer a { color: var(--info); }
-.pill { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px; color: var(--muted); }
+
+#stage { flex: 1; position: relative; min-width: 0; background: #121212; }
+#cv { width: 100%; height: 100%; display: block; }
+#vbar {
+  position: absolute; top: 10px; right: 10px; display: flex; gap: 8px; align-items: center;
+  background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 8px;
+}
+#vbar label { color: var(--muted); font-size: 11.5px; display: flex; gap: 5px; align-items: center; }
+#vhint { position: absolute; left: 12px; bottom: 10px; color: var(--faint); font: 11px var(--mono); pointer-events: none; }
+#vfoot { position: absolute; right: 12px; bottom: 10px; color: var(--faint); font: 10.5px var(--mono); pointer-events: none; }
 </style>
 <script type="importmap">
 { "imports": {
-  "@gcu/gslib": "../../ext/gslib/index.js",
-  "@gcu/plot":  "../../ext/plot/index.js"
+  "@gcu/gslib":     "../../ext/gslib/index.js",
+  "@gcu/plot":      "../../ext/plot/index.js",
+  "@gcu/condenser": "../../ext/condenser/index.js"
 } }
 </script>
 </head>
 <body>
 <header>
   <h1><b>gslib</b>.wasm</h1>
-  <span class="sub">GSLIB in your browser — the Fortran is the spec</span>
   <span class="sp"></span>
   <button id="btnOpen">Open… (.dat / .csv)</button>
   <button id="btnSample">▸ sample data</button>
-  <span class="pill">networkless</span>
 </header>
-<main>
+<div id="app">
+<nav id="rail">
+  <button data-step="secData" class="on"><span class="n">1</span>Data</button>
+  <button data-step="secDeclus" disabled><span class="n">2</span>Decluster</button>
+  <button data-step="secVario" disabled><span class="n">3</span>Variograms</button>
+  <button data-step="secModel" disabled><span class="n">4</span>Model</button>
+  <button data-step="secKrige" disabled><span class="n">5</span>Kriging</button>
+  <button data-step="secExport" disabled><span class="n">6</span>Export</button>
+</nav>
+<div id="dock">
 
-<section class="card" id="secData">
-  <h2><span class="n">1</span>Data</h2>
+<section id="secData" class="on">
+  <h2>Data</h2>
   <p class="why">GeoEAS <b>.dat</b> (the book's format) or CSV. Everything stays on this machine — the page cannot make a network request.</p>
-  <div id="drop">drop a file here — or <b>Open…</b> above, or click <b>▸ sample data</b> for a clustered synthetic deposit</div>
+  <div id="drop">drop a file anywhere — or <b>Open…</b>, or <b>▸ sample data</b> for a clustered synthetic deposit</div>
   <div class="row" id="mapRow" style="display:none">
     <label>X <select id="mapX"></select></label>
     <label>Y <select id="mapY"></select></label>
@@ -94,26 +121,28 @@ footer a { color: var(--info); }
   <div class="plots" id="dataPlots"></div>
 </section>
 
-<section class="card off" id="secDeclus">
-  <h2><span class="n">2</span>Decluster</h2>
-  <p class="why">Preferentially-sampled data lies about its mean. Cell declustering (<code>declus</code>) sweeps cell sizes and weights samples by how crowded their cell is.</p>
+<section id="secDeclus">
+  <h2>Decluster</h2>
+  <p class="why">Preferentially-sampled data lies about its mean. <code>declus</code> sweeps cell sizes and weights samples by how crowded their cell is.</p>
   <div class="row">
-    <label>cell size, from <input type="number" id="dcMin" step="any"></label>
+    <label>cell, from <input type="number" id="dcMin" step="any"></label>
     <label>to <input type="number" id="dcMax" step="any"></label>
     <label>steps <input type="number" id="dcN" value="20" min="2" max="60"></label>
+  </div>
+  <div class="row">
     <button id="btnDeclus" class="primary">run declus</button>
     <span class="msg" id="dcMsg"></span>
   </div>
   <div class="plots" id="dcPlots"></div>
 </section>
 
-<section class="card off" id="secVario">
-  <h2><span class="n">3</span>Experimental variograms</h2>
+<section id="secVario">
+  <h2>Experimental variograms</h2>
   <p class="why"><code>gamv</code> — the same pair-counting, the same accumulation order as the Fortran.</p>
   <div class="row">
     <label>lags <input type="number" id="vgNlag" value="10" min="2" max="40"></label>
-    <label>lag size <input type="number" id="vgLag" step="any"></label>
-    <label>tolerance <input type="number" id="vgTol" step="any"></label>
+    <label>size <input type="number" id="vgLag" step="any"></label>
+    <label>tol <input type="number" id="vgTol" step="any"></label>
   </div>
   <table class="dirs" id="dirTable">
     <thead><tr><th>azimuth</th><th>tol</th><th>bandwidth</th><th></th></tr></thead>
@@ -127,26 +156,25 @@ footer a { color: var(--info); }
   <div class="plots" id="vgPlots"></div>
 </section>
 
-<section class="card off" id="secModel">
-  <h2><span class="n">4</span>Variogram model</h2>
-  <p class="why">A nugget plus nested structures. The curve is <code>vmodel</code> — the exact covariance the kriging will use, not a lookalike.</p>
+<section id="secModel">
+  <h2>Variogram model</h2>
+  <p class="why">Nugget + nested structures. The curve is <code>vmodel</code> — the exact covariance the kriging will use. It redraws over the experimental plots (step 3) on every edit.</p>
   <div class="row">
     <label>nugget c₀ <input type="number" id="mNug" value="0" step="any" min="0"></label>
-    <span class="msg" id="mSill"></span>
   </div>
+  <div class="row"><span class="msg" id="mSill"></span></div>
   <table class="dirs" id="stTable">
-    <thead><tr><th>type</th><th>contribution</th><th>range</th><th>range minor</th><th>azimuth</th><th></th></tr></thead>
+    <thead><tr><th>type</th><th>cc</th><th>range</th><th>minor</th><th>azm</th><th></th></tr></thead>
     <tbody></tbody>
   </table>
   <div class="row">
     <button id="btnAddSt">+ structure</button>
-    <span class="msg">the model redraws on every edit, over the experimental points above</span>
   </div>
 </section>
 
-<section class="card off" id="secKrige">
-  <h2><span class="n">5</span>Kriging</h2>
-  <p class="why"><code>kb2d</code> (2D) / <code>kt3d</code> (3D) — ordinary or simple kriging with the model above.</p>
+<section id="secKrige">
+  <h2>Kriging</h2>
+  <p class="why"><code>kb2d</code> (2D) / <code>kt3d</code> (3D). The result lands in the viewer as a block model — switch estimate / variance up top.</p>
   <div class="row">
     <label>nx <input type="number" id="kNx" value="50" min="2"></label>
     <label>ny <input type="number" id="kNy" value="50" min="2"></label>
@@ -154,48 +182,163 @@ footer a { color: var(--info); }
     <label>cell y <input type="number" id="kSy" step="any"></label>
   </div>
   <div class="row">
-    <label>search radius <input type="number" id="kRad" step="any"></label>
-    <label>min samples <input type="number" id="kMin" value="2" min="1"></label>
-    <label>max samples <input type="number" id="kMax" value="16" min="1"></label>
+    <label>radius <input type="number" id="kRad" step="any"></label>
+    <label>min <input type="number" id="kMin" value="2" min="1"></label>
+    <label>max <input type="number" id="kMax" value="16" min="1"></label>
+  </div>
+  <div class="row">
     <label>type <select id="kType"><option>OK</option><option>SK</option></select></label>
     <label id="kMeanL" style="display:none">SK mean <input type="number" id="kMean" step="any" value="0"></label>
-    <label>discretization <input type="number" id="kDisc" value="1" min="1" max="8" title="1 = point kriging; >1 = block kriging (n×n)"></label>
+    <label>disc <input type="number" id="kDisc" value="1" min="1" max="8" title="1 = point kriging; >1 = block kriging (n×n)"></label>
   </div>
   <div class="row">
     <button id="btnKrige" class="primary">krige</button>
     <span class="msg" id="kMsg"></span>
   </div>
-  <div class="plots" id="kPlots"></div>
 </section>
 
-<section class="card off" id="secExport">
-  <h2><span class="n">6</span>Export</h2>
+<section id="secExport">
+  <h2>Export</h2>
   <div class="row">
     <button id="btnExpGrid">grid → CSV</button>
-    <button id="btnExpModel">variogram model → JSON</button>
-    <span class="msg" id="exMsg"></span>
+    <button id="btnExpModel">model → JSON</button>
   </div>
+  <div class="row"><span class="msg" id="exMsg"></span></div>
 </section>
 
-</main>
-<footer>
-  gslib.wasm · GSLIB (Deutsch &amp; Journel) transcribed to <a href="https://github.com/endarthur/auditable" rel="noopener">atra</a>, compiled to WebAssembly ·
-  same variable names, same accumulation order — <b>the Fortran is the spec</b> · no network, no upload · build <span id="build">__GSLIB_BUILD__</span>
-</footer>
+</div>
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <div id="vbar">
+    <label>colour <select id="vMode"><option value="est">estimate</option><option value="var">variance</option><option value="none">samples only</option></select></label>
+    <label>samples <input type="checkbox" id="vPts" checked></label>
+    <button id="vFit" title="frame the data">⛶ fit</button>
+  </div>
+  <div id="vhint">drag orbit · wheel zoom · right-drag pan</div>
+  <div id="vfoot">gslib.wasm · the Fortran is the spec · no network · build <span id="build">__GSLIB_BUILD__</span></div>
+</div>
+</div>
 
 <script type="module">
 import { gamv, declus, kb2d, kt3d, vmodel } from '@gcu/gslib';
 import { subplots } from '@gcu/plot';
+import { createRenderer, createOrbitCamera, attachOrbitInput, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, rampPixels, createEdl } from '@gcu/condenser';
 
 const $ = (s) => document.querySelector(s);
 const S = {                                                  // the pipeline's state, start → finish
-  cols: [], rows: [],                                        // parsed file
+  cols: [], rows: [],
   map: { x: -1, y: -1, z: -1, v: -1 },
   weights: null, declusMean: null,
-  vario: null,                                               // last gamv result + the lags/dirs that made it
+  vario: null,
   model: { nugget: 0, structures: [] },
-  krige: null,                                               // { est, var, grid }
+  krige: null,
 };
+
+// ── the step rail ─────────────────────────────────────────────────────────────
+function showStep(id) {
+  for (const s of document.querySelectorAll('#dock section')) s.classList.toggle('on', s.id === id);
+  for (const b of document.querySelectorAll('#rail button')) b.classList.toggle('on', b.dataset.step === id);
+}
+for (const b of document.querySelectorAll('#rail button')) b.onclick = () => showStep(b.dataset.step);
+function enableSteps() { for (const b of document.querySelectorAll('#rail button')) b.disabled = false; }
+
+// ── the viewer (@gcu/condenser — micro's engine, at teaching scale) ───────────
+// Layers: 0 = sample points (rgb from the ramp, by grade) · 1 = kriged estimate
+// (chan → the built-in ramp) · 2 = kriging variance. est/var toggle = visibility.
+const V = { renderer: null, cam: null, frame: null, bbox: null, dirty: false, ramp: rampPixels(256) };
+function rampColor(t) {                                      // sample the SAME ramp the blocks use
+  const i = Math.max(0, Math.min(255, Math.round(t * 255))) * 4;
+  return [V.ramp[i], V.ramp[i + 1], V.ramp[i + 2]];
+}
+function requestRender() { V.dirty = true; }
+function initViewer() {
+  if (V.renderer) return;
+  const cv = $('#cv');
+  V.renderer = createRenderer(cv, { background: [0.07, 0.07, 0.07, 1] });
+  V.edl = createEdl(V.renderer.gl);                          // the scene draws OFFSCREEN; edl.render is the present step
+  V.cam = createOrbitCamera();
+  attachOrbitInput(cv, V.cam, { onChange: requestRender });
+  new ResizeObserver(() => { const [w, h] = V.renderer.resize(); V.cam.setAspect(w / h); requestRender(); }).observe(cv);
+  const loop = () => {
+    if (V.dirty) {
+      V.dirty = false;
+      V.edl.render(cv.width, cv.height, V.cam,
+        () => V.renderer.draw(V.cam, { pointPx: 7, layerOpts: { 0: { colorMode: 3 }, 1: { colorMode: 1 }, 2: { colorMode: 1 } } }),   // points by rgb; blocks by GRADE (mode 0 is elevation — uniform on a 2D slab)
+        { enabled: true, strength: 0.8 });                   // gentle EDL — depth cue on the blocks
+    }
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+}
+function bboxUnion(b) {
+  if (!V.bbox) { V.bbox = Array.from(b); return; }
+  for (let i = 0; i < 3; i++) { if (b[i] < V.bbox[i]) V.bbox[i] = b[i]; if (b[i + 3] > V.bbox[i + 3]) V.bbox[i + 3] = b[i + 3]; }
+}
+function viewerPoints() {
+  initViewer();
+  V.renderer.removeLayer(0);
+  const n = S.rows.length;
+  const { x, y, z, v } = S.map;
+  const xs = new Float64Array(n), ys = new Float64Array(n), zs = new Float64Array(n), gv = new Float64Array(n);
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const r = S.rows[i];
+    xs[i] = r[x]; ys[i] = r[y]; zs[i] = z >= 0 ? r[z] : 0.62; gv[i] = r[v];   // 2D: sit just above the 1-unit kriged slab (z ±0.5), not buried inside it
+    if (gv[i] < lo) lo = gv[i]; if (gv[i] > hi) hi = gv[i];
+  }
+  const rgb = new Uint8Array(3 * n);
+  for (let i = 0; i < n; i++) {
+    const [r, g, b] = rampColor(hi > lo ? (gv[i] - lo) / (hi - lo) : 0.5);
+    rgb[i * 3] = r; rgb[i * 3 + 1] = g; rgb[i * 3 + 2] = b;
+  }
+  const bb = { min: [Math.min(...xs), Math.min(...ys), Math.min(...zs)], max: [Math.max(...xs), Math.max(...ys), Math.max(...zs)] };
+  V.frame = documentFrame({ bbox: bb });
+  const builder = createChunkBuilder({ frame: V.frame, onChunk: (c) => V.renderer.addChunk(c, 'base', 0) });
+  builder.push({ x: xs, y: ys, z: zs, intensity: new Uint16Array(n), classification: new Uint8Array(n), rgb, count: n, recStart: 0 });
+  builder.flush();
+  V.bbox = null; bboxUnion(builder.doc.bboxLocal);
+  V.cam.fit(V.bbox);
+  requestRender();
+}
+function viewerBlocks() {
+  const { grid: g, est, var: kv } = S.krige;
+  V.renderer.removeLayer(1); V.renderer.removeLayer(2);
+  const axes = [
+    { origin: g.xmn, pitch: g.xsiz, count: g.nx },
+    { origin: g.ymn, pitch: g.ysiz, count: g.ny },
+    { origin: g.zmn ?? 0, pitch: g.zsiz ?? 1, count: g.nz ?? 1 },
+  ];
+  const bgrid = makeBlockGrid(axes, V.frame);
+  for (const [layer, chanSrc] of [[1, est], [2, kv]]) {
+    const bld = createBlockChunkBuilder({ frame: V.frame, grid: bgrid, onChunk: (c) => V.renderer.addChunk(c, 'base', layer) });
+    const nxyz = chanSrc.length;
+    const xs = new Float64Array(nxyz), ys = new Float64Array(nxyz), zs = new Float64Array(nxyz), ch = new Float64Array(nxyz);
+    let m = 0;
+    for (let iz = 0; iz < (g.nz ?? 1); iz++) for (let iy = 0; iy < g.ny; iy++) for (let ix = 0; ix < g.nx; ix++) {
+      const i = iz * g.nx * g.ny + iy * g.nx + ix;
+      if (chanSrc[i] <= -1e20) continue;                     // UNEST stays out of the model
+      xs[m] = g.xmn + ix * g.xsiz; ys[m] = g.ymn + iy * g.ysiz; zs[m] = (g.zmn ?? 0) + iz * (g.zsiz ?? 1);
+      ch[m] = chanSrc[i]; m++;
+    }
+    bld.push({ x: xs.subarray(0, m), y: ys.subarray(0, m), z: zs.subarray(0, m), chan: ch.subarray(0, m), count: m, recStart: 0 });
+    bld.flush();
+    bboxUnion(bld.doc.bboxLocal);
+  }
+  applyViewMode();
+  V.cam.fit(V.bbox);
+  requestRender();
+}
+function applyViewMode() {
+  if (!V.renderer) return;
+  const m = $('#vMode').value;
+  V.renderer.setLayerVisible(1, m === 'est');
+  V.renderer.setLayerVisible(2, m === 'var');
+  V.renderer.setLayerVisible(0, $('#vPts').checked);
+  requestRender();
+}
+$('#vMode').onchange = applyViewMode;
+$('#vPts').onchange = applyViewMode;
+$('#vFit').onclick = () => { if (V.bbox) { V.cam.fit(V.bbox); requestRender(); } };
 
 // ── parsing: GeoEAS + CSV ─────────────────────────────────────────────────────
 // GeoEAS: title / nvar / nvar names / whitespace rows. The book's format, 1990-simple.
@@ -223,11 +366,14 @@ function parseCSV(text) {
   }
   return { cols, rows };
 }
+// new data must WIPE everything derived from the old data — a stale "declustered
+// mean" on a file that never ran declus is a lie in a tool about honest numbers
 function resetDerived() {
   S.weights = null; S.declusMean = null; S.vario = null; S.krige = null;
   S.model.structures = [];                                   // reseeded from the NEW data's variance in onData
-  for (const id of ['#dcPlots', '#vgPlots', '#kPlots']) $(id).textContent = '';
+  for (const id of ['#dcPlots', '#vgPlots']) $(id).textContent = '';
   for (const id of ['#dcMsg', '#vgMsg', '#kMsg', '#exMsg']) { $(id).textContent = ''; $(id).className = 'msg'; }
+  if (V.renderer) { V.renderer.removeLayer(1); V.renderer.removeLayer(2); requestRender(); }
 }
 function openText(name, text) {
   let d;
@@ -257,8 +403,6 @@ function guessMapping() {
   }
   $('#mapRow').style.display = '';
 }
-
-// data in gslib shape: 2D → [x,y,v], 3D → [x,y,z,v]
 const is3D = () => S.map.z >= 0;
 function gdata() {
   const { x, y, z, v } = S.map;
@@ -271,7 +415,7 @@ function extent() {
 }
 
 // ── plotting helpers (@gcu/plot; each figure is its own canvas) ───────────────
-function fig(node, caption, draw, w = 340, h = 260) {
+function fig(node, caption, draw, w = 350, h = 250) {
   // positional (1, 1, opts) — the kwargs-in-arg-0 path is adder's, gated on _kw
   const { fig, ax } = subplots(1, 1, { figsize: [w / 100, h / 100] });
   draw(ax, fig);
@@ -300,7 +444,6 @@ function onData() {
   ].map(([k, x]) => `<tr><td>${k}</td><td>${x}</td></tr>`).join('');
   const holder = document.createElement('figure'); holder.appendChild(tbl); d.appendChild(holder);
   fig(d, `histogram of ${S.cols[S.map.v]}`, (ax) => ax.hist(v, { bins: 24 }));
-  fig(d, 'sample locations', (ax) => ax.scatter(S.rows.map((r) => r[S.map.x]), S.rows.map((r) => r[S.map.y]), { s: 8 }));
 
   // wake the pipeline + seed defaults from the data's own scale
   const e = extent();
@@ -313,7 +456,8 @@ function onData() {
   $('#kRad').value = +(span / 2).toPrecision(2);
   if (!S.model.structures.length) S.model.structures.push({ type: 'spherical', contribution: +va.toPrecision(3), range: +(span / 4).toPrecision(2), rangeMinor: null, angle: 0 });
   renderStructures();
-  for (const id of ['#secDeclus', '#secVario', '#secModel', '#secKrige', '#secExport']) $(id).classList.remove('off');
+  enableSteps();
+  viewerPoints();                                            // the data goes straight into the viewer
 }
 
 // ── 2. declus: the cell-size sweep, the book's own diagnostic ────────────────
@@ -328,13 +472,13 @@ function runDeclus() {
   }
   const best = declus({ data, cellRange: [lo, hi], ncell: k, noff: 8, criterion: 'min' });
   S.weights = best.weights; S.declusMean = best.weightedMean;
-  $('#dcMsg').textContent = `minimizing cell ≈ ${best.cellSize.toPrecision(3)} → declustered mean ${best.weightedMean.toFixed(4)} (naive ${(vals().reduce((a, b) => a + b, 0) / vals().length).toFixed(4)})`;
+  $('#dcMsg').textContent = `minimizing cell ≈ ${best.cellSize.toPrecision(3)} → mean ${best.weightedMean.toFixed(4)} (naive ${(vals().reduce((a, b) => a + b, 0) / vals().length).toFixed(4)})`;
   $('#dcMsg').className = 'msg go';
   const d = $('#dcPlots'); d.textContent = '';
   fig(d, 'declustered mean vs cell size — pick the minimum', (ax) => {
     ax.plot(sizes, means);
     ax.scatter([best.cellSize], [best.weightedMean], { s: 30 });
-  }, 420, 260);
+  }, 360, 240);
   onData();                                                  // refresh the stats card (declustered mean)
 }
 
@@ -409,7 +553,7 @@ function renderStructures() {
     tr.innerHTML = `<td><select>${['spherical', 'exponential', 'gaussian', 'power', 'hole'].map((t) => `<option${t === st.type ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
       <td><input type="number" step="any" value="${st.contribution}"></td>
       <td><input type="number" step="any" value="${st.range}"></td>
-      <td><input type="number" step="any" value="${st.rangeMinor ?? ''}" placeholder="= range"></td>
+      <td><input type="number" step="any" value="${st.rangeMinor ?? ''}" placeholder="= rng"></td>
       <td><input type="number" step="any" value="${st.angle || 0}"></td>
       <td><button>×</button></td>`;
     const [sel] = tr.querySelectorAll('select');
@@ -427,13 +571,13 @@ function renderStructures() {
 function sillReadout() {
   const total = (+$('#mNug').value || 0) + S.model.structures.reduce((a, s) => a + (s.contribution || 0), 0);
   const el = $('#mSill');
-  el.textContent = `total sill = ${total.toPrecision(4)}  ·  data variance = ${S.variance ? S.variance.toPrecision(4) : '—'}`;
+  el.textContent = `total sill = ${total.toPrecision(4)} · data variance = ${S.variance ? S.variance.toPrecision(4) : '—'}`;
   el.className = 'msg' + (S.variance && Math.abs(total - S.variance) / S.variance < 0.15 ? ' go' : '');
 }
 $('#mNug').oninput = () => { sillReadout(); renderVario(); };
 $('#btnAddSt').onclick = () => { S.model.structures.push({ type: 'spherical', contribution: +(S.variance / 2 || 1).toPrecision(3), range: +$('#vgLag').value * 4 || 10, rangeMinor: null, angle: 0 }); renderStructures(); renderVario(); };
 
-// ── 5. kriging → maps ─────────────────────────────────────────────────────────
+// ── 5. kriging → the viewer ───────────────────────────────────────────────────
 function runKrige() {
   const e = extent();
   const grid = {
@@ -449,15 +593,11 @@ function runKrige() {
   try { r = is3D() ? kt3d({ ...opts, grid: { ...grid, nz: 1, zsiz: 1, zmn: 0 } }) : kb2d(opts); }
   catch (err) { $('#kMsg').textContent = `kriging failed: ${err.message}`; $('#kMsg').className = 'msg bad'; return; }
   const ms = performance.now() - t0;
-  const est = r.est;
-  let informed = 0; for (let i = 0; i < est.length; i++) if (est[i] > -1e20) informed++;
+  let informed = 0; for (let i = 0; i < r.est.length; i++) if (r.est[i] > -1e20) informed++;
   S.krige = { ...r, grid };
   $('#kMsg').textContent = `${grid.nx}×${grid.ny} = ${(grid.nx * grid.ny).toLocaleString()} blocks · ${informed.toLocaleString()} estimated · ${ms.toFixed(0)} ms`;
   $('#kMsg').className = 'msg go';
-  const d = $('#kPlots'); d.textContent = '';
-  const clean = (a) => a.map((x) => (x > -1e20 ? x : NaN));  // GSLIB's UNEST → blank
-  fig(d, `estimate (${$('#kType').value})`, (ax) => ax.imshow(clean(Array.from(r.est)), grid.nx, grid.ny), 430, 360);
-  fig(d, 'kriging variance', (ax) => ax.imshow(clean(Array.from(r.var)), grid.nx, grid.ny), 430, 360);
+  viewerBlocks();
 }
 $('#kType').onchange = () => { $('#kMeanL').style.display = $('#kType').value === 'SK' ? '' : 'none'; };
 
@@ -532,7 +672,8 @@ document.body.addEventListener('drop', async (e) => {
 addDir(0, 90);                                               // omnidirectional default
 
 // the automation surface (the smokes drive this)
-window._gslib = { openText, sampleData, runDeclus, runVario, runKrige, addDir, S, modelSpec };
+window._gslib = { openText, sampleData, runDeclus, runVario, runKrige, addDir, showStep, S, modelSpec,
+  viewerInfo: () => ({ chunks: V.renderer ? V.renderer.chunkCount : 0, hasBlocks: !!S.krige }) };
 </script>
 </body>
 </html>

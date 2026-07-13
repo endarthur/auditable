@@ -1804,10 +1804,11 @@ if (target === 'gslib') {
   // the .atra source + the compiler are in this repo, so the bytes are reproducible.
   // Seal's networkless+wasm profile (the 4th) isn't wired yet — emit is skipped, honestly.
   const dir = path.join(__dirname, 'tools/gslib');
-  const SPEC = { '@gcu/gslib': '#gslib', '@gcu/plot': '#plot' };
+  const SPEC = { '@gcu/gslib': '#gslib', '@gcu/plot': '#plot', '@gcu/condenser': '#condenser' };
   const libs = [
-    ['gslib', 'ext/gslib/index.js'],              // atra→Wasm GSLIB, bytes embedded — the Fortran is the spec
-    ['plot',  'ext/plot/index.js'],
+    ['gslib',     'ext/gslib/index.js'],          // atra→Wasm GSLIB, bytes embedded — the Fortran is the spec
+    ['plot',      'ext/plot/index.js'],
+    ['condenser', 'ext/condenser/index.js'],      // micro's engine, at teaching scale: the kriged grid is a real block model
   ];
   const modules = [];
   for (const [name, rel] of libs) {

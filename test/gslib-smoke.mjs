@@ -26,7 +26,10 @@ const d1 = await p.evaluate(() => {
   return { rows: window._gslib.S.rows.length, canvases: document.querySelectorAll('#dataPlots canvas').length,
            variance: window._gslib.S.variance };
 });
-ok(d1.rows === 210 && d1.canvases >= 2, `${d1.rows} samples, ${d1.canvases} plots, variance ${d1.variance && d1.variance.toFixed(3)}`);
+// one dock plot (the histogram) — the sample LOCATIONS live in the 3D viewer now
+ok(d1.rows === 210 && d1.canvases >= 1, `${d1.rows} samples, ${d1.canvases} dock plot, variance ${d1.variance && d1.variance.toFixed(3)}`);
+const v1 = await p.evaluate(() => window._gslib.viewerInfo());
+ok(v1.chunks >= 1, `the samples are in the viewer (${v1.chunks} chunk)`);
 
 console.log('\n2. declus — the clustered mean must drop toward the truth');
 const d2 = await p.evaluate(() => {
@@ -54,8 +57,9 @@ ok(d3.pts[0][1] < d3.pts.at(-1)[1], 'γ rises with distance (spatial correlation
 ok(d3.canvases >= 1, 'variogram plotted with the model overlay');
 
 console.log('\n4. krige — OK on a 50×50 grid');
+await p.evaluate(() => window._gslib.runKrige());
+await p.waitForTimeout(600);                                  // a rAF or two — let the viewer paint
 const d4 = await p.evaluate(() => {
-  window._gslib.runKrige();
   const K = window._gslib.S.krige;
   if (!K) return null;
   let informed = 0, sum = 0, mn = Infinity, mx = -Infinity, negVar = 0;
@@ -63,14 +67,21 @@ const d4 = await p.evaluate(() => {
     if (K.est[i] > -1e20) { informed++; sum += K.est[i]; if (K.est[i] < mn) mn = K.est[i]; if (K.est[i] > mx) mx = K.est[i]; }
     if (K.var[i] > -1e20 && K.var[i] < -1e-6) negVar++;
   }
+  const vi = window._gslib.viewerInfo();
+  // the viewer canvas is preserveDrawingBuffer — read a band of pixels to prove
+  // the block model actually PAINTED, not merely uploaded
+  const cv = document.querySelector('#cv'); const g2 = cv.getContext('webgl2');
+  const px = new Uint8Array(4 * 64);
+  g2.readPixels((cv.width / 2) | 0, (cv.height / 2) | 0, 64, 1, g2.RGBA, g2.UNSIGNED_BYTE, px);
+  let lit = 0; for (let i = 0; i < 64; i++) if (px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2] > 60) lit++;
   return { n: K.est.length, informed, mean: sum / informed, mn, mx, negVar,
-           msg: document.querySelector('#kMsg').textContent, maps: document.querySelectorAll('#kPlots canvas').length };
+           msg: document.querySelector('#kMsg').textContent, chunks: vi.chunks, lit };
 });
 console.log(`    ${d4 && d4.msg}`);
 ok(d4 && d4.informed > d4.n * 0.8, `${d4.informed}/${d4.n} blocks estimated`);
 ok(d4 && d4.mn > 0 && d4.mx < 20, `estimates within data range (${d4.mn.toFixed(2)}…${d4.mx.toFixed(2)})`);
 ok(d4 && d4.negVar === 0, 'no negative kriging variances');
-ok(d4 && d4.maps === 2, 'estimate + variance maps rendered');
+ok(d4 && d4.chunks >= 2 && d4.lit > 16, `the kriged model is IN THE VIEWER and painted (${d4.chunks} chunks, ${d4.lit}/64 centre px lit)`);
 
 console.log('\n5. SK vs OK differ; the model export round-trips');
 const d5 = await p.evaluate(() => {
