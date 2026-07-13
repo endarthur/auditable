@@ -482,6 +482,13 @@ params:
           series:
             - layer: "model_A.csv"
               col: "$grade"</pre>
+<h3>Which rows run — <code>filter</code></h3>
+<p>A parameter table usually outlives any one run: benches that are finished, domains you're not reporting this month, a scratch row someone left behind. Rather than maintaining a second copy of the table, give the <code>each</code> block a <b>filter</b> — the same expression language again, deciding which rows fan out:</p>
+<pre>- each: { from: "params.xlsx#Benches" }
+  as: b
+  filter: "active = true and bench >= g.floor"   # which rows run
+  steps: [ ... ]</pre>
+<p>The row's own columns are plain names, and any scalars from <code>params</code> are visible too, so a row can be compared against a global. This is <i>data selection</i>, not an <code>if</code>: the rows that run are still decided entirely by the files you can read, never by the result of a step — so <b>Preview</b> still lists every run and the <b>guard</b> still checks every output, exactly as before. A mistyped column in the filter says so out loud instead of quietly matching nothing.</p>
 <h3>Computed values — <code>${…}</code></h3>
 <p>A <code>$name</code> substitutes a value as it stands. Wrap it in <code>${…}</code> and you get an <b>expression</b> — the <i>same</i> language as the filter box and the ƒ columns, so there is nothing new to learn:</p>
 <pre>- recipe: "grade tonnage"
@@ -751,6 +758,7 @@ params:
 <p style="margin:.15em 0">params (routine scalars) — §18</p>
 <p style="margin:.15em 0">nested each (cross product) — §18</p>
 <p style="margin:.15em 0">${…} computed values — §18</p>
+<p style="margin:.15em 0">each filter (which rows run) — §18</p>
 <p style="margin:.15em 0">scenes — §18</p>
 <p style="margin:.15em 0">Sealed — §20, C</p>
 <p style="margin:.15em 0">sections — §4</p>

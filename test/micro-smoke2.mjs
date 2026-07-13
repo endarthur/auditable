@@ -1396,6 +1396,28 @@ await p.close();
   await pe.close();
 }
 
+// ── §28: filter: on an each block — which rows fan out (data selection, not ifs) ──
+{
+  const pf = await mkPage('sm2eachfilter');
+  const ef = await pf.evaluate(async () => {
+    const steps = await window._micro.expandRoutine({ steps: [
+      { each: [
+        { bench: 1020, active: 'true' },
+        { bench: 1040, active: 'true' },
+        { bench: 1060, active: 'false' },
+      ], as: 'b', filter: 'active = "true" and bench >= 1040',
+        steps: [{ tool: 'gt', layer: 'm.csv', v: '$b.bench' }] },
+    ] });
+    const scoped = window._micro.routineFilterRows([{ bench: 1020 }, { bench: 1060 }], 'bench >= g.floor', { g: { floor: 1040 } });
+    let typo = null;
+    try { window._micro.routineFilterRows([{ bench: 1 }], 'bnch > 1', {}); } catch (e) { typo = e.message; }
+    return { n: steps.length, v: steps.map((x) => x.v).join(','), scoped: scoped.map((r) => r.bench).join(','), typo };
+  });
+  chk(`each filter: 3 rows → ${ef.n} run (${ef.v}); compares against a scalar (${ef.scoped}); a typo fails loudly`,
+    ef.n === 1 && ef.v === '1040' && ef.scoped === '1060' && /unknown column: bnch/.test(ef.typo || ''));
+  await pf.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
