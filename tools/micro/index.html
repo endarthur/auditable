@@ -818,6 +818,7 @@
 
 <script type="module">
 import { openLas, decodeLasRecords, openPly, openBlockModel, openTable, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, buildHeightfieldMesh, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH, layerOfId, faceOfId, isMiss, FACE_NAMES, FACE_NORMALS, FACE_CUT } from '../../ext/condenser/src/main.js';
+import { deriveVocab as nlDeriveVocab, trainSession as nlTrainSession } from '../../ext/dispatch/index.js';   // @gcu/dispatch — session-trained NL → command. EXPERIMENTAL, off by default.
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
@@ -10923,6 +10924,25 @@ Everything here is on a block model's <b>right-click menu</b> and in the <b>comm
 <b>linked brushing</b> — the grade-tonnage &amp; swath windows have an <b>all / selection</b> toggle: rubber-band a bench, a domain, or a suspect zone in 3D and read its curve live<br><br>
 <b>figures</b> (View → <b>Decorations &amp; figure…</b>) — a live panel: toggle a <b>scale bar</b>, <b>north arrow</b>, and <b>title</b>; turn on a colour <b>legend per layer</b> (they stack, each captioned by its coloured attribute — rename inline); set a <b>background</b> (white/paper for print — the decorations flip to dark ink). <b>Export figure</b> captures exactly what you see as a report-ready PNG — at <b>1× / 2× / 3×</b> resolution (2×/3× re-render the scene sharper for print)<br>
 <b>windows</b> (View → <b>Windows…</b>) — the analysis + table + paint windows are all draggable and layer-pinned; list / focus / <b>cascade</b> / <b>close all</b> from here<br>`;
+// About + the experiments drawer. The NL command bar lives here, OFF by default:
+// a stranger's first minute must not contain a text box that guesses.
+function showAbout() {
+  const exp = `
+  <h3 style="margin-top:1.2em">Experimental</h3>
+  <p class="fi-note">Off by default, and rightly so — these are not finished.</p>
+  <label style="display:flex;gap:.5em;align-items:flex-start;cursor:pointer">
+    <input type="checkbox" id="nlToggle"${_nlOn ? ' checked' : ''} style="margin-top:.25em">
+    <span><b>Natural-language command bar</b><br>
+    <span class="fi-note">Press ⌘K / Ctrl+K and type a phrase — <i>“colour by FE”</i>, <i>“hematite above 60 iron”</i>,
+    <i>“section on Z at 1020”</i>. It <b>proposes</b> a command and never runs it: you read what it understood, and press Enter.<br>
+    It learns <b>this project's</b> vocabulary — your columns, your lithologies, your layer names — and trains in about a second,
+    in this tab. No model file, no network, no WASM: micro stays Sealed, and it cannot be out of date.
+    It will misread you. Nothing it proposes is destructive.</span></span>
+  </label>`;
+  showHelp('about micro', HELP_ABOUT + exp);
+  const cb = $('#nlToggle');
+  if (cb) cb.onchange = () => { nlSetEnabled(cb.checked); if (cb.checked) nlEnsureTrained(); };
+}
 function showHelp(title, html) {
   $('#helpTitle').textContent = title;
   $('#helpBody').innerHTML = html;
@@ -10949,7 +10969,7 @@ $('#mHelp').onclick = () => menuAt($('#mHelp'), [
   { label: 'Shortcut card (print) ↗', action: () => window.open('https://gentropic.org/micro/docs/card.html', '_blank', 'noopener') },
   { label: 'Why it’s Sealed (security)…', action: () => sealedInfo() },
   { label: 'Check for updates…', action: () => checkForUpdates() },
-  { label: 'About micro', action: () => showHelp('about micro', HELP_ABOUT) },
+  { label: 'About micro', action: () => showAbout() },
 ]);
 $('#helpClose').onclick = () => $('#help').classList.remove('show');
 $('#help').addEventListener('click', (e) => { if (e.target.id === 'help') $('#help').classList.remove('show'); });
@@ -11837,6 +11857,143 @@ const COMMANDS = [
 ];
 let _palOpen = false, _palSel = 0, _palItems = [];
 const palCtx = () => ({ L: activeLayer(), layers: _layers, project: _project });
+// ══ EXPERIMENTAL: the natural-language command bar (@gcu/dispatch) ═══════════
+// OFF BY DEFAULT. Enabled from Help → About. The hard rule, enforced here rather
+// than merely intended: dispatch **PROPOSES, IT NEVER ACTS**. A recognised phrase
+// becomes ONE palette row that spells out the resolved command and its arguments;
+// nothing runs until you read it and press Enter. A wrong guess costs a glance.
+//
+// It is session-trained: the vocabulary is derived from THIS project (its columns,
+// its lithologies, its layer names), a corpus is generated from that, and a
+// perceptron intent-classifier + a structured-perceptron slot-tagger are trained
+// IN THE TAB in about a second. No model file, no network, no WASM — it stays
+// Sealed, and it cannot be stale, because it is rebuilt from the data in front of
+// you. (LLM at authoring time; zero LLM at runtime.)
+const nlMsg = (m) => { $('#meta').textContent = m; };
+let _nlOn = localStorage.getItem('micro.nl') === '1';
+let _nlDispatcher = null, _nlKey = '', _nlBusy = false, _nlStats = null;
+
+// The tools it may propose — DECLARATIONS ONLY, each one wired below. If a verb
+// is not in this list it cannot be uttered, which is the point.
+const NL_TOOLS = [
+  { name: 'micro.colorBy', kind: 'column-pick', argName: 'column', pools: ['numeric', 'categorical'],
+    frames: ['color the model by {col}', 'color by {col}', 'paint the blocks by {col}', 'show {col} on the model', 'map {col}', 'display {col}', 'put {col} on the color ramp', 'color the blocks with {col}'] },
+  { name: 'micro.filterBlocks', kind: 'comparison-filter', nouns: ['blocks', 'the blocks', 'the model'] },
+  { name: 'micro.clearFilter', kind: 'no-arg',
+    frames: ['clear the filter', 'remove the filter', 'reset the filter', 'drop all filters', 'unfilter', 'clear filters', 'take the filter off', 'filter off'] },
+  { name: 'micro.sectionAt', kind: 'axis-position', axes: { X: ['x', 'easting', 'east-west'], Y: ['y', 'northing', 'north-south'], Z: ['z', 'elevation', 'level', 'bench', 'rl'] } },
+  { name: 'micro.clearSection', kind: 'no-arg',
+    frames: ['clear the section', 'close the section', 'remove the section', 'no section', 'section off', 'drop the section', 'stop sectioning', 'clear the slice'] },
+  { name: 'micro.setSectionThickness', kind: 'number-arg', argName: 'thickness', values: [5, 10, 15, 20, 25, 30, 40, 50, 75, 100],
+    frames: ['make the section {n} meters thick', 'section thickness {n}', 'set the slab to {n} m', '{n} meter thick section', 'thicken the section to {n}'] },
+  { name: 'micro.setZExag', kind: 'number-arg', argName: 'factor', values: [1, 1.5, 2, 2.5, 3, 4, 5, 10],
+    frames: ['exaggerate z by {n}', 'vertical exaggeration {n}', 'z exaggeration {n}', 'set z exag to {n}', 'stretch the vertical by {n}', '{n}x vertical'] },
+  { name: 'micro.setBackground', kind: 'lexicon-pick', argName: 'color',
+    values: { basalt: ['basalt', 'the default background', 'dark grey'], black: ['black'], white: ['white'], paper: ['paper', 'off-white'] },
+    frames: ['{val} background', 'set the background to {val}', 'make the background {val}', 'background {val}'] },
+  { name: 'micro.openGradeTonnage', kind: 'column-pick', argName: 'column', optional: true,
+    frames: ['grade tonnage for {col}', 'open the grade tonnage for {col}', 'GT curve on {col}', 'grade-tonnage of {col}', 'tonnage curve for {col}'] },
+  { name: 'micro.setLayerVisibility', kind: 'layer-action' },
+];
+
+// tool → what it SAYS it will do, and what it does when you press Enter.
+const NL_RUN = {
+  'micro.colorBy': (a) => ({ say: `Colour by ${a.column}`,
+    run: () => { const sel = $('#colorBy'); const o = [...sel.options].find((x) => x.textContent === a.column || x.value === a.column); if (!o) return nlMsg(`no column "${a.column}" to colour by`); sel.value = o.value; sel.dispatchEvent(new Event('change')); } }),
+  'micro.filterBlocks': (a) => { const e = nlClausesToExpr(a.clauses); return { say: `Filter blocks:  ${e}`, run: () => { $('#filter').value = e; applyBlockFilter(e); } }; },
+  'micro.clearFilter': () => ({ say: 'Clear the block filter', run: () => { $('#filter').value = ''; applyBlockFilter(''); } }),
+  'micro.sectionAt': (a) => ({ say: `Section on ${a.axis} at ${a.position}`, run: () => nlSectionAt(a.axis, a.position) }),
+  'micro.clearSection': () => ({ say: 'Clear the section', run: () => { const m = $('#secMode'); m.value = 'off'; m.dispatchEvent(new Event('input')); } }),
+  'micro.setSectionThickness': (a) => ({ say: `Section thickness ${a.thickness} m`, run: () => { const h = $('#secHalf'); h.value = a.thickness / 2; h.dispatchEvent(new Event('input')); } }),
+  'micro.setZExag': (a) => ({ say: `Vertical exaggeration ×${a.factor}`, run: () => setZExag(a.factor) }),
+  'micro.setBackground': (a) => ({ say: `Background: ${a.color}`, run: () => setBg(a.color) }),
+  'micro.openGradeTonnage': (a) => ({ say: `Grade–tonnage${a.column ? ' for ' + a.column : ''}`, run: () => { const L = activeLayer(); if (L) openGradeTonnage(L, a.column || null); } }),
+  'micro.setLayerVisibility': (a) => ({ say: `${a.action === 'hide' ? 'Hide' : 'Show'} ${a.layer}`,
+    run: () => { const L = _layers.find((x) => (x.label || x.name) === a.layer || x.name === a.layer); if (!L) return nlMsg(`no layer "${a.layer}"`); L.visible = a.action !== 'hide'; applyTreeVisibility(); requestRender(); } }),
+};
+
+// dispatch hands back CANONICAL args (clauses arrays, real booleans) → @gcu/expr text
+function nlClausesToExpr(clauses) {
+  return (clauses || []).map((c) => {
+    const v = typeof c.value === 'string' && !/^-?\d/.test(c.value) ? JSON.stringify(c.value) : c.value;
+    return `${c.column} ${c.op} ${v}`;
+  }).join(' and ');
+}
+function nlSectionAt(axis, position) {
+  const mode = axis === 'Z' ? 'plan' : axis === 'X' ? 'ns' : 'ew';       // X → an east-facing (N–S) plane
+  const m = $('#secMode'); m.value = mode; m.dispatchEvent(new Event('input'));
+  const [lo, hi] = secRange();
+  $('#secPos').value = hi > lo ? Math.max(0, Math.min(1, (position - lo) / (hi - lo))) : 0.5;
+  $('#secPos').dispatchEvent(new Event('input'));
+  requestRender();
+}
+
+// The vocabulary IS the session: this project's columns, categories and layers.
+function nlSessionVocab() {
+  const numCols = {}, catCols = {}, catValues = {}, layers = {};
+  for (const L of _layers) {
+    const nm = L.label || L.name;
+    layers[nm] = [nm.toLowerCase(), ...(/\.(csv|dm|parquet)$/i.test(nm) ? ['the model', 'the block model'] : []),
+      ...(L.kind === 'mesh' ? ['the mesh', 'the surface'] : []), ...(L.kind === 'dh' ? ['the drillholes', 'the holes'] : [])];
+    for (const c of numericColsOf(L) || []) {
+      const r = rampRangeFor(L, c.name || c) || [0, 100];
+      numCols[c.name || c] = { lo: +(+r[0]).toFixed(2), hi: +(+r[1]).toFixed(2), dec: 2 };
+    }
+    const hdr = layerTableHeader(L);
+    const cats = hdr && hdr.categories;
+    if (cats) for (const [col, dict] of Object.entries(cats)) {
+      catCols[col] = [col.toLowerCase()];
+      catValues[col] = {};
+      for (const v of Object.values(dict || {})) if (v) catValues[col][String(v)] = [String(v).toLowerCase()];
+    }
+  }
+  return { numCols, catCols, catValues, layers, idCols: [] };
+}
+function nlSessionKey() {
+  return _layers.map((L) => `${L.id}:${L.label || L.name}:${(numericColsOf(L) || []).length}`).join('|');
+}
+async function nlEnsureTrained() {
+  const key = nlSessionKey();
+  if (_nlDispatcher && _nlKey === key) return _nlDispatcher;
+  if (_nlBusy) return null;
+  _nlBusy = true;
+  try {
+    await new Promise((r) => setTimeout(r));                              // let the palette paint "training…"
+    const t0 = performance.now();
+    const vocab = nlDeriveVocab(nlSessionVocab());
+    const { dispatcher, stats } = nlTrainSession({ vocab, tools: NL_TOOLS, seed: 42 });
+    _nlDispatcher = dispatcher; _nlKey = key;
+    _nlStats = { ...stats, ms: Math.round(performance.now() - t0) };
+    return dispatcher;
+  } catch (e) {
+    console.warn('[nl] training failed', e);
+    _nlDispatcher = null;
+    return null;
+  } finally { _nlBusy = false; }
+}
+// A phrase → ONE proposal row. Never runs anything.
+function nlPropose(q) {
+  if (!_nlOn || !_nlDispatcher || q.length < 4) return null;
+  let r = null;
+  try { r = _nlDispatcher.dispatch(q, { surface: 'micro' }); } catch { return null; }
+  // dispatch() → { calls: [{ name, arguments }], intent, margin }. A refusal (or a
+  // failed assembly) comes back with NO calls — say nothing rather than guess.
+  const call = r && r.calls && r.calls[0];
+  if (!call || !call.name) return null;
+  const mk = NL_RUN[call.name];
+  if (!mk) return null;                                                  // declared but unwired → say nothing
+  let act = null;
+  try { act = mk(call.arguments || {}); } catch { return null; }
+  if (!act || !act.say) return null;
+  return { id: 'nl:' + call.name, group: 'suggested', title: act.say, nl: true, run: () => act.run() };
+}
+function nlSetEnabled(on) {
+  _nlOn = !!on;
+  localStorage.setItem('micro.nl', _nlOn ? '1' : '0');
+  if (!_nlOn) { _nlDispatcher = null; _nlKey = ''; }
+  nlMsg(_nlOn ? 'natural-language command bar ON (experimental) — press ⌘K / Ctrl+K, then type a phrase' : 'natural-language command bar off');
+}
+
 function openPalette() {
   if (_palOpen) return; _palOpen = true;
   let ov = $('#palOverlay');
@@ -11862,12 +12019,25 @@ function renderPalette() {
   }
   scored.sort((a, b) => a.score - b.score);
   _palItems = scored.map((s) => s.c);
+  // EXPERIMENTAL: nothing matched by name → ask @gcu/dispatch what the phrase MEANT.
+  // It only ever adds a row that spells out the command and its arguments; Enter runs it.
+  if (_nlOn && !_palItems.length && q.length >= 4) {
+    if (!_nlDispatcher && !_nlBusy) { nlEnsureTrained().then(() => { if (_palOpen) renderPalette(); }); }
+    const prop = nlPropose($('#palInput').value.trim());
+    if (prop) _palItems = [prop];
+  }
   if (_palSel >= _palItems.length) _palSel = Math.max(0, _palItems.length - 1);
   const list = $('#palList'); list.textContent = '';
+  if (_nlOn && _nlBusy && !_palItems.length) {
+    const d = document.createElement('div'); d.className = 'pal-item';
+    d.textContent = 'learning this project\u2019s vocabulary\u2026';                  // ~1 s, once per session
+    list.appendChild(d); return;
+  }
   _palItems.forEach((c, i) => {
     const d = document.createElement('div'); d.className = 'pal-item' + (i === _palSel ? ' sel' : '');
     const g = document.createElement('span'); g.className = 'pal-g'; g.textContent = c.group;
     const t = document.createElement('span'); t.className = 'pal-t'; t.textContent = c.title;
+    if (c.nl) { d.classList.add('pal-nl'); const h = document.createElement('span'); h.className = 'pal-hint'; h.textContent = 'Enter to run'; d.appendChild(h); }
     d.append(g, t); d.onmousemove = () => { if (_palSel !== i) { _palSel = i; renderPalette(); } }; d.onclick = () => runPalette(i);
     list.appendChild(d);
     if (i === _palSel) d.scrollIntoView({ block: 'nearest' });
@@ -16396,7 +16566,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(hit);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

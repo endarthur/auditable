@@ -1702,9 +1702,11 @@ if (target === 'micro') {
     '../../ext/units/index.js': '#units',
     '../../ext/yaml/index.js': '#yaml',
     '../../ext/sheet/index.js': '#sheet',
+    '../../ext/dispatch/index.js': '#dispatch',       // @gcu/dispatch — the EXPERIMENTAL NL command bar (off by default)
   };
   const libs = [
     ['condenser', 'ext/condenser/index.js'],
+    ['dispatch',  'ext/dispatch/index.js'],           // session-trained NL → command (zero-dep, no WASM: Sealed holds)
     ['expr',      'ext/expr/index.js'],
     ['sluice',    'ext/sluice/index.js'],              // streaming column stats (the columns tab)
     ['loom',      'ext/loom/index.js'],                // the attribute table's canvas grid

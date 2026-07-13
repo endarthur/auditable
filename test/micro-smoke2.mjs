@@ -1623,6 +1623,42 @@ await p.close();
   await pk.close();
 }
 
+// ── §33: the EXPERIMENTAL natural-language bar — the SAFETY properties ──
+// Its accuracy is allowed to be imperfect; these three are not:
+//   (a) it is OFF by default — a cold visitor never meets a box that guesses
+//   (b) it PROPOSES, it never ACTS — nothing happens until you read it and press Enter
+//   (c) nonsense is refused, not guessed at
+{
+  const nl = await mkPage('sm2nl');
+  const r = await nl.evaluate(async () => {
+    let t = 'XC,YC,ZC,FE\n';
+    for (let k = 0; k < 4; k++) for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++)
+      t += `${5 + i * 10},${5 + j * 10},${1000 + k * 10},${40 + ((i + j + k) % 30)}\n`;
+    await window._micro.openBlob(new Blob([t]), 'deposit.csv', 'replace');
+    await new Promise((z) => setTimeout(z, 1200));
+
+    const offByDefault = { stored: localStorage.getItem('micro.nl'), proposes: !!window._micro.nlPropose('colour the model by FE') };
+
+    window._micro.nlSetEnabled(true);
+    await window._micro.nlEnsureTrained();
+    const said = window._micro.nlPropose('show blocks with FE above 60');
+    const before = document.querySelector('#filter').value;              // proposing must NOT act
+    const junk = window._micro.nlPropose('what is the airspeed velocity of an unladen swallow');
+    if (said) said.run();                                                // …running must
+    await new Promise((z) => setTimeout(z, 1200));
+    const after = document.querySelector('#filter').value;
+
+    window._micro.nlSetEnabled(false);
+    return { offByDefault, said: said && said.title, junk: junk && junk.title, before, after };
+  });
+  chk(`NL bar: OFF by default — nothing stored, nothing proposed (stored=${r.offByDefault.stored})`,
+    r.offByDefault.stored === null && r.offByDefault.proposes === false);
+  chk(`NL bar: it PROPOSES ("${r.said}") and does NOT act — filter stayed "${r.before}" until run, then "${r.after}"`,
+    /FE/.test(r.said || '') && r.before === '' && /FE/.test(r.after) && /60/.test(r.after));
+  chk('NL bar: nonsense is refused, not guessed at', r.junk == null);
+  await nl.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
