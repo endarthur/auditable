@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/dispatch",
+  "version": "0.1.0",
+  "description": "Session-trained natural-language → tool-call dispatch: a Snips-shaped resolver (averaged-perceptron intent + CRF-class slot tagger + gazetteers + deterministic per-kind assemblers) that trains IN THE BROWSER from the host session's own vocabulary in under a second. Tools are declarative (ten kinds); no shipped model, no network, explainable per decision — refusals return empty calls so the host degrades into its command palette. Born from an incubator where this beat a 26M finetuned transformer 50/52 to 3/24 on a frozen yardstick.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["nlu", "intent", "slot-filling", "perceptron", "crf", "gazetteer", "tool-calling", "command-bar", "on-device", "sealed", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gentropic/auditable.git",
+    "directory": "ext/dispatch"
+  },
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/dispatch",
+  "bugs": {
+    "url": "https://github.com/gentropic/auditable/issues"
+  }
+}
