@@ -67,7 +67,11 @@
     #rail a.on { color:var(--orange); border-left-color:var(--orange); }
     #rail a .n { display:inline-block; width:1.7em; color:var(--line); }
     #rail a.on .n { color:var(--orange); }
-    #rail .sep { height:1px; background:var(--line); margin:.7em 0 .7em 10px; }
+    #rail .part {
+      color:var(--dim); font-size:.9em; letter-spacing:.05em; text-transform:uppercase;
+      margin:1.15em 0 .35em 10px; padding-top:.7em; border-top:1px solid var(--line);
+    }
+    #rail .part:first-of-type { border-top:none; padding-top:0; margin-top:.2em; }
   }
 
   /* ── print / PDF profile (used by page.pdf() and Ctrl+P → Save as PDF) ──
@@ -724,18 +728,30 @@ params:
   var rail = document.getElementById('rail');
   var heads = [].slice.call(document.querySelectorAll('h2[id]'));
   if (!rail || !heads.length) return;
+  // The rail groups the flat section series into parts — reading structure
+  // only. Section numbers (and the PDF, the index, every §N cross-reference)
+  // are untouched; a proper renumbering into parts is a separate, later job.
+  var PARTS = {
+    what: 'Getting oriented',
+    view: 'Looking at the data',
+    calc: 'Working the data',
+    gt: 'Analysis',
+    grids: 'Producing & keeping',
+    sealed: 'The tool itself',
+    ref: 'Reference',
+  };
   var t = document.createElement('p');
   t.className = 'rail-t';
   t.textContent = 'Contents';
   rail.appendChild(t);
-  var links = heads.map(function (h, i) {
+  var links = heads.map(function (h) {
     var num = h.querySelector('.n');
     var n = num ? num.textContent : '';
-    // a divider where the appendices start (the numbering turns alphabetic)
-    if (i && /^[A-Z]$/.test(n) && !/^[A-Z]$/.test(heads[i - 1].querySelector('.n').textContent)) {
-      var sep = document.createElement('div');
-      sep.className = 'sep';
-      rail.appendChild(sep);
+    if (PARTS[h.id]) {
+      var lab = document.createElement('p');
+      lab.className = 'part';
+      lab.textContent = PARTS[h.id];
+      rail.appendChild(lab);
     }
     var a = document.createElement('a');
     a.href = '#' + h.id;
