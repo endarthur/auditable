@@ -104,6 +104,7 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   <span class="sp"></span>
   <button id="btnOpen">Open… (.dat / .csv)</button>
   <button id="btnSample">▸ sample data</button>
+  <button id="btnCluster" title="the GSLIB book's canonical 140-sample dataset">▸ cluster.dat</button>
 </header>
 <div id="app">
 <nav id="rail">
@@ -124,6 +125,10 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
     <button id="btnDh">Import drillholes…</button>
     <button id="btnDhSample">▸ sample drillholes (3D)</button>
     <span class="msg" id="dhMsg"></span>
+  </div>
+  <div class="row">
+    <button id="btnPar">Import .par…</button>
+    <span class="msg" id="parMsg"></span>
   </div>
   <div class="row" id="mapRow" style="display:none">
     <label>X <select id="mapX"></select></label>
@@ -231,6 +236,12 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   <div class="row">
     <button id="btnExpGrid">grid → CSV</button>
     <button id="btnExpModel">model → JSON</button>
+  </div>
+  <div class="row">
+    <button id="btnParGamv">gamv.par</button>
+    <button id="btnParKt3d">kt3d.par</button>
+    <button id="btnParSgsim">sgsim.par</button>
+    <button id="btnParDeclus">declus.par</button>
   </div>
   <div class="row"><span class="msg" id="exMsg"></span></div>
 </section>
@@ -829,6 +840,309 @@ function runSim() {
 }
 $('#btnSim').onclick = runSim;
 
+// ── GSLIB .par files: decades of course material and site workflows, readable ──
+// A .par is line-ORDERED: values first, free comment after. The PARAMETERS travel;
+// the file paths inside them point at somebody's 1997 disk and are ignored (and
+// said to be). Import fills the UI; export writes a .par real GSLIB can run.
+function parLines(text) {
+  const all = text.split(/\r?\n/);
+  const i = all.findIndex((l) => /START OF PARAMETERS/i.test(l));
+  return all.slice(i + 1).filter((l) => l.trim() !== '');
+}
+const parNums = (l) => {                                     // leading numeric tokens only
+  const out = [];
+  for (const t of String(l || '').trim().split(/\s+/)) {
+    const v = Number(t);
+    if (!Number.isFinite(v)) break;
+    out.push(v);
+  }
+  return out;
+};
+const VTYPE = { 1: 'spherical', 2: 'exponential', 3: 'gaussian', 4: 'power', 5: 'hole' };
+// structures come as PAIRS of lines: "it cc ang1 ang2 ang3" then "aahmax aahmin aavert"
+function parStructures(lines, i0, nst) {
+  const structures = [];
+  for (let k = 0; k < nst; k++) {
+    const a = parNums(lines[i0 + 2 * k]), b = parNums(lines[i0 + 2 * k + 1]);
+    structures.push({ type: VTYPE[a[0]] || 'spherical', contribution: a[1],
+      angle: a[2] || 0, angle2: a[3] || 0,
+      range: b[0], rangeMinor: b[1] ?? b[0], rangeVert: b[2] ?? b[0] });
+  }
+  return structures;
+}
+function applyModel(nugget, structures, applied) {
+  $('#mNug').value = nugget;
+  S.model.structures = structures;
+  renderStructures(); renderVario();
+  applied.push(`model: c₀=${nugget} + ${structures.length} structure${structures.length > 1 ? 's' : ''}`);
+}
+function importPar(name, text) {
+  const L = parLines(text);
+  const applied = [], ignored = ['data file paths (they point at another machine)'];
+  const kind = /kt3d/i.test(name) ? 'kt3d' : /sgsim/i.test(name) ? 'sgsim' : /gamv/i.test(name) ? 'gamv' : /declus/i.test(name) ? 'declus' : null;
+  if (!kind) { $('#parMsg').textContent = 'name the file after its program — kt3d.par, gamv.par, sgsim.par or declus.par'; $('#parMsg').className = 'msg bad'; return; }
+  try {
+    if (kind === 'gamv') {
+      const nlag = parNums(L[5])[0], xlag = parNums(L[6])[0], xltol = parNums(L[7])[0], ndir = parNums(L[8])[0];
+      $('#vgNlag').value = nlag; $('#vgLag').value = xlag; $('#vgTol').value = xltol;
+      $('#dirTable tbody').textContent = '';
+      for (let k = 0; k < ndir; k++) {
+        const [azm, atol, bwh, dip, dtol] = parNums(L[9 + k]);
+        addDir(azm || 0, atol ?? 90, dip || 0, dtol ?? 90, bwh >= 1e20 ? '' : bwh);
+      }
+      applied.push(`${nlag} lags × ${xlag}`, `${ndir} direction${ndir > 1 ? 's' : ''}`);
+      ignored.push('column numbers, variogram types (semivariogram assumed)');
+      showStep('secVario');
+    } else if (kind === 'declus') {
+      const mm = parNums(L[8]);                              // ncell cmin cmax
+      $('#dcN').value = Math.min(60, mm[0] || 20); $('#dcMin').value = mm[1]; $('#dcMax').value = mm[2];
+      applied.push(`cell sweep ${mm[1]} … ${mm[2]} × ${mm[0]}`);
+      showStep('secDeclus');
+    } else if (kind === 'kt3d') {
+      const gx = parNums(L[9]), gy = parNums(L[10]), gz = parNums(L[11]);
+      $('#kNx').value = gx[0]; $('#kSx').value = gx[2];
+      $('#kNy').value = gy[0]; $('#kSy').value = gy[2];
+      if (is3D()) { $('#kNz').value = gz[0]; $('#kSz').value = gz[2]; }
+      const dis = parNums(L[12]); $('#kDisc').value = Math.max(1, dis[0] || 1);
+      const nd = parNums(L[13]); $('#kMin').value = nd[0]; $('#kMax').value = nd[1];
+      const rad = parNums(L[15]); $('#kRad').value = rad[0];
+      const kt = parNums(L[17]);
+      $('#kType').value = kt[0] === 0 ? 'SK' : 'OK';
+      $('#kType').dispatchEvent(new Event('change'));
+      if (kt[0] === 0) $('#kMean').value = kt[1] || 0;
+      if (kt[0] > 1) ignored.push(`ktype ${kt[0]} (KT/LVM) → OK`);
+      applied.push(`grid ${gx[0]}×${gy[0]}${gz[0] > 1 ? '×' + gz[0] : ''}`, `search r=${rad[0]}, n=${nd[0]}…${nd[1]}`, kt[0] === 0 ? 'SK' : 'OK');
+      const nc = parNums(L[22]);
+      applyModel(nc[1] || 0, parStructures(L, 23, nc[0]), applied);
+      ignored.push('grid ORIGINS (the grid anchors to the loaded data)', 'octants, drift terms, anisotropic search radii');
+      showStep('secKrige');
+    } else if (kind === 'sgsim') {
+      const gx = parNums(L[15]), gy = parNums(L[16]), gz = parNums(L[17]);
+      $('#kNx').value = gx[0]; $('#kSx').value = gx[2];
+      $('#kNy').value = gy[0]; $('#kSy').value = gy[2];
+      if (is3D()) { $('#kNz').value = gz[0]; $('#kSz').value = gz[2]; }
+      $('#sgSeed').value = parNums(L[18])[0] || 69069;
+      const nd = parNums(L[19]); $('#kMax').value = nd[1] || 16;
+      // the search radius + the variogram: SCAN (sgsim variants shuffle the middle)
+      let iRad = -1, iNst = -1;
+      for (let i = 20; i < L.length - 1; i++) {
+        const a = parNums(L[i]);
+        if (iRad < 0 && a.length === 3 && a[0] > 0 && a[1] > 0 && a[2] > 0 && a[0] >= a[1]) iRad = i;
+        if (a.length >= 2 && Number.isInteger(a[0]) && a[0] >= 1 && a[0] <= 4 && a[1] >= 0 && a[1] <= 1.5) {
+          const st1 = parNums(L[i + 1]);
+          if (st1.length >= 2 && st1[0] >= 1 && st1[0] <= 5) { iNst = i; break; }
+        }
+      }
+      if (iRad >= 0) $('#kRad').value = parNums(L[iRad])[0];
+      applied.push(`grid ${gx[0]}×${gy[0]}${gz[0] > 1 ? '×' + gz[0] : ''}`, `seed ${$('#sgSeed').value}`);
+      if (iNst >= 0) {
+        const nc = parNums(L[iNst]);
+        applyModel(nc[1] || 0, parStructures(L, iNst + 1, nc[0]), applied);
+        applied.push('(sgsim variograms are NORMAL-SCORE space — sill ≈ 1)');
+      } else ignored.push('variogram (could not locate the nst line in this variant)');
+      ignored.push('transform/tail options (nscore runs here with its own table)', 'nsim (one realization per click; bump the counter)');
+      showStep('secSim');
+    }
+    $('#parMsg').textContent = `${name}: applied ${applied.join(' · ')} — ignored: ${ignored.join('; ')}`;
+    $('#parMsg').className = 'msg go';
+  } catch (e) { $('#parMsg').textContent = `${name}: ${e.message}`; $('#parMsg').className = 'msg bad'; }
+}
+$('#btnPar').onclick = () => {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.par,.txt';
+  inp.onchange = async () => { const f = inp.files[0]; if (f) importPar(f.name, await f.text()); };
+  inp.click();
+};
+
+// ── .par EXPORT: the current session as files real GSLIB can run ──
+function parVario(m) {
+  const inv = { spherical: 1, exponential: 2, gaussian: 3, power: 4, hole: 5 };
+  let out = `${m.structures.length}    ${m.nugget}                      -nst, nugget effect\n`;
+  for (const st of m.structures) {
+    out += `${inv[st.type] || 1}    ${st.contribution}  ${st.angle || 0}  ${st.angle2 || 0}  0.0     -it,cc,ang1,ang2,ang3\n`;
+    out += `         ${st.range}  ${st.rangeMinor || st.range}  ${st.rangeVert || st.range}     -a_hmax, a_hmin, a_vert\n`;
+  }
+  return out;
+}
+function exportPar(kind) {
+  const label = ($('#drop').textContent.match(/^\S+/) || ['data.dat'])[0];
+  const g = gridFromInputs();
+  const m = modelSpec();
+  const ic = { x: S.map.x + 1, y: S.map.y + 1, z: is3D() ? S.map.z + 1 : 0, v: S.map.v + 1 };
+  let t = '';
+  if (kind === 'gamv') {
+    const dirs = dirRows();
+    t = `                  Parameters for GAMV\n                  *******************\n\nSTART OF PARAMETERS:\n${label}                        -file with data\n${ic.x}   ${ic.y}   ${ic.z}                      -columns for X, Y, Z coordinates\n1   ${ic.v}                            -number of variables, column numbers\n-1.0e21   1.0e21               -trimming limits\ngamv.out                       -file for variogram output\n${$('#vgNlag').value}                             -number of lags\n${$('#vgLag').value}                            -lag separation distance\n${$('#vgTol').value}                            -lag tolerance\n${dirs.length}                              -number of directions\n` +
+      dirs.map((d) => `${d.azimuth}  ${d.tolerance}  ${d.bandwidthH >= 1e20 ? '1.0e21' : d.bandwidthH}  ${d.dip}  ${d.dipTolerance}  1.0e21   -azm,atol,bandh,dip,dtol,bandv\n`).join('') +
+      `0                              -standardize sills? (0=no, 1=yes)\n1                              -number of variograms\n1   1   1                      -tail var., head var., variogram type\n`;
+  } else if (kind === 'kt3d') {
+    const kt = $('#kType').value === 'SK' ? 0 : 1;
+    t = `                  Parameters for KT3D\n                  *******************\n\nSTART OF PARAMETERS:\n${label}                        -file with data\n0  ${ic.x}  ${ic.y}  ${ic.z}  ${ic.v}  0         -columns for DH,X,Y,Z,var,sec var\n-1.0e21   1.0e21               -trimming limits\n0                              -option: 0=grid, 1=cross, 2=jackknife\nxvk.dat                        -file with jackknife data\n1   2   0    3    0            -columns for X,Y,Z,vr and sec var\n0                              -debugging level: 0,1,2,3\nkt3d.dbg                       -file for debugging output\nkt3d.out                       -file for kriged output\n${g.nx}   ${g.xmn}   ${g.xsiz}          -nx,xmn,xsiz\n${g.ny}   ${g.ymn}   ${g.ysiz}          -ny,ymn,ysiz\n${g.nz}   ${g.zmn}   ${g.zsiz}          -nz,zmn,zsiz\n${$('#kDisc').value}    ${$('#kDisc').value}    ${is3D() ? $('#kDisc').value : 1}      -x,y and z block discretization\n${$('#kMin').value}    ${$('#kMax').value}               -min, max data for kriging\n0                              -max per octant (0-> not used)\n${$('#kRad').value}  ${$('#kRad').value}  ${$('#kRad').value}      -maximum search radii\n0.0   0.0   0.0                -angles for search ellipsoid\n${kt}     ${+$('#kMean').value || 0}                 -0=SK,1=OK,2=non-st SK,3=exdrift\n0 0 0 0 0 0 0 0 0              -drift: x,y,z,xx,yy,zz,xy,xz,zy\n0                              -0, variable; 1, estimate trend\nextdrift.dat                   -gridded file with drift/mean\n4                              -column number in gridded file\n` + parVario(m);
+  } else if (kind === 'sgsim') {
+    t = `                  Parameters for SGSIM\n                  ********************\n\nSTART OF PARAMETERS:\n${label}                        -file with data\n${ic.x}  ${ic.y}  ${ic.z}  ${ic.v}  0  0          -columns for X,Y,Z,vr,wt,sec.var.\n-1.0e21   1.0e21               -trimming limits\n1                              -transform the data (0=no, 1=yes)\nsgsim.trn                      -file for output trans table\n0                              -consider ref. dist (0=no, 1=yes)\nhistsmth.out                   -file with ref. dist distribution\n1  2                           -columns for vr and wt\n0.0    100.0                   -zmin,zmax(tail extrapolation)\n1      0.0                     -lower tail option, parameter\n1     100.0                    -upper tail option, parameter\n0                              -debugging level: 0,1,2,3\nsgsim.dbg                      -file for debugging output\nsgsim.out                      -file for simulation output\n1                              -number of realizations to generate\n${g.nx}   ${g.xmn}   ${g.xsiz}          -nx,xmn,xsiz\n${g.ny}   ${g.ymn}   ${g.ysiz}          -ny,ymn,ysiz\n${g.nz}   ${g.zmn}   ${g.zsiz}          -nz,zmn,zsiz\n${$('#sgSeed').value}                       -random number seed\n0     ${$('#kMax').value}                  -min and max original data for sim\n12                             -number of simulated nodes to use\n1                              -assign data to nodes (0=no, 1=yes)\n1     3                        -multiple grid search (0=no, 1=yes),num\n0                              -maximum data per octant (0=not used)\n${$('#kRad').value}  ${$('#kRad').value}  ${$('#kRad').value}      -maximum search radii\n0.0   0.0   0.0                -angles for search ellipsoid\n51    51    11                 -size of covariance lookup table\n0     0.60   1.0               -ktype: 0=SK,1=OK,2=LVM,3=EXDR,4=COLC\nnodata.dat                     -file with LVM, EXDR, or COLC variable\n4                              -column for secondary variable\n` + parVario(m);
+  } else if (kind === 'declus') {
+    t = `                  Parameters for DECLUS\n                  *********************\n\nSTART OF PARAMETERS:\n${label}                        -file with data\n${ic.x}   ${ic.y}   ${ic.z}   ${ic.v}               -columns for X, Y, Z, and variable\n-1.0e21   1.0e21               -trimming limits\ndeclus.sum                     -file for summary output\ndeclus.out                     -file for output with data & weights\n1.0   1.0                      -Y and Z cell anisotropy (Ysize=size*Yanis)\n0                              -0=look for minimum declustered mean (1=max)\n${$('#dcN').value}  ${$('#dcMin').value}  ${$('#dcMax').value}               -number of cell sizes, min size, max size\n8                              -number of origin offsets\n`;
+  }
+  download(kind + '.par', t, 'text/plain');
+  $('#exMsg').textContent = `saved ${kind}.par — runnable by real GSLIB (against your exported data)`;
+}
+
+// cluster.dat — the GSLIB book's canonical dataset (Deutsch & Journel), embedded
+// verbatim. Authenticated against the book's fingerprints: n=140, Primary mean
+// 4.3504, max 58.32, and the file's own Declustering Weight column reproduces the
+// published declustered mean (2.528).
+// License (GSLIB, 1996): "Copyright (C) 1996, The Board of Trustees of the Leland
+// Stanford Junior University. All rights reserved... Everyone is granted permission
+// to copy, modify and redistribute the programs in GSLIB, but only under the
+// condition that this notice and the above copyright notice remain intact."
+const CLUSTER_DAT = `Clustered 140 primary and secondary data
+5
+Xlocation
+Ylocation
+Primary
+Secondary
+Declustering Weight
+39.5 18.5   .06   .22 1.619
+ 5.5  1.5   .06   .27 1.619
+38.5  5.5   .08   .40 1.416
+20.5  1.5   .09   .39 1.821
+27.5 14.5   .09   .24 1.349
+40.5 21.5   .10   .48  .944
+15.5  3.5   .10   .21 1.214
+ 6.5 25.5   .11   .36 1.619
+38.5 21.5   .11   .22 1.146
+23.5 18.5   .16   .30 1.821
+  .5 25.5   .16   .31 1.349
+ 9.5 19.5   .17   .30 1.012
+36.5 43.5   .18  1.60  .944
+21.5  5.5   .19   .59 1.416
+13.5  3.5   .19   .18 1.146
+40.5  7.5   .19   .75 1.012
+31.5 17.5   .22   .44 1.619
+46.5 40.5   .24   .58 1.821
+10.5  7.5   .26   .54 1.281
+28.5 11.5   .28   .62 1.551
+ 8.5  7.5   .28   .97 1.281
+47.5   .5   .31  2.88 2.023
+ 4.5 37.5   .32   .35  .944
+14.5 21.5   .33   .48 1.619
+22.5 48.5   .34   .48 2.023
+18.5  6.5   .34   .23 1.619
+ 3.5 38.5   .34   .51  .944
+11.5 46.5   .40   .47 1.079
+31.5 26.5   .45   .74 1.619
+14.5 29.5   .46  2.52 1.025
+14.5 43.5   .51  1.21 1.079
+38.5 28.5   .57  5.55 1.083
+45.5 14.5   .62  2.30 1.281
+ 4.5 30.5   .65  1.06 1.416
+ 6.5 41.5   .67   .43 1.821
+ 7.5 12.5   .71  2.07 1.551
+26.5 23.5   .79  1.40 1.281
+ 8.5 45.5   .81   .80 1.821
+14.5 46.5   .83   .72 1.079
+13.5 24.5   .84   .60 1.012
+26.5  1.5   .89  1.01 1.619
+33.5  7.5   .92   .99 1.619
+45.5 22.5   .93  1.29 1.416
+48.5 25.5   .94  1.06 1.619
+35.5 10.5   .96   .66 1.214
+34.5 14.5   .99   .52 1.214
+13.5 39.5   .99  1.53 1.821
+ 7.5 18.5  1.01   .67 1.214
+15.5 27.5  1.02   .66 1.146
+ 3.5 33.5  1.10  1.09 1.146
+11.5 15.5  1.11   .42 1.315
+22.5 30.5  1.21  2.16 1.416
+45.5 29.5  1.21  2.07 1.619
+13.5 12.5  1.27   .61 1.517
+22.5 11.5  1.34  2.15 1.821
+17.5 34.5  1.36  2.58 1.619
+39.5 43.5  1.37  1.45 1.146
+ 3.5 23.5  1.38   .99  .944
+30.5 22.5  1.38  1.37 1.416
+46.5 13.5  1.66  4.68 1.079
+30.5  9.5  1.70  1.30 1.349
+27.5 32.5  1.71  3.61  .944
+12.5 34.5  1.78  6.25 1.497
+25.5  4.5  1.81  1.37 1.416
+27.5 34.5  1.82  4.73 1.146
+45.5  6.5  1.89  1.89 2.023
+ 3.5 47.5  1.96  3.47 2.023
+33.5 31.5  1.98  4.96  .571
+41.5 26.5  2.13  1.80 1.281
+19.5 20.5  2.17  1.41 1.416
+  .5 41.5  2.33  1.98 1.619
+ 5.5 22.5  2.34  1.25  .944
+43.5 10.5  2.47  1.80  .877
+41.5 45.5  2.75  2.65 1.619
+28.5 42.5  2.76  7.66  .573
+21.5 34.5  2.84  3.66 1.416
+16.5 13.5  2.99  2.74  .870
+23.5 24.5  3.04  1.66 1.079
+ 2.5  1.5  3.33  1.89 1.619
+47.5 44.5  3.35  2.94 1.821
+39.5 38.5  3.51   .87  .958
+46.5 34.5  3.81  4.44 2.023
+35.5 45.5  4.60  4.70  .787
+25.5 25.5  4.89  2.10 1.281
+28.5 44.5  5.05  5.18  .587
+19.5 42.5  5.15  2.19 2.023
+38.5 36.5  5.31  3.29  .347
+ 2.5  9.5  6.26 17.02  .292
+32.5 36.5  6.41  2.45  .348
+  .5  8.5  6.49 14.95  .328
+31.5 45.5  7.53 10.21  .306
+ 9.5 29.5  8.03  5.21  .445
+39.5 31.5  8.34  8.02  .341
+17.5 15.5  9.08  3.32  .445
+ 2.5 14.5 10.27  5.67  .429
+30.5 41.5 17.19 10.10  .360
+35.5 32.5 18.76 10.76  .261
+37.5 36.5  3.64  3.86  .311
+38.5 35.5  3.59  4.99  .324
+38.5 37.5  9.08  1.68  .499
+39.5 36.5  2.22  3.23  .482
+ 1.5  9.5  7.56 19.74  .272
+ 2.5  8.5  8.90 12.32  .348
+ 2.5 10.5  2.55 15.91  .309
+ 3.5  9.5  7.92 12.01  .444
+31.5 36.5  4.29  2.49  .438
+32.5 35.5  2.33  2.30  .335
+32.5 37.5  3.21  2.75  .510
+33.5 36.5  7.71  2.82  .315
+  .5  7.5 12.74 14.04  .682
+  .5  9.5 15.77 22.46  .272
+ 1.5  8.5 20.35 14.09  .328
+30.5 45.5  5.54  9.00  .339
+31.5 44.5  5.38  9.08  .306
+31.5 46.5 15.77 11.87  .665
+32.5 45.5 10.20  9.61  .360
+ 8.5 29.5  9.01  4.38  .566
+ 9.5 28.5  9.27  4.40  .769
+ 9.5 30.5  3.56  5.84  .546
+10.5 29.5  2.52  6.19  .479
+38.5 31.5 18.64 11.79  .298
+39.5 30.5  7.94  7.09  .425
+39.5 32.5  2.28  9.32  .341
+40.5 31.5  2.51  4.96  .493
+16.5 15.5 19.44  3.60  .445
+17.5 14.5  2.96  3.17  .546
+17.5 16.5  2.97  3.62  .566
+18.5 15.5  4.92  2.86  .769
+ 1.5 14.5  5.54  5.92  .733
+ 2.5 13.5  8.71 11.72  .345
+ 2.5 15.5  2.74  4.07  .789
+ 3.5 14.5  3.61  5.03  .497
+29.5 41.5 58.32 10.26  .450
+30.5 40.5 11.08  9.31  .396
+30.5 42.5 21.08 10.26  .326
+31.5 41.5 22.75  8.21  .427
+34.5 32.5  9.42  6.76  .413
+35.5 31.5  8.48 12.78  .419
+35.5 33.5  2.82  9.21  .271
+36.5 32.5  5.26 12.40  .252
+`;
+
 // ── the sample: a clustered synthetic deposit (seeded — same numbers every time) ──
 function sampleData() {
   let a = 987654321;
@@ -858,6 +1172,8 @@ function sampleData() {
 
 // ── wiring ────────────────────────────────────────────────────────────────────
 $('#btnSample').onclick = sampleData;
+$('#btnCluster').onclick = () => openText('cluster.dat', CLUSTER_DAT);
+for (const k of ['gamv', 'kt3d', 'sgsim', 'declus']) $('#btnPar' + k[0].toUpperCase() + k.slice(1)).onclick = () => exportPar(k);
 $('#btnDeclus').onclick = runDeclus;
 $('#btnVario').onclick = runVario;
 $('#btnKrige').onclick = runKrige;
@@ -877,7 +1193,7 @@ document.body.addEventListener('drop', async (e) => {
 addDir(0, 90);                                               // omnidirectional default
 
 // the automation surface (the smokes drive this)
-window._gslib = { openText, sampleData, sampleDrillholes, importDrillholes, runDeclus, runVario, runKrige, runSim, addDir, showStep, S, modelSpec,
+window._gslib = { openText, sampleData, sampleDrillholes, importDrillholes, runDeclus, runVario, runKrige, runSim, addDir, showStep, S, modelSpec, importPar, exportPar, CLUSTER_DAT,
   viewerInfo: () => ({ chunks: V.renderer ? V.renderer.chunkCount : 0, hasBlocks: !!S.krige, hasReal: !!S.realization }) };
 </script>
 </body>
