@@ -201,6 +201,7 @@ ext/wasm4/build/
 ext/gsjs/src/_wasm.js
 lamina.html
 micro.html
+gslib.html
 moncad.html
 tools/micro/docs/shots/
 tools/micro/docs/micro-manual.pdf

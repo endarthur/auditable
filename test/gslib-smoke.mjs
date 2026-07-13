@@ -1,0 +1,102 @@
+// gslib.wasm — the committed app smoke (like micro-smoke / lamina-smoke; not in `npm test`).
+// Default target is the BUILT gslib.html (run `node build.js --target=gslib` first);
+// pass `dev` to drive tools/gslib/index.html instead.
+//   node test/gslib-smoke.mjs [dev]
+// Pipeline: boot → sample → declus → gamv → model overlay → OK/SK krige → GeoEAS import.
+import { chromium } from 'playwright';
+import http from 'http'; import { readFile } from 'fs/promises'; import { extname } from 'path';
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript' };
+const srv = http.createServer(async (rq, rs) => { try { const p = decodeURIComponent(new URL(rq.url, 'http://x').pathname);
+  rs.writeHead(200, { 'content-type': MIME[extname(p)] || 'application/octet-stream' }); rs.end(await readFile('.' + p)); } catch { rs.writeHead(404); rs.end(); } });
+await new Promise((r) => srv.listen(0, '127.0.0.1', r)); const PORT = srv.address().port;
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log('  ok  ', m); } else { fail++; console.log('  FAIL', m); } };
+const b = await chromium.launch();
+const p = await b.newPage();
+const errs = [];
+p.on('pageerror', (e) => errs.push(e.message));
+p.on('console', (m) => { if (m.type() === 'error') errs.push('console: ' + m.text().slice(0, 140)); });
+await p.goto(`http://127.0.0.1:${PORT}/${process.argv[2] === 'dev' ? 'tools/gslib/index.html' : 'gslib.html'}`);
+await p.waitForFunction(() => window._gslib, null, { timeout: 15000 }).catch(() => {});
+ok(await p.evaluate(() => !!window._gslib), 'the app boots (wasm instantiated in the page)');
+
+console.log('\n1. sample data → stats + histogram + location map');
+const d1 = await p.evaluate(() => {
+  window._gslib.sampleData();
+  return { rows: window._gslib.S.rows.length, canvases: document.querySelectorAll('#dataPlots canvas').length,
+           variance: window._gslib.S.variance };
+});
+ok(d1.rows === 210 && d1.canvases >= 2, `${d1.rows} samples, ${d1.canvases} plots, variance ${d1.variance && d1.variance.toFixed(3)}`);
+
+console.log('\n2. declus — the clustered mean must drop toward the truth');
+const d2 = await p.evaluate(() => {
+  window._gslib.runDeclus();
+  const naive = window._gslib.S.rows.reduce((a, r) => a + r[2], 0) / window._gslib.S.rows.length;
+  return { naive, dec: window._gslib.S.declusMean, msg: document.querySelector('#dcMsg').textContent,
+           plot: document.querySelectorAll('#dcPlots canvas').length };
+});
+console.log(`    naive ${d2.naive.toFixed(4)} → declustered ${d2.dec && d2.dec.toFixed(4)}`);
+ok(d2.dec != null && d2.dec < d2.naive, 'declustered mean < naive mean (clusters sit on highs — this is the whole point)');
+ok(d2.plot >= 1, 'the cell-size sweep plotted');
+
+console.log('\n3. gamv — experimental variogram rises from nugget toward the sill');
+const d3 = await p.evaluate(() => {
+  window._gslib.runVario();
+  const { r, lags } = window._gslib.S.vario;
+  const nlp2 = lags.n + 2;
+  const pts = [];
+  for (let k = 0; k < nlp2; k++) if (r.npairs[k] > 0 && r.distance[k] > 0) pts.push([r.distance[k], r.value[k]]);
+  return { pts, canvases: document.querySelectorAll('#vgPlots canvas').length };
+});
+console.log(`    ${d3.pts.length} lags: γ(${d3.pts[0][0].toFixed(1)})=${d3.pts[0][1].toFixed(3)} … γ(${d3.pts.at(-1)[0].toFixed(1)})=${d3.pts.at(-1)[1].toFixed(3)}`);
+ok(d3.pts.length >= 6, `${d3.pts.length} populated lags`);
+ok(d3.pts[0][1] < d3.pts.at(-1)[1], 'γ rises with distance (spatial correlation exists)');
+ok(d3.canvases >= 1, 'variogram plotted with the model overlay');
+
+console.log('\n4. krige — OK on a 50×50 grid');
+const d4 = await p.evaluate(() => {
+  window._gslib.runKrige();
+  const K = window._gslib.S.krige;
+  if (!K) return null;
+  let informed = 0, sum = 0, mn = Infinity, mx = -Infinity, negVar = 0;
+  for (let i = 0; i < K.est.length; i++) {
+    if (K.est[i] > -1e20) { informed++; sum += K.est[i]; if (K.est[i] < mn) mn = K.est[i]; if (K.est[i] > mx) mx = K.est[i]; }
+    if (K.var[i] > -1e20 && K.var[i] < -1e-6) negVar++;
+  }
+  return { n: K.est.length, informed, mean: sum / informed, mn, mx, negVar,
+           msg: document.querySelector('#kMsg').textContent, maps: document.querySelectorAll('#kPlots canvas').length };
+});
+console.log(`    ${d4 && d4.msg}`);
+ok(d4 && d4.informed > d4.n * 0.8, `${d4.informed}/${d4.n} blocks estimated`);
+ok(d4 && d4.mn > 0 && d4.mx < 20, `estimates within data range (${d4.mn.toFixed(2)}…${d4.mx.toFixed(2)})`);
+ok(d4 && d4.negVar === 0, 'no negative kriging variances');
+ok(d4 && d4.maps === 2, 'estimate + variance maps rendered');
+
+console.log('\n5. SK vs OK differ; the model export round-trips');
+const d5 = await p.evaluate(() => {
+  const okMean = window._gslib.S.krige.est.filter((x) => x > -1e20).reduce((a, b) => a + b, 0);
+  document.querySelector('#kType').value = 'SK';
+  document.querySelector('#kType').dispatchEvent(new Event('change'));
+  document.querySelector('#kMean').value = window._gslib.S.declusMean;
+  window._gslib.runKrige();
+  const skMean = window._gslib.S.krige.est.filter((x) => x > -1e20).reduce((a, b) => a + b, 0);
+  return { differ: Math.abs(okMean - skMean) > 1e-9, model: window._gslib.modelSpec() };
+});
+ok(d5.differ, 'SK (with the declustered mean) differs from OK');
+ok(d5.model.structures.length >= 1 && d5.model.structures[0].contribution > 0, `model spec exports (${d5.model.structures.length} structure)`);
+
+console.log('\n6. GeoEAS import');
+const d6 = await p.evaluate(() => {
+  const dat = 'toy data\n3\nXloc\nYloc\nGrade\n' +
+    Array.from({ length: 30 }, (_, i) => `${(i % 6) * 10} ${Math.floor(i / 6) * 10} ${(1 + (i % 7) * 0.3).toFixed(2)}`).join('\n') + '\n';
+  window._gslib.openText('toy.dat', dat);
+  return { rows: window._gslib.S.rows.length, cols: window._gslib.S.cols.join(',') };
+});
+ok(d6.rows === 30 && d6.cols === 'Xloc,Yloc,Grade', `GeoEAS parsed: ${d6.rows} rows, cols [${d6.cols}]`);
+
+console.log('\n7. page errors');
+ok(errs.length === 0, errs.length ? errs.slice(0, 3).join(' | ') : 'none');
+
+console.log(`\n${pass} passed, ${fail} failed`);
+await p.close(); await b.close(); srv.close();
+process.exit(fail ? 1 : 0);

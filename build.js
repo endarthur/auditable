@@ -1798,6 +1798,61 @@ if (target === 'micro') {
 // off-thread scan worker can import it (same-origin blob → module-call).
 // Output: lamina.html (standalone, offline). The PWA shell (manifest/sw/icon)
 // is added by the gentropic/lamina deploy repo, exactly as works does.
+if (target === 'gslib') {
+  // gslib.wasm — GSLIB in a browser. Two libs + the inline app from tools/gslib/index.html.
+  // WASM is ALLOWED here (the gslib bundle embeds atra-compiled bytecode) and AUDITABLE:
+  // the .atra source + the compiler are in this repo, so the bytes are reproducible.
+  // Seal's networkless+wasm profile (the 4th) isn't wired yet — emit is skipped, honestly.
+  const dir = path.join(__dirname, 'tools/gslib');
+  const SPEC = { '@gcu/gslib': '#gslib', '@gcu/plot': '#plot' };
+  const libs = [
+    ['gslib', 'ext/gslib/index.js'],              // atra→Wasm GSLIB, bytes embedded — the Fortran is the spec
+    ['plot',  'ext/plot/index.js'],
+  ];
+  const modules = [];
+  for (const [name, rel] of libs) {
+    const lp = path.join(__dirname, rel);
+    if (!fs.existsSync(lp)) { console.error(`Error: ${rel} not found — build the ext package first.`); process.exit(1); }
+    modules.push({ name, source: fs.readFileSync(lp, 'utf8').replace(/^\n+/, '').replace(/\n+$/, '') });
+  }
+  let html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
+  const appMatch = html.match(/<script type="module">([\s\S]*?)<\/script>\s*<\/body>/);
+  if (!appMatch) { console.error('Error: tools/gslib/index.html — inline module script not found.'); process.exit(1); }
+  let appSrc = appMatch[1];
+  for (const [from, to] of Object.entries(SPEC)) appSrc = appSrc.split(`from '${from}'`).join(`from '${to}'`);
+  modules.push({ name: 'app', source: appSrc.trim() });
+
+  const entries = modules.map((m) =>
+    JSON.stringify(m.name) + ': ' + JSON.stringify(m.source).replace(/<\/script>/gi, '<\\/script>'));
+  const order = JSON.stringify(modules.map((m) => m.name));
+  const boot =
+    '(async () => {\n' +
+    'const _S = {' + entries.join(',') + '};\n' +
+    'const _O = ' + order + ';\n' +
+    'const _U = {};\n' +
+    "for (const n of _O) _U[n] = URL.createObjectURL(new Blob([_S[n] + '\\n//# sourceURL=gslib/' + n + '.js\\n'], { type: 'application/javascript' }));\n" +
+    "const _m = document.createElement('script'); _m.type = 'importmap';\n" +
+    'const _im = {}; for (const n of _O) _im["#" + n] = _U[n];\n' +
+    "_m.textContent = JSON.stringify({ imports: _im }); document.body.appendChild(_m);\n" +
+    'for (const n of _O) await import(_U[n]);\n' +
+    '_m.remove();\n' +
+    '})();\n';
+
+  const gsVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'ext/gslib/package.json'), 'utf8')).version || '0.0.0';
+  const gsBuildId = require('crypto').createHash('sha256').update(boot).digest('hex').slice(0, 7);
+  const gsStamp = `${gsVersion} · ${gsBuildId} · ${buildDateFromGit()}`;
+
+  html = html.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
+  html = html.replace(/<script type="module">[\s\S]*?<\/script>\s*(?=<\/body>)/, () => `<script>\n${boot}\n</script>\n`);
+  html = html.replace('__GSLIB_BUILD__', gsStamp);
+
+  const outPath = path.join(__dirname, 'gslib.html');
+  fs.writeFileSync(outPath, html);
+  console.log(`Built gslib.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB in the clear, ${modules.length} modules) — build ${gsStamp}`);
+  console.log('seal: SKIPPED — the networkless+wasm profile is not wired yet (ext/seal SPEC roadmap)');
+  return;
+}
+
 if (target === 'lamina') {
   const lamDir = path.join(__dirname, 'tools/lamina');
   const lamJsDir = path.join(lamDir, 'js');
