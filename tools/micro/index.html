@@ -3246,7 +3246,7 @@ function openGradeTonnage(L, ropts) {
     const seg = document.createElement('div'); seg.className = 'sw-seg'; seg.title = 'all rows · rows matching each layer\'s current filter · the 3D selection (re-runs as it changes)';
     for (const [v, t] of [['all', 'all'], ['filtered', 'filt'], ['selection', 'sel']]) { const bt = document.createElement('button'); bt.className = 'sw-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; buildRail(); run(); }; seg.append(bt); } scRow.append(scL, seg); vSec.append(scRow);
     vSec.append(rangesRow(st, () => { if (st.scan) plot(); }, { x: 'cutoff', l: 't', r: 'grade' }));
-    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `gt-${(L.label || L.name).replace(/\.[^.]+$/, '')}.png`, tableTSV)); vSec.append(exRow);
+    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `gt-${(L.label || L.name).replace(/\.[^.]+$/, '')}.png`, tableTSV, 'grade-tonnage')); vSec.append(exRow);
     rail.append(vSec);
     // ── Footer: Run + save-as-recipe + stale + progress ──
     const foot = document.createElement('div'); foot.className = 'sw-foot';
@@ -3322,24 +3322,32 @@ function rangesFromCfg(r) {
 // export / copy a chart canvas (PNG at its dpr-scaled resolution); tableFn,
 // when given, adds a TSV copy of the computed NUMBERS (what lands in memos)
 // a result table (TSV) → a table layer in the project
+// `title` may be a PATH — "swaths/FE drift" files the result into a swaths group
 async function resultToLayer(title, tsv, lineageOp) {
   if (!tsv || !tsv.trim()) { $('#meta').textContent = 'no table to keep'; return null; }
-  const name = `${recipeSlug(title)}.tsv`;
+  const leaf = String(title).split('/').pop().trim() || 'result';
+  const name = `${recipeSlug(leaf)}.tsv`;
   const blob = new Blob([tsv], { type: 'text/tab-separated-values' });
   await openBlob(blob, name, 'add', null, { asKind: 'table', lineage: lineageOp ? mkLineage(lineageOp.op, lineageOp.params || {}, lineageOp.sources || []) : undefined });
   const L = activeLayer();
-  if (L) { L.label = title; renderLayers(); }
-  $('#meta').textContent = `${title} → a table layer (${L && L.docs.tableDoc ? L.docs.tableDoc.header.count.toLocaleString() : '?'} rows) — filter it, join it, export it`;
+  if (L) fileLayerByPath(L, title);                        // path → group; plain name → just the label
+  const rows = L && L.docs.tableDoc ? L.docs.tableDoc.header.count.toLocaleString() : '?';
+  $('#meta').textContent = `${title} → a table layer (${rows} rows) — filter it, join it, export it`;
   markProjectDirty();
   return L;
 }
-function plotExportBtns(cv, nameFn, tableFn) {
+function plotExportBtns(cv, nameFn, tableFn, group) {
   if (tableFn) setTimeout(() => { const h = cv.closest('.fwin'); if (h) h._tableTSV = tableFn; });   // routines read the table from here
   const wrap = document.createElement('span'); wrap.className = 'pp-exp';
   const save = document.createElement('button'); save.className = 'awin-btn'; save.textContent = '⤓ png'; save.title = 'save the plot as PNG';
   save.onclick = () => cv.toBlob((blob) => { if (!blob) return; const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nameFn(); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); $('#meta').textContent = `saved ${nameFn()}`; }, 'image/png');
   const keep = document.createElement('button'); keep.className = 'awin-btn'; keep.textContent = '⇥ layer'; keep.title = 'keep the result as a TABLE LAYER — filter it, join it, compare it against another run';
-  keep.onclick = async () => { const t = tableFn && tableFn(); if (!t) { $('#meta').textContent = 'run it first — there is no table yet'; return; } await resultToLayer(nameFn().replace(/\.png$/i, ''), t); };
+  keep.onclick = async () => {
+    const t = tableFn && tableFn();
+    if (!t) { $('#meta').textContent = 'run it first — there is no table yet'; return; }
+    const leaf = nameFn().replace(/\.png$/i, '');
+    await resultToLayer(group ? `${group}/${leaf}` : leaf, t);   // grouped by the kind of analysis
+  };
   const copy = document.createElement('button'); copy.className = 'awin-btn'; copy.textContent = '⧉ copy'; copy.title = 'copy the plot to the clipboard';
   copy.onclick = () => cv.toBlob(async (blob) => {
     if (!blob) return;
@@ -3842,7 +3850,11 @@ async function runRoutine(r, opts = {}) {
         const fh = await resolveFileHandle(_project.dir, outPath(st._slug), { create: true });
         const w = await fh.createWritable(); await w.write(tsv); await w.close();
         wrote++;
-        if (st.emit === 'layer' || (merged.params && merged.params.emit === 'layer')) await resultToLayer(st._slug, tsv);   // keep it as a table layer too
+        const emit = st.emit || (merged.params && merged.params.emit);
+        if (emit) {                                        // keep the result as a table layer too
+          const path = typeof emit === 'object' && emit.layer ? String(emit.layer) : `${r.name}/${st._slug}`;
+          await resultToLayer(path, tsv);
+        }
         el.querySelector('.fwin-head button:last-child').click();   // tidy: close the step's window
       } else if (tool === 'calccols' || tool === 'interp' || tool === 'figure') {
         runRecipe(merged, true);
@@ -4839,7 +4851,7 @@ function openSwath(L, ropts) {
     // manual plot ranges (display-only — re-plots from the scan)
     vSec.append(rangesRow(st, () => { if (st.scan) plot(); }, { x: 'x', l: 'grade', r: 'bars' }));
     // export / copy the plot
-    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `swath-${(zebraL().label || zebraL().name).replace(/\.[^.]+$/, '')}-${(st.scan ? st.scan.dirNames : swathDirNames(st))[st.axis].split(' ')[0].replace(/[^\w-]/g, '')}.png`, tableTSV));
+    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `swath-${(zebraL().label || zebraL().name).replace(/\.[^.]+$/, '')}-${(st.scan ? st.scan.dirNames : swathDirNames(st))[st.axis].split(' ')[0].replace(/[^\w-]/g, '')}.png`, tableTSV, 'swaths'));
     vSec.append(exRow);
     rail.append(vSec);
     // ── Footer: Run + save-as-recipe + stale + progress ──
@@ -11515,8 +11527,11 @@ function toggleSection() {
 // save/reload). F2 (the Windows reflex) + the layer context menu + palette.
 async function renameActiveLayer(L) {
   if (!L) return;
-  const v = await microPrompt('layer name', L.label || L.name);
-  if (v && v.trim()) { L.label = v.trim(); renderLayers(); markProjectDirty(); }
+  const v = await microPrompt('layer name — a path files it into groups (swaths/FE drift)', L.label || L.name);
+  if (!v || !v.trim()) return;
+  const moved = fileLayerByPath(L, v.trim());              // "a/b" → group a, label b; a plain name just renames
+  if (!moved) { renderLayers(); markProjectDirty(); }
+  else $('#meta').textContent = `${L.label} → filed under ${v.trim().split('/').slice(0, -1).join('/')}`;
 }
 // BATCH RENAME (a group / a multi-selection / all layers): strip the common
 // prefix/suffix in one click, or find→replace (plain or regex), with a live
@@ -15418,6 +15433,35 @@ function groupLayerIds(nd, out = []) {
   return out;
 }
 // nest the given root-level layers into a new (collapsed) group
+// ensure a group path exists ("reports/swaths" → nested groups), returning the
+// children array to file into
+function ensureGroupPath(segments) {
+  treeSync();
+  let arr = _layerTree;
+  for (const seg of segments) {
+    const name = String(seg).trim();
+    if (!name) continue;
+    let g = arr.find((nd) => typeof nd !== 'number' && nd.group && !nd.dhSet && nd.name === name);
+    if (!g) { g = { group: true, name, visible: true, collapsed: false, children: [] }; arr.push(g); }
+    arr = g.children;
+  }
+  return arr;
+}
+// file a layer by a PATH-SHAPED name: the last segment is the label, the rest
+// are groups. Returns true when it moved (i.e. the name carried a path).
+function fileLayerByPath(L, path) {
+  const parts = String(path).split('/').map((x) => x.trim()).filter(Boolean);
+  if (parts.length < 2) { L.label = String(path).trim() || L.label; return false; }
+  const leaf = parts.pop();
+  const dest = ensureGroupPath(parts);
+  const src = treeFindParent(L.id);
+  if (src) src.arr.splice(src.i, 1);
+  dest.push(L.id);
+  L.label = leaf;
+  renderLayers();
+  markProjectDirty();
+  return true;
+}
 function createLayerGroup(name, layerIds, { collapsed = true, dhSet = false } = {}) {
   treeSync();
   const node = { group: true, name, visible: true, collapsed, children: [], ...(dhSet ? { dhSet: true } : {}) };
@@ -16178,7 +16222,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(rec);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

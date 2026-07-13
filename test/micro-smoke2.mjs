@@ -1468,6 +1468,31 @@ await p.close();
   await p3.close();
 }
 
+// ── §30: groups as sugar on naming — "swaths/FE drift" files the layer ──
+{
+  const pg = await mkPage('sm2groups');
+  await pg.evaluate(() => window._micro.openBlob(new Blob(['X,Y,Z,FE\n0,0,0,50\n10,0,0,60\n']), 'm.csv', 'replace'));
+  await pg.waitForFunction(() => window._micro.layers()[0], null, { timeout: 20000 });
+  const gp = await pg.evaluate(async () => {
+    const A = await window._micro.resultToLayer('swaths/FE drift', 'band\tmean\n1\t55\n2\t58\n');
+    await window._micro.resultToLayer('swaths/SIO2 drift', 'band\tmean\n1\t4\n');
+    await window._micro.resultToLayer('month-end/gt/FE', 'cutoff\tt\n0\t9\n');
+    const L = window._micro.layers().find((x) => x.name === 'm.csv');
+    window._micro.fileLayerByPath(L, 'models/deposit');
+    const tree = window._micro.layerTree();
+    const sw = tree.find((n) => n.group && n.name === 'swaths');
+    const me = tree.find((n) => n.group && n.name === 'month-end');
+    const gt = me && me.children.find((n) => typeof n !== 'number' && n.group && n.name === 'gt');
+    const md = tree.find((n) => n.group && n.name === 'models');
+    return { label: A.label, kind: A.kind, sw: sw ? sw.children.length : 0, nested: !!gt, model: md ? md.children.includes(L.id) : false, modelLabel: L.label };
+  });
+  chk(`group paths: "swaths/FE drift" → group swaths (${gp.sw} members), leaf as label ("${gp.label}"), nested path nests (${gp.nested})`,
+    gp.kind === 'table' && gp.label === 'FE drift' && gp.sw === 2 && gp.nested);
+  chk(`group paths: renaming a layer with a path files it ("models/deposit" → ${gp.modelLabel}, in models: ${gp.model})`,
+    gp.model && gp.modelLabel === 'deposit');
+  await pg.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

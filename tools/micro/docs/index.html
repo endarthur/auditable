@@ -535,6 +535,9 @@ params:
 <p>The parameter table has two more spellings for hand-writers: <b>equal-length columns</b> (<code>each:</code> holding one list per variable, zipped row by row — never a cross-product; unequal lengths are an error, not a guess) and <code>from: "params.csv"</code>, which reads the rows from a table file in the project — keep the quarter's run matrix as a CSV and the routine stays two lines.</p>
 <h3>Keeping a result — <b>&#8677; layer</b></h3>
 <p>Every analysis window has a <b>&#8677; layer</b> button beside its export buttons. It keeps the result — the grade&ndash;tonnage curve, the swath profile, the stats table &mdash; as a <b>table layer</b>: something you can filter, join against another run, and export like any other data, instead of a window you look at and close. In a routine, a step with <code>emit: layer</code> does the same automatically, so a month-end run ends with layers you can read, not only files you have to open elsewhere.</p>
+<h3>Filing layers — a name can be a path</h3>
+<p>A layer name with slashes in it is a <b>path</b>: name a result <code>swaths/FE drift</code> and it lands in a <b>swaths</b> group (created if it isn't there yet), labelled <i>FE drift</i>. It nests — <code>month-end/gt/FE</code> makes a <i>gt</i> group inside a <i>month-end</i> group — and it works on any layer, not just results: <b>rename</b> a model to <code>models/deposit</code> and it files itself. A plain name with no slash just renames, as always.</p>
+<p>This is sugar at naming time, not a new kind of group: once filed, the layer tree is the truth again — drag layers between groups, collapse them, reorder them exactly as before. It means a routine's outputs organise themselves: a step with <code>emit: layer</code> files its result under the routine's own name, and <code>emit: { layer: "swaths/$b.grade" }</code> puts it exactly where you say.</p>
 <h3>What a step writes, and what stops it</h3>
 <p><b>Preview</b> now says what every step <i>writes</i> — a report path, a <b>column</b> on a layer (marked <i>(replaces)</i> if it is already there), a figure, or <i>(opens only)</i> if it writes nothing. The <b>guard</b> checks all of it: a calc-column or interpolation step that would overwrite an existing column stops the routine before anything runs, exactly as a report file does. Producing operations replace by name rather than refusing, so running a routine twice leaves the same project as running it once.</p>
 <h3>When a run stops</h3>
@@ -766,6 +769,7 @@ params:
 <p style="margin:.15em 0">${…} computed values — §18</p>
 <p style="margin:.15em 0">each filter (which rows run) — §18</p>
 <p style="margin:.15em 0">result → table layer (⇥ layer) — §18</p>
+<p style="margin:.15em 0">group paths (name as a path) — §18</p>
 <p style="margin:.15em 0">resume / retry a routine — §18</p>
 <p style="margin:.15em 0">scenes — §18</p>
 <p style="margin:.15em 0">Sealed — §20, C</p>
