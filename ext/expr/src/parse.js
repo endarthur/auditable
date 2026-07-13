@@ -32,7 +32,7 @@ export const CALLFNS = {
 };
 
 // Is `name` writable as a bare identifier? (Used by quoteIdent + complete.)
-const PLAIN_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const PLAIN_IDENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*$/;   // dots allowed: a name, not member access
 // Quote a column name for use in an expression: plain idents pass through, anything
 // else (spaces, hyphens, reserved words) gets the backtick escape with \` / \\.
 // Consumers that treat a column NAME as an expression (stats pickers, materialize)
@@ -48,14 +48,22 @@ export class ExprParseError extends Error {
 function fail(msg) { throw new ExprParseError(msg); }
 
 // ── lexer ──────────────────────────────────────────────────────────────────
-// Bare field refs are case-insensitive idents of [A-Za-z_][A-Za-z0-9_]* — `-` is
-// ALWAYS subtraction (v0.2; `AU-CU` is arithmetic, as pandas/SQL fingers expect).
+// Bare field refs are case-insensitive idents of [A-Za-z_][A-Za-z0-9_]*, and a
+// name MAY CONTAIN DOTS — `Fe.pct`, `g.cutoff` (v0.3). A dot is part of the NAME,
+// not an operator: there is no member access, values stay scalars, and the data
+// model is unchanged. Dotted names are how callers spell namespaces BY CONVENTION
+// (a routine's `$g.cutoff`, an assay table's `au.ppm`) without the language
+// growing objects. Unambiguous because numbers lex first and expression literals
+// are always dot-decimal (opts.decimal only affects reading DATA strings), so a
+// dot after a letter can never be part of a number. Strictly additive: `Fe.pct`
+// used to be a parse error unless backticked.
+// `-` is ALWAYS subtraction (v0.2; `AU-CU` is arithmetic, as pandas/SQL fingers expect).
 // Any other column name takes the BACKTICK escape — `Assay Au ppm` — the pandas
 // df.query() convention; \` escapes a literal backtick, \\ a backslash. The legacy
 // `["…"]` bracket form still parses (shipped lenses) but is undocumented.
 // Strings: "double" (canonical) or 'single' (tolerated). Numbers: ints, decimals,
 // leading-dot (.5) and scientific (1e4, 2.5e-3). `^` and `**` are power.
-const TOKEN_RE = /(\s+)|(#[^\n]*)|(\[\s*"[^"]*"\s*\]|`(?:[^`\\]|\\.)*`)|("[^"]*"|'[^']*')|(&&|\|\||\*\*|==|<>|<=|>=|!=|!~|<|>|=|~)|([-+*/(),^])|((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][A-Za-z0-9_]*)/y;
+const TOKEN_RE = /(\s+)|(#[^\n]*)|(\[\s*"[^"]*"\s*\]|`(?:[^`\\]|\\.)*`)|("[^"]*"|'[^']*')|(&&|\|\||\*\*|==|<>|<=|>=|!=|!~|<|>|=|~)|([-+*/(),^])|((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)/y;
 
 // Lex into tokens carrying source positions. `tolerant` (for highlighting) emits a
 // 1-char 'err' token on an unexpected character instead of throwing.

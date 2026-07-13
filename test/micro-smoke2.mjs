@@ -1371,6 +1371,31 @@ await p.close();
   await pn.close();
 }
 
+// ── §27: ${expr} in routines — one calculus; values compute, structure doesn't ──
+{
+  const pe = await mkPage('sm2expr');
+  const ex = await pe.evaluate(async () => {
+    const steps = await window._micro.expandRoutine({ steps: [
+      { each: [{ bench: 1040, grade: 'FE' }, { bench: 1060, grade: 'SIO2' }], as: 'b', steps: [
+        { tool: 'gt', layer: 'm.csv', cut: '${b.bench * 0.001}', pick: '${if(b.grade = "FE", 55, 45)}', label: 'bench ${b.bench}' },
+      ] },
+    ] });
+    let typo = null;
+    try { await window._micro.expandRoutine({ steps: [{ each: [{ bench: 1 }], as: 'b', steps: [{ tool: 'gt', v: '${b.bnch}' }] }] }); }
+    catch (e) { typo = e.message; }
+    return {
+      n: steps.length, cut: steps[0].cut, t: typeof steps[0].cut,
+      picks: steps.map((x) => x.pick).join(','), label: steps[0].label,
+      slugs: steps.map((x) => x._slug).join(','), typo,
+    };
+  });
+  chk(`routine \${expr}: typed arithmetic (${ex.cut} ${ex.t}), if() (${ex.picks}), text interpolation ("${ex.label}")`,
+    ex.cut === 1.04 && ex.t === 'number' && ex.picks === '55,45' && ex.label === 'bench 1040');
+  chk(`routine \${expr}: structure stays static (2 steps, slugs ${ex.slugs}) + a typo fails loudly`,
+    ex.n === 2 && ex.slugs === 'gt-1040-fe,gt-1060-sio2' && /unknown column: b\.bnch/.test(ex.typo || ''));
+  await pe.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

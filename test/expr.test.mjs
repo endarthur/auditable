@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parse, evaluate, evalBool, constraintValid, compile, compileBool, compileChunk, compileChunkBool, deps, validate, canMatch, quoteIdent, tokenize, complete } from '../ext/expr/src/main.js';
+import { parse, evaluate, evalBool, constraintValid, compile, compileBool, compileChunk, compileChunkBool, compileValue, deps, validate, canMatch, quoteIdent, tokenize, complete } from '../ext/expr/src/main.js';
 
 const fx = JSON.parse(readFileSync(new URL('./fixtures/expr.json', import.meta.url), 'utf8'));
 
@@ -368,4 +368,42 @@ test('keyword operator spans: between/in/contains carry opStart/opEnd', () => {
   assert.equal(src.slice(opOf('between').opStart, opOf('between').opEnd), 'between');
   assert.equal(src.slice(opOf('in').opStart, opOf('in').opEnd), 'in');
   assert.equal(src.slice(opOf('contains').opStart, opOf('contains').opEnd), 'contains');
+});
+
+// ── v0.3: dotted names (a NAME may contain dots — not member access) ─────────
+// Namespaces are a CONVENTION (g.cutoff, au.ppm), not a language feature: values
+// stay scalars, the data model is unchanged, and this is strictly additive
+// (Fe.pct used to be a parse error unless backticked).
+const DOT_SCHEMA = [
+  { name: 'g.cutoff', type: 'number' },
+  { name: 'Fe.pct', type: 'number' },
+  { name: 'FE', type: 'number' },
+  { name: 'd.hem.price', type: 'number' },
+];
+const DOT_ROW = [55, 61, 60, 105.5];
+
+test('dotted names: a bare dotted identifier resolves to its column', () => {
+  assert.equal(compileValue('g.cutoff * 2', DOT_SCHEMA, {})(DOT_ROW), 110);
+  assert.equal(compileValue('d.hem.price', DOT_SCHEMA, {})(DOT_ROW), 105.5);   // any depth — it is just a name
+  assert.equal(compileBool('Fe.pct > 60', DOT_SCHEMA, {})(DOT_ROW), true);     // the real-world assay column
+});
+
+test('dotted names: numbers still lex first (no ambiguity)', () => {
+  assert.equal(compileValue('1.5 + .5 + 1e2', DOT_SCHEMA, {})(DOT_ROW), 102);
+  assert.equal(compileValue('g.cutoff + 1.5', DOT_SCHEMA, {})(DOT_ROW), 56.5);
+  assert.equal(compileValue('FE + 1', DOT_SCHEMA, {})(DOT_ROW), 61);           // plain idents unchanged
+});
+
+test('dotted names: deps + validate + quoteIdent know them', () => {
+  assert.deepEqual(deps(parse('g.cutoff + Fe.pct')), ['g.cutoff', 'Fe.pct']);
+  assert.equal(validate('g.cutoff * 2', DOT_SCHEMA).ok, true);
+  const bad = validate('g.cutof * 2', DOT_SCHEMA);                             // a TYPO is caught by name
+  assert.equal(bad.ok, false);
+  assert.equal(bad.errors[0].name, 'g.cutof');
+  assert.equal(quoteIdent('g.cutoff'), 'g.cutoff');                            // no backticks needed now
+  assert.equal(quoteIdent('a b'), '`a b`');                                    // still quoted when it must be
+});
+
+test('dotted names: the backtick escape still works (nothing regressed)', () => {
+  assert.equal(compileValue('`Fe.pct` + 0', DOT_SCHEMA, {})(DOT_ROW), 61);
 });

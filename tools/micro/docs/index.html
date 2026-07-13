@@ -482,6 +482,14 @@ params:
           series:
             - layer: "model_A.csv"
               col: "$grade"</pre>
+<h3>Computed values — <code>${…}</code></h3>
+<p>A <code>$name</code> substitutes a value as it stands. Wrap it in <code>${…}</code> and you get an <b>expression</b> — the <i>same</i> language as the filter box and the ƒ columns, so there is nothing new to learn:</p>
+<pre>- recipe: "grade tonnage"
+  nCut: ${g.cutoff * 1.1}                    # arithmetic
+  floor: ${if(b.grade = "FE", 55, 45)}       # if(), the same one you use in ƒ
+  as: "bench ${b.bench} · ${b.grade}"        # inside text, it interpolates</pre>
+<p>Expressions compute <b>values</b>, never <b>structure</b>. They can say what a cutoff <i>is</i>; they cannot decide how many runs there are, which recipes exist, or what a report is called. That is deliberate, and it is what keeps a routine honest: the step list is still fully enumerable before anything executes, so <b>Preview</b> still lists every step and the <b>guard</b> still checks every output. A routine remains a document you can read, not a program you have to run to understand.</p>
+<p>A mistyped name fails loudly rather than quietly becoming empty — <code>${b.bnch}</code> reports <i>unknown column: b.bnch — did you mean b.bench?</i> — and dotted names are just names, so <code>$g.cutoff</code> and a real assay column called <code>Fe.pct</code> are spelled the same way.</p>
 <h3>Nesting — every bench × every grade</h3>
 <p>An <b>each</b> block is just a step, and its body is a list of steps — so an <code>each</code> inside an <code>each</code> simply <b>nests</b>, and nesting is a <b>cross product</b>: every row of the outer table against every row of the inner one. Give each table an <code>as</code> and its columns get a namespace, which is what keeps two tables apart when they both have a column called <i>cutoff</i>.</p>
 <pre>steps:
@@ -742,6 +750,7 @@ params:
 <p style="margin:.15em 0">Excel (.xlsx) workbooks — §18</p>
 <p style="margin:.15em 0">params (routine scalars) — §18</p>
 <p style="margin:.15em 0">nested each (cross product) — §18</p>
+<p style="margin:.15em 0">${…} computed values — §18</p>
 <p style="margin:.15em 0">scenes — §18</p>
 <p style="margin:.15em 0">Sealed — §20, C</p>
 <p style="margin:.15em 0">sections — §4</p>
