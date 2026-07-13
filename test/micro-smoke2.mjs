@@ -1530,10 +1530,13 @@ await p.close();
     let lit = 0, bogus = 0;
     const data = region ? region.data : new Uint32Array(0);
     for (let i = 0; i < data.length; i += 4) {
-      const lid = data[i + 1] >>> 0;
-      if (lid === 0xFFFFFFFF) continue;                     // miss
+      const g = data[i + 1] >>> 0;
+      if (g === 0xFFFFFFFF) continue;                       // miss
       lit++;
+      const lid = g & 0xFFFF;                               // G = layer | face<<16 — never read it raw
+      const face = (g >>> 16) & 7;
       if (!known.has(lid)) bogus++;                         // a packed-id ghost would land here
+      if (face > 7) bogus++;
     }
     return { tables: tabs.length, opened, hiId: hi.id, hiName: hi.name, au: au && au[1], lit, bogus };
   });

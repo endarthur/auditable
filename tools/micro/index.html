@@ -817,7 +817,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openTable, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, buildHeightfieldMesh, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openTable, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, buildHeightfieldMesh, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH, layerOfId, faceOfId, isMiss, FACE_NAMES, FACE_NORMALS, FACE_CUT } from '../../ext/condenser/src/main.js';
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
 import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
@@ -929,6 +929,76 @@ function currentSection() {
     return { on: true, n, d: clip === 'front' ? d0 + H : d0 - H, half: H, d0, clip, traceHalf: Math.max(0.01, +$('#secHalf').value) };   // meshes trace at the TRUE plane, this wide
   }
   return { on: true, n, d: d0, half: Math.max(0.01, +$('#secHalf').value), d0, clip: 'slab' };
+}
+// A camera ray through a CSS pixel — frame-local {o, d}, honouring ortho.
+// (unprojectToMidZ below is the perspective-only special case it grew from.)
+function pixelRay(cssX, cssY) {
+  const st = cam.state, r = cv.getBoundingClientRect();
+  const ndcX = (2 * cssX / r.width) - 1, ndcY = 1 - (2 * cssY / r.height);
+  const v = st.view;
+  const right = [v[0], v[4], v[8]], up = [v[1], v[5], v[9]];
+  const f = [st.target[0] - st.eye[0], st.target[1] - st.eye[1], st.target[2] - st.eye[2]];
+  const fl = Math.hypot(...f) || 1;
+  const fwd = f.map((c) => c / fl);
+  if (st.ortho) {                                          // parallel rays offset across the film
+    const hh = st.halfH, hw = hh * st.aspect;
+    const o = [0, 1, 2].map((i) => st.eye[i] + right[i] * ndcX * hw + up[i] * ndcY * hh);
+    return { o, d: fwd };
+  }
+  const tanF = Math.tan(st.fovY / 2);
+  const d = [0, 1, 2].map((i) => fwd[i] + right[i] * ndcX * tanF * st.aspect + up[i] * ndcY * tanF);
+  const dl = Math.hypot(...d) || 1;
+  return { o: st.eye.slice(), d: d.map((c) => c / dl) };
+}
+// Where EXACTLY did the ray meet the thing it picked? The GPU already solved the
+// ray-box entry to write true depth, and it told us WHICH FACE it entered through
+// — so the plane is known and the point is one intersection, with no second
+// ray-AABB on the CPU to drift from what was drawn. A splat, a capsule or a hit
+// with no face falls back to the source record's centroid (exact, just coarser).
+async function pickHitPoint(hit, cssX, cssY) {
+  const world = await recordPosition(hit);                 // world centroid — the fallback, and the plane's anchor
+  if (!world) return null;
+  const face = hit.face;
+  if (face == null || face === 7) return world;
+  const { o, d } = pixelRay(cssX, cssY);
+  let n, dist;                                             // plane: dot(n, p_local) = dist
+  if (face === FACE_CUT) {
+    const sec = currentSection();
+    if (!sec || !sec.on) return world;
+    n = sec.n; dist = sec.d0 != null ? sec.d0 : sec.d;     // the TRUE plane, not the fat slab face
+  } else {
+    const L = layerById(hit.layer);
+    const half = await blockHalfDims(L, hit.rec);          // sub-blocks carry their own size
+    if (!half) return world;
+    const ax = face >> 1, sign = (face & 1) ? 1 : -1;      // 0=−X 1=+X 2=−Y 3=+Y 4=−Z 5=+Z
+    n = FACE_NORMALS[face];
+    const cLocal = [world[0] - frame.origin[0], world[1] - frame.origin[1], world[2] - frame.origin[2]];
+    dist = (cLocal[ax] + sign * half[ax]) * sign;          // dot(n, p) = n[ax]·p[ax]; n[ax] = sign
+  }
+  const den = n[0] * d[0] + n[1] * d[1] + n[2] * d[2];
+  if (Math.abs(den) < 1e-9) return world;
+  const t = (dist - (n[0] * o[0] + n[1] * o[1] + n[2] * o[2])) / den;
+  if (!Number.isFinite(t) || t <= 0) return world;
+  return [o[0] + d[0] * t + frame.origin[0], o[1] + d[1] * t + frame.origin[1], o[2] + d[2] * t + frame.origin[2]];
+}
+// half-extent of ONE block, in world units. A regular model reads the grid pitch;
+// a SUB-BLOCKED one reads the record's own dim columns — a sub-block's face is
+// its own, not its parent cell's.
+async function blockHalfDims(L, rec) {
+  const bd = L && L.docs && L.docs.blockDoc;
+  const g = bd && bd.header && bd.header.grid;              // { x: {origin,pitch,count}, y: …, z: … }
+  if (!g || !g.x || !g.y || !g.z) return null;
+  const h = [g.x.pitch / 2, g.y.pitch / 2, g.z.pitch / 2];  // sub-blocked → this is the FINE pitch (the fallback)
+  const dc = bd.header.subBlocked && bd.header.dimCols;    // { x, y, z } → column INDICES
+  if (!dc) return h;
+  let f = null;
+  try {
+    if (bd.header.dm) f = await fetchDmRecord(bd.blob, bd.header.dm, rec);
+    else if (!bd.parquet) f = await fetchCsvRecord(rec, bd);
+  } catch { f = null; }
+  if (!f) return h;                                        // parquet sub-blocks: the parent pitch (honest, coarser)
+  const v = [+f[dc.x], +f[dc.y], +f[dc.z]];
+  return v.every((x) => Number.isFinite(x) && x > 0) ? [v[0] / 2, v[1] / 2, v[2] / 2] : h;
 }
 // A camera ray through a CSS pixel, intersected with the horizontal plane at the
 // document's mid-elevation → a frame-local world point (no picking needed).
@@ -1168,8 +1238,8 @@ function selectByPolygon(poly, mode, isRect) {
     const cssY = ry + (h - 1 - j) / dpr;                   // GL rows are bottom-up
     for (let i = 0; i < w; i++) {
       const o = (j * w + i) * 4;
-      const lid = data[o + 1] >>> 0;                       // G = layer, R = record
-      if (lid === 0xFFFFFFFF) continue;                    // nothing under this pixel
+      if (isMiss(data[o + 1])) continue;                    // nothing under this pixel
+      const lid = layerOfId(data[o + 1]);                  // G = layer | face<<16, R = record
       if (!isRect && !pipTest(rx + i / dpr, cssY, poly)) continue;
       let set = perLayer.get(lid);
       if (!set) perLayer.set(lid, set = new Set());
@@ -1466,7 +1536,7 @@ function paintByPolygon(poly, code, isRect) {
     const cssY = ry + (h - 1 - j) / dpr;
     for (let i = 0; i < w; i++) {
       const o = (j * w + i) * 4;
-      if ((data[o + 1] >>> 0) !== t.lid) continue;         // another layer (or nothing) under this pixel
+      if (isMiss(data[o + 1]) || layerOfId(data[o + 1]) !== t.lid) continue;   // another layer (or nothing)
       if (!isRect && !pipTest(rx + i / dpr, cssY, poly)) continue;
       hits.add(data[o] >>> 0);
     }
@@ -10986,7 +11056,7 @@ function clearMeasure() {
 async function measureClick(cssX, cssY) {
   const hit = renderer.pick(cssX, cssY, cam, { pointPx: +$('#ptPx').value, blocksAsPoints: _viewMode === 'points', section: currentSection() });
   if (hit == null) return;
-  const world = await recordPosition(hit);
+  const world = await pickHitPoint(hit, cssX, cssY);       // ON the face you clicked, not the centroid behind it
   if (!world) return;
   const local = [world[0] - frame.origin[0], world[1] - frame.origin[1], world[2] - frame.origin[2]];
   if (!_measure.a) { _measure.a = local; $('#meta').textContent = 'measure: click the second point'; drawMeasure(); }
@@ -16124,9 +16194,10 @@ function renderRecCfg() {
   noneA.onclick = () => { for (const n of shown) L._recHide.add(n); paintRecList(); rebuild(); };
   rebuild();
 }
+let _recFace = null;                                        // the face of the current block pick (null = n/a)
 function showRecPanel(title, rows, note) {
   if (_propOpen) closeProps();
-  $('#rpTitle').textContent = title;
+  $('#rpTitle').textContent = _recFace != null ? `${title} · ${FACE_NAMES[_recFace]}` : title;
   _recRows = rows; _recNote = note || ''; _recAllNames = rows.map(([k]) => String(k));
   paintRecList();
   if ($('#rpCfg').classList.contains('show')) renderRecCfg();
@@ -16186,6 +16257,10 @@ async function showRecord(hit) {
   // active aliases: any visible layer is pickable
   const lid = hit.layer, rec = hit.rec;
   const L = layerById(lid);
+  // …and the pick knows WHICH FACE of the block you hit (the shader solved it to
+  // write depth). Name it in the title — it is what you clicked, and it is the
+  // plane "section here" and measure snap to.
+  _recFace = (L && L.kind === 'blocks' && hit.face != null && hit.face <= 6) ? hit.face : null;
   _recLayer = L;                        // gate the field picker to the picked layer's own hidden set
   attrTableReveal(lid, rec);
   const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
@@ -16266,7 +16341,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(hit);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, estimateAtPoints, readLayerPoints, readLayerCoords, estimateOntoTarget, applyOutputFilterPoints, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, openInterpolateDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

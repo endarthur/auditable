@@ -9,9 +9,22 @@
 
 import { makeProgram } from './gl-util.js';
 
-// no encoder: the pick target is RG32UI (R = record, G = layer), so the ids go
-// out as integers instead of being smeared across four bytes and reassembled
+// no encoder: the pick target is RG32UI (R = record, G = layer + face), so the
+// ids go out as integers instead of being smeared across four bytes and
+// reassembled. The layer needs 6 bits and has 32, so the FACE of the hit rides
+// in the spare ones — the fragment shader already solved the ray-box entry to
+// write true depth, and throwing that away meant the CPU had to re-derive it
+// (a second ray-AABB + sub-block dims + slab clip, drifting from what was drawn).
+//
+//   G = (layer & 0xFFFF) | (face << 16)
+//   face: 0=−X 1=+X 2=−Y 3=+Y 4=−Z 5=+Z, 6 = the SECTION CUT wall, 7 = none
+//
+// Naming the face names the PLANE, so the exact hit point is ray ∩ plane — one
+// line on the CPU, and it agrees with the pixel by construction.
 const ENCODE = '';
+const PACK = `
+const uint NO_FACE = 7u;
+uint packId(uint layer, uint face) { return (layer & 0xFFFFu) | (face << 16); }`;
 
 // ── points ──
 const PICK_VERT_PTS = `#version 300 es
@@ -54,12 +67,13 @@ precision highp float;
 flat in uint vRec;
 flat in float vCull;
 uniform uint uLayer;                    // the layer is per-DRAW, not per-element
-out uvec4 outId;                        // R = record (full uint32), G = layer
+out uvec4 outId;                        // R = record (full uint32), G = layer | face<<16
+${PACK}
 void main() {
   if (vCull > 0.5) discard;
   vec2 d = gl_PointCoord - 0.5;
   if (dot(d, d) > 0.25) discard;
-  outId = uvec4(vRec, uLayer, 0u, 0u);
+  outId = uvec4(vRec, packId(uLayer, NO_FACE), 0u, 0u);   // a splat has no face
 }`;
 
 // ── blocks (geometry identical to gl-blocks; color replaced by the encoded id) ──
@@ -140,12 +154,13 @@ uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
 uniform uint uLayer;
 out uvec4 outId;
+${PACK}
 void main() {
   if (vCull > 0.5) discard;
   if (vMode > 0.5) {
     if (dot(vCorner, vCorner) > 1.0) discard;
     gl_FragDepth = gl_FragCoord.z;
-    outId = uvec4(vRec, uLayer, 0u, 0u);
+    outId = uvec4(vRec, packId(uLayer, NO_FACE), 0u, 0u);  // demoted to a splat: no box, no face
     return;
   }
   vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
@@ -157,6 +172,7 @@ void main() {
   float tin = max(max(tmin3.x, tmin3.y), tmin3.z);
   float tout = min(min(tmax3.x, tmax3.y), tmax3.z);
   if (tin > tout || tout < 0.0) discard;
+  float tinBox = tin;                                    // the box entry, before any slab clip
   // clip by the section slab — the visible CUT surface is what picks (gl-blocks)
   if (uSecCfg.x > 0.5) {
     float den = dot(rd, uSecPlane.xyz);
@@ -172,7 +188,20 @@ void main() {
   float t = tin > 0.0 ? tin : tout;
   vec4 clip = uViewProj * vec4(ro + rd * t, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
-  outId = uvec4(vRec, uLayer, 0u, 0u);
+  // WHICH FACE the eye ray entered through: the axis that WON the box entry,
+  // signed by the ray's direction along it (travelling +x → you hit the −X face).
+  // If the slab clip pushed the entry past the box's own, you are looking at the
+  // CUT, not a face. tin ≤ 0 means the eye is inside the block — no face.
+  uint face = NO_FACE;
+  if (tin > 0.0) {
+    if (tin > tinBox + 1e-5) face = 6u;                  // the section cut wall
+    else {
+      uint ax = (tmin3.x >= tmin3.y && tmin3.x >= tmin3.z) ? 0u : ((tmin3.y >= tmin3.z) ? 1u : 2u);
+      float rda = ax == 0u ? rd.x : (ax == 1u ? rd.y : rd.z);
+      face = ax * 2u + (rda > 0.0 ? 0u : 1u);
+    }
+  }
+  outId = uvec4(vRec, packId(uLayer, face), 0u, 0u);
 }`;
 
 // ── sticks (capsule geometry identical to gl-sticks; color = the encoded id) ──
@@ -259,12 +288,13 @@ uniform vec4 uSecPlane;
 uniform vec2 uSecCfg;
 uniform uint uLayer;
 out uvec4 outId;
+${PACK}
 void main() {
   if (vCull > 0.5) discard;
   if (vMode > 0.5) {
     if (dot(vCorner, vCorner) > 1.0) discard;
     gl_FragDepth = gl_FragCoord.z;
-    outId = uvec4(vRec, uLayer, 0u, 0u);
+    outId = uvec4(vRec, packId(uLayer, NO_FACE), 0u, 0u);
     return;
   }
   vec3 ro = uOrthoRay > 0.5 ? vWorldPos - uFwd * uBackoff : uEye;
@@ -315,10 +345,21 @@ void main() {
   }
   vec4 clip = uViewProj * vec4(ro + rd * t, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
-  outId = uvec4(vRec, uLayer, 0u, 0u);
+  outId = uvec4(vRec, packId(uLayer, NO_FACE), 0u, 0u);   // a capsule has no axis-aligned face
 }`;
 
 const NO_LAYER = 0xFFFFFFFF;                                // the layer channel's miss sentinel
+
+// The G channel's contract, in ONE place. Anything that reads the pick buffer —
+// pick(), pickRegion()'s callers, a rubber-band sweep — unpacks through these.
+export const layerOfId = (g) => (g >>> 0) & 0xFFFF;
+export const faceOfId = (g) => ((g >>> 16) & 7);
+export const isMiss = (g) => (g >>> 0) === NO_LAYER;
+export const NO_FACE = 7;
+export const FACE_CUT = 6;
+// unit normals per face code, and the human name. index 6/7 have no normal.
+export const FACE_NORMALS = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], null, null];
+export const FACE_NAMES = ['−X (west)', '+X (east)', '−Y (south)', '+Y (north)', '−Z (bottom)', '+Z (top)', 'section cut', '—'];
 const MISS_CLEAR = new Uint32Array([0xFFFFFFFF, 0xFFFFFFFF, 0, 0]);
 
 export function createPickPipeline(gl) {
@@ -566,14 +607,17 @@ export function createPickPipeline(gl) {
     gl.readPixels(px, py, 1, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, out);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.bindVertexArray(null);
-    return out[1] === NO_LAYER ? null : { layer: out[1] >>> 0, rec: out[0] >>> 0 };
+    if (out[1] === NO_LAYER) return null;
+    const g = out[1] >>> 0;
+    return { layer: g & 0xFFFF, rec: out[0] >>> 0, face: (g >>> 16) & 7 };
   }
 
   // one ID-buffer pass over a RECT (device px, GL bottom-left origin) — the
   // marquee/lasso read. Same programs, same per-layer gates; returns the raw
   // RGBA block (rows bottom-up); the caller masks by polygon and decodes.
   // the marquee/lasso read: a Uint32Array of 4 components per pixel (rows
-  // bottom-up) — [0] = record, [1] = layer (NO_LAYER = nothing there)
+  // bottom-up) — [0] = record, [1] = layer | face<<16 (NO_LAYER = nothing there;
+  // unpack with layerOfId/faceOfId, never by reading [1] raw)
   function pickRegion(px, py, w2, h2, chunks, cam, opts) {
     renderInto(px, py, w2, h2, chunks, cam, opts);
     const out = new Uint32Array(w2 * h2 * 4);
