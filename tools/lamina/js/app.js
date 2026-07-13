@@ -15,6 +15,7 @@ import { convert as unitConvert } from '@gcu/units';   // grade/density unit dec
 import { geometryAccumulator, inferGeometry } from '@gcu/recon';   // grid-geometry inference (harvested from BMA) — the grid summary
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
+import { census as xlsxCensus, openSheet as xlsxOpenSheet } from '@gcu/sheet';   // worksheets as TYPED table documents — no CSV round-trip
 import { detectDM, parseHeader, recordRange, decodeRecord, readField } from '@gcu/dm';
 import { Unzip, UnzipInflate } from 'fflate';
 import { idbCache } from './idb-cache.js';
@@ -181,7 +182,7 @@ function mountView(vs, info = {}, keepVScroll = false) {
   $('#binary').style.display = 'none';
   $('#empty').style.display = 'none';
   const badge = $('#kindBadge'); badge.style.display = '';
-  badge.textContent = c.d.dm ? 'dm' : c.d.kind === 'delimited' ? `CSV · ${c.d.delimiter === '\t' ? 'TSV' : 'delimited'}` : c.d.kind;
+  badge.textContent = c.d.dm ? 'dm' : c.d.xlsx ? `xlsx · ${c.d.xlsx}` : c.d.kind === 'delimited' ? `CSV · ${c.d.delimiter === '\t' ? 'TSV' : 'delimited'}` : c.d.kind;
   badge.title = detectedFacts(c.d).map(([k, v]) => `${k}: ${v}`).join(' · ') + ' — click to change how the file is read';
 
   const base = createLaminaProvider(vs, { PENDING });
@@ -843,7 +844,7 @@ async function applyFilter(str) {
   if (!str.trim()) { $('#filter').classList.remove('err'); c.filterResult = null; const r = recompute(); refreshGutterFiltered(); return r; }
   const cols = c.d.kind === 'delimited' ? c.d.schema : [{ name: 'line' }];
   const v = validate(str, cols);                          // parse + unknown-column → red box, friendly message
-  if (!v.ok) return filterErr(new Error(friendlyError(v.errors, cols)));
+  if (!v.ok) return filterErr(new Error(friendlyError(v.errors, cols, str)));
   let predicate;
   try { predicate = compileBool(str, cols, { decimal: c.d.decimal }); } catch (e) { return filterErr(e); }
   $('#filter').classList.remove('err');
@@ -1017,6 +1018,89 @@ function createDmCursor(reader, h, { chunk = 4096 } = {}) {
       return decodeRecord(bytes, h).map((v) => (v == null ? '' : String(v)));   // display strings (matches CSV)
     },
   };
+}
+
+// ── a worksheet as a first-class source ─────────────────────────────────────
+// An .xlsx IS a zip, so it used to fall into the archive branch and offer you a
+// picker full of `xl/worksheets/sheet1.xml`. What a person dragging a workbook in
+// wants is their DATA. @gcu/sheet reads a sheet as TYPED columns (a column is
+// numeric because Excel says so — a Float64Array — not because a string parsed),
+// so it mounts like .dm does: schema + view + cursor, no CSV in the middle.
+// Resident by nature (a zip must be inflated whole), which is fine: Excel itself
+// caps at ~1M rows, and lamina then gives that sheet histograms, quantiles and a
+// blank-count Excel never will.
+function createSheetViewSource(tbl, schema) {
+  const n = tbl.header.count;
+  return {
+    kind: 'delimited', cols: schema.length, schema,
+    rowCount() { return n; },
+    rowAt(r) { return (r < 0 || r >= n) ? null : tbl.at(r); },   // resident → never LOADING
+    header(c) { return { label: schema[c] ? schema[c].name : `col ${c + 1}`, type: this.colType(c) }; },
+    colType(c) { return (schema[c] && schema[c].type) || 'string'; },
+    onReady() { return () => {}; },                              // nothing to wait for
+  };
+}
+function createSheetCursor(tbl, schema) {
+  const n = tbl.header.count;
+  return {
+    kind: 'sheet', rowCount: n, schema, delimiter: '\t', quote: '"',
+    async eachRecord({ dataStart = 0, rows = null, onProgress, limit = Infinity } = {}, visit) {
+      let sp = 0, seen = 0;
+      for (let i = 0; i < n; i++) {
+        const disp = i - dataStart;
+        if (disp < 0) continue;
+        if (rows) {                                              // restrict to the subset (ascending)
+          while (sp < rows.length && rows[sp] < disp) sp++;
+          if (sp >= rows.length || rows[sp] !== disp) continue;
+          sp++;
+        }
+        visit(disp, tbl.at(i), i, 0);
+        if (++seen >= limit) return;
+        if (onProgress && (i & 8191) === 0) { onProgress(i, n); await Promise.resolve(); }
+        if (rows && sp >= rows.length) break;
+      }
+      if (onProgress) onProgress(n, n);
+    },
+    async readByLoc(i) { return tbl.at(i).map((v) => (v == null ? '' : String(v))); },
+  };
+}
+function mountSheet(name, tbl, totalBytes = 0) {
+  if (grid) { grid.destroy(); grid = null; }
+  const num = new Set(tbl.header.numericColumns.map((c) => c.i));
+  const schema = tbl.header.columns.map((nm, i) => ({ name: nm, type: num.has(i) ? 'number' : 'string' }));
+  const baseVs = createSheetViewSource(tbl, schema);
+  const source = createSheetCursor(tbl, schema);
+  const d = { kind: 'delimited', delimiter: '\t', quote: '"', hasHeader: true, schema, dataStart: 0, decimal: '.', xlsx: tbl.header.sheet };
+  current = { source, d, schema, dataStart: 0, baseVs, label: name, totalBytes, filterResult: null, sort: null, hidden: new Set(), colWidths: {}, colFormats: {}, _vis: null, file: null, bytes: null, force: {} };
+  _recPinned = null; _recRow = 0;
+  $('#filter').value = ''; $('#filter').classList.remove('err'); syncFilterClear();
+  lastScan = 'sheet';
+  initCalcState();
+  recompute();
+  refreshGutter();
+  if (_pendingLens || _pendingLensView) Promise.resolve().then(applyPendingLens);
+}
+// .xlsx / .xlsm → pick a sheet (if there's more than one), then mount it.
+async function openXlsx(file) {
+  if (file.size > residentLimit()) {
+    return showNote(file.name, 'xlsx', 'workbook too large',
+      `${fmtBytes(file.size)} — a workbook is a zip and must be inflated whole. Export the sheet as CSV and lamina will window it at any size.`,
+      `${fmtBytes(file.size)} · xlsx`);
+  }
+  $('#meta').textContent = 'reading workbook…';
+  const cs = await xlsxCensus(file);
+  const sheets = (cs.sheets || []).filter((sh) => (sh.rows || 0) > 0);
+  if (!sheets.length) {
+    return showNote(file.name, 'xlsx', 'no data in this workbook', 'every sheet is empty', `${fmtBytes(file.size)} · xlsx`);
+  }
+  const openOne = async (nm) => {
+    $('#meta').textContent = `reading ${nm}…`;
+    const tbl = await xlsxOpenSheet(file, { sheet: nm });
+    mountSheet(sheets.length > 1 ? `${file.name} › ${nm}` : file.name, tbl, file.size);
+    $('#fileName').textContent = file.name; $('#empty').style.display = 'none';
+  };
+  if (sheets.length === 1) return openOne(sheets[0].name);
+  showPicker(sheets.map((sh) => ({ path: sh.name, label: `${(sh.rows || 0).toLocaleString()} rows × ${sh.columns || 0} cols` })), openOne);
 }
 
 // Mount a .dm: the windowed browse view + the record cursor (filter/sort/stats).
@@ -1621,9 +1705,18 @@ function lev(a, b) {
   }
   return prev[n];
 }
-function friendlyError(errors, cols) {
+function friendlyError(errors, cols, str) {
   const e = errors[0];
+  // A SQL person's first instinct is to type the whole statement. The parse error
+  // ("trailing input near 'FE'") is accurate and useless; say the actual thing.
+  if (e.kind !== 'column' && /^\s*(select|from|where)\b/i.test(str || '')) {
+    const cond = String(str).replace(/^\s*select\b.*?\bwhere\b/i, '').replace(/^\s*where\b/i, '').trim();
+    return `the filter IS the WHERE clause — drop the rest${cond ? `, just: ${cond}` : ''}`;
+  }
   if (e.kind !== 'column') return e.message;
+  // @gcu/expr already fuzzy-matches and appends its own "— did you mean X?".
+  // Appending ours too produced "did you mean FE? — did you mean FE?".
+  if (/did you mean/i.test(e.message)) return e.message;
   const names = cols.map((c) => (typeof c === 'string' ? c : c.name));
   const lb = e.name.toLowerCase();
   let near = names.find((n) => n.toLowerCase().startsWith(lb)) || names.find((n) => n.toLowerCase().includes(lb));
@@ -1794,7 +1887,8 @@ function showPicker(entries, onPick) {
   for (const e of entries) {
     const item = document.createElement('div');
     item.className = 'pk-item';
-    item.innerHTML = `<span class="pk-name"></span><span class="pk-size">${fmtBytes(e.size || 0)}</span>`;
+    item.innerHTML = `<span class="pk-name"></span><span class="pk-size"></span>`;
+    item.querySelector('.pk-size').textContent = e.label || fmtBytes(e.size || 0);   // a sheet is rows, not bytes
     item.querySelector('.pk-name').textContent = e.path;          // textContent — no markup injection
     item.onclick = () => { $('#picker').classList.remove('show'); onPick(e.path); };
     list.appendChild(item);
@@ -1815,7 +1909,19 @@ async function openFile(file, force) {
     // A .lamina lens (small JSON with the marker)? Apply it, don't read it as data.
     if (file.size < (1 << 20)) { const t = new TextDecoder('utf-8', { fatal: false }).decode(head); if (/^\s*\{/.test(t) && t.includes('lamina-lens')) { const lens = sniffLens(new Uint8Array(await file.arrayBuffer())); if (lens) return applyLens(lens); } }
     const fmt = detectFormat(head);
-    if (fmt === 'zip' || fmt === 'gz' || fmt === 'tar' || fmt === 'zst' || fmt === 'xz' || fmt === 'bz2') return openArchive(file, fmt);
+    // A WORKBOOK IS A ZIP — catch it before the archive route, or a person who
+    // drags in parameters.xlsx gets a picker full of xl/worksheets/sheet1.xml
+    // instead of their data.
+    if (fmt === 'zip' && /\.xlsx$|\.xlsm$/i.test(file.name)) {
+      try { return await openXlsx(file); }
+      catch (e) { return showNote(file.name, 'xlsx', "couldn't read this workbook", e.message || String(e), `${fmtBytes(file.size)} · xlsx`); }
+    }
+    if (fmt === 'zip' || fmt === 'gz' || fmt === 'tar' || fmt === 'zst' || fmt === 'xz' || fmt === 'bz2') {
+      // A corrupt/truncated archive threw out of here uncaught, leaving the status
+      // stuck on "decompressing…" forever. Fail with a name instead.
+      try { return await openArchive(file, fmt); }
+      catch (e) { return showNote(file.name, fmt, `couldn't read this ${fmt}`, e.message || String(e), `${fmtBytes(file.size)} · ${fmt}`); }
+    }
 
     // Datamine .dm (binary table) — sniff the DD page, then window it: a record
     // cursor + browse view read only the records they touch via File.slice. No

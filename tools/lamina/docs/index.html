@@ -115,6 +115,9 @@
 
 <h2 id="start"><span class="n">2</span>Getting started</h2>
 <p><b>File → Open</b> (<span class="kbd">Ctrl+O</span>) or drag a file anywhere onto the window. Recent files are remembered (toggleable) and reopen with one click.</p>
+<h3>What it opens</h3>
+<p><b>CSV / TSV</b> and any delimited text, at any size — lamina windows the file rather than loading it. <b>Datamine <code>.dm</code></b> block models, read the same way. Plain <b>text</b> as lines. <b>Archives</b> (<code>.zip .tar .gz .zst .bz2</code>) — peek inside and open an entry without extracting.</p>
+<p><b>Excel <code>.xlsx</code></b> — drop a workbook and lamina lists its <b>sheets</b>; pick one and it opens as a table. Columns arrive <b>typed from Excel itself</b> (a column is numeric because the workbook says so, not because a string happened to parse), so filters, statistics and distributions work on it immediately. A workbook is a zip and must be read whole, so unlike a CSV it is bounded by memory — for a very large sheet, export it as CSV and lamina will window it at any size. Opening a sheet this way is usually quicker than starting Excel, and the <a href="#dist">column distributions</a> tell you more than Excel will.</p>
 <h3>If a file reads wrong</h3>
 <p>Click the <b>kind badge</b> (top right) or <b>Data → Interpretation…</b> to force the delimiter, header on/off, rows to skip, comment prefix, decimal point vs comma, or the <b>character encoding</b> (UTF-8 · Windows-1252 · Latin-1 · UTF-16). A <code>⚠ encoding?</code> hint appears in the footer when bytes don't decode cleanly as UTF-8 — mojibake never passes silently.</p>
 

@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { zipSync, gzipSync } from '../ext/archive/vendor/fflate.module.mjs';
 import { writeTar } from '../ext/archive/src/tar.js';
 import { makeDM } from './dm-make.mjs';
+import { sheet as xlsxSheet } from '../ext/sheet/index.js';   // build the .xlsx fixture, don't commit a binary
 
 const repo = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css' };
@@ -1563,6 +1564,93 @@ try {
 
   if (errors.length) fail('console errors: ' + errors.join(' | '));
   else ok('no console errors');
+  // ── §: an EXCEL workbook is a zip, and a person dragging one in wants their DATA ──
+  // Before this, .xlsx fell into the archive branch and offered a picker full of
+  // `xl/worksheets/sheet1.xml`. Now it offers SHEETS, typed straight from Excel.
+  {
+    const bytes = await xlsxSheet.write({
+      sheets: [
+        { name: 'Assays', columns: { HOLE: ['DH1', 'DH1', 'DH2', 'DH2'], FROM: [0, 1.5, 0, 2], AU: [0.42, 1.10, 0.05, 2.30], LITHO: ['OXIDE', 'OXIDE', 'FRESH', 'FRESH'] } },
+        { name: 'General', columns: { parameter: ['cutoff', 'density'], value: [0.3, 2.7] } },
+      ],
+    });
+    const b64 = Buffer.from(bytes).toString('base64');
+
+    const picked = await page.evaluate(async (b) => {
+      const raw = Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+      await window._lamina.openFile(new File([raw], 'assays.xlsx'));
+      await new Promise((r) => setTimeout(r, 400));
+      const items = [...document.querySelectorAll('#pickerList .pk-item')].map((i) => ({
+        name: i.querySelector('.pk-name').textContent, meta: i.querySelector('.pk-size').textContent }));
+      return { shown: document.getElementById('picker').classList.contains('show'), items };
+    }, b64);
+    if (picked.shown && picked.items.length === 2 && picked.items.some((i) => i.name === 'Assays') && /rows/.test(picked.items[0].meta))
+      ok(`xlsx: a workbook offers its SHEETS, measured in rows (${picked.items.map((i) => i.name).join(', ')})`);
+    else fail(`xlsx: expected a 2-sheet picker, got ${JSON.stringify(picked)}`);
+
+    const mounted = await page.evaluate(async () => {
+      [...document.querySelectorAll('#pickerList .pk-item')].find((i) => i.querySelector('.pk-name').textContent === 'Assays').click();
+      await new Promise((r) => setTimeout(r, 500));
+      const vs = window._laminaVS;
+      return {
+        rows: vs.rowCount(),
+        schema: Array.from({ length: vs.cols }, (_, i) => `${vs.header(i).label}:${vs.colType(i)}`),
+        badge: document.getElementById('kindBadge').textContent,
+      };
+    });
+    // AU is a number because EXCEL says so (a Float64Array), not because a string parsed
+    if (mounted.rows === 4 && mounted.schema.includes('AU:number') && mounted.schema.includes('HOLE:string') && /xlsx/.test(mounted.badge))
+      ok(`xlsx: the sheet mounts TYPED — ${mounted.schema.join(' · ')} (badge "${mounted.badge}")`);
+    else fail(`xlsx: expected a typed 4-row mount, got ${JSON.stringify(mounted)}`);
+
+    const filtered = await page.evaluate(async () => {
+      await window._lamina.applyFilter('AU > 1');
+      await new Promise((r) => setTimeout(r, 400));
+      return document.getElementById('meta').textContent;
+    });
+    if (/2 of 4/.test(filtered)) ok(`xlsx: the whole toolkit runs on it — "AU > 1" → ${filtered.split('·')[0].trim()}`);
+    else fail(`xlsx: filter on an Excel column gave "${filtered}"`);
+  }
+
+  // ── §: a CORRUPT archive must fail with a NAME, not hang ──
+  // listZip() threw out of openFile uncaught, so the status sat on "decompressing…"
+  // forever and the console carried "invalid zip data". A .docx did this too.
+  {
+    const stuck = await page.evaluate(async () => {
+      const junk = new Uint8Array([0x50, 0x4B, 0x03, 0x04, 1, 2, 3, 4, 5, 6, 7, 8]);   // zip magic, then garbage
+      await window._lamina.openFile(new File([junk], 'report.docx'));
+      await new Promise((r) => setTimeout(r, 600));
+      return document.getElementById('meta').textContent;
+    });
+    if (!/decompressing/i.test(stuck) && stuck.trim())
+      ok(`corrupt archive: fails with a name, not a hang — "${stuck}"`);
+    else fail(`corrupt archive: stuck on "${stuck}"`);
+  }
+
+  // ── §: the filter tells a stranger the truth ──
+  {
+    const msgs = await page.evaluate(async () => {
+      const csv = 'ID,FE,SIO2\n' + Array.from({ length: 20 }, (_, i) => `${i},${30 + i},5`).join('\n');
+      window._lamina.open('grades.csv', new TextEncoder().encode(csv));
+      await new Promise((r) => setTimeout(r, 300));
+      const out = {};
+      for (const e of ['SELECT * WHERE FE > 40', 'FEE > 40']) {
+        await window._lamina.applyFilter(e);
+        await new Promise((r) => setTimeout(r, 300));
+        out[e] = document.getElementById('meta').textContent;
+      }
+      return out;
+    });
+    // a SQL person's first instinct — hand them the working expression
+    if (/WHERE clause/.test(msgs['SELECT * WHERE FE > 40']) && /just: FE > 40/.test(msgs['SELECT * WHERE FE > 40']))
+      ok(`filter: SQL-brain gets the answer — "${msgs['SELECT * WHERE FE > 40'].replace('filter: ', '')}"`);
+    else fail(`filter: SQL hint missing — "${msgs['SELECT * WHERE FE > 40']}"`);
+    // @gcu/expr suggests, and lamina must NOT suggest again ("did you mean FE? — did you mean FE?")
+    const dm = (msgs['FEE > 40'].match(/did you mean/g) || []).length;
+    if (dm === 1) ok(`filter: the column suggestion is offered ONCE — "${msgs['FEE > 40'].replace('filter: ', '')}"`);
+    else fail(`filter: suggestion appears ${dm}× — "${msgs['FEE > 40']}"`);
+  }
+
 } catch (e) {
   fail('smoke threw: ' + e.message);
 } finally {

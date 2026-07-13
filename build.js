@@ -1804,13 +1804,14 @@ if (target === 'lamina') {
   // is appended last so its imports resolve against an already-populated map.
   const SPEC = {
     '@gcu/loom': '#loom', '@gcu/lamina': '#lamina', '@gcu/proc': '#proc',
-    '@gcu/archive': '#archive', '@gcu/dm': '#dm', '@gcu/expr': '#expr', '@gcu/sluice': '#sluice', '@gcu/recon': '#recon', '@gcu/units': '#units', 'fflate': '#fflate', './idb-cache.js': '#idb-cache',
+    '@gcu/archive': '#archive', '@gcu/dm': '#dm', '@gcu/expr': '#expr', '@gcu/sluice': '#sluice', '@gcu/recon': '#recon', '@gcu/units': '#units', '@gcu/sheet': '#sheet', 'fflate': '#fflate', './idb-cache.js': '#idb-cache',
   };
   const libs = [
     ['loom',    'ext/loom/index.js'],
     ['lamina',  'ext/lamina/index.js'],
     ['proc',    'ext/proc/index.js'],
     ['archive', 'ext/archive/index.nowasm.js'],   // wasm-free — lamina's CSP has no 'wasm-unsafe-eval' (drops xz)
+    ['sheet',   'ext/sheet/index.js'],            // @gcu/sheet — a worksheet as a typed table source (inflates via DecompressionStream: still WASM-free)
     ['dm',      'ext/dm/index.js'],
     ['expr',    'ext/expr/index.js'],
     ['sluice',  'ext/sluice/index.js'],           // streaming accumulators — the grade-tonnage cutoff curve
