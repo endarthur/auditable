@@ -209,6 +209,38 @@ const c7 = await p.evaluate(async () => {
 ok(c7.on !== 'off' && c7.off === 'off', `x toggles (off → ${c7.on} → off)`);
 ok(Math.abs(c7.p1 - c7.p0 - 0.03) < 1e-9 && Math.abs(c7.p2 - c7.p1 + 0.01) < 1e-9, `. and , scrub the slab (${c7.p0} → ${c7.p1} → ${c7.p2})`);
 
+console.log('7b. the knife, ctrl+scroll, cut-samples, and ortho');
+const c7b = await p.evaluate(async () => {
+  const cv = document.querySelector('#cv'), r = cv.getBoundingClientRect();
+  // the knife programmatically: a diagonal line → a VERTICAL plane through it
+  const cut = window._gslib.knifeFrom(r.width * 0.35, r.height * 0.4, r.width * 0.7, r.height * 0.6);
+  const sec = window._gslib.currentSection();
+  const knife = { cut, mode: document.querySelector('#vSec').value,
+    vertical: sec && sec.n[2] === 0, oblique: sec && sec.n[0] !== 0 && sec.n[1] !== 0,
+    unit: sec && Math.abs(Math.hypot(sec.n[0], sec.n[1]) - 1) < 1e-9 };
+  // ctrl+scroll scrubs (window capture — the orbit's zoom must NOT run)
+  const p0 = +document.querySelector('#vSecPos').value;
+  cv.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, ctrlKey: true, bubbles: true, cancelable: true }));
+  const p1 = +document.querySelector('#vSecPos').value;
+  // samples exempt from the cut
+  const cb = document.querySelector('#vCutPts');
+  cb.checked = false; cb.dispatchEvent(new Event('change'));
+  const exempt = window._gslib.V.renderer.layerSectioned(0) === false;
+  cb.checked = true; cb.dispatchEvent(new Event('change'));
+  // ortho ↔ perspective
+  document.querySelector('#vOrtho').click();
+  const ortho = window._gslib.V.cam.state.ortho === true && document.querySelector('#vOrtho').textContent === 'O';
+  document.querySelector('#vOrtho').click();
+  const back = window._gslib.V.cam.state.ortho === false;
+  document.querySelector('#vSec').value = 'off'; document.querySelector('#vSec').dispatchEvent(new Event('change'));
+  return { knife, p0, p1, exempt, ortho, back };
+});
+ok(c7b.knife.cut && c7b.knife.mode === 'K' && c7b.knife.vertical && c7b.knife.oblique && c7b.knife.unit,
+  `the knife cuts an OBLIQUE vertical plane (mode K, unit horizontal normal)`);
+ok(Math.abs(c7b.p1 - c7b.p0 - 0.01) < 1e-9, `ctrl+scroll scrubs the slab (${c7b.p0} → ${c7b.p1})`);
+ok(c7b.exempt, 'the cut-samples toggle exempts layer 0 (renderer.layerSectioned flips)');
+ok(c7b.ortho && c7b.back, 'P ↔ O round-trips (camera state + button label)');
+
 console.log('8. a Brazilian CSV: semicolons + decimal COMMAS');
 const c8 = await p.evaluate(async () => {
   const csv = 'X;Y;TEOR\n1,5;2,5;0,42\n3,5;4,5;1,10\n5,0;6,0;2,30\n';

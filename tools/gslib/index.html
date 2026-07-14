@@ -271,9 +271,12 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   <div id="vbar">
     <label>colour <select id="vMode"><option value="est">estimate</option><option value="var">variance</option><option value="real">realization</option><option value="none">samples only</option></select></label>
     <label>samples <input type="checkbox" id="vPts" checked></label>
-    <label>section <select id="vSec"><option value="off">off</option><option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option></select></label>
-    <input type="range" id="vSecPos" min="0" max="1" step="0.002" value="0.5" style="width:110px;display:none" title="scrub the section">
+    <label>section <select id="vSec"><option value="off">off</option><option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option><option value="K">knife</option></select></label>
+    <button id="vKnife" title="drag a line across the view — the section becomes the vertical plane through it">✂ knife</button>
+    <input type="range" id="vSecPos" min="0" max="1" step="0.002" value="0.5" style="width:110px;display:none" title="scrub the section (also , / . and ctrl+scroll)">
     <input type="number" id="vSecHalf" step="any" style="width:60px;display:none" title="slab half-thickness">
+    <label id="vCutPtsL" style="display:none"><input type="checkbox" id="vCutPts" checked> cut samples</label>
+    <button id="vOrtho" title="orthographic ↔ perspective">P</button>
     <button id="vFit" title="frame the data">⛶ fit</button>
   </div>
   <div id="vhint">drag orbit · wheel zoom · right-drag pan</div>
@@ -400,23 +403,137 @@ function viewerBlocks() {
 function currentSection() {
   const ax = $('#vSec').value;
   if (ax === 'off' || !V.bbox) return null;
+  const half = Math.max(0.01, +$('#vSecHalf').value || 1);
+  if (ax === 'K') {                                          // the knife: an arbitrary VERTICAL plane
+    if (!V.knife) return null;
+    const n = V.knife.n;
+    // scrub range = the bbox corners projected onto the knife normal
+    let lo = Infinity, hi = -Infinity;
+    for (const cx of [V.bbox[0], V.bbox[3]]) for (const cy of [V.bbox[1], V.bbox[4]]) {
+      const d2 = n[0] * cx + n[1] * cy;
+      if (d2 < lo) lo = d2; if (d2 > hi) hi = d2;
+    }
+    return { on: true, n, d: lo + (+$('#vSecPos').value) * (hi - lo), half };
+  }
   const i = ax === 'X' ? 0 : ax === 'Y' ? 1 : 2;
   const lo = V.bbox[i], hi = V.bbox[i + 3];
   const d = lo + (+$('#vSecPos').value) * (hi - lo);
   const n = [0, 0, 0]; n[i] = 1;
-  const half = Math.max(0.01, +$('#vSecHalf').value || 1);
   return { on: true, n, d, half };
 }
 $('#vSec').onchange = () => {
-  const on = $('#vSec').value !== 'off';
+  const v = $('#vSec').value;
+  if (v === 'K' && !V.knife) { armKnife(); }                 // picking "knife" with none drawn arms the drag
+  const on = v !== 'off';
   $('#vSecPos').style.display = on ? '' : 'none';
   $('#vSecHalf').style.display = on ? '' : 'none';
+  $('#vCutPtsL').style.display = on ? '' : 'none';
   if (on && !+$('#vSecHalf').value && V.bbox) {
     const span = Math.max(V.bbox[3] - V.bbox[0], V.bbox[4] - V.bbox[1], V.bbox[5] - V.bbox[2]);
     $('#vSecHalf').value = +(span / 60).toPrecision(2);
   }
   requestRender();
 };
+// samples exempt from the cut — condenser's per-layer sectioned flag (micro's "don't cut")
+$('#vCutPts').onchange = () => { V.renderer.setLayerSectioned(0, $('#vCutPts').checked); requestRender(); };
+// A camera ray through a CSS pixel ∩ the data's mid-z plane → a LOCAL point.
+// (micro's unprojectToMidZ, ported — cam.state is the same shape.)
+function unprojectToMidZ(cssX, cssY) {
+  const st = V.cam.state, r = $('#cv').getBoundingClientRect();
+  const ndcX = (2 * cssX / r.width) - 1, ndcY = 1 - (2 * cssY / r.height);
+  const v = st.view;
+  const right = [v[0], v[4], v[8]], up = [v[1], v[5], v[9]];
+  const fwd = [st.target[0] - st.eye[0], st.target[1] - st.eye[1], st.target[2] - st.eye[2]];
+  const fl = Math.hypot(...fwd) || 1;
+  const zMid = V.bbox ? (V.bbox[2] + V.bbox[5]) / 2 : 0;
+  let o, dir;
+  if (st.ortho) {                                            // parallel rays, offset across the film
+    const hh = st.halfH, hw = hh * st.aspect;
+    o = [0, 1, 2].map((i) => st.eye[i] + right[i] * ndcX * hw + up[i] * ndcY * hh);
+    dir = fwd.map((c) => c / fl);
+  } else {
+    const tanF = Math.tan(st.fovY / 2);
+    o = st.eye;
+    dir = [0, 1, 2].map((i) => fwd[i] / fl + right[i] * ndcX * tanF * st.aspect + up[i] * ndcY * tanF);
+  }
+  if (Math.abs(dir[2]) < 1e-9) return null;
+  const t = (zMid - o[2]) / dir[2];
+  if (t <= 0) return null;
+  return [o[0] + dir[0] * t, o[1] + dir[1] * t, zMid];
+}
+// Drag a line; the section becomes the VERTICAL plane containing it. The drag is
+// intercepted at WINDOW capture so the orbit never sees it.
+let _knifeArm = false, _kStart = null, _kLine = null;
+function armKnife() {
+  _knifeArm = true;
+  $('#cv').style.cursor = 'crosshair';
+  $('#vhint').textContent = 'knife: drag a line across the view';
+}
+function knifeFrom(x1, y1, x2, y2) {
+  const p1 = unprojectToMidZ(x1, y1), p2 = unprojectToMidZ(x2, y2);
+  if (!p1 || !p2) return false;
+  const dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+  const l = Math.hypot(dx, dy);
+  if (l < 1e-6) return false;
+  const n = [dy / l, -dx / l, 0];                            // horizontal normal ⊥ the drawn line
+  V.knife = { n };
+  const d0 = n[0] * p1[0] + n[1] * p1[1];
+  let lo = Infinity, hi = -Infinity;
+  for (const cx of [V.bbox[0], V.bbox[3]]) for (const cy of [V.bbox[1], V.bbox[4]]) {
+    const d2 = n[0] * cx + n[1] * cy;
+    if (d2 < lo) lo = d2; if (d2 > hi) hi = d2;
+  }
+  $('#vSecPos').value = hi > lo ? Math.max(0, Math.min(1, (d0 - lo) / (hi - lo))) : 0.5;
+  $('#vSec').value = 'K';
+  $('#vSec').dispatchEvent(new Event('change'));
+  return true;
+}
+$('#vKnife').onclick = armKnife;
+// ortho ↔ perspective: the camera does the work (update() re-derives halfH from
+// the radius, so the apparent size holds across the flip)
+$('#vOrtho').onclick = () => {
+  const on = !V.cam.state.ortho;
+  V.cam.setOrtho(on);
+  $('#vOrtho').textContent = on ? 'O' : 'P';
+  requestRender();
+};
+const kXY = (e) => { const r = $('#cv').getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+window.addEventListener('pointerdown', (e) => {
+  if (!_knifeArm || e.target !== $('#cv')) return;
+  e.stopPropagation(); e.preventDefault();
+  _kStart = kXY(e);
+  _kLine = document.createElement('div');
+  _kLine.style.cssText = 'position:absolute;height:0;border-top:1.5px dashed var(--act);transform-origin:0 0;pointer-events:none;left:0;top:0';
+  $('#stage').appendChild(_kLine);
+}, true);
+window.addEventListener('pointermove', (e) => {
+  if (!_knifeArm || !_kStart) return;
+  e.stopPropagation();
+  const [x, y] = kXY(e);
+  const dx = x - _kStart[0], dy = y - _kStart[1];
+  _kLine.style.left = _kStart[0] + 'px'; _kLine.style.top = _kStart[1] + 'px';
+  _kLine.style.width = Math.hypot(dx, dy) + 'px';
+  _kLine.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+}, true);
+window.addEventListener('pointerup', (e) => {
+  if (!_knifeArm || !_kStart) return;
+  e.stopPropagation();
+  const [x, y] = kXY(e);
+  const okCut = knifeFrom(_kStart[0], _kStart[1], x, y);
+  if (_kLine) _kLine.remove();
+  _kLine = null; _kStart = null; _knifeArm = false;
+  $('#cv').style.cursor = '';
+  $('#vhint').textContent = okCut ? 'drag orbit · wheel zoom · right-drag pan' : 'knife: too short — drag a longer line';
+}, true);
+// ctrl+scroll scrubs the section (window CAPTURE so the orbit's zoom never fires)
+window.addEventListener('wheel', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.target !== $('#cv') || $('#vSec').value === 'off') return;
+  e.preventDefault(); e.stopPropagation();
+  const el = $('#vSecPos');
+  el.value = Math.max(0, Math.min(1, (+el.value) + (e.deltaY > 0 ? 0.01 : -0.01)));
+  el.dispatchEvent(new Event('input'));
+}, { capture: true, passive: false });
+
 $('#vSecPos').oninput = requestRender;
 $('#vSecHalf').oninput = requestRender;
 
@@ -1365,7 +1482,7 @@ window.addEventListener('keydown', (e) => {
 addDir(0, 90);                                               // omnidirectional default
 
 // the automation surface (the smokes drive this)
-window._gslib = { openText, sampleData, sampleDrillholes, importDrillholes, runDeclus, runVario, runKrige, runSim, runVarmap, showSimView, simViewArray, addDir, showStep, S, modelSpec, importPar, exportPar, CLUSTER_DAT,
+window._gslib = { openText, sampleData, sampleDrillholes, importDrillholes, runDeclus, runVario, runKrige, runSim, runVarmap, showSimView, simViewArray, addDir, showStep, S, modelSpec, importPar, exportPar, knifeFrom, currentSection, V, CLUSTER_DAT,
   viewerInfo: () => ({ chunks: V.renderer ? V.renderer.chunkCount : 0, hasBlocks: !!S.krige, hasReal: !!S.realization }) };
 </script>
 </body>
