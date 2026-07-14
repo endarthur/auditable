@@ -56,6 +56,12 @@ nav#rail button:disabled { opacity: .35; cursor: default; }
 #dock .why { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
 .row label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px 10px; margin: 8px 0; align-items: end; }
+.fields label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 11px; min-width: 0; }
+.fields input, .fields select { width: 100%; min-width: 0; font: 12.5px var(--mono); padding: 4px 6px; }
+.fields .msg, .fields .note { grid-column: 1 / -1; align-self: center; }
+.fields .wide { grid-column: span 2; }
+#mapRow { grid-template-columns: repeat(2, 1fr); }
 .plots { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
 .plots figure { margin: 0; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
 .plots figcaption { font: 11px var(--mono); color: var(--muted); padding: 4px 2px 0; }
@@ -66,7 +72,7 @@ table.stats td:first-child { color: var(--muted); }
 table.dirs { border-collapse: collapse; font: 12px var(--mono); margin: 6px 0; }
 table.dirs th { color: var(--muted); font-weight: 400; text-align: left; padding: 2px 8px 2px 0; }
 table.dirs td { padding: 2px 8px 2px 0; }
-table.dirs input, table.dirs select { width: 52px; }
+table.dirs input, table.dirs select { width: 56px; }
 .st-card { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin: 6px 0; background: var(--panel2); }
 .st-card .row { margin: 4px 0; }
 .st-card input { width: 56px; }
@@ -145,16 +151,16 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
     <button id="btnPar">Import .par…</button>
     <span class="msg" id="parMsg"></span>
   </div>
-  <div class="row" id="csvRow" style="display:none">
-    <label>delimiter <select id="csvDelim"><option value="auto">auto</option><option value=",">,</option><option value=";">;</option><option value="\t">tab</option><option value=" ">space</option></select></label>
-    <label>decimal <select id="csvDec"><option value=".">.</option><option value=",">,</option></select></label>
+  <div class="fields" id="csvRow" style="display:none">
+    <label>delimiter<select id="csvDelim"><option value="auto">auto</option><option value=",">,</option><option value=";">;</option><option value="\t">tab</option><option value=" ">space</option></select></label>
+    <label>decimal<select id="csvDec"><option value=".">.</option><option value=",">,</option></select></label>
     <span class="msg">changes re-read the file in place</span>
   </div>
-  <div class="row" id="mapRow" style="display:none">
-    <label>X <select id="mapX"></select></label>
-    <label>Y <select id="mapY"></select></label>
-    <label>Z <select id="mapZ"></select></label>
-    <label>value <select id="mapV"></select></label>
+  <div class="fields" id="mapRow" style="display:none">
+    <label>X<select id="mapX"></select></label>
+    <label>Y<select id="mapY"></select></label>
+    <label>Z<select id="mapZ"></select></label>
+    <label>value<select id="mapV"></select></label>
     <span class="msg" id="dataMsg"></span>
   </div>
   <div class="plots" id="dataPlots"></div>
@@ -163,10 +169,10 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
 <section id="secDeclus">
   <h2>Decluster</h2>
   <p class="why">Preferentially-sampled data lies about its mean. <code>declus</code> sweeps cell sizes and weights samples by how crowded their cell is.</p>
-  <div class="row">
-    <label>cell, from <input type="number" id="dcMin" step="any"></label>
-    <label>to <input type="number" id="dcMax" step="any"></label>
-    <label>steps <input type="number" id="dcN" value="20" min="2" max="60"></label>
+  <div class="fields">
+    <label>cell, from<input type="number" id="dcMin" step="any"></label>
+    <label>to<input type="number" id="dcMax" step="any"></label>
+    <label>steps<input type="number" id="dcN" value="20" min="2" max="60"></label>
   </div>
   <div class="row">
     <button id="btnDeclus" class="primary">run declus</button>
@@ -179,10 +185,10 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
 <section id="secVario">
   <h2>Variography</h2>
   <p class="why"><code>gamv</code> — the same pair-counting, the same accumulation order as the Fortran. Directions take a dip for 3D data; with 2D data leave dip 0.</p>
-  <div class="row">
-    <label>lags <input type="number" id="vgNlag" value="10" min="2" max="40"></label>
-    <label>size <input type="number" id="vgLag" step="any"></label>
-    <label>tol <input type="number" id="vgTol" step="any"></label>
+  <div class="fields">
+    <label>lags<input type="number" id="vgNlag" value="10" min="2" max="40"></label>
+    <label>lag size<input type="number" id="vgLag" step="any"></label>
+    <label>lag tol<input type="number" id="vgTol" step="any"></label>
   </div>
   <table class="dirs" id="dirTable">
     <thead><tr><th>azm</th><th>tol</th><th>dip</th><th>dtol</th><th>bw</th><th></th></tr></thead>
@@ -199,11 +205,10 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
 
   <h3 class="sub">Model</h3>
   <p class="why">Nugget + nested structures — <code>vmodel</code>, the exact covariance the kriging will use, redrawn over the experimental points below on every edit.</p>
-  <div class="row">
-    <label>nugget c₀ <input type="number" id="mNug" value="0" step="any" min="0"></label>
-    <button id="btnAddSt">+ structure</button>
+  <div class="fields">
+    <label>nugget c₀<input type="number" id="mNug" value="0" step="any" min="0"></label>
   </div>
-  <div class="row"><span class="msg" id="mSill"></span></div>
+  <div class="row"><button id="btnAddSt">+ structure</button><span class="msg" id="mSill"></span></div>
   <div id="stList"></div>
 
   <div class="plots" id="vgPlots"></div>
@@ -212,34 +217,34 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
 <section id="secKrige">
   <h2>Kriging</h2>
   <p class="why"><code>kb2d</code> (2D) / <code>kt3d</code> (3D). The result lands in the viewer as a block model — switch estimate / variance up top.</p>
-  <div class="row">
-    <label>nx <input type="number" id="kNx" value="50" min="2"></label>
-    <label>ny <input type="number" id="kNy" value="50" min="2"></label>
-    <label>cell x <input type="number" id="kSx" step="any"></label>
-    <label>cell y <input type="number" id="kSy" step="any"></label>
+  <div class="fields">
+    <label>nx<input type="number" id="kNx" value="50" min="2"></label>
+    <label>ny<input type="number" id="kNy" value="50" min="2"></label>
+    <label>cell x<input type="number" id="kSx" step="any"></label>
+    <label>cell y<input type="number" id="kSy" step="any"></label>
   </div>
-  <div class="row" id="kZRow" style="display:none">
-    <label>nz <input type="number" id="kNz" value="20" min="1"></label>
-    <label>cell z <input type="number" id="kSz" step="any"></label>
+  <div class="fields" id="kZRow" style="display:none">
+    <label>nz<input type="number" id="kNz" value="20" min="1"></label>
+    <label>cell z<input type="number" id="kSz" step="any"></label>
   </div>
-  <div class="row">
-    <label>origin x <input type="number" id="kOx" step="any" title="GSLIB convention: the CENTRE of the first cell (xmn)"></label>
-    <label>y <input type="number" id="kOy" step="any"></label>
-    <label id="kOzL" style="display:none">z <input type="number" id="kOz" step="any"></label>
-    <button id="btnFitGrid" title="re-derive cell sizes and origins from the data's bounding box, keeping nx/ny/nz">⌖ fit grid to data</button>
+  <div class="fields">
+    <label>origin x<input type="number" id="kOx" step="any" title="GSLIB convention: the CENTRE of the first cell (xmn)"></label>
+    <label>origin y<input type="number" id="kOy" step="any"></label>
+    <label id="kOzL" style="display:none">origin z<input type="number" id="kOz" step="any"></label>
   </div>
-  <div class="row">
-    <label>radius <input type="number" id="kRad" step="any"></label>
-    <label>min <input type="number" id="kMin" value="2" min="1"></label>
-    <label>max <input type="number" id="kMax" value="16" min="1"></label>
+  <div class="fields">
+    <label>search radius<input type="number" id="kRad" step="any"></label>
+    <label>min data<input type="number" id="kMin" value="2" min="1"></label>
+    <label>max data<input type="number" id="kMax" value="16" min="1"></label>
   </div>
-  <div class="row">
-    <label>type <select id="kType"><option>OK</option><option>SK</option></select></label>
-    <label id="kMeanL" style="display:none">SK mean <input type="number" id="kMean" step="any" value="0"></label>
-    <label>disc <input type="number" id="kDisc" value="1" min="1" max="8" title="1 = point kriging; >1 = block kriging (n×n)"></label>
+  <div class="fields">
+    <label>type<select id="kType"><option>OK</option><option>SK</option></select></label>
+    <label id="kMeanL" style="display:none">SK mean<input type="number" id="kMean" step="any" value="0"></label>
+    <label>discretization<input type="number" id="kDisc" value="1" min="1" max="8" title="1 = point kriging; >1 = block kriging (n×n)"></label>
   </div>
   <div class="row">
     <button id="btnKrige" class="primary">krige</button>
+    <button id="btnFitGrid" title="re-derive cell sizes and origins from the data's bounding box, keeping nx/ny/nz">⌖ fit grid</button>
     <button id="btnExpGrid">grid → CSV</button>
     <button id="btnParKt3d">kt3d.par</button>
     <span class="msg" id="kMsg"></span>
@@ -252,19 +257,21 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
   (declustering weights applied if you ran declus), one realization is simulated in Gaussian space on the kriging
   grid, and back-transformed through the score table. The model is your fitted one <b>rescaled to unit sill</b> —
   proper practice fits the normal-scores variogram itself; this is the teaching shortcut, and it is labelled as one.</p>
-  <div class="row">
-    <label>seed <input type="number" id="sgSeed" value="69069"></label>
-    <label>realizations <input type="number" id="sgNsim" value="5" min="1" max="100"></label>
+  <div class="fields">
+    <label>seed<input type="number" id="sgSeed" value="69069"></label>
+    <label>realizations<input type="number" id="sgNsim" value="5" min="1" max="100"></label>
   </div>
   <div class="row">
     <button id="btnSim" class="primary">simulate</button>
     <span class="msg" id="sgMsg"></span>
   </div>
-  <div class="row" id="sgViewRow" style="display:none">
-    <label>view <select id="sgShow"><option value="real">realization</option><option value="mean">e-type mean</option><option value="std">std dev</option><option value="prob">P(Z &gt; cutoff)</option><option value="quant">quantile</option></select></label>
-    <label># <input type="number" id="sgReal" value="1" min="1"></label>
-    <label id="sgCutL" style="display:none">cutoff <input type="number" id="sgCut" step="any"></label>
-    <label id="sgQL" style="display:none">p <input type="number" id="sgQ" value="90" min="1" max="99"></label>
+  <div class="fields" id="sgViewRow" style="display:none">
+    <label class="wide">view<select id="sgShow"><option value="real">realization</option><option value="mean">e-type mean</option><option value="std">std dev</option><option value="prob">P(Z &gt; cutoff)</option><option value="quant">quantile</option></select></label>
+    <label>#<input type="number" id="sgReal" value="1" min="1"></label>
+    <label id="sgCutL" style="display:none">cutoff<input type="number" id="sgCut" step="any"></label>
+    <label id="sgQL" style="display:none">p (%)<input type="number" id="sgQ" value="90" min="1" max="99"></label>
+  </div>
+  <div class="row" id="sgExpRow" style="display:none">
     <button id="btnExpSim">realizations → CSV</button>
     <button id="btnParSgsim">sgsim.par</button>
   </div>
@@ -649,7 +656,7 @@ function resetDerived() {
   S.model.structures = [];                                   // reseeded from the NEW data's variance in onData
   for (const id of ['#dcPlots', '#vgPlots']) $(id).textContent = '';
   for (const id of ['#dcMsg', '#vgMsg', '#kMsg', '#sgMsg', '#parMsg']) { $(id).textContent = ''; $(id).className = 'msg'; }
-  S.realizations = null; $('#sgViewRow').style.display = 'none';
+  S.realizations = null; $('#sgViewRow').style.display = 'none'; $('#sgExpRow').style.display = 'none';
   S.realization = null;
   if (_sg) { try { _sg.handle.dispose(); } catch { /* already gone */ } _sg = null; }
   $('#pickInfo').style.display = 'none';
@@ -1049,7 +1056,7 @@ function runSim() {
     S.realization = { real: list[0], grid };                  // kept for the smokes' contract
     S.realizations = { grid, list, seed0 };
     $('#sgReal').max = nsim; if (+$('#sgReal').value > nsim) $('#sgReal').value = 1;
-    $('#sgViewRow').style.display = '';
+    $('#sgViewRow').style.display = ''; $('#sgExpRow').style.display = '';
     showSimView();
     $('#sgMsg').textContent = `${nsim} realization${nsim > 1 ? 's' : ''} (seeds ${seed0}…${seed0 + nsim - 1}) · ${list[0].length.toLocaleString()} nodes · ${ms.toFixed(0)} ms`;
     $('#sgMsg').className = 'msg go';
