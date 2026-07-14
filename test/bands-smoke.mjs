@@ -134,6 +134,47 @@ console.log('— sections + knife stay alive —');
   ok(errs.length === 0, `still no page errors${errs.length ? ' — ' + errs[errs.length - 1] : ''}`);
 }
 
+console.log('— play, morph, budget —');
+{
+  // space toggles play, even with the play button focused (native activation suppressed)
+  await p.click('#btnPlay');
+  ok(await p.evaluate(() => document.querySelector('#btnPlay').textContent.includes('pause')), 'play starts');
+  await p.keyboard.press(' ');
+  ok(await p.evaluate(() => document.querySelector('#btnPlay').textContent.includes('play')), 'space pauses (button focused)');
+  await p.keyboard.press(' ');
+  ok(await p.evaluate(() => document.querySelector('#btnPlay').textContent.includes('pause')), 'space resumes');
+  await p.evaluate(() => window._bands.setPlaying(false));
+
+  const corr = (a, b2) => {
+    let ma = 0, mb = 0;
+    for (let i = 0; i < a.length; i++) { ma += a[i]; mb += b2[i]; }
+    ma /= a.length; mb /= a.length;
+    let sab = 0, sa = 0, sb = 0;
+    for (let i = 0; i < a.length; i++) { const da = a[i] - ma, db = b2[i] - mb; sab += da * db; sa += da * da; sb += db * db; }
+    return sab / Math.sqrt(sa * sb);
+  };
+  // morph: consecutive frames are the SAME field drifting (high correlation), K frozen
+  await p.evaluate(() => { window._bands.resetAcc(); document.querySelector('#vMorph').checked = true; window._bands.step({}); });
+  const k0 = await p.evaluate(() => window._bands.SIM.K);
+  const m1 = (await readVals(1, 'fbLast')).slice(0, 4096);
+  await p.evaluate(() => window._bands.step({}));
+  const m2 = (await readVals(1, 'fbLast')).slice(0, 4096);
+  ok(corr(m1, m2) > 0.8, `morph frames correlated (r=${corr(m1, m2).toFixed(3)})`);
+  ok(await p.evaluate(() => window._bands.SIM.K) === k0, 'morph steps do not tick K (correlated ≠ independent)');
+  // morph off: the first step re-realizes the parked base seed (t=0), so
+  // independence shows between the NEXT two fresh seeds
+  await p.evaluate(() => { document.querySelector('#vMorph').checked = false; window._bands.step({}); });
+  const m3 = (await readVals(1, 'fbLast')).slice(0, 4096);
+  await p.evaluate(() => window._bands.step({}));
+  const m4 = (await readVals(1, 'fbLast')).slice(0, 4096);
+  ok(Math.abs(corr(m3, m4)) < 0.4, `independent seeds decorrelate (r=${corr(m3, m4).toFixed(3)})`);
+
+  // budget: a still camera draws everything; a moving one uses the selector
+  ok(await p.evaluate(() => window._bands.budgetNow() >= 5e7), 'still camera → full draw');
+  ok(await p.evaluate(() => { window._bands.camMoved(); return window._bands.budgetNow() === +document.querySelector('#vBudget').value; }), 'moving camera → the selected budget');
+  ok(errs.length === 0, `still no page errors${errs.length ? ' — ' + errs[errs.length - 1] : ''}`);
+}
+
 await b.close(); srv.close();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
