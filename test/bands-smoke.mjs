@@ -296,6 +296,30 @@ console.log('— conditioning: the three laws —');
   ok(L.onNearSd < 0.25 * L.offNearSd, `variance collapses at the data (sd ${L.onNearSd.toFixed(3)} vs unconditional ${L.offNearSd.toFixed(3)})`);
   ok(L.onFarSd > 0.55 * L.offFarSd, `still a simulation away from data (sd ${L.onFarSd.toFixed(2)} vs ${L.offFarSd.toFixed(2)})`);
   ok(await p.evaluate(() => { document.querySelector('#vRange').value = 30; document.querySelector('#vRange').dispatchEvent(new Event('change')); return document.querySelector('#cOn').disabled; }), 'changing the model invalidates the tensor (geometry moved)');
+
+  // layouts: vertical holes hold x,y down the hole; section lines sit on block
+  // centres so an X section lands exactly on the plane the holes live in
+  const geo = await p.evaluate(() => {
+    const $ = (s2) => document.querySelector(s2);
+    $('#cLayout').value = 'sections'; $('#cVert').checked = true;
+    $('#cHoles').value = 9; $('#cLines').value = 3;
+    window._bands.genDrillholes();
+    const { COND, V } = window._bands;
+    const xs = new Set(Array.from(COND.x, (v) => v.toFixed(3)));
+    // group samples by (x,y): a vertical hole is one column
+    const cols = new Set(Array.from({ length: COND.n }, (_, i) => COND.x[i].toFixed(3) + ',' + COND.y[i].toFixed(3)));
+    const sec = window._bands.currentSection();
+    const onLine = COND.lines.some((x) => Math.abs(window._bands.worldToLocalX(x) - sec.d) < 1e-6);
+    return { distinctX: xs.size, lines: COND.lines.length, columns: cols.size, holes: COND.holes,
+      secAxis: sec.n[0], secHalf: sec.half, onLine, centred: COND.lines.every((x) => Math.abs(x - Math.floor(x) - 0.5) < 1e-9) };
+  });
+  ok(geo.columns === geo.holes, `vertical: each hole is one column (${geo.columns} columns / ${geo.holes} holes)`);
+  ok(geo.distinctX === geo.lines, `on section lines: ${geo.distinctX} distinct X for ${geo.lines} lines`);
+  ok(geo.centred, 'drill lines sit on block centres');
+  ok(geo.secAxis === 1 && geo.onLine && geo.secHalf < 1, 'drilling sections the view onto line 1, one block thick');
+  ok(await p.evaluate(() => { window._bands.sectionToLine(1); const s2 = window._bands.currentSection(); return Math.abs(window._bands.worldToLocalX(window._bands.COND.lines[1]) - s2.d) < 1e-6; }), '↦ drill line steps to the next line');
+  ok(await p.evaluate(() => { document.querySelector('#cVert').checked = false; window._bands.genDrillholes(); const { COND } = window._bands; const cols = new Set(Array.from({ length: COND.n }, (_, i) => COND.x[i].toFixed(3) + ',' + COND.y[i].toFixed(3))); return cols.size > COND.holes * 2; }), 'unchecking vertical makes the holes plunge (many columns)');
+
   ok(errs.length === 0, `still no page errors${errs.length ? ' — ' + errs[errs.length - 1] : ''}`);
 }
 

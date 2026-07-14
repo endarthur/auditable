@@ -130,11 +130,19 @@ button.on { border-color: var(--go); color: var(--go); }
 <h2>Conditioning</h2>
 <p class="why">Kriging weights depend on geometry alone, never on values — so the CPU solves the systems ONCE and every realization is conditioned on the GPU.</p>
 <div class="fields">
-  <label>holes<input type="number" id="cHoles" value="8" min="1" max="60"></label>
+  <label>holes<input type="number" id="cHoles" value="9" min="1" max="60"></label>
   <label>spacing<input type="number" id="cSpace" value="4" step="any" min="0.5"></label>
   <label>truth seed<input type="number" id="cTruth" value="12345"></label>
+  <label class="wide">layout<select id="cLayout">
+    <option value="sections" selected>on section lines</option>
+    <option value="grid">regular grid</option>
+    <option value="random">scattered</option>
+  </select></label>
+  <label>lines<input type="number" id="cLines" value="3" min="1" max="12" title="number of section lines"></label>
+  <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="cVert" checked style="width:auto">vertical</label>
 </div>
-<div class="row"><button id="btnHoles">drill</button><button id="btnResim">resimulate values</button><span class="msg" id="cMsg1"></span></div>
+<div class="row"><button id="btnHoles">drill</button><button id="btnResim">resimulate values</button>
+  <button id="btnSecLine" title="section onto the next drill line">&#8614; drill line</button><span class="msg" id="cMsg1"></span></div>
 <div class="fields">
   <label>max data/block<input type="number" id="cK" value="12" min="1" max="24"></label>
   <label>search (ranges)<input type="number" id="cRad" value="1.5" step="0.25" min="0.25"></label>
@@ -158,7 +166,7 @@ button.on { border-color: var(--go); color: var(--go); }
   <div id="vbar">
     <label>section <select id="vSec"><option value="off">off</option><option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option><option value="K">knife</option></select></label>
     <button id="vKnife" title="drag a line — the section becomes the vertical plane through it (k)">✂ knife</button>
-    <input type="range" id="vSecPos" min="0" max="1" step="0.002" value="0.5" style="width:110px;display:none">
+    <input type="range" id="vSecPos" min="0" max="1" step="any" value="0.5" style="width:110px;display:none">
     <input type="number" id="vSecHalf" step="any" style="width:56px;display:none">
     <button id="vOrtho" title="orthographic ↔ perspective (o)">P</button>
     <button id="vFit" title="frame the model (f)">⛶ fit</button>
@@ -570,37 +578,81 @@ function evalField(bands, B, R, px, py, pz, time, sqrtStruct, sqrtNug, rec, seed
   return z;
 }
 
-// synthetic drillholes: collars scattered over the footprint, holes plunging
-// steeply with a little jitter, samples composited down the hole
+// synthetic drillholes. Layouts: on section LINES (collars on a few constant-X
+// lines placed at BLOCK CENTRES, so an X section lands exactly on a line — the
+// easiest way to see conditioning at work), a regular grid, or scattered.
+// Vertical is the default; unchecked, holes plunge steeply with jitter.
 function genDrillholes() {
   const nH = Math.max(1, Math.min(60, +$('#cHoles').value | 0));
   const sp = Math.max(0.5, +$('#cSpace').value || 4);
-  const rnd = mulberry32(hash32(7777 + nH * 131 + Math.round(sp * 10)));
+  const layout = $('#cLayout').value, vert = $('#cVert').checked;
+  const rnd = mulberry32(hash32(7777 + nH * 131 + Math.round(sp * 10) + layout.length * 977));
   const { nx, ny, nz } = G;
-  const ax = [], ay = [], az = [], bx = [], by = [], bz = [], cx = [], cy = [], cz = [], chan = [];
-  for (let h = 0; h < nH; h++) {
-    const x0 = nx * (0.12 + 0.76 * rnd()), y0 = ny * (0.12 + 0.76 * rnd());
-    const azm = 2 * Math.PI * rnd(), plunge = (78 + 12 * rnd()) * Math.PI / 180;
-    const dx = Math.cos(azm) * Math.cos(plunge), dy = Math.sin(azm) * Math.cos(plunge), dz = -Math.sin(plunge);
-    const depth = nz * (0.55 + 0.4 * rnd());
+  const ax = [], ay = [], az = [], bx = [], by = [], bz = [], cx = [], cy = [], cz = [];
+
+  const collars = [];
+  if (layout === 'sections') {
+    const nL = Math.max(1, Math.min(12, +$('#cLines').value | 0));
+    const per = Math.ceil(nH / nL);
+    COND.lines = [];
+    for (let l = 0; l < nL; l++) {
+      const xi = Math.round(nx * (l + 1) / (nL + 1) - 0.5);      // a block index …
+      const x0 = xi + 0.5;                                       // … so the line IS a block-centre plane
+      COND.lines.push(x0);
+      for (let j = 0; j < per && collars.length < nH; j++) collars.push([x0, ny * (j + 1) / (per + 1)]);
+    }
+  } else if (layout === 'grid') {
+    COND.lines = null;
+    const c = Math.ceil(Math.sqrt(nH));
+    for (let i = 0; i < nH; i++) collars.push([nx * ((i % c) + 1) / (c + 1), ny * (((i / c) | 0) + 1) / (c + 1)]);
+  } else {
+    COND.lines = null;
+    for (let i = 0; i < nH; i++) collars.push([nx * (0.12 + 0.76 * rnd()), ny * (0.12 + 0.76 * rnd())]);
+  }
+
+  for (const [x0, y0] of collars) {
+    let dx = 0, dy = 0, dz = -1;
+    if (!vert) {
+      const azm = 2 * Math.PI * rnd(), plunge = (72 + 15 * rnd()) * Math.PI / 180;
+      dx = Math.cos(azm) * Math.cos(plunge); dy = Math.sin(azm) * Math.cos(plunge); dz = -Math.sin(plunge);
+    }
+    const depth = layout === 'random' ? nz * (0.6 + 0.35 * rnd()) : nz * 0.9;
     for (let d = sp / 2; d < depth; d += sp) {
       const t0 = d - sp / 2, t1 = d + sp / 2;
       const px = x0 + dx * d, py = y0 + dy * d, pz = nz - 0.5 + dz * d;
       if (px < 0 || px > nx || py < 0 || py > ny || pz < 0) break;
       ax.push(x0 + dx * t0); ay.push(y0 + dy * t0); az.push(nz - 0.5 + dz * t0);
       bx.push(x0 + dx * t1); by.push(y0 + dy * t1); bz.push(nz - 0.5 + dz * t1);
-      cx.push(px); cy.push(py); cz.push(pz); chan.push(0);
+      cx.push(px); cy.push(py); cz.push(pz);
     }
   }
-  COND.n = cx.length; COND.holes = nH;
+  COND.n = cx.length; COND.holes = collars.length;
   COND.x = Float64Array.from(cx); COND.y = Float64Array.from(cy); COND.z = Float64Array.from(cz);
   COND.v = new Float64Array(COND.n);
   COND._seg = { ax: Float64Array.from(ax), ay: Float64Array.from(ay), az: Float64Array.from(az),
     bx: Float64Array.from(bx), by: Float64Array.from(by), bz: Float64Array.from(bz) };
   invalidateTensor();
   resimulateValues();                                       // fresh holes always carry values
-  $('#cMsg1').textContent = `${nH} holes · ${COND.n} samples`;
+  $('#btnSecLine').disabled = !COND.lines;
+  if (COND.lines) sectionToLine(0);                         // land the view on the first drill line
 }
+
+// put the X section exactly ON a drill line, one block thick — the demo move:
+// in this plane the field is pinned to the data; between the lines it is free
+let _lineAt = 0;
+function sectionToLine(i) {
+  if (!COND.lines || !COND.lines.length || !V.bbox) return;
+  _lineAt = ((i % COND.lines.length) + COND.lines.length) % COND.lines.length;
+  const x = COND.lines[_lineAt];
+  $('#vSec').value = 'X';
+  $('#vSec').dispatchEvent(new Event('change'));             // seeds a default thickness…
+  $('#vSecHalf').value = 0.6;                                // …one block is what we want
+  $('#vSecPos').value = Math.max(0, Math.min(1, x / G.nx));  // world x → slider fraction
+  $('#vSecPos').dispatchEvent(new Event('input'));
+  $('#cMsg1').textContent = `${COND.holes} holes · ${COND.n} samples · line ${_lineAt + 1}/${COND.lines.length}`;
+}
+// the document frame centres the model: world x ↦ local x − nx/2
+const worldToLocalX = (x) => x - G.nx / 2;
 
 // the data's values ARE a realization of the model — resample them from a seed
 function resimulateValues() {
@@ -761,6 +813,9 @@ function uploadResiduals(seed, time, B) {
 
 $('#btnHoles').onclick = genDrillholes;
 $('#btnResim').onclick = resimulateValues;
+$('#btnSecLine').onclick = () => sectionToLine(_lineAt + 1);
+$('#btnSecLine').disabled = true;
+$('#cLayout').onchange = () => { $('#cLines').disabled = $('#cLayout').value !== 'sections'; };
 $('#btnTensor').onclick = buildTensor;
 $('#cOn').onchange = () => { resetAcc(); };
 for (const id of ['#cK', '#cRad']) $(id).onchange = () => invalidateTensor('search changed — rebuild the tensor');
@@ -1162,7 +1217,7 @@ $('#vCut').disabled = true;
 buildGrid();
 requestAnimationFrame(loop);
 
-window._bands = { step, resetAcc, buildGrid, pickAt, clearPick, knifeFrom, currentSection, setPlaying, budgetNow, camMoved, updateDiag, genDrillholes, resimulateValues, buildTensor, condReady, MORPH, DIAG, COND, SIM, G, V };
+window._bands = { step, resetAcc, buildGrid, pickAt, clearPick, knifeFrom, currentSection, setPlaying, budgetNow, camMoved, updateDiag, genDrillholes, resimulateValues, buildTensor, sectionToLine, worldToLocalX, condReady, MORPH, DIAG, COND, SIM, G, V };
 </script>
 </body>
 </html>
