@@ -217,6 +217,12 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
     <label>cell z <input type="number" id="kSz" step="any"></label>
   </div>
   <div class="row">
+    <label>origin x <input type="number" id="kOx" step="any" title="GSLIB convention: the CENTRE of the first cell (xmn)"></label>
+    <label>y <input type="number" id="kOy" step="any"></label>
+    <label id="kOzL" style="display:none">z <input type="number" id="kOz" step="any"></label>
+    <button id="btnFitGrid" title="re-derive cell sizes and origins from the data's bounding box, keeping nx/ny/nz">⌖ fit grid to data</button>
+  </div>
+  <div class="row">
     <label>radius <input type="number" id="kRad" step="any"></label>
     <label>min <input type="number" id="kMin" value="2" min="1"></label>
     <label>max <input type="number" id="kMax" value="16" min="1"></label>
@@ -236,7 +242,7 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
 
 <section id="secSim">
   <h2>Simulation</h2>
-  <p class="why"><code>nscore</code> → <code>sgsim</code> → <code>backtr</code>: the data goes to normal scores
+  <p class="why">Grid and search come from <b>Kriging (step 4)</b>; the seed and count are this panel's own. <code>nscore</code> → <code>sgsim</code> → <code>backtr</code>: the data goes to normal scores
   (declustering weights applied if you ran declus), one realization is simulated in Gaussian space on the kriging
   grid, and back-transformed through the score table. The model is your fitted one <b>rescaled to unit sill</b> —
   proper practice fits the normal-scores variogram itself; this is the teaching shortcut, and it is labelled as one.</p>
@@ -249,8 +255,10 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
     <span class="msg" id="sgMsg"></span>
   </div>
   <div class="row" id="sgViewRow" style="display:none">
-    <label>view <select id="sgShow"><option value="real">realization</option><option value="mean">e-type mean</option><option value="std">std dev</option></select></label>
+    <label>view <select id="sgShow"><option value="real">realization</option><option value="mean">e-type mean</option><option value="std">std dev</option><option value="prob">P(Z &gt; cutoff)</option><option value="quant">quantile</option></select></label>
     <label># <input type="number" id="sgReal" value="1" min="1"></label>
+    <label id="sgCutL" style="display:none">cutoff <input type="number" id="sgCut" step="any"></label>
+    <label id="sgQL" style="display:none">p <input type="number" id="sgQ" value="90" min="1" max="99"></label>
     <button id="btnExpSim">realizations → CSV</button>
     <button id="btnParSgsim">sgsim.par</button>
   </div>
@@ -512,17 +520,28 @@ function extent() {
 }
 // the grid the kriging AND the simulation share, from the panel inputs
 function gridFromInputs() {
-  const e = extent();
   const g = {
     nx: +$('#kNx').value, ny: +$('#kNy').value,
     xsiz: +$('#kSx').value, ysiz: +$('#kSy').value,
-    xmn: e.x0 + (+$('#kSx').value) / 2, ymn: e.y0 + (+$('#kSy').value) / 2,
+    xmn: +$('#kOx').value, ymn: +$('#kOy').value,            // GSLIB xmn = the FIRST CELL'S CENTRE
   };
   if (is3D()) {
-    g.nz = Math.max(1, +$('#kNz').value); g.zsiz = +$('#kSz').value;
-    g.zmn = e.z0 + g.zsiz / 2;
+    g.nz = Math.max(1, +$('#kNz').value); g.zsiz = +$('#kSz').value; g.zmn = +$('#kOz').value;
   } else { g.nz = 1; g.zsiz = 1; g.zmn = 0; }
   return g;
+}
+// seed (or re-fit) cell sizes + origins from the data's bbox, keeping nx/ny/nz
+function fitGridToData() {
+  const e = extent();
+  $('#kSx').value = +((e.x1 - e.x0) / $('#kNx').value).toPrecision(3);
+  $('#kSy').value = +((e.y1 - e.y0) / $('#kNy').value).toPrecision(3);
+  $('#kOx').value = +(e.x0 + (+$('#kSx').value) / 2).toPrecision(6);
+  $('#kOy').value = +(e.y0 + (+$('#kSy').value) / 2).toPrecision(6);
+  $('#kZRow').style.display = $('#kOzL').style.display = is3D() ? '' : 'none';
+  if (is3D()) {
+    $('#kSz').value = +(Math.max(1e-6, (e.z1 - e.z0)) / $('#kNz').value).toPrecision(3);
+    $('#kOz').value = +(e.z0 + (+$('#kSz').value) / 2).toPrecision(6);
+  }
 }
 
 // ── plotting helpers (@gcu/plot; each figure is its own canvas) ───────────────
@@ -562,11 +581,8 @@ function onData() {
   $('#dcMin').value = +(span / 100).toPrecision(2); $('#dcMax').value = +(span / 2).toPrecision(2);
   $('#vgLag').value = +(span / 2 / (+$('#vgNlag').value)).toPrecision(2);
   $('#vgTol').value = +($('#vgLag').value / 2).toPrecision(2);
-  $('#kSx').value = +((e.x1 - e.x0) / $('#kNx').value).toPrecision(3);
-  $('#kSy').value = +((e.y1 - e.y0) / $('#kNy').value).toPrecision(3);
   $('#kRad').value = +(span / 2).toPrecision(2);
-  $('#kZRow').style.display = is3D() ? '' : 'none';
-  if (is3D()) $('#kSz').value = +(Math.max(1e-6, (e.z1 - e.z0)) / $('#kNz').value).toPrecision(3);
+  fitGridToData();
   if (!S.model.structures.length) S.model.structures.push({ type: 'spherical', contribution: +va.toPrecision(3), range: +(span / 4).toPrecision(2), rangeMinor: null, angle: 0 });
   renderStructures();
   enableSteps();
@@ -718,6 +734,7 @@ function runKrige() {
   viewerBlocks();
 }
 $('#kType').onchange = () => { $('#kMeanL').style.display = $('#kType').value === 'SK' ? '' : 'none'; };
+$('#btnFitGrid').onclick = () => { fitGridToData(); $('#kMsg').textContent = 'grid re-fitted to the data bounding box'; $('#kMsg').className = 'msg go'; };
 
 // ── 6. export ─────────────────────────────────────────────────────────────────
 function download(name, text, mime = 'text/csv') {
@@ -867,6 +884,21 @@ function simViewArray() {
   if (mode === 'real') return R.list[Math.max(0, Math.min(R.list.length - 1, +$('#sgReal').value - 1))];
   const n = R.list[0].length, k = R.list.length;
   const out = new Float64Array(n);
+  if (mode === 'prob') {                                     // postsim: P(Z > cutoff), per node across realizations
+    const cut = +$('#sgCut').value;
+    for (let i = 0; i < n; i++) { let c = 0; for (const r of R.list) if (r[i] > cut) c++; out[i] = c / k; }
+    return out;
+  }
+  if (mode === 'quant') {                                    // postsim: the per-node p-quantile of the local CDF
+    const q = Math.max(0.01, Math.min(0.99, (+$('#sgQ').value || 50) / 100));
+    const buf = new Float64Array(k);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < k; j++) buf[j] = R.list[j][i];
+      buf.sort();
+      out[i] = buf[Math.min(k - 1, Math.floor(q * k))];
+    }
+    return out;
+  }
   for (let i = 0; i < n; i++) {
     let s2 = 0; for (const r of R.list) s2 += r[i];
     const m = s2 / k;
@@ -883,7 +915,19 @@ function showSimView() {
   V.cam.fit(V.bbox);
   requestRender();
 }
-$('#sgShow').onchange = () => { $('#sgReal').disabled = $('#sgShow').value !== 'real'; showSimView(); };
+$('#sgShow').onchange = () => {
+  const m = $('#sgShow').value;
+  $('#sgReal').disabled = m !== 'real';
+  $('#sgCutL').style.display = m === 'prob' ? '' : 'none';
+  $('#sgQL').style.display = m === 'quant' ? '' : 'none';
+  if (m === 'prob' && $('#sgCut').value === '') {            // a sensible first cutoff: the data median
+    const v = [...vals()].sort((a, b) => a - b);
+    $('#sgCut').value = +v[Math.floor(v.length / 2)].toPrecision(3);
+  }
+  showSimView();
+};
+$('#sgCut').onchange = showSimView;
+$('#sgQ').onchange = showSimView;
 $('#sgReal').onchange = showSimView;
 $('#btnExpSim').onclick = () => {
   const R = S.realizations;
@@ -958,9 +1002,9 @@ function importPar(name, text) {
       showStep('secDeclus');
     } else if (kind === 'kt3d') {
       const gx = parNums(L[9]), gy = parNums(L[10]), gz = parNums(L[11]);
-      $('#kNx').value = gx[0]; $('#kSx').value = gx[2];
-      $('#kNy').value = gy[0]; $('#kSy').value = gy[2];
-      if (is3D()) { $('#kNz').value = gz[0]; $('#kSz').value = gz[2]; }
+      $('#kNx').value = gx[0]; $('#kOx').value = gx[1]; $('#kSx').value = gx[2];
+      $('#kNy').value = gy[0]; $('#kOy').value = gy[1]; $('#kSy').value = gy[2];
+      if (is3D()) { $('#kNz').value = gz[0]; $('#kOz').value = gz[1]; $('#kSz').value = gz[2]; }
       const dis = parNums(L[12]); $('#kDisc').value = Math.max(1, dis[0] || 1);
       const nd = parNums(L[13]); $('#kMin').value = nd[0]; $('#kMax').value = nd[1];
       const rad = parNums(L[15]); $('#kRad').value = rad[0];
@@ -972,13 +1016,13 @@ function importPar(name, text) {
       applied.push(`grid ${gx[0]}×${gy[0]}${gz[0] > 1 ? '×' + gz[0] : ''}`, `search r=${rad[0]}, n=${nd[0]}…${nd[1]}`, kt[0] === 0 ? 'SK' : 'OK');
       const nc = parNums(L[22]);
       applyModel(nc[1] || 0, parStructures(L, 23, nc[0]), applied);
-      ignored.push('grid ORIGINS (the grid anchors to the loaded data)', 'octants, drift terms, anisotropic search radii');
+      ignored.push('octants, drift terms, anisotropic search radii');
       showStep('secKrige');
     } else if (kind === 'sgsim') {
       const gx = parNums(L[15]), gy = parNums(L[16]), gz = parNums(L[17]);
-      $('#kNx').value = gx[0]; $('#kSx').value = gx[2];
-      $('#kNy').value = gy[0]; $('#kSy').value = gy[2];
-      if (is3D()) { $('#kNz').value = gz[0]; $('#kSz').value = gz[2]; }
+      $('#kNx').value = gx[0]; $('#kOx').value = gx[1]; $('#kSx').value = gx[2];
+      $('#kNy').value = gy[0]; $('#kOy').value = gy[1]; $('#kSy').value = gy[2];
+      if (is3D()) { $('#kNz').value = gz[0]; $('#kOz').value = gz[1]; $('#kSz').value = gz[2]; }
       $('#sgSeed').value = parNums(L[18])[0] || 69069;
       const nd = parNums(L[19]); $('#kMax').value = nd[1] || 16;
       // the search radius + the variogram: SCAN (sgsim variants shuffle the middle)

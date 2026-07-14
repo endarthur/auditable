@@ -143,6 +143,55 @@ ok(c6 && c6.n === 4 && c6.viewRow, `4 realizations from one click, the view row 
 // realizations share through the conditioning data (4 realizations ≈ 25% here)
 ok(c6 && c6.vMean < c6.vReal * 0.95, `e-type mean variance ${c6.vMean.toFixed(3)} < realization ${c6.vReal.toFixed(3)} — averaging smooths, as it must`);
 
+console.log('6b. postsim: P(Z > cutoff) and quantile maps, from the SAME realizations');
+const c6b = await p.evaluate(async () => {
+  const set = (id, v) => { const el = document.querySelector(id); el.value = v; el.dispatchEvent(new Event('change')); };
+  // probability: bounded [0,1], and MONOTONE — a higher cutoff can only lower it
+  set('#sgShow', 'prob');
+  set('#sgCut', 1.0);
+  await new Promise((r) => setTimeout(r, 300));
+  const pLow = window._gslib.simViewArray();
+  set('#sgCut', 5.0);
+  await new Promise((r) => setTimeout(r, 300));
+  const pHigh = window._gslib.simViewArray();
+  let inBounds = true, mono = 0, n = 0;
+  let sLow = 0, sHigh = 0;
+  for (let i = 0; i < pLow.length; i++) {
+    if (pLow[i] < 0 || pLow[i] > 1) inBounds = false;
+    if (pHigh[i] <= pLow[i] + 1e-12) mono++;
+    sLow += pLow[i]; sHigh += pHigh[i]; n++;
+  }
+  // quantiles: p90 must dominate p10, node by node
+  set('#sgShow', 'quant');
+  set('#sgQ', 10);
+  await new Promise((r) => setTimeout(r, 300));
+  const q10 = window._gslib.simViewArray();
+  set('#sgQ', 90);
+  await new Promise((r) => setTimeout(r, 300));
+  const q90 = window._gslib.simViewArray();
+  let dom = 0;
+  for (let i = 0; i < q10.length; i++) if (q90[i] >= q10[i] - 1e-12) dom++;
+  const cutSeeded = document.querySelector('#sgCut').value !== '';
+  return { inBounds, mono, dom, n, meanLow: sLow / n, meanHigh: sHigh / n, cutSeeded };
+});
+ok(c6b.inBounds && c6b.mono === c6b.n, `P(Z>cut) ∈ [0,1] and monotone in the cutoff (mean ${c6b.meanLow.toFixed(2)} @1.0 → ${c6b.meanHigh.toFixed(2)} @5.0)`);
+ok(c6b.dom === c6b.n, `q90 ≥ q10 at every node (${c6b.dom}/${c6b.n})`);
+
+console.log('6c. grid ORIGINS are real inputs; ⌖ fit re-derives them from the data');
+const c6c = await p.evaluate(async () => {
+  document.querySelector('#kOx').value = 123.45;             // a deliberately wrong origin
+  window._gslib.runKrige();
+  await new Promise((r) => setTimeout(r, 500));
+  const usedWrong = window._gslib.S.krige.grid.xmn;
+  document.querySelector('#btnFitGrid').click();
+  const refit = +document.querySelector('#kOx').value;
+  const xs = window._gslib.S.rows.map((r) => r[window._gslib.S.map.x]);
+  const expected = Math.min(...xs) + (+document.querySelector('#kSx').value) / 2;
+  return { usedWrong, refit, expected };
+});
+ok(c6c.usedWrong === 123.45, `kriging honours the origin input (xmn = ${c6c.usedWrong})`);
+ok(Math.abs(c6c.refit - c6c.expected) < 1e-6, `⌖ fit restores the data-derived origin (${c6c.refit} ≈ ${c6c.expected.toFixed(4)})`);
+
 console.log('7. the keyboard: x toggles the section, , and . scrub it');
 const c7 = await p.evaluate(async () => {
   const key = (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
