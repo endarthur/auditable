@@ -4274,6 +4274,8 @@ uniform sampler2D uCatVis;              // 256x1 per-class visibility
 uniform float uCatVisOn;
 uniform sampler2D uRule;                // rule-code byte by record index (8192-wide)
 uniform float uRuleOn;                  // rule mode: the code replaces the category
+uniform sampler2D uChanTex;             // OPT-IN: raw f32 VALUE by record index (8192-wide rows) —
+uniform float uChanTexOn;               // replaces aChan; how a never-materialized grade gets drawn
 uniform float uForceSplat;              // 1 = whole chunk demoted (cheap far-field path)
 uniform float uFixedSplat;              // 1 = points view: fixed-px splats regardless of block size
 uniform uint uPicked;                   // picked RECORD (0xFFFFFFFF = none)
@@ -4328,7 +4330,10 @@ void main() {
     float t = clamp((center.z - uZRange.x) / max(uZRange.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
   } else if (uColorMode == 1) {
-    float v = uChanChunk.x + aChan * uChanChunk.y;
+    int cr = int(aRec);
+    float v = uChanTexOn > 0.5
+      ? texelFetch(uChanTex, ivec2(cr & 8191, cr >> 13), 0).r
+      : uChanChunk.x + aChan * uChanChunk.y;
     float t = clamp((v - uChanDoc.x) / max(uChanDoc.y, 1e-6), 0.0, 1.0);
     vColor = texture(uRamp, vec2(t, 0.5));
   } else if (uColorMode == 2) {
@@ -4490,6 +4495,7 @@ function createBlocksPipeline(gl) {
       mask: U('uMask'), filterOn: U('uFilterOn'), isolate: U('uIsolate'), forceSplat: U('uForceSplat'), fixedSplat: U('uFixedSplat'), picked: U('uPicked'), pickedLayer: U('uPickedLayer'), layer: U('uLayer'), repaint: U('uRepaint'),
       catVis: U('uCatVis'), catVisOn: U('uCatVisOn'), sel: U('uSel'), selOn: U('uSelOn'),
       rule: U('uRule'), ruleOn: U('uRuleOn'),
+      chanTex: U('uChanTex'), chanTexOn: U('uChanTexOn'),
       secPlane: U('uSecPlane'), secCfg: U('uSecCfg'), edges: U('uEdges'),
       ortho: U('uOrtho'), fwd: U('uFwd'), orthoRay: U('uOrthoRay'), backoff: U('uBackoff'),
     } };
@@ -4577,7 +4583,7 @@ function createBlocksPipeline(gl) {
 
   // Per-frame program state (called once before the chunk loop) — set on BOTH
   // programs so drawSlice can switch freely between full and cheap.
-  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, pickedLayer = 0xFFFFFFFF, layer = 0, section = null, catVisTex = null, selTex = null, ruleTex = null, opacity = 1, edges = false }) {
+  function begin(cam, { pointPx, colorMode, zRange, chanDoc, ramp, palette, viewportH, maskTex = null, isolate = false, pointsView = false, picked = 0xFFFFFFFF, pickedLayer = 0xFFFFFFFF, layer = 0, section = null, catVisTex = null, selTex = null, ruleTex = null, chanTex = null, opacity = 1, edges = false }) {
     const s = cam.state;
     for (const pp of [full, cheap]) {
       gl.useProgram(pp.prog);
@@ -4629,6 +4635,8 @@ function createBlocksPipeline(gl) {
       if (selTex) { gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, selTex); gl.uniform1i(uni.sel, 6); }
       gl.uniform1f(uni.ruleOn, ruleTex ? 1 : 0);
       if (ruleTex) { gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, ruleTex); gl.uniform1i(uni.rule, 7); }
+      gl.uniform1f(uni.chanTexOn, chanTex ? 1 : 0);
+      if (chanTex) { gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, chanTex); gl.uniform1i(uni.chanTex, 8); }
     }
     active = full;
     gl.useProgram(full.prog);
@@ -6462,7 +6470,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
             intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
             meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, opacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0, selTex: null, selH: 0,
-            ruleTex: null, ruleH: 0, ruleOn: false };
+            ruleTex: null, ruleH: 0, ruleOn: false,
+            chanTex: null, chanTexRange: null };
       layers.set(id, l);
     }
     return l;
@@ -6695,6 +6704,17 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     },
     // per-layer color ramp LUT (layer properties: presets + baked breakpoints).
     // pixels = Uint8Array(256*4) RGBA, or null to fall back to the built-in ramp.
+    // OPT-IN: drive block colour from an R32F VALUE texture (one texel per record,
+    // 8192-wide rows) instead of the baked aChan buffer. `range` = [lo, hi] for the
+    // ramp normalization — a computed texture has no docChan of its own. Pass a
+    // null texture to fall back to aChan. The caller OWNS the texture (create,
+    // render into, delete); the renderer only samples it.
+    setLayerChanTex(layer, tex, range = null) {
+      const ls = layerOf(layer);
+      ls.chanTex = tex || null;
+      ls.chanTexRange = (tex && range) ? [range[0], Math.max(1e-9, range[1] - range[0])] : null;
+      needClear = true;
+    },
     setLayerRamp(layer, pixels) {
       const ls = layerOf(layer);
       if (!pixels) {
@@ -7022,11 +7042,12 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           const cHi = o.clip && o.clip[1] != null && o.colorMode === 1 ? o.clip[1] : ls.docChan[1];
           blocksPipe.begin(cam, {
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
-            chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
+            chanDoc: ls.chanTex && ls.chanTexRange ? ls.chanTexRange : [cLo, cHi > cLo ? cHi - cLo : 1],
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, pickedLayer, layer: id,
             section: layerSecOf(ls, sec),
             catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
+            chanTex: ls.chanTex,
             opacity: ls.opacity, edges: ls.edges != null ? ls.edges : blockEdges,   // per-layer override, else the View toggle
           });
         };

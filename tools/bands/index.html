@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="connect-src 'none'">
+<title>bands.gpu</title>
+<style>
+:root {
+  --bg: #16181a; --panel: #1d2023; --panel2: #24282c; --line: #34393e;
+  --ink: #d4d9de; --muted: #8b939b; --faint: #5c646b;
+  --act: #c8722e; --info: #5b8fb9; --go: #4f9c62; --warn: #c8a04a; --bad: #b95b5b;
+  --mono: "Space Mono", ui-monospace, Consolas, monospace;
+  --sans: Barlow, system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); display: flex; flex-direction: column; overflow: hidden; }
+header { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { margin: 0; font: 700 16px var(--mono); }
+header h1 b { color: var(--act); }
+header .sub { color: var(--muted); font-size: 12px; }
+header .sp { flex: 1; }
+button, select, input { background: var(--panel2); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; font: 13px var(--sans); }
+button { cursor: pointer; }
+button:hover { border-color: var(--act); }
+button.primary { background: var(--act); color: #16181a; font-weight: 700; border-color: var(--act); }
+button.on { border-color: var(--go); color: var(--go); }
+#app { flex: 1; display: flex; min-height: 0; }
+#dock { flex: 0 0 300px; overflow-y: auto; overflow-x: hidden; padding: 12px 14px; background: var(--panel); border-right: 1px solid var(--line); }
+#dock h2 { margin: 12px 0 4px; font: 700 12px var(--mono); color: var(--act); letter-spacing: .06em; text-transform: uppercase; }
+#dock h2:first-child { margin-top: 0; }
+#dock .why { color: var(--muted); font-size: 11.5px; margin: 0 0 8px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px 10px; margin: 8px 0; align-items: end; }
+.fields label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 11px; min-width: 0; }
+.fields input, .fields select { width: 100%; min-width: 0; font: 12.5px var(--mono); padding: 4px 6px; }
+.fields .wide { grid-column: span 2; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.msg { font: 11.5px var(--mono); color: var(--muted); }
+.msg.go { color: var(--go); }
+.big { font: 700 20px var(--mono); color: var(--ink); }
+.big small { font: 11px var(--mono); color: var(--muted); display: block; }
+* { scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 5px; }
+#stage { flex: 1; position: relative; min-width: 0; background: #121212; }
+#cv { width: 100%; height: 100%; display: block; }
+#vbar { position: absolute; top: 10px; right: 10px; display: flex; gap: 8px; align-items: center;
+  background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+#vbar label { color: var(--muted); font-size: 11.5px; display: flex; gap: 5px; align-items: center; }
+#vhint { position: absolute; left: 12px; bottom: 10px; color: var(--faint); font: 11px var(--mono); pointer-events: none; }
+#vfoot { position: absolute; right: 12px; bottom: 10px; color: var(--faint); font: 10.5px var(--mono); pointer-events: none; }
+#pickInfo { display: none; position: absolute; left: 12px; top: 12px; min-width: 150px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 10px; font: 11.5px var(--mono); }
+#pickInfo b { color: var(--act); display: block; margin-bottom: 4px; }
+#pickInfo div { display: flex; justify-content: space-between; gap: 12px; }
+#pickInfo div span { color: var(--muted); }
+</style>
+<script type="importmap">
+{ "imports": { "@gcu/condenser": "../../ext/condenser/index.js" } }
+</script>
+</head>
+<body>
+<header>
+  <h1><b>bands</b>.gpu</h1>
+  <span class="sub">turning bands, never materialized — the realization exists only as its reductions</span>
+  <span class="sp"></span>
+</header>
+<div id="app">
+<div id="dock">
+
+<h2>Grid</h2>
+<div class="fields">
+  <label class="wide">blocks<select id="gSize">
+    <option value="64,64,32">64 × 64 × 32 — 131k</option>
+    <option value="96,96,48" selected>96 × 96 × 48 — 442k</option>
+    <option value="128,128,64">128 × 128 × 64 — 1.05M</option>
+    <option value="160,160,80">160 × 160 × 80 — 2.05M</option>
+  </select></label>
+</div>
+
+<h2>Variogram</h2>
+<p class="why">Spectral turning bands (Mantoglou–Wilson): ω drawn from the model's own 3D spectral measure — the covariance is exact, not approximate.</p>
+<div class="fields">
+  <label>model<select id="vModel"><option value="sph">spherical</option><option value="exp">exponential</option><option value="gau" selected>gaussian</option></select></label>
+  <label>range<input type="number" id="vRange" value="24" step="any" min="1"></label>
+  <label>range minor<input type="number" id="vRangeMinor" value="12" step="any" min="1"></label>
+  <label>range vert<input type="number" id="vRangeVert" value="6" step="any" min="1"></label>
+  <label>azimuth<input type="number" id="vAzm" value="30" step="any"></label>
+  <label>nugget<input type="number" id="vNug" value="0.1" step="0.05" min="0" max="1"></label>
+  <label>bands<input type="number" id="vBands" value="300" min="16" max="1024"></label>
+  <label>seed<input type="number" id="vSeed" value="1" min="0"></label>
+</div>
+
+<h2>Realize + reduce</h2>
+<p class="why">▶ draws one NEW realization per frame and folds it into the running reductions — on the GPU, per block. No grid × K is ever stored, anywhere.</p>
+<div class="row">
+  <button id="btnPlay" class="primary">▶ accumulate</button>
+  <button id="btnStep">step</button>
+  <button id="btnReset">↺ reset</button>
+</div>
+<div class="fields">
+  <label class="wide">view<select id="vView">
+    <option value="mean">realization / e-type mean</option>
+    <option value="std">std dev</option>
+    <option value="prob">P(Z &gt; cutoff)</option>
+  </select></label>
+  <label>cutoff<input type="number" id="vCut" value="1.0" step="0.1"></label>
+</div>
+<div class="row"><span class="big" id="kCount">K = 0<small>realizations folded in</small></span></div>
+<div class="row"><span class="msg" id="perf"></span></div>
+<div class="row"><span class="msg" id="msg"></span></div>
+
+<h2>What this shows</h2>
+<p class="why">A 3-D block model whose grade is computed BY THE GPU from the variogram, per frame.
+Scrub the seed — each value is a fresh realization evaluated at draw time.
+Press ▶ — realizations flow through the reductions and the e-type converges live.
+Knife it, section it, click a block: everything you touch is a field that was never written to memory.</p>
+
+</div>
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <div id="vbar">
+    <label>section <select id="vSec"><option value="off">off</option><option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option><option value="K">knife</option></select></label>
+    <button id="vKnife" title="drag a line — the section becomes the vertical plane through it">✂ knife</button>
+    <input type="range" id="vSecPos" min="0" max="1" step="0.002" value="0.5" style="width:110px;display:none">
+    <input type="number" id="vSecHalf" step="any" style="width:56px;display:none">
+    <button id="vOrtho" title="orthographic ↔ perspective">P</button>
+    <button id="vFit" title="frame the model">⛶ fit</button>
+  </div>
+  <div id="vhint">drag orbit · wheel zoom · , . scrub seed · x section · click to inspect</div>
+  <div id="vfoot">bands.gpu · build __BANDS_BUILD__</div>
+  <div id="pickInfo"></div>
+</div>
+</div>
+
+<script type="module">
+import { createRenderer, createOrbitCamera, attachOrbitInput, documentFrame, createBlockChunkBuilder, makeBlockGrid, createEdl } from '@gcu/condenser';
+
+const $ = (s) => document.querySelector(s);
+
+// ── deterministic rng (seed → the same realization, forever) ─────────────────
+function mulberry32(a) {
+  return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+// ── the spectral measures ─────────────────────────────────────────────────────
+// By Bochner: Z(x) = sqrt(2/B) Σ cos(ω·x + φ), ω ~ the 3-D spectral measure of C,
+// reproduces C EXACTLY. Radial densities (unit range), sampled by inverse CDF:
+//   gaussian     C = exp(-h²)        →  ω ~ N(0, 2I) (closed form)
+//   exponential  C = exp(-h)         →  f(ω) ∝ ω² / (1 + ω²)²        (table)
+//   spherical    C = sph(h), range 1 →  f(ω) ∝ ω² · |FT(ball)|²      (table;
+//                the spherical model is the self-convolution of a ball, so its
+//                spectrum is a SQUARE — nonnegative by construction)
+function radialCDF(kind) {
+  const N = 4096, wMax = kind === 'exp' ? 60 : 40;
+  const pdf = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    const w = (i + 0.5) * wMax / N;
+    if (kind === 'exp') pdf[i] = (w * w) / ((1 + w * w) ** 2);
+    else {                                                   // spherical, range 1: ball radius 1/2
+      const u = w * 0.5;
+      const bt = u < 1e-4 ? 1 / 3 - u * u / 30 : (Math.sin(u) - u * Math.cos(u)) / (u ** 3);
+      pdf[i] = w * w * bt * bt;
+    }
+  }
+  const cdf = new Float64Array(N);
+  let acc = 0;
+  for (let i = 0; i < N; i++) { acc += pdf[i]; cdf[i] = acc; }
+  for (let i = 0; i < N; i++) cdf[i] /= acc;
+  return (u) => {                                            // inverse CDF by binary search
+    let lo = 0, hi = N - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (cdf[m] < u) lo = m + 1; else hi = m; }
+    return (lo + 0.5) * wMax / N;
+  };
+}
+const INV = { exp: radialCDF('exp'), sph: radialCDF('sph') };
+
+function drawBands(B, model, seed) {
+  const rnd = mulberry32(0x9E3779B9 ^ seed);
+  const out = new Float32Array(B * 4);
+  for (let i = 0; i < B; i++) {
+    // a uniform direction on the sphere
+    const z = 2 * rnd() - 1, th = 2 * Math.PI * rnd(), r = Math.sqrt(Math.max(0, 1 - z * z));
+    let w;                                                   // radial frequency, unit range
+    if (model === 'gau') {                                   // ω ~ N(0, 2I): 3 gaussians via Box–Muller
+      const g = () => Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(2 * Math.PI * rnd());
+      const wx = g() * Math.SQRT2, wy = g() * Math.SQRT2, wz = g() * Math.SQRT2;
+      out[i * 4] = wx; out[i * 4 + 1] = wy; out[i * 4 + 2] = wz; out[i * 4 + 3] = 2 * Math.PI * rnd();
+      continue;
+    }
+    w = INV[model](rnd());
+    out[i * 4] = w * r * Math.cos(th);
+    out[i * 4 + 1] = w * r * Math.sin(th);
+    out[i * 4 + 2] = w * z;
+    out[i * 4 + 3] = 2 * Math.PI * rnd();
+  }
+  return out;
+}
+
+// the anisotropy: rotate by azimuth (from north, clockwise), then scale each axis
+// by 1/range — the shader evaluates the UNIT-RANGE model in transformed coords
+function anisoMatrix() {
+  const a = (+$('#vAzm').value || 0) * Math.PI / 180;
+  const rMaj = +$('#vRange').value || 1, rMin = +$('#vRangeMinor').value || rMaj, rVer = +$('#vRangeVert').value || rMaj;
+  const c = Math.cos(a), s = Math.sin(a);
+  // rows: (major axis = azimuth direction: [sin a, cos a]), minor ⊥, vertical
+  return new Float32Array([
+    s / rMaj, c / rMaj, 0,
+    c / rMin, -s / rMin, 0,
+    0, 0, 1 / rVer,
+  ]);
+}
+
+// ── the grid + the condenser scene ───────────────────────────────────────────
+const V = { renderer: null, cam: null, edl: null, frame: null, bbox: null, dirty: false };
+let G = { nx: 96, ny: 96, nz: 48, n: 0 };
+const TEXW = 8192;
+
+function requestRender() { V.dirty = true; }
+const cv = $('#cv');
+V.renderer = createRenderer(cv, { background: [0.07, 0.07, 0.07, 1] });
+const gl = V.renderer.gl;
+if (!gl.getExtension('EXT_color_buffer_float')) $('#msg').textContent = 'EXT_color_buffer_float unavailable — this GPU cannot run the demo';
+V.edl = createEdl(gl);
+V.cam = createOrbitCamera();
+attachOrbitInput(cv, V.cam, { onChange: requestRender });
+new ResizeObserver(() => { const [w, h] = V.renderer.resize(); V.cam.setAspect(w / h); requestRender(); }).observe(cv);
+
+function buildGrid() {
+  const [nx, ny, nz] = $('#gSize').value.split(',').map(Number);
+  G = { nx, ny, nz, n: nx * ny * nz };
+  V.renderer.removeLayer(1);
+  const bb = { min: [0, 0, 0], max: [nx, ny, nz] };
+  V.frame = documentFrame({ bbox: bb });
+  const grid = makeBlockGrid([{ origin: 0.5, pitch: 1, count: nx }, { origin: 0.5, pitch: 1, count: ny }, { origin: 0.5, pitch: 1, count: nz }], V.frame);
+  const bld = createBlockChunkBuilder({ frame: V.frame, grid, onChunk: (c) => V.renderer.addChunk(c, 'base', 1) });
+  const xs = new Float64Array(G.n), ys = new Float64Array(G.n), zs = new Float64Array(G.n), ch = new Float64Array(G.n), recs = new Uint32Array(G.n);
+  let m = 0;
+  for (let iz = 0; iz < nz; iz++) for (let iy = 0; iy < ny; iy++) for (let ix = 0; ix < nx; ix++) {
+    xs[m] = ix + 0.5; ys[m] = iy + 0.5; zs[m] = iz + 0.5; ch[m] = 0; recs[m] = m; m++;
+  }
+  bld.push({ x: xs, y: ys, z: zs, chan: ch, recIdx: recs, count: m, recStart: 0 });
+  bld.flush();
+  V.bbox = Array.from(bld.doc.bboxLocal);
+  V.cam.fit(V.bbox);
+  allocSimTextures();
+  resetAcc();
+  requestRender();
+}
+
+// ── the simulation engine: two tiny passes on condenser's own GL context ─────
+// pass A (realize): one fragment per BLOCK (8192-wide index texture) evaluates
+//   Z = sqrt(sill-nugget-part) · sqrt(2/B) Σ cos(ω·Mx + φ)  +  nugget hash
+//   and ADDS (z, z², z>cutoff, 1) into the accumulator (blend ONE, ONE).
+// pass B (resolve): accumulator → the R32F value texture condenser draws from
+//   (mean | std | P) — setLayerChanTex, the never-materialized display path.
+const SIM = { acc: null, val: null, bandTex: null, fbA: null, fbB: null, progA: null, progB: null, quad: null, texH: 0, K: 0 };
+
+function sh(type, src) {
+  const s2 = gl.createShader(type);
+  gl.shaderSource(s2, src); gl.compileShader(s2);
+  if (!gl.getShaderParameter(s2, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s2));
+  return s2;
+}
+function prog(vs, fs) {
+  const p2 = gl.createProgram();
+  gl.attachShader(p2, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p2, sh(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p2);
+  if (!gl.getProgramParameter(p2, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p2));
+  return p2;
+}
+const QUAD_VS = `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID<<1)&2, gl_VertexID&2); gl_Position = vec4(p*2.0-1.0, 0.0, 1.0); }`;
+
+const REALIZE_FS = `#version 300 es
+precision highp float; precision highp int;
+uniform sampler2D uBands;       // B×1 RGBA32F: ω.xyz, φ
+uniform int uB, uN;
+uniform ivec3 uDims;
+uniform mat3 uAniso;            // rotate + 1/range scale → unit-range coords
+uniform float uSqrtStruct;      // sqrt(1 - nugget)
+uniform float uSqrtNug;         // sqrt(nugget)
+uniform float uCut;
+uniform uint uSeed;
+out vec4 o;
+// a per-block white noise: integer hash of (rec, seed)
+float white(uint rec){
+  uint h = rec * 747796405u + uSeed * 2891336453u;
+  h = ((h >> ((h >> 28) + 4u)) ^ h) * 277803737u;
+  h = (h >> 22) ^ h;
+  float u1 = float(h & 0xFFFFu) / 65535.0;
+  float u2 = float((h >> 16) & 0xFFFFu) / 65535.0;
+  return sqrt(-2.0 * log(max(u1, 1e-6))) * cos(6.2831853 * u2);
+}
+void main(){
+  int rec = int(gl_FragCoord.x) + int(gl_FragCoord.y) * 8192;
+  if (rec >= uN) discard;
+  int nxy = uDims.x * uDims.y;
+  int iz = rec / nxy, iy = (rec % nxy) / uDims.x, ix = rec % uDims.x;
+  vec3 p = uAniso * vec3(float(ix) + 0.5, float(iy) + 0.5, float(iz) + 0.5);
+  float s = 0.0;
+  for (int i = 0; i < uB; i++) {
+    vec4 b = texelFetch(uBands, ivec2(i, 0), 0);
+    s += cos(dot(b.xyz, p) + b.w);
+  }
+  float z = uSqrtStruct * sqrt(2.0 / float(uB)) * s + uSqrtNug * white(uint(rec));
+  o = vec4(z, z * z, z > uCut ? 1.0 : 0.0, 1.0);
+}`;
+
+const RESOLVE_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uAcc;
+uniform int uMode;              // 0 mean | 1 std | 2 P(>cut)
+out vec4 o;
+void main(){
+  vec4 a = texelFetch(uAcc, ivec2(gl_FragCoord.xy), 0);
+  float k = max(a.a, 1.0);
+  float m = a.r / k;
+  float v = uMode == 0 ? m
+          : uMode == 1 ? sqrt(max(0.0, a.g / k - m * m))
+          : a.b / k;
+  o = vec4(v, 0.0, 0.0, 1.0);
+}`;
+
+function tex2(w, h, internal) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, internal === gl.RGBA32F ? gl.RGBA : gl.RED, gl.FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  return t;
+}
+function allocSimTextures() {
+  for (const k of ['acc', 'val', 'bandTex']) if (SIM[k]) { gl.deleteTexture(SIM[k]); SIM[k] = null; }
+  for (const k of ['fbA', 'fbB']) if (SIM[k]) { gl.deleteFramebuffer(SIM[k]); SIM[k] = null; }
+  SIM.texH = Math.ceil(G.n / TEXW);
+  SIM.acc = tex2(TEXW, SIM.texH, gl.RGBA32F);
+  SIM.val = tex2(TEXW, SIM.texH, gl.R32F);
+  SIM.bandTex = gl.createTexture();
+  SIM.fbA = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbA);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, SIM.acc, 0);
+  SIM.fbB = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbB);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, SIM.val, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  if (!SIM.progA) { SIM.progA = prog(QUAD_VS, REALIZE_FS); SIM.progB = prog(QUAD_VS, RESOLVE_FS); SIM.quad = gl.createVertexArray(); }
+}
+function uploadBands(seed) {
+  const B = Math.max(16, Math.min(1024, +$('#vBands').value | 0));
+  const data = drawBands(B, $('#vModel').value, seed);
+  gl.bindTexture(gl.TEXTURE_2D, SIM.bandTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, B, 1, 0, gl.RGBA, gl.FLOAT, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  return B;
+}
+function realizeOnce(seed, accumulate) {
+  const B = uploadBands(seed);
+  const nug = Math.max(0, Math.min(1, +$('#vNug').value || 0));
+  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbA);
+  gl.viewport(0, 0, TEXW, SIM.texH);
+  gl.disable(gl.DEPTH_TEST);
+  if (accumulate) { gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); }
+  else { gl.disable(gl.BLEND); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); }
+  gl.useProgram(SIM.progA);
+  const U = (n) => gl.getUniformLocation(SIM.progA, n);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, SIM.bandTex); gl.uniform1i(U('uBands'), 0);
+  gl.uniform1i(U('uB'), B);
+  gl.uniform1i(U('uN'), G.n);
+  gl.uniform3i(U('uDims'), G.nx, G.ny, G.nz);
+  gl.uniformMatrix3fv(U('uAniso'), false, anisoMatrix());
+  gl.uniform1f(U('uSqrtStruct'), Math.sqrt(1 - nug));
+  gl.uniform1f(U('uSqrtNug'), Math.sqrt(nug));
+  gl.uniform1f(U('uCut'), +$('#vCut').value || 0);
+  gl.uniform1ui(U('uSeed'), seed >>> 0);
+  gl.bindVertexArray(SIM.quad);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.disable(gl.BLEND);
+  SIM.K = accumulate ? SIM.K + 1 : 1;
+}
+function resolve() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbB);
+  gl.viewport(0, 0, TEXW, SIM.texH);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+  gl.useProgram(SIM.progB);
+  const U = (n) => gl.getUniformLocation(SIM.progB, n);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, SIM.acc); gl.uniform1i(U('uAcc'), 0);
+  const mode = { mean: 0, std: 1, prob: 2 }[$('#vView').value];
+  gl.uniform1i(U('uMode'), mode);
+  gl.bindVertexArray(SIM.quad);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  // the ramp range per view: the field is standard normal by construction
+  const range = mode === 2 ? [0, 1] : mode === 1 ? [0, SIM.K > 1 ? 1.1 : 0.01] : [-2.8, 2.8];
+  V.renderer.setLayerChanTex(1, SIM.val, range);
+  $('#kCount').innerHTML = `K = ${SIM.K}<small>realization${SIM.K === 1 ? '' : 's'} folded in</small>`;
+  requestRender();
+}
+
+// ── run control ───────────────────────────────────────────────────────────────
+let playing = false, seed = 1;
+function step(accumulate) {
+  const t0 = performance.now();
+  realizeOnce(seed, accumulate);
+  resolve();
+  gl.finish();                                               // the clock stops when the GPU does — not at submit
+  const dt = performance.now() - t0;
+  const cos = G.n * (+$('#vBands').value);
+  $('#perf').textContent = `${G.n.toLocaleString()} blocks × ${$('#vBands').value} bands = ${(cos / 1e6).toFixed(0)}M cos · ${dt.toFixed(1)} ms / realization`;
+  seed++;
+  $('#vSeed').value = seed;
+}
+function resetAcc() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbA);
+  gl.viewport(0, 0, TEXW, SIM.texH);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  SIM.K = 0;
+  seed = Math.max(0, +$('#vSeed').value | 0);
+  step(false);                                               // land on ONE fresh realization
+}
+$('#btnPlay').onclick = () => {
+  playing = !playing;
+  $('#btnPlay').textContent = playing ? '⏸ pause' : '▶ accumulate';
+  $('#btnPlay').classList.toggle('on', playing);
+};
+$('#btnStep').onclick = () => step(true);
+$('#btnReset').onclick = resetAcc;
+$('#vView').onchange = () => { $('#vCut').disabled = $('#vView').value !== 'prob'; resolve(); };
+$('#vCut').onchange = () => { if (SIM.K > 1) { resetAcc(); $('#msg').textContent = 'cutoff changed → accumulation reset (P is folded at realize time)'; } else resolve(); };
+for (const id of ['#vModel', '#vRange', '#vRangeMinor', '#vRangeVert', '#vAzm', '#vNug', '#vBands']) {
+  $(id).onchange = () => { resetAcc(); $('#msg').textContent = 'model changed → accumulation reset'; };
+}
+$('#vSeed').onchange = () => { resetAcc(); };
+$('#gSize').onchange = buildGrid;
+
+// ── the frame loop: condenser presents; play-mode folds one realization/frame ──
+const loop = () => {
+  if (playing) { step(true); V.dirty = true; }
+  if (V.dirty) {
+    V.dirty = false;
+    V.edl.render(cv.width, cv.height, V.cam,
+      () => V.renderer.draw(V.cam, { section: currentSection(), layerOpts: { 1: { colorMode: 1 } } }),
+      { enabled: true, strength: 0.8 });
+  }
+  requestAnimationFrame(loop);
+};
+
+// ── sections + knife + ortho (the gslib.atra grammar) ────────────────────────
+function currentSection() {
+  const ax = $('#vSec').value;
+  if (ax === 'off' || !V.bbox) return null;
+  const half = Math.max(0.01, +$('#vSecHalf').value || 1);
+  if (ax === 'K') {
+    if (!V.knife) return null;
+    const n = V.knife.n;
+    let lo = Infinity, hi = -Infinity;
+    for (const cx of [V.bbox[0], V.bbox[3]]) for (const cy of [V.bbox[1], V.bbox[4]]) {
+      const d2 = n[0] * cx + n[1] * cy;
+      if (d2 < lo) lo = d2; if (d2 > hi) hi = d2;
+    }
+    return { on: true, n, d: lo + (+$('#vSecPos').value) * (hi - lo), half };
+  }
+  const i = ax === 'X' ? 0 : ax === 'Y' ? 1 : 2;
+  const lo = V.bbox[i], hi = V.bbox[i + 3];
+  return { on: true, n: [+(i === 0), +(i === 1), +(i === 2)], d: lo + (+$('#vSecPos').value) * (hi - lo), half };
+}
+$('#vSec').onchange = () => {
+  const v = $('#vSec').value;
+  if (v === 'K' && !V.knife) armKnife();
+  const on = v !== 'off';
+  $('#vSecPos').style.display = on ? '' : 'none';
+  $('#vSecHalf').style.display = on ? '' : 'none';
+  if (on && !+$('#vSecHalf').value && V.bbox) $('#vSecHalf').value = +(Math.max(V.bbox[3] - V.bbox[0], V.bbox[5] - V.bbox[2]) / 40).toPrecision(2);
+  requestRender();
+};
+$('#vSecPos').oninput = requestRender;
+$('#vSecHalf').oninput = requestRender;
+function unprojectToMidZ(cssX, cssY) {
+  const st = V.cam.state, r = cv.getBoundingClientRect();
+  const ndcX = (2 * cssX / r.width) - 1, ndcY = 1 - (2 * cssY / r.height);
+  const v = st.view;
+  const right = [v[0], v[4], v[8]], up = [v[1], v[5], v[9]];
+  const fwd = [st.target[0] - st.eye[0], st.target[1] - st.eye[1], st.target[2] - st.eye[2]];
+  const fl = Math.hypot(...fwd) || 1;
+  const zMid = V.bbox ? (V.bbox[2] + V.bbox[5]) / 2 : 0;
+  let o, dir;
+  if (st.ortho) {
+    const hh = st.halfH, hw = hh * st.aspect;
+    o = [0, 1, 2].map((i) => st.eye[i] + right[i] * ndcX * hw + up[i] * ndcY * hh);
+    dir = fwd.map((c) => c / fl);
+  } else {
+    const tanF = Math.tan(st.fovY / 2);
+    o = st.eye;
+    dir = [0, 1, 2].map((i) => fwd[i] / fl + right[i] * ndcX * tanF * st.aspect + up[i] * ndcY * tanF);
+  }
+  if (Math.abs(dir[2]) < 1e-9) return null;
+  const t = (zMid - o[2]) / dir[2];
+  if (t <= 0) return null;
+  return [o[0] + dir[0] * t, o[1] + dir[1] * t, zMid];
+}
+let _knifeArm = false, _kStart = null, _kLine = null;
+function armKnife() { _knifeArm = true; cv.style.cursor = 'crosshair'; $('#vhint').textContent = 'knife: drag a line across the view'; }
+function knifeFrom(x1, y1, x2, y2) {
+  const p1 = unprojectToMidZ(x1, y1), p2 = unprojectToMidZ(x2, y2);
+  if (!p1 || !p2) return false;
+  const dx = p2[0] - p1[0], dy = p2[1] - p1[1], l = Math.hypot(dx, dy);
+  if (l < 1e-6) return false;
+  V.knife = { n: [dy / l, -dx / l, 0] };
+  const n = V.knife.n, d0 = n[0] * p1[0] + n[1] * p1[1];
+  let lo = Infinity, hi = -Infinity;
+  for (const cx of [V.bbox[0], V.bbox[3]]) for (const cy of [V.bbox[1], V.bbox[4]]) {
+    const d2 = n[0] * cx + n[1] * cy;
+    if (d2 < lo) lo = d2; if (d2 > hi) hi = d2;
+  }
+  $('#vSecPos').value = hi > lo ? Math.max(0, Math.min(1, (d0 - lo) / (hi - lo))) : 0.5;
+  $('#vSec').value = 'K';
+  $('#vSec').dispatchEvent(new Event('change'));
+  return true;
+}
+$('#vKnife').onclick = armKnife;
+const kXY = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+window.addEventListener('pointerdown', (e) => {
+  if (!_knifeArm || e.target !== cv) return;
+  e.stopPropagation(); e.preventDefault();
+  _kStart = kXY(e);
+  _kLine = document.createElement('div');
+  _kLine.style.cssText = 'position:absolute;height:0;border-top:1.5px dashed var(--act);transform-origin:0 0;pointer-events:none;left:0;top:0';
+  $('#stage').appendChild(_kLine);
+}, true);
+window.addEventListener('pointermove', (e) => {
+  if (!_knifeArm || !_kStart) return;
+  e.stopPropagation();
+  const [x, y] = kXY(e);
+  const dx = x - _kStart[0], dy = y - _kStart[1];
+  _kLine.style.left = _kStart[0] + 'px'; _kLine.style.top = _kStart[1] + 'px';
+  _kLine.style.width = Math.hypot(dx, dy) + 'px';
+  _kLine.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+}, true);
+window.addEventListener('pointerup', (e) => {
+  if (!_knifeArm || !_kStart) return;
+  e.stopPropagation();
+  const [x, y] = kXY(e);
+  const cut = knifeFrom(_kStart[0], _kStart[1], x, y);
+  if (_kLine) _kLine.remove();
+  _kLine = null; _kStart = null; _knifeArm = false;
+  cv.style.cursor = '';
+  $('#vhint').textContent = cut ? 'drag orbit · wheel zoom · , . scrub seed · x section · click to inspect' : 'knife: too short — drag a longer line';
+}, true);
+window.addEventListener('wheel', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.target !== cv || $('#vSec').value === 'off') return;
+  e.preventDefault(); e.stopPropagation();
+  const el = $('#vSecPos');
+  el.value = Math.max(0, Math.min(1, (+el.value) + (e.deltaY > 0 ? 0.01 : -0.01)));
+  el.dispatchEvent(new Event('input'));
+}, { capture: true, passive: false });
+$('#vOrtho').onclick = () => {
+  const on = !V.cam.state.ortho;
+  V.cam.setOrtho(on);
+  $('#vOrtho').textContent = on ? 'O' : 'P';
+  requestRender();
+};
+$('#vFit').onclick = () => { if (V.bbox) { V.cam.fit(V.bbox); requestRender(); } };
+let _lastSecAxis = 'Z';
+window.addEventListener('keydown', (e) => {
+  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === ',' || e.key === '.') {
+    // , . scrub the SEED (a new realization per keypress); with a section on they scrub the slab
+    if ($('#vSec').value !== 'off') {
+      const el = $('#vSecPos');
+      el.value = Math.max(0, Math.min(1, (+el.value) + (e.key === ',' ? -0.01 : 0.01)));
+      el.dispatchEvent(new Event('input'));
+    } else {
+      seed = Math.max(0, seed + (e.key === ',' ? -2 : 0));   // step(false) advances by 1 — net −1/+1
+      $('#vSeed').value = seed;
+      resetAcc();
+    }
+    e.preventDefault();
+  } else if (e.key === 'x' || e.key === 'X') {
+    const sel = $('#vSec');
+    if (sel.value === 'off') sel.value = _lastSecAxis;
+    else { _lastSecAxis = sel.value; sel.value = 'off'; }
+    sel.dispatchEvent(new Event('change'));
+  } else if (e.key === ' ') { $('#btnPlay').click(); e.preventDefault(); }
+});
+
+// ── click to inspect: the pick names the block; ITS value comes off the GPU ──
+function pickAt(cx, cy) {
+  const hit = V.renderer.pick(cx, cy, V.cam, { pointPx: 6, section: currentSection() });
+  const el = $('#pickInfo');
+  if (!hit || hit.layer !== 1) { el.style.display = 'none'; V.renderer.setPicked(null); requestRender(); return null; }
+  V.renderer.setPicked(hit); requestRender();
+  const i = hit.rec, nxy = G.nx * G.ny;
+  const iz = Math.floor(i / nxy), iy = Math.floor((i % nxy) / G.nx), ix = i % G.nx;
+  // read the ONE texel — the only readback in the whole app, and only on click
+  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbB);
+  const px = new Float32Array(4);
+  gl.readPixels(i % TEXW, Math.floor(i / TEXW), 1, 1, gl.RGBA, gl.FLOAT, px);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const label = { mean: SIM.K > 1 ? `e-type (K=${SIM.K})` : 'realization', std: 'std dev', prob: `P(Z>${$('#vCut').value})` }[$('#vView').value];
+  el.innerHTML = `<b>block [${ix}, ${iy}, ${iz}]</b><div><span>${label}</span>${+px[0].toPrecision(5)}</div><div><span>computed</span>on the GPU, just now</div>`;
+  el.style.display = '';
+  return { hit, value: px[0] };
+}
+let _pd = null;
+cv.addEventListener('pointerdown', (e) => { if (!_knifeArm && e.button === 0) _pd = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+cv.addEventListener('pointerup', (e) => {
+  if (!_pd) return;
+  const moved = Math.hypot(e.clientX - _pd.x, e.clientY - _pd.y), dt = performance.now() - _pd.t;
+  _pd = null;
+  if (moved > 5 || dt > 500) return;
+  const r = cv.getBoundingClientRect();
+  pickAt(e.clientX - r.left, e.clientY - r.top);
+});
+
+// ── boot ──────────────────────────────────────────────────────────────────────
+$('#vCut').disabled = true;
+buildGrid();
+requestAnimationFrame(loop);
+
+window._bands = { step, resetAcc, buildGrid, pickAt, knifeFrom, currentSection, SIM, G, V,
+  setPlaying: (p2) => { if (p2 !== playing) $('#btnPlay').click(); } };
+</script>
+</body>
+</html>

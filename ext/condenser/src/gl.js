@@ -252,7 +252,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       l = { visible: true, set: 'base', maskTex: null, maskH: 0, isolate: false,
             intensityMax: 1, docChan: [Infinity, -Infinity], catN: 0, stickRadius: 1, sectioned: true,
             meshTint: [0.62, 0.64, 0.66], meshOpacity: 1, opacity: 1, catVisTex: null, rampTex: null, paletteTex: null, paletteW: 0, selTex: null, selH: 0,
-            ruleTex: null, ruleH: 0, ruleOn: false };
+            ruleTex: null, ruleH: 0, ruleOn: false,
+            chanTex: null, chanTexRange: null };
       layers.set(id, l);
     }
     return l;
@@ -485,6 +486,17 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     },
     // per-layer color ramp LUT (layer properties: presets + baked breakpoints).
     // pixels = Uint8Array(256*4) RGBA, or null to fall back to the built-in ramp.
+    // OPT-IN: drive block colour from an R32F VALUE texture (one texel per record,
+    // 8192-wide rows) instead of the baked aChan buffer. `range` = [lo, hi] for the
+    // ramp normalization — a computed texture has no docChan of its own. Pass a
+    // null texture to fall back to aChan. The caller OWNS the texture (create,
+    // render into, delete); the renderer only samples it.
+    setLayerChanTex(layer, tex, range = null) {
+      const ls = layerOf(layer);
+      ls.chanTex = tex || null;
+      ls.chanTexRange = (tex && range) ? [range[0], Math.max(1e-9, range[1] - range[0])] : null;
+      needClear = true;
+    },
     setLayerRamp(layer, pixels) {
       const ls = layerOf(layer);
       if (!pixels) {
@@ -812,11 +824,12 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           const cHi = o.clip && o.clip[1] != null && o.colorMode === 1 ? o.clip[1] : ls.docChan[1];
           blocksPipe.begin(cam, {
             pointPx, colorMode: o.colorMode, zRange: zRangeOf(o),
-            chanDoc: [cLo, cHi > cLo ? cHi - cLo : 1],
+            chanDoc: ls.chanTex && ls.chanTexRange ? ls.chanTexRange : [cLo, cHi > cLo ? cHi - cLo : 1],
             ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette, viewportH: canvas.height,
             maskTex: ls.maskTex, isolate: ls.isolate, pointsView: blocksAsPoints, picked: pickedRec, pickedLayer, layer: id,
             section: layerSecOf(ls, sec),
             catVisTex: ls.catVisTex, selTex: ls.selTex, ruleTex: ls.ruleOn ? ls.ruleTex : null,
+            chanTex: ls.chanTex,
             opacity: ls.opacity, edges: ls.edges != null ? ls.edges : blockEdges,   // per-layer override, else the View toggle
           });
         };
