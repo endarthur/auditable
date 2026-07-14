@@ -36,8 +36,8 @@ button.on { border-color: var(--go); color: var(--go); }
 .fields input, .fields select { width: 100%; min-width: 0; font: 12.5px var(--mono); padding: 4px 6px; }
 .fields .wide { grid-column: span 2; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.row label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
 .msg { font: 11.5px var(--mono); color: var(--muted); }
-.msg.go { color: var(--go); }
 .big { font: 700 20px var(--mono); color: var(--ink); }
 .big small { font: 11px var(--mono); color: var(--muted); display: block; }
 * { scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
@@ -64,7 +64,7 @@ button.on { border-color: var(--go); color: var(--go); }
 <body>
 <header>
   <h1><b>bands</b>.gpu</h1>
-  <span class="sub">turning bands, never materialized — the realization exists only as its reductions</span>
+  <span class="sub">spectral turning bands on the GPU</span>
   <span class="sp"></span>
 </header>
 <div id="app">
@@ -78,10 +78,17 @@ button.on { border-color: var(--go); color: var(--go); }
     <option value="128,128,64">128 × 128 × 64 — 1.05M</option>
     <option value="160,160,80">160 × 160 × 80 — 2.05M</option>
   </select></label>
+  <label class="wide">draw budget<select id="vBudget">
+    <option value="250000">0.25M</option>
+    <option value="500000">0.5M</option>
+    <option value="1000000">1M</option>
+    <option value="3000000" selected>3M</option>
+    <option value="8000000">8M</option>
+  </select></label>
 </div>
 
 <h2>Variogram</h2>
-<p class="why">Spectral turning bands (Mantoglou–Wilson): ω drawn from the model's own 3D spectral measure — the covariance is exact, not approximate.</p>
+<p class="why">ω is drawn from the model's 3-D spectral measure, so the covariance is exact (spectral method, Mantoglou–Wilson).</p>
 <div class="fields">
   <label>model<select id="vModel"><option value="sph">spherical</option><option value="exp">exponential</option><option value="gau" selected>gaussian</option></select></label>
   <label>range<input type="number" id="vRange" value="24" step="any" min="1"></label>
@@ -93,43 +100,45 @@ button.on { border-color: var(--go); color: var(--go); }
   <label>seed<input type="number" id="vSeed" value="1" min="0"></label>
 </div>
 
-<h2>Realize + reduce</h2>
-<p class="why">▶ draws one NEW realization per frame and folds it into the running reductions — on the GPU, per block. No grid × K is ever stored, anywhere.</p>
+<h2>Simulation</h2>
+<p class="why">▶ computes one new realization per frame. Reductions fold in alongside; switch view any time.</p>
 <div class="row">
-  <button id="btnPlay" class="primary">▶ accumulate</button>
+  <button id="btnPlay" class="primary">▶ play</button>
   <button id="btnStep">step</button>
   <button id="btnReset">↺ reset</button>
 </div>
 <div class="fields">
   <label class="wide">view<select id="vView">
-    <option value="mean">realization / e-type mean</option>
+    <option value="real">realization</option>
+    <option value="mean">e-type mean</option>
     <option value="std">std dev</option>
     <option value="prob">P(Z &gt; cutoff)</option>
   </select></label>
   <label>cutoff<input type="number" id="vCut" value="1.0" step="0.1"></label>
+  <label class="wide">rate<select id="vRate">
+    <option value="60">60 / s</option>
+    <option value="30" selected>30 / s</option>
+    <option value="10">10 / s</option>
+    <option value="2">2 / s</option>
+  </select></label>
+  <label class="wide" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="vFold" checked style="width:auto">fold reductions</label>
 </div>
-<div class="row"><span class="big" id="kCount">K = 0<small>realizations folded in</small></span></div>
+<div class="row"><span class="big" id="kCount">K = 0<small>realizations</small></span></div>
 <div class="row"><span class="msg" id="perf"></span></div>
 <div class="row"><span class="msg" id="msg"></span></div>
-
-<h2>What this shows</h2>
-<p class="why">A 3-D block model whose grade is computed BY THE GPU from the variogram, per frame.
-Scrub the seed — each value is a fresh realization evaluated at draw time.
-Press ▶ — realizations flow through the reductions and the e-type converges live.
-Knife it, section it, click a block: everything you touch is a field that was never written to memory.</p>
 
 </div>
 <div id="stage">
   <canvas id="cv"></canvas>
   <div id="vbar">
     <label>section <select id="vSec"><option value="off">off</option><option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option><option value="K">knife</option></select></label>
-    <button id="vKnife" title="drag a line — the section becomes the vertical plane through it">✂ knife</button>
+    <button id="vKnife" title="drag a line — the section becomes the vertical plane through it (k)">✂ knife</button>
     <input type="range" id="vSecPos" min="0" max="1" step="0.002" value="0.5" style="width:110px;display:none">
     <input type="number" id="vSecHalf" step="any" style="width:56px;display:none">
-    <button id="vOrtho" title="orthographic ↔ perspective">P</button>
-    <button id="vFit" title="frame the model">⛶ fit</button>
+    <button id="vOrtho" title="orthographic ↔ perspective (o)">P</button>
+    <button id="vFit" title="frame the model (f)">⛶ fit</button>
   </div>
-  <div id="vhint">drag orbit · wheel zoom · , . scrub seed · x section · click to inspect</div>
+  <div id="vhint">drag orbit · wheel zoom · space play · x section · , . scrub · f fit · click to inspect</div>
   <div id="vfoot">bands.gpu · build __BANDS_BUILD__</div>
   <div id="pickInfo"></div>
 </div>
@@ -146,13 +155,12 @@ function mulberry32(a) {
 }
 
 // ── the spectral measures ─────────────────────────────────────────────────────
-// By Bochner: Z(x) = sqrt(2/B) Σ cos(ω·x + φ), ω ~ the 3-D spectral measure of C,
-// reproduces C EXACTLY. Radial densities (unit range), sampled by inverse CDF:
-//   gaussian     C = exp(-h²)        →  ω ~ N(0, 2I) (closed form)
-//   exponential  C = exp(-h)         →  f(ω) ∝ ω² / (1 + ω²)²        (table)
-//   spherical    C = sph(h), range 1 →  f(ω) ∝ ω² · |FT(ball)|²      (table;
-//                the spherical model is the self-convolution of a ball, so its
-//                spectrum is a SQUARE — nonnegative by construction)
+// Z(x) = sqrt(2/B) Σ cos(ω·x + φ), ω ~ the 3-D spectral measure of C (Bochner),
+// reproduces C exactly. Radial densities at unit range, sampled by inverse CDF:
+//   gaussian     C = exp(-h²)   →  ω ~ N(0, 2I) (closed form)
+//   exponential  C = exp(-h)    →  f(ω) ∝ ω² / (1 + ω²)²
+//   spherical    range 1        →  f(ω) ∝ ω² · |FT(ball)|²  (a self-convolution
+//                of a ball, so the spectrum is a square — nonnegative)
 function radialCDF(kind) {
   const N = 4096, wMax = kind === 'exp' ? 60 : 40;
   const pdf = new Float64Array(N);
@@ -169,7 +177,7 @@ function radialCDF(kind) {
   let acc = 0;
   for (let i = 0; i < N; i++) { acc += pdf[i]; cdf[i] = acc; }
   for (let i = 0; i < N; i++) cdf[i] /= acc;
-  return (u) => {                                            // inverse CDF by binary search
+  return (u) => {
     let lo = 0, hi = N - 1;
     while (lo < hi) { const m = (lo + hi) >> 1; if (cdf[m] < u) lo = m + 1; else hi = m; }
     return (lo + 0.5) * wMax / N;
@@ -181,16 +189,14 @@ function drawBands(B, model, seed) {
   const rnd = mulberry32(0x9E3779B9 ^ seed);
   const out = new Float32Array(B * 4);
   for (let i = 0; i < B; i++) {
-    // a uniform direction on the sphere
     const z = 2 * rnd() - 1, th = 2 * Math.PI * rnd(), r = Math.sqrt(Math.max(0, 1 - z * z));
-    let w;                                                   // radial frequency, unit range
-    if (model === 'gau') {                                   // ω ~ N(0, 2I): 3 gaussians via Box–Muller
+    if (model === 'gau') {                                   // ω ~ N(0, 2I): Box–Muller
       const g = () => Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(2 * Math.PI * rnd());
-      const wx = g() * Math.SQRT2, wy = g() * Math.SQRT2, wz = g() * Math.SQRT2;
-      out[i * 4] = wx; out[i * 4 + 1] = wy; out[i * 4 + 2] = wz; out[i * 4 + 3] = 2 * Math.PI * rnd();
+      out[i * 4] = g() * Math.SQRT2; out[i * 4 + 1] = g() * Math.SQRT2; out[i * 4 + 2] = g() * Math.SQRT2;
+      out[i * 4 + 3] = 2 * Math.PI * rnd();
       continue;
     }
-    w = INV[model](rnd());
+    const w = INV[model](rnd());
     out[i * 4] = w * r * Math.cos(th);
     out[i * 4 + 1] = w * r * Math.sin(th);
     out[i * 4 + 2] = w * z;
@@ -199,13 +205,12 @@ function drawBands(B, model, seed) {
   return out;
 }
 
-// the anisotropy: rotate by azimuth (from north, clockwise), then scale each axis
-// by 1/range — the shader evaluates the UNIT-RANGE model in transformed coords
+// rotate by azimuth, scale each axis by 1/range — the shader evaluates the
+// unit-range model in transformed coordinates
 function anisoMatrix() {
   const a = (+$('#vAzm').value || 0) * Math.PI / 180;
   const rMaj = +$('#vRange').value || 1, rMin = +$('#vRangeMinor').value || rMaj, rVer = +$('#vRangeVert').value || rMaj;
   const c = Math.cos(a), s = Math.sin(a);
-  // rows: (major axis = azimuth direction: [sin a, cos a]), minor ⊥, vertical
   return new Float32Array([
     s / rMaj, c / rMaj, 0,
     c / rMin, -s / rMin, 0,
@@ -214,7 +219,7 @@ function anisoMatrix() {
 }
 
 // ── the grid + the condenser scene ───────────────────────────────────────────
-const V = { renderer: null, cam: null, edl: null, frame: null, bbox: null, dirty: false };
+const V = { renderer: null, cam: null, edl: null, frame: null, bbox: null, dirty: false, knife: null };
 let G = { nx: 96, ny: 96, nz: 48, n: 0 };
 const TEXW = 8192;
 
@@ -250,13 +255,13 @@ function buildGrid() {
   requestRender();
 }
 
-// ── the simulation engine: two tiny passes on condenser's own GL context ─────
-// pass A (realize): one fragment per BLOCK (8192-wide index texture) evaluates
-//   Z = sqrt(sill-nugget-part) · sqrt(2/B) Σ cos(ω·Mx + φ)  +  nugget hash
-//   and ADDS (z, z², z>cutoff, 1) into the accumulator (blend ONE, ONE).
-// pass B (resolve): accumulator → the R32F value texture condenser draws from
-//   (mean | std | P) — setLayerChanTex, the never-materialized display path.
-const SIM = { acc: null, val: null, bandTex: null, fbA: null, fbB: null, progA: null, progB: null, quad: null, texH: 0, K: 0 };
+// ── the simulation engine — three passes on condenser's GL context ───────────
+// realize:  one fragment per block → z into lastTex (R32F). The realization.
+// fold:     lastTex → acc (RGBA32F, additive): (z, z², z>cutoff, 1). Optional.
+// resolve:  acc → valTex (R32F): mean | std | P. Only for the reduction views.
+// Display: view=realization → condenser reads lastTex; else valTex (chanTex hook).
+const SIM = { last: null, acc: null, val: null, bandTex: null, fbLast: null, fbA: null, fbB: null,
+  progR: null, progF: null, progV: null, quad: null, texH: 0, K: 0 };
 
 function sh(type, src) {
   const s2 = gl.createShader(type);
@@ -279,13 +284,11 @@ precision highp float; precision highp int;
 uniform sampler2D uBands;       // B×1 RGBA32F: ω.xyz, φ
 uniform int uB, uN;
 uniform ivec3 uDims;
-uniform mat3 uAniso;            // rotate + 1/range scale → unit-range coords
+uniform mat3 uAniso;
 uniform float uSqrtStruct;      // sqrt(1 - nugget)
 uniform float uSqrtNug;         // sqrt(nugget)
-uniform float uCut;
 uniform uint uSeed;
 out vec4 o;
-// a per-block white noise: integer hash of (rec, seed)
 float white(uint rec){
   uint h = rec * 747796405u + uSeed * 2891336453u;
   h = ((h >> ((h >> 28) + 4u)) ^ h) * 277803737u;
@@ -306,6 +309,16 @@ void main(){
     s += cos(dot(b.xyz, p) + b.w);
   }
   float z = uSqrtStruct * sqrt(2.0 / float(uB)) * s + uSqrtNug * white(uint(rec));
+  o = vec4(z, 0.0, 0.0, 1.0);
+}`;
+
+const FOLD_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uLast;
+uniform float uCut;
+out vec4 o;
+void main(){
+  float z = texelFetch(uLast, ivec2(gl_FragCoord.xy), 0).r;
   o = vec4(z, z * z, z > uCut ? 1.0 : 0.0, 1.0);
 }`;
 
@@ -332,21 +345,30 @@ function tex2(w, h, internal) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   return t;
 }
+function fbFor(t) {
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+  return fb;
+}
 function allocSimTextures() {
-  for (const k of ['acc', 'val', 'bandTex']) if (SIM[k]) { gl.deleteTexture(SIM[k]); SIM[k] = null; }
-  for (const k of ['fbA', 'fbB']) if (SIM[k]) { gl.deleteFramebuffer(SIM[k]); SIM[k] = null; }
+  for (const k of ['last', 'acc', 'val', 'bandTex']) if (SIM[k]) { gl.deleteTexture(SIM[k]); SIM[k] = null; }
+  for (const k of ['fbLast', 'fbA', 'fbB']) if (SIM[k]) { gl.deleteFramebuffer(SIM[k]); SIM[k] = null; }
   SIM.texH = Math.ceil(G.n / TEXW);
+  SIM.last = tex2(TEXW, SIM.texH, gl.R32F);
   SIM.acc = tex2(TEXW, SIM.texH, gl.RGBA32F);
   SIM.val = tex2(TEXW, SIM.texH, gl.R32F);
   SIM.bandTex = gl.createTexture();
-  SIM.fbA = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbA);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, SIM.acc, 0);
-  SIM.fbB = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbB);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, SIM.val, 0);
+  SIM.fbLast = fbFor(SIM.last);
+  SIM.fbA = fbFor(SIM.acc);
+  SIM.fbB = fbFor(SIM.val);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  if (!SIM.progA) { SIM.progA = prog(QUAD_VS, REALIZE_FS); SIM.progB = prog(QUAD_VS, RESOLVE_FS); SIM.quad = gl.createVertexArray(); }
+  if (!SIM.progR) {
+    SIM.progR = prog(QUAD_VS, REALIZE_FS);
+    SIM.progF = prog(QUAD_VS, FOLD_FS);
+    SIM.progV = prog(QUAD_VS, RESOLVE_FS);
+    SIM.quad = gl.createVertexArray();
+  }
 }
 function uploadBands(seed) {
   const B = Math.max(16, Math.min(1024, +$('#vBands').value | 0));
@@ -357,16 +379,19 @@ function uploadBands(seed) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   return B;
 }
-function realizeOnce(seed, accumulate) {
-  const B = uploadBands(seed);
-  const nug = Math.max(0, Math.min(1, +$('#vNug').value || 0));
-  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbA);
+function passSetup(fb) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   gl.viewport(0, 0, TEXW, SIM.texH);
   gl.disable(gl.DEPTH_TEST);
-  if (accumulate) { gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); }
-  else { gl.disable(gl.BLEND); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); }
-  gl.useProgram(SIM.progA);
-  const U = (n) => gl.getUniformLocation(SIM.progA, n);
+  gl.disable(gl.BLEND);
+  gl.bindVertexArray(SIM.quad);
+}
+function realizeOnce(seed) {
+  const B = uploadBands(seed);
+  const nug = Math.max(0, Math.min(1, +$('#vNug').value || 0));
+  passSetup(SIM.fbLast);
+  gl.useProgram(SIM.progR);
+  const U = (n) => gl.getUniformLocation(SIM.progR, n);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, SIM.bandTex); gl.uniform1i(U('uBands'), 0);
   gl.uniform1i(U('uB'), B);
   gl.uniform1i(U('uN'), G.n);
@@ -374,42 +399,52 @@ function realizeOnce(seed, accumulate) {
   gl.uniformMatrix3fv(U('uAniso'), false, anisoMatrix());
   gl.uniform1f(U('uSqrtStruct'), Math.sqrt(1 - nug));
   gl.uniform1f(U('uSqrtNug'), Math.sqrt(nug));
-  gl.uniform1f(U('uCut'), +$('#vCut').value || 0);
   gl.uniform1ui(U('uSeed'), seed >>> 0);
-  gl.bindVertexArray(SIM.quad);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  return B;
+}
+function fold() {
+  passSetup(SIM.fbA);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  gl.useProgram(SIM.progF);
+  const U = (n) => gl.getUniformLocation(SIM.progF, n);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, SIM.last); gl.uniform1i(U('uLast'), 0);
+  gl.uniform1f(U('uCut'), +$('#vCut').value || 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.disable(gl.BLEND);
-  SIM.K = accumulate ? SIM.K + 1 : 1;
+  SIM.K++;
 }
-function resolve() {
-  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbB);
-  gl.viewport(0, 0, TEXW, SIM.texH);
-  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
-  gl.useProgram(SIM.progB);
-  const U = (n) => gl.getUniformLocation(SIM.progB, n);
-  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, SIM.acc); gl.uniform1i(U('uAcc'), 0);
-  const mode = { mean: 0, std: 1, prob: 2 }[$('#vView').value];
-  gl.uniform1i(U('uMode'), mode);
-  gl.bindVertexArray(SIM.quad);
-  gl.drawArrays(gl.TRIANGLES, 0, 3);
+function display() {
+  const view = $('#vView').value;
+  if (view === 'real') {
+    V.renderer.setLayerChanTex(1, SIM.last, [-2.8, 2.8]);
+  } else {
+    passSetup(SIM.fbB);
+    gl.useProgram(SIM.progV);
+    const U = (n) => gl.getUniformLocation(SIM.progV, n);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, SIM.acc); gl.uniform1i(U('uAcc'), 0);
+    gl.uniform1i(U('uMode'), { mean: 0, std: 1, prob: 2 }[view]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const range = view === 'prob' ? [0, 1] : view === 'std' ? [0, 1.15] : [-2.8, 2.8];
+    V.renderer.setLayerChanTex(1, SIM.val, range);
+  }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  // the ramp range per view: the field is standard normal by construction
-  const range = mode === 2 ? [0, 1] : mode === 1 ? [0, SIM.K > 1 ? 1.1 : 0.01] : [-2.8, 2.8];
-  V.renderer.setLayerChanTex(1, SIM.val, range);
-  $('#kCount').innerHTML = `K = ${SIM.K}<small>realization${SIM.K === 1 ? '' : 's'} folded in</small>`;
+  $('#kCount').innerHTML = `K = ${SIM.K}<small>realization${SIM.K === 1 ? '' : 's'}</small>`;
   requestRender();
 }
 
 // ── run control ───────────────────────────────────────────────────────────────
 let playing = false, seed = 1;
-function step(accumulate) {
+function step(opts = {}) {
   const t0 = performance.now();
-  realizeOnce(seed, accumulate);
-  resolve();
-  gl.finish();                                               // the clock stops when the GPU does — not at submit
-  const dt = performance.now() - t0;
-  const cos = G.n * (+$('#vBands').value);
-  $('#perf').textContent = `${G.n.toLocaleString()} blocks × ${$('#vBands').value} bands = ${(cos / 1e6).toFixed(0)}M cos · ${dt.toFixed(1)} ms / realization`;
+  const B = realizeOnce(seed);
+  if ($('#vFold').checked) fold();
+  display();
+  if (opts.measure) {                                        // manual step: an honest number
+    gl.finish();                                             // the clock stops when the GPU does
+    const dt = performance.now() - t0;
+    $('#perf').textContent = `${G.n.toLocaleString()} blocks × ${B} bands = ${(G.n * B / 1e6).toFixed(0)}M cos · ${dt.toFixed(1)} ms`;
+  }
   seed++;
   $('#vSeed').value = seed;
 }
@@ -420,36 +455,43 @@ function resetAcc() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   SIM.K = 0;
   seed = Math.max(0, +$('#vSeed').value | 0);
-  step(false);                                               // land on ONE fresh realization
+  step({ measure: true });
 }
-$('#btnPlay').onclick = () => {
-  playing = !playing;
-  $('#btnPlay').textContent = playing ? '⏸ pause' : '▶ accumulate';
+function setPlaying(p2) {
+  playing = p2;
+  $('#btnPlay').textContent = playing ? '⏸ pause' : '▶ play';
   $('#btnPlay').classList.toggle('on', playing);
-};
-$('#btnStep').onclick = () => step(true);
-$('#btnReset').onclick = resetAcc;
-$('#vView').onchange = () => { $('#vCut').disabled = $('#vView').value !== 'prob'; resolve(); };
-$('#vCut').onchange = () => { if (SIM.K > 1) { resetAcc(); $('#msg').textContent = 'cutoff changed → accumulation reset (P is folded at realize time)'; } else resolve(); };
-for (const id of ['#vModel', '#vRange', '#vRangeMinor', '#vRangeVert', '#vAzm', '#vNug', '#vBands']) {
-  $(id).onchange = () => { resetAcc(); $('#msg').textContent = 'model changed → accumulation reset'; };
 }
-$('#vSeed').onchange = () => { resetAcc(); };
+$('#btnPlay').onclick = () => setPlaying(!playing);
+$('#btnStep').onclick = () => step({ measure: true });
+$('#btnReset').onclick = resetAcc;
+$('#vView').onchange = () => { $('#vCut').disabled = $('#vView').value !== 'prob'; display(); };
+$('#vCut').onchange = () => { if (SIM.K > 1) { resetAcc(); $('#msg').textContent = 'cutoff changed — reductions reset (P folds at realize time)'; } else display(); };
+for (const id of ['#vModel', '#vRange', '#vRangeMinor', '#vRangeVert', '#vAzm', '#vNug', '#vBands']) {
+  $(id).onchange = () => { resetAcc(); $('#msg').textContent = ''; };
+}
+$('#vSeed').onchange = () => resetAcc();
 $('#gSize').onchange = buildGrid;
+$('#vBudget').onchange = requestRender;
 
-// ── the frame loop: condenser presents; play-mode folds one realization/frame ──
-const loop = () => {
-  if (playing) { step(true); V.dirty = true; }
+// ── the frame loop: condenser presents; play advances at the chosen rate ─────
+let _lastStep = 0;
+const loop = (ts) => {
+  if (playing && ts - _lastStep >= 1000 / (+$('#vRate').value)) {
+    _lastStep = ts;
+    step({});
+    V.dirty = true;
+  }
   if (V.dirty) {
     V.dirty = false;
     V.edl.render(cv.width, cv.height, V.cam,
-      () => V.renderer.draw(V.cam, { section: currentSection(), layerOpts: { 1: { colorMode: 1 } } }),
+      () => V.renderer.draw(V.cam, { budget: +$('#vBudget').value, section: currentSection(), layerOpts: { 1: { colorMode: 1 } } }),
       { enabled: true, strength: 0.8 });
   }
   requestAnimationFrame(loop);
 };
 
-// ── sections + knife + ortho (the gslib.atra grammar) ────────────────────────
+// ── sections + knife + ortho ──────────────────────────────────────────────────
 function currentSection() {
   const ax = $('#vSec').value;
   if (ax === 'off' || !V.bbox) return null;
@@ -503,7 +545,12 @@ function unprojectToMidZ(cssX, cssY) {
   return [o[0] + dir[0] * t, o[1] + dir[1] * t, zMid];
 }
 let _knifeArm = false, _kStart = null, _kLine = null;
-function armKnife() { _knifeArm = true; cv.style.cursor = 'crosshair'; $('#vhint').textContent = 'knife: drag a line across the view'; }
+function armKnife(on = true) {
+  _knifeArm = on;
+  cv.style.cursor = on ? 'crosshair' : '';
+  $('#vhint').textContent = on ? 'knife: drag a line across the view (Esc cancels)' : HINT;
+}
+const HINT = 'drag orbit · wheel zoom · space play · x section · , . scrub · f fit · click to inspect';
 function knifeFrom(x1, y1, x2, y2) {
   const p1 = unprojectToMidZ(x1, y1), p2 = unprojectToMidZ(x2, y2);
   if (!p1 || !p2) return false;
@@ -521,7 +568,7 @@ function knifeFrom(x1, y1, x2, y2) {
   $('#vSec').dispatchEvent(new Event('change'));
   return true;
 }
-$('#vKnife').onclick = armKnife;
+$('#vKnife').onclick = () => armKnife();
 const kXY = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
 window.addEventListener('pointerdown', (e) => {
   if (!_knifeArm || e.target !== cv) return;
@@ -548,14 +595,12 @@ window.addEventListener('pointerup', (e) => {
   if (_kLine) _kLine.remove();
   _kLine = null; _kStart = null; _knifeArm = false;
   cv.style.cursor = '';
-  $('#vhint').textContent = cut ? 'drag orbit · wheel zoom · , . scrub seed · x section · click to inspect' : 'knife: too short — drag a longer line';
+  $('#vhint').textContent = cut ? HINT : 'knife: too short — drag a longer line';
 }, true);
 window.addEventListener('wheel', (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.target !== cv || $('#vSec').value === 'off') return;
   e.preventDefault(); e.stopPropagation();
-  const el = $('#vSecPos');
-  el.value = Math.max(0, Math.min(1, (+el.value) + (e.deltaY > 0 ? 0.01 : -0.01)));
-  el.dispatchEvent(new Event('input'));
+  scrubSection(e.deltaY > 0 ? 1 : -1);
 }, { capture: true, passive: false });
 $('#vOrtho').onclick = () => {
   const on = !V.cam.state.ortho;
@@ -564,30 +609,48 @@ $('#vOrtho').onclick = () => {
   requestRender();
 };
 $('#vFit').onclick = () => { if (V.bbox) { V.cam.fit(V.bbox); requestRender(); } };
+
+// ── keyboard: micro's grammar ─────────────────────────────────────────────────
+const PHI_MAX = Math.PI / 2 - 0.02;
+function setView(theta, phi) {
+  const st = V.cam.state;
+  st.theta = theta; st.phi = phi;
+  V.cam.update(); requestRender();
+}
+function scrubSection(dir) {
+  if ($('#vSec').value === 'off') return;
+  const el = $('#vSecPos');
+  el.value = Math.max(0, Math.min(1, (+el.value) + dir * 0.01));
+  el.dispatchEvent(new Event('input'));
+}
 let _lastSecAxis = 'Z';
+function toggleSection() {
+  const sel = $('#vSec');
+  if (sel.value === 'off') sel.value = _lastSecAxis;
+  else { _lastSecAxis = sel.value; sel.value = 'off'; }
+  sel.dispatchEvent(new Event('change'));
+}
 window.addEventListener('keydown', (e) => {
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.key === ',' || e.key === '.') {
-    // , . scrub the SEED (a new realization per keypress); with a section on they scrub the slab
-    if ($('#vSec').value !== 'off') {
-      const el = $('#vSecPos');
-      el.value = Math.max(0, Math.min(1, (+el.value) + (e.key === ',' ? -0.01 : 0.01)));
-      el.dispatchEvent(new Event('input'));
-    } else {
-      seed = Math.max(0, seed + (e.key === ',' ? -2 : 0));   // step(false) advances by 1 — net −1/+1
-      $('#vSeed').value = seed;
-      resetAcc();
-    }
-    e.preventDefault();
-  } else if (e.key === 'x' || e.key === 'X') {
-    const sel = $('#vSec');
-    if (sel.value === 'off') sel.value = _lastSecAxis;
-    else { _lastSecAxis = sel.value; sel.value = 'off'; }
-    sel.dispatchEvent(new Event('change'));
-  } else if (e.key === ' ') { $('#btnPlay').click(); e.preventDefault(); }
+  const k = e.key;
+  if (k === 'f') $('#vFit').click();
+  else if (k === 'k' || k === 'c') armKnife();
+  else if (k === 'Escape' && _knifeArm) { armKnife(false); }
+  else if (k === 'n') setView(-Math.PI / 2, 0);           // looking north
+  else if (k === 's') setView(Math.PI / 2, 0);            // looking south
+  else if (k === 'e') setView(Math.PI, 0);                // looking east
+  else if (k === 'w') setView(0, 0);                      // looking west
+  else if (k === 'd') setView(V.cam.state.theta, PHI_MAX);   // plan (down)
+  else if (k === 'u') setView(V.cam.state.theta, -PHI_MAX);  // from below
+  else if (k === 'o') { $('#vOrtho').click(); }
+  else if (k === 'x') toggleSection();
+  else if (k === ',' || k === '.') scrubSection(k === ',' ? -1 : 1);
+  else if (k === ' ') { setPlaying(!playing); e.preventDefault(); }
+  else return;
+  if (k !== ' ') e.preventDefault();
 });
 
-// ── click to inspect: the pick names the block; ITS value comes off the GPU ──
+// ── click to inspect ──────────────────────────────────────────────────────────
 function pickAt(cx, cy) {
   const hit = V.renderer.pick(cx, cy, V.cam, { pointPx: 6, section: currentSection() });
   const el = $('#pickInfo');
@@ -595,13 +658,13 @@ function pickAt(cx, cy) {
   V.renderer.setPicked(hit); requestRender();
   const i = hit.rec, nxy = G.nx * G.ny;
   const iz = Math.floor(i / nxy), iy = Math.floor((i % nxy) / G.nx), ix = i % G.nx;
-  // read the ONE texel — the only readback in the whole app, and only on click
-  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbB);
+  const view = $('#vView').value;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, view === 'real' ? SIM.fbLast : SIM.fbB);
   const px = new Float32Array(4);
   gl.readPixels(i % TEXW, Math.floor(i / TEXW), 1, 1, gl.RGBA, gl.FLOAT, px);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  const label = { mean: SIM.K > 1 ? `e-type (K=${SIM.K})` : 'realization', std: 'std dev', prob: `P(Z>${$('#vCut').value})` }[$('#vView').value];
-  el.innerHTML = `<b>block [${ix}, ${iy}, ${iz}]</b><div><span>${label}</span>${+px[0].toPrecision(5)}</div><div><span>computed</span>on the GPU, just now</div>`;
+  const label = { real: `z (seed ${seed - 1})`, mean: `mean (K=${SIM.K})`, std: `std (K=${SIM.K})`, prob: `P(Z>${$('#vCut').value})` }[view];
+  el.innerHTML = `<b>block [${ix}, ${iy}, ${iz}]</b><div><span>${label}</span>${+px[0].toPrecision(5)}</div>`;
   el.style.display = '';
   return { hit, value: px[0] };
 }
@@ -621,8 +684,7 @@ $('#vCut').disabled = true;
 buildGrid();
 requestAnimationFrame(loop);
 
-window._bands = { step, resetAcc, buildGrid, pickAt, knifeFrom, currentSection, SIM, G, V,
-  setPlaying: (p2) => { if (p2 !== playing) $('#btnPlay').click(); } };
+window._bands = { step, resetAcc, buildGrid, pickAt, knifeFrom, currentSection, setPlaying, SIM, G, V };
 </script>
 </body>
 </html>

@@ -27,21 +27,21 @@ ok(await p.evaluate(() => window._bands.SIM.K === 1), 'boot lands on one realiza
 ok(await p.evaluate(() => window._bands.G.n === 96 * 96 * 48), 'default grid 96×96×48');
 
 // helper: read the resolved value texture rows [0, rows) → Float32Array of values
-const readVals = (rows) => p.evaluate((rows2) => {
+const readVals = (rows, fb = 'fbB') => p.evaluate(([rows2, fb2]) => {
   const { V, SIM } = window._bands;
   const gl = V.renderer.gl;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbB);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM[fb2]);
   const px = new Float32Array(8192 * rows2 * 4);
   gl.readPixels(0, 0, 8192, rows2, gl.RGBA, gl.FLOAT, px);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   const out = new Array(8192 * rows2);
   for (let i = 0; i < out.length; i++) out[i] = px[i * 4];
   return out;
-}, rows);
+}, [rows, fb]);
 
 console.log('— a single realization is standard normal —');
 {
-  const v = (await readVals(24)).slice(0, 96 * 96 * 16);   // the first 16 z-slices
+  const v = (await readVals(24, 'fbLast')).slice(0, 96 * 96 * 16);   // the first 16 z-slices
   const n = v.length;
   let m = 0; for (const x of v) m += x; m /= n;
   let s2 = 0; for (const x of v) s2 += (x - m) * (x - m); s2 /= n;
@@ -63,7 +63,7 @@ console.log('— the covariance is exact: experimental γ(h) vs the model —');
   const acc = new Float64Array(LAGS.length), cnt = new Float64Array(LAGS.length);
   for (let s = 0; s < 8; s++) {
     await p.evaluate(() => window._bands.resetAcc());
-    const v = (await readVals(2)).slice(0, 96 * 96);       // one z-slice
+    const v = (await readVals(2, 'fbLast')).slice(0, 96 * 96);       // one z-slice
     for (let li = 0; li < LAGS.length; li++) {
       const h = LAGS[li];
       for (let iy = 0; iy < 96; iy++) for (let ix = 0; ix + h < 96; ix++) {
@@ -85,8 +85,9 @@ console.log('— the covariance is exact: experimental γ(h) vs the model —');
 
 console.log('— accumulation: the e-type converges, std → 1, P behaves —');
 {
-  await p.evaluate(() => { window._bands.resetAcc(); for (let i = 0; i < 40; i++) window._bands.step(true); });
-  ok(await p.evaluate(() => window._bands.SIM.K === 41), 'K = 41 after 40 accumulated steps');
+  await p.evaluate(() => { window._bands.resetAcc(); for (let i = 0; i < 40; i++) window._bands.step({}); });
+  ok(await p.evaluate(() => window._bands.SIM.K === 41), 'K = 41 after 40 folded steps');
+  await p.evaluate(() => { document.querySelector('#vView').value = 'mean'; document.querySelector('#vView').dispatchEvent(new Event('change')); });
   const mean40 = (await readVals(2)).slice(0, 4096);
   let mAbs = 0; for (const x of mean40) mAbs += Math.abs(x); mAbs /= mean40.length;
   ok(mAbs < 0.35, `e-type mean shrinks toward 0 (mean |Z̄| = ${mAbs.toFixed(3)} over K=41)`);
