@@ -50,7 +50,7 @@ button.on { border-color: var(--go); color: var(--go); }
 #vbar label { color: var(--muted); font-size: 11.5px; display: flex; gap: 5px; align-items: center; }
 #vhint { position: absolute; left: 12px; bottom: 10px; color: var(--faint); font: 11px var(--mono); pointer-events: none; }
 #vfoot { position: absolute; right: 12px; bottom: 10px; color: var(--faint); font: 10.5px var(--mono); pointer-events: none; }
-#pickInfo { display: none; position: absolute; left: 12px; top: 12px; min-width: 150px;
+#pickInfo { display: none; position: absolute; min-width: 150px; pointer-events: none;
   background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--line); border-radius: 6px;
   padding: 8px 10px; font: 11.5px var(--mono); }
 #pickInfo b { color: var(--act); display: block; margin-bottom: 4px; }
@@ -123,6 +123,7 @@ button.on { border-color: var(--go); color: var(--go); }
   </select></label>
   <label class="wide" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="vFold" checked style="width:auto">fold reductions</label>
   <label class="wide" style="flex-direction:row;align-items:center;gap:6px" title="drift the band phases so consecutive realizations morph into each other"><input type="checkbox" id="vMorph" style="width:auto">morph</label>
+  <label class="wide">morph speed<input type="range" id="vMorphSpd" min="0.25" max="5" step="0.25" value="1"></label>
 </div>
 <div class="row"><span class="big" id="kCount">K = 0<small>realizations</small></span></div>
 <div class="row"><span class="msg" id="perf"></span></div>
@@ -186,8 +187,15 @@ function radialCDF(kind) {
 }
 const INV = { exp: radialCDF('exp'), sph: radialCDF('sph') };
 
+// mulberry32 from RAW adjacent seeds can yield correlated early streams — and
+// correlated band sets are correlated REALIZATIONS. Hash the seed first.
+function hash32(x) {
+  x ^= x >>> 16; x = Math.imul(x, 0x21F0AAAD);
+  x ^= x >>> 15; x = Math.imul(x, 0x735A2D97);
+  x ^= x >>> 15; return x >>> 0;
+}
 function drawBands(B, model, seed) {
-  const rnd = mulberry32(0x9E3779B9 ^ seed);
+  const rnd = mulberry32(hash32(seed ^ 0x9E3779B9));
   const out = new Float32Array(B * 8);                       // row 0: ω.xyz, φ · row 1: phase velocity
   for (let i = 0; i < B; i++) {
     const z = 2 * rnd() - 1, th = 2 * Math.PI * rnd(), r = Math.sqrt(Math.max(0, 1 - z * z));
@@ -203,7 +211,7 @@ function drawBands(B, model, seed) {
     out[i * 4 + 2] = w * z;
     out[i * 4 + 3] = 2 * Math.PI * rnd();
   }
-  for (let i = 0; i < B; i++) out[B * 4 + i * 4] = (rnd() - 0.5) * 3;   // rad/s, per band
+  for (let i = 0; i < B; i++) out[B * 4 + i * 4] = (rnd() - 0.5) * 12;   // rad/s, per band — the field decorrelates in ~0.5 s
   return out;
 }
 
@@ -260,6 +268,7 @@ function buildGrid() {
   bld.flush();
   V.bbox = Array.from(bld.doc.bboxLocal);
   V.cam.fit(V.bbox);
+  if (typeof clearPick === 'function' && PICK) clearPick();
   allocSimTextures();
   resetAcc();
   requestRender();
@@ -446,20 +455,25 @@ function display() {
   }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   $('#kCount').innerHTML = `K = ${SIM.K}<small>realization${SIM.K === 1 ? '' : 's'}</small>`;
+  if (PICK && performance.now() - _chipAt > 250) { _chipAt = performance.now(); renderChip(); }
   requestRender();
 }
 
 // ── run control ───────────────────────────────────────────────────────────────
 let playing = false, seed = 1;
-const MORPH = { t: 0 };
+const MORPH = { t: 0, last: 0 };
 function step(opts = {}) {
   const t0 = performance.now();
   let B;
   if ($('#vMorph').checked) {
-    MORPH.t += 1 / (+$('#vRate').value);
+    // wall-clock drift: the morph moves at the same speed at ANY rate —
+    // a lower rate costs choppiness, not slowness (and quiets the GPU)
+    const dt = MORPH.last ? Math.min(0.25, (t0 - MORPH.last) / 1000) : 1 / (+$('#vRate').value);
+    MORPH.t += dt * (+$('#vMorphSpd').value || 1);
+    MORPH.last = t0;
     B = realizeOnce(seed, MORPH.t);
   } else {
-    MORPH.t = 0;
+    MORPH.t = 0; MORPH.last = 0;
     B = realizeOnce(seed);
     if ($('#vFold').checked) fold();
   }
@@ -674,22 +688,40 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ── click to inspect ──────────────────────────────────────────────────────────
+let PICK = null, _chipAt = 0;
+function readBlockValue(rec) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, $('#vView').value === 'real' ? SIM.fbLast : SIM.fbB);
+  const px = new Float32Array(4);
+  gl.readPixels(rec % TEXW, Math.floor(rec / TEXW), 1, 1, gl.RGBA, gl.FLOAT, px);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return px[0];
+}
+function renderChip() {
+  if (!PICK) return;
+  const el = $('#pickInfo');
+  const v = readBlockValue(PICK.rec);
+  const view = $('#vView').value;
+  const label = { real: 'z', mean: `mean (K=${SIM.K})`, std: `std (K=${SIM.K})`, prob: `P(Z>${$('#vCut').value})` }[view];
+  el.innerHTML = `<b>block [${PICK.ix}, ${PICK.iy}, ${PICK.iz}]</b><div><span>${label}</span>${+v.toPrecision(5)}</div>`;
+  const r = $('#stage').getBoundingClientRect();
+  el.style.left = Math.min(PICK.x + 14, r.width - 170) + 'px';
+  el.style.top = Math.min(PICK.y + 10, r.height - 60) + 'px';
+  el.style.display = 'block';                                // '' falls back to the sheet's display:none
+  return v;
+}
+function clearPick() {
+  PICK = null;
+  $('#pickInfo').style.display = 'none';
+  V.renderer.setPicked(null);
+  requestRender();
+}
 function pickAt(cx, cy) {
   const hit = V.renderer.pick(cx, cy, V.cam, { pointPx: 6, section: currentSection() });
-  const el = $('#pickInfo');
-  if (!hit || hit.layer !== 1) { el.style.display = 'none'; V.renderer.setPicked(null); requestRender(); return null; }
+  if (!hit || hit.layer !== 1) { clearPick(); return null; }
   V.renderer.setPicked(hit); requestRender();
   const i = hit.rec, nxy = G.nx * G.ny;
-  const iz = Math.floor(i / nxy), iy = Math.floor((i % nxy) / G.nx), ix = i % G.nx;
-  const view = $('#vView').value;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, view === 'real' ? SIM.fbLast : SIM.fbB);
-  const px = new Float32Array(4);
-  gl.readPixels(i % TEXW, Math.floor(i / TEXW), 1, 1, gl.RGBA, gl.FLOAT, px);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  const label = { real: `z (seed ${seed - 1})`, mean: `mean (K=${SIM.K})`, std: `std (K=${SIM.K})`, prob: `P(Z>${$('#vCut').value})` }[view];
-  el.innerHTML = `<b>block [${ix}, ${iy}, ${iz}]</b><div><span>${label}</span>${+px[0].toPrecision(5)}</div>`;
-  el.style.display = '';
-  return { hit, value: px[0] };
+  PICK = { rec: i, ix: i % G.nx, iy: Math.floor((i % nxy) / G.nx), iz: Math.floor(i / nxy), x: cx, y: cy };
+  return { hit, value: renderChip() };
 }
 let _pd = null;
 cv.addEventListener('pointerdown', (e) => { if (!_knifeArm && e.button === 0) _pd = { x: e.clientX, y: e.clientY, t: performance.now() }; });
@@ -707,7 +739,7 @@ $('#vCut').disabled = true;
 buildGrid();
 requestAnimationFrame(loop);
 
-window._bands = { step, resetAcc, buildGrid, pickAt, knifeFrom, currentSection, setPlaying, budgetNow, camMoved, SIM, G, V };
+window._bands = { step, resetAcc, buildGrid, pickAt, clearPick, knifeFrom, currentSection, setPlaying, budgetNow, camMoved, MORPH, SIM, G, V };
 </script>
 </body>
 </html>

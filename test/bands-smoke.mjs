@@ -117,6 +117,16 @@ console.log('— the viewer draws it (chanTex → pixels) and picks it —');
     for (let i = 0; i < img.data.length; i += 40) seen.add((img.data[i] >> 4) + ',' + (img.data[i + 1] >> 4) + ',' + (img.data[i + 2] >> 4));
     ok(seen.size > 12, `viewport shows a varied field (${seen.size} colour bins)`);
   }
+  // a REAL mouse click, and the chip must be COMPUTED-visible — style.display
+  // alone lied once (inline '' falls back to the sheet's display:none)
+  const cvBox = await p.evaluate(() => { const r2 = document.querySelector('#cv').getBoundingClientRect(); return { x: r2.x, y: r2.y, w: r2.width, h: r2.height }; });
+  await p.mouse.click(cvBox.x + cvBox.w / 2, cvBox.y + cvBox.h / 2);
+  await p.waitForTimeout(200);
+  const chip = await p.evaluate(() => {
+    const el = document.querySelector('#pickInfo');
+    return { visible: getComputedStyle(el).display !== 'none', text: el.textContent };
+  });
+  ok(chip.visible && /block \[\d+, \d+, \d+\]/.test(chip.text), `a real click shows the value chip (${chip.text.slice(0, 40)})`);
   const picked = await p.evaluate(() => {
     const r = document.querySelector('#cv').getBoundingClientRect();
     return window._bands.pickAt(r.width / 2, r.height / 2);
@@ -153,14 +163,34 @@ console.log('— play, morph, budget —');
     for (let i = 0; i < a.length; i++) { const da = a[i] - ma, db = b2[i] - mb; sab += da * db; sa += da * da; sb += db * db; }
     return sab / Math.sqrt(sa * sb);
   };
-  // morph: consecutive frames are the SAME field drifting (high correlation), K frozen
-  await p.evaluate(() => { window._bands.resetAcc(); document.querySelector('#vMorph').checked = true; window._bands.step({}); });
-  const k0 = await p.evaluate(() => window._bands.SIM.K);
-  const m1 = (await readVals(1, 'fbLast')).slice(0, 4096);
-  await p.evaluate(() => window._bands.step({}));
-  const m2 = (await readVals(1, 'fbLast')).slice(0, 4096);
-  ok(corr(m1, m2) > 0.8, `morph frames correlated (r=${corr(m1, m2).toFixed(3)})`);
-  ok(await p.evaluate(() => window._bands.SIM.K) === k0, 'morph steps do not tick K (correlated ≠ independent)');
+  // morph: consecutive frames are the SAME field drifting (high correlation), K
+  // frozen. The drift is wall-clock, so BOTH steps + reads happen in one page
+  // call — a Playwright round-trip between them would add real seconds of drift.
+  const morphPair = await p.evaluate(() => {
+    const { V, SIM } = window._bands;
+    const gl = V.renderer.gl;
+    const read = () => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbLast);
+      const px = new Float32Array(4096 * 4);
+      gl.readPixels(0, 0, 4096, 1, gl.RGBA, gl.FLOAT, px);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return Array.from({ length: 4096 }, (_, i) => px[i * 4]);
+    };
+    window._bands.resetAcc();
+    document.querySelector('#vMorph').checked = true;
+    window._bands.step({});
+    const k0 = SIM.K, t1 = window._bands.MORPH.t, a = read();
+    window._bands.step({});
+    return { k0, a, b: read(), k1: SIM.K, dt: window._bands.MORPH.t - t1 };
+  });
+  // the law: velocities ~ U(±6) ⇒ corr(Δt) = (1-nug)·sin(6Δt)/(6Δt) + nug (the
+  // nugget is frozen during morph). Δt is wall-clock, so compute the expectation
+  // from the measured Δt instead of assuming the steps were adjacent.
+  const rM = corr(morphPair.a, morphPair.b);
+  const sx = 6 * morphPair.dt;
+  const expM = 0.9 * (Math.sin(sx) / sx) + 0.1;
+  ok(Math.abs(rM - expM) < 0.2, `morph correlation obeys the drift law (r=${rM.toFixed(3)}, expected ${expM.toFixed(3)} at Δt=${morphPair.dt.toFixed(3)}s)`);
+  ok(morphPair.k1 === morphPair.k0, 'morph steps do not tick K (correlated ≠ independent)');
   // morph off: the first step re-realizes the parked base seed (t=0), so
   // independence shows between the NEXT two fresh seeds
   await p.evaluate(() => { document.querySelector('#vMorph').checked = false; window._bands.step({}); });
