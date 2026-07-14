@@ -127,6 +127,22 @@ button.on { border-color: var(--go); color: var(--go); }
 </div>
 <div class="row"><span class="big" id="kCount">K = 0<small>realizations</small></span></div>
 
+<h2>Conditioning</h2>
+<p class="why">Kriging weights depend on geometry alone, never on values — so the CPU solves the systems ONCE and every realization is conditioned on the GPU.</p>
+<div class="fields">
+  <label>holes<input type="number" id="cHoles" value="8" min="1" max="60"></label>
+  <label>spacing<input type="number" id="cSpace" value="4" step="any" min="0.5"></label>
+  <label>truth seed<input type="number" id="cTruth" value="12345"></label>
+</div>
+<div class="row"><button id="btnHoles">drill</button><button id="btnResim">resimulate values</button><span class="msg" id="cMsg1"></span></div>
+<div class="fields">
+  <label>max data/block<input type="number" id="cK" value="12" min="1" max="24"></label>
+  <label>search (ranges)<input type="number" id="cRad" value="1.5" step="0.25" min="0.25"></label>
+</div>
+<div class="row"><button id="btnTensor">build tensor</button>
+  <label style="gap:6px"><input type="checkbox" id="cOn" disabled style="width:auto">condition</label></div>
+<div class="row"><span class="msg" id="cMsg2">no drillholes yet</span></div>
+
 <h2>Diagnostics</h2>
 <div class="row"><label style="gap:6px"><input type="checkbox" id="vDiag" checked style="width:auto">live histogram + variogram</label></div>
 <canvas id="dgHist" width="272" height="92" style="width:272px;height:92px;background:var(--panel2);border:1px solid var(--line);border-radius:4px"></canvas>
@@ -154,7 +170,7 @@ button.on { border-color: var(--go); color: var(--go); }
 </div>
 
 <script type="module">
-import { createRenderer, createOrbitCamera, attachOrbitInput, documentFrame, createBlockChunkBuilder, makeBlockGrid, createEdl } from '@gcu/condenser';
+import { createRenderer, createOrbitCamera, attachOrbitInput, documentFrame, createBlockChunkBuilder, createStickChunkBuilder, makeBlockGrid, createEdl } from '@gcu/condenser';
 
 const $ = (s) => document.querySelector(s);
 
@@ -250,7 +266,7 @@ function anisoMatrix() {
 
 // ── the grid + the condenser scene ───────────────────────────────────────────
 const V = { renderer: null, cam: null, edl: null, frame: null, bbox: null, dirty: false, knife: null };
-let G = { nx: 96, ny: 96, nz: 48, n: 0 };
+const G = { nx: 96, ny: 96, nz: 48, n: 0 };              // mutated in place — never reassign (external readers hold the reference)
 const TEXW = 8192;
 
 function requestRender() { V.dirty = true; }
@@ -273,7 +289,7 @@ new ResizeObserver(() => { const [w, h] = V.renderer.resize(); V.cam.setAspect(w
 
 function buildGrid() {
   const [nx, ny, nz] = $('#gSize').value.split(',').map(Number);
-  G = { nx, ny, nz, n: nx * ny * nz };
+  G.nx = nx; G.ny = ny; G.nz = nz; G.n = nx * ny * nz;
   V.renderer.removeLayer(1);
   const bb = { min: [0, 0, 0], max: [nx, ny, nz] };
   V.frame = documentFrame({ bbox: bb });
@@ -291,6 +307,10 @@ function buildGrid() {
   if (typeof clearPick === 'function' && PICK) clearPick();
   DIAG.buf = null; DIAG.at = 0;
   allocSimTextures();
+  if (typeof COND !== 'undefined' && COND.n) {               // holes survive; the tensor is grid-shaped
+    invalidateTensor('grid changed — rebuild the tensor');
+    drawHoleLayer();
+  }
   resetAcc();
   requestRender();
 }
@@ -329,6 +349,10 @@ uniform float uSqrtStruct;      // sqrt(1 - nugget)
 uniform float uSqrtNug;         // sqrt(nugget)
 uniform float uTime;            // morph: phases drift at per-band velocities
 uniform uint uSeed;
+uniform sampler2D uTensor;      // RG32F conditioning tensor: (data index, weight), K planes
+uniform sampler2D uResid;       // R32F: zᵢ − Z_s(xᵢ), one per datum, this realization
+uniform int uK, uTexH;
+uniform float uCondOn;
 out vec4 o;
 float white(uint rec){
   uint h = rec * 747796405u + uSeed * 2891336453u;
@@ -351,6 +375,16 @@ void main(){
     s += cos(dot(b.xyz, p) + ph);
   }
   float z = uSqrtStruct * sqrt(2.0 / float(uB)) * s + uSqrtNug * white(uint(rec));
+  // conditioning: Z_c = Z_s + Σ λᵢ · (zᵢ − Z_s(xᵢ)). The λ come off the tensor
+  // the CPU solved once; the residuals are this realization's, uploaded per frame.
+  if (uCondOn > 0.5) {
+    int col = rec & 8191, row0 = rec >> 13;
+    for (int k = 0; k < uK; k++) {
+      vec2 t = texelFetch(uTensor, ivec2(col, k * uTexH + row0), 0).rg;
+      if (t.y == 0.0) continue;
+      z += t.y * texelFetch(uResid, ivec2(int(t.x), 0), 0).r;
+    }
+  }
   o = vec4(z, 0.0, 0.0, 1.0);
 }`;
 
@@ -418,6 +452,7 @@ function uploadBands(seed) {
   if (SIM.bandKey === key) return B;
   SIM.bandKey = key;
   const data = drawBands(B, $('#vModel').value, seed);
+  SIM.bandData = data;                                       // the CPU needs them for the residuals
   gl.bindTexture(gl.TEXTURE_2D, SIM.bandTex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, B, 2, 0, gl.RGBA, gl.FLOAT, data);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -433,6 +468,8 @@ function passSetup(fb) {
 }
 function realizeOnce(seed, time = 0) {
   const B = uploadBands(seed);
+  const cond = condReady();
+  if (cond) uploadResiduals(seed, time, B);
   const nug = Math.max(0, Math.min(1, +$('#vNug').value || 0));
   passSetup(SIM.fbLast);
   gl.useProgram(SIM.progR);
@@ -446,6 +483,13 @@ function realizeOnce(seed, time = 0) {
   gl.uniform1f(U('uSqrtNug'), Math.sqrt(nug));
   gl.uniform1f(U('uTime'), time);
   gl.uniform1ui(U('uSeed'), seed >>> 0);
+  gl.uniform1f(U('uCondOn'), cond ? 1 : 0);
+  if (cond) {
+    gl.uniform1i(U('uK'), COND.K);
+    gl.uniform1i(U('uTexH'), COND.texH);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, COND.tex); gl.uniform1i(U('uTensor'), 1);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, COND.resTex); gl.uniform1i(U('uResid'), 2);
+  }
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   return B;
 }
@@ -481,6 +525,245 @@ function display() {
   display._force = false;
   requestRender();
 }
+
+// ── conditioning ──────────────────────────────────────────────────────────────
+// Conditional simulation by kriged residuals (the standard construction):
+//
+//   Z_c(x) = Z_s(x) + Σᵢ λᵢ(x) · [ zᵢ − Z_s(xᵢ) ]
+//
+// The weights λ depend ONLY on geometry (data locations + the variogram), never
+// on the values — so they are solved ONCE on the CPU into a conditioning tensor
+// (K neighbours per block: index + weight) and uploaded as a texture. Per
+// realization the GPU adds Σ λᵢ rᵢ; the residuals rᵢ are n·B cosines on the CPU.
+// Nothing about the ensemble is ever materialized.
+const COND = { n: 0, x: null, y: null, z: null, v: null, holes: 0,
+  K: 0, tex: null, resTex: null, res: null, texH: 0, key: '', building: false };
+
+const condReady = () => !!COND.tex && $('#cOn').checked && !$('#cOn').disabled;
+const condKey = () => [G.nx, G.ny, G.nz, COND.n, $('#cK').value, $('#cRad').value,
+  $('#vModel').value, $('#vRange').value, $('#vRangeMinor').value, $('#vRangeVert').value,
+  $('#vAzm').value, $('#vNug').value].join('|');
+
+function invalidateTensor(why) {
+  if (COND.tex) { gl.deleteTexture(COND.tex); COND.tex = null; }
+  $('#cOn').checked = false; $('#cOn').disabled = true;
+  if (why && COND.n) $('#cMsg2').textContent = why;
+  requestRender();
+}
+
+// the field, in JS — the same formula the shader runs (for data locations)
+function evalField(bands, B, R, px, py, pz, time, sqrtStruct, sqrtNug, rec, seed) {
+  const ax = R[0][0] * px + R[0][1] * py + R[0][2] * pz;
+  const ay = R[1][0] * px + R[1][1] * py + R[1][2] * pz;
+  const az = R[2][0] * px + R[2][1] * py + R[2][2] * pz;
+  let sum = 0;
+  for (let i = 0; i < B; i++) {
+    const ph = bands[i * 4 + 3] + time * bands[B * 4 + i * 4];
+    sum += Math.cos(bands[i * 4] * ax + bands[i * 4 + 1] * ay + bands[i * 4 + 2] * az + ph);
+  }
+  let z = sqrtStruct * Math.sqrt(2 / B) * sum;
+  if (sqrtNug > 0) {                                        // an independent nugget draw at this location
+    const r = mulberry32(hash32(rec * 2654435761 ^ hash32(seed)))();
+    const r2 = mulberry32(hash32(rec * 40503 ^ hash32(seed + 7)))();
+    z += sqrtNug * Math.sqrt(-2 * Math.log(1 - r)) * Math.cos(2 * Math.PI * r2);
+  }
+  return z;
+}
+
+// synthetic drillholes: collars scattered over the footprint, holes plunging
+// steeply with a little jitter, samples composited down the hole
+function genDrillholes() {
+  const nH = Math.max(1, Math.min(60, +$('#cHoles').value | 0));
+  const sp = Math.max(0.5, +$('#cSpace').value || 4);
+  const rnd = mulberry32(hash32(7777 + nH * 131 + Math.round(sp * 10)));
+  const { nx, ny, nz } = G;
+  const ax = [], ay = [], az = [], bx = [], by = [], bz = [], cx = [], cy = [], cz = [], chan = [];
+  for (let h = 0; h < nH; h++) {
+    const x0 = nx * (0.12 + 0.76 * rnd()), y0 = ny * (0.12 + 0.76 * rnd());
+    const azm = 2 * Math.PI * rnd(), plunge = (78 + 12 * rnd()) * Math.PI / 180;
+    const dx = Math.cos(azm) * Math.cos(plunge), dy = Math.sin(azm) * Math.cos(plunge), dz = -Math.sin(plunge);
+    const depth = nz * (0.55 + 0.4 * rnd());
+    for (let d = sp / 2; d < depth; d += sp) {
+      const t0 = d - sp / 2, t1 = d + sp / 2;
+      const px = x0 + dx * d, py = y0 + dy * d, pz = nz - 0.5 + dz * d;
+      if (px < 0 || px > nx || py < 0 || py > ny || pz < 0) break;
+      ax.push(x0 + dx * t0); ay.push(y0 + dy * t0); az.push(nz - 0.5 + dz * t0);
+      bx.push(x0 + dx * t1); by.push(y0 + dy * t1); bz.push(nz - 0.5 + dz * t1);
+      cx.push(px); cy.push(py); cz.push(pz); chan.push(0);
+    }
+  }
+  COND.n = cx.length; COND.holes = nH;
+  COND.x = Float64Array.from(cx); COND.y = Float64Array.from(cy); COND.z = Float64Array.from(cz);
+  COND.v = new Float64Array(COND.n);
+  COND._seg = { ax: Float64Array.from(ax), ay: Float64Array.from(ay), az: Float64Array.from(az),
+    bx: Float64Array.from(bx), by: Float64Array.from(by), bz: Float64Array.from(bz) };
+  invalidateTensor();
+  resimulateValues();                                       // fresh holes always carry values
+  $('#cMsg1').textContent = `${nH} holes · ${COND.n} samples`;
+}
+
+// the data's values ARE a realization of the model — resample them from a seed
+function resimulateValues() {
+  if (!COND.n) { $('#cMsg1').textContent = 'drill first'; return; }
+  const seed = +$('#cTruth').value | 0;
+  const B = Math.max(16, Math.min(1024, +$('#vBands').value | 0));
+  const bands = drawBands(B, $('#vModel').value, seed);
+  const R = anisoRows(), nug = Math.max(0, Math.min(1, +$('#vNug').value || 0));
+  const ss = Math.sqrt(1 - nug), sn = Math.sqrt(nug);
+  for (let i = 0; i < COND.n; i++) COND.v[i] = evalField(bands, B, R, COND.x[i], COND.y[i], COND.z[i], 0, ss, sn, i, seed);
+  drawHoleLayer();
+  invalidateTensor('values changed — rebuild the tensor');
+  $('#cMsg1').textContent = `${COND.holes} holes · ${COND.n} samples · seed ${seed}`;
+}
+
+function drawHoleLayer() {
+  V.renderer.removeLayer(2);
+  if (!COND.n) return;
+  const sg = COND._seg;
+  const bld = createStickChunkBuilder({ frame: V.frame, onChunk: (c) => V.renderer.addChunk(c, 'base', 2) });
+  bld.push({ ax: sg.ax, ay: sg.ay, az: sg.az, bx: sg.bx, by: sg.by, bz: sg.bz,
+    x: COND.x, y: COND.y, z: COND.z, chan: COND.v, count: COND.n, recStart: 0 });
+  bld.flush();
+  V.renderer.setLayerStickRadius(2, 1.1);
+  V.renderer.setLayerSectioned(2, false);                   // the holes stay visible through a section
+  requestRender();
+}
+
+// C(h) with the model's own anisotropy; h given in NORMALIZED (unit-range) lag
+const covOf = (hn, nug, same) => (same ? 1 : (1 - nug) * modelCov(hn));
+
+function cholSolve(A, b, K) {                              // in-place Cholesky, small K
+  for (let i = 0; i < K; i++) {
+    for (let j = 0; j <= i; j++) {
+      let s2 = A[i * K + j];
+      for (let k = 0; k < j; k++) s2 -= A[i * K + k] * A[j * K + k];
+      if (i === j) {
+        if (s2 <= 1e-10) return false;
+        A[i * K + i] = Math.sqrt(s2);
+      } else A[i * K + j] = s2 / A[j * K + j];
+    }
+  }
+  for (let i = 0; i < K; i++) {                            // forward
+    let s2 = b[i];
+    for (let k = 0; k < i; k++) s2 -= A[i * K + k] * b[k];
+    b[i] = s2 / A[i * K + i];
+  }
+  for (let i = K - 1; i >= 0; i--) {                       // back
+    let s2 = b[i];
+    for (let k = i + 1; k < K; k++) s2 -= A[k * K + i] * b[k];
+    b[i] = s2 / A[i * K + i];
+  }
+  return true;
+}
+
+async function buildTensor() {
+  if (!COND.n) { $('#cMsg2').textContent = 'drill some holes first'; return; }
+  if (COND.building) return;
+  COND.building = true;
+  const t0 = performance.now();
+  const K = Math.max(1, Math.min(24, +$('#cK').value | 0));
+  const searchR = Math.max(0.25, +$('#cRad').value || 1.5);   // in units of the model's range
+  const R = anisoRows(), nug = Math.max(0, Math.min(1, +$('#vNug').value || 0));
+  const { nx, ny, nz, n } = G, nxy = nx * ny;
+  const texH = SIM.texH;
+  const data = new Float32Array(TEXW * texH * K * 2);         // RG: (index, weight)
+
+  // data in NORMALIZED coordinates — the search ellipsoid IS the variogram's
+  const dnx = new Float64Array(COND.n), dny = new Float64Array(COND.n), dnz = new Float64Array(COND.n);
+  for (let i = 0; i < COND.n; i++) {
+    const x = COND.x[i], y = COND.y[i], z = COND.z[i];
+    dnx[i] = R[0][0] * x + R[0][1] * y + R[0][2] * z;
+    dny[i] = R[1][0] * x + R[1][1] * y + R[1][2] * z;
+    dnz[i] = R[2][0] * x + R[2][1] * y + R[2][2] * z;
+  }
+  const nd = new Int32Array(K), ndd = new Float64Array(K);
+  const A = new Float64Array(K * K), rhs = new Float64Array(K);
+  const R2 = searchR * searchR;
+  let solved = 0, skipped = 0;
+
+  for (let rec = 0; rec < n; rec++) {
+    if ((rec & 0xFFFF) === 0) {
+      $('#cMsg2').textContent = `solving… ${((rec / n) * 100) | 0}%`;
+      await new Promise((r) => setTimeout(r));
+    }
+    const iz = (rec / nxy) | 0, iy = ((rec % nxy) / nx) | 0, ix = rec % nx;
+    const bx = ix + 0.5, by = iy + 0.5, bz = iz + 0.5;
+    const px = R[0][0] * bx + R[0][1] * by + R[0][2] * bz;
+    const py = R[1][0] * bx + R[1][1] * by + R[1][2] * bz;
+    const pz = R[2][0] * bx + R[2][1] * by + R[2][2] * bz;
+    // K nearest within the search ellipsoid (insertion into a tiny sorted list)
+    let m = 0;
+    for (let i = 0; i < COND.n; i++) {
+      const ddx = dnx[i] - px, ddy = dny[i] - py, ddz = dnz[i] - pz;
+      const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+      if (d2 > R2) continue;
+      if (m < K) {
+        let j = m++;
+        while (j > 0 && ndd[j - 1] > d2) { ndd[j] = ndd[j - 1]; nd[j] = nd[j - 1]; j--; }
+        ndd[j] = d2; nd[j] = i;
+      } else if (d2 < ndd[K - 1]) {
+        let j = K - 1;
+        while (j > 0 && ndd[j - 1] > d2) { ndd[j] = ndd[j - 1]; nd[j] = nd[j - 1]; j--; }
+        ndd[j] = d2; nd[j] = i;
+      }
+    }
+    if (!m) { skipped++; continue; }                         // no data in range → unconditional
+    for (let a = 0; a < m; a++) {
+      const ia = nd[a];
+      for (let b2 = 0; b2 <= a; b2++) {
+        const ib = nd[b2];
+        const h = a === b2 ? 0 : Math.hypot(dnx[ia] - dnx[ib], dny[ia] - dny[ib], dnz[ia] - dnz[ib]);
+        const c = covOf(h, nug, a === b2);
+        A[a * m + b2] = c; A[b2 * m + a] = c;
+      }
+      A[a * m + a] += 1e-8;                                  // ridge
+      rhs[a] = covOf(Math.sqrt(ndd[a]), nug, false);         // block ↔ datum (point support)
+    }
+    if (!cholSolve(A, rhs, m)) { skipped++; continue; }
+    solved++;
+    const col = rec & 8191, row0 = rec >> 13;
+    for (let k = 0; k < m; k++) {
+      const t = ((k * texH + row0) * TEXW + col) * 2;
+      data[t] = nd[k]; data[t + 1] = rhs[k];
+    }
+  }
+
+  if (COND.tex) gl.deleteTexture(COND.tex);
+  COND.tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, COND.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, TEXW, texH * K, 0, gl.RG, gl.FLOAT, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  COND.K = K; COND.texH = texH; COND.key = condKey();
+  if (COND.resTex) gl.deleteTexture(COND.resTex);
+  COND.resTex = gl.createTexture();
+  COND.res = new Float32Array(COND.n);
+  $('#cOn').disabled = false; $('#cOn').checked = true;
+  COND.building = false;
+  const mb = (data.length * 4 / 1048576).toFixed(0);
+  $('#cMsg2').textContent = `tensor: ${solved.toLocaleString()} blocks × ≤${K} · ${mb} MB · ${((performance.now() - t0) / 1000).toFixed(1)} s (once)`;
+  resetAcc();
+}
+
+// per realization: the residuals at the data (n × B cosines on the CPU)
+function uploadResiduals(seed, time, B) {
+  const R = anisoRows(), nug = Math.max(0, Math.min(1, +$('#vNug').value || 0));
+  const ss = Math.sqrt(1 - nug), sn = Math.sqrt(nug);
+  const bands = SIM.bandData;
+  for (let i = 0; i < COND.n; i++) {
+    COND.res[i] = COND.v[i] - evalField(bands, B, R, COND.x[i], COND.y[i], COND.z[i], time, ss, sn, i, seed);
+  }
+  gl.bindTexture(gl.TEXTURE_2D, COND.resTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, COND.n, 1, 0, gl.RED, gl.FLOAT, COND.res);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+}
+
+$('#btnHoles').onclick = genDrillholes;
+$('#btnResim').onclick = resimulateValues;
+$('#btnTensor').onclick = buildTensor;
+$('#cOn').onchange = () => { resetAcc(); };
+for (const id of ['#cK', '#cRad']) $(id).onchange = () => invalidateTensor('search changed — rebuild the tensor');
 
 // ── diagnostics: histogram + directional variograms of the CURRENT realization,
 //    from one throttled full readback of lastTex. Off = zero cost.
@@ -640,7 +923,11 @@ $('#btnReset').onclick = resetAcc;
 $('#vView').onchange = () => { $('#vCut').disabled = $('#vView').value !== 'prob'; display(); };
 $('#vCut').onchange = () => { if (SIM.K > 1) { resetAcc(); $('#msg').textContent = 'cutoff changed — reductions reset (P folds at realize time)'; } else display(); };
 for (const id of ['#vModel', '#vRange', '#vRangeMinor', '#vRangeVert', '#vAzm', '#vNug', '#vBands']) {
-  $(id).onchange = () => { resetAcc(); $('#msg').textContent = ''; };
+  $(id).onchange = () => {
+    if (COND.tex && condKey() !== COND.key) invalidateTensor('model changed — rebuild the tensor');
+    resetAcc();
+    $('#msg').textContent = '';
+  };
 }
 $('#vSeed').onchange = () => resetAcc();
 $('#gSize').onchange = buildGrid;
@@ -657,7 +944,8 @@ const loop = (ts) => {
   if (V.dirty) {
     V.dirty = false;
     V.edl.render(cv.width, cv.height, V.cam,
-      () => V.renderer.draw(V.cam, { budget: budgetNow(), section: currentSection(), layerOpts: { 1: { colorMode: 1 } } }),
+      () => V.renderer.draw(V.cam, { budget: budgetNow(), section: currentSection(),
+        layerOpts: { 1: { colorMode: 1 }, 2: { colorMode: 1, clip: [-2.8, 2.8] } } }),
       { enabled: true, strength: 0.8 });
   }
   requestAnimationFrame(loop);
@@ -874,7 +1162,7 @@ $('#vCut').disabled = true;
 buildGrid();
 requestAnimationFrame(loop);
 
-window._bands = { step, resetAcc, buildGrid, pickAt, clearPick, knifeFrom, currentSection, setPlaying, budgetNow, camMoved, updateDiag, MORPH, DIAG, SIM, G, V };
+window._bands = { step, resetAcc, buildGrid, pickAt, clearPick, knifeFrom, currentSection, setPlaying, budgetNow, camMoved, updateDiag, genDrillholes, resimulateValues, buildTensor, condReady, MORPH, DIAG, COND, SIM, G, V };
 </script>
 </body>
 </html>

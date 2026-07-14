@@ -231,6 +231,74 @@ console.log('— diagnostics + the azimuth actually rotates —');
   ok(errs.length === 0, `still no page errors${errs.length ? ' — ' + errs[errs.length - 1] : ''}`);
 }
 
+console.log('— conditioning: the three laws —');
+{
+  // a small grid keeps the CPU solve quick; the laws are scale-free
+  await p.evaluate(() => {
+    const $ = (s2) => document.querySelector(s2);
+    $('#gSize').value = '64,64,32'; $('#gSize').dispatchEvent(new Event('change'));
+    $('#vModel').value = 'gau'; $('#vNug').value = 0;
+    $('#vRange').value = 20; $('#vRangeMinor').value = 20; $('#vRangeVert').value = 10;
+    $('#vModel').dispatchEvent(new Event('change'));
+    $('#cHoles').value = 6; $('#cSpace').value = 3;
+    window._bands.genDrillholes();
+    window._bands.buildTensor();
+  });
+  await p.waitForFunction(() => !window._bands.COND.building && window._bands.COND.tex, null, { timeout: 120000 });
+  ok(await p.evaluate(() => window._bands.COND.n > 20), `drillholes sampled (${await p.evaluate(() => window._bands.COND.n)} samples)`);
+
+  const L = await p.evaluate(() => {
+    const { COND, G, SIM, V } = window._bands;
+    const gl = V.renderer.gl;
+    const readRec = (r2) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbLast);
+      const px = new Float32Array(4);
+      gl.readPixels(r2 % 8192, Math.floor(r2 / 8192), 1, 1, gl.RGBA, gl.FLOAT, px);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return px[0];
+    };
+    const recOf = (x, y, z) => Math.min(G.nx - 1, Math.max(0, Math.floor(x)))
+      + Math.min(G.ny - 1, Math.max(0, Math.floor(y))) * G.nx
+      + Math.min(G.nz - 1, Math.max(0, Math.floor(z))) * G.nx * G.ny;
+    // the datum sitting closest to a block centre (kriging should reproduce it)
+    let best = 0, bestD = 1e9;
+    for (let i = 0; i < COND.n; i++) {
+      const d = Math.hypot(COND.x[i] - (Math.floor(COND.x[i]) + 0.5), COND.y[i] - (Math.floor(COND.y[i]) + 0.5), COND.z[i] - (Math.floor(COND.z[i]) + 0.5));
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    const recNear = recOf(COND.x[best], COND.y[best], COND.z[best]);
+    let recFar = 0, farD = 0;                                  // the block furthest from every hole
+    for (let t = 0; t < 300; t++) {
+      const x = Math.random() * G.nx, y = Math.random() * G.ny, z = Math.random() * G.nz;
+      let d = 1e9;
+      for (let i = 0; i < COND.n; i++) d = Math.min(d, Math.hypot(COND.x[i] - x, COND.y[i] - y, COND.z[i] - z));
+      if (d > farD) { farD = d; recFar = recOf(x, y, z); }
+    }
+    const seeds = (on) => {
+      document.querySelector('#cOn').checked = on;
+      const near = [], far = [];
+      for (let s2 = 0; s2 < 6; s2++) {
+        document.querySelector('#vSeed').value = 100 + s2;
+        window._bands.resetAcc();
+        near.push(readRec(recNear)); far.push(readRec(recFar));
+      }
+      return { near, far };
+    };
+    const sd = (a) => { const m = a.reduce((t, v) => t + v, 0) / a.length; return Math.sqrt(a.reduce((t, v) => t + (v - m) ** 2, 0) / a.length); };
+    const on = seeds(true), off = seeds(false);
+    const truth = COND.v[best];
+    return {
+      err: on.near.reduce((t, v) => t + Math.abs(v - truth), 0) / on.near.length,
+      onNearSd: sd(on.near), offNearSd: sd(off.near), onFarSd: sd(on.far), offFarSd: sd(off.far),
+    };
+  });
+  ok(L.err < 0.15, `every realization honours the datum (mean |error| ${L.err.toFixed(4)})`);
+  ok(L.onNearSd < 0.25 * L.offNearSd, `variance collapses at the data (sd ${L.onNearSd.toFixed(3)} vs unconditional ${L.offNearSd.toFixed(3)})`);
+  ok(L.onFarSd > 0.55 * L.offFarSd, `still a simulation away from data (sd ${L.onFarSd.toFixed(2)} vs ${L.offFarSd.toFixed(2)})`);
+  ok(await p.evaluate(() => { document.querySelector('#vRange').value = 30; document.querySelector('#vRange').dispatchEvent(new Event('change')); return document.querySelector('#cOn').disabled; }), 'changing the model invalidates the tensor (geometry moved)');
+  ok(errs.length === 0, `still no page errors${errs.length ? ' — ' + errs[errs.length - 1] : ''}`);
+}
+
 await b.close(); srv.close();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
