@@ -205,6 +205,32 @@ console.log('— play, morph, budget —');
   ok(errs.length === 0, `still no page errors${errs.length ? ' — ' + errs[errs.length - 1] : ''}`);
 }
 
+console.log('— diagnostics + the azimuth actually rotates —');
+{
+  const setP = (azm) => p.evaluate((azm2) => {
+    const $ = (s2) => document.querySelector(s2);
+    $('#vModel').value = 'gau'; $('#vRange').value = 24; $('#vRangeMinor').value = 12; $('#vRangeVert').value = 6;
+    $('#vAzm').value = azm2; $('#vNug').value = 0; $('#vBands').value = 400;
+    document.querySelector('#vMorph').checked = false;
+    $('#vModel').dispatchEvent(new Event('change'));         // resets + forces a diagnostics refresh
+    return { gx: Array.from(window._bands.DIAG.last.gx), gy: Array.from(window._bands.DIAG.last.gy), gz: Array.from(window._bands.DIAG.last.gz) };
+  }, azm);
+  // azimuth 0: major range 24 along +Y (north), minor 12 along X, vertical 6
+  const a0 = await setP(0);
+  ok(a0.gy[6] * 1.4 < a0.gx[6], `azm 0: γY(6) ≪ γX(6) — major along north (${a0.gy[6].toFixed(3)} vs ${a0.gx[6].toFixed(3)})`);
+  ok(a0.gx[6] * 1.4 < a0.gz[6], `vertical range shortest: γX(6) ≪ γZ(6) (${a0.gx[6].toFixed(3)} vs ${a0.gz[6].toFixed(3)})`);
+  // azimuth 90: the major axis rotates onto +X — the ordering flips
+  const a90 = await setP(90);
+  ok(a90.gx[6] * 1.4 < a90.gy[6], `azm 90 flips it: γX(6) ≪ γY(6) (${a90.gx[6].toFixed(3)} vs ${a90.gy[6].toFixed(3)})`);
+  // histogram is a density that integrates to ~1 and peaks near 0
+  const hist = await p.evaluate(() => ({ bins: Array.from(window._bands.DIAG.last.bins), bw: window._bands.DIAG.last.bw }));
+  const area = hist.bins.reduce((t, b2) => t + b2 * hist.bw, 0);
+  const peak = hist.bins.indexOf(Math.max(...hist.bins));
+  ok(Math.abs(area - 1) < 0.05, `histogram is a density (area=${area.toFixed(3)})`);
+  ok(Math.abs(peak - hist.bins.length / 2) <= 5, `histogram peaks near 0 (bin ${peak}/${hist.bins.length})`);
+  ok(errs.length === 0, `still no page errors${errs.length ? ' — ' + errs[errs.length - 1] : ''}`);
+}
+
 await b.close(); srv.close();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -126,6 +126,13 @@ button.on { border-color: var(--go); color: var(--go); }
   <label class="wide">morph speed<input type="range" id="vMorphSpd" min="0.25" max="5" step="0.25" value="1"></label>
 </div>
 <div class="row"><span class="big" id="kCount">K = 0<small>realizations</small></span></div>
+
+<h2>Diagnostics</h2>
+<div class="row"><label style="gap:6px"><input type="checkbox" id="vDiag" checked style="width:auto">live histogram + variogram</label></div>
+<canvas id="dgHist" width="272" height="92" style="width:272px;height:92px;background:var(--panel2);border:1px solid var(--line);border-radius:4px"></canvas>
+<div class="msg" style="margin:2px 0 8px">histogram of the realization · N(0,1) target</div>
+<canvas id="dgVar" width="272" height="120" style="width:272px;height:120px;background:var(--panel2);border:1px solid var(--line);border-radius:4px"></canvas>
+<div class="msg" style="margin:2px 0 8px">experimental γ(h) along <span style="color:var(--info)">X</span> <span style="color:var(--go)">Y</span> <span style="color:var(--warn)">Z</span> · lines = the model</div>
 <div class="row"><span class="msg" id="perf"></span></div>
 <div class="row"><span class="msg" id="msg"></span></div>
 
@@ -217,14 +224,27 @@ function drawBands(B, model, seed) {
 
 // rotate by azimuth, scale each axis by 1/range — the shader evaluates the
 // unit-range model in transformed coordinates
-function anisoMatrix() {
+// rows of the INTENDED transform: project onto the azimuth direction (from
+// north, clockwise) over the major range, its perpendicular over the minor,
+// z over the vertical — then evaluate the unit-range model.
+function anisoRows() {
   const a = (+$('#vAzm').value || 0) * Math.PI / 180;
   const rMaj = +$('#vRange').value || 1, rMin = +$('#vRangeMinor').value || rMaj, rVer = +$('#vRangeVert').value || rMaj;
   const c = Math.cos(a), s = Math.sin(a);
+  return [
+    [s / rMaj, c / rMaj, 0],
+    [c / rMin, -s / rMin, 0],
+    [0, 0, 1 / rVer],
+  ];
+}
+function anisoMatrix() {
+  const r = anisoRows();
+  // uniformMatrix3fv is COLUMN-major: flatten columns, not rows — row-major
+  // upload TRANSPOSES the matrix and the azimuth cancels out of |M·v|
   return new Float32Array([
-    s / rMaj, c / rMaj, 0,
-    c / rMin, -s / rMin, 0,
-    0, 0, 1 / rVer,
+    r[0][0], r[1][0], r[2][0],
+    r[0][1], r[1][1], r[2][1],
+    r[0][2], r[1][2], r[2][2],
   ]);
 }
 
@@ -269,6 +289,7 @@ function buildGrid() {
   V.bbox = Array.from(bld.doc.bboxLocal);
   V.cam.fit(V.bbox);
   if (typeof clearPick === 'function' && PICK) clearPick();
+  DIAG.buf = null; DIAG.at = 0;
   allocSimTextures();
   resetAcc();
   requestRender();
@@ -456,14 +477,128 @@ function display() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   $('#kCount').innerHTML = `K = ${SIM.K}<small>realization${SIM.K === 1 ? '' : 's'}</small>`;
   if (PICK && performance.now() - _chipAt > 250) { _chipAt = performance.now(); renderChip(); }
+  updateDiag(display._force);
+  display._force = false;
   requestRender();
 }
+
+// ── diagnostics: histogram + directional variograms of the CURRENT realization,
+//    from one throttled full readback of lastTex. Off = zero cost.
+const DIAG = { at: 0, buf: null };
+function modelCov(d) {
+  const m = $('#vModel').value;
+  if (m === 'gau') return Math.exp(-d * d);
+  if (m === 'exp') return Math.exp(-d);
+  return d < 1 ? 1 - 1.5 * d + 0.5 * d * d * d : 0;          // spherical, unit range
+}
+function updateDiag(force) {
+  if (!$('#vDiag').checked) { DIAG.at = 0; return; }
+  const now = performance.now();
+  const minGap = Math.max(300, G.n / 1e6 * 200);             // bigger grids read less often
+  if (!force && now - DIAG.at < minGap) return;
+  DIAG.at = now;
+  const total = TEXW * SIM.texH * 4;
+  if (!DIAG.buf || DIAG.buf.length < total) DIAG.buf = new Float32Array(total);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, SIM.fbLast);
+  gl.readPixels(0, 0, TEXW, SIM.texH, gl.RGBA, gl.FLOAT, DIAG.buf);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const v = (rec) => DIAG.buf[rec * 4];
+  const { nx, ny, nz, n } = G;
+  const nxy = nx * ny;
+
+  // histogram: a strided sample, density-normalized
+  const NB = 48, lo = -3.6, hi = 3.6, bw = (hi - lo) / NB;
+  const bins = new Float64Array(NB);
+  const stride = Math.max(1, Math.round(n / 80000));
+  let ns = 0;
+  for (let i = 0; i < n; i += stride) { const b = Math.floor((v(i) - lo) / bw); if (b >= 0 && b < NB) bins[b]++; ns++; }
+  for (let b = 0; b < NB; b++) bins[b] /= ns * bw;           // density
+
+  // directional experimental variograms (z-slice 0 for X/Y, the y=0 sheet for Z)
+  const hmax = Math.min(40, Math.max(nx, ny) >> 1), hmaxZ = Math.min(hmax, Math.max(2, Math.floor(nz * 0.75)));
+  const gamma = (hm, count, pair) => {
+    const g = new Float64Array(hm + 1);
+    for (let h = 1; h <= hm; h++) {
+      let acc = 0, c = 0;
+      count(h, (a, b) => { const d = a - b; acc += d * d; c++; });
+      g[h] = c ? acc / (2 * c) : NaN;
+    }
+    return g;
+  };
+  const gx = gamma(hmax, (h, f) => { for (let iy = 0; iy < ny; iy += 2) { const b = iy * nx; for (let ix = 0; ix + h < nx; ix += 2) f(v(b + ix), v(b + ix + h)); } });
+  const gy = gamma(hmax, (h, f) => { for (let ix = 0; ix < nx; ix += 2) for (let iy = 0; iy + h < ny; iy += 2) f(v(ix + iy * nx), v(ix + (iy + h) * nx)); });
+  const gz = gamma(hmaxZ, (h, f) => { for (let ix = 0; ix < nx; ix += 2) for (let iz = 0; iz + h < nz; iz++) f(v(ix + iz * nxy), v(ix + (iz + h) * nxy)); });
+
+  // model curves: γ(h) = nug + (1-nug)(1 - C(|M·h·eᵢ|)) with the INTENDED matrix
+  const R = anisoRows(), nug = Math.max(0, Math.min(1, +$('#vNug').value || 0));
+  const scale = (i) => Math.hypot(R[0][i], R[1][i], R[2][i]);
+  const model = (i, h) => nug + (1 - nug) * (1 - modelCov(h * scale(i)));
+
+  DIAG.last = { gx, gy, gz, hmax, hmaxZ, bins, lo, bw, model: [0, 1, 2].map((i) => scale(i)) };
+  drawHist(bins, lo, bw);
+  drawVar({ gx, gy, gz, hmax, hmaxZ, model });
+}
+function drawHist(bins, lo, bw) {
+  const cvh = $('#dgHist'), ctx = cvh.getContext('2d');
+  const W = cvh.width, H = cvh.height;
+  ctx.clearRect(0, 0, W, H);
+  const ymax = 0.48;
+  const css = getComputedStyle(document.documentElement);
+  ctx.fillStyle = css.getPropertyValue('--info').trim() + '66';
+  for (let b = 0; b < bins.length; b++) {
+    const x = (b / bins.length) * W, w = W / bins.length - 1;
+    const h = Math.min(1, bins[b] / ymax) * (H - 8);
+    ctx.fillRect(x, H - h, w, h);
+  }
+  ctx.strokeStyle = css.getPropertyValue('--act').trim();
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  for (let px = 0; px <= W; px += 2) {
+    const x = lo + (px / W) * (bins.length * bw);
+    const y = H - (Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI) / ymax) * (H - 8);
+    px === 0 ? ctx.moveTo(px, y) : ctx.lineTo(px, y);
+  }
+  ctx.stroke();
+}
+function drawVar({ gx, gy, gz, hmax, hmaxZ, model }) {
+  const cvv = $('#dgVar'), ctx = cvv.getContext('2d');
+  const W = cvv.width, H = cvv.height, mL = 20, mB = 12, mT = 4;
+  ctx.clearRect(0, 0, W, H);
+  const css = getComputedStyle(document.documentElement);
+  const ymax = 1.5;
+  const X = (h) => mL + (h / hmax) * (W - mL - 4);
+  const Y = (g) => H - mB - Math.min(1, g / ymax) * (H - mB - mT);
+  ctx.strokeStyle = css.getPropertyValue('--line').trim();
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(mL, Y(1)); ctx.lineTo(W - 4, Y(1)); ctx.stroke();   // the sill
+  ctx.setLineDash([]);
+  ctx.fillStyle = css.getPropertyValue('--faint').trim();
+  ctx.font = '9px monospace';
+  ctx.fillText('1', 8, Y(1) + 3);
+  ctx.fillText(String(hmax), W - 16, H - 2);
+  const dirs = [
+    { g: gx, hm: hmax, col: css.getPropertyValue('--info').trim(), i: 0 },
+    { g: gy, hm: hmax, col: css.getPropertyValue('--go').trim(), i: 1 },
+    { g: gz, hm: hmaxZ, col: css.getPropertyValue('--warn').trim(), i: 2 },
+  ];
+  for (const d of dirs) {
+    ctx.strokeStyle = d.col + '99';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let h = 0; h <= d.hm; h++) { const y = Y(model(d.i, h)); h === 0 ? ctx.moveTo(X(h), y) : ctx.lineTo(X(h), y); }
+    ctx.stroke();
+    ctx.fillStyle = d.col;
+    for (let h = 1; h <= d.hm; h++) if (Number.isFinite(d.g[h])) ctx.fillRect(X(h) - 1.5, Y(d.g[h]) - 1.5, 3, 3);
+  }
+}
+$('#vDiag').onchange = () => { if ($('#vDiag').checked) updateDiag(true); };
 
 // ── run control ───────────────────────────────────────────────────────────────
 let playing = false, seed = 1;
 const MORPH = { t: 0, last: 0 };
 function step(opts = {}) {
   const t0 = performance.now();
+  if (opts.measure) display._force = true;                   // manual step / reset: refresh diagnostics now
   let B;
   if ($('#vMorph').checked) {
     // wall-clock drift: the morph moves at the same speed at ANY rate —
@@ -739,7 +874,7 @@ $('#vCut').disabled = true;
 buildGrid();
 requestAnimationFrame(loop);
 
-window._bands = { step, resetAcc, buildGrid, pickAt, clearPick, knifeFrom, currentSection, setPlaying, budgetNow, camMoved, MORPH, SIM, G, V };
+window._bands = { step, resetAcc, buildGrid, pickAt, clearPick, knifeFrom, currentSection, setPlaying, budgetNow, camMoved, updateDiag, MORPH, DIAG, SIM, G, V };
 </script>
 </body>
 </html>
