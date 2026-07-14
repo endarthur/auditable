@@ -241,6 +241,50 @@ ok(Math.abs(c7b.p1 - c7b.p0 - 0.01) < 1e-9, `ctrl+scroll scrubs the slab (${c7b.
 ok(c7b.exempt, 'the cut-samples toggle exempts layer 0 (renderer.layerSectioned flips)');
 ok(c7b.ortho && c7b.back, 'P ↔ O round-trips (camera state + button label)');
 
+console.log('7c. click-to-inspect: a block reports its GRID value; a sample reports its row');
+const c7c = await p.evaluate(async () => {
+  // 6c kriged at a deliberately WRONG origin (123.45) — re-fit the grid to the
+  // data and re-krige, then ⛶ fit must frame ONLY the real scene (the per-layer
+  // bbox fix: the phantom extent of the old grid must not linger in the union)
+  document.querySelector('#btnFitGrid').click();
+  window._gslib.runKrige();
+  await new Promise((r) => setTimeout(r, 800));
+  document.querySelector('#vFit').click();
+  await new Promise((r) => setTimeout(r, 600));
+  const cv = document.querySelector('#cv'), r = cv.getBoundingClientRect();
+  // a block: hide the samples first — they sit ABOVE the slab and win the pixel
+  // (correct picking behaviour; the wrong target for this assertion)
+  const pts = document.querySelector('#vPts');
+  pts.checked = false; pts.dispatchEvent(new Event('change'));
+  await new Promise((z) => setTimeout(z, 400));
+  const bHit = window._gslib.pickAt(r.width * 0.5, r.height * 0.5);
+  const panel = document.querySelector('#pickInfo');
+  const bInfo = { hit: !!bHit, layer: bHit && bHit.layer, shown: panel.style.display !== 'none', text: panel.textContent };
+  const bTrue = bHit && bHit.layer >= 1 ? +window._gslib.S.krige.est[bHit.rec].toPrecision(6) : null;
+  // a sample: samples back on, blocks off, then scan a few spots until a point answers
+  pts.checked = true; pts.dispatchEvent(new Event('change'));
+  document.querySelector('#vMode').value = 'none';
+  document.querySelector('#vMode').dispatchEvent(new Event('change'));
+  await new Promise((z) => setTimeout(z, 500));
+  let sHit = null;
+  for (let gx = 0.2; gx <= 0.8 && !sHit; gx += 0.1) for (let gy = 0.2; gy <= 0.8 && !sHit; gy += 0.1) {
+    const h = window._gslib.pickAt(r.width * gx, r.height * gy);
+    if (h && h.layer === 0) sHit = h;
+  }
+  const sRow = sHit ? window._gslib.S.rows[sHit.rec] : null;
+  const sText = panel.textContent;
+  // empty click clears
+  const cleared = window._gslib.pickAt(2, 2) === null && panel.style.display === 'none';
+  document.querySelector('#vMode').value = 'est';
+  document.querySelector('#vMode').dispatchEvent(new Event('change'));
+  return { bInfo, bTrue, sHit: !!sHit, sPrimary: sRow && +sRow[2].toPrecision(6), sText, cleared };
+});
+ok(c7c.bInfo.hit && c7c.bInfo.layer >= 1 && c7c.bInfo.shown && c7c.bInfo.text.includes(String(c7c.bTrue)),
+  `a block pick shows ITS grid cell's estimate (${c7c.bTrue}) — recIdx carries the true grid index past the UNEST compaction`);
+ok(c7c.sHit && c7c.sText.includes('sample') && c7c.sText.includes(String(c7c.sPrimary)),
+  `a sample pick shows its own row (Primary ${c7c.sPrimary})`);
+ok(c7c.cleared, 'an empty click clears the readout and the highlight');
+
 console.log('8. a Brazilian CSV: semicolons + decimal COMMAS');
 const c8 = await p.evaluate(async () => {
   const csv = 'X;Y;TEOR\n1,5;2,5;0,42\n3,5;4,5;1,10\n5,0;6,0;2,30\n';

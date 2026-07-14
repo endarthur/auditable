@@ -93,6 +93,12 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
 #smpMenu button { border: none; background: none; text-align: left; padding: 6px 10px; border-radius: 4px; }
 #smpMenu button:hover { background: var(--panel); }
 #vhint { position: absolute; left: 12px; bottom: 10px; color: var(--faint); font: 11px var(--mono); pointer-events: none; }
+#pickInfo { display: none; position: absolute; left: 12px; top: 12px; min-width: 170px; max-width: 260px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 10px; font: 11.5px var(--mono); }
+#pickInfo b { color: var(--act); display: block; margin-bottom: 4px; }
+#pickInfo div { display: flex; justify-content: space-between; gap: 12px; }
+#pickInfo div span { color: var(--muted); }
 #vfoot { position: absolute; right: 12px; bottom: 10px; color: var(--faint); font: 10.5px var(--mono); pointer-events: none; }
 </style>
 <script type="importmap">
@@ -279,7 +285,8 @@ h3.sub { margin: 16px 0 4px; font: 700 12px var(--mono); color: var(--act); lett
     <button id="vOrtho" title="orthographic ↔ perspective">P</button>
     <button id="vFit" title="frame the data">⛶ fit</button>
   </div>
-  <div id="vhint">drag orbit · wheel zoom · right-drag pan</div>
+  <div id="vhint">drag orbit · wheel zoom · right-drag pan · click to inspect</div>
+  <div id="pickInfo"></div>
   <div id="vfoot">gslib.atra · build <span id="build">__GSLIB_BUILD__</span></div>
 </div>
 </div>
@@ -337,9 +344,14 @@ function initViewer() {
   };
   requestAnimationFrame(loop);
 }
-function bboxUnion(b) {
-  if (!V.bbox) { V.bbox = Array.from(b); return; }
-  for (let i = 0; i < 3; i++) { if (b[i] < V.bbox[i]) V.bbox[i] = b[i]; if (b[i + 3] > V.bbox[i + 3]) V.bbox[i + 3] = b[i + 3]; }
+function setLayerBbox(layer, b) {                            // per-layer, so a re-kriged grid at a new
+  V.lbb = V.lbb || {};                                       // origin doesn't leave a PHANTOM extent in
+  if (b) V.lbb[layer] = Array.from(b); else delete V.lbb[layer];   // the camera fit
+  V.bbox = null;
+  for (const bb of Object.values(V.lbb)) {
+    if (!V.bbox) { V.bbox = Array.from(bb); continue; }
+    for (let i = 0; i < 3; i++) { if (bb[i] < V.bbox[i]) V.bbox[i] = bb[i]; if (bb[i + 3] > V.bbox[i + 3]) V.bbox[i + 3] = bb[i + 3]; }
+  }
 }
 function viewerPoints() {
   initViewer();
@@ -363,7 +375,7 @@ function viewerPoints() {
   const builder = createChunkBuilder({ frame: V.frame, onChunk: (c) => V.renderer.addChunk(c, 'base', 0) });
   builder.push({ x: xs, y: ys, z: zs, intensity: new Uint16Array(n), classification: new Uint8Array(n), rgb, count: n, recStart: 0 });
   builder.flush();
-  V.bbox = null; bboxUnion(builder.doc.bboxLocal);
+  V.lbb = {}; setLayerBbox(0, builder.doc.bboxLocal);        // new data: every old extent is stale
   V.cam.fit(V.bbox);
   requestRender();
 }
@@ -378,16 +390,17 @@ function gridToLayer(g, chanSrc, layer) {                    // one grid array �
   const bld = createBlockChunkBuilder({ frame: V.frame, grid: bgrid, onChunk: (c) => V.renderer.addChunk(c, 'base', layer) });
   const nxyz = chanSrc.length;
   const xs = new Float64Array(nxyz), ys = new Float64Array(nxyz), zs = new Float64Array(nxyz), ch = new Float64Array(nxyz);
-  let m = 0;
-  for (let iz = 0; iz < (g.nz ?? 1); iz++) for (let iy = 0; iy < g.ny; iy++) for (let ix = 0; ix < g.nx; ix++) {
+  const recs = new Uint32Array(nxyz);                        // the GRID index rides as recIdx — the push
+  let m = 0;                                                 // compacts UNEST away, so m ≠ i and a pick
+  for (let iz = 0; iz < (g.nz ?? 1); iz++) for (let iy = 0; iy < g.ny; iy++) for (let ix = 0; ix < g.nx; ix++) {   // must get i back
     const i = iz * g.nx * g.ny + iy * g.nx + ix;
     if (chanSrc[i] <= -1e20 || !Number.isFinite(chanSrc[i])) continue;   // UNEST stays out of the model
     xs[m] = g.xmn + ix * g.xsiz; ys[m] = g.ymn + iy * g.ysiz; zs[m] = (g.zmn ?? 0) + iz * (g.zsiz ?? 1);
-    ch[m] = chanSrc[i]; m++;
+    ch[m] = chanSrc[i]; recs[m] = i; m++;
   }
-  bld.push({ x: xs.subarray(0, m), y: ys.subarray(0, m), z: zs.subarray(0, m), chan: ch.subarray(0, m), count: m, recStart: 0 });
+  bld.push({ x: xs.subarray(0, m), y: ys.subarray(0, m), z: zs.subarray(0, m), chan: ch.subarray(0, m), recIdx: recs.subarray(0, m), count: m, recStart: 0 });
   bld.flush();
-  bboxUnion(bld.doc.bboxLocal);
+  setLayerBbox(layer, bld.doc.bboxLocal);
   return m;
 }
 function viewerBlocks() {
@@ -488,6 +501,55 @@ function knifeFrom(x1, y1, x2, y2) {
   $('#vSec').dispatchEvent(new Event('change'));
   return true;
 }
+// click-to-inspect: the GPU ID buffer (this morning's machinery) names the layer +
+// record; samples resolve to their row, blocks to their GRID cell + est/var (+ the
+// current sim view's value). A readout, not a selection system.
+function fmtv(x) { return Number.isFinite(x) ? +x.toPrecision(6) : '—'; }
+function pickAt(cx, cy) {
+  if (!V.renderer) return null;
+  const hit = V.renderer.pick(cx, cy, V.cam, { pointPx: 9, section: currentSection() });
+  const el = $('#pickInfo');
+  if (!hit) { el.style.display = 'none'; V.renderer.setPicked(null); requestRender(); return null; }
+  V.renderer.setPicked(hit); requestRender();
+  const rows = [];
+  let title = '';
+  if (hit.layer === 0) {
+    const row = S.rows[hit.rec];
+    if (!row) return null;
+    title = `sample ${hit.rec + 1} of ${S.rows.length}`;
+    S.cols.forEach((c, i) => rows.push([c, fmtv(row[i])]));
+  } else {
+    const g = (hit.layer === 3 && S.realizations) ? S.realizations.grid : (S.krige && S.krige.grid);
+    if (!g) return null;
+    const i = hit.rec, nxy = g.nx * g.ny;
+    const iz = Math.floor(i / nxy), iy = Math.floor((i % nxy) / g.nx), ix = i % g.nx;
+    title = `block [${ix}, ${iy}${g.nz > 1 ? ', ' + iz : ''}]`;
+    rows.push(['x', fmtv(g.xmn + ix * g.xsiz)], ['y', fmtv(g.ymn + iy * g.ysiz)]);
+    if (g.nz > 1) rows.push(['z', fmtv(g.zmn + iz * g.zsiz)]);
+    if (S.krige) {
+      rows.push(['estimate', fmtv(S.krige.est[i])], ['kriging var', fmtv(S.krige.var[i])]);
+    }
+    if (S.realizations) {
+      const view = simViewArray();
+      const label = { real: `realization ${+$('#sgReal').value}`, mean: 'e-type mean', std: 'std dev', prob: `P(Z>${$('#sgCut').value})`, quant: `q${$('#sgQ').value}` }[$('#sgShow').value];
+      if (view) rows.push([label, fmtv(view[i])]);
+    }
+  }
+  el.innerHTML = `<b>${title}</b>` + rows.map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('');
+  el.style.display = '';
+  return hit;
+}
+let _pd = null;
+$('#cv').addEventListener('pointerdown', (e) => { if (!_knifeArm && e.button === 0) _pd = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+$('#cv').addEventListener('pointerup', (e) => {
+  if (!_pd) return;
+  const moved = Math.hypot(e.clientX - _pd.x, e.clientY - _pd.y), dt = performance.now() - _pd.t;
+  _pd = null;
+  if (moved > 5 || dt > 500) return;                         // that was an orbit, not a click
+  const r = $('#cv').getBoundingClientRect();
+  pickAt(e.clientX - r.left, e.clientY - r.top);
+});
+
 $('#vKnife').onclick = armKnife;
 // ortho ↔ perspective: the camera does the work (update() re-derives halfH from
 // the radius, so the apparent size holds across the flip)
@@ -590,7 +652,12 @@ function resetDerived() {
   S.realizations = null; $('#sgViewRow').style.display = 'none';
   S.realization = null;
   if (_sg) { try { _sg.handle.dispose(); } catch { /* already gone */ } _sg = null; }
-  if (V.renderer) { V.renderer.removeLayer(1); V.renderer.removeLayer(2); V.renderer.removeLayer(3); requestRender(); }
+  $('#pickInfo').style.display = 'none';
+  if (V.renderer) {
+    V.renderer.setPicked(null);
+    for (const l of [1, 2, 3]) { V.renderer.removeLayer(l); setLayerBbox(l, null); }
+    requestRender();
+  }
 }
 function openText(name, text) {
   const csvOpts = { delim: $('#csvDelim').value, decimal: $('#csvDec').value };
@@ -1482,7 +1549,7 @@ window.addEventListener('keydown', (e) => {
 addDir(0, 90);                                               // omnidirectional default
 
 // the automation surface (the smokes drive this)
-window._gslib = { openText, sampleData, sampleDrillholes, importDrillholes, runDeclus, runVario, runKrige, runSim, runVarmap, showSimView, simViewArray, addDir, showStep, S, modelSpec, importPar, exportPar, knifeFrom, currentSection, V, CLUSTER_DAT,
+window._gslib = { openText, sampleData, sampleDrillholes, importDrillholes, runDeclus, runVario, runKrige, runSim, runVarmap, showSimView, simViewArray, addDir, showStep, S, modelSpec, importPar, exportPar, knifeFrom, currentSection, pickAt, V, CLUSTER_DAT,
   viewerInfo: () => ({ chunks: V.renderer ? V.renderer.chunkCount : 0, hasBlocks: !!S.krige, hasReal: !!S.realization }) };
 </script>
 </body>
