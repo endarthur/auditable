@@ -207,6 +207,11 @@ moncad.html
 tools/micro/docs/shots/
 tools/micro/docs/micro-manual.pdf
 tools/micro/docs/micro-card.pdf
+# Personal PhD documents (not part of the bands.gpu tool — never commit to the public repo)
+tools/bands/phd-notes*
+tools/bands/PHD-NOTES*
+tools/bands/research-sketch.*
+tools/bands/make-notes-pdf.mjs
 tools/lamina/docs/shots/
 tools/lamina/docs/lamina-manual.pdf
 
