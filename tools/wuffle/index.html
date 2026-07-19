@@ -10,6 +10,8 @@
   "@gcu/leadacid": "../../ext/leadacid/index.js"
 } }
 </script>
+<!-- dev bench: load with ?bench to run shell-style on the desktop (mocks /native). Stripped at build. -->
+<script src="../../ext/leadacid/bench.js"></script>
 <style>
   :root { color-scheme: dark; --ink:#e8ecef; --dim:#8a929a; --bg:#15171a; --card:#1d2024;
     --line:#2f353b; --orange:#c8722e; --green:#4a9d5f; --blue:#4a7fb5; --red:#c25450; }
@@ -286,8 +288,9 @@ $('brandsub').textContent = shell.present ? 'compass · magnetic N' : 'stereonet
 msg(shell.present ? 'lead-acid ready · lay the phone on a surface to measure'
                   : 'desktop · type measurements above, or open in lead-acid for live compass');
 
-// programmatic hook — the smoke test and headless use plot through this.
-window.__wuffle = { plot: (d1, d2, m) => record(d1, d2, m), log, count: () => log.length };
+// programmatic hook — the smoke test and headless use plot through this;
+// `shell` is exposed so the bench smoke can exercise the mocked native layer.
+window.__wuffle = { plot: (d1, d2, m) => record(d1, d2, m), log, count: () => log.length, shell };
 </script>
 </body>
 </html>

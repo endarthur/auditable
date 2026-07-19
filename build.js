@@ -1949,6 +1949,7 @@ if (target === 'wuffle') {
   const wfStamp = `0.1.0 · ${wfBuildId} · ${buildDateFromGit()}`;
 
   html = html.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
+  html = html.replace(/<!-- dev bench[\s\S]*?<script src="[^"]*bench\.js"><\/script>\s*/, '');   // dev-only bench
   html = html.replace(/<script type="module">[\s\S]*?<\/script>\s*(?=<\/body>)/, () => `<script>\n${boot}\n</script>\n`);
   html = html.replace('__WUFFLE_BUILD__', wfStamp);
 
