@@ -25,6 +25,7 @@
     "test:micro": "node test/micro-smoke.mjs",
     "test:micro2": "node test/micro-smoke2.mjs",
     "test:micro:all": "npm run test:micro && npm run test:micro2",
+    "test:wuffle": "node test/wuffle-smoke.mjs",
     "test:idb-browser": "node test/vfs-idb-browser.mjs",
     "test:all": "npm test && npm run test:wasm"
   },

@@ -1905,6 +1905,59 @@ if (target === 'bands') {
   return;
 }
 
+if (target === 'wuffle') {
+  // wuffle — a geological compass: device orientation → @gcu/bearing → a live
+  // Schmidt net + a measurement log. Two homes, one file: the built HTML runs on
+  // the desktop (manual entry / analysis) AND inside the lead-acid Android shell
+  // (live compass, via the vendored @gcu/leadacid shim). Registry build like bands.
+  const dir = path.join(__dirname, 'tools/wuffle');
+  const SPEC = { '@gcu/bearing': '#bearing', '@gcu/leadacid': '#leadacid' };
+  const libs = [
+    ['bearing', 'ext/bearing/index.js'],
+    ['leadacid', 'ext/leadacid/index.js'],
+  ];
+  const modules = [];
+  for (const [name, rel] of libs) {
+    const lp = path.join(__dirname, rel);
+    if (!fs.existsSync(lp)) { console.error(`Error: ${rel} not found — build the ext package first.`); process.exit(1); }
+    modules.push({ name, source: fs.readFileSync(lp, 'utf8').replace(/^\n+/, '').replace(/\n+$/, '') });
+  }
+  let html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
+  const appMatch = html.match(/<script type="module">([\s\S]*?)<\/script>\s*<\/body>/);
+  if (!appMatch) { console.error('Error: tools/wuffle/index.html — inline module script not found.'); process.exit(1); }
+  let appSrc = appMatch[1];
+  for (const [from, to] of Object.entries(SPEC)) appSrc = appSrc.split(`from '${from}'`).join(`from '${to}'`);
+  modules.push({ name: 'app', source: appSrc.trim() });
+
+  const entries = modules.map((m) =>
+    JSON.stringify(m.name) + ': ' + JSON.stringify(m.source).replace(/<\/script>/gi, '<\\/script>'));
+  const order = JSON.stringify(modules.map((m) => m.name));
+  const boot =
+    '(async () => {\n' +
+    'const _S = {' + entries.join(',') + '};\n' +
+    'const _O = ' + order + ';\n' +
+    'const _U = {};\n' +
+    "for (const n of _O) _U[n] = URL.createObjectURL(new Blob([_S[n] + '\\n//# sourceURL=wuffle/' + n + '.js\\n'], { type: 'application/javascript' }));\n" +
+    "const _m = document.createElement('script'); _m.type = 'importmap';\n" +
+    'const _im = {}; for (const n of _O) _im["#" + n] = _U[n];\n' +
+    "_m.textContent = JSON.stringify({ imports: _im }); document.body.appendChild(_m);\n" +
+    'for (const n of _O) await import(_U[n]);\n' +
+    '_m.remove();\n' +
+    '})();\n';
+
+  const wfBuildId = require('crypto').createHash('sha256').update(boot).digest('hex').slice(0, 7);
+  const wfStamp = `0.1.0 · ${wfBuildId} · ${buildDateFromGit()}`;
+
+  html = html.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
+  html = html.replace(/<script type="module">[\s\S]*?<\/script>\s*(?=<\/body>)/, () => `<script>\n${boot}\n</script>\n`);
+  html = html.replace('__WUFFLE_BUILD__', wfStamp);
+
+  const outPath = path.join(__dirname, 'wuffle.html');
+  fs.writeFileSync(outPath, html);
+  console.log(`Built wuffle.html (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB in the clear, ${modules.length} modules) — build ${wfStamp}`);
+  return;
+}
+
 if (target === 'lamina') {
   const lamDir = path.join(__dirname, 'tools/lamina');
   const lamJsDir = path.join(lamDir, 'js');
