@@ -348,6 +348,19 @@ const tiled = await p.evaluate(async () => {
 // 171 cols (i=0..170) × 4 rows fully inside = 684; a broken tile-offset drops it
 chk(`winding XY-tiling: fraction sweep spans 2 dispatch tiles, ${tiled.full}/${tiled.total} fully inside`, tiled.full === 684 && tiled.total === 720);
 
+// forced-CPU winding: the worker CPU path (safety valve — can't trip the GPU
+// watchdog) must give the SAME flag result as the default backend, then restore.
+const cpuFlag = await p.evaluate(async () => {
+  const m = window._micro;
+  m.setWindingGpu(false);
+  const mesh = m.layers().find((L) => L.name === 'box.obj'), model = m.layers().find((L) => L.name === 'model.csv');
+  await m.flagBySolid(mesh, [model], { name: 'INBOXCPU', label: 'Y', mode: 'inside' });
+  m.setWindingGpu(true);
+  const col = model.paintCols.find((c) => c.name === 'INBOXCPU');
+  let n = 0; for (const c of col.codes) if (c) n++; return n;
+});
+chk(`winding CPU toggle: forced-CPU flag matches the default backend (${cpuFlag} blocks)`, cpuFlag === 440);
+
 // ── 4b. mesh export: OBJ named object + LFM round-trip, exact world coords ──
 const mex = await p.evaluate(async () => {
   const m = window._micro;
