@@ -382,12 +382,16 @@ await p.waitForFunction(() => window._micro.layers().some((L) => L.name === 'zbo
 const peelP = await p.evaluate(async () => {
   const m = window._micro;
   const mesh = m.layers().find((L) => L.name === 'zbox.obj'), model = m.layers().find((L) => L.name === 'zmodel.csv');
-  const cnt = async (method, name) => { await m.flagBySolid(mesh, [model], { name, label: 'Y', mode: 'inside', method }); const col = model.paintCols.find((c) => c.name === name); let n = 0; for (const c of col.codes) if (c) n++; return n; };
-  const w = await cnt('winding', 'ZW');
-  const pk = await cnt('peel', 'ZP');
-  return { w, pk };
+  const flagCnt = async (method, name) => { await m.flagBySolid(mesh, [model], { name, label: 'Y', mode: 'inside', method }); const col = model.paintCols.find((c) => c.name === name); let n = 0; for (const c of col.codes) if (c) n++; return n; };
+  const propSum = async (method, name) => { await m.ratioBySolid(mesh, model, { name, res: 3, mode: 'inside', method }); const col = model.paintCols.find((c) => c.name === name); let n = 0, s = 0; for (const c of col.codes) { if (c) n++; s += c; } return { n, s }; };
+  const w = await flagCnt('winding', 'ZW');
+  const pk = await flagCnt('peel', 'ZP');
+  const pw = await propSum('winding', 'ZPW');
+  const pp = await propSum('peel', 'ZPP');
+  return { w, pk, pw, pp };
 });
-chk(`peel engine: matches winding on a box within the model (winding ${peelP.w}, peel ${peelP.pk})`, peelP.pk > 0 && peelP.pk === peelP.w);
+chk(`peel engine: flag matches winding on a box within the model (winding ${peelP.w}, peel ${peelP.pk})`, peelP.pk > 0 && peelP.pk === peelP.w);
+chk(`peel engine: FRACTION matches winding (winding n=${peelP.pw.n} s=${peelP.pw.s}, peel n=${peelP.pp.n} s=${peelP.pp.s})`, peelP.pp.n > 0 && peelP.pp.n === peelP.pw.n && peelP.pp.s === peelP.pw.s);
 
 // ── 4b. mesh export: OBJ named object + LFM round-trip, exact world coords ──
 const mex = await p.evaluate(async () => {

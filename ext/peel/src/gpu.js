@@ -17,7 +17,7 @@ struct Params {
   mode: u32,          // 0=depths, 1=flag, 2=proportion
   surface_type: u32,  // 0=closed, 1=open
   scale: u32,         // proportion scale factor
-  _pad2: u32,
+  ray_offset: u32,    // thread offset when the host tiles the dispatch (workgroup-limit / watchdog)
 }
 
 @group(0) @binding(0) var<storage, read> vertices: array<f32>;
@@ -105,7 +105,7 @@ fn set_axis(v: ptr<function, vec3<f32>>, a: u32, val: f32) {
 
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let ray_idx = gid.x;
+  let ray_idx = gid.x + params.ray_offset;   // dispatch is tiled on the host; offset back to the global ray
   let total_u = params.grid_uv.x * params.sub_uv.x;
   let total_v = params.grid_uv.y * params.sub_uv.y;
   let total_rays = total_u * total_v;
@@ -366,21 +366,27 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
     ],
   });
 
-  // Dispatch in batches for pacing
-  const BATCH = 65536;
+  // Dispatch, TILED. A monolithic dispatchWorkgroups(nDispatches,…) breaks two ways on
+  // large ray counts: nDispatches > maxComputeWorkgroupsPerDimension (65535) is a silent
+  // VALIDATION failure — the dispatch is dropped and the output stays cleared (all-zero
+  // proportions, since proportion casts su·sv× the rays of flag) — and a huge single
+  // dispatch can also trip the GPU watchdog. Tiling with a ray_offset fixes both.
   const nDispatches = Math.ceil(totalRays / 64);
-  // For simplicity, dispatch all at once (rays are independent)
-  {
+  const TILE = 16384;                                        // workgroups/submit, well under 65535
+  for (let base = 0; base < nDispatches; base += TILE) {
+    const chunk = Math.min(TILE, nDispatches - base);
+    paramU[19] = base * 64;                                  // ray_offset (workgroup_size = 64)
+    device.queue.writeBuffer(paramBuf, 0, paramData);
     const enc = device.createCommandEncoder();
     const pass = enc.beginComputePass();
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(nDispatches, 1, 1);
+    pass.dispatchWorkgroups(chunk, 1, 1);
     pass.end();
     device.queue.submit([enc.finish()]);
+    await device.queue.onSubmittedWorkDone();                // bound each submit (workgroup count + watchdog)
+    if (onProgress) onProgress(0.5 * (base + chunk) / nDispatches);
   }
-  await device.queue.onSubmittedWorkDone();
-  if (onProgress) onProgress(0.5);
 
   if (mode !== 'depths' && mode !== 'flag') {
     // Finalize: counters → proportions

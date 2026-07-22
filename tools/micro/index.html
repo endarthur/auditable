@@ -2861,7 +2861,7 @@ async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside'
     const t2 = _attrTables.get(L.id); if (t2 && t2.invalidate) t2.invalidate();
     setLayerColorSel(L, 'paint:' + name);
     made++;
-    $('#meta').textContent = `flag by solid: ${cnt.toLocaleString()} of ${n.toLocaleString()} → ${name} = ${label} · ${L.label || L.name}`;
+    $('#meta').textContent = `flag by solid: ${cnt.toLocaleString()} of ${n.toLocaleString()} inside → ${name} · filter with ${name} == "${label}"`;
   }
   markProjectDirty(); requestRender();
   return made;
