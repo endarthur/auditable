@@ -11805,7 +11805,14 @@ const NL_RUN = {
   'micro.setBackground': (a) => ({ say: `Background: ${a.color}`, run: () => setBg(a.color) }),
   'micro.openGradeTonnage': (a, L) => ({ say: `Grade–tonnage${a.column ? ' for ' + a.column : ''}${nlOn(L)}`, run: () => { if (L) { nlFocus(L); openGradeTonnage(L, a.column || null); } } }),
   'micro.setLayerVisibility': (a) => ({ say: `${a.action === 'hide' ? 'Hide' : 'Show'} ${a.layer}`,
-    run: () => { const L = _layers.find((x) => (x.label || x.name) === a.layer || x.name === a.layer); if (!L) return nlMsg(`no layer "${a.layer}"`); L.visible = a.action !== 'hide'; applyTreeVisibility(); requestRender(); } }),
+    run: () => {
+      const vis = a.action !== 'hide';
+      const L = _layers.find((x) => (x.label || x.name) === a.layer || x.name === a.layer);
+      if (L) { L.visible = vis; applyTreeVisibility(); renderLayers(); requestRender(); return; }   // renderLayers → the tree checkbox updates too
+      const g = nlFindGroup(a.layer);
+      if (g) { g.visible = vis; applyTreeVisibility(); renderLayers(); requestRender(); return; }
+      nlMsg(`no layer or group "${a.layer}"`);
+    } }),
 };
 
 // dispatch hands back CANONICAL args (clauses arrays, real booleans) → @gcu/expr text
@@ -11870,6 +11877,14 @@ function nlSessionVocab() {
       }
     }
   }
+  // groups are addressable targets too ("hide mining phases") — walk the tree and add
+  // each group NAME (keyed by name; resolved in NL_RUN.setLayerVisibility via nlFindGroup).
+  const addGroups = (arr) => { for (const nd of arr || []) { if (nd && typeof nd === 'object' && nd.group && nd.name) {
+    const gl = String(nd.name).toLowerCase(), last = gl.split(/\s+/).pop();
+    layers[nd.name] = [...new Set([gl, `the ${gl}`, ...(last && last !== gl ? [`the ${last}`] : [])])];
+    addGroups(nd.children);
+  } } };
+  addGroups(_layerTree);
   return { numCols, catCols, catValues, layers, idCols: [] };
 }
 // …so switching the active layer re-derives the vocabulary (a ~0.9 s retrain, lazily,
@@ -11877,7 +11892,8 @@ function nlSessionVocab() {
 // The vocabulary depends on the LAYER SET, not on which one is active — so switching
 // the active layer costs nothing (the target is resolved per phrase, not per model).
 function nlSessionKey() {
-  return _layers.map((L) => `${L.id}:${L.label || L.name}:${(numericColsOf(L) || []).length}`).join('|');
+  const gs = []; const gw = (arr) => { for (const nd of arr || []) if (nd && typeof nd === 'object' && nd.group) { gs.push(nd.name); gw(nd.children); } }; gw(_layerTree);
+  return _layers.map((L) => `${L.id}:${L.label || L.name}:${(numericColsOf(L) || []).length}`).join('|') + '#' + gs.join(',');
 }
 async function nlEnsureTrained() {
   const key = nlSessionKey();
@@ -11947,6 +11963,12 @@ function nlResolveTarget(q, tags, column) {
 const nlOn = (L) => (_layers.length > 1 && L ? ` on ${L.label || L.name}` : '');
 // act on the resolved layer: micro's controls follow the ACTIVE layer, so make it active first
 function nlFocus(L) { if (L && L.id !== _activeId) setActiveLayer(L.id); }
+// resolve a GROUP node by name (case-insensitive) — groups are visibility targets too
+function nlFindGroup(name) {
+  const want = String(name).toLowerCase(); let found = null;
+  const walk = (arr) => { for (const nd of arr || []) { if (found) return; if (nd && typeof nd === 'object' && nd.group) { if ((nd.name || '').toLowerCase() === want) { found = nd; return; } walk(nd.children); } } };
+  walk(_layerTree); return found;
+}
 
 // A phrase → ONE proposal row. Never runs anything.
 function nlPropose(q) {
@@ -12042,7 +12064,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keydown', (e) => {
   if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // typing, not commanding
   const k = e.key;
-  if (e.ctrlKey || e.metaKey) return;                     // reserved combos (⌘K palette, ⌘S save…) handled elsewhere
+  if (e.ctrlKey || e.metaKey || e.altKey) return;         // reserved combos (⌘K palette, Alt+K NL bar, ⌘S save…) handled elsewhere — Alt must not trigger the single-key reflexes (k=knife)
   if (k === 'f') $('#btnFit').click();
   else if (k === 'k' || k === 'c') { $('#secMode').value = 'knife'; $('#secMode').dispatchEvent(new Event('input')); }   // k = knife, c = cut (same verb, two reflexes)
   else if (k === 'Escape' && _knifeArm) { armKnife(false); $('#secMode').value = 'off'; $('#secMode').dispatchEvent(new Event('input')); }

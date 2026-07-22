@@ -1575,6 +1575,11 @@ await p.close();
     const said = window._micro.nlPropose('show blocks with FE above 60');
     const sym = window._micro.nlPropose('FE > 55');                       // SYMBOL operator (was misread as colour-by)
     const cat = window._micro.nlPropose('only hematite');                 // CATEGORICAL filter (was unrecognised)
+    window._micro.createLayerGroup('phase set', [window._micro.layers().find((L) => L.docs && L.docs.blockDoc).id]);
+    await window._micro.nlEnsureTrained();                                // the group changes the session key → retrain
+    const grpProp = window._micro.nlPropose('hide phase set');           // a GROUP is an addressable target too
+    grpProp && grpProp.run();
+    const grpHidden = (window._micro.layerTree().find((n) => n && n.group && n.name === 'phase set') || {}).visible === false;
     const before = document.querySelector('#filter').value;              // proposing must NOT act
     const junk = window._micro.nlPropose('what is the airspeed velocity of an unladen swallow');
     if (said) said.run();                                                // …running must
@@ -1582,7 +1587,7 @@ await p.close();
     const after = document.querySelector('#filter').value;
 
     window._micro.nlSetEnabled(false);
-    return { offByDefault, said: said && said.title, sym: sym && sym.title, cat: cat && cat.title, junk: junk && junk.title, before, after };
+    return { offByDefault, said: said && said.title, sym: sym && sym.title, cat: cat && cat.title, grp: grpProp && grpProp.title, grpHidden, junk: junk && junk.title, before, after };
   });
   chk(`NL bar: OFF by default — nothing stored, nothing proposed (stored=${r.offByDefault.stored})`,
     r.offByDefault.stored === null && r.offByDefault.proposes === false);
@@ -1590,6 +1595,7 @@ await p.close();
     /FE/.test(r.said || '') && r.before === '' && /FE/.test(r.after) && /60/.test(r.after));
   chk(`NL bar: SYMBOL operators dispatch to a filter, not colour-by (FE > 55 → "${r.sym}")`, /FE\s*>\s*55/.test(r.sym || ''));
   chk(`NL bar: CATEGORICAL filter is recognised (only hematite → "${r.cat}")`, /LITO/.test(r.cat || '') && /HEMATITE/i.test(r.cat || ''));
+  chk(`NL bar: a GROUP is an addressable visibility target (hide phase set → "${r.grp}", hidden=${r.grpHidden})`, /phase set/i.test(r.grp || '') && r.grpHidden === true);
   chk('NL bar: nonsense is refused, not guessed at', r.junk == null);
   await nl.close();
 }
