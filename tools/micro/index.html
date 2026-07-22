@@ -2275,6 +2275,14 @@ async function meshWinding(meshL, variant = 'solid') {
 // cells outside are 0 by definition), handed whole to winding's evaluator
 // (worker + per-layer progress), then one cheap position pass maps records
 // onto the lattice. Returns null when the layer has no regular grid.
+// remaining-time estimate for a long winding sweep — linear extrapolation from
+// elapsed × (1−f)/f; blank until there's enough progress to be meaningful.
+function etaStr(t0, frac) {
+  if (!(frac > 0.03)) return '';
+  const rem = ((performance.now() - t0) / 1000) * (1 - frac) / frac;
+  if (!Number.isFinite(rem) || rem < 0.5) return '';
+  return rem >= 90 ? ` · ~${Math.round(rem / 60)} min left` : ` · ~${Math.max(1, Math.round(rem))}s left`;
+}
 let _sbActive = null;                                      // { W, meshL, reject } while a dense run is up
 async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgress, variant = 'solid' } = {}) {
   const doc = L.docs.blockDoc;
@@ -2312,10 +2320,12 @@ async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgr
   const res = mode === 'flag' ? [1, 1, 1] : resolution;
   const run = { W, meshL, reject: null };
   _sbActive = run;
+  const t0 = performance.now();
+  const prog2 = (f) => { if (onProgress) onProgress(f); $('#meta').textContent = `winding sweep: ${Math.round(f * 100)}%${etaStr(t0, f)} (${W.hasWorker ? (W.hasGPU ? 'GPU' : 'CPU') : 'CPU'})`; };
   let result;
   try {
     result = await Promise.race([
-      W.evaluate(bm, { mode, resolution: res, threshold: 0.5, frame, onProgress, mesh: variant }),
+      W.evaluate(bm, { mode, resolution: res, threshold: 0.5, frame, onProgress: prog2, mesh: variant }),
       new Promise((_, rej) => { run.reject = rej; }),
     ]);
   } finally { if (_sbActive === run) _sbActive = null; }
