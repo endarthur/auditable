@@ -8,12 +8,13 @@
 export const LOCALES = {
   en: {
     ops: {
-      '>': ['above', 'over', 'greater than', 'more than', 'higher than'],
-      '>=': ['at least', 'no less than'],
-      '<': ['below', 'under', 'less than', 'lower than'],
-      '<=': ['at most', 'up to'],
+      '>': ['above', 'over', 'greater than', 'more than', 'higher than', '>'],
+      '>=': ['at least', 'no less than', '>='],
+      '<': ['below', 'under', 'less than', 'lower than', '<'],
+      '<=': ['at most', 'up to', '<='],
+      '=': ['equal to', 'exactly', '=', '=='],
     },
-    opWord: { above: '>', over: '>', greater: '>', more: '>', higher: '>', least: '>=', below: '<', under: '<', less: '<', lower: '<', most: '<=', up: '<=', equal: '=', exactly: '=', different: '!=' },
+    opWord: { above: '>', over: '>', greater: '>', more: '>', higher: '>', least: '>=', below: '<', under: '<', less: '<', lower: '<', most: '<=', up: '<=', equal: '=', exactly: '=', different: '!=', '>': '>', '<': '<', '=': '=' },
     units: ['percent', '%', 'm', 'meter', 'meters', 'metre', 'metres'],
     hideWords: ['hide', 'remove', 'off', 'rid', 'invisible', 'drop', 'take', 'switch'],
     showWords: ['show', 'back', 'unhide', 'visible', 'on', 'see', 'want'],

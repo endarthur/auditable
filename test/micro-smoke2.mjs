@@ -1562,9 +1562,9 @@ await p.close();
 {
   const nl = await mkPage('sm2nl');
   const r = await nl.evaluate(async () => {
-    let t = 'XC,YC,ZC,FE\n';
+    let t = 'XC,YC,ZC,FE,LITO\n';
     for (let k = 0; k < 4; k++) for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++)
-      t += `${5 + i * 10},${5 + j * 10},${1000 + k * 10},${40 + ((i + j + k) % 30)}\n`;
+      t += `${5 + i * 10},${5 + j * 10},${1000 + k * 10},${40 + ((i + j + k) % 30)},${(i + j) % 3 === 0 ? 'HEMATITE' : (i + j) % 3 === 1 ? 'ITABIRITE' : 'WASTE'}\n`;
     await window._micro.openBlob(new Blob([t]), 'deposit.csv', 'replace');
     await new Promise((z) => setTimeout(z, 1200));
 
@@ -1573,6 +1573,8 @@ await p.close();
     window._micro.nlSetEnabled(true);
     await window._micro.nlEnsureTrained();
     const said = window._micro.nlPropose('show blocks with FE above 60');
+    const sym = window._micro.nlPropose('FE > 55');                       // SYMBOL operator (was misread as colour-by)
+    const cat = window._micro.nlPropose('only hematite');                 // CATEGORICAL filter (was unrecognised)
     const before = document.querySelector('#filter').value;              // proposing must NOT act
     const junk = window._micro.nlPropose('what is the airspeed velocity of an unladen swallow');
     if (said) said.run();                                                // …running must
@@ -1580,12 +1582,14 @@ await p.close();
     const after = document.querySelector('#filter').value;
 
     window._micro.nlSetEnabled(false);
-    return { offByDefault, said: said && said.title, junk: junk && junk.title, before, after };
+    return { offByDefault, said: said && said.title, sym: sym && sym.title, cat: cat && cat.title, junk: junk && junk.title, before, after };
   });
   chk(`NL bar: OFF by default — nothing stored, nothing proposed (stored=${r.offByDefault.stored})`,
     r.offByDefault.stored === null && r.offByDefault.proposes === false);
   chk(`NL bar: it PROPOSES ("${r.said}") and does NOT act — filter stayed "${r.before}" until run, then "${r.after}"`,
     /FE/.test(r.said || '') && r.before === '' && /FE/.test(r.after) && /60/.test(r.after));
+  chk(`NL bar: SYMBOL operators dispatch to a filter, not colour-by (FE > 55 → "${r.sym}")`, /FE\s*>\s*55/.test(r.sym || ''));
+  chk(`NL bar: CATEGORICAL filter is recognised (only hematite → "${r.cat}")`, /LITO/.test(r.cat || '') && /HEMATITE/i.test(r.cat || ''));
   chk('NL bar: nonsense is refused, not guessed at', r.junk == null);
   await nl.close();
 }

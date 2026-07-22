@@ -11729,7 +11729,7 @@ const COMMANDS = [
   { id: 'helpwork', group: 'Help', title: 'Analysis & workbench help…', kw: 'grade tonnage swath reconcile join validate lineage figure docs guide', run: () => showHelp('analysis & workbench', HELP_ANALYSIS) },
   { id: 'helpkeys', group: 'Help', title: 'Keyboard & mouse help…', kw: 'shortcuts docs guide', run: () => showHelp('keyboard & mouse', HELP_KEYS) },
 ];
-let _palOpen = false, _palSel = 0, _palItems = [];
+let _palOpen = false, _palSel = 0, _palItems = [], _palNlMode = false;
 const palCtx = () => ({ L: activeLayer(), layers: _layers, project: _project });
 // ══ EXPERIMENTAL: the natural-language command bar (@gcu/dispatch) ═══════════
 // OFF BY DEFAULT. Enabled from Help → About. The hard rule, enforced here rather
@@ -11857,11 +11857,17 @@ function nlSessionVocab() {
     const syns = [...new Set([nm.toLowerCase(), bare.toLowerCase(), `the ${bare.toLowerCase()}`, ...byKind])].filter(Boolean);
     layers[nm] = syns;
     for (const c of numericColsOf(L) || []) numCols[c.name || c] = { lo: 0, hi: 100, dec: 2 };
-    const cats = (layerTableHeader(L) || {}).categories;
-    if (cats) for (const [col, dict] of Object.entries(cats)) {
-      catCols[col] = [col.toLowerCase()];
-      catValues[col] = catValues[col] || {};
-      for (const v of Object.values(dict || {})) if (v) catValues[col][String(v)] = [String(v).toLowerCase()];
+    // micro's block header carries ONE category channel: h.mapping.cat = the column
+    // index, h.categories = its value LIST (a flat array, NOT a {col:dict} object —
+    // Object.entries on the array was producing "0"→"HEMATITE" garbage → no cat vocab).
+    const hh = layerTableHeader(L) || {}; const mm = hh.mapping || {};
+    if (mm.cat != null && Array.isArray(hh.categories) && hh.categories.length && hh.columns) {
+      const catName = hh.columns[mm.cat];
+      if (catName) {
+        catCols[catName] = [...new Set([catName.toLowerCase(), ...(catCols[catName] || [])])];
+        catValues[catName] = catValues[catName] || {};
+        for (const v of hh.categories) if (v) catValues[catName][String(v)] = [String(v).toLowerCase()];
+      }
     }
   }
   return { numCols, catCols, catValues, layers, idCols: [] };
@@ -11965,11 +11971,11 @@ function nlSetEnabled(on) {
   _nlOn = !!on;
   localStorage.setItem('micro.nl', _nlOn ? '1' : '0');
   if (!_nlOn) { _nlDispatcher = null; _nlKey = ''; }
-  nlMsg(_nlOn ? 'natural-language command bar ON (experimental) — press ⌘K / Ctrl+K, then type a phrase' : 'natural-language command bar off');
+  nlMsg(_nlOn ? 'natural-language command bar ON (experimental) — ⌘K/Ctrl+K falls back to it; Alt+K goes straight to it' : 'natural-language command bar off');
 }
 
-function openPalette() {
-  if (_palOpen) return; _palOpen = true;
+function openPalette(opts = {}) {
+  if (_palOpen) return; _palOpen = true; _palNlMode = !!opts.nl && _nlOn;
   let ov = $('#palOverlay');
   if (!ov) {
     ov = document.createElement('div'); ov.id = 'palOverlay';
@@ -11979,9 +11985,10 @@ function openPalette() {
     $('#palInput').addEventListener('input', () => { _palSel = 0; renderPalette(); });
     $('#palInput').addEventListener('keydown', palKeydown);
   }
+  $('#palInput').placeholder = _palNlMode ? 'Ask in plain language…  (dispatch — experimental)' : 'Type a command…  (↑↓ to move · Enter to run · Esc to close)';
   ov.style.display = 'flex'; $('#palInput').value = ''; _palSel = 0; renderPalette(); $('#palInput').focus();
 }
-function closePalette() { _palOpen = false; const ov = $('#palOverlay'); if (ov) ov.style.display = 'none'; }
+function closePalette() { _palOpen = false; _palNlMode = false; const ov = $('#palOverlay'); if (ov) ov.style.display = 'none'; }
 function renderPalette() {
   const q = $('#palInput').value.trim().toLowerCase(), ctx = palCtx();
   const toks = q.split(/\s+/).filter(Boolean);
@@ -11995,10 +12002,12 @@ function renderPalette() {
   _palItems = scored.map((s) => s.c);
   // EXPERIMENTAL: nothing matched by name → ask @gcu/dispatch what the phrase MEANT.
   // It only ever adds a row that spells out the command and its arguments; Enter runs it.
-  if (_nlOn && !_palItems.length && q.length >= 4) {
+  // EXPERIMENTAL: ask @gcu/dispatch what the phrase MEANT. Default (⌘K): only when
+  // NOTHING matched a command by name. NL mode (Alt+K): ALWAYS, and put it first.
+  if (_nlOn && q.length >= 4 && (_palNlMode || !_palItems.length)) {
     if (!_nlDispatcher && !_nlBusy) { nlEnsureTrained().then(() => { if (_palOpen) renderPalette(); }); }
     const prop = nlPropose($('#palInput').value.trim());
-    if (prop) _palItems = [prop];
+    if (prop) _palItems = _palNlMode ? [prop, ..._palItems.filter((c) => c.id !== prop.id)] : [prop];
   }
   if (_palSel >= _palItems.length) _palSel = Math.max(0, _palItems.length - 1);
   const list = $('#palList'); list.textContent = '';
@@ -12028,6 +12037,7 @@ function runPalette(i) { const c = _palItems[i]; if (!c) return; closePalette();
 $('#btnCmd').onclick = () => (_palOpen ? closePalette() : openPalette());
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); _palOpen ? closePalette() : openPalette(); }
+  else if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyK' && _nlOn) { e.preventDefault(); closePalette(); openPalette({ nl: true }); }   // Alt+K → straight to the NL bar (experimental)
 }, true);
 window.addEventListener('keydown', (e) => {
   if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // typing, not commanding

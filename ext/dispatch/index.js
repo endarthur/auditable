@@ -13,12 +13,13 @@
 const LOCALES = {
   en: {
     ops: {
-      '>': ['above', 'over', 'greater than', 'more than', 'higher than'],
-      '>=': ['at least', 'no less than'],
-      '<': ['below', 'under', 'less than', 'lower than'],
-      '<=': ['at most', 'up to'],
+      '>': ['above', 'over', 'greater than', 'more than', 'higher than', '>'],
+      '>=': ['at least', 'no less than', '>='],
+      '<': ['below', 'under', 'less than', 'lower than', '<'],
+      '<=': ['at most', 'up to', '<='],
+      '=': ['equal to', 'exactly', '=', '=='],
     },
-    opWord: { above: '>', over: '>', greater: '>', more: '>', higher: '>', least: '>=', below: '<', under: '<', less: '<', lower: '<', most: '<=', up: '<=', equal: '=', exactly: '=', different: '!=' },
+    opWord: { above: '>', over: '>', greater: '>', more: '>', higher: '>', least: '>=', below: '<', under: '<', less: '<', lower: '<', most: '<=', up: '<=', equal: '=', exactly: '=', different: '!=', '>': '>', '<': '<', '=': '=' },
     units: ['percent', '%', 'm', 'meter', 'meters', 'metre', 'metres'],
     hideWords: ['hide', 'remove', 'off', 'rid', 'invisible', 'drop', 'take', 'switch'],
     showWords: ['show', 'back', 'unhide', 'visible', 'on', 'see', 'want'],
@@ -246,6 +247,8 @@ const opFromGroup = (words, L) => {
   if (words.includes('at') && words.includes('least')) return '>=';
   if (words.includes('at') && words.includes('most')) return '<=';
   if (words.includes('up') && words.includes('to')) return '<=';
+  if (words.includes('>') && words.includes('=')) return '>=';   // the tokenizer splits >= into '>' '='
+  if (words.includes('<') && words.includes('=')) return '<=';
   for (const w of words) if (L.opWord[w]) return L.opWord[w];
   return null;
 };
@@ -298,7 +301,11 @@ const KINDS = {
       }
       if (cats && kind < 0.5) {
         const v = R.pick(Object.keys(cats)), syn = R.pick(cats[v]);
-        return { q: R.pick([`filter ${noun} to ${syn}`, `only ${syn} ${noun}`, `keep just the ${syn}`]), args: { clauses: [{ column: catCol, op: '=', value: v }], join: 'and' } };
+        const colSyn = R.pick((vocab.catCols && vocab.catCols[catCol]) || [catCol]);
+        return { q: R.pick([`filter ${noun} to ${syn}`, `only ${syn} ${noun}`, `keep just the ${syn}`,
+          `only ${syn}`, `${syn} only`, `just ${syn}`, `keep ${syn}`, `show only ${syn}`,
+          `${colSyn} is ${syn}`, `${colSyn} = ${syn}`, `where ${colSyn} is ${syn}`]),
+          args: { clauses: [{ column: catCol, op: '=', value: v }], join: 'and' } };
       }
       if (kind < 0.68) {
         if (tool.depthRange) {

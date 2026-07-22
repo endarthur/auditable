@@ -51,6 +51,8 @@ const opFromGroup = (words, L) => {
   if (words.includes('at') && words.includes('least')) return '>=';
   if (words.includes('at') && words.includes('most')) return '<=';
   if (words.includes('up') && words.includes('to')) return '<=';
+  if (words.includes('>') && words.includes('=')) return '>=';   // the tokenizer splits >= into '>' '='
+  if (words.includes('<') && words.includes('=')) return '<=';
   for (const w of words) if (L.opWord[w]) return L.opWord[w];
   return null;
 };
@@ -103,7 +105,11 @@ export const KINDS = {
       }
       if (cats && kind < 0.5) {
         const v = R.pick(Object.keys(cats)), syn = R.pick(cats[v]);
-        return { q: R.pick([`filter ${noun} to ${syn}`, `only ${syn} ${noun}`, `keep just the ${syn}`]), args: { clauses: [{ column: catCol, op: '=', value: v }], join: 'and' } };
+        const colSyn = R.pick((vocab.catCols && vocab.catCols[catCol]) || [catCol]);
+        return { q: R.pick([`filter ${noun} to ${syn}`, `only ${syn} ${noun}`, `keep just the ${syn}`,
+          `only ${syn}`, `${syn} only`, `just ${syn}`, `keep ${syn}`, `show only ${syn}`,
+          `${colSyn} is ${syn}`, `${colSyn} = ${syn}`, `where ${colSyn} is ${syn}`]),
+          args: { clauses: [{ column: catCol, op: '=', value: v }], join: 'and' } };
       }
       if (kind < 0.68) {
         if (tool.depthRange) {
