@@ -462,7 +462,23 @@ fn traverse_bvh(p: vec3<f32>) -> f32 {
   while (sp > 0u) {
     sp -= 1u;
     let node_idx = stack[sp];
-    let off = node_idx * 16u;   // NODE_SIZE (bvh.js) — extra fields are the CPU far-field dipoles
+    let off = node_idx * 16u;   // NODE_SIZE (bvh.js) — [8..14] are the far-field dipole fields
+
+    // Far field: approximate the whole subtree as ONE dipole (Barill et al. 2018,
+    // "Fast Winding Numbers", order 1) when the query is far enough — d² > β²·r², β = 3.
+    // Mirrors cpu.js windingBVH; turns per-query cost from O(triangles) into ~O(log N).
+    // Without this the GPU descended every node and summed every triangle, so a large
+    // wireframe (100k+ tris) ran millions of solid-angle evals PER query point and hung
+    // the device (DXGI_ERROR_DEVICE_HUNG) no matter how the dispatch was tiled.
+    let qx = bvh_nodes[off + 8u] - p.x;
+    let qy = bvh_nodes[off + 9u] - p.y;
+    let qz = bvh_nodes[off + 10u] - p.z;
+    let d2 = qx * qx + qy * qy + qz * qz;
+    let rr = bvh_nodes[off + 14u];
+    if (d2 > 9.0 * rr * rr) {
+      winding += (bvh_nodes[off + 11u] * qx + bvh_nodes[off + 12u] * qy + bvh_nodes[off + 13u] * qz) / (d2 * sqrt(d2));
+      continue;
+    }
 
     let data2 = bvh_nodes[off + 7u];
 
