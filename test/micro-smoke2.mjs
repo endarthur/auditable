@@ -1586,8 +1586,17 @@ await p.close();
     await new Promise((z) => setTimeout(z, 1200));
     const after = document.querySelector('#filter').value;
 
+    // completion surface (Alt+K): starters when empty, word completion, breakdown chips
+    window._micro.openPalette({ nl: true });
+    const palItems = () => [...document.querySelectorAll('#palList .pal-item')];
+    const nStarters = palItems().length;
+    const typ = (v) => { const inp = document.querySelector('#palInput'); inp.value = v; inp.dispatchEvent(new Event('input')); };
+    typ('hide phase'); const compHit = palItems().some((el) => /phase set/i.test((el.querySelector('.pal-t') || {}).textContent || ''));
+    typ('FE > 55'); const bdChips = ((palItems()[0] || document.createElement('div')).querySelectorAll('.pal-chip')).length;
+    window._micro.closePalette();
+
     window._micro.nlSetEnabled(false);
-    return { offByDefault, said: said && said.title, sym: sym && sym.title, cat: cat && cat.title, grp: grpProp && grpProp.title, grpHidden, junk: junk && junk.title, before, after };
+    return { offByDefault, said: said && said.title, sym: sym && sym.title, cat: cat && cat.title, grp: grpProp && grpProp.title, grpHidden, nStarters, compHit, bdChips, junk: junk && junk.title, before, after };
   });
   chk(`NL bar: OFF by default — nothing stored, nothing proposed (stored=${r.offByDefault.stored})`,
     r.offByDefault.stored === null && r.offByDefault.proposes === false);
@@ -1596,6 +1605,7 @@ await p.close();
   chk(`NL bar: SYMBOL operators dispatch to a filter, not colour-by (FE > 55 → "${r.sym}")`, /FE\s*>\s*55/.test(r.sym || ''));
   chk(`NL bar: CATEGORICAL filter is recognised (only hematite → "${r.cat}")`, /LITO/.test(r.cat || '') && /HEMATITE/i.test(r.cat || ''));
   chk(`NL bar: a GROUP is an addressable visibility target (hide phase set → "${r.grp}", hidden=${r.grpHidden})`, /phase set/i.test(r.grp || '') && r.grpHidden === true);
+  chk(`NL bar (Alt+K): completion surface — ${r.nStarters} starters, group word-completion=${r.compHit}, ${r.bdChips} breakdown chips`, r.nStarters >= 4 && r.compHit === true && r.bdChips >= 2);
   chk('NL bar: nonsense is refused, not guessed at', r.junk == null);
   await nl.close();
 }

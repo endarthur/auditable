@@ -593,6 +593,17 @@
   .pal-g { font: 10px monospace; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); min-width: 62px; }
   .pal-t { font-size: 13px; color: var(--fg, #ddd); }
   .pal-empty { padding: 12px; color: var(--dim); font-size: 12px; text-align: center; }
+  .pal-item.pal-nl { flex-direction: column; align-items: stretch; gap: 4px; }
+  .pal-top { display: flex; align-items: baseline; gap: 10px; }
+  .pal-hint { font: 10px monospace; color: var(--dim); margin-left: auto; }
+  .pal-item.sel .pal-hint { color: rgba(255,255,255,0.7); }
+  .pal-bd { display: flex; flex-wrap: wrap; gap: 5px; }
+  .pal-chip { font: 11px monospace; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,0.07); color: var(--fg,#ddd); white-space: nowrap; }
+  .pal-chip b { color: var(--dim); font-weight: normal; margin-right: 5px; }
+  .pal-item.sel .pal-chip { background: rgba(255,255,255,0.2); color: #fff; }
+  .pal-item.sel .pal-chip b { color: rgba(255,255,255,0.72); }
+  .pal-kind { font: 10px monospace; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); margin-left: auto; }
+  .pal-item.sel .pal-kind { color: rgba(255,255,255,0.7); }
   .val-readout { display: flex; flex-wrap: wrap; gap: 12px; padding: 5px 8px; border-top: 1px solid var(--border); font: 12px monospace; }
   .val-stat b { color: var(--dim); font-weight: 400; margin-right: 3px; }
   .val-stat.ok { color: var(--go, #7fb47c); }
@@ -11970,6 +11981,27 @@ function nlFindGroup(name) {
   walk(_layerTree); return found;
 }
 
+// the structured breakdown of a resolved call — labelled chips ("column: FE", "on:
+// deposit.csv") so a full phrase shows exactly what was understood, not just prose.
+function nlBreakdown(name, args, L) {
+  const p = [];
+  const verb = name === 'micro.setLayerVisibility' ? (args.action === 'hide' ? 'hide' : 'show')
+    : ({ 'micro.filterBlocks': 'filter', 'micro.colorBy': 'colour', 'micro.sectionAt': 'section', 'micro.clearSection': 'clear section', 'micro.setSectionThickness': 'section', 'micro.setZExag': 'z-exag', 'micro.setBackground': 'background', 'micro.openGradeTonnage': 'grade–tonnage', 'micro.clearFilter': 'clear filter' }[name] || name);
+  p.push({ k: '', v: verb });
+  if (name === 'micro.filterBlocks') {
+    (args.clauses || []).forEach((cl, i) => {
+      if (i) p.push({ k: '', v: args.join || 'and' });
+      p.push({ k: cl.column, v: `${cl.op} ${typeof cl.value === 'string' ? '“' + cl.value + '”' : cl.value}` });
+    });
+  } else if (args.column) p.push({ k: 'column', v: args.column });
+  else if (args.axis != null) { p.push({ k: 'axis', v: args.axis }); p.push({ k: 'at', v: args.position }); if (args.thickness) p.push({ k: 'thick', v: `${args.thickness} m` }); }
+  else if (args.factor != null) p.push({ k: 'factor', v: `×${args.factor}` });
+  else if (args.color) p.push({ k: 'colour', v: args.color });
+  else if (args.thickness != null) p.push({ k: 'thick', v: `${args.thickness} m` });
+  else if (args.layer) p.push({ k: '', v: args.layer });
+  if (L && (name === 'micro.filterBlocks' || name === 'micro.colorBy' || name === 'micro.openGradeTonnage')) p.push({ k: 'on', v: L.label || L.name });
+  return p;
+}
 // A phrase → ONE proposal row. Never runs anything.
 function nlPropose(q) {
   if (!_nlOn || !_nlDispatcher || q.length < 4) return null;
@@ -11987,7 +12019,42 @@ function nlPropose(q) {
   let act = null;
   try { act = mk(args, target); } catch { return null; }
   if (!act || !act.say) return null;
-  return { id: 'nl:' + call.name, group: 'suggested', title: act.say, nl: true, run: () => act.run() };
+  return { id: 'nl:' + call.name, group: 'suggested', title: act.say, nl: true, breakdown: nlBreakdown(call.name, args, target), run: () => act.run() };
+}
+// completion vocab keywords (verbs / operators / axis words) — the closed classes the
+// gazetteer doesn't carry as column/category/layer synonyms.
+const NL_VERBS = ['color', 'colour', 'filter', 'show', 'hide', 'only', 'clear', 'keep', 'section', 'elevation', 'easting', 'northing', 'bench', 'thickness', 'grade', 'tonnage', 'background', 'exaggeration', 'exaggerate', 'above', 'below', 'over', 'under', 'greater', 'less'];
+// example phrases for an EMPTY Alt+K, instantiated from THIS session (real columns, a
+// real category value, a real group/layer) — discovery + a template you can edit.
+function nlStarters() {
+  const V = nlDeriveVocab(nlSessionVocab());
+  const col = Object.keys(V.numCols)[0];
+  const catCol = Object.keys(V.catValues)[0]; const catVal = catCol && Object.keys(V.catValues[catCol])[0];
+  let grp = null; for (const nd of _layerTree || []) if (!grp && nd && typeof nd === 'object' && nd.group && nd.name) grp = nd.name;
+  const lay = _layers[0] && (_layers[0].label || _layers[0].name);
+  const s = [];
+  if (col) { s.push(`colour by ${col}`); s.push(`${col} > 60`); }
+  if (catVal) s.push(`only ${String(catVal).toLowerCase()}`);
+  if (grp || lay) s.push(`hide ${grp || lay}`);
+  s.push('section at elevation 1040');
+  if (col) s.push(`grade tonnage for ${col}`);
+  return s.map((t) => ({ id: 'nlstart:' + t, group: '', title: t, hint: 'example', fill: t }));
+}
+// complete the CURRENT (last) word against the session vocabulary + the verb list. A
+// closed candidate set → nothing to hallucinate; picking one replaces the word.
+function nlComplete(raw) {
+  const frag = ((raw.match(/(\S*)$/) || [])[1] || '').toLowerCase();
+  if (frag.length < 1) return [];
+  const V = nlDeriveVocab(nlSessionVocab());
+  const seen = new Set(), out = [];
+  const push = (disp, kind) => { const d = String(disp), key = d.toLowerCase(); if (key.startsWith(frag) && key !== frag && !seen.has(key)) { seen.add(key); out.push({ d, kind }); } };
+  for (const c of Object.keys(V.numCols)) { push(c, 'column'); for (const sy of V.numCols[c].syn || []) push(sy, 'column'); }
+  for (const col of Object.keys(V.catValues)) for (const val of Object.keys(V.catValues[col])) for (const sy of V.catValues[col][val]) push(sy, 'value');
+  for (const f of Object.keys(V.layers)) for (const sy of V.layers[f]) push(sy, 'layer');
+  for (const w of NL_VERBS) push(w, 'word');
+  out.sort((a, b) => a.d.length - b.d.length || a.d.localeCompare(b.d));
+  const prefix = raw.slice(0, raw.length - frag.length);
+  return out.slice(0, 8).map((o) => ({ id: 'nlcomp:' + o.d, group: '', title: o.d, hint: o.kind, fill: prefix + o.d + ' ' }));
 }
 function nlSetEnabled(on) {
   _nlOn = !!on;
@@ -12022,14 +12089,21 @@ function renderPalette() {
   }
   scored.sort((a, b) => a.score - b.score);
   _palItems = scored.map((s) => s.c);
-  // EXPERIMENTAL: nothing matched by name → ask @gcu/dispatch what the phrase MEANT.
-  // It only ever adds a row that spells out the command and its arguments; Enter runs it.
-  // EXPERIMENTAL: ask @gcu/dispatch what the phrase MEANT. Default (⌘K): only when
-  // NOTHING matched a command by name. NL mode (Alt+K): ALWAYS, and put it first.
-  if (_nlOn && q.length >= 4 && (_palNlMode || !_palItems.length)) {
+  // EXPERIMENTAL @gcu/dispatch. NL mode (Alt+K): a pure NL surface — starters when the
+  // box is empty, else the live interpretation + word completions. Default (⌘K): only
+  // ask dispatch when NOTHING matched a command by name, and show just the proposal.
+  if (_nlOn && _palNlMode) {
+    const raw = $('#palInput').value, rq = raw.trim();
+    if (!rq) _palItems = nlStarters();
+    else {
+      if (!_nlDispatcher && !_nlBusy) { nlEnsureTrained().then(() => { if (_palOpen) renderPalette(); }); }
+      const prop = rq.length >= 4 ? nlPropose(raw) : null;
+      _palItems = [...(prop ? [prop] : []), ...nlComplete(raw)];
+    }
+  } else if (_nlOn && !_palItems.length && q.length >= 4) {
     if (!_nlDispatcher && !_nlBusy) { nlEnsureTrained().then(() => { if (_palOpen) renderPalette(); }); }
     const prop = nlPropose($('#palInput').value.trim());
-    if (prop) _palItems = _palNlMode ? [prop, ..._palItems.filter((c) => c.id !== prop.id)] : [prop];
+    if (prop) _palItems = [prop];
   }
   if (_palSel >= _palItems.length) _palSel = Math.max(0, _palItems.length - 1);
   const list = $('#palList'); list.textContent = '';
@@ -12040,10 +12114,22 @@ function renderPalette() {
   }
   _palItems.forEach((c, i) => {
     const d = document.createElement('div'); d.className = 'pal-item' + (i === _palSel ? ' sel' : '');
-    const g = document.createElement('span'); g.className = 'pal-g'; g.textContent = c.group;
-    const t = document.createElement('span'); t.className = 'pal-t'; t.textContent = c.title;
-    if (c.nl) { d.classList.add('pal-nl'); const h = document.createElement('span'); h.className = 'pal-hint'; h.textContent = 'Enter to run'; d.appendChild(h); }
-    d.append(g, t); d.onmousemove = () => { if (_palSel !== i) { _palSel = i; renderPalette(); } }; d.onclick = () => runPalette(i);
+    if (c.nl && c.breakdown) {                               // the live interpretation: sentence + structured chips
+      d.classList.add('pal-nl');
+      const top = document.createElement('div'); top.className = 'pal-top';
+      const t = document.createElement('span'); t.className = 'pal-t'; t.textContent = c.title;
+      const h = document.createElement('span'); h.className = 'pal-hint'; h.textContent = 'Enter to run';
+      top.append(t, h);
+      const bd = document.createElement('div'); bd.className = 'pal-bd';
+      for (const part of c.breakdown) { const chip = document.createElement('span'); chip.className = 'pal-chip'; if (part.k) { const b = document.createElement('b'); b.textContent = part.k; chip.appendChild(b); } chip.appendChild(document.createTextNode(String(part.v))); bd.appendChild(chip); }
+      d.append(top, bd);
+    } else {
+      const g = document.createElement('span'); g.className = 'pal-g'; g.textContent = c.group || '';
+      const t = document.createElement('span'); t.className = 'pal-t'; t.textContent = c.title;
+      d.append(g, t);
+      if (c.hint) { const k = document.createElement('span'); k.className = 'pal-kind'; k.textContent = c.hint; d.appendChild(k); }
+    }
+    d.onmousemove = () => { if (_palSel !== i) { _palSel = i; renderPalette(); } }; d.onclick = () => runPalette(i);
     list.appendChild(d);
     if (i === _palSel) d.scrollIntoView({ block: 'nearest' });
   });
@@ -12055,7 +12141,11 @@ function palKeydown(e) {
   else if (e.key === 'ArrowUp') { e.preventDefault(); _palSel = Math.max(0, _palSel - 1); renderPalette(); }
   else if (e.key === 'Enter') { e.preventDefault(); runPalette(_palSel); }
 }
-function runPalette(i) { const c = _palItems[i]; if (!c) return; closePalette(); try { c.run(palCtx()); } catch (err) { $('#meta').textContent = `${c.title}: ${err.message}`; } }
+function runPalette(i) {
+  const c = _palItems[i]; if (!c) return;
+  if (c.fill != null) { const inp = $('#palInput'); inp.value = c.fill; _palSel = 0; renderPalette(); inp.focus(); return; }   // a completion / starter — fill the box, don't run
+  closePalette(); try { c.run(palCtx()); } catch (err) { $('#meta').textContent = `${c.title}: ${err.message}`; }
+}
 $('#btnCmd').onclick = () => (_palOpen ? closePalette() : openPalette());
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); _palOpen ? closePalette() : openPalette(); }
