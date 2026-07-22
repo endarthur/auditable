@@ -318,6 +318,36 @@ const flagged = await p.evaluate(() => { const col = window._micro.layers().find
 // × all 20 Y rows × both benches = 440
 chk(`mesh solid flag: ${flagged} blocks inside the box (winding)`, flagged === 440);
 
+// ── 4a. winding XY-tiling: a fraction sweep on a model WIDE enough that its blocks
+//     span >1 dispatch tile (the GPU dispatch is tiled to stay under the driver
+//     watchdog). Block 170's sub-samples straddle the 512-thread tile boundary, so a
+//     broken tile-offset would drop it below a full 255 → guards the tiling seam. ──
+await p.evaluate(() => {
+  let csv = 'XC,YC,ZC,GRD\n';
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 180; i++) csv += `${620000 + i * 10},${7765000 + j * 10},650,1\n`;
+  return window._micro.openBlob(new Blob([csv]), 'wide.csv', 'add');
+});
+await p.waitForFunction(() => window._micro.layers().some((L) => L.name === 'wide.csv' && L.docs.blockDoc), null, { timeout: 60000 });
+await p.evaluate(() => {
+  // a closed box over X columns 0..170 (face cleanly between cols 170/171), all Y and Z
+  const x0 = 619995, x1 = 621705, y0 = 7764990, y1 = 7765040, z0 = 640, z1 = 660;
+  const V = [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]];
+  const T = [[1, 3, 2], [1, 4, 3], [5, 6, 7], [5, 7, 8], [1, 2, 6], [1, 6, 5], [3, 4, 8], [3, 8, 7], [1, 5, 8], [1, 8, 4], [2, 3, 7], [2, 7, 6]];
+  const obj = V.map((v) => `v ${v.join(' ')}`).concat(T.map((f) => `f ${f.join(' ')}`)).join('\n');
+  return window._micro.openBlob(new Blob([obj]), 'widebox.obj', 'add');
+});
+await p.waitForFunction(() => window._micro.layers().some((L) => L.name === 'widebox.obj'), null, { timeout: 60000 });
+const tiled = await p.evaluate(async () => {
+  const m = window._micro;
+  const mesh = m.layers().find((L) => L.name === 'widebox.obj'), model = m.layers().find((L) => L.name === 'wide.csv');
+  await m.ratioBySolid(mesh, model, { name: 'FRAC', res: [3, 3, 3], mode: 'inside' });
+  const col = model.paintCols.find((c) => c.name === 'FRAC');
+  let full = 0; for (const c of col.codes) if (c === 255) full++;
+  return { full, total: col.codes.length };
+});
+// 171 cols (i=0..170) × 4 rows fully inside = 684; a broken tile-offset drops it
+chk(`winding XY-tiling: fraction sweep spans 2 dispatch tiles, ${tiled.full}/${tiled.total} fully inside`, tiled.full === 684 && tiled.total === 720);
+
 // ── 4b. mesh export: OBJ named object + LFM round-trip, exact world coords ──
 const mex = await p.evaluate(async () => {
   const m = window._micro;

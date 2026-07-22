@@ -415,7 +415,8 @@ struct Params {
   threshold: f32,
   z_block: u32,
   z_sub: u32,
-  _pad: u32,
+  tile_off_x: u32,
+  tile_off_y: u32,
 }
 
 struct BVHNode {
@@ -492,8 +493,8 @@ fn traverse_bvh(p: vec3<f32>) -> f32 {
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let xi = gid.x;
-  let yi = gid.y;
+  let xi = gid.x + params.tile_off_x;       // XY dispatch is tiled on the host; offset back to global
+  let yi = gid.y + params.tile_off_y;
 
   let sx = params.resolution.x;
   let sy = params.resolution.y;
@@ -566,9 +567,9 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
   const propBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
   const readBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
 
-  // Params: 16 floats (64 bytes), padded to 16-byte alignment
-  // origin(3) + pad + block_size(3) + block_count_x + block_count(3) + resolution_x
-  // + resolution(3) + threshold + z_block + z_sub + pad
+  // Params: 80 bytes (20 × u32/f32). origin(3)+block_size_x, block_size(3)+block_count_x,
+  // block_count(3)+resolution_x, resolution(3)+threshold, z_block, z_sub, tile_off_x, tile_off_y.
+  // z_block/z_sub and the tile offsets (slots 16–19) are rewritten per dispatch.
   const paramData = new ArrayBuffer(80);
   const paramF = new Float32Array(paramData);
   const paramU = new Uint32Array(paramData);
@@ -610,22 +611,36 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
     device.queue.submit([enc.finish()]);
   }
 
+  // Tile the XY dispatch so no single submit runs long enough to trip the OS GPU
+  // watchdog (Windows TDR → DXGI_ERROR_DEVICE_HUNG). Each tile is a bounded compute
+  // burst that we await before the next, so a solid × model of ANY XY size, subdivision,
+  // or wireframe (BVH depth) completes — slowly for huge jobs — instead of hanging the
+  // device. TILE is in workgroups (× workgroup_size 8 = threads per edge); tunable.
+  const TILE = 64;
+  const zSteps = nz * sz;
+  let step = 0;
   for (let zb = 0; zb < nz; zb++) {
     for (let zs = 0; zs < sz; zs++) {
       paramU[16] = zb;
       paramU[17] = zs;
-      device.queue.writeBuffer(paramBuf, 0, paramData);
-
-      const enc = device.createCommandEncoder();
-      const pass = enc.beginComputePass();
-      pass.setPipeline(mainPipeline);
-      pass.setBindGroup(0, mainBindGroup);
-      pass.dispatchWorkgroups(dispatchX, dispatchY, 1);
-      pass.end();
-      device.queue.submit([enc.finish()]);
+      for (let tx = 0; tx < dispatchX; tx += TILE) {
+        for (let ty = 0; ty < dispatchY; ty += TILE) {
+          paramU[18] = tx * 8;                                // tile thread-offset X (workgroup_size = 8)
+          paramU[19] = ty * 8;                                // tile thread-offset Y
+          device.queue.writeBuffer(paramBuf, 0, paramData);
+          const enc = device.createCommandEncoder();
+          const pass = enc.beginComputePass();
+          pass.setPipeline(mainPipeline);
+          pass.setBindGroup(0, mainBindGroup);
+          pass.dispatchWorkgroups(Math.min(TILE, dispatchX - tx), Math.min(TILE, dispatchY - ty), 1);
+          pass.end();
+          device.queue.submit([enc.finish()]);
+          await device.queue.onSubmittedWorkDone();           // bound each GPU-busy stretch under the watchdog
+        }
+      }
+      step++;
+      if (onProgress) onProgress(step / zSteps);
     }
-    await device.queue.onSubmittedWorkDone();
-    if (onProgress) onProgress((zb + 1) / nz);
   }
 
   if (mode === 'proportion') {

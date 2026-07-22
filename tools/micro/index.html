@@ -2189,13 +2189,18 @@ async function solidOrientedMesh(meshL) {
       if (edges.get(key) === 1) boundary.push(a, b2);
     }
   }
-  const closed = boundary.length === 0;
+  // closed VOLUME = watertight (zero boundary edges) OR the user forces it: an ore/oxide
+  // shell clipped at the model boundary leaves an open rim yet is watertight-enough that
+  // the generalized winding number still classifies inside/outside cleanly. _forceClosed
+  // orients by signed volume and skips the skirt-closure (below/above) path.
+  const forced = !!meshL._forceClosed;
+  const closed = boundary.length === 0 || forced;
   const bb = m.header.bbox;
   const tris = closed ? orientBySignedVolume(m.vertices, T) : T;
   meshL._solidMesh = {
     vertices: m.vertices, triangles: tris,
     bbox: [...bb.min, ...bb.max],
-    closed, boundaryEdges: boundary.length / 2, boundary,
+    closed, forced, boundaryEdges: boundary.length / 2, boundary,
   };
   return meshL._solidMesh;
 }
@@ -2288,12 +2293,17 @@ async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgr
     size: grid.size,
     count: [cnx, cny, cnz],
   };
+  // flag = centroid membership (ONE sample/block) — 27× less GPU work than a sampled
+  // proportion, and matches this path's "centroids only" intent. Running flags at the
+  // [3,3,3] default was the DXGI_ERROR_DEVICE_HUNG (GPU watchdog timeout) on work-scale
+  // solids × models; only proportion/ratio needs the res³ sub-sample grid.
+  const res = mode === 'flag' ? [1, 1, 1] : resolution;
   const run = { W, meshL, reject: null };
   _sbActive = run;
   let result;
   try {
     result = await Promise.race([
-      W.evaluate(bm, { mode, resolution, threshold: 0.5, frame, onProgress, mesh: variant }),
+      W.evaluate(bm, { mode, resolution: res, threshold: 0.5, frame, onProgress, mesh: variant }),
       new Promise((_, rej) => { run.reject = rej; }),
     ]);
   } finally { if (_sbActive === run) _sbActive = null; }
@@ -5674,9 +5684,28 @@ function renderSolidDialog() {
   const tNote = document.createElement('div'); tNote.className = 'pp-note';
   tNote.textContent = geomIsGrid ? `gridded surface (${meshSel.docs.gridDoc.grid.nx.toLocaleString()}×${meshSel.docs.gridDoc.grid.ny.toLocaleString()} heightfield) — above / below / between; a bilinear sample, no winding`
     : !topo ? 'reading mesh topology…'
+    : topo.forced ? `forced closed volume (${topo.boundaryEdges.toLocaleString()} boundary edges bridged by winding) — inside / outside apply`
     : topo.closed ? 'closed solid — inside / outside apply'
     : `open surface (${topo.boundaryEdges.toLocaleString()} boundary edges) — above / below / between apply, via winding closures`;
   body.appendChild(tNote);
+  // force-closed override: treat an almost-watertight shell as a closed volume so
+  // inside / outside applies (winding tolerates the open rim). Offered only when the
+  // mesh actually has boundary edges; toggling clears the cached solid / BVH / winding.
+  if (!geomIsGrid && topo && topo.boundaryEdges > 0) {
+    const fcRow = mkRow2('volume');
+    const lab = document.createElement('label');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!meshSel._forceClosed;
+    cb.onchange = () => {
+      meshSel._forceClosed = cb.checked;
+      meshSel._solidMesh = null; meshSel._solidBVH = null; meshSel._variants = null;
+      if (meshSel._windingEngine && meshSel._windingEngine.terminate) meshSel._windingEngine.terminate();
+      meshSel._windingEngine = null; meshSel._windingMeshes = null;
+      d.side = null;                                          // grammar flips inside/outside ↔ above/below
+      renderSolidDialog(); sbEnsureTopology();
+    };
+    lab.append(cb, ' treat as closed volume');
+    fcRow.appendChild(lab);
+  }
   const isSurf = geomIsGrid || (topo && !topo.closed);
   const sides = isSurf ? [['below', 'below'], ['above', 'above'], ['between', 'between']] : [['inside', 'inside'], ['outside', 'outside']];
   if (!d.side || !sides.some(([k]) => k === d.side)) d.side = sides[0][0];
