@@ -2352,13 +2352,21 @@ async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgr
     if (usePeel) {
       // peel: one ray per column, exact 1D interval along z. origin is block-0 CENTROID
       // (min corner + half); resolution is a 2D sub-grid on the XY plane (z stays exact).
+      // surfaceType comes from the mesh's own topology — peel classifies an OPEN surface
+      // natively (inside = BELOW it), no skirt closures; ABOVE is the complement.
       const bmPeel = { origin: [bm.origin[0] + dx / 2, bm.origin[1] + dy / 2, bm.origin[2] + dz / 2], size: grid.size, count: [cnx, cny, cnz] };
       const pres = mode === 'flag' ? [1, 1] : [Math.max(1, resolution[0] | 0), Math.max(1, resolution[1] | 0)];
+      const stype = m.closed ? 'closed' : 'open';
       result = await Promise.race([
-        eng.evaluate(bmPeel, { mode, axis: 'z', surfaceType: 'closed', maxPeels: 32, resolution: pres, frame, onProgress: prog2, mesh: 'solid' }),
+        eng.evaluate(bmPeel, { mode, axis: 'z', surfaceType: stype, maxPeels: 32, resolution: pres, frame, onProgress: prog2, mesh: 'solid' }),
         new Promise((_, rej) => { run.reject = rej; }),
       ]);
       if (result && result.overflow) $('#meta').textContent = `peel: ${result.overflow.toLocaleString()} column(s) exceeded maxPeels — some blocks may be wrong; switch to winding`;
+      if (result && !m.closed && variant === 'above') {      // peel 'open' gives BELOW; ABOVE = complement
+        const vv = mode === 'proportion' ? result.proportions : result.flags;
+        if (mode === 'proportion') for (let z = 0; z < vv.length; z++) vv[z] = 1 - vv[z];
+        else for (let z = 0; z < vv.length; z++) vv[z] = vv[z] ? 0 : 1;
+      }
     } else {
       result = await Promise.race([
         eng.evaluate(bm, { mode, resolution: res, threshold: 0.5, frame, onProgress: prog2, mesh: variant }),
@@ -2670,7 +2678,7 @@ async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = n
     try {
       // grid layers: the dense engine (worker + clipped lattice) — centroids only
       const dense = L.docs.blockDoc ? await evalSolidOnGrid(meshL, L, { mode: 'flag', variant, method, onProgress: (f) => prog(f * (between ? 0.4 : 0.8), 'winding') }) : null;
-      const denseB = dense && between ? await evalSolidOnGrid(meshB, L, { mode: 'flag', variant: 'above', onProgress: (f) => prog(0.4 + f * 0.4, 'winding B') }) : null;
+      const denseB = dense && between ? await evalSolidOnGrid(meshB, L, { mode: 'flag', variant: 'above', method, onProgress: (f) => prog(0.4 + f * 0.4, 'winding B') }) : null;
       if (dense && (!between || denseB)) {
         let done = 0;
         for await (const ch of layerPositions(L, dense.bbox)) {
@@ -2746,7 +2754,7 @@ async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = 
       },
     });
     if (between) denseB = await evalSolidOnGrid(meshB, L, {
-      mode: 'proportion', resolution, variant: 'above',
+      mode: 'proportion', resolution, variant: 'above', method,
       onProgress: (f) => {
         if (onProgress) onProgress(0.45 + f * 0.4, 'winding sweep B');
         $('#meta').textContent = `ratio by solid: second surface ${Math.round(f * 100)}%…`;
@@ -2811,7 +2819,7 @@ async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside'
     $('#meta').textContent = `flag by solid: sweeping ${L.label || L.name}…`;
     try {
       const dense = L.docs.blockDoc ? await evalSolidOnGrid(meshL, L, { mode: 'flag', variant, method, onProgress: (f) => prog(f * (between ? 0.4 : 0.8), 'winding') }) : null;
-      const denseB = dense && between ? await evalSolidOnGrid(meshB, L, { mode: 'flag', variant: 'above', onProgress: (f) => prog(0.4 + f * 0.4, 'winding B') }) : null;
+      const denseB = dense && between ? await evalSolidOnGrid(meshB, L, { mode: 'flag', variant: 'above', method, onProgress: (f) => prog(0.4 + f * 0.4, 'winding B') }) : null;
       if (epoch !== _ratioEpoch) return made;
       if (dense && (!between || denseB)) {
         for await (const ch of layerPositions(L, dense.bbox)) {
@@ -5771,11 +5779,11 @@ function renderSolidDialog() {
   mkRadios(mkRow2('compute'), 'sbcompute', [['gpu', 'GPU'], ['cpu', 'CPU']], _windingGpu ? 'gpu' : 'cpu', (k) => setWindingGpu(k === 'gpu'));
   // engine: winding (robust, any mesh) or peel (depth-peel — much faster for a CLEAN
   // closed solid on a regular grid: the oxide-from-Leapfrog case). Closed solids only.
-  if (topo && topo.closed && !geomIsGrid) {
+  if (topo && !geomIsGrid) {
     mkRadios(mkRow2('engine'), 'sbengine', [['winding', 'winding'], ['peel', 'peel · fast']], d.method === 'peel' ? 'peel' : 'winding', (k) => { d.method = k; renderSolidDialog(); });
     body.appendChild(ppNote(d.method === 'peel'
-      ? 'peel casts one ray per column (exact along Z) — fast for clean closed solids; if it reports overflow or looks wrong on a messy mesh, use winding.'
-      : 'winding sums a robust scalar field — tolerant of holes / flipped normals. Try peel for a big clean solid.'));
+      ? 'peel casts one ray per column (exact along Z) — fast for clean meshes, closed OR open surface. If it reports overflow or looks wrong on a messy mesh, use winding.'
+      : 'winding sums a robust scalar field — tolerant of holes / flipped normals, any mesh. Try peel for a big clean solid or surface.'));
   }
   const isSurf = geomIsGrid || (topo && !topo.closed);
   const sides = isSurf ? [['below', 'below'], ['above', 'above'], ['between', 'between']] : [['inside', 'inside'], ['outside', 'outside']];
@@ -5900,7 +5908,7 @@ $('#sbGo').onclick = async () => {
     const geomL = layerById(d.solid);
     const topo2 = geomL && geomL._solidMesh;
     const rMode = (geomL && geomL.docs.gridDoc) || (topo2 && !topo2.closed) ? d.side : 'inside';
-    const method = (topo2 && topo2.closed && !(geomL && geomL.docs.gridDoc)) ? (d.method || 'winding') : 'winding';   // peel is closed-solid only
+    const method = (topo2 && !(geomL && geomL.docs.gridDoc)) ? (d.method || 'winding') : 'winding';   // peel handles closed solids AND open surfaces; grids stay winding
     if (d.act === 'ratio') {
       const L = layerById(d.ratioLid); if (!L) return;
       const defName = sbDefaultName(d);
@@ -8885,6 +8893,8 @@ function fdBounds(L, col, v) {
 }
 // category values for a column: pinned dict → header categories → just the current
 function fdValues(L, col, cur) {
+  const pc = (L.paintCols || []).find((c) => c.name === col && c.dict && c.dict.length);   // flag / derived categorical paint column
+  if (pc) return pc.dict.filter((x) => x !== '');
   const e = pinGet(L, col); if (e && e.dict) return e.dict.filter((x) => x !== '');
   const h = layerTableHeader(L); const mm = h && h.mapping;
   if (h && h.categories && mm && mm.cat != null && String(h.columns[mm.cat]).toLowerCase() === String(col).toLowerCase()) return h.categories.slice();
@@ -8991,14 +9001,16 @@ function fdAddRow(AL, insert, defJoin, compact) {
   const sel = document.createElement('select');
   const nums = numericColsOf(AL); const h = layerTableHeader(AL); const mm = h.mapping || {};
   const catName = mm.cat != null ? h.columns[mm.cat] : null;
+  const catPaint = (AL.paintCols || []).filter((c) => c.kind !== 'ratio' && c.dict && c.dict.length > 1);   // flag / derived categorical columns (dict-coded, e.g. a by-solid flag)
   sel.append(new Option('add condition…', ''));
   for (const c of nums) sel.append(new Option(c, 'n:' + c));
   if (catName) sel.append(new Option(catName, 'c:' + catName));
+  for (const c of catPaint) if (c.name !== catName) sel.append(new Option(c.name, 'c:' + c.name));
   sel.onchange = () => {
     const v = sel.value; if (!v) return;
     const col = v.slice(2);
     let clause;
-    if (v[0] === 'c') { const vals = fdValues(AL, col, []); clause = quoteIdent(col) + ' = "' + (vals[0] || '') + '"'; }
+    if (v[0] === 'c') { const vals = fdValues(AL, col, []); clause = quoteIdent(col) + ' = "' + (vals.find((x) => x) || vals[0] || '') + '"'; }
     else { const [lo, hi] = fdBounds(AL, col, 0); clause = quoteIdent(col) + ' > ' + fdNum((lo + hi) / 2, (hi - lo) / 200 || 0.01); }
     insert(clause, joinSel ? joinSel.value : 'and');
     clearTimeout(_fdTimer); applyBlockFilter(fdSrc());

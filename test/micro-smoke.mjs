@@ -318,6 +318,19 @@ const flagged = await p.evaluate(() => { const col = window._micro.layers().find
 // × all 20 Y rows × both benches = 440
 chk(`mesh solid flag: ${flagged} blocks inside the box (winding)`, flagged === 440);
 
+// the filter BUILDER must offer a by-solid flag column (a DERIVED categorical), not just
+// base columns — the "add condition…" dropdown was base-only, so a flag couldn't be picked.
+const builderOpts = await p.evaluate(async () => {
+  const m = window._micro; const model = m.layers().find((L) => L.name === 'model.csv');
+  m.setActiveLayer(model.id); m.toggleFilterDrawer(true);
+  await new Promise((r) => setTimeout(r, 50));
+  const addSel = [...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => /add condition/.test(o.textContent)));
+  const opts = addSel ? [...addSel.options].map((o) => o.textContent) : [];
+  m.toggleFilterDrawer(false);
+  return opts;
+});
+chk(`filter builder lists the by-solid flag column (${builderOpts.join(', ')})`, builderOpts.includes('INBOX'));
+
 // ── 4a. winding XY-tiling: a fraction sweep on a model WIDE enough that its blocks
 //     span >1 dispatch tile (the GPU dispatch is tiled to stay under the driver
 //     watchdog). Block 170's sub-samples straddle the 512-thread tile boundary, so a
@@ -392,6 +405,25 @@ const peelP = await p.evaluate(async () => {
 });
 chk(`peel engine: flag matches winding on a box within the model (winding ${peelP.w}, peel ${peelP.pk})`, peelP.pk > 0 && peelP.pk === peelP.w);
 chk(`peel engine: FRACTION matches winding (winding n=${peelP.pw.n} s=${peelP.pw.s}, peel n=${peelP.pp.n} s=${peelP.pp.s})`, peelP.pp.n > 0 && peelP.pp.n === peelP.pw.n && peelP.pp.s === peelP.pw.s);
+
+// peel on an OPEN surface (no force-closing) — a flat sheet over the model, 'below'
+// must match winding. Peel classifies an open surface natively (surfaceType 'open').
+await p.evaluate(() => {
+  const z = 655, x0 = 619990, x1 = 620120, y0 = 7764990, y1 = 7765120;   // spans the whole zmodel footprint
+  const obj = `v ${x0} ${y0} ${z}\nv ${x1} ${y0} ${z}\nv ${x1} ${y1} ${z}\nv ${x0} ${y1} ${z}\nf 1 2 3\nf 1 3 4`;
+  return window._micro.openBlob(new Blob([obj]), 'sheet.obj', 'add');
+});
+await p.waitForFunction(() => window._micro.layers().some((L) => L.name === 'sheet.obj'), null, { timeout: 30000 });
+const openS = await p.evaluate(async () => {
+  const m = window._micro;
+  const mesh = m.layers().find((L) => L.name === 'sheet.obj'), model = m.layers().find((L) => L.name === 'zmodel.csv');
+  const cnt = async (method, name) => { await m.flagBySolid(mesh, [model], { name, label: 'Y', mode: 'below', method }); const col = model.paintCols.find((c) => c.name === name); let n = 0; for (const c of col.codes) if (c) n++; return n; };
+  const w = await cnt('winding', 'SW');
+  const topoOpen = mesh._solidMesh ? !mesh._solidMesh.closed : null;   // populated by the winding run
+  const pk = await cnt('peel', 'SP');
+  return { topoOpen, w, pk };
+});
+chk(`peel on an OPEN surface: 'below' matches winding (open ${openS.topoOpen}; winding ${openS.w}, peel ${openS.pk})`, openS.topoOpen === true && openS.pk > 0 && openS.pk === openS.w);
 
 // ── 4b. mesh export: OBJ named object + LFM round-trip, exact world coords ──
 const mex = await p.evaluate(async () => {
