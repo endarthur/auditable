@@ -480,129 +480,60 @@ await p.close();
   await pm.close();
 }
 
-// ═══ 12. scatter → grid interpolation core (NN · IDW · anisotropy) — a unit test
-//     of interpolateLattice on synthetic points, convention-free where it matters ═══
+// ═══ 12. materialized columns on a block model → GT/swath see them, and the resolver
+//     composes (calc references a materialized column; out-of-order calc-on-calc).
+//     Interpolation (NN/IDW) was removed — estimation lives in gslib.atra — so the
+//     substrate guards now ride on materialize-a-calc-column, not an estimate ═══
 {
-  const pi = await mkPage('sm2interp');
-  // samples carrying a pure x-ramp field (v = x) → IDW at query points must reproduce it
-  const lin = await pi.evaluate(async () => {
-    const px = [], py = [], pz = [], pv = [];
-    for (let x = 0; x <= 100; x += 20) for (let y = 0; y <= 100; y += 20) { px.push(x); py.push(y); pz.push(0); pv.push(x); }
-    const pts = { px: Float64Array.from(px), py: Float64Array.from(py), pz: Float64Array.from(pz), pv: Float64Array.from(pv) };
-    const idw = await window._micro.estimateAtPoints({ pts, qx: Float64Array.from([10, 50, 90]), qy: Float64Array.from([50, 50, 50]), qz: null, method: 'idw', power: 2, ranges: [40, 40, 40], orient: {}, minPts: 1, maxPts: 24 });
-    const nn = await window._micro.estimateAtPoints({ pts, qx: Float64Array.from([40]), qy: Float64Array.from([60]), qz: null, method: 'nn', ranges: [40, 40, 40], orient: {}, minPts: 1, maxPts: 24 });
-    return { x10: idw[0], x50: idw[1], x90: idw[2], nn40: nn[0], sampleVals: [...new Set(pv)] };
-  });
-  chk(`IDW reproduces a linear field (x=10→${lin.x10.toFixed(1)}, x=50→${lin.x50.toFixed(1)}, x=90→${lin.x90.toFixed(1)})`,
-    Math.abs(lin.x10 - 10) < 4 && Math.abs(lin.x50 - 50) < 2 && Math.abs(lin.x90 - 90) < 4);
-  chk(`NN returns the nearest sample's exact value ((40,60) → ${lin.nn40})`, lin.nn40 === 40 && lin.sampleVals.includes(lin.nn40));
-  // anisotropy steers the neighbourhood: query at origin, B(0,50)=100 due N, C(50,0)=20 due E.
-  // a long/thin ellipse (major 60, minor 12) major→N includes only B; major→E only C.
-  const aniso = await pi.evaluate(async () => {
-    const pts = { px: Float64Array.from([0, 50]), py: Float64Array.from([50, 0]), pz: Float64Array.from([0, 0]), pv: Float64Array.from([100, 20]) };
-    const qx = Float64Array.from([0]), qy = Float64Array.from([0]);
-    const run = (orient, ranges) => window._micro.estimateAtPoints({ pts, qx, qy, qz: null, method: 'idw', power: 2, ranges, orient, minPts: 1, maxPts: 8 });
-    const towardB = (await run({ dipAzimuth: 90 }, [60, 12, 12]))[0];   // major N–S → reaches B only
-    const towardC = (await run({ dipAzimuth: 0 }, [60, 12, 12]))[0];    // major E–W → reaches C only
-    const iso = (await run({}, [60, 60, 60]))[0];
-    return { towardB, towardC, iso };
-  });
-  chk(`anisotropy steers the neighbourhood (major→B ${aniso.towardB.toFixed(1)}, major→C ${aniso.towardC.toFixed(1)}, iso ${aniso.iso.toFixed(1)})`,
-    Math.abs(aniso.towardB - 100) < 1 && Math.abs(aniso.towardC - 20) < 1 && Math.abs(aniso.iso - 60) < 1);
-  // output filter: blank result cells whose (X,Y,Z,value) fails the predicate (per record)
-  const outf = await pi.evaluate(() => {
-    const vals = new Float32Array([10, 20, 30, 40]);
-    window._micro.applyOutputFilterPoints(vals, Float64Array.from([0, 10, 0, 10]), Float64Array.from([0, 0, 10, 10]), null, 'VAL', 'VAL > 25');
-    return [...vals].map((v) => (Number.isNaN(v) ? 'x' : v));
-  });
-  chk(`output filter blanks cells failing the predicate (VAL>25 → ${JSON.stringify(outf)})`, outf[0] === 'x' && outf[1] === 'x' && outf[2] === 30 && outf[3] === 40);
-  await pi.close();
-}
-
-// ═══ 13. INTERPOLATE ONTO A TARGET: source samples → an existing block model →
-//     a materialized column ON the target (decoupled from grid creation) ═══
-{
-  const pg = await mkPage('sm2interp2');
-  const src = await pg.evaluate(() => {
-    let s = 'X,Y,Z,GRADE\n';                                            // off-lattice jitter → opens as POINTS; GRADE = x
-    for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) { const x = i * 20 + ((i * 3 + j * 7) % 5 - 2) * 1.5, y = j * 20 + ((i * 5 + j * 2) % 5 - 2) * 1.5; s += `${x.toFixed(2)},${y.toFixed(2)},0,${x.toFixed(2)}\n`; }
-    return s;
-  });
-  await pg.evaluate((c) => window._micro.openBlob(new Blob([c]), 'samples.csv', 'replace'), src);
-  await pg.waitForFunction(() => window._micro.layers().length === 1, null, { timeout: 30000 });
-  const tgt = await pg.evaluate(() => { let s = 'X,Y,Z,DUMMY\n'; for (let i = 0; i <= 10; i++) for (let j = 0; j <= 10; j++) s += `${i * 10},${j * 10},0,0\n`; return s; });   // a REGULAR 11×11 block model target
-  await pg.evaluate((c) => window._micro.openBlob(new Blob([c]), 'model.csv', 'add'), tgt);
+  const pg = await mkPage('sm2compose');
+  // a REGULAR 11×11 block model with a base GRADE = X (a field rising along X)
+  const tgt = await pg.evaluate(() => { let s = 'X,Y,Z,GRADE\n'; for (let i = 0; i <= 10; i++) for (let j = 0; j <= 10; j++) s += `${i * 10},${j * 10},0,${i * 10}\n`; return s; });
+  await pg.evaluate((c) => window._micro.openBlob(new Blob([c]), 'model.csv', 'replace'), tgt);
   await pg.waitForFunction(() => window._micro.layers().some((L) => L.name === 'model.csv' && L.docs.blockDoc), null, { timeout: 30000 });
-  // the readers: source samples + the TARGET's own record coordinates
-  const rd = await pg.evaluate(async () => {
-    const S = window._micro.layers().find((x) => x.name === 'samples.csv'), T = window._micro.layers().find((x) => x.name === 'model.csv');
-    const pts = await window._micro.readLayerPoints(S, 'GRADE'); const tq = await window._micro.readLayerCoords(T);
-    return { sn: pts.px.length, srcX: Math.abs(pts.pv[0] - pts.px[0]) < 0.01, tn: tq.n };
-  });
-  chk(`readers: ${rd.sn} source samples (GRADE==X) + ${rd.tn} target records`, rd.sn === 36 && rd.srcX && rd.tn === 121);
-  // the standalone dialog shows Source + onto-target + method + range + output column
-  const ui = await pg.evaluate(() => {
-    window._micro.openInterpolateDialog(); const txt = document.querySelector('#ngDlgBody').textContent;
-    return { shown: document.querySelector('#ngDlg').classList.contains('show'), src: /source/.test(txt), onto: /onto/.test(txt), method: /IDW/.test(txt) && /nearest/.test(txt), range: /range \(m\)/.test(txt), col: /column/.test(txt) };
-  });
-  chk(`interpolate dialog: source + onto + method + range + column`, ui.shown && ui.src && ui.onto && ui.method && ui.range && ui.col);
-  await pg.evaluate(() => document.querySelector('#ngCancel').click());
-  // estimate GRADE onto the model → a materialized column ON the target (the recipe-run path)
+  // materialize a calc column GRADE_M = GRADE → a real MATERIALIZED (non-base) column
   const out = await pg.evaluate(async () => {
-    const cfg = { srcName: 'samples.csv', srcCol: 'GRADE', tgtName: 'model.csv', method: 'idw', power: 2, aniso: false, rMaj: 60, rSemi: 60, rMin: 60, dip: 0, dipAz: 0, pitch: 0, minPts: 1, maxPts: 12, inFilter: '', outFilter: '', outName: 'GRADE_IDW' };
-    await window._micro.estimateOntoTarget(cfg, () => {});
     const T = window._micro.layers().find((x) => x.name === 'model.csv');
-    const col = window._micro.matColList(T).find((c) => c.name === 'GRADE_IDW');
-    const inOpts = [...document.querySelectorAll('#colorBy option')].some((o) => o.value === 'paint:GRADE_IDW');
-    const lin = col && col.lineage;                                    // the estimate's provenance rides on the COLUMN, not the target layer
-    return { has: !!col, mat: !!(col && col.mat), at50: col ? col.fvalues[5 * 11 + 5] : null, op: lin && lin.op, target: lin && lin.params.target, column: lin && lin.params.column, colorSel: T.colorSel, inOpts };
+    window._micro.applyCalcCols(T, [{ name: 'GRADE_M', expr: 'GRADE', ty: 'number' }]);
+    await window._micro.materializeCalcCol(T, 'GRADE_M');
+    const col = window._micro.matColList(T).find((c) => c.name === 'GRADE_M');
+    return { has: !!col, mat: !!(col && col.mat), stillCalc: (T.calcCols || []).some((c) => c.name === 'GRADE_M'), at50: col ? col.fvalues[5 * 11 + 5] : null };
   });
-  chk(`estimate lands a materialized column ON the target (mat ${out.mat}, block(50,50)≈${(out.at50 || 0).toFixed(1)}, coloured ${out.colorSel})`,
-    out.has && out.mat && Math.abs(out.at50 - 50) < 6 && out.op === 'interpolate' && out.target === 'model.csv' && out.column === 'GRADE_IDW' && out.colorSel === 'paint:GRADE_IDW' && out.inOpts);
-  // GT + swath now SEE the materialized column (schemaExt + extendRow); numericColsOf offers it
+  chk(`materialize-a-calc lands a materialized column on the model (mat ${out.mat}, block(50,50)≈${(out.at50 || 0).toFixed(1)})`,
+    out.has && out.mat && !out.stillCalc && Math.abs(out.at50 - 50) < 0.01);
+  // GT + swath SEE the materialized column (schemaExt + extendRow); numericColsOf offers it
   const gtsw = await pg.evaluate(async () => {
     const T = window._micro.layers().find((x) => x.name === 'model.csv');
-    const offered = window._micro.numericColsOf(T).includes('GRADE_IDW');
-    const gt = await window._micro.computeGT(T, ['GRADE_IDW'], null, 8, () => {});
-    const sw = await window._micro.computeSwath(T, ['GRADE_IDW'], [1, 0, 0], 12, 0, null, () => {});
+    const offered = window._micro.numericColsOf(T).includes('GRADE_M');
+    const gt = await window._micro.computeGT(T, ['GRADE_M'], null, 8, () => {});
+    const sw = await window._micro.computeSwath(T, ['GRADE_M'], [1, 0, 0], 12, 0, null, () => {});
     const means = sw ? sw.profile.map((b) => b.mean[0]).filter(Number.isFinite) : [];
     return { offered, gtCuts: gt ? gt.gt[0].length : 0, gtMax: gt ? gt.gmax : 0, swBands: sw ? sw.profile.length : 0, rising: means.length > 2 && means[means.length - 1] > means[0] };
   });
   chk(`GT + swath compute on the materialized column (numericColsOf offers it ${gtsw.offered}; GT ${gtsw.gtCuts} cuts, gmax ${(gtsw.gtMax || 0).toFixed(0)}; swath ${gtsw.swBands} bands, rising ${gtsw.rising})`,
     gtsw.offered && gtsw.gtCuts === 9 && gtsw.gtMax > 50 && gtsw.swBands > 2 && gtsw.rising);
-  // THE COMPOSITION GAP (resolver): a calc column referencing the ESTIMATED column,
+  // THE COMPOSITION GAP (resolver): a calc column referencing the MATERIALIZED column,
   // then materialized — the exact case that failed pre-resolver (calc saw base only)
   const matc = await pg.evaluate(async () => {
     const T = window._micro.layers().find((x) => x.name === 'model.csv');
-    window._micro.applyCalcCols(T, [{ name: 'DBL', expr: 'GRADE_IDW * 2', ty: 'number' }]);
+    window._micro.applyCalcCols(T, [{ name: 'DBL', expr: 'GRADE_M * 2', ty: 'number' }]);
     const wasCalc = (T.calcCols || []).some((c) => c.name === 'DBL');
     await window._micro.materializeCalcCol(T, 'DBL');
     const col = window._micro.matColList(T).find((c) => c.name === 'DBL');
     return { wasCalc, mat: !!(col && col.mat), stillCalc: (T.calcCols || []).some((c) => c.name === 'DBL'), at50: col ? col.fvalues[5 * 11 + 5] : null, from: col && col.lineage && col.lineage.params.from };
   });
-  chk(`calc REFERENCES the estimated column + materializes (DBL = GRADE_IDW*2 → (50,50)≈${(matc.at50 || 0).toFixed(0)})`,
-    matc.wasCalc && matc.mat && !matc.stillCalc && Math.abs(matc.at50 - 100) < 12 && matc.from === 'calc');
+  chk(`calc REFERENCES the materialized column + materializes (DBL = GRADE_M*2 → (50,50)≈${(matc.at50 || 0).toFixed(0)})`,
+    matc.wasCalc && matc.mat && !matc.stillCalc && Math.abs(matc.at50 - 100) < 0.01 && matc.from === 'calc');
   // calc-on-calc, dependency-ordered regardless of input order (B2 defined referencing A2)
   const chain = await pg.evaluate(async () => {
     const T = window._micro.layers().find((x) => x.name === 'model.csv');
-    window._micro.applyCalcCols(T, [{ name: 'B2', expr: 'A2 * 10', ty: 'number' }, { name: 'A2', expr: 'GRADE_IDW + 1', ty: 'number' }]);
+    window._micro.applyCalcCols(T, [{ name: 'B2', expr: 'A2 * 10', ty: 'number' }, { name: 'A2', expr: 'GRADE_M + 1', ty: 'number' }]);
     window._micro.setActiveLayer(T.id);
     document.querySelector('#filter').value = 'B2 > 500'; await window._micro.applyBlockFilter('B2 > 500');
     const hits = T._filterMask ? T._filterMask.reduce((a, b) => a + b, 0) : -1;
     await window._micro.applyBlockFilter('');
     return { hits };
   });
-  chk(`calc-on-calc chains through the resolver, out of input order (B2=A2*10, A2=GRADE_IDW+1; B2>500 → ${chain.hits} blocks)`, chain.hits > 50 && chain.hits < 80);
-  // input + output filters compose: drop low samples, blank low results → some blocks unestimated
-  const flt = await pg.evaluate(async () => {
-    const cfg = { srcName: 'samples.csv', srcCol: 'GRADE', tgtName: 'model.csv', method: 'idw', power: 2, aniso: false, rMaj: 80, rSemi: 80, rMin: 80, dip: 0, dipAz: 0, pitch: 0, minPts: 1, maxPts: 12, inFilter: 'GRADE > 20', outFilter: 'GRADE_F > 40', outName: 'GRADE_F' };
-    await window._micro.estimateOntoTarget(cfg, () => {});
-    const T = window._micro.layers().find((x) => x.name === 'model.csv'); const col = window._micro.matColList(T).find((c) => c.name === 'GRADE_F');
-    let valid = 0, blank = 0; for (const v of col.fvalues) (Number.isFinite(v) ? valid++ : blank++);
-    return { inF: col.lineage.params.inFilter, outF: col.lineage.params.outFilter, valid, blank, min: col.min };
-  });
-  chk(`filters compose on the target (in "${flt.inF}", out "${flt.outF}"; ${flt.valid} valid · ${flt.blank} blank, min ${(flt.min || 0).toFixed(1)})`,
-    flt.inF === 'GRADE > 20' && flt.outF === 'GRADE_F > 40' && flt.valid > 0 && flt.blank > 0 && flt.min > 40);
+  chk(`calc-on-calc chains through the resolver, out of input order (B2=A2*10, A2=GRADE_M+1; B2>500 → ${chain.hits} blocks, expect 66)`, chain.hits === 66);
   await pg.close();
 }
 
