@@ -827,6 +827,7 @@ import { compileBool, compileValue, compileChunk, compileChunkBool, validate, co
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 import { buildBVH, windingBVH, Winding, raycastBVH } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
+import { Peel } from '../../ext/peel/index.js';   // depth-peel by-solid — fast on clean closed meshes (complements winding)
 import { readLFM, writeLFM } from '../../ext/lfm/lfm.js';   // Leapfrog model files (multi-mesh + colours)
 import { readGTiff, gridFromGTiff, gridWindowFromGTiff, gridDecimatedFromGTiff, stepForCap, windowForWorldBbox, pickOverviewForCap } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs + windowed/decimated reads (spec 7.1)
 import { parquetInfo, parquetInfoAsync, streamParquetColumns, readParquetRange, readParquetRow, writeParquet, createParquetBlobWriter } from '../../ext/parquet/index.js';   // Apache Parquet block models (columnar, streamed row-group by row-group)
@@ -2247,7 +2248,8 @@ function setWindingGpu(on) {
   try { localStorage.setItem('micro.windingCpu', on ? '0' : '1'); } catch { /* private */ }
   for (const L of _layers) {                                // drop cached engines so the next run uses the chosen backend
     if (L._windingEngine && L._windingEngine.terminate) L._windingEngine.terminate();
-    L._windingEngine = null; L._windingMeshes = null;
+    if (L._peelEngine && L._peelEngine.terminate) L._peelEngine.terminate();
+    L._windingEngine = null; L._windingMeshes = null; L._peelEngine = null; L._peelMeshes = null;
   }
   $('#meta').textContent = `winding: ${on ? 'GPU' : 'CPU (worker)'} for the next solid query`;
 }
@@ -2270,6 +2272,24 @@ async function meshWinding(meshL, variant = 'solid') {
   }
   return meshL._windingEngine;
 }
+// the cached @gcu/peel engine per mesh layer — the fast depth-peel path for a clean
+// closed solid on a regular grid (one ray per column, exact along z). Honors the same
+// GPU/CPU toggle as winding; silent CPU fallback if the worker/GPU can't start.
+async function meshPeel(meshL) {
+  const m = await meshVariant(meshL, 'solid');
+  if (!m) return null;
+  if (!meshL._peelEngine) {
+    let P = null;
+    try { P = await Peel.create({ worker: true, gpu: _windingGpu }); }
+    catch { P = await Peel.create({}); }
+    meshL._peelEngine = P; meshL._peelMeshes = new Set();
+  }
+  if (!meshL._peelMeshes.has('solid')) {
+    meshL._peelEngine.setMesh(m.vertices, m.triangles, { frame, name: 'solid' });
+    meshL._peelMeshes.add('solid');
+  }
+  return meshL._peelEngine;
+}
 // dense clipped-lattice evaluation for GRID layers: the block model's lattice
 // clipped to the solid's bbox (the pretest, expressed as lattice clipping —
 // cells outside are 0 by definition), handed whole to winding's evaluator
@@ -2284,13 +2304,14 @@ function etaStr(t0, frac) {
   return rem >= 90 ? ` · ~${Math.round(rem / 60)} min left` : ` · ~${Math.max(1, Math.round(rem))}s left`;
 }
 let _sbActive = null;                                      // { W, meshL, reject } while a dense run is up
-async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgress, variant = 'solid' } = {}) {
+async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgress, variant = 'solid', method = 'winding' } = {}) {
   const doc = L.docs.blockDoc;
   const grid = doc && (doc.grid || (doc.header && doc.header.grid));
   if (!grid || !grid.size || !grid.count) return null;
-  const m = await meshVariant(meshL, variant);
-  const W = await meshWinding(meshL, variant);
-  if (!m || !W) return null;
+  const usePeel = method === 'peel';
+  const m = await meshVariant(meshL, usePeel ? 'solid' : variant);   // peel handles closed/open via surfaceType, no skirt closures
+  const eng = usePeel ? await meshPeel(meshL) : await meshWinding(meshL, variant);
+  if (!m || !eng) return null;
   const [dx, dy, dz] = grid.size;
   const [nx, ny, nz] = grid.count;
   const corner = [                                         // world MIN corner (originLocal = block-0 CENTER, frame-local)
@@ -2305,7 +2326,11 @@ async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgr
   ];
   const [i0, i1] = clip(bx0, bx1, corner[0], dx, nx);
   const [j0, j1] = clip(by0, by1, corner[1], dy, ny);
-  const [k0, k1] = clip(bz0, bz1, corner[2], dz, nz);
+  // peel casts rays along Z: the ray must START outside the solid, so it needs the FULL
+  // Z span (winding clips all 3 axes as a bbox pretest; peel would otherwise start the ray
+  // inside the solid and mis-pair crossings). XY clip still limits which columns get a ray.
+  // (Caveat: a solid extending past the model's Z floor/ceiling can't be peeled — use winding.)
+  const [k0, k1] = usePeel ? [0, nz - 1] : clip(bz0, bz1, corner[2], dz, nz);
   const cnx = i1 - i0 + 1, cny = j1 - j0 + 1, cnz = k1 - k0 + 1;
   if (cnx < 1 || cny < 1 || cnz < 1) return { lookup: () => 0 };   // solid entirely off-model
   const bm = {
@@ -2313,25 +2338,37 @@ async function evalSolidOnGrid(meshL, L, { mode, resolution = [3, 3, 3], onProgr
     size: grid.size,
     count: [cnx, cny, cnz],
   };
-  // flag = centroid membership (ONE sample/block) — 27× less GPU work than a sampled
-  // proportion, and matches this path's "centroids only" intent. Running flags at the
-  // [3,3,3] default was the DXGI_ERROR_DEVICE_HUNG (GPU watchdog timeout) on work-scale
-  // solids × models; only proportion/ratio needs the res³ sub-sample grid.
+  // flag = centroid membership (ONE sample/block) — winding needs no res³ grid and peel
+  // is exact along its axis, so a flag is 27× cheaper than a sampled proportion. Running
+  // winding flags at the [3,3,3] default was the DXGI_ERROR_DEVICE_HUNG on work-scale data.
   const res = mode === 'flag' ? [1, 1, 1] : resolution;
-  const run = { W, meshL, reject: null };
+  const run = { W: eng, meshL, reject: null };
   _sbActive = run;
   const t0 = performance.now();
-  const prog2 = (f) => { if (onProgress) onProgress(f); $('#meta').textContent = `winding sweep: ${Math.round(f * 100)}%${etaStr(t0, f)} (${W.hasWorker ? (W.hasGPU ? 'GPU' : 'CPU') : 'CPU'})`; };
+  const tag = eng.hasWorker ? (eng.hasGPU ? 'GPU' : 'CPU') : 'CPU';
+  const prog2 = (f) => { if (onProgress) onProgress(f); $('#meta').textContent = `${usePeel ? 'peel' : 'winding'} sweep: ${Math.round(f * 100)}%${etaStr(t0, f)} (${tag})`; };
   let result;
   try {
-    result = await Promise.race([
-      W.evaluate(bm, { mode, resolution: res, threshold: 0.5, frame, onProgress: prog2, mesh: variant }),
-      new Promise((_, rej) => { run.reject = rej; }),
-    ]);
+    if (usePeel) {
+      // peel: one ray per column, exact 1D interval along z. origin is block-0 CENTROID
+      // (min corner + half); resolution is a 2D sub-grid on the XY plane (z stays exact).
+      const bmPeel = { origin: [bm.origin[0] + dx / 2, bm.origin[1] + dy / 2, bm.origin[2] + dz / 2], size: grid.size, count: [cnx, cny, cnz] };
+      const pres = mode === 'flag' ? [1, 1] : [Math.max(1, resolution[0] | 0), Math.max(1, resolution[1] | 0)];
+      result = await Promise.race([
+        eng.evaluate(bmPeel, { mode, axis: 'z', surfaceType: 'closed', maxPeels: 32, resolution: pres, frame, onProgress: prog2, mesh: 'solid' }),
+        new Promise((_, rej) => { run.reject = rej; }),
+      ]);
+      if (result && result.overflow) $('#meta').textContent = `peel: ${result.overflow.toLocaleString()} column(s) exceeded maxPeels — some blocks may be wrong; switch to winding`;
+    } else {
+      result = await Promise.race([
+        eng.evaluate(bm, { mode, resolution: res, threshold: 0.5, frame, onProgress: prog2, mesh: variant }),
+        new Promise((_, rej) => { run.reject = rej; }),
+      ]);
+    }
   } finally { if (_sbActive === run) _sbActive = null; }
   const values = mode === 'proportion' ? result.proportions : result.flags;
   return {
-    engine: W.hasWorker ? (W.hasGPU ? 'worker+gpu' : 'worker') : 'cpu',
+    engine: (usePeel ? 'peel:' : '') + (eng.hasWorker ? (eng.hasGPU ? 'worker+gpu' : 'worker') : 'cpu'),
     bbox: m.bbox,                                          // world; the spatial-pushdown filter for the sweep
     lookup(x, y, z) {
       const ii = Math.round((x - corner[0]) / dx - 0.5);
@@ -2346,7 +2383,7 @@ function sbCancelActive() {
   const run = _sbActive;
   if (!run) return;
   if (run.reject) run.reject(new Error('cancelled'));
-  if (run.W && run.W.hasWorker) { run.W.terminate(); run.meshL._windingEngine = null; }
+  if (run.W && run.W.hasWorker) { run.W.terminate(); run.meshL._windingEngine = null; run.meshL._peelEngine = null; run.meshL._windingMeshes = null; run.meshL._peelMeshes = null; }
   _sbActive = null;
   _selEpoch++; _ratioEpoch++;
 }
@@ -2612,7 +2649,7 @@ async function flagByGridSurface(gridL, targets, { name, label = 'IN', mode = 'b
   markProjectDirty(); requestRender();
   return made;
 }
-async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = null, combine = 'replace', onProgress = null } = {}) {
+async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = null, combine = 'replace', onProgress = null, method = 'winding' } = {}) {
   if (meshL.docs.gridDoc) return selectByGridSurface(meshL, { mode, meshB, targets, combine, onProgress });
   const between = mode === 'between';
   const variant = between ? 'below' : (SB_VARIANT[mode] || 'solid');
@@ -2632,7 +2669,7 @@ async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = n
     $('#meta').textContent = `select by solid: sweeping ${L.label || L.name}…`;
     try {
       // grid layers: the dense engine (worker + clipped lattice) — centroids only
-      const dense = L.docs.blockDoc ? await evalSolidOnGrid(meshL, L, { mode: 'flag', variant, onProgress: (f) => prog(f * (between ? 0.4 : 0.8), 'winding') }) : null;
+      const dense = L.docs.blockDoc ? await evalSolidOnGrid(meshL, L, { mode: 'flag', variant, method, onProgress: (f) => prog(f * (between ? 0.4 : 0.8), 'winding') }) : null;
       const denseB = dense && between ? await evalSolidOnGrid(meshB, L, { mode: 'flag', variant: 'above', onProgress: (f) => prog(0.4 + f * 0.4, 'winding B') }) : null;
       if (dense && (!between || denseB)) {
         let done = 0;
@@ -2689,7 +2726,7 @@ async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = n
 // the sampling error). Lands on the painted-column storage, kind 'ratio' —
 // filter / scan / table / export see a plain numeric column.
 let _ratioEpoch = 0;
-async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = null, onProgress = null } = {}) {
+async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = null, onProgress = null, method = 'winding' } = {}) {
   if (meshL.docs.gridDoc) return ratioByGridSurface(meshL, L, { name, res, mode, meshB, onProgress });
   const doc = L.docs.blockDoc;
   const grid = doc && (doc.grid || (doc.header && doc.header.grid));
@@ -2702,7 +2739,7 @@ async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = 
   let dense, denseB = null;
   try {
     dense = await evalSolidOnGrid(meshL, L, {
-      mode: 'proportion', resolution, variant,
+      mode: 'proportion', resolution, variant, method,
       onProgress: (f) => {
         if (onProgress) onProgress(f * (between ? 0.45 : 0.85), 'winding sweep');
         $('#meta').textContent = `ratio by solid: winding sweep ${Math.round(f * 100)}%…`;
@@ -2753,7 +2790,7 @@ async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = 
 // NEW painted column — one step instead of select-then-apply, and because it
 // IS a painted column you can touch it up with the brush afterwards. Works
 // on any table-backed layer (blocks, xyz points, drillholes).
-async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside', meshB = null, onProgress = null } = {}) {
+async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside', meshB = null, onProgress = null, method = 'winding' } = {}) {
   if (meshL.docs.gridDoc) return flagByGridSurface(meshL, targets, { name, label, mode, meshB, onProgress });
   const between = mode === 'between';
   const variant = between ? 'below' : (SB_VARIANT[mode] || 'solid');
@@ -2773,7 +2810,7 @@ async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside'
     let cnt = 0, done = 0;
     $('#meta').textContent = `flag by solid: sweeping ${L.label || L.name}…`;
     try {
-      const dense = L.docs.blockDoc ? await evalSolidOnGrid(meshL, L, { mode: 'flag', variant, onProgress: (f) => prog(f * (between ? 0.4 : 0.8), 'winding') }) : null;
+      const dense = L.docs.blockDoc ? await evalSolidOnGrid(meshL, L, { mode: 'flag', variant, method, onProgress: (f) => prog(f * (between ? 0.4 : 0.8), 'winding') }) : null;
       const denseB = dense && between ? await evalSolidOnGrid(meshB, L, { mode: 'flag', variant: 'above', onProgress: (f) => prog(0.4 + f * 0.4, 'winding B') }) : null;
       if (epoch !== _ratioEpoch) return made;
       if (dense && (!between || denseB)) {
@@ -5648,7 +5685,7 @@ function openSolidDialog(meshL0) {
   if (!elements.length) { $('#meta').textContent = 'select by solid / surface: no element layers to classify'; return; }
   _sbDlg = {
     solid: (meshL0 && geoms.includes(meshL0) ? meshL0 : geoms[0]).id,
-    act: 'select', side: null, combine: 'replace',
+    act: 'select', side: null, combine: 'replace', method: 'winding',
     res: [3, 3, 3], name: null, flagName: null, flagLabel: 'IN',
     targets: new Set(elements.filter((L) => L.visible).map((L) => L.id)),
     ratioLid: null, surfB: null,
@@ -5721,7 +5758,8 @@ function renderSolidDialog() {
       meshSel._forceClosed = cb.checked;
       meshSel._solidMesh = null; meshSel._solidBVH = null; meshSel._variants = null;
       if (meshSel._windingEngine && meshSel._windingEngine.terminate) meshSel._windingEngine.terminate();
-      meshSel._windingEngine = null; meshSel._windingMeshes = null;
+      if (meshSel._peelEngine && meshSel._peelEngine.terminate) meshSel._peelEngine.terminate();
+      meshSel._windingEngine = null; meshSel._windingMeshes = null; meshSel._peelEngine = null; meshSel._peelMeshes = null;
       d.side = null;                                          // grammar flips inside/outside ↔ above/below
       renderSolidDialog(); sbEnsureTopology();
     };
@@ -5731,6 +5769,14 @@ function renderSolidDialog() {
   // compute backend — GPU (default, fast) or the worker CPU path (slower, but can't
   // trip the GPU driver watchdog: the safety valve when a device hangs on a huge solid).
   mkRadios(mkRow2('compute'), 'sbcompute', [['gpu', 'GPU'], ['cpu', 'CPU']], _windingGpu ? 'gpu' : 'cpu', (k) => setWindingGpu(k === 'gpu'));
+  // engine: winding (robust, any mesh) or peel (depth-peel — much faster for a CLEAN
+  // closed solid on a regular grid: the oxide-from-Leapfrog case). Closed solids only.
+  if (topo && topo.closed && !geomIsGrid) {
+    mkRadios(mkRow2('engine'), 'sbengine', [['winding', 'winding'], ['peel', 'peel · fast']], d.method === 'peel' ? 'peel' : 'winding', (k) => { d.method = k; renderSolidDialog(); });
+    body.appendChild(ppNote(d.method === 'peel'
+      ? 'peel casts one ray per column (exact along Z) — fast for clean closed solids; if it reports overflow or looks wrong on a messy mesh, use winding.'
+      : 'winding sums a robust scalar field — tolerant of holes / flipped normals. Try peel for a big clean solid.'));
+  }
   const isSurf = geomIsGrid || (topo && !topo.closed);
   const sides = isSurf ? [['below', 'below'], ['above', 'above'], ['between', 'between']] : [['inside', 'inside'], ['outside', 'outside']];
   if (!d.side || !sides.some(([k]) => k === d.side)) d.side = sides[0][0];
@@ -5854,19 +5900,20 @@ $('#sbGo').onclick = async () => {
     const geomL = layerById(d.solid);
     const topo2 = geomL && geomL._solidMesh;
     const rMode = (geomL && geomL.docs.gridDoc) || (topo2 && !topo2.closed) ? d.side : 'inside';
+    const method = (topo2 && topo2.closed && !(geomL && geomL.docs.gridDoc)) ? (d.method || 'winding') : 'winding';   // peel is closed-solid only
     if (d.act === 'ratio') {
       const L = layerById(d.ratioLid); if (!L) return;
       const defName = sbDefaultName(d);
-      const col = await ratioBySolid(meshL, L, { name: (d.name || defName).trim() || defName, res: d.res, mode: rMode, meshB, onProgress: sbProgress });
+      const col = await ratioBySolid(meshL, L, { name: (d.name || defName).trim() || defName, res: d.res, mode: rMode, meshB, method, onProgress: sbProgress });
       if (!col) { sbProgress(0, ''); $('#sbDlgMsg').textContent = $('#meta').textContent; return; }
     } else if (d.act === 'flag') {
       const defName = sbDefaultName(d);
       const made = await flagBySolid(meshL, _layers.filter((L) => d.targets.has(L.id)), {
-        name: (d.flagName || defName).trim() || defName, label: d.flagLabel || 'IN', mode: d.side, meshB, onProgress: sbProgress,
+        name: (d.flagName || defName).trim() || defName, label: d.flagLabel || 'IN', mode: d.side, meshB, method, onProgress: sbProgress,
       });
       if (!made) { sbProgress(0, ''); $('#sbDlgMsg').textContent = $('#meta').textContent || 'no layer took the column'; return; }
     } else {
-      await selectBySolid(meshL, { mode: d.side, meshB, targets: _layers.filter((L) => d.targets.has(L.id)), combine: d.combine, onProgress: sbProgress });
+      await selectBySolid(meshL, { mode: d.side, meshB, targets: _layers.filter((L) => d.targets.has(L.id)), combine: d.combine, method, onProgress: sbProgress });
     }
     if (_sbDlg) { $('#sbDlg').classList.remove('show'); _sbDlg = null; }
   } finally {

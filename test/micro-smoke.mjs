@@ -361,6 +361,34 @@ const cpuFlag = await p.evaluate(async () => {
 });
 chk(`winding CPU toggle: forced-CPU flag matches the default backend (${cpuFlag} blocks)`, cpuFlag === 440);
 
+// peel engine: the depth-peel alternative (fast for clean closed solids) must give the
+// SAME inside/outside as winding — a different algorithm, same answer. Peel casts a ray
+// that must START outside the solid, so the test uses a multi-bench model with a closed
+// box WITHIN its Z-extent (z 625–675 inside the 600–700 span); winding ≡ peel is asserted.
+await p.evaluate(() => {
+  let csv = 'XC,YC,ZC,FE\n';
+  for (let b = 0; b <= 10; b++) for (let j = 0; j < 12; j++) for (let i = 0; i < 12; i++) csv += `${620000 + i * 10},${7765000 + j * 10},${600 + b * 10},1\n`;
+  return window._micro.openBlob(new Blob([csv]), 'zmodel.csv', 'add');
+});
+await p.waitForFunction(() => window._micro.layers().some((L) => L.name === 'zmodel.csv' && L.docs.blockDoc), null, { timeout: 30000 });
+await p.evaluate(() => {
+  const x0 = 619995, x1 = 620055, y0 = 7764990, y1 = 7765200, z0 = 625, z1 = 675;   // faces within the model Z span
+  const V = [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]];
+  const T = [[1, 3, 2], [1, 4, 3], [5, 6, 7], [5, 7, 8], [1, 2, 6], [1, 6, 5], [3, 4, 8], [3, 8, 7], [1, 5, 8], [1, 8, 4], [2, 3, 7], [2, 7, 6]];
+  const obj = V.map((v) => `v ${v.join(' ')}`).concat(T.map((f) => `f ${f.join(' ')}`)).join('\n');
+  return window._micro.openBlob(new Blob([obj]), 'zbox.obj', 'add');
+});
+await p.waitForFunction(() => window._micro.layers().some((L) => L.name === 'zbox.obj'), null, { timeout: 30000 });
+const peelP = await p.evaluate(async () => {
+  const m = window._micro;
+  const mesh = m.layers().find((L) => L.name === 'zbox.obj'), model = m.layers().find((L) => L.name === 'zmodel.csv');
+  const cnt = async (method, name) => { await m.flagBySolid(mesh, [model], { name, label: 'Y', mode: 'inside', method }); const col = model.paintCols.find((c) => c.name === name); let n = 0; for (const c of col.codes) if (c) n++; return n; };
+  const w = await cnt('winding', 'ZW');
+  const pk = await cnt('peel', 'ZP');
+  return { w, pk };
+});
+chk(`peel engine: matches winding on a box within the model (winding ${peelP.w}, peel ${peelP.pk})`, peelP.pk > 0 && peelP.pk === peelP.w);
+
 // ── 4b. mesh export: OBJ named object + LFM round-trip, exact world coords ──
 const mex = await p.evaluate(async () => {
   const m = window._micro;
