@@ -106,10 +106,7 @@ export const KINDS = {
       if (cats && kind < 0.5) {
         const v = R.pick(Object.keys(cats)), syn = R.pick(cats[v]);
         const colSyn = R.pick((vocab.catCols && vocab.catCols[catCol]) || [catCol]);
-        return { q: R.pick([`filter ${noun} to ${syn}`, `only ${syn} ${noun}`, `keep just the ${syn}`,
-          `only ${syn}`, `${syn} only`, `just ${syn}`, `keep ${syn}`, `show only ${syn}`,
-          `${colSyn} is ${syn}`, `${colSyn} = ${syn}`, `where ${colSyn} is ${syn}`]),
-          args: { clauses: [{ column: catCol, op: '=', value: v }], join: 'and' } };
+        return { q: R.pick([`filter ${noun} to ${syn}`, `only ${syn} ${noun}`, `keep just the ${syn}`, `${colSyn} is ${syn}`, `${colSyn} = ${syn}`]), args: { clauses: [{ column: catCol, op: '=', value: v }], join: 'and' } };
       }
       if (kind < 0.68) {
         if (tool.depthRange) {
