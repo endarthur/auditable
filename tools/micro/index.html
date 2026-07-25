@@ -496,9 +496,18 @@
   .fwin.busy .fwin-body::before { content: ''; position: absolute; z-index: 9; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 40% 100%; background-repeat: no-repeat; animation: fwin-busybar 1.2s linear infinite; }
   @keyframes fwin-busybar { from { background-position: -60% 0; } to { background-position: 180% 0; } }
   /* the results row inside the sticky analysis footer */
-  /* the results row: an even grid, plot actions over result actions — never a ragged wrap */
+  /* ── footer grammar ─────────────────────────────────────────────────────
+     Every fixed zone in a float is a DESIGNED row, not an append pile:
+     · rail foot   — Run (primary, full width) · recipe ghost · results grid
+     · results     — an even grid, plot actions over result actions
+     · mixed bar   — config left, results pushed right (validate)
+     · action foot — right-aligned, the primary (filled) last (lineage, dialogs)
+     · adders (+…) — dashed ghosts: they add content, they don't act */
   .sw-foot .pp-exp { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
   .sw-foot .pp-exp .awin-btn { width: 100%; text-align: center; padding: 3px 0; }
+  .awin-ctrls .pp-exp { margin-left: auto; }
+  .awin-ctrls.rt { justify-content: flex-end; }
+  .rw-actions { display: flex; gap: 6px; justify-content: flex-end; align-items: center; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
   .awin-ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 5px 7px; border-top: 1px solid var(--border); background: var(--panel); }
   .awin-ctrls select, .awin-btn { font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; cursor: pointer; }
   .awin-ctrls label { font: 11px monospace; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
@@ -4482,14 +4491,14 @@ function openRoutineWindow(r0) {
     list.textContent = '';
     renderSteps(steps, list, 0);
     const addBar = document.createElement('div'); addBar.className = 'rw-bar';
-    const addS = document.createElement('button'); addS.className = 'awin-btn'; addS.textContent = '+ run a recipe';
+    const addS = document.createElement('button'); addS.className = 'sw-add'; addS.textContent = '+ run a recipe';
     addS.onclick = () => { steps.push({ recipe: '' }); render(); };
-    const addI = document.createElement('button'); addI.className = 'awin-btn'; addI.textContent = '+ inline step';
+    const addI = document.createElement('button'); addI.className = 'sw-add'; addI.textContent = '+ inline step';
     addI.title = 'a step configured in place — no saved recipe needed';
     addI.onclick = () => { steps.push({ tool: 'gt' }); render(); };
-    const addE = document.createElement('button'); addE.className = 'awin-btn'; addE.textContent = '+ for-each block';
+    const addE = document.createElement('button'); addE.className = 'sw-add'; addE.textContent = '+ for-each block';
     addE.onclick = () => { steps.push({ each: [{ var1: '' }], steps: [{ recipe: '' }] }); render(); };
-    const addP = document.createElement('button'); addP.className = 'awin-btn'; addP.textContent = '+ params';
+    const addP = document.createElement('button'); addP.className = 'sw-add'; addP.textContent = '+ params';
     addP.title = 'bind a key→value sheet as scalars for the steps below';
     addP.onclick = () => { steps.push({ params: { from: '', as: 'g' } }); render(); };
     addBar.append(addS, addI, addE, addP);
@@ -4497,7 +4506,7 @@ function openRoutineWindow(r0) {
   }
   render();
   // ── preview / save / run ──
-  const bar = document.createElement('div'); bar.className = 'rw-bar'; bar.style.marginTop = '8px';
+  const bar = document.createElement('div'); bar.className = 'rw-actions';
   const prevB = document.createElement('button'); prevB.className = 'awin-btn'; prevB.textContent = 'Preview'; prevB.title = 'enumerate every step and report path — nothing runs';
   const saveB = document.createElement('button'); saveB.className = 'awin-btn'; saveB.textContent = 'Save';
   const runB = document.createElement('button'); runB.className = 'awin-btn btn-p'; runB.textContent = 'Save & Run';
@@ -5576,7 +5585,7 @@ function openCalcWindow(L, selIdx) {
       $('#meta').textContent = `ƒ ${name} ${cur ? 'updated' : 'added'} — it works in the filter, color ramps, GT/swath, the record panel, and exports`;
     }
     const ctr = document.createElement('div'); ctr.className = 'awin-ctrls'; ctr.style.cssText = 'border-top:none;background:none;padding:5px 0;';
-    const saveB = document.createElement('button'); saveB.className = 'awin-btn'; saveB.textContent = cur ? 'save' : 'add column';
+    const saveB = document.createElement('button'); saveB.className = 'awin-btn btn-p'; saveB.textContent = cur ? 'save' : 'add column';
     saveB.onclick = () => doSave(false);
     ctr.appendChild(saveB);
     if (cur) {
@@ -5608,10 +5617,10 @@ function openLineageWindow(L) {
   win.body.style.cssText += 'display:flex;flex-direction:column';
   const tree = document.createElement('div'); tree.className = 'lin-tree'; tree.style.cssText = 'flex:1;overflow:auto;padding:6px 4px';
   renderLineageTree(tree, L.lineage, 0);
-  const foot = document.createElement('div'); foot.className = 'awin-ctrls';
-  const rep = document.createElement('button'); rep.className = 'awin-btn'; rep.textContent = 'Export report (HTML)…'; rep.onclick = () => exportLineageReport(L);
+  const foot = document.createElement('div'); foot.className = 'awin-ctrls rt';
   const cpy = document.createElement('button'); cpy.className = 'awin-btn'; cpy.textContent = 'Copy JSON'; cpy.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(L.lineage, null, 2)); $('#meta').textContent = 'lineage JSON copied'; };
-  foot.append(rep, cpy);
+  const rep = document.createElement('button'); rep.className = 'awin-btn btn-p'; rep.textContent = 'Export report (HTML)…'; rep.onclick = () => exportLineageReport(L);
+  foot.append(cpy, rep);
   win.body.append(tree, foot);
   _linWins.set(L.id, win);
 }
@@ -8220,7 +8229,7 @@ function pickSheets(name, sheets) {
     const bar = document.createElement('div'); bar.className = 'rw-bar'; bar.style.marginTop = '8px';
     const note = document.createElement('span'); note.className = 'lbl'; note.style.flex = '1';
     note.textContent = 'sheets open as tables';
-    const ok = document.createElement('button'); ok.className = 'awin-btn'; ok.textContent = 'Open';
+    const ok = document.createElement('button'); ok.className = 'awin-btn btn-p'; ok.textContent = 'Open';
     const cancel = document.createElement('button'); cancel.className = 'awin-btn'; cancel.textContent = 'Cancel';
     bar.append(note, cancel, ok);
     win.body.appendChild(bar);
