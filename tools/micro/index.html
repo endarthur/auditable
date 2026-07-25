@@ -496,7 +496,9 @@
   .fwin.busy .fwin-body::before { content: ''; position: absolute; z-index: 9; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 40% 100%; background-repeat: no-repeat; animation: fwin-busybar 1.2s linear infinite; }
   @keyframes fwin-busybar { from { background-position: -60% 0; } to { background-position: 180% 0; } }
   /* the results row inside the sticky analysis footer */
-  .sw-foot .pp-exp { display: flex; gap: 4px; flex-wrap: wrap; }
+  /* the results row: an even grid, plot actions over result actions — never a ragged wrap */
+  .sw-foot .pp-exp { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .sw-foot .pp-exp .awin-btn { width: 100%; text-align: center; padding: 3px 0; }
   .awin-ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 5px 7px; border-top: 1px solid var(--border); background: var(--panel); }
   .awin-ctrls select, .awin-btn { font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; cursor: pointer; }
   .awin-ctrls label { font: 11px monospace; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
