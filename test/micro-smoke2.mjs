@@ -1651,6 +1651,26 @@ await p.close();
     r3.footBtns.some((x) => x.includes('layer')) && r3.footBtns.some((x) => x.includes('table')) && r3.footBtns.some((x) => x.includes('png')));
   chk(`window system: floats are opaque (${r3.opaque})`, r3.opaque === 'rgb(22, 22, 22)');
   chk(`window system: minimize → strip chip (${r3.chipCount}), chip restores + raises`, r3.chipCount === 1 && r3.hidden && r3.restored && r3.topAccent);
+
+  // ── the solid RECIPE path: params → resolve by name → flag column lands ──
+  const solidR = await wp.evaluate(async () => {
+    // a closed OBJ box over the left half of the 20×10 block sheet
+    const x0 = 611995, x1 = 612095, y0 = 7764995, y1 = 7765095, z0 = 350, z1 = 450;
+    const V = [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]];
+    const T = [[1, 3, 2], [1, 4, 3], [5, 6, 7], [5, 7, 8], [1, 2, 6], [1, 6, 5], [3, 4, 8], [3, 8, 7], [1, 5, 8], [1, 8, 4], [2, 3, 7], [2, 7, 6]];
+    const obj = V.map((v) => `v ${v.join(' ')}`).join('\n') + '\n' + T.map((t) => `f ${t.join(' ')}`).join('\n');
+    await window._micro.openBlob(new Blob([obj]), 'box.obj', 'add');
+    await new Promise((z) => setTimeout(z, 800));
+    const err = await window._micro.runSolidRecipe({ geometry: 'box.obj', do: 'flag', which: 'inside', column: 'INBOX', value: 'IN', targets: ['w.csv'] }).then(() => null, (e) => e.message);
+    const L = window._micro.layers().find((x) => x.name === 'w.csv');
+    const col = (L.paintCols || []).find((c) => c.name === 'INBOX');
+    const hasCol = window._micro.layerHasColumn('INBOX', 'w.csv');
+    // a bad recipe fails with a NAMED layer, before anything runs
+    const bad = await window._micro.runSolidRecipe({ geometry: 'nope.obj', do: 'flag' }).then(() => null, (e) => e.message);
+    return { err, hasCol, colKind: col && col.kind, bad };
+  });
+  chk(`solid recipe: params resolve by name and the flag column lands (INBOX, ${solidR.colKind})`, solidR.err === null && solidR.hasCol);
+  chk(`solid recipe: a missing layer fails NAMED before running ("${solidR.bad}")`, /nope\.obj/.test(solidR.bad || ''));
   await wp.close();
 }
 

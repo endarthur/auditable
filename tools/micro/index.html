@@ -853,7 +853,7 @@
   <div id="brDlg"><div class="box"><div class="hd"><span>rename layers</span><button id="brCancel">×</button></div><div class="bd" id="brDlgBody"></div><div class="dh-foot"><span id="brDlgMsg"></span><button id="brNot">Cancel</button><button id="brGo">Apply</button></div></div></div>
   <div id="meDlg"><div class="box"><div class="hd"><span>export mesh</span><button id="meCancel">×</button></div><div class="bd" id="meDlgBody"></div><div class="dh-foot"><span id="meDlgMsg"></span><button id="meNot">Cancel</button><button id="meGo">Export</button></div></div></div>
   <div id="plDlg"><div class="box"><div class="hd"><span>opening project</span><button id="plClose">×</button></div><div class="bd" id="plDlgBody"></div></div></div>
-  <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbGo">Run</button></div></div></div>
+  <div id="sbDlg"><div class="box"><div class="hd"><span>select by solid</span><button id="sbCancel">×</button></div><div class="bd" id="sbDlgBody"></div><div id="sbProg" style="display:none"><div id="sbProgFill"></div></div><div class="dh-foot"><span id="sbDlgMsg"></span><button id="sbRcp" class="rcp">save as recipe…</button><button id="sbGo">Run</button></div></div></div>
   <div id="adDlg"><div class="box"><div class="hd"><span>assign domains</span><button id="adCancel">×</button></div><div class="bd" id="adDlgBody"></div><div id="adProg" style="display:none"><div id="adProgFill"></div></div><div class="dh-foot"><span id="adDlgMsg"></span><button id="adGo">Assign</button></div></div></div>
   <div id="fdrawer" class="fdw"></div>
   <div id="ngDlg"><div class="box"><div class="hd"><span>new grid / block model</span><button id="ngCancel">×</button></div><div class="bd" id="ngDlgBody"></div><div class="dh-foot"><span id="ngDlgMsg"></span><button id="ngGo">Create</button></div></div></div>
@@ -3641,7 +3641,7 @@ function applyAnalysisGeo(L, kind, win) {
 // in and Scan folder picks it up. Series reference layers BY NAME; a missing
 // primary gets a one-question remap — that prompt IS the parameter binding. ──
 let _recipes = [];                                          // { name, tool, params, file }
-const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath', stats: 'stats', figure: 'figure', calccols: 'calc columns', routine: 'routine' };
+const RECIPE_TOOLS = { gt: 'grade-tonnage', swath: 'swath', stats: 'stats', figure: 'figure', calccols: 'calc columns', solid: 'by solid / surface', routine: 'routine' };
 // apply a calc-column SET to a layer — REPLACE on same name (idempotency is
 // gospel: run-twice == run-once), append the new; invalid expressions are
 // skipped and named. The recipe-facing form of Properties → columns.
@@ -3898,6 +3898,9 @@ function routineTargets(tool, params, slug, P) {
     for (const c of params.cols || []) if (c && c.name) t.columns.push({ layer, name: c.name, kind: 'ƒ' });
   } else if (tool === 'figure') {
     if (params.out) t.figures.push(String(params.out));
+  } else if (tool === 'solid') {
+    if (params.do === 'flag') for (const layer of params.targets || []) t.columns.push({ layer, name: params.column, kind: 'flag' });
+    else if (params.do === 'ratio' && params.model) t.columns.push({ layer: params.model, name: params.column, kind: 'fraction' });
   }
   return t;
 }
@@ -4080,7 +4083,9 @@ async function runRoutine(r, opts = {}) {
           await resultToLayer(path, tsv);
         }
         el.querySelector('.fwin-head button:last-child').click();   // tidy: close the step's window
-      } else if (tool === 'calccols' || tool === 'interp' || tool === 'figure') {
+      } else if (tool === 'solid') {
+        await runSolidRecipe(merged.params);              // long-running (winding/peel) — awaited, not settled
+      } else if (tool === 'calccols' || tool === 'figure') {
         runRecipe(merged, true);
         await new Promise((r2) => setTimeout(r2, 400));     // engine steps settle; figure runs its own flow
       } else throw new Error(`unsupported tool in a routine: ${tool}`);
@@ -4172,6 +4177,11 @@ function runRecipe(r, andRun = true) {
   if (andRun && Array.isArray(r.inputs) && r.inputs.length) { openInputsDialog(r); return; }   // ask-me-first: the generated dialog runs the substituted copy
   if (r.tool === 'routine') { if (andRun) runRoutine(r); else openRoutineWindow(r); return; }
   if (r.tool === 'figure') { runFigureRecipe(r.params); return; }   // camera-based — no layer to resolve
+  if (r.tool === 'solid') {                                // by-geometry — resolves its own layers
+    if (!andRun) { openSolidRecipeConfigured(r.params); return; }
+    runSolidRecipe(r.params).catch((e) => { $('#meta').textContent = `recipe “${r.name}”: ${e.message}`; });
+    return;
+  }
   const open2 = (Lp) => {
     if (r.tool === 'calccols') {
       const { applied, bad } = applyCalcCols(Lp, r.params.cols);
@@ -5958,34 +5968,128 @@ $('#sbCancel').onclick = () => {
   if (_sbRunning) sbCancelActive();                        // aborts the worker + bumps the epochs
   $('#sbDlg').classList.remove('show'); _sbDlg = null; _sbRunning = false;
 };
+// ── the by-geometry evaluation core — shared by the dialog's Run and the
+// solid RECIPE path (same semantics, different progress surface) ──
+async function sbExecute(d, onProgress) {
+  const meshL = layerById(d.solid); if (!meshL) return { ok: false, msg: 'geometry layer is gone' };
+  const meshB = d.side === 'between' ? layerById(d.surfB) : null;
+  const topo2 = meshL._solidMesh;
+  const rMode = (meshL.docs.gridDoc) || (topo2 && !topo2.closed) ? d.side : 'inside';
+  const method = (topo2 && !meshL.docs.gridDoc) ? (d.method || 'winding') : 'winding';   // peel handles closed solids AND open surfaces; grids stay winding
+  if (d.act === 'ratio') {
+    const L = layerById(d.ratioLid); if (!L) return { ok: false, msg: 'the target model layer is gone' };
+    const defName = sbDefaultName(d);
+    const col = await ratioBySolid(meshL, L, { name: (d.name || defName).trim() || defName, res: d.res, mode: rMode, meshB, method, onProgress });
+    if (!col) return { ok: false, msg: $('#meta').textContent };
+  } else if (d.act === 'flag') {
+    const defName = sbDefaultName(d);
+    const made = await flagBySolid(meshL, _layers.filter((L) => d.targets.has(L.id)), {
+      name: (d.flagName || defName).trim() || defName, label: d.flagLabel || 'IN', mode: d.side, meshB, method, onProgress,
+    });
+    if (!made) return { ok: false, msg: $('#meta').textContent || 'no layer took the column' };
+  } else {
+    await selectBySolid(meshL, { mode: d.side, meshB, targets: _layers.filter((L) => d.targets.has(L.id)), combine: d.combine, method, onProgress });
+  }
+  return { ok: true };
+}
+// dialog state → op-shaped recipe params (layers by NAME, like every recipe)
+function sbCfgOf(d) {
+  const nm = (id) => { const L = layerById(id); return L ? L.name : null; };
+  const meshL = layerById(d.solid);
+  const p = { geometry: nm(d.solid), do: d.act, which: d.side };
+  if (meshL && meshL._forceClosed && !meshL.docs.gridDoc) p.forceClosed = true;
+  if (d.side === 'between') p.lower = nm(d.surfB);
+  if (d.method === 'peel' && meshL && !meshL.docs.gridDoc) p.engine = 'peel';
+  if (d.act === 'ratio') {
+    p.model = nm(d.ratioLid);
+    p.column = (d.name || sbDefaultName(d)).trim() || sbDefaultName(d);
+    p.probes = d.res.slice();
+  } else {
+    p.targets = _layers.filter((L) => d.targets.has(L.id)).map((L) => L.name);
+    if (d.act === 'flag') { p.column = (d.flagName || sbDefaultName(d)).trim() || sbDefaultName(d); p.value = d.flagLabel || 'IN'; }
+    if (d.act === 'select') p.combine = d.combine;
+  }
+  return p;
+}
+// recipe params → dialog state. Throws with a named-layer message when a
+// referenced layer isn't loaded (routines surface it before anything runs).
+const sbFindLayer = (name) => _layers.find((x) => x.name === name || x.label === name);
+async function sbStateFromParams(p) {
+  const geomL = sbFindLayer(String(p.geometry || ''));
+  if (!geomL) throw new Error(`solid recipe: geometry layer “${p.geometry || '?'}” is not loaded`);
+  if (p.forceClosed != null && !geomL.docs.gridDoc && !!geomL._forceClosed !== !!p.forceClosed) {
+    geomL._forceClosed = !!p.forceClosed;                  // same cache-clear the dialog's toggle does
+    geomL._solidMesh = null; geomL._solidBVH = null; geomL._variants = null;
+    if (geomL._windingEngine && geomL._windingEngine.terminate) geomL._windingEngine.terminate();
+    if (geomL._peelEngine && geomL._peelEngine.terminate) geomL._peelEngine.terminate();
+    geomL._windingEngine = null; geomL._windingMeshes = null; geomL._peelEngine = null; geomL._peelMeshes = null;
+  }
+  if (!geomL.docs.gridDoc) await solidOrientedMesh(geomL);
+  const act = ['select', 'flag', 'ratio'].includes(p.do) ? p.do : 'flag';
+  const d = {
+    solid: geomL.id, act, side: p.which || null, combine: p.combine || 'replace',
+    method: p.engine === 'peel' ? 'peel' : 'winding',
+    res: Array.isArray(p.probes) && p.probes.length === 3 ? p.probes.map((v) => Math.max(1, +v || 1)) : [3, 3, 3],
+    name: p.column || null, flagName: p.column || null, flagLabel: p.value || 'IN',
+    targets: new Set(), ratioLid: null, surfB: null,
+  };
+  const topo = geomL._solidMesh;
+  const isSurf = !!geomL.docs.gridDoc || (topo && !topo.closed);
+  const sides = isSurf ? ['below', 'above', 'between'] : ['inside', 'outside'];
+  if (!d.side || !sides.includes(d.side)) d.side = sides[0];
+  if (d.side === 'between') {
+    const low = sbFindLayer(String(p.lower || ''));
+    if (!low) throw new Error(`solid recipe: “between” needs the lower surface “${p.lower || '?'}” loaded`);
+    d.surfB = low.id;
+  }
+  if (act === 'ratio') {
+    const M = sbFindLayer(String(p.model || ''));
+    const doc = M && M.docs.blockDoc;
+    if (!doc || !(doc.grid || (doc.header && doc.header.grid))) throw new Error(`solid recipe: fraction needs the regular block model “${p.model || '?'}” loaded`);
+    d.ratioLid = M.id;
+  } else {
+    const wanted = Array.isArray(p.targets) && p.targets.length ? p.targets.map(String) : null;
+    const elements = _layers.filter((L) => L.kind !== 'mesh' && !L.docs.gridDoc && attrRowCountOf(L) > 0);
+    for (const L of elements) if (wanted ? wanted.some((n2) => L.name === n2 || L.label === n2) : L.visible) d.targets.add(L.id);
+    if (wanted) {
+      const missing = wanted.filter((n2) => !elements.some((L) => L.name === n2 || L.label === n2));
+      if (missing.length) throw new Error(`solid recipe: target layer${missing.length > 1 ? 's' : ''} not loaded — ${missing.join(', ')}`);
+    }
+    if (!d.targets.size) throw new Error('solid recipe: no target layers loaded');
+  }
+  return d;
+}
+async function runSolidRecipe(params) {                    // headless: resolve, evaluate, report
+  const d = await sbStateFromParams(params);
+  const prog = (frac, label) => { if (label && frac > 0 && frac < 1) $('#meta').textContent = `by solid — ${label} ${Math.round(frac * 100)}%`; };
+  const r = await sbExecute(d, prog);
+  if (!r.ok) throw new Error(r.msg || 'by-solid evaluation failed');
+  $('#meta').textContent = `by solid: done${params.column ? ` — ${params.column}` : ''}`;
+  return r;
+}
+async function openSolidRecipeConfigured(params) {         // preview: the dialog, configured, not run
+  try {
+    _sbDlg = await sbStateFromParams(params);
+    renderSolidDialog();
+    $('#sbDlg').classList.add('show');
+  } catch (e) { $('#meta').textContent = e.message; }
+}
+$('#sbRcp').onclick = () => {
+  const d = _sbDlg; if (!d) return;
+  const meshL = layerById(d.solid);
+  const base = (meshL ? (meshL.label || meshL.name) : 'solid').replace(/\.[^.]+$/, '');
+  saveRecipe('solid', sbCfgOf(d), `${base} ${d.act === 'ratio' ? 'fraction' : d.act} by solid`);
+};
 $('#sbGo').onclick = async () => {
   const d = _sbDlg; if (!d) return;
-  const meshL = layerById(d.solid); if (!meshL) return;
   const btn = $('#sbGo');
   btn.disabled = true;
   _sbRunning = true;
   for (const el of $('#sbDlgBody').querySelectorAll('input, select')) el.disabled = true;
   sbProgress(0.001, 'starting');
   try {
-    const meshB = d.side === 'between' ? layerById(d.surfB) : null;
-    const geomL = layerById(d.solid);
-    const topo2 = geomL && geomL._solidMesh;
-    const rMode = (geomL && geomL.docs.gridDoc) || (topo2 && !topo2.closed) ? d.side : 'inside';
-    const method = (topo2 && !(geomL && geomL.docs.gridDoc)) ? (d.method || 'winding') : 'winding';   // peel handles closed solids AND open surfaces; grids stay winding
-    if (d.act === 'ratio') {
-      const L = layerById(d.ratioLid); if (!L) return;
-      const defName = sbDefaultName(d);
-      const col = await ratioBySolid(meshL, L, { name: (d.name || defName).trim() || defName, res: d.res, mode: rMode, meshB, method, onProgress: sbProgress });
-      if (!col) { sbProgress(0, ''); $('#sbDlgMsg').textContent = $('#meta').textContent; return; }
-    } else if (d.act === 'flag') {
-      const defName = sbDefaultName(d);
-      const made = await flagBySolid(meshL, _layers.filter((L) => d.targets.has(L.id)), {
-        name: (d.flagName || defName).trim() || defName, label: d.flagLabel || 'IN', mode: d.side, meshB, method, onProgress: sbProgress,
-      });
-      if (!made) { sbProgress(0, ''); $('#sbDlgMsg').textContent = $('#meta').textContent || 'no layer took the column'; return; }
-    } else {
-      await selectBySolid(meshL, { mode: d.side, meshB, targets: _layers.filter((L) => d.targets.has(L.id)), combine: d.combine, method, onProgress: sbProgress });
-    }
+    const r = await sbExecute(d, sbProgress);
+    if (!r.ok) { sbProgress(0, ''); $('#sbDlgMsg').textContent = r.msg || ''; return; }
     if (_sbDlg) { $('#sbDlg').classList.remove('show'); _sbDlg = null; }
   } finally {
     _sbRunning = false;
@@ -16830,7 +16934,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(hit);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
