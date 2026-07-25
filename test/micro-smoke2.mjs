@@ -1610,6 +1610,50 @@ await p.close();
   await nl.close();
 }
 
+// ── §23 window system: dialog lifecycle · results footer · minimize strip ──
+// Guards the 2026-07-25 coherence pass: dialogs stack on the shared z counter
+// (later on top), Escape unwinds them newest-first, floats are opaque, every
+// analysis foot carries the shared results row, minimize goes to a strip chip.
+{
+  const wp = await mkPage('sm2win');
+  await wp.evaluate(() => {
+    let csv = 'XC,YC,ZC,FE\n';
+    for (let i = 0; i < 200; i++) csv += `${612000 + (i % 20) * 10},${7765000 + ((i / 20) | 0) * 10},400,${30 + i % 20}\n`;
+    return window._micro.openBlob(new Blob([csv]), 'w.csv', 'replace');
+  });
+  await wp.waitForTimeout(700);
+  await wp.evaluate(() => { window._micro.openNewDialog(); window._micro.openExportDialog(window._micro.layers()[0]); });
+  await wp.waitForTimeout(250);
+  const z1 = await wp.evaluate(() => ({ ng: +document.querySelector('#ngDlg').style.zIndex, ex: +document.querySelector('#exDlg').style.zIndex, ngShow: document.querySelector('#ngDlg').classList.contains('show'), exShow: document.querySelector('#exDlg').classList.contains('show'), ngModeless: document.querySelector('#ngDlg').classList.contains('modeless') }));
+  chk(`window system: two config dialogs coexist modeless, later on top (ng z${z1.ng} < ex z${z1.ex})`, z1.ngShow && z1.exShow && z1.ngModeless && z1.ex > z1.ng);
+  await wp.keyboard.press('Escape'); await wp.waitForTimeout(120);
+  await wp.keyboard.press('Escape'); await wp.waitForTimeout(120);
+  const z2 = await wp.evaluate(() => ({ ngShow: document.querySelector('#ngDlg').classList.contains('show'), exShow: document.querySelector('#exDlg').classList.contains('show') }));
+  chk('window system: Escape unwinds dialogs newest-first to none', !z2.ngShow && !z2.exShow);
+  const r3 = await wp.evaluate(async () => {
+    const L = window._micro.layers()[0];
+    window._micro.openGradeTonnage(L);
+    await new Promise((z) => setTimeout(z, 300));
+    const win = [...document.querySelectorAll('.fwin')].pop();
+    const footBtns = [...win.querySelectorAll('.sw-foot .pp-exp button')].map((x) => x.textContent);
+    const opaque = getComputedStyle(win).backgroundColor;
+    const minB = win.querySelector('.fwin-head button');   // buttons are [minimize, close]
+    minB.click();
+    const chipCount = document.querySelectorAll('#winStrip .win-chip').length;
+    const hidden = win.style.display === 'none';
+    document.querySelector('#winStrip .win-chip').click();
+    const restored = win.style.display !== 'none' && document.querySelectorAll('#winStrip .win-chip').length === 0;
+    const topAccent = win.classList.contains('top');
+    window._micro.closeAllWindows();
+    return { footBtns, opaque, chipCount, hidden, restored, topAccent };
+  });
+  chk(`window system: the results row lives in the analysis foot [${r3.footBtns.join(' · ')}]`,
+    r3.footBtns.some((x) => x.includes('layer')) && r3.footBtns.some((x) => x.includes('table')) && r3.footBtns.some((x) => x.includes('png')));
+  chk(`window system: floats are opaque (${r3.opaque})`, r3.opaque === 'rgb(22, 22, 22)');
+  chk(`window system: minimize → strip chip (${r3.chipCount}), chip restores + raises`, r3.chipCount === 1 && r3.hidden && r3.restored && r3.topAccent);
+  await wp.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

@@ -485,6 +485,18 @@
   .btn-p { background: var(--accent) !important; color: #121212 !important; border: 1px solid var(--accent) !important; border-radius: 3px; font-weight: 600; cursor: pointer; }
   .rcp { border-style: dashed !important; border-color: var(--bd2) !important; background: none !important; color: var(--muted) !important; }
   .rcp:hover { color: var(--text-hi) !important; border-color: var(--accent) !important; }
+  /* the minimized-window strip (a slim taskbar above the status bar) */
+  #winStrip { position: absolute; left: 8px; bottom: 26px; display: flex; gap: 4px; z-index: 55; max-width: 72vw; flex-wrap: wrap; }
+  #winStrip:empty { display: none; }
+  .win-chip { font-family: var(--mono); font-size: 11px; background: #161616; color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 2px 10px; cursor: pointer; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .win-chip:hover { color: var(--text-hi); border-color: var(--accent); }
+  /* drag-to-edge half-snap preview */
+  #snapPreview { position: absolute; z-index: 54; background: rgba(217, 122, 60, 0.10); border: 1px dashed var(--accent); border-radius: 4px; pointer-events: none; }
+  /* a busy window also runs a thin bar across the body top */
+  .fwin.busy .fwin-body::before { content: ''; position: absolute; z-index: 9; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 40% 100%; background-repeat: no-repeat; animation: fwin-busybar 1.2s linear infinite; }
+  @keyframes fwin-busybar { from { background-position: -60% 0; } to { background-position: 180% 0; } }
+  /* the results row inside the sticky analysis footer */
+  .sw-foot .pp-exp { display: flex; gap: 4px; flex-wrap: wrap; }
   .awin-ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 5px 7px; border-top: 1px solid var(--border); background: var(--panel); }
   .awin-ctrls select, .awin-btn { font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; cursor: pointer; }
   .awin-ctrls label { font: 11px monospace; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
@@ -3442,16 +3454,16 @@ function openGradeTonnage(L, ropts) {
     const seg = document.createElement('div'); seg.className = 'sw-seg'; seg.title = 'all rows · rows matching each layer\'s current filter · the 3D selection (re-runs as it changes)';
     for (const [v, t] of [['all', 'all'], ['filtered', 'filt'], ['selection', 'sel']]) { const bt = document.createElement('button'); bt.className = 'sw-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; buildRail(); run(); }; seg.append(bt); } scRow.append(scL, seg); vSec.append(scRow);
     vSec.append(rangesRow(st, () => { if (st.scan) plot(); }, { x: 'cutoff', l: 't', r: 'grade' }));
-    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `gt-${(L.label || L.name).replace(/\.[^.]+$/, '')}.png`, tableTSV, 'grade-tonnage')); vSec.append(exRow);
     rail.append(vSec);
     // ── Footer: Run + save-as-recipe + stale + progress ──
     const foot = document.createElement('div'); foot.className = 'sw-foot';
     runBtn = document.createElement('button'); runBtn.className = 'sw-run'; runBtn.textContent = 'Run'; runBtn.onclick = run;
     const rcpBtn = document.createElement('button'); rcpBtn.className = 'sw-add rcp'; rcpBtn.textContent = 'save as recipe…'; rcpBtn.title = 'save this setup as a named, re-runnable YAML file in the project (Tools → Recipes)';
     rcpBtn.onclick = () => saveRecipe('gt', cfgOf(), `${(L.label || L.name).replace(/\.[^.]+$/, '')} grade-tonnage`);
+    const resRow = plotExportBtns(cv, () => `gt-${(L.label || L.name).replace(/\.[^.]+$/, '')}.png`, tableTSV, 'grade-tonnage');
     staleEl = document.createElement('div'); staleEl.className = 'sw-stale'; staleEl.textContent = st.scan && st.stale ? '↻ config changed — Run to update' : '';
     progEl = document.createElement('div'); progEl.className = 'sw-prog';
-    foot.append(runBtn, rcpBtn, staleEl, progEl); rail.append(foot);
+    foot.append(runBtn, rcpBtn, resRow, staleEl, progEl); rail.append(foot);
   }
   _gtWins.set(L.id, { win, redraw: run, st });
   buildRail(); plot();
@@ -3533,10 +3545,11 @@ async function resultToLayer(title, tsv, lineageOp) {
   return L;
 }
 function plotExportBtns(cv, nameFn, tableFn, group) {
-  if (tableFn) setTimeout(() => { const h = cv.closest('.fwin'); if (h) h._tableTSV = tableFn; });   // routines read the table from here
+  // THE results row — the same actions in the same order in every analysis
+  // window (⤓ png · ⧉ copy when there is a plot; ⇥ layer · ⧉ table when
+  // there is a table), mounted in the sticky footer under Run.
   const wrap = document.createElement('span'); wrap.className = 'pp-exp';
-  const save = document.createElement('button'); save.className = 'awin-btn'; save.textContent = '⤓ png'; save.title = 'save the plot as PNG';
-  save.onclick = () => cv.toBlob((blob) => { if (!blob) return; const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nameFn(); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); $('#meta').textContent = `saved ${nameFn()}`; }, 'image/png');
+  if (tableFn) setTimeout(() => { const h = (cv || wrap).closest('.fwin'); if (h) h._tableTSV = tableFn; });   // routines read the table from here
   const keep = document.createElement('button'); keep.className = 'awin-btn'; keep.textContent = '⇥ layer'; keep.title = 'keep the result as a TABLE LAYER — filter it, join it, compare it against another run';
   keep.onclick = async () => {
     const t = tableFn && tableFn();
@@ -3544,13 +3557,18 @@ function plotExportBtns(cv, nameFn, tableFn, group) {
     const leaf = nameFn().replace(/\.png$/i, '');
     await resultToLayer(group ? `${group}/${leaf}` : leaf, t);   // grouped by the kind of analysis
   };
-  const copy = document.createElement('button'); copy.className = 'awin-btn'; copy.textContent = '⧉ copy'; copy.title = 'copy the plot to the clipboard';
-  copy.onclick = () => cv.toBlob(async (blob) => {
-    if (!blob) return;
-    try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); $('#meta').textContent = 'plot copied to clipboard'; }
-    catch (e) { $('#meta').textContent = `copy failed (${e.message}) — use ⤓ png`; }
-  }, 'image/png');
-  wrap.append(save, copy, ...(tableFn ? [keep] : []));
+  if (cv) {
+    const save = document.createElement('button'); save.className = 'awin-btn'; save.textContent = '⤓ png'; save.title = 'save the plot as PNG';
+    save.onclick = () => cv.toBlob((blob) => { if (!blob) return; const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nameFn(); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); $('#meta').textContent = `saved ${nameFn()}`; }, 'image/png');
+    const copy = document.createElement('button'); copy.className = 'awin-btn'; copy.textContent = '⧉ copy'; copy.title = 'copy the plot to the clipboard';
+    copy.onclick = () => cv.toBlob(async (blob) => {
+      if (!blob) return;
+      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); $('#meta').textContent = 'plot copied to clipboard'; }
+      catch (e) { $('#meta').textContent = `copy failed (${e.message}) — use ⤓ png`; }
+    }, 'image/png');
+    wrap.append(save, copy);
+  }
+  if (tableFn) wrap.append(keep);
   if (tableFn) {
     const tbl = document.createElement('button'); tbl.className = 'awin-btn'; tbl.textContent = '⧉ table'; tbl.title = 'copy the computed numbers as TSV (paste into a spreadsheet)';
     tbl.onclick = async () => {
@@ -5026,18 +5044,16 @@ function openSwath(L, ropts) {
     for (const [v, t] of [['all', 'all'], ['filtered', 'filt'], ['selection', 'sel']]) { const bt = document.createElement('button'); bt.className = 'sw-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; markStale(); buildRail(); }; seg.append(bt); } scRow.append(scL, seg); vSec.append(scRow);
     // manual plot ranges (display-only — re-plots from the scan)
     vSec.append(rangesRow(st, () => { if (st.scan) plot(); }, { x: 'x', l: 'grade', r: 'bars' }));
-    // export / copy the plot
-    const exRow = document.createElement('div'); exRow.className = 'sw-row'; exRow.append(plotExportBtns(cv, () => `swath-${(zebraL().label || zebraL().name).replace(/\.[^.]+$/, '')}-${(st.scan ? st.scan.dirNames : swathDirNames(st))[st.axis].split(' ')[0].replace(/[^\w-]/g, '')}.png`, tableTSV, 'swaths'));
-    vSec.append(exRow);
     rail.append(vSec);
     // ── Footer: Run + save-as-recipe + stale + progress ──
     const foot = document.createElement('div'); foot.className = 'sw-foot';
     runBtn = document.createElement('button'); runBtn.className = 'sw-run'; runBtn.textContent = 'Run'; runBtn.onclick = run;
     const rcpBtn = document.createElement('button'); rcpBtn.className = 'sw-add rcp'; rcpBtn.textContent = 'save as recipe…'; rcpBtn.title = 'save this setup as a named, re-runnable YAML file in the project (Tools → Recipes)';
     rcpBtn.onclick = () => saveRecipe('swath', cfgOf(), `${(L.label || L.name).replace(/\.[^.]+$/, '')} swath`);
+    const resRow = plotExportBtns(cv, () => `swath-${(zebraL().label || zebraL().name).replace(/\.[^.]+$/, '')}-${(st.scan ? st.scan.dirNames : swathDirNames(st))[st.axis].split(' ')[0].replace(/[^\w-]/g, '')}.png`, tableTSV, 'swaths');
     staleEl = document.createElement('div'); staleEl.className = 'sw-stale'; staleEl.textContent = st.scan && st.stale ? '↻ config changed — Run to update' : '';
     progEl = document.createElement('div'); progEl.className = 'sw-prog';
-    foot.append(runBtn, rcpBtn, staleEl, progEl); rail.append(foot);
+    foot.append(runBtn, rcpBtn, resRow, staleEl, progEl); rail.append(foot);
   }
   _swathWins.set(L.id, { win, redraw: run, st });          // refreshLinkedWindows gates on the scope kind
   buildRail(); buildTabs(); plot();
@@ -5208,19 +5224,15 @@ function openStats(L, ropts) {
     const seg = document.createElement('div'); seg.className = 'sw-seg'; seg.title = 'all rows · rows matching the current filter · the 3D selection';
     for (const [v, t] of [['all', 'all'], ['filtered', 'filt'], ['selection', 'sel']]) { const bt = document.createElement('button'); bt.className = 'sw-segbtn' + (st.scope === v ? ' on' : ''); bt.textContent = t; bt.onclick = () => { st.scope = v; markStale(); buildRail(); }; seg.append(bt); }
     scRow.append(scL, seg); vSec.append(scRow);
-    const exRow = document.createElement('div'); exRow.className = 'sw-row';
-    const tblB = document.createElement('button'); tblB.className = 'awin-btn'; tblB.textContent = '⧉ table'; tblB.title = 'copy the table as TSV (paste into a spreadsheet)';
-    setTimeout(() => { const h = tblB.closest('.fwin'); if (h) h._tableTSV = tableTSV; });
-    tblB.onclick = async () => { const tsv = tableTSV(); if (!tsv) { $('#meta').textContent = 'table: nothing computed yet — Run first'; return; } try { await navigator.clipboard.writeText(tsv); $('#meta').textContent = `table copied (${tsv.split('\n').length - 1} rows, TSV)`; } catch (e) { $('#meta').textContent = `copy failed (${e.message})`; } };
-    exRow.append(tblB); vSec.append(exRow);
     rail.append(vSec);
     const foot = document.createElement('div'); foot.className = 'sw-foot';
     runBtn = document.createElement('button'); runBtn.className = 'sw-run'; runBtn.textContent = 'Run'; runBtn.onclick = run;
     const rcpBtn = document.createElement('button'); rcpBtn.className = 'sw-add rcp'; rcpBtn.textContent = 'save as recipe…'; rcpBtn.title = 'save this setup as a named, re-runnable YAML file in the project (Tools → Recipes)';
     rcpBtn.onclick = () => saveRecipe('stats', cfgOf(), `${(L.label || L.name).replace(/\.[^.]+$/, '')} stats`);
+    const resRow = plotExportBtns(null, () => `stats-${(L.label || L.name).replace(/\.[^.]+$/, '')}.png`, tableTSV, 'stats');
     staleEl = document.createElement('div'); staleEl.className = 'sw-stale'; staleEl.textContent = st.scan && st.stale ? '↻ config changed — Run to update' : '';
     progEl = document.createElement('div'); progEl.className = 'sw-prog';
-    foot.append(runBtn, rcpBtn, staleEl, progEl); rail.append(foot);
+    foot.append(runBtn, rcpBtn, resRow, staleEl, progEl); rail.append(foot);
   }
   _statsWins.set(L.id, { win, redraw: run, st });
   buildRail(); render();
@@ -5314,7 +5326,7 @@ function openValidation(M) {
     const cL = document.createElement('label'); cL.textContent = 'cell'; const cI = document.createElement('input'); cI.type = 'number'; cI.step = 'any'; cI.style.width = '68px'; cI.placeholder = 'auto'; cI.value = st.cell != null ? String(st.cell) : ''; cI.title = 'decluster cell size (m) — blank = auto-sweep'; cI.onchange = () => { st.cell = cI.value === '' ? null : +cI.value; redraw(); }; cL.appendChild(cI);
     const seg = document.createElement('div'); seg.className = 'pp-seg';
     ['X', 'Y', 'Z'].forEach((nm, i) => { const bt = document.createElement('button'); bt.className = 'pp-segbtn' + (st.axis === i ? ' on' : ''); bt.textContent = nm; bt.onclick = () => { st.axis = i; for (const b2 of seg.children) b2.classList.toggle('on', b2 === bt); redraw(); }; seg.appendChild(bt); });
-    ctrls.append(dSel, mSel, sSel, cL, seg);
+    ctrls.append(dSel, mSel, sSel, cL, seg, plotExportBtns(cv, () => `validate-${(M.label || M.name).replace(/\.[^.]+$/, '')}.png`, null));
   };
   _valWins.set(M.id, { win, redraw });
   buildCtrls(); redraw();
@@ -11430,10 +11442,15 @@ applyBg();                                                 // restore the saved 
 // lineage · table · paint), a place to find, focus, tidy, and dismiss them. ──
 const openFloatWins = () => [...document.querySelectorAll('.fwin')];
 const winTitle = (el) => { const t = el.querySelector('.fwin-head .t'); return t ? t.textContent : 'window'; };
-function raiseWindow(el) { el.style.zIndex = ++_fwinZ; if (el.classList.contains('min')) { const mb = el.querySelector('.fwin-head button'); if (mb) mb.click(); } }
+function raiseWindow(el) {
+  if (el._chip) { el._chip.remove(); el._chip = null; el.style.display = ''; }   // restore from the strip
+  el.style.zIndex = ++_fwinZ;
+  document.querySelectorAll('.fwin.top').forEach((w2) => { if (w2 !== el) w2.classList.remove('top'); });
+  el.classList.add('top');                                 // the top float carries the accent head
+}
 function cascadeWindows() {
   const ws = openFloatWins(); if (!ws.length) { $('#meta').textContent = 'no open windows'; return; }
-  ws.forEach((el, i) => { if (el.classList.contains('min')) { const mb = el.querySelector('.fwin-head button'); if (mb) mb.click(); } el.style.left = (44 + i * 30) + 'px'; el.style.top = (74 + i * 30) + 'px'; raiseWindow(el); });
+  ws.forEach((el, i) => { el.style.left = (44 + i * 30) + 'px'; el.style.top = (74 + i * 30) + 'px'; raiseWindow(el); });
   $('#meta').textContent = `cascaded ${ws.length} window${ws.length > 1 ? 's' : ''}`;
 }
 function closeAllWindows() {
@@ -11445,7 +11462,7 @@ function windowsMenu(anchor) {
   const r = (anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: anchor.x || 120, bottom: anchor.y || 60 });
   const ws = openFloatWins();
   const items = ws.length
-    ? ws.map((el) => ({ label: (el.classList.contains('min') ? '– ' : '') + winTitle(el), action: () => raiseWindow(el) }))
+    ? ws.map((el) => ({ label: (el._chip ? '– ' : '') + winTitle(el), action: () => raiseWindow(el) }))
     : [{ label: 'no open windows', action: () => {} }];
   if (ws.length) items.push({ sep: true }, { label: 'Cascade', action: cascadeWindows }, { label: 'Close all', action: closeAllWindows });
   menuXY(r.left, r.bottom + 2, items);
@@ -12502,9 +12519,15 @@ let _fwinZ = 40;
 function floatWin({ title, sub, x = 90, y = 90, w = 560, h = 320, onClose }) {
   // open ON the screen whatever the screen is — a phone gets the same window,
   // clamped (CSS max-width backs this up against later resizes)
+  const kind = (String(title).split('·')[0] || '').trim() || 'win';   // "grade-tonnage · deposit.csv" → "grade-tonnage"
+  let _geo = null; try { _geo = JSON.parse(localStorage.getItem('micro.winGeo.' + kind) || 'null'); } catch { /* private */ }
+  if (_geo) {                                              // remembered per-kind geometry: size always,
+    w = _geo.w || w; h = _geo.h || h;                      // position only when no sibling of the kind is open
+    if (!document.querySelector('.fwin[data-kind="' + CSS.escape(kind) + '"]')) { x = _geo.x ?? x; y = _geo.y ?? y; }
+  }
   w = Math.min(w, innerWidth - 12); h = Math.min(h, innerHeight - 72);
   x = Math.max(0, Math.min(x, innerWidth - w - 6)); y = Math.max(28, Math.min(y, innerHeight - h - 30));
-  const el = document.createElement('div'); el.className = 'fwin';
+  const el = document.createElement('div'); el.className = 'fwin'; el.dataset.kind = kind;
   el.style.cssText += `left:${x}px;top:${y}px;width:${w}px;height:${h}px;z-index:${++_fwinZ};`;
   const head = document.createElement('div'); head.className = 'fwin-head';
   const t = document.createElement('span'); t.className = 't'; t.textContent = title;
@@ -12516,39 +12539,68 @@ function floatWin({ title, sub, x = 90, y = 90, w = 560, h = 320, onClose }) {
   const grip = document.createElement('div'); grip.className = 'fwin-grip';
   el.append(head, body, grip);
   document.body.appendChild(el);
-  const raise = () => {
-    el.style.zIndex = ++_fwinZ;
-    document.querySelectorAll('.fwin.top').forEach((w2) => { if (w2 !== el) w2.classList.remove('top'); });
-    el.classList.add('top');                               // the top float carries the accent head
-  };
-  raise();
-  el.addEventListener('pointerdown', raise);
-  // a sub ending in "…" is a busy state — shimmer it (sampling…, scanning…)
-  const syncBusy = () => subEl.classList.toggle('busy', /(…|\.\.\.)\s*$/.test(subEl.textContent || ''));
+  raiseWindow(el);
+  el.addEventListener('pointerdown', () => raiseWindow(el));
+  // a sub ending in "…" is a busy state — head shimmer + a thin bar across the body top
+  const syncBusy = () => { const b2 = /(…|\.\.\.)\s*$/.test(subEl.textContent || ''); subEl.classList.toggle('busy', b2); el.classList.toggle('busy', b2); };
   new MutationObserver(syncBusy).observe(subEl, { childList: true, characterData: true, subtree: true });
   syncBusy();
-  let restoreH = h;
-  minB.onclick = () => {
-    if (el.classList.toggle('min')) { restoreH = el.offsetHeight; el.style.height = 'auto'; }
-    else el.style.height = restoreH + 'px';
+  const saveGeo = () => {                                   // per-kind geometry memory (survives reloads)
+    if (el.style.display === 'none' || !el.offsetWidth) return;
+    try { localStorage.setItem('micro.winGeo.' + kind, JSON.stringify({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight })); } catch { /* private */ }
   };
-  closeB.onclick = () => { el.remove(); if (onClose) onClose(); };
+  minB.onclick = () => {                                    // minimize → a titled chip on the bottom strip
+    saveGeo(); el.style.display = 'none'; el.classList.remove('top');
+    const chip = document.createElement('button'); chip.className = 'win-chip';
+    chip.textContent = t.textContent; chip.title = 'restore ' + t.textContent;
+    chip.onclick = () => raiseWindow(el);
+    el._chip = chip; _winStrip().appendChild(chip);
+  };
+  closeB.onclick = () => { saveGeo(); if (el._chip) { el._chip.remove(); el._chip = null; } el.remove(); if (onClose) onClose(); };
   head.addEventListener('pointerdown', (e) => {
     if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT' || e.target.tagName === 'LABEL') return;
     e.preventDefault();
     const sx = e.clientX - el.offsetLeft, sy = e.clientY - el.offsetTop;
-    const move = (ev) => { el.style.left = Math.max(0, ev.clientX - sx) + 'px'; el.style.top = Math.max(28, ev.clientY - sy) + 'px'; };
-    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+    let zone = null;                                        // drag to a screen edge → half-snap (preview first)
+    const move = (ev) => {
+      el.style.left = Math.max(0, ev.clientX - sx) + 'px'; el.style.top = Math.max(28, ev.clientY - sy) + 'px';
+      zone = ev.clientX < 14 ? 'left' : ev.clientX > innerWidth - 14 ? 'right' : null;
+      _snapPreview(zone);
+    };
+    const up = () => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+      _snapPreview(null);
+      if (zone) {
+        const g = _snapGeo(zone);
+        el.style.left = g.x + 'px'; el.style.top = g.y + 'px'; el.style.width = g.w + 'px'; el.style.height = g.h + 'px';
+        if (el._onResized) el._onResized();
+      }
+      saveGeo();
+    };
     addEventListener('pointermove', move); addEventListener('pointerup', up);
   });
   grip.addEventListener('pointerdown', (e) => {
     e.preventDefault(); e.stopPropagation();
     const sw2 = el.offsetWidth - e.clientX, sh2 = el.offsetHeight - e.clientY;
     const move = (ev) => { el.style.width = Math.max(300, ev.clientX + sw2) + 'px'; el.style.height = Math.max(120, ev.clientY + sh2) + 'px'; };
-    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); if (el._onResized) el._onResized(); };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); if (el._onResized) el._onResized(); saveGeo(); };
     addEventListener('pointermove', move); addEventListener('pointerup', up);
   });
   return { el, body, head, sub: subEl, close: () => closeB.onclick() };
+}
+// the minimized-window strip + edge-snap helpers
+function _winStrip() { let s2 = $('#winStrip'); if (!s2) { s2 = document.createElement('div'); s2.id = 'winStrip'; document.body.appendChild(s2); } return s2; }
+function _snapGeo(zone) {
+  const top = 92, bot = 30;                                 // below the instrument rail, above the status bar
+  const W2 = Math.floor(innerWidth / 2);
+  return { x: zone === 'left' ? 6 : W2 + 3, y: top, w: W2 - 9, h: innerHeight - top - bot };
+}
+function _snapPreview(zone) {
+  let p2 = $('#snapPreview');
+  if (!zone) { if (p2) p2.remove(); return; }
+  if (!p2) { p2 = document.createElement('div'); p2.id = 'snapPreview'; document.body.appendChild(p2); }
+  const g = _snapGeo(zone);
+  p2.style.cssText = 'left:' + g.x + 'px;top:' + g.y + 'px;width:' + g.w + 'px;height:' + g.h + 'px;';
 }
 // ── dialog lifecycle — one manager for every #…Dlg overlay ──────────────────
 // Two kinds, one contract. MODAL = flow gates (open/import/save/progress):
@@ -12608,6 +12660,14 @@ addEventListener('keydown', (e) => {                       // Escape: topmost di
   else if (help && help.classList.contains('show')) { help.classList.remove('show'); e.preventDefault(); e.stopImmediatePropagation(); }
 }, true);
 $('#help').addEventListener('pointerdown', (e) => { if (e.target === $('#help')) $('#help').classList.remove('show'); });
+addEventListener('keydown', (e) => {                       // Ctrl+` cycles the floats — the bottom-most rises
+  if (e.key !== '`' || !e.ctrlKey || e.altKey || e.metaKey) return;
+  const wins = [...document.querySelectorAll('.fwin')].filter((x) => x.style.display !== 'none');
+  if (!wins.length) return;
+  e.preventDefault();
+  wins.sort((a, b2) => (+a.style.zIndex || 0) - (+b2.style.zIndex || 0));
+  raiseWindow(wins[0]);
+});
 const _attrTables = new Map();                             // layerId → { win, grid, view }
 async function fetchLayerRow(L, rec) {
   const d = L.docs;
