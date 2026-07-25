@@ -175,6 +175,8 @@
   .cw-proj .cw-klabel { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; flex: 1; }
   .cw-proj .cw-sect { color: var(--dim); font-size: 10px; text-transform: uppercase; margin: 4px 0 4px; }
   .rw-body { padding: 8px 10px; overflow-y: auto; font: 12px var(--mono); color: var(--text); }
+  .rw-body.rw-pin { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+  .rw-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px; }
   .rw-body input[type="text"], .rw-body select { font: 11px var(--mono); color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 3px 6px; }
   .rw-step { border: 1px solid var(--bd2); border-radius: 4px; padding: 6px 8px; margin: 6px 0; }
   .rw-bar { display: flex; gap: 6px; align-items: center; margin: 4px 0 2px; flex-wrap: wrap; }
@@ -507,7 +509,7 @@
   .sw-foot .pp-exp .awin-btn { width: 100%; text-align: center; padding: 3px 0; }
   .awin-ctrls .pp-exp { margin-left: auto; }
   .awin-ctrls.rt { justify-content: flex-end; }
-  .rw-actions { display: flex; gap: 6px; justify-content: flex-end; align-items: center; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
+  .rw-actions { flex: 0 0 auto; display: flex; gap: 6px; justify-content: flex-end; align-items: center; border-top: 1px solid var(--border); padding: 8px 10px; background: var(--panel); }
   .awin-ctrls { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 5px 7px; border-top: 1px solid var(--border); background: var(--panel); }
   .awin-ctrls select, .awin-btn { font: 11px monospace; background: var(--bg2, #1a1a1a); color: var(--fg, #ddd); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; cursor: pointer; }
   .awin-ctrls label { font: 11px monospace; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
@@ -608,7 +610,7 @@
   .sw-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
   .sw-segbtn { font: 11px monospace; background: none; border: none; color: var(--muted); padding: 2px 8px; cursor: pointer; }
   .sw-segbtn.on { background: var(--accent); color: #121212; }
-  .sw-foot { position: sticky; bottom: 0; margin: auto -9px 0 -9px; padding: 7px 9px 8px 9px; background: #161616; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; }
+  .sw-foot { position: sticky; bottom: 0; margin: auto -9px 0 -9px; padding: 7px 9px 8px 9px; background: var(--panel); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; }
   .sw-run { font: 12px monospace; background: var(--accent); color: #121212; border: none; border-radius: 3px; padding: 7px; cursor: pointer; font-weight: 600; }
   .sw-run:disabled { opacity: .55; cursor: default; }
   .sw-stale { font: 10px monospace; color: var(--caution, #d4a24a); text-align: center; min-height: 12px; }
@@ -4242,7 +4244,8 @@ function openRoutineWindow(r0) {
   normalize(steps);
   const win = floatWin({ title: r0 ? `routine · ${r0.name}` : 'new routine', sub: file || 'unsaved', x: innerWidth / 2 - 300, y: 80, w: 600, h: Math.min(560, innerHeight - 110) });
   win.el.dataset.routine = '1';
-  win.body.className += ' rw-body';
+  win.body.className += ' rw-body rw-pin';
+  const scrollEl = document.createElement('div'); scrollEl.className = 'rw-scroll'; win.body.appendChild(scrollEl);
   const msg = (t) => { $('#meta').textContent = t; };
   const recipeNames = () => _recipes.filter((x) => x.tool !== 'routine').map((x) => x.name);   // routines don't nest
   const extrasOf = (st, skip) => Object.fromEntries(Object.entries(st).filter(([k]) => !skip.includes(k)));
@@ -4365,7 +4368,7 @@ function openRoutineWindow(r0) {
     host.appendChild(addR);
   }
   // ── header widgets (created once; render() rebuilds only the steps list) ──
-  const top = document.createElement('div'); win.body.appendChild(top);
+  const top = document.createElement('div'); scrollEl.appendChild(top);
   const nameBar = document.createElement('div'); nameBar.className = 'rw-bar';
   const nameL = document.createElement('span'); nameL.className = 'lbl'; nameL.textContent = 'name';
   const nameI = document.createElement('input'); nameI.type = 'text'; nameI.style.flex = '1'; nameI.value = model.name || ''; nameI.placeholder = 'month-end';
@@ -4387,7 +4390,7 @@ function openRoutineWindow(r0) {
   // generated dialog; answers land at $name markers BEFORE the parameter
   // table expands — keep input names distinct from the table's variables) ──
   model.inputs = Array.isArray(model.inputs) ? model.inputs : [];
-  const inpWrap = document.createElement('div'); win.body.appendChild(inpWrap);
+  const inpWrap = document.createElement('div'); scrollEl.appendChild(inpWrap);
   const INPUT_TYPES = ['text', 'number', 'choice', 'layer', 'column'];
   function renderInputs() {
     inpWrap.textContent = '';
@@ -4426,7 +4429,7 @@ function openRoutineWindow(r0) {
     inpWrap.appendChild(add);
   }
   renderInputs();
-  const list = document.createElement('div'); win.body.appendChild(list);
+  const list = document.createElement('div'); scrollEl.appendChild(list);
   const foot = document.createElement('div'); win.body.appendChild(foot);
   // an `each` block's body is a step list, so it can hold another `each` — the
   // editor renders the tree the same way the runner expands it. Nesting is a
@@ -4511,10 +4514,11 @@ function openRoutineWindow(r0) {
   const saveB = document.createElement('button'); saveB.className = 'awin-btn'; saveB.textContent = 'Save';
   const runB = document.createElement('button'); runB.className = 'awin-btn btn-p'; runB.textContent = 'Save & Run';
   bar.append(prevB, saveB, runB); foot.appendChild(bar);
-  const prev = document.createElement('div'); prev.className = 'rw-prev'; prev.style.display = 'none'; foot.appendChild(prev);
+  const prev = document.createElement('div'); prev.className = 'rw-prev'; prev.style.display = 'none'; scrollEl.appendChild(prev);
   prevB.onclick = async () => {
     prev.style.display = '';
     prev.textContent = '';
+    setTimeout(() => prev.scrollIntoView({ block: 'nearest' }), 60);
     try {
       let P2 = collect();
       // resolve the routine's own inputs from defaults / last answers, so the
