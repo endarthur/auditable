@@ -13842,6 +13842,10 @@ function renderRampSection(body, L) {
       const c2 = rampCfgOf(L, true);
       c2.breaks[dragging] = xv(x);
       draw(); drawPreview();
+      // live 3D tracking: with deferred re-shade a mid-drag ramp update is one
+      // fullscreen resolve pass, not a re-raster — the model recolours under
+      // the drag. Non-forced → the staged-apply mode still stages.
+      applyRamp(L);
     } else cvh.style.cursor = nearBreak(x) >= 0 ? 'ew-resize' : 'crosshair';
   });
   cvh.addEventListener('pointerup', () => { if (dragging >= 0) { dragging = -1; setRampCfg(L, {}); renderProps(); } });
