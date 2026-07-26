@@ -460,12 +460,12 @@ export function createPickPipeline(gl) {
     catVis: U(stk, 'uCatVis'), catVisOn: U(stk, 'uCatVisOn'), rule: U(stk, 'uRule'), ruleOn: U(stk, 'uRuleOn'),
     secPlane: U(stk, 'uSecPlane'), secCfg: U(stk, 'uSecCfg'),
   };
-  let fbo = null, colorTex = null, depthRb = null, w = 0, h = 0;
+  let fbo = null, colorTex = null, depthTex = null, w = 0, h = 0;
 
   function ensure(width, height) {
     if (fbo && width === w && height === h) return;
     w = width; h = height;
-    if (fbo) { gl.deleteFramebuffer(fbo); gl.deleteTexture(colorTex); gl.deleteRenderbuffer(depthRb); }
+    if (fbo) { gl.deleteFramebuffer(fbo); gl.deleteTexture(colorTex); gl.deleteTexture(depthTex); }
     colorTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, colorTex);
     // RG32UI: R = record (a full uint32), G = layer. Integer target → the ids are
@@ -473,13 +473,17 @@ export function createPickPipeline(gl) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32UI, w, h, 0, gl.RG_INTEGER, gl.UNSIGNED_INT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    depthRb = gl.createRenderbuffer();
-    gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
-    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+    // depth is a TEXTURE (not a renderbuffer): the deferred re-shade resolve
+    // samples it to unproject each pixel's exact hit point (block edge lines)
+    depthTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, depthTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colorTex, 0);
-    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depthTex, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
@@ -750,7 +754,7 @@ export function createPickPipeline(gl) {
     renderInto(0, 0, opts.viewportW, opts.viewportH, chunks, cam, opts);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.bindVertexArray(null);
-    return { tex: colorTex, w, h };
+    return { tex: colorTex, depth: depthTex, w, h };
   }
 
   return { pick, pickRegion, captureViewport, NO_LAYER };

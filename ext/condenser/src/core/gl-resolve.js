@@ -91,6 +91,7 @@ precision highp usampler2D;
 uniform usampler2D uId;                  // RG32UI: R = record, G = layer | face<<16 (NO_LAYER = miss)
 uniform sampler2D uAttr;                 // baked (z, value, cat, rgbPacked) by record
 uniform sampler2D uRamp, uPalette, uMask, uSel, uRule, uChanTex;
+uniform sampler2D uDepth;                // the capture's hit depths (edge-line unproject)
 uniform uint uLayerId, uPicked, uPickedLayer;
 uniform int uKind;                       // 0 = points, 1 = blocks
 uniform int uColorMode;
@@ -99,6 +100,10 @@ uniform float uPaletteN, uIntensityScale;
 uniform float uFilterOn, uSelOn, uRuleOn, uChanTexOn;
 uniform vec3 uLightDir, uCutNormal;
 uniform vec3 uFaceN[6];                  // gl-pick's FACE_NORMALS
+uniform float uEdgesOn, uOrtho, uPerspScale;
+uniform mat4 uInvVP;                     // inverse viewProj: (pixel, depth) → world hit point
+uniform vec2 uViewport;
+uniform vec3 uEyePos, uGridOrigin, uGridSize;   // the blocks layer's lattice (regular grids only)
 out vec4 outColor;
 void main() {
   ivec2 px = ivec2(gl_FragCoord.xy);
@@ -154,7 +159,71 @@ void main() {
     uint face = (id.g >> 16) & 7u;
     if (face < 6u) shade = 0.55 + 0.45 * max(dot(uFaceN[face], uLightDir), 0.0);
     else if (face == 6u) shade = (0.55 + 0.45 * max(dot(uCutNormal, uLightDir), 0.0)) * 0.85;   // the section cut wall
-    // face 7 (NO_FACE): a demoted splat — unlit, as rasterized
+    // face 7 (NO_FACE): a demoted splat — unlit, as rasterized (and no edges)
+    // BLOCK EDGE LINES (gl-blocks' exact math): the capture depth gives back
+    // the hit point — unproject it, snap the block centre from the face plane
+    // + the regular lattice, and the box-local coords fall out. Sub-blocked
+    // models (per-block half-dims) can't reconstruct the centre this way and
+    // fall back to the re-raster before we get here.
+    if (uEdgesOn > 0.5 && face < 7u) {
+      float dz = texelFetch(uDepth, px, 0).r;
+      vec2 xy = (gl_FragCoord.xy / uViewport) * 2.0 - 1.0;
+      vec4 hp = uInvVP * vec4(xy, dz * 2.0 - 1.0, 1.0);
+      vec3 p = hp.xyz / hp.w;
+      vec3 half_ = uGridSize * 0.5;
+      // the pixel ray (also perturbed rays below, for the analytic derivative)
+      vec4 rA = uInvVP * vec4(xy, -1.0, 1.0);
+      vec4 rB = uInvVP * vec4(xy, 1.0, 1.0);
+      vec3 ro = rA.xyz / rA.w, rd = rB.xyz / rB.w - ro;
+      float pv = 0.0; int ax = 0;
+      if (face < 6u) {
+        // depth only PICKS the lattice face plane; the position comes from
+        // re-intersecting the ray with that exact plane (no 24-bit jitter)
+        ax = int(face >> 1);
+        float o0 = uGridOrigin[ax] - half_[ax];
+        pv = o0 + round((p[ax] - o0) / uGridSize[ax]) * uGridSize[ax];
+        if (abs(rd[ax]) > 1e-12) p = ro + rd * ((pv - ro[ax]) / rd[ax]);
+        p[ax] = pv;
+      }
+      vec3 base = face < 6u ? p - uFaceN[face] * half_ : p;   // face pixel: step inward; cut pixel: already interior
+      vec3 center = uGridOrigin + vec3(round((base.x - uGridOrigin.x) / uGridSize.x), round((base.y - uGridOrigin.y) / uGridSize.y), round((base.z - uGridOrigin.z) / uGridSize.z)) * uGridSize;
+      vec3 a2 = abs(p - center) / half_;
+      float m1 = max(a2.x, max(a2.y, a2.z));
+      float m2 = max(min(a2.x, a2.y), min(max(a2.x, a2.y), a2.z));
+      float e = face == 6u ? m1 : m2;
+      // ANALYTIC screen derivative of e: fwidth() cancels at block seams (e is
+      // symmetric across them — …0.8, 1.0 │ 1.0, 0.8…), erasing the lines
+      // exactly where they live; the raster never sees that because each
+      // impostor is its own primitive with helper-invocation derivatives. So
+      // evaluate e at the hardware's own 2×2 QUAD positions — rays through the
+      // quad-aligned pixels, intersected with THIS pixel's plane — and
+      // difference them ourselves. Quad alignment matters: it reproduces the
+      // raster's per-quad-shared derivative, phase and all.
+      float cutD = dot(p, uCutNormal);
+      vec2 qb = floor(gl_FragCoord.xy * 0.5) * 2.0 + 0.5;
+      float eq[3];
+      for (int k = 0; k < 3; k++) {
+        vec2 fxy = k == 0 ? qb : (k == 1 ? qb + vec2(1.0, 0.0) : qb + vec2(0.0, 1.0));
+        vec2 nxy = (fxy / uViewport) * 2.0 - 1.0;
+        vec4 qA = uInvVP * vec4(nxy, -1.0, 1.0);
+        vec4 qB = uInvVP * vec4(nxy, 1.0, 1.0);
+        vec3 qo = qA.xyz / qA.w, qd = qB.xyz / qB.w - qo;
+        vec3 q;
+        if (face < 6u) { float den = qd[ax]; q = abs(den) > 1e-12 ? qo + qd * ((pv - qo[ax]) / den) : p; }
+        else { float den = dot(qd, uCutNormal); q = abs(den) > 1e-9 ? qo + qd * ((cutD - dot(qo, uCutNormal)) / den) : p; }
+        vec3 aq = abs(q - center) / half_;
+        float q1 = max(aq.x, max(aq.y, aq.z));
+        float q2 = max(min(aq.x, aq.y), min(max(aq.x, aq.y), aq.z));
+        eq[k] = face == 6u ? q1 : q2;
+      }
+      float fw = abs(eq[1] - eq[0]) + abs(eq[2] - eq[0]);
+      float dpx = (1.0 - e) / max(fw, 1e-6);
+      float edge = 1.0 - clamp(dpx * 0.7 - 0.3, 0.0, 1.0);
+      float distE = uOrtho > 0.5 ? 1.0 : max(distance(uEyePos, center), 1e-3);
+      float pxR = length(half_) * uPerspScale / distE;
+      edge *= clamp((pxR - 5.0) / 8.0, 0.0, 1.0);          // fade toward demotion, as rasterized
+      shade *= 1.0 - 0.4 * edge;
+    }
   }
   outColor = vec4(col.rgb * shade, col.a);
 }`;
@@ -178,7 +247,11 @@ export function createResolvePipeline(gl) {
     paletteN: U(resolveProg, 'uPaletteN'), intensityScale: U(resolveProg, 'uIntensityScale'),
     filterOn: U(resolveProg, 'uFilterOn'), selOn: U(resolveProg, 'uSelOn'), ruleOn: U(resolveProg, 'uRuleOn'), chanTexOn: U(resolveProg, 'uChanTexOn'),
     lightDir: U(resolveProg, 'uLightDir'), cutNormal: U(resolveProg, 'uCutNormal'), faceN: U(resolveProg, 'uFaceN'),
+    depth: U(resolveProg, 'uDepth'), edgesOn: U(resolveProg, 'uEdgesOn'), ortho: U(resolveProg, 'uOrtho'), perspScale: U(resolveProg, 'uPerspScale'),
+    invVP: U(resolveProg, 'uInvVP'), viewport: U(resolveProg, 'uViewport'), eyePos: U(resolveProg, 'uEyePos'),
+    gridOrigin: U(resolveProg, 'uGridOrigin'), gridSize: U(resolveProg, 'uGridSize'),
   };
+  const IDENT4 = Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
   const bakeFbo = gl.createFramebuffer();
   const bakes = new Map();                                 // layerId → { tex, h }
   const faceFlat = new Float32Array(18);
@@ -276,6 +349,15 @@ export function createResolvePipeline(gl) {
       bind(5, uR.sel, u.sel || u.ramp);
       bind(6, uR.rule, u.rule || u.ramp);
       bind(7, uR.chanTex, u.chanTex || u.ramp);
+      bind(8, uR.depth, (u.edges && u.depth) || u.ramp);   // depth-as-sampler2D: .r is the depth (compare mode NONE)
+      gl.uniform1f(uR.edgesOn, u.edges && u.depth ? 1 : 0);
+      gl.uniform1f(uR.ortho, u.ortho ? 1 : 0);
+      gl.uniform1f(uR.perspScale, u.perspScale || 1);
+      gl.uniformMatrix4fv(uR.invVP, false, u.invVP || IDENT4);
+      gl.uniform2f(uR.viewport, u.viewportW || 1, u.viewportH || 1);
+      gl.uniform3f(uR.eyePos, u.eye ? u.eye[0] : 0, u.eye ? u.eye[1] : 0, u.eye ? u.eye[2] : 0);
+      gl.uniform3f(uR.gridOrigin, u.grid ? u.grid.originLocal[0] : 0, u.grid ? u.grid.originLocal[1] : 0, u.grid ? u.grid.originLocal[2] : 0);
+      gl.uniform3f(uR.gridSize, u.grid ? u.grid.size[0] : 1, u.grid ? u.grid.size[1] : 1, u.grid ? u.grid.size[2] : 1);
       gl.uniform1ui(uR.layerId, layerId >>> 0);
       gl.uniform1ui(uR.picked, u.picked >>> 0);
       gl.uniform1ui(uR.pickedLayer, u.pickedLayer >>> 0);

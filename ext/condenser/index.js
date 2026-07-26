@@ -5136,12 +5136,12 @@ function createPickPipeline(gl) {
     catVis: U(stk, 'uCatVis'), catVisOn: U(stk, 'uCatVisOn'), rule: U(stk, 'uRule'), ruleOn: U(stk, 'uRuleOn'),
     secPlane: U(stk, 'uSecPlane'), secCfg: U(stk, 'uSecCfg'),
   };
-  let fbo = null, colorTex = null, depthRb = null, w = 0, h = 0;
+  let fbo = null, colorTex = null, depthTex = null, w = 0, h = 0;
 
   function ensure(width, height) {
     if (fbo && width === w && height === h) return;
     w = width; h = height;
-    if (fbo) { gl.deleteFramebuffer(fbo); gl.deleteTexture(colorTex); gl.deleteRenderbuffer(depthRb); }
+    if (fbo) { gl.deleteFramebuffer(fbo); gl.deleteTexture(colorTex); gl.deleteTexture(depthTex); }
     colorTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, colorTex);
     // RG32UI: R = record (a full uint32), G = layer. Integer target → the ids are
@@ -5149,13 +5149,17 @@ function createPickPipeline(gl) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32UI, w, h, 0, gl.RG_INTEGER, gl.UNSIGNED_INT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    depthRb = gl.createRenderbuffer();
-    gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
-    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+    // depth is a TEXTURE (not a renderbuffer): the deferred re-shade resolve
+    // samples it to unproject each pixel's exact hit point (block edge lines)
+    depthTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, depthTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colorTex, 0);
-    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depthTex, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
@@ -5426,7 +5430,7 @@ function createPickPipeline(gl) {
     renderInto(0, 0, opts.viewportW, opts.viewportH, chunks, cam, opts);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.bindVertexArray(null);
-    return { tex: colorTex, w, h };
+    return { tex: colorTex, depth: depthTex, w, h };
   }
 
   return { pick, pickRegion, captureViewport, NO_LAYER };
@@ -6073,6 +6077,34 @@ function mat4Multiply(a, b) {                       // a·b (both column-major)
   return m;
 }
 
+// General 4×4 inverse (cofactor expansion, column-major). Used to unproject
+// (pixel, depth) → world in the deferred re-shade resolve; the viewProj is
+// always invertible for a real camera. Returns null on a singular matrix.
+function mat4Inverse(m) {
+  const inv = new Float32Array(16);
+  inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+  inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+  inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+  inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+  inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+  inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+  inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+  inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+  inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+  inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+  inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+  inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+  inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+  inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+  inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+  inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+  const det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+  if (!det) return null;
+  const d = 1 / det;
+  for (let i = 0; i < 16; i++) inv[i] *= d;
+  return inv;
+}
+
 // Frustum planes from a viewProj matrix (Gribb–Hartmann, column-major): six
 // [a,b,c,d] rows — a point is inside when a·x+b·y+c·z+d ≥ 0 for all six.
 function frustumPlanes(m) {
@@ -6350,6 +6382,7 @@ precision highp usampler2D;
 uniform usampler2D uId;                  // RG32UI: R = record, G = layer | face<<16 (NO_LAYER = miss)
 uniform sampler2D uAttr;                 // baked (z, value, cat, rgbPacked) by record
 uniform sampler2D uRamp, uPalette, uMask, uSel, uRule, uChanTex;
+uniform sampler2D uDepth;                // the capture's hit depths (edge-line unproject)
 uniform uint uLayerId, uPicked, uPickedLayer;
 uniform int uKind;                       // 0 = points, 1 = blocks
 uniform int uColorMode;
@@ -6358,6 +6391,10 @@ uniform float uPaletteN, uIntensityScale;
 uniform float uFilterOn, uSelOn, uRuleOn, uChanTexOn;
 uniform vec3 uLightDir, uCutNormal;
 uniform vec3 uFaceN[6];                  // gl-pick's FACE_NORMALS
+uniform float uEdgesOn, uOrtho, uPerspScale;
+uniform mat4 uInvVP;                     // inverse viewProj: (pixel, depth) → world hit point
+uniform vec2 uViewport;
+uniform vec3 uEyePos, uGridOrigin, uGridSize;   // the blocks layer's lattice (regular grids only)
 out vec4 outColor;
 void main() {
   ivec2 px = ivec2(gl_FragCoord.xy);
@@ -6413,7 +6450,71 @@ void main() {
     uint face = (id.g >> 16) & 7u;
     if (face < 6u) shade = 0.55 + 0.45 * max(dot(uFaceN[face], uLightDir), 0.0);
     else if (face == 6u) shade = (0.55 + 0.45 * max(dot(uCutNormal, uLightDir), 0.0)) * 0.85;   // the section cut wall
-    // face 7 (NO_FACE): a demoted splat — unlit, as rasterized
+    // face 7 (NO_FACE): a demoted splat — unlit, as rasterized (and no edges)
+    // BLOCK EDGE LINES (gl-blocks' exact math): the capture depth gives back
+    // the hit point — unproject it, snap the block centre from the face plane
+    // + the regular lattice, and the box-local coords fall out. Sub-blocked
+    // models (per-block half-dims) can't reconstruct the centre this way and
+    // fall back to the re-raster before we get here.
+    if (uEdgesOn > 0.5 && face < 7u) {
+      float dz = texelFetch(uDepth, px, 0).r;
+      vec2 xy = (gl_FragCoord.xy / uViewport) * 2.0 - 1.0;
+      vec4 hp = uInvVP * vec4(xy, dz * 2.0 - 1.0, 1.0);
+      vec3 p = hp.xyz / hp.w;
+      vec3 half_ = uGridSize * 0.5;
+      // the pixel ray (also perturbed rays below, for the analytic derivative)
+      vec4 rA = uInvVP * vec4(xy, -1.0, 1.0);
+      vec4 rB = uInvVP * vec4(xy, 1.0, 1.0);
+      vec3 ro = rA.xyz / rA.w, rd = rB.xyz / rB.w - ro;
+      float pv = 0.0; int ax = 0;
+      if (face < 6u) {
+        // depth only PICKS the lattice face plane; the position comes from
+        // re-intersecting the ray with that exact plane (no 24-bit jitter)
+        ax = int(face >> 1);
+        float o0 = uGridOrigin[ax] - half_[ax];
+        pv = o0 + round((p[ax] - o0) / uGridSize[ax]) * uGridSize[ax];
+        if (abs(rd[ax]) > 1e-12) p = ro + rd * ((pv - ro[ax]) / rd[ax]);
+        p[ax] = pv;
+      }
+      vec3 base = face < 6u ? p - uFaceN[face] * half_ : p;   // face pixel: step inward; cut pixel: already interior
+      vec3 center = uGridOrigin + vec3(round((base.x - uGridOrigin.x) / uGridSize.x), round((base.y - uGridOrigin.y) / uGridSize.y), round((base.z - uGridOrigin.z) / uGridSize.z)) * uGridSize;
+      vec3 a2 = abs(p - center) / half_;
+      float m1 = max(a2.x, max(a2.y, a2.z));
+      float m2 = max(min(a2.x, a2.y), min(max(a2.x, a2.y), a2.z));
+      float e = face == 6u ? m1 : m2;
+      // ANALYTIC screen derivative of e: fwidth() cancels at block seams (e is
+      // symmetric across them — …0.8, 1.0 │ 1.0, 0.8…), erasing the lines
+      // exactly where they live; the raster never sees that because each
+      // impostor is its own primitive with helper-invocation derivatives. So
+      // evaluate e at the hardware's own 2×2 QUAD positions — rays through the
+      // quad-aligned pixels, intersected with THIS pixel's plane — and
+      // difference them ourselves. Quad alignment matters: it reproduces the
+      // raster's per-quad-shared derivative, phase and all.
+      float cutD = dot(p, uCutNormal);
+      vec2 qb = floor(gl_FragCoord.xy * 0.5) * 2.0 + 0.5;
+      float eq[3];
+      for (int k = 0; k < 3; k++) {
+        vec2 fxy = k == 0 ? qb : (k == 1 ? qb + vec2(1.0, 0.0) : qb + vec2(0.0, 1.0));
+        vec2 nxy = (fxy / uViewport) * 2.0 - 1.0;
+        vec4 qA = uInvVP * vec4(nxy, -1.0, 1.0);
+        vec4 qB = uInvVP * vec4(nxy, 1.0, 1.0);
+        vec3 qo = qA.xyz / qA.w, qd = qB.xyz / qB.w - qo;
+        vec3 q;
+        if (face < 6u) { float den = qd[ax]; q = abs(den) > 1e-12 ? qo + qd * ((pv - qo[ax]) / den) : p; }
+        else { float den = dot(qd, uCutNormal); q = abs(den) > 1e-9 ? qo + qd * ((cutD - dot(qo, uCutNormal)) / den) : p; }
+        vec3 aq = abs(q - center) / half_;
+        float q1 = max(aq.x, max(aq.y, aq.z));
+        float q2 = max(min(aq.x, aq.y), min(max(aq.x, aq.y), aq.z));
+        eq[k] = face == 6u ? q1 : q2;
+      }
+      float fw = abs(eq[1] - eq[0]) + abs(eq[2] - eq[0]);
+      float dpx = (1.0 - e) / max(fw, 1e-6);
+      float edge = 1.0 - clamp(dpx * 0.7 - 0.3, 0.0, 1.0);
+      float distE = uOrtho > 0.5 ? 1.0 : max(distance(uEyePos, center), 1e-3);
+      float pxR = length(half_) * uPerspScale / distE;
+      edge *= clamp((pxR - 5.0) / 8.0, 0.0, 1.0);          // fade toward demotion, as rasterized
+      shade *= 1.0 - 0.4 * edge;
+    }
   }
   outColor = vec4(col.rgb * shade, col.a);
 }`;
@@ -6437,7 +6538,11 @@ function createResolvePipeline(gl) {
     paletteN: U(resolveProg, 'uPaletteN'), intensityScale: U(resolveProg, 'uIntensityScale'),
     filterOn: U(resolveProg, 'uFilterOn'), selOn: U(resolveProg, 'uSelOn'), ruleOn: U(resolveProg, 'uRuleOn'), chanTexOn: U(resolveProg, 'uChanTexOn'),
     lightDir: U(resolveProg, 'uLightDir'), cutNormal: U(resolveProg, 'uCutNormal'), faceN: U(resolveProg, 'uFaceN'),
+    depth: U(resolveProg, 'uDepth'), edgesOn: U(resolveProg, 'uEdgesOn'), ortho: U(resolveProg, 'uOrtho'), perspScale: U(resolveProg, 'uPerspScale'),
+    invVP: U(resolveProg, 'uInvVP'), viewport: U(resolveProg, 'uViewport'), eyePos: U(resolveProg, 'uEyePos'),
+    gridOrigin: U(resolveProg, 'uGridOrigin'), gridSize: U(resolveProg, 'uGridSize'),
   };
+  const IDENT4 = Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
   const bakeFbo = gl.createFramebuffer();
   const bakes = new Map();                                 // layerId → { tex, h }
   const faceFlat = new Float32Array(18);
@@ -6535,6 +6640,15 @@ function createResolvePipeline(gl) {
       bind(5, uR.sel, u.sel || u.ramp);
       bind(6, uR.rule, u.rule || u.ramp);
       bind(7, uR.chanTex, u.chanTex || u.ramp);
+      bind(8, uR.depth, (u.edges && u.depth) || u.ramp);   // depth-as-sampler2D: .r is the depth (compare mode NONE)
+      gl.uniform1f(uR.edgesOn, u.edges && u.depth ? 1 : 0);
+      gl.uniform1f(uR.ortho, u.ortho ? 1 : 0);
+      gl.uniform1f(uR.perspScale, u.perspScale || 1);
+      gl.uniformMatrix4fv(uR.invVP, false, u.invVP || IDENT4);
+      gl.uniform2f(uR.viewport, u.viewportW || 1, u.viewportH || 1);
+      gl.uniform3f(uR.eyePos, u.eye ? u.eye[0] : 0, u.eye ? u.eye[1] : 0, u.eye ? u.eye[2] : 0);
+      gl.uniform3f(uR.gridOrigin, u.grid ? u.grid.originLocal[0] : 0, u.grid ? u.grid.originLocal[1] : 0, u.grid ? u.grid.originLocal[2] : 0);
+      gl.uniform3f(uR.gridSize, u.grid ? u.grid.size[0] : 1, u.grid ? u.grid.size[1] : 1, u.grid ? u.grid.size[2] : 1);
       gl.uniform1ui(uR.layerId, layerId >>> 0);
       gl.uniform1ui(uR.picked, u.picked >>> 0);
       gl.uniform1ui(uR.pickedLayer, u.pickedLayer >>> 0);
@@ -7246,8 +7360,11 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       // Hidden layers can't change pixels; meshes ignore colour opts entirely
       // (their cosmetics go through setLayerMeshStyle → needClear).
       const sigOf = (id) => { const o = lopt(id); return `${o.colorMode}|${o.clip ? `${o.clip[0]}~${o.clip[1]}` : 'a'}`; };
-      const kindBy = new Map();
-      for (const c of chunks) if (activeChunk(c) && !kindBy.has(c._layer)) kindBy.set(c._layer, c.kind);
+      const kindBy = new Map(), subBy = new Set();
+      for (const c of chunks) if (activeChunk(c)) {
+        if (!kindBy.has(c._layer)) kindBy.set(c._layer, c.kind);
+        if (c.dimPalette) subBy.add(c._layer);             // sub-blocked: variable half-dims
+      }
       const dirty = new Set(cosmeticDirtyLayers);
       for (const id of kindBy.keys()) if (lastCosSig.get(id) !== sigOf(id)) dirty.add(id);
       for (const id of [...dirty]) { const k = kindBy.get(id); if (!k || k === 'mesh') dirty.delete(id); }
@@ -7267,7 +7384,10 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
             const ls = layerOf(id), k = kindBy.get(id);
             if (k !== 'points' && k !== 'blocks') { bail = true; break; }   // a sticks/soup recolour must re-raster
             if (ls.opacity < 0.999) { bail = true; break; }   // screen-door holes aren't in the id buffer
-            if (k === 'blocks' && (ls.edges != null ? ls.edges : blockEdges)) { bail = true; break; }   // edge lines need the intra-face hit
+            // edge lines RESOLVE for regular grids (the capture depth unprojects
+            // the hit point, the lattice snaps the centre); sub-blocked models
+            // have per-block half-dims the depth alone can't recover
+            if (k === 'blocks' && (ls.edges != null ? ls.edges : blockEdges) && subBy.has(id)) { bail = true; break; }
             groups.set(id, []);
             // NOTE: isolate filters and class eyes (catVis) are FINE here even
             // though they cull — changing them goes through needClear, so at
@@ -7303,6 +7423,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
           const l2 = Math.hypot(lx, ly, lz) || 1;
           const lightDir = [lx / l2, ly / l2, lz / l2];
+          const invVP = mat4Inverse(vp);                   // edge-line unproject
+          const perspScale = s.ortho ? (canvas.height / 2) / s.halfH : (canvas.height / 2) / Math.tan(s.fovY / 2);
           for (const [id, group] of groups) {
             const ls = layerOf(id), o = lopt(id), zr = zRangeOf(o);
             let u;
@@ -7323,6 +7445,10 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
                 ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette,
                 mask: ls.maskTex, sel: ls.selTex, rule: ls.ruleOn ? ls.ruleTex : null, chanTex: ls.chanTex,
                 picked: pickedRec, pickedLayer, lightDir, cutNormal: cutN,
+                edges: ls.edges != null ? ls.edges : blockEdges, depth: idCapture.depth,
+                invVP, viewportW: canvas.width, viewportH: canvas.height,
+                eye: [s.eye[0], s.eye[1], s.eye[2]], ortho: s.ortho, perspScale,
+                grid: group[0].grid,
               };
             } else {
               u = {
@@ -7808,6 +7934,7 @@ export {
   mat4Ortho,
   mat4LookAt,
   mat4Multiply,
+  mat4Inverse,
   transformPoint,
   frustumPlanes,
   aabbInFrustum,

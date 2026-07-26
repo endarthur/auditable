@@ -8,7 +8,7 @@
 // chunks proportionally; each chunk draws its FIRST k elements — correct as a
 // uniform subsample because chunks.js shuffled them (the §2.1.4 invariant).
 
-import { frustumPlanes, aabbInFrustum } from './camera.js';
+import { frustumPlanes, aabbInFrustum, mat4Inverse } from './camera.js';
 import { createBlocksPipeline, categoryPalettePixels } from './gl-blocks.js';
 import { createSticksPipeline } from './gl-sticks.js';
 import { createMeshPipeline } from './gl-mesh.js';
@@ -691,8 +691,11 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       // Hidden layers can't change pixels; meshes ignore colour opts entirely
       // (their cosmetics go through setLayerMeshStyle → needClear).
       const sigOf = (id) => { const o = lopt(id); return `${o.colorMode}|${o.clip ? `${o.clip[0]}~${o.clip[1]}` : 'a'}`; };
-      const kindBy = new Map();
-      for (const c of chunks) if (activeChunk(c) && !kindBy.has(c._layer)) kindBy.set(c._layer, c.kind);
+      const kindBy = new Map(), subBy = new Set();
+      for (const c of chunks) if (activeChunk(c)) {
+        if (!kindBy.has(c._layer)) kindBy.set(c._layer, c.kind);
+        if (c.dimPalette) subBy.add(c._layer);             // sub-blocked: variable half-dims
+      }
       const dirty = new Set(cosmeticDirtyLayers);
       for (const id of kindBy.keys()) if (lastCosSig.get(id) !== sigOf(id)) dirty.add(id);
       for (const id of [...dirty]) { const k = kindBy.get(id); if (!k || k === 'mesh') dirty.delete(id); }
@@ -712,7 +715,10 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             const ls = layerOf(id), k = kindBy.get(id);
             if (k !== 'points' && k !== 'blocks') { bail = true; break; }   // a sticks/soup recolour must re-raster
             if (ls.opacity < 0.999) { bail = true; break; }   // screen-door holes aren't in the id buffer
-            if (k === 'blocks' && (ls.edges != null ? ls.edges : blockEdges)) { bail = true; break; }   // edge lines need the intra-face hit
+            // edge lines RESOLVE for regular grids (the capture depth unprojects
+            // the hit point, the lattice snaps the centre); sub-blocked models
+            // have per-block half-dims the depth alone can't recover
+            if (k === 'blocks' && (ls.edges != null ? ls.edges : blockEdges) && subBy.has(id)) { bail = true; break; }
             groups.set(id, []);
             // NOTE: isolate filters and class eyes (catVis) are FINE here even
             // though they cull — changing them goes through needClear, so at
@@ -748,6 +754,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
           const l2 = Math.hypot(lx, ly, lz) || 1;
           const lightDir = [lx / l2, ly / l2, lz / l2];
+          const invVP = mat4Inverse(vp);                   // edge-line unproject
+          const perspScale = s.ortho ? (canvas.height / 2) / s.halfH : (canvas.height / 2) / Math.tan(s.fovY / 2);
           for (const [id, group] of groups) {
             const ls = layerOf(id), o = lopt(id), zr = zRangeOf(o);
             let u;
@@ -768,6 +776,10 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
                 ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette,
                 mask: ls.maskTex, sel: ls.selTex, rule: ls.ruleOn ? ls.ruleTex : null, chanTex: ls.chanTex,
                 picked: pickedRec, pickedLayer, lightDir, cutNormal: cutN,
+                edges: ls.edges != null ? ls.edges : blockEdges, depth: idCapture.depth,
+                invVP, viewportW: canvas.width, viewportH: canvas.height,
+                eye: [s.eye[0], s.eye[1], s.eye[2]], ortho: s.ortho, perspScale,
+                grid: group[0].grid,
               };
             } else {
               u = {

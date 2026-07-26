@@ -13,6 +13,6 @@ export { createMeshPipeline } from './core/gl-mesh.js';
 export { createSoupPipeline } from './core/gl-soup.js';
 export { categoryPalettePixels, createBlocksPipeline } from './core/gl-blocks.js';
 export { createPickPipeline, layerOfId, faceOfId, isMiss, NO_FACE, FACE_CUT, FACE_NORMALS, FACE_NAMES } from './core/gl-pick.js';
-export { mat4Perspective, mat4Ortho, mat4LookAt, mat4Multiply, transformPoint, frustumPlanes, aabbInFrustum, createOrbitCamera, attachOrbitInput } from './core/camera.js';
+export { mat4Perspective, mat4Ortho, mat4LookAt, mat4Multiply, mat4Inverse, transformPoint, frustumPlanes, aabbInFrustum, createOrbitCamera, attachOrbitInput } from './core/camera.js';
 export { makeProgram, rampPixels, palettePixels, uploadChunk, createRenderer } from './core/gl.js';
 export { createEdl } from './core/edl.js';
