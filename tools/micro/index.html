@@ -1401,8 +1401,8 @@ function armSelect(kind) {
   $('#meta').textContent = _paintArm
     ? `painting ${paintArmLabel()} — drag to paint · alt erases · Esc stops` + (_selThrough ? ' · THROUGH' : '')
     : (kind === 'rect'
-      ? 'select: drag a rectangle — shift adds, alt subtracts'
-      : 'select: draw a lasso — shift adds, alt subtracts') + (_selThrough ? ' · THROUGH (everything in the tube)' : ' · visible');
+      ? 'select: drag a rectangle — shift adds, alt subtracts (and keeps the tool armed)'
+      : 'select: draw a lasso — shift adds, alt subtracts (and keeps the tool armed)') + (_selThrough ? ' · THROUGH (everything in the tube)' : ' · visible');
 }
 function disarmSelect() {
   _selArm = null; _selPts = null;
@@ -1458,7 +1458,12 @@ cv.addEventListener('pointerup', (e) => {
       // armed — drag, drag, drag; Esc puts the brush down
       (_selThrough ? paintVolume : paintByPolygon)(poly, e.altKey ? 0 : _paintArm.code, kind === 'rect');
       armSelect(kind);
-    } else (_selThrough ? selectVolume : selectByPolygon)(poly, selModeOf(e), kind === 'rect');
+    } else {
+      (_selThrough ? selectVolume : selectByPolygon)(poly, selModeOf(e), kind === 'rect');
+      // intent-sticky: releasing with shift/alt (add/subtract) says more
+      // gestures are coming — stay armed; a plain release puts the tool down
+      if (e.shiftKey || e.altKey) armSelect(kind);
+    }
   } else $('#meta').textContent = _paintArm ? 'paint: nothing there' : 'selection: nothing there';
 }, { capture: true });
 // ── paint-to-column (§15, the crown jewel): interactive domaining. A painted
