@@ -13765,6 +13765,11 @@ function renderRampSection(body, L) {
     bIn.onkeydown = (e) => { if (e.key === 'Enter') applyBreaks(); };
     bIn.onblur = () => { if (bIn.value !== ((rampCfgOf(L) || {}).breaks || []).map((v) => fmtStat(v)).join(', ')) applyBreaks(); };
     body.appendChild(mkRow('breaks', bIn));
+    // live drag sync — but never while the user is typing in it
+    if (_rampRepaint) _rampRepaint.breaksIn = () => {
+      if (document.activeElement === bIn) return;
+      bIn.value = (((rampCfgOf(L) || {}).breaks) || []).slice().sort((a, b2) => a - b2).map((v) => fmtStat(v)).join(', ');
+    };
   }
   if (!isChan && !isRatio) return;                         // the histogram is scan-fed — channels and ratio columns have stats
   const h = layerTableHeader(L);
@@ -13846,6 +13851,9 @@ function renderRampSection(body, L) {
       // fullscreen resolve pass, not a re-raster — the model recolours under
       // the drag. Non-forced → the staged-apply mode still stages.
       applyRamp(L);
+      // …and the interval table + breaks entry follow the gesture in place
+      if (_rampRepaint && _rampRepaint.bands) _rampRepaint.bands();
+      if (_rampRepaint && _rampRepaint.breaksIn) _rampRepaint.breaksIn();
     } else cvh.style.cursor = nearBreak(x) >= 0 ? 'ew-resize' : 'crosshair';
   });
   cvh.addEventListener('pointerup', () => { if (dragging >= 0) { dragging = -1; setRampCfg(L, {}); renderProps(); } });
@@ -13931,8 +13939,12 @@ function renderIntervalTable(body, L, lo, hi) {
     return n;
   };
   const edges = [lo, ...breaks, hi];
+  const fmtN = (v) => (v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1e5 ? Math.round(v / 1e3) + 'k' : Math.round(v).toLocaleString());
+  const liveRows = [];                                     // per-band element refs for the live drag sync
   for (let k = 0; k < edges.length - 1; k++) {
     const row = document.createElement('div'); row.className = 'pp-band';
+    const live = { fromS: null, toIn: null, toS: null, sw: null, ct: null };
+    liveRows.push(live);
     const midT = cfg.classed ? (k + 0.5) / (edges.length - 1) : ((edges[k] + edges[k + 1]) / 2 - lo) / Math.max(hi - lo, 1e-9);
     const defHex = '#' + rampSample(stops, midT).map((v) => v.toString(16).padStart(2, '0')).join('');
     if (cfg.classed) {
@@ -13949,10 +13961,12 @@ function renderIntervalTable(body, L, lo, hi) {
     } else {
       const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = defHex;
       row.appendChild(sw);
+      live.sw = sw;
     }
     const fromS = document.createElement('span'); fromS.className = 'from'; fromS.textContent = fmtStat(edges[k]);
     const dash = document.createElement('span'); dash.className = 'dash'; dash.textContent = '–';
     row.append(fromS, dash);
+    live.fromS = fromS;
     if (k < edges.length - 2) {
       const toIn = document.createElement('input'); toIn.type = 'number'; toIn.step = 'any';
       toIn.value = +edges[k + 1].toFixed(2);
@@ -13965,17 +13979,40 @@ function renderIntervalTable(body, L, lo, hi) {
         renderProps();
       };
       row.appendChild(toIn);
+      live.toIn = toIn;
     } else {
       const toS = document.createElement('span'); toS.className = 'to-max'; toS.textContent = fmtStat(edges[k + 1]);
       row.appendChild(toS);
+      live.toS = toS;
     }
     const ct = document.createElement('span'); ct.className = 'ct';
     const n = bandCount(edges[k], k === edges.length - 2 ? edges[k + 1] + 1e-9 : edges[k + 1]);
-    const fmtN = (v) => (v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1e5 ? Math.round(v / 1e3) + 'k' : Math.round(v).toLocaleString());
     ct.textContent = n == null ? '–' : `${fmtN(n)} · ${stat.total ? Math.round((100 * n) / stat.total) : 0}%`;
     row.appendChild(ct);
+    live.ct = ct;
     body.appendChild(row);
   }
+  // live drag sync: the histogram drag repatches bounds, swatches, and counts
+  // in place — the FILE-of-record stays cfg.breaks; renderProps still owns any
+  // structural change (a band added/removed mid-gesture just freezes the table
+  // until pointerup)
+  if (_rampRepaint) _rampRepaint.bands = () => {
+    const c2 = rampCfgOf(L);
+    const bks = ((c2 && c2.breaks) || []).filter((v) => Number.isFinite(v) && v > lo && v < hi).sort((a, b3) => a - b3);
+    if (bks.length !== breaks.length) return;
+    const ed = [lo, ...bks, hi];
+    liveRows.forEach((r, k) => {
+      r.fromS.textContent = fmtStat(ed[k]);
+      if (r.toIn && document.activeElement !== r.toIn) r.toIn.value = +ed[k + 1].toFixed(2);
+      if (r.toS) r.toS.textContent = fmtStat(ed[k + 1]);
+      if (r.sw) {
+        const midT = c2 && c2.classed ? (k + 0.5) / (ed.length - 1) : ((ed[k] + ed[k + 1]) / 2 - lo) / Math.max(hi - lo, 1e-9);
+        r.sw.style.background = '#' + rampSample(stops, midT).map((v) => v.toString(16).padStart(2, '0')).join('');
+      }
+      const n2 = bandCount(ed[k], k === ed.length - 2 ? ed[k + 1] + 1e-9 : ed[k + 1]);
+      r.ct.textContent = n2 == null ? '–' : `${fmtN(n2)} · ${stat.total ? Math.round((100 * n2) / stat.total) : 0}%`;
+    });
+  };
 }
 // LAS classification names (ASPRS standard 0–18)
 const LAS_CLASSES = ['never classified', 'unclassified', 'ground', 'low vegetation', 'medium vegetation', 'high vegetation', 'building', 'low point (noise)', 'reserved', 'water', 'rail', 'road surface', 'reserved', 'wire — guard', 'wire — conductor', 'transmission tower', 'wire connector', 'bridge deck', 'high noise'];
@@ -15772,9 +15809,11 @@ function setRampCfg(L, patch) {
   const cfg = rampCfgOf(L, true);
   Object.assign(cfg, patch);
   applyRamp(L);
-  if (_rampRepaint) {                                      // keep the strip + histogram honest without a DOM rebuild
+  if (_rampRepaint) {                                      // keep the strip + histogram + table honest without a DOM rebuild
     if (_rampRepaint.prev) _rampRepaint.prev();
     if (_rampRepaint.hist) _rampRepaint.hist();
+    if (_rampRepaint.bands) _rampRepaint.bands();
+    if (_rampRepaint.breaksIn) _rampRepaint.breaksIn();
   }
   markProjectDirty();
 }
