@@ -315,6 +315,7 @@ SIO2 &gt; 10 and not (LITO = "CANGA")   # comments are fine</pre>
 
 <h2 id="join"><span class="n">9</span>Join &amp; reconcile</h2>
 <p>Two model versions, or a lookup table? The <b>join tab</b> (Properties → <b>join</b>) brings data across — and it follows one rule: <b>if the operation keeps this layer's records, the result lands as columns on it; only an operation that changes the record set makes a new layer.</b></p>
+<p><b>Only the 3D selection</b> — a toggle above the run buttons scopes any join or reconcile to the rubber-banded zone: lasso the pit area, reconcile <i>just it</i>. Each side uses its own selection where it has one, and a scoped run is stamped <code>selection: true</code> in the lineage.</p>
 <ul>
   <li><b>Key join → columns here</b> — match rows by a key column (a block id, a domain code) and the brought columns land on this layer: numeric as materialized columns, text as categories, name collisions prefixed. The classic domain→density lookup is one join, no new layer.</li>
   <li><b>Spatial join → columns here</b> — with the target grid set to <i>this model's own lattice</i>, the other model's columns resample onto your existing cells (mean / sum / count, optionally weighted; categories by majority) and land as columns. A compatibility banner tells you whether the grids share a lattice, or why not.</li>

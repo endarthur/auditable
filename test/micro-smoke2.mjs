@@ -1671,6 +1671,21 @@ await p.close();
   });
   chk(`solid recipe: params resolve by name and the flag column lands (INBOX, ${solidR.colKind})`, solidR.err === null && solidR.hasCol);
   chk(`solid recipe: a missing layer fails NAMED before running ("${solidR.bad}")`, /nope\.obj/.test(solidR.bad || ''));
+
+  // ── join scope: "only the 3D selection" masks the source rows ──
+  const joinSel = await wp.evaluate(async () => {
+    const L = window._micro.layers().find((x) => x.name === 'w.csv');
+    const T = window._micro.gridAxesOf(L);
+    const n = 200;                                          // w.csv = 20×10 blocks, one bench
+    const mask = new Uint8Array(n); for (let i = 0; i < n; i++) if (i % 20 < 10) mask[i] = 1;   // the left half
+    L._selMask = mask; L._selCount = 100;
+    const columns = () => [{ src: 'left', name: 'FE', out: 'FE', num: true, op: 'mean' }];
+    const all = await window._micro.runSpatialJoin({ leftL: L, rightL: null, target: T, columns: columns(), coverage: false, label: 'j', asCells: true });
+    const sel = await window._micro.runSpatialJoin({ leftL: L, rightL: null, target: T, columns: columns(), coverage: false, label: 'j', asCells: true, useSelection: true });
+    L._selMask = null; L._selCount = 0;
+    return { all: all.nPresent, sel: sel.nPresent };
+  });
+  chk(`join scope: selection masks the source (${joinSel.all} cells all → ${joinSel.sel} selected)`, joinSel.all === 200 && joinSel.sel === 100);
   await wp.close();
 }
 

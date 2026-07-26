@@ -3007,7 +3007,7 @@ function gridAxesOf(L) {
 // target grid T, build a target block model (a CSV blob — real data columns),
 // and open it as a NEW layer. columns: [{ src:'left'|'right', name, out, op,
 // num, weight }]. op for numeric: 'mean'|'sum'|'count'; categorical → majority.
-async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], coverage = true, label = 'join', onProgress = null, asCells = false }) {
+async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], coverage = true, label = 'join', onProgress = null, asCells = false, useSelection = false }) {
   const T = target;
   const nx = T.x.count, ny = T.y.count, nz = T.z.count, cells = nx * ny * nz;
   if (cells > 40_000_000) throw new Error(`target grid is ${cells.toLocaleString()} cells — too large`);
@@ -3033,11 +3033,20 @@ async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], co
       c._i = h.columns.indexOf(c.name); c._w = c.weight ? h.columns.indexOf(c.weight) : -1;
       if (c.num) c._acc = R.newAcc(); else { c._acc = R.newCatAcc(); c._dict = ['']; c._codeOf = new Map(); }
     }
+    // this side's 3D selection, when asked for — record numbering mirrors
+    // runExport's: invalid-coord DELIMITED rows aren't records (renderer numbering)
+    const selMask = useSelection && L._selMask && L._selCount ? L._selMask : null;
+    const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm);
+    let rec2 = 0;
     let rc = 0;
     for await (const batch of layerRows(L, null)) {
       for (const f of batch) {
         const wx = +f[m.x], wy = +f[m.y], wz = +f[m.z];
-        if (!Number.isFinite(wx) || !Number.isFinite(wy) || !Number.isFinite(wz)) continue;
+        const badCoord = !Number.isFinite(wx) || !Number.isFinite(wy) || !Number.isFinite(wz);
+        if (badCoord && isDelim) continue;
+        const rAt = rec2++;
+        if (badCoord) continue;
+        if (selMask && !selMask[rAt]) continue;
         let si, sj, sk, hx, hy, hz;
         if (sub) {
           hx = (+f[dimCols.x] || 0) / 2; hy = (+f[dimCols.y] || 0) / 2; hz = (+f[dimCols.z] || 0) / 2;
@@ -15685,6 +15694,15 @@ function renderSpatialJoinUI(body, L, R, jf) {
     }
   };
   addSourceCols('left', L, lh); addSourceCols('right', R, rh);
+  // scope: honor each side's 3D selection (rubber-band a zone → join/reconcile just it)
+  const anySel = (L._selMask && L._selCount) || (R && R._selMask && R._selCount);
+  const selLab = document.createElement('label'); selLab.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:8px;color:var(--muted);cursor:pointer';
+  const selCb = document.createElement('input'); selCb.type = 'checkbox';
+  selCb.checked = !!jf.useSel && !!anySel; selCb.disabled = !anySel;
+  selCb.onchange = () => { jf.useSel = selCb.checked; };
+  selLab.append(selCb, anySel ? 'only the 3D selection (each side uses its own, where present)' : 'only the 3D selection — select something first (r / v)');
+  if (!anySel) jf.useSel = false;
+  body.appendChild(selLab);
   // run + reconcile
   const btns = document.createElement('div'); btns.style.cssText = 'display:flex;gap:6px;margin-top:10px';
   const rightPicked = jf.cols.some((k) => k.startsWith('right:'));
@@ -15733,8 +15751,8 @@ async function runSpatialJoinUI(L, R, jf) {
     const T = targetAxes(jf, L, R);
     const columns = joinColumnsFromForm(jf, L, R);
     const name = `${shortName(L)}⋈${shortName(R)}.csv`;
-    const { blob, cells } = await runSpatialJoin({ leftL: L, rightL: R, target: T, columns, label: 'join' });
-    const lin = mkLineage('join', { target: jf.target, columns: columns.map((c) => ({ src: c.src, name: c.name, out: c.out, op: c.op || undefined, weight: c.weight || undefined })) }, [L.lineage, R.lineage]);
+    const { blob, cells } = await runSpatialJoin({ leftL: L, rightL: R, target: T, columns, label: 'join', useSelection: !!jf.useSel });
+    const lin = mkLineage('join', { target: jf.target, ...(jf.useSel ? { selection: true } : {}), columns: columns.map((c) => ({ src: c.src, name: c.name, out: c.out, op: c.op || undefined, weight: c.weight || undefined })) }, [L.lineage, R.lineage]);
     await openBlob(blob, name, 'add', null, { lineage: lin });
     $('#meta').textContent = `joined ${cells.toLocaleString()} cells → ${name}`;
   } catch (e) { $('#meta').textContent = `join: ${e.message}`; }
@@ -15758,7 +15776,7 @@ async function spatialJoinToCols(L, R, jf) {
   const T = gridAxesOf(L); if (!T) throw new Error('this layer has no regular grid');
   const columns = joinColumnsFromForm(jf, L, R).filter((c) => c.src === 'right');
   if (!columns.length) throw new Error('pick right-side columns (the left ones are already here)');
-  const res = await runSpatialJoin({ leftL: null, rightL: R, target: T, columns, coverage: false, label: 'join', asCells: true });
+  const res = await runSpatialJoin({ leftL: null, rightL: R, target: T, columns, coverage: false, label: 'join', asCells: true, useSelection: !!jf.useSel });
   const h = layerTableHeader(L), m = h.mapping;
   const nx = T.x.count, ny = T.y.count;
   const n = attrRowCountOf(L) || 0;
@@ -15795,7 +15813,7 @@ async function spatialJoinToCols(L, R, jf) {
     await new Promise((r) => setTimeout(r));
   }
   for (const o of outs) {
-    const lin = mkLineage('estimate', { method: 'resample', fromElement: R.name, column: o.c.name, op: o.c.op || (o.c.num ? 'mean' : 'majority'), weight: o.c.weight || undefined }, [L.lineage, R.lineage].filter(Boolean));
+    const lin = mkLineage('estimate', { method: 'resample', fromElement: R.name, column: o.c.name, op: o.c.op || (o.c.num ? 'mean' : 'majority'), weight: o.c.weight || undefined, ...(jf.useSel ? { selection: true } : {}) }, [L.lineage, R.lineage].filter(Boolean));
     if (o.c.num) matColSet(L, o.out, o.vals, { lineage: lin });
     else { o.pc.lineage = lin; paintRecount(o.pc); }
   }
@@ -15887,11 +15905,11 @@ async function runReconcile(L, R, jf, grade) {
     ];
     const derived = [{ out: dName, num: true, compute: (g) => { const a = g(aName), b = g(bName); return a != null && b != null ? b - a : null; } }];
     const name = `reconcile_${shortName(L)}_vs_${shortName(R)}.csv`;
-    const { blob } = await runSpatialJoin({ leftL: L, rightL: R, target: T, columns, derived, label: 'reconcile' });
+    const { blob } = await runSpatialJoin({ leftL: L, rightL: R, target: T, columns, derived, label: 'reconcile', useSelection: !!jf.useSel });
     // open ALREADY coloured by Δ (chan = the Δ column) — heads are
     // XC,YC,ZC, ...columns, ...derived, so Δ is at 3 + columns.length
     const dIdx = 3 + columns.length;
-    const lin = mkLineage('reconcile', { grade, target: 'common-finest', of: `${shortName(L)}−${shortName(R)}` }, [L.lineage, R.lineage]);
+    const lin = mkLineage('reconcile', { grade, target: 'common-finest', ...(jf.useSel ? { selection: true } : {}), of: `${shortName(L)}−${shortName(R)}` }, [L.lineage, R.lineage]);
     await openBlob(blob, name, 'add', null, { mapping: { x: 0, y: 1, z: 2, chan: dIdx, cat: null }, lineage: lin });
     const J = activeLayer();
     if (J) {
