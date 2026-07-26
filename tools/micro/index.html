@@ -716,14 +716,15 @@
   #recPanel .rp-fields { margin-left: auto; background: none; border: none; color: var(--muted); font-family: var(--mono); font-size: 11px; cursor: pointer; padding: 0 4px; white-space: nowrap; }
   #recPanel .rp-fields:hover { color: var(--text-hi); }
   #recPanel .rp-fields + .rp-close { margin-left: 0; }   /* fields button already ate the auto gap */
-  #recPanel .rp-cfg { display: none; padding: 6px 12px 8px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; }
+  #recPanel .rp-cfg { display: none; flex: 0 0 auto; padding: 6px 12px 8px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; }
   #recPanel .rp-cfg.show { display: block; }
+  #recPanel .rp-list { flex: 1 1 auto; min-height: 0; }
   #recPanel .rp-cfg .rp-search { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 5px; margin-bottom: 5px; }
   #recPanel .rp-cfg .rp-links { margin-bottom: 5px; }
   #recPanel .rp-cfg .rp-links a { color: var(--accent); cursor: pointer; margin-right: 12px; }
   #recPanel .rp-cfg .rp-links .tally { color: var(--muted); }
   #recPanel .rp-cfg .rp-checks { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
-  #recPanel .rp-cfg .rp-checks label { display: flex; align-items: center; gap: 6px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+  #recPanel .rp-cfg .rp-checks label { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
   #recPanel .rp-cfg .rp-checks label:hover { color: var(--text-hi); }
   /* in-app prompt — micro never speaks through the browser's "says" box */
   #pmDlg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 31; }
