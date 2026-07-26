@@ -1391,6 +1391,9 @@ async function selectVolume(poly, mode, isRect) {
 }
 // gesture arming — the knife's grammar: one-shot, capture-phase, Esc cancels
 let _selArm = null;                                        // 'rect' | 'lasso' | null
+// selection stickiness (Settings → interaction): 'oneshot' | 'smart' | 'sticky'
+let _selStick = (() => { try { return localStorage.getItem('micro.selStick') || 'smart'; } catch { return 'smart'; } })();
+function setSelStick(v) { _selStick = v; try { localStorage.setItem('micro.selStick', v); } catch { /* private */ } }
 let _selPts = null;
 function armSelect(kind) {
   _selArm = kind; _selPts = null;
@@ -1460,9 +1463,9 @@ cv.addEventListener('pointerup', (e) => {
       armSelect(kind);
     } else {
       (_selThrough ? selectVolume : selectByPolygon)(poly, selModeOf(e), kind === 'rect');
-      // intent-sticky: releasing with shift/alt (add/subtract) says more
-      // gestures are coming — stay armed; a plain release puts the tool down
-      if (e.shiftKey || e.altKey) armSelect(kind);
+      // stickiness per Settings: 'smart' re-arms when released with shift/alt
+      // (add/subtract says more gestures are coming), 'sticky' always, 'oneshot' never
+      if (_selStick === 'sticky' || (_selStick === 'smart' && (e.shiftKey || e.altKey))) armSelect(kind);
     }
   } else $('#meta').textContent = _paintArm ? 'paint: nothing there' : 'selection: nothing there';
 }, { capture: true });
@@ -10879,6 +10882,78 @@ $('#mData').onclick = () => menuAt($('#mData'), [
 ]);
 // Tools = the instruments and readouts (lamina's grammar: View is how it
 // LOOKS, Tools is what you DO to it)
+// ── Settings — machine preferences, one declarative registry ────────────────
+// Three kinds of state: VIEW state travels with the project (bookmarks, pinned
+// windows), DATA decisions live in the manifests (mappings, desurvey) — and
+// MACHINE preferences (how this user on this machine likes micro to behave)
+// live here, in localStorage micro.*, never in the project. The window renders
+// itself from PREFS; adding a preference = adding a row.
+const PREFS = [
+  { sec: 'display', label: 'background', kind: 'choice', opts: [['#121212', 'basalt'], ['#000000', 'black'], ['#ffffff', 'white'], ['#f4f2ec', 'paper']], get: () => _bgColor, set: (v) => setBg(v) },
+  { sec: 'display', label: 'block edges', kind: 'toggle', get: () => _blockEdges, set: (v) => setBlockEdges(v) },
+  { sec: 'display', label: 'render budget', kind: 'choice', opts: () => [...$('#budget').options].map((o) => [o.value, o.textContent]), get: () => $('#budget').value, set: (v) => { $('#budget').value = v; $('#budget').dispatchEvent(new Event('change')); requestRender(); } },
+  { sec: 'interaction', label: 'selection tool stays armed', kind: 'choice', opts: [['oneshot', 'never (one shot)'], ['smart', 'with shift/alt held'], ['sticky', 'until Esc']], get: () => _selStick, set: (v) => setSelStick(v) },
+  { sec: 'interaction', label: 'properties auto-apply', kind: 'toggle', get: () => _autoApply, set: (v) => { $('#ppAuto').checked = v; $('#ppAuto').dispatchEvent(new Event('change')); } },
+  { sec: 'interaction', label: 'camera follows the section scrub', kind: 'toggle', get: () => _secFollow, set: (v) => { $('#secFollow').checked = v; $('#secFollow').dispatchEvent(new Event('input')); } },
+  { sec: 'compute', label: 'by-solid compute', kind: 'choice', opts: [['gpu', 'GPU (fast)'], ['cpu', 'CPU (watchdog-safe)']], get: () => (_windingGpu ? 'gpu' : 'cpu'), set: (v) => setWindingGpu(v === 'gpu') },
+  { sec: 'compute', label: 'derived-column residency', kind: 'choice', opts: [['auto', 'auto (scales with RAM)'], ['off', 'off (re-derive on demand)'], ['256', '256 MB'], ['512', '512 MB'], ['1024', '1 GB']], get: () => { try { return localStorage.getItem('micro.pinBudget') || 'auto'; } catch { return 'auto'; } }, set: (v) => setPinBudget(v) },
+  { sec: 'data', label: 'optimize block models to spatial Parquet on save', kind: 'choice', opts: [['on', 'always'], ['off', 'never'], ['ask', 'ask on next save']], get: () => (_autoOptimize || 'ask'), set: (v) => { if (v === 'ask') { _autoOptimize = null; try { localStorage.removeItem('micro.autoOptimize'); } catch { /* private */ } } else setAutoOptimize(v); } },
+  { sec: 'experimental', label: 'natural-language command bar (⌘K, proposes only)', kind: 'toggle', get: () => _nlOn, set: (v) => { nlSetEnabled(v); if (v) nlEnsureTrained(); } },
+];
+let _settingsWin = null;
+function openSettingsWindow() {
+  if (_settingsWin) { raiseWindow(_settingsWin.el); return; }
+  const win = floatWin({ title: 'settings', sub: 'this machine', x: innerWidth / 2 - 210, y: 90, w: 420, h: 470, onClose: () => { _settingsWin = null; } });
+  _settingsWin = win;
+  win.body.style.cssText += 'display:flex;flex-direction:column';
+  const scroll = document.createElement('div');
+  scroll.style.cssText = 'flex:1;min-height:0;overflow-y:auto;padding:8px 12px;font-family:var(--mono);font-size:12px';
+  win.body.appendChild(scroll);
+  const render = () => {
+    scroll.textContent = '';
+    let lastSec = null;
+    for (const pr of PREFS) {
+      if (pr.sec !== lastSec) {
+        lastSec = pr.sec;
+        const h = document.createElement('div'); h.className = 'sw-h'; h.style.marginTop = '8px'; h.textContent = pr.sec;
+        scroll.appendChild(h);
+      }
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin:3px 0;color:var(--muted)';
+      const lab = document.createElement('span'); lab.style.cssText = 'flex:1;min-width:0'; lab.textContent = pr.label;
+      row.appendChild(lab);
+      if (pr.kind === 'toggle') {
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!pr.get();
+        cb.onchange = () => { pr.set(cb.checked); };
+        row.appendChild(cb);
+      } else {
+        const sel = document.createElement('select'); sel.className = 'sw-sel';
+        const opts = typeof pr.opts === 'function' ? pr.opts() : pr.opts;
+        for (const [v, t] of opts) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); }
+        const cur = String(pr.get());
+        if (![...sel.options].some((o) => o.value === cur)) { const o = document.createElement('option'); o.value = cur; o.textContent = cur; sel.appendChild(o); }
+        sel.value = cur;
+        sel.onchange = () => { pr.set(sel.value); };
+        row.appendChild(sel);
+      }
+      scroll.appendChild(row);
+    }
+    // housekeeping
+    const h = document.createElement('div'); h.className = 'sw-h'; h.style.marginTop = '10px'; h.textContent = 'housekeeping';
+    scroll.appendChild(h);
+    const hk = document.createElement('div'); hk.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin:3px 0';
+    const forget = document.createElement('button'); forget.className = 'awin-btn'; forget.textContent = 'forget window layouts';
+    forget.title = 'clear every remembered per-kind window position/size';
+    forget.onclick = () => { try { for (const k of Object.keys(localStorage)) if (k.startsWith('micro.winGeo.')) localStorage.removeItem(k); } catch { /* private */ } $('#meta').textContent = 'window layouts forgotten — windows open at their defaults again'; };
+    hk.appendChild(forget);
+    scroll.appendChild(hk);
+    const note = document.createElement('div');
+    note.style.cssText = 'color:var(--dim);font-size:11px;line-height:1.5;margin-top:10px';
+    note.textContent = 'preferences are stored in this browser only — nothing leaves this machine (Sealed). View state travels with the project; data decisions live in its manifests.';
+    scroll.appendChild(note);
+  };
+  render();
+}
 $('#mTools').onclick = () => menuAt($('#mTools'), [
   { label: 'Measure…', kbd: 'm', action: armMeasure },
   { label: (_measureTP ? '✓ ' : '') + 'Measure trend & plunge', action: toggleMeasureTP },
@@ -10898,6 +10973,7 @@ $('#mTools').onclick = () => menuAt($('#mTools'), [
   { label: 'Scrub section forward', kbd: '.', action: () => scrubSection(1) },
   { sep: true },
   { label: (_autoOptimize === 'on' ? '✓ ' : '') + 'Auto-optimize block models to spatial Parquet on save', action: () => setAutoOptimize(_autoOptimize === 'on' ? 'off' : 'on') },
+  { label: 'Settings…', action: openSettingsWindow },
   { label: 'Memory…', action: showMemoryInfo },
 ]);
 const HELP_KEYS = `
@@ -11910,6 +11986,7 @@ const COMMANDS = [
   { id: 'export', group: 'Layer', title: 'Export rows…', kw: 'csv parquet save out', when: (c) => c.L && layerTableHeader(c.L), run: (c) => openExportDialog(c.L) },
   { id: 'hide', group: 'Layer', title: 'Hide / show layer', kw: 'visible toggle', when: (c) => c.L, run: (c) => { c.L.visible = !c.L.visible; applyTreeVisibility(); renderLayers(); } },
   { id: 'remove', group: 'Layer', title: 'Remove layer', kw: 'delete close', when: (c) => c.L, run: (c) => removeLayerUI(c.L.id) },
+  { id: 'settings', group: 'Tools', title: 'Settings…', kw: 'preferences options prefs background budget selection compute', run: () => openSettingsWindow() },
   { id: 'memory', group: 'Tools', title: 'Memory…', kw: 'vram usage ram', run: () => showMemoryInfo() },
   { id: 'sealed', group: 'Help', title: 'Why it\'s Sealed (security)…', kw: 'network privacy offline trust connect-src wasm verify', run: () => sealedInfo() },
   { id: 'update', group: 'Help', title: 'Check for updates…', kw: 'version new build reload service worker', run: () => checkForUpdates() },
@@ -16958,7 +17035,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(hit);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

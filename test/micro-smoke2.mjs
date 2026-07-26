@@ -1686,6 +1686,22 @@ await p.close();
     return { all: all.nPresent, sel: sel.nPresent };
   });
   chk(`join scope: selection masks the source (${joinSel.all} cells all → ${joinSel.sel} selected)`, joinSel.all === 200 && joinSel.sel === 100);
+
+  // ── settings window: the PREFS registry renders and persists ──
+  const setw = await wp.evaluate(() => {
+    window._micro.openSettingsWindow();
+    const win = [...document.querySelectorAll('.fwin')].pop();
+    const rows = win.querySelectorAll('input, select').length;
+    const sels = [...win.querySelectorAll('select')];
+    const stickSel = sels.find((s2) => [...s2.options].some((o) => o.value === 'sticky'));
+    stickSel.value = 'sticky'; stickSel.dispatchEvent(new Event('change'));
+    const stored = localStorage.getItem('micro.selStick');
+    stickSel.value = 'smart'; stickSel.dispatchEvent(new Event('change'));   // restore the default
+    window._micro.closeAllWindows();
+    return { title: win.querySelector('.fwin-head .t').textContent, rows, stored };
+  });
+  chk(`settings: the PREFS registry renders (${setw.rows} controls) and a choice persists (selStick → ${setw.stored})`,
+    setw.title === 'settings' && setw.rows >= 10 && setw.stored === 'sticky');
   await wp.close();
 }
 
