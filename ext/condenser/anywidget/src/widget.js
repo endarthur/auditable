@@ -162,6 +162,11 @@ const fmtN = (v) => {
 export function render({ model, el }) {
   const host = document.createElement('div');
   host.style.cssText = 'position:relative;width:100%;background:#121212;border-radius:3px;overflow:hidden;';
+  // right-drag PANS, so JupyterLab's own context menu must stay out of the way.
+  // This attribute is the supported hook: JupyterLab's handler does
+  // `el.closest('[data-jp-suppress-context-menu]')` and stands down if it hits.
+  host.setAttribute('data-jp-suppress-context-menu', 'true');
+  host.addEventListener('contextmenu', (e) => e.preventDefault());
   const canvas = document.createElement('canvas');
   canvas.style.cssText = 'display:block;width:100%;height:100%;';
   host.appendChild(canvas);
@@ -360,6 +365,29 @@ export function render({ model, el }) {
     tb.syncOrtho(cam.state.ortho);
   };
 
+  // camera presets — ONE implementation, shared by the toolbar and w.look()
+  const setView = (k) => {
+    const c = cam.state;
+    if (k === 'plan') { c.theta = -Math.PI / 2; c.phi = Math.PI / 2 - 0.001; }
+    else if (k === 'north') { c.theta = -Math.PI / 2; c.phi = 0; }
+    else if (k === 'south') { c.theta = Math.PI / 2; c.phi = 0; }
+    else if (k === 'east') { c.theta = Math.PI; c.phi = 0; }
+    else if (k === 'west') { c.theta = 0; c.phi = 0; }
+    else { c.theta = Math.PI / 4; c.phi = Math.PI / 5; }
+    cam.update();
+    needFit = true; invalidate();
+  };
+
+  // the stored camera state. Applied on CHANGE *and* at load: a widget
+  // displayed a second time (any cell whose value is the Viewer) builds a fresh
+  // view, and it must not come up pointing somewhere else than its sibling.
+  const applyView = () => {
+    const v = model.get('_view') || {};
+    if (v.name) setView(v.name);
+    if (v.ortho != null) { cam.setOrtho(!!v.ortho); if (tb) tb.syncOrtho(!!v.ortho); }
+    invalidate();
+  };
+
   // ── the toolbar ──
   const buildToolbar = () => {
     if (tb) { tb.destroy(); tb = null; }
@@ -374,15 +402,7 @@ export function render({ model, el }) {
         syncChrome();
       },
       fit: () => { needFit = true; invalidate(); },
-      setView: (k) => {
-        const c = cam.state;
-        if (k === 'plan') { c.theta = -Math.PI / 2; c.phi = Math.PI / 2 - 0.001; }
-        else if (k === 'north') { c.theta = -Math.PI / 2; c.phi = 0; }
-        else if (k === 'east') { c.theta = Math.PI; c.phi = 0; }
-        else { c.theta = Math.PI / 4; c.phi = Math.PI / 5; }
-        cam.update();
-        needFit = true; invalidate();
-      },
+      setView,
       toggleOrtho: () => { const on = !cam.state.ortho; cam.setOrtho(on); invalidate(); return on; },
       isOrtho: () => cam.state.ortho,
       getSection: () => model.get('section'),
@@ -398,7 +418,10 @@ export function render({ model, el }) {
           } catch (e) { hud.textContent = `snapshot failed: ${e.message}`; }
         });
       },
-      onToolChange: () => { tb.setBand(null); },
+      onToolChange: (t) => {
+        tb.setBand(null);
+        canvas.style.cursor = t === 'knife' ? 'crosshair' : '';
+      },
     });
     syncChrome();
   };
@@ -518,6 +541,7 @@ export function render({ model, el }) {
     ['change:toolbar', buildToolbar],
     ['change:edl', invalidate], ['change:edl_strength', invalidate], ['change:budget', invalidate],
     ['change:_fit', () => { needFit = true; invalidate(); }],
+    ['change:_view', applyView],
   ];
   for (const [ev, fn] of subs) model.on(ev, fn);
 
@@ -527,6 +551,7 @@ export function render({ model, el }) {
   applyBackground();
   buildToolbar();
   load();
+  applyView();                                             // match any camera state already on the widget
 
   return () => {
     disposed = true;

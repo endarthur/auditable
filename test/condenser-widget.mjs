@@ -211,15 +211,50 @@ const r = await page.evaluate(async (port) => {
   knifeBtn.click();
   const cv0 = document.querySelector('#host canvas');
   const r0 = cv0.getBoundingClientRect();
+  await new Promise((res) => setTimeout(res, 60));
   const kp = (t2, x, y) => host.dispatchEvent(new PointerEvent(t2, { clientX: x, clientY: y, bubbles: true }));
   kp('pointerdown', r0.left + r0.width * 0.3, r0.top + r0.height * 0.35);
   kp('pointermove', r0.left + r0.width * 0.5, r0.top + r0.height * 0.5);
-  out.bandShown = host.querySelector('.cdknife').style.display !== 'none';
+  const bandSvg = host.querySelector('.cdknife');
+  out.bandShown = bandSvg.style.display !== 'none';
+  // an SVG with no width/height gets a 300x150 intrinsic box and CLIPS the line
+  // — 'display != none' was true while nothing was visible. Assert the BOX.
+  out.bandBox = Math.round(bandSvg.getBoundingClientRect().width);
+  out.bandCaps = bandSvg.querySelectorAll('circle').length;
+  out.knifeCursor = getComputedStyle(cv0).cursor;
   kp('pointerup', r0.left + r0.width * 0.7, r0.top + r0.height * 0.65);
   await settle();
   out.knifeSection = model._get('section');
   out.scrubShown = host.querySelector('.cdsec') && host.querySelector('.cdsec').style.display !== 'none';
+  // the scrub bar: the slider must NOT move as the readout's width changes
+  {
+    const bar = host.querySelector('.cdsec');
+    const rng = bar.querySelector('input[type=range]');
+    const lbl = bar.querySelector('.lbl');
+    const pos = [], labels = [];
+    for (const v of [0, 500, 1000]) {
+      rng.value = String(v); rng.dispatchEvent(new Event('input'));
+      await new Promise((res) => setTimeout(res, 220));
+      pos.push(Math.round(rng.getBoundingClientRect().left));
+      labels.push(lbl.textContent);
+    }
+    out.scrubSpread = Math.max(...pos) - Math.min(...pos);
+    out.scrubLabels = labels;
+  }
   model.set('section', null); await settle();
+
+  // a SECOND view of the same widget must come up matching its stored camera —
+  // _view used to be change-only, so a re-display ignored it
+  model.set('_view', { name: 'north', ortho: true, n: 1 });
+  await settle();
+  const el2 = document.createElement('div');
+  el2.style.cssText = 'width:300px;height:200px';
+  document.body.appendChild(el2);
+  const d2 = render({ model, el: el2 });
+  await settle();
+  out.orthoBefore = false;
+  out.orthoAfter = el2.querySelector('.cdt button[title^="Parallel"]').getAttribute('aria-pressed') === 'true';
+  d2(); el2.remove();
 
   // pick → layer + row
   const cv = document.querySelector('#host canvas');
@@ -268,7 +303,13 @@ chk(`toolbar renders (${r.tbButtons} buttons) with the colour legend`, r.tbButto
 chk(`layers popover lists all 3 and a toggle reaches _styles (visible=${r.tbStylesVisible}, ${r.baseLit.toLocaleString()} → ${r.tbHidLit.toLocaleString()} px)`,
   r.popRows === 3 && r.tbStylesVisible === false && r.tbHidLit < r.baseLit * 0.9);
 chk(`knife drag cuts a section on a free normal (${JSON.stringify(r.knifeSection && r.knifeSection.normal ? r.knifeSection.normal.map((v) => Math.round(v * 100) / 100) : null)})`,
-  r.bandShown && r.knifeSection && Array.isArray(r.knifeSection.normal) && Number.isFinite(r.knifeSection.position) && r.scrubShown);
+  r.knifeSection && Array.isArray(r.knifeSection.normal) && Number.isFinite(r.knifeSection.position) && r.scrubShown);
+chk(`knife shows a crosshair and a traced line that fills the view (${r.bandBox}px box, ${r.bandCaps} end caps)`,
+  r.bandShown && r.bandBox > 600 && r.bandCaps === 2 && r.knifeCursor === 'crosshair', `cursor=${r.knifeCursor}`);
+chk(`the scrub slider is pinned — it cannot move as the readout's number changes width (spread ${r.scrubSpread}px)`,
+  r.scrubSpread === 0, JSON.stringify(r.scrubLabels));
+chk(`a second view honours the widget's stored camera (ortho ${r.orthoBefore} -> ${r.orthoAfter})`,
+  r.orthoBefore === false && r.orthoAfter === true);
 chk(`pick readout shows the record (${JSON.stringify((r.pickBoxText || '').slice(0, 42))})`,
   r.pickBoxShown && /row/.test(r.pickBoxText));
 chk('dispose is clean and empties the host', !r.disposeErr && r.emptied, r.disposeErr || '');

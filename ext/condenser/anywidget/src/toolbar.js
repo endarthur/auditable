@@ -46,8 +46,15 @@ const CSS = `
 .cdpop button.opt:hover { background:#2e2e2e; color:#fff; }
 .cdsec { position:absolute; left:6px; bottom:26px; z-index:4; display:flex; align-items:center; gap:6px;
   background:rgba(22,22,22,.88); border:1px solid #333; border-radius:4px; padding:3px 7px;
-  font:11px ui-monospace,Menlo,Consolas,monospace; color:#c4c4c4; backdrop-filter:blur(3px); }
-.cdsec input[type=range] { width:130px; accent-color:#c8781f; }
+  font:11px ui-monospace,Menlo,Consolas,monospace; color:#c4c4c4; backdrop-filter:blur(3px);
+  user-select:none; }
+/* FIXED width. The readout is the only elastic thing in this bar, and it sits
+   BEFORE the slider — letting it resize as the number changes (N 300 -> N -28.03)
+   walks the slider out from under the cursor mid-drag. Monospace + a fixed ch
+   box keeps the thumb exactly where the hand left it. */
+.cdsec .lbl { flex:0 0 12ch; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  font-variant-numeric:tabular-nums; }
+.cdsec input[type=range] { flex:0 0 130px; width:130px; accent-color:#c8781f; }
 .cdsec button { all:unset; cursor:pointer; color:#8a8a8a; padding:0 2px; }
 .cdsec button:hover { color:#e0705a; }
 .cdpick { position:absolute; right:6px; top:6px; z-index:4; max-width:210px;
@@ -172,6 +179,7 @@ export function createToolbar(host, api) {
   secBar.className = 'cdsec';
   secBar.style.display = 'none';
   const secLabel = document.createElement('span');
+  secLabel.className = 'lbl';
   const slider = document.createElement('input');
   slider.type = 'range'; slider.min = '0'; slider.max = '1000'; slider.value = '500';
   const thick = document.createElement('input');
@@ -210,12 +218,19 @@ export function createToolbar(host, api) {
   host.appendChild(leg);
 
   // ── the knife rubber band ──
-  const band = document.createElement('svg');
-  const bandEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const NS = 'http://www.w3.org/2000/svg';
+  const bandEl = document.createElementNS(NS, 'svg');
   bandEl.setAttribute('class', 'cdknife');
-  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-  line.setAttribute('stroke', '#c8781f'); line.setAttribute('stroke-width', '1.5'); line.setAttribute('stroke-dasharray', '5 3');
-  bandEl.appendChild(line);
+  bandEl.setAttribute('width', '100%');                    // an SVG with no size
+  bandEl.setAttribute('height', '100%');                   // gets a 300x150 box and CLIPS the line
+  const line = document.createElementNS(NS, 'line');
+  line.setAttribute('stroke', '#c8781f');
+  line.setAttribute('stroke-width', '1.6');
+  line.setAttribute('stroke-dasharray', '6 4');
+  const capA = document.createElementNS(NS, 'circle');
+  const capB = document.createElementNS(NS, 'circle');
+  for (const c of [capA, capB]) { c.setAttribute('r', '3'); c.setAttribute('fill', '#c8781f'); }
+  bandEl.append(line, capA, capB);
   bandEl.style.display = 'none';
   host.appendChild(bandEl);
 
@@ -225,6 +240,8 @@ export function createToolbar(host, api) {
       if (!a) { bandEl.style.display = 'none'; return; }
       line.setAttribute('x1', a[0]); line.setAttribute('y1', a[1]);
       line.setAttribute('x2', b[0]); line.setAttribute('y2', b[1]);
+      capA.setAttribute('cx', a[0]); capA.setAttribute('cy', a[1]);
+      capB.setAttribute('cx', b[0]); capB.setAttribute('cy', b[1]);
       bandEl.style.display = '';
     },
     clearTool() { tool = 'pick'; pickBtn.setAttribute('aria-pressed', 'true'); knifeBtn.setAttribute('aria-pressed', 'false'); api.onToolChange(tool); },

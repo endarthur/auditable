@@ -6,11 +6,13 @@
 import numpy as np, gcu_condenser as cd
 
 cd.blocks(df, x="XC", y="YC", z="ZC", value="FE")        # on its own
-cd.view(                                                  # …or stacked, co-registered
+w = cd.view(                                              # …or stacked, co-registered
     cd.blocks(df, value="FE", name="model", threshold=[28, 99]),
     cd.drillholes(collar, survey, assay, value="AU"),
     cd.points(tx, ty, tz, name="topo", sectioned=False),
-).cut(axis="y", position=8200500, thickness=40)
+    section={"axis": "y", "position": 8200500, "thickness": 40},
+)
+w
 ```
 
 The renderer is [`@gcu/condenser`](../) — the same streaming engine behind
@@ -109,7 +111,7 @@ Per **layer** — every one is live, set it and the view updates with no re-send
 | `selected` | read back: the row picked on this layer |
 
 Per **view**: `section` (or `w.cut(...)`), `background`, `height`, `toolbar`, `edl`,
-`edl_strength`, `budget`, `selection`, `w.fit()`, `w["name"]`, `w.add(layer)`.
+`edl_strength`, `budget`, `selection`, `w.fit()`, `w.look(view, ortho=)`, `w["name"]`, `w.add(layer)`.
 
 ### Seeing inside a model
 
@@ -131,11 +133,20 @@ the value column it already has.
 w.cut(axis="y", position=8200500, thickness=40)
 w.cut(normal=[1, 1, 0], position=0, thickness=25)   # any orientation
 w.cut()                                              # clear
+w.look("north", ortho=True)                          # …and look ALONG it
 ```
+
+A section is only readable when you look **along** it in parallel projection, so
+`look()` is the usual companion — `'plan'`, `'north'`, `'south'`, `'east'`,
+`'west'`, `'iso'`. The toolbar's *views* and *ortho* buttons do the same.
 
 A layer built with `sectioned=False` stays whole while the rest is cut — the
 usual way you keep topography for context. `'front'` / `'behind'` give you a
 half-space instead of a slab.
+
+`cut()`, `look()`, `fit()` and `add()` return `None` on purpose: a notebook
+displays a cell's value, so returning `self` would build a *second* live view of
+the same widget every time you adjusted it.
 
 ### Clicking round-trips into pandas
 

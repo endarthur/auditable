@@ -267,6 +267,7 @@ class Viewer(anywidget.AnyWidget):
     _payload = traitlets.Bytes(b"").tag(sync=True)
     _styles = traitlets.List(traitlets.Dict(), default_value=[]).tag(sync=True)
     _fit = traitlets.Int(0).tag(sync=True)
+    _view = traitlets.Dict(default_value={}).tag(sync=True)
 
     #: {'axis': 'x'|'y'|'z', 'position': v, 'thickness': t} or
     #: {'normal': [x,y,z], 'position': v, 'thickness': t}; {} or None = off
@@ -352,6 +353,11 @@ class Viewer(anywidget.AnyWidget):
             ly.selected = int(sel.get("row", -1)) if i == idx else -1
 
     # ── convenience ──
+    # NB: the mutators below return None ON PURPOSE. A notebook displays a
+    # cell's value, so `return self` would build a SECOND live view of the same
+    # widget for every `w.cut(...)` — a second WebGL context, and two views
+    # sharing one state that then appear to contradict each other. Chaining is
+    # not worth that; `cd.view(..., section=...)` covers the one-liner.
     def add(self, layer):
         """Add a layer and re-pack (the shared frame is recomputed)."""
         layer._viewer = self
@@ -360,13 +366,11 @@ class Viewer(anywidget.AnyWidget):
         self.layers.append(layer)
         self._repack()
         self._push_styles()
-        return self
 
     def remove(self, key):
         self.layers.pop(self._index(key))
         self._repack()
         self._push_styles()
-        return self
 
     def _index(self, key):
         if isinstance(key, int):
@@ -385,7 +389,18 @@ class Viewer(anywidget.AnyWidget):
     def fit(self):
         """Re-frame the camera on the data."""
         self._fit += 1
-        return self
+
+    def look(self, view="iso", ortho=None):
+        """Point the camera: 'plan' | 'north' | 'south' | 'east' | 'west' | 'iso'.
+
+        A section is only readable when you look ALONG it, so this is the usual
+        companion to :meth:`cut` -- and `ortho=True` (parallel projection) is
+        what makes a section measurable rather than merely suggestive.
+        """
+        v = {"name": view, "n": int(self._view.get("n", 0)) + 1}
+        if ortho is not None:
+            v["ortho"] = bool(ortho)
+        self._view = v
 
     def cut(self, axis=None, position=None, thickness=10.0, normal=None):
         """Set the section plane. ``cut()`` with no arguments clears it."""
@@ -398,7 +413,6 @@ class Viewer(anywidget.AnyWidget):
             else:
                 s["axis"] = axis
             self.section = s
-        return self
 
     @property
     def selected_row(self):
