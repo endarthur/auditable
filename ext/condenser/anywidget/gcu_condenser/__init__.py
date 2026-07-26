@@ -222,7 +222,14 @@ class Layer(traitlets.HasTraits):
     #: the row index of the last pick on THIS layer, or -1
     selected = traitlets.Int(-1)
 
+    @property
+    def selected_rows(self):
+        """Rows selected on this layer by the rectangle/lasso tools, as a
+        numpy array of indices into the table you passed (empty if none)."""
+        return getattr(self, "_sel", np.zeros(0, dtype=np.uint32))
+
     def __init__(self, kind, cols, extra, categories=None, **kw):
+        self._sel = np.zeros(0, dtype=np.uint32)
         self._kind = kind
         self._cols = cols                      # name -> np.ndarray (world coords, unframed)
         self._extra = extra                    # per-layer header bits
@@ -268,6 +275,11 @@ class Viewer(anywidget.AnyWidget):
     _styles = traitlets.List(traitlets.Dict(), default_value=[]).tag(sync=True)
     _fit = traitlets.Int(0).tag(sync=True)
     _view = traitlets.Dict(default_value={}).tag(sync=True)
+    _sel_rows = traitlets.Bytes(b"").tag(sync=True)
+    _clear_sel = traitlets.Int(0).tag(sync=True)
+    #: the last measurement: {'from', 'to', 'distance', 'dx','dy','dz',
+    #: 'bearing', 'plunge'} — {} until you measure something
+    measurement = traitlets.Dict(default_value={}).tag(sync=True)
 
     #: {'axis': 'x'|'y'|'z', 'position': v, 'thickness': t} or
     #: {'normal': [x,y,z], 'position': v, 'thickness': t}; {} or None = off
@@ -296,6 +308,7 @@ class Viewer(anywidget.AnyWidget):
         self._push_styles()
         self.observe(self._on_selection, names="selection")
         self.observe(self._on_styles, names="_styles")
+        self.observe(self._on_sel_rows, names="_sel_rows")
 
     # ── data ──
     def _repack(self):
@@ -345,6 +358,61 @@ class Viewer(anywidget.AnyWidget):
                         setattr(ly, k, v)
         finally:
             self._syncing = False
+
+    def _on_sel_rows(self, change):
+        """Decode the packed region selection onto the Layers.
+
+        Wire layout (little-endian, mirrored by src/widget.js's packSelection):
+            u32 nLayers, then per layer: u32 layerIndex, u32 count, u32[count] rows
+        Bytes, not JSON -- a marquee over a big model can select a million rows.
+        """
+        raw = change["new"] or b""
+        for ly in self.layers:
+            ly._sel = np.zeros(0, dtype=np.uint32)
+        if len(raw) < 4:
+            return
+        head = np.frombuffer(raw, dtype=np.uint32)
+        n, at = int(head[0]), 1
+        for _ in range(n):
+            if at + 1 >= head.size:
+                break
+            li, count = int(head[at]), int(head[at + 1])
+            at += 2
+            rows = head[at:at + count]
+            at += count
+            if 0 <= li < len(self.layers):
+                self.layers[li]._sel = np.array(rows, dtype=np.uint32)
+
+    @property
+    def selected_rows(self):
+        """{layer name: row indices} for every layer with a region selection."""
+        return {ly.name: ly.selected_rows for ly in self.layers if ly.selected_rows.size}
+
+    def clear_selection(self):
+        """Drop the rectangle/lasso selection everywhere."""
+        self._clear_sel += 1
+
+    def copy(self):
+        """An INDEPENDENT viewer over the same data.
+
+        Views of one Viewer share its state -- that is what makes `w.cut(...)`
+        update a cell further up, and it also means two displays of `w` can
+        never differ. When you want two panels side by side (cut vs uncut, plan
+        vs section), take a copy: the payload bytes are reused, so this costs a
+        widget, not a re-pack.
+        """
+        clone = Viewer.__new__(Viewer)
+        layers = []
+        for ly in self.layers:
+            l2 = Layer(ly._kind, ly._cols, ly._extra, ly.categories, **ly._style())
+            layers.append(l2)
+        Viewer.__init__(clone, layers,
+                        section=self.section, background=self.background, height=self.height,
+                        toolbar=self.toolbar, edl=self.edl, edl_strength=self.edl_strength,
+                        budget=self.budget)
+        clone._payload = self._payload                     # same bytes, no re-pack
+        clone._view = dict(self._view)
+        return clone
 
     def _on_selection(self, change):
         sel = change["new"] or {}

@@ -191,6 +191,7 @@ const r = await page.evaluate(async (port) => {
   // ── the TOOLBAR ──
   const host = el.querySelector('div');
   out.tbButtons = host.querySelectorAll('.cdt button').length;
+  const toolBtn = (p) => [...host.querySelectorAll('.cdt button')].find((b) => (b.title || '').startsWith(p));
   out.legendShown = !!host.querySelector('.cdleg') && host.querySelector('.cdleg').style.display !== 'none';
 
   // layers popover → toggling a checkbox must reach _styles (and so Python)
@@ -256,6 +257,73 @@ const r = await page.evaluate(async (port) => {
   out.orthoAfter = el2.querySelector('.cdt button[title^="Parallel"]').getAttribute('aria-pressed') === 'true';
   d2(); el2.remove();
 
+  // ── RECTANGLE selection: drag a box, get rows back in the packed wire format
+  // that gcu_condenser decodes (u32 n, then per layer: idx, count, rows...) ──
+  const cvS = document.querySelector('#host canvas');
+  const rS = cvS.getBoundingClientRect();
+  const drag = (from, to, path) => {
+    host.dispatchEvent(new PointerEvent('pointerdown', { clientX: from[0], clientY: from[1], bubbles: true }));
+    for (const p of (path || [to])) host.dispatchEvent(new PointerEvent('pointermove', { clientX: p[0], clientY: p[1], bubbles: true }));
+    host.dispatchEvent(new PointerEvent('pointerup', { clientX: to[0], clientY: to[1], bubbles: true }));
+  };
+  const unpack = (dv) => {
+    if (!dv || dv.byteLength < 4) return {};
+    const out2 = {}; const n = dv.getUint32(0, true); let off = 4;
+    for (let q = 0; q < n; q++) {
+      const li = dv.getUint32(off, true), count = dv.getUint32(off + 4, true);
+      off += 8;
+      const rows = [];
+      for (let z = 0; z < count; z++) { rows.push(dv.getUint32(off, true)); off += 4; }
+      out2[li] = rows;
+    }
+    return out2;
+  };
+  toolBtn('Rectangle').click();
+  out.rectCursor = getComputedStyle(cvS).cursor;
+  drag([rS.left + rS.width * 0.30, rS.top + rS.height * 0.30],
+       [rS.left + rS.width * 0.62, rS.top + rS.height * 0.66],
+       [[rS.left + rS.width * 0.45, rS.top + rS.height * 0.5], [rS.left + rS.width * 0.62, rS.top + rS.height * 0.66]]);
+  await settle();
+  out.rectSel = unpack(model._get('_sel_rows'));
+  out.rectLit = lit().sig;
+  const totalOf = (o) => Object.values(o).reduce((a, v) => a + v.length, 0);
+  out.rectTotal = totalOf(out.rectSel);
+
+  // LASSO over a deliberately smaller loop → strictly fewer rows
+  model.set('_clear_sel', 1); await settle();
+  toolBtn('Lasso').click();
+  const cx0 = rS.left + rS.width * 0.46, cy0 = rS.top + rS.height * 0.48, rad = Math.min(rS.width, rS.height) * 0.11;
+  const loop = [];
+  for (let a = 0; a <= 18; a++) { const th = (a / 18) * Math.PI * 2; loop.push([cx0 + Math.cos(th) * rad, cy0 + Math.sin(th) * rad]); }
+  drag(loop[0], loop[loop.length - 1], loop);
+  await settle();
+  out.lassoSel = unpack(model._get('_sel_rows'));
+  out.lassoTotal = totalOf(out.lassoSel);
+
+  // clearing from Python drops the wash
+  model.set('_clear_sel', 2); await settle();
+  out.clearedTotal = totalOf(unpack(model._get('_sel_rows')));
+
+  // ── MEASURE: two clicks on elements → distance, bearing, plunge ──
+  toolBtn('Measure').click();
+  const clickAt = (x, y) => {
+    host.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, bubbles: true }));
+    host.dispatchEvent(new PointerEvent('pointerup', { clientX: x, clientY: y, bubbles: true }));
+  };
+  let meas = {};
+  outer: for (const A of [[0.42, 0.44], [0.46, 0.5], [0.5, 0.46]]) {
+    for (const B of [[0.58, 0.58], [0.55, 0.62], [0.6, 0.52]]) {
+      model.set('measurement', {});
+      clickAt(rS.left + rS.width * A[0], rS.top + rS.height * A[1]); await settle();
+      clickAt(rS.left + rS.width * B[0], rS.top + rS.height * B[1]); await settle();
+      meas = model._get('measurement') || {};
+      if (meas.distance) break outer;
+    }
+  }
+  out.measurement = meas;
+  out.measBandShown = host.querySelector('.cdknife').style.display !== 'none';
+  toolBtn('Pick').click();
+
   // pick → layer + row
   const cv = document.querySelector('#host canvas');
   const rect = cv.getBoundingClientRect();
@@ -299,7 +367,15 @@ chk(`sectioned=False exempts a layer (exempt ${r.sectionLit.toLocaleString()} px
   r.sectionAllLit < r.sectionLit);
 chk(`pick returns layer + row (${JSON.stringify(r.selection)})`,
   r.selection && Number.isInteger(r.selection.row) && r.selection.row >= 0 && typeof r.selection.name === 'string' && r.selection.name.length > 0);
-chk(`toolbar renders (${r.tbButtons} buttons) with the colour legend`, r.tbButtons === 7 && r.legendShown);
+chk(`toolbar renders (${r.tbButtons} buttons) with the colour legend`, r.tbButtons === 10 && r.legendShown);
+chk(`rectangle select returns rows in the packed wire format (${r.rectTotal.toLocaleString()} rows over ${Object.keys(r.rectSel).length} layer(s))`,
+  r.rectTotal > 0 && Object.keys(r.rectSel).length >= 1 && r.rectCursor === 'crosshair');
+chk(`lasso select is tighter than the box (${r.lassoTotal.toLocaleString()} vs ${r.rectTotal.toLocaleString()} rows)`,
+  r.lassoTotal > 0 && r.lassoTotal < r.rectTotal);
+chk('clear_selection() from Python empties it', r.clearedTotal === 0);
+chk(`measure gives distance / bearing / plunge (${r.measurement.distance ? Math.round(r.measurement.distance) : '—'} m, brg ${r.measurement.bearing != null ? Math.round(r.measurement.bearing) : '—'}, plunge ${r.measurement.plunge != null ? Math.round(r.measurement.plunge) : '—'})`,
+  !!r.measurement.distance && r.measurement.distance > 0 && Number.isFinite(r.measurement.bearing)
+  && Number.isFinite(r.measurement.plunge) && Array.isArray(r.measurement.from) && r.measBandShown);
 chk(`layers popover lists all 3 and a toggle reaches _styles (visible=${r.tbStylesVisible}, ${r.baseLit.toLocaleString()} → ${r.tbHidLit.toLocaleString()} px)`,
   r.popRows === 3 && r.tbStylesVisible === false && r.tbHidLit < r.baseLit * 0.9);
 chk(`knife drag cuts a section on a free normal (${JSON.stringify(r.knifeSection && r.knifeSection.normal ? r.knifeSection.normal.map((v) => Math.round(v * 100) / 100) : null)})`,

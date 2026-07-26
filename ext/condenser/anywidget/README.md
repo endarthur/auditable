@@ -80,6 +80,9 @@ minimum-curvature code micro uses, so a hole lands in the same place in both.
 | **views** | plan · looking north · looking east · isometric |
 | **ortho** | parallel projection — sections are unreadable in perspective |
 | **pick** | click an element to inspect it (on by default) |
+| **rectangle** | drag a box to select — shift adds to the selection |
+| **lasso** | draw around elements to select — shift adds |
+| **measure** | click two elements for distance, bearing and plunge |
 | **knife** | drag a line across the view to cut a section along it |
 | **layers** | show/hide each layer |
 | **snapshot** | save the view as a PNG |
@@ -109,9 +112,11 @@ Per **layer** — every one is live, set it and the view updates with no re-send
 | `visible`, `point_size`, `as_points`, `block_edges`, `radius` | |
 | `sectioned` | `True` · `False` (exempt) · `'front'` · `'behind'` |
 | `selected` | read back: the row picked on this layer |
+| `selected_rows` | read back: rows caught by the rectangle/lasso tools |
 
 Per **view**: `section` (or `w.cut(...)`), `background`, `height`, `toolbar`, `edl`,
-`edl_strength`, `budget`, `selection`, `w.fit()`, `w.look(view, ortho=)`, `w["name"]`, `w.add(layer)`.
+`edl_strength`, `budget`, `selection`, `selected_rows`, `measurement`, `w.fit()`, `w.look(view, ortho=)`,
+`w.clear_selection()`, `w.copy()`, `w["name"]`, `w.add(layer)`.
 
 ### Seeing inside a model
 
@@ -160,6 +165,49 @@ df.iloc[w.selected_row]
 ```
 
 For drillholes the row is the **interval** row of the assay table.
+
+### Selecting, and measuring
+
+The rectangle and lasso tools hand their result straight back as row indices:
+
+```python
+w.selected_rows                  # {'model': array([...]), 'holes': array([...])}
+w["model"].selected_rows         # just this layer's rows
+df.iloc[w["model"].selected_rows]        # …which is a DataFrame slice
+df.iloc[w["model"].selected_rows].FE.mean()
+w.clear_selection()
+```
+
+Selection uses the same ID buffer as a click, so **what you select is what you
+can see** — occluded elements are not caught, exactly like picking. It rides
+back as packed binary rather than JSON, because a marquee over a big model can
+easily select a million rows.
+
+Measure takes two clicks and reports what you actually want off two points:
+
+```python
+w.measurement
+# {'from': [...], 'to': [...], 'distance': 84.9, 'dx':…, 'dy':…, 'dz':…,
+#  'bearing': 41.2, 'plunge': 63.5}
+```
+
+Bearing is degrees from north, clockwise; plunge is positive downward.
+
+### Two panels at once
+
+Views of one Viewer **share its state** — that is what makes `w.cut(...)` update
+a cell further up, and it also means two displays of `w` can never differ. For
+genuinely independent panels, take a copy:
+
+```python
+plan = w.copy()
+plan.look("plan", ortho=True)
+section = w.copy()
+section.cut(axis="y", position=8200500, thickness=40)
+section.look("north", ortho=True)     # …two panels, one dataset
+```
+
+`copy()` reuses the payload bytes, so it costs a widget, not a re-pack.
 
 ## Honest notes
 

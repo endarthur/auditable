@@ -263,6 +263,13 @@ export function render({ model, el }) {
         if (L.cat_n) renderer.setCategories(L.cat_n);
       } else if (L.kind === 'drillholes') {
         const seg = drillholeSegments(L, cols);
+        // the desurvey computes these, so stash the interval midpoints by ROW:
+        // measure and the readout need a position for a drillhole pick too
+        L._pos = { x: new Float64Array(L.count), y: new Float64Array(L.count), z: new Float64Array(L.count) };
+        for (let q = 0; q < seg.count; q++) {
+          const r = seg.recIdx[q];
+          L._pos.x[r] = seg.x[q]; L._pos.y[r] = seg.y[q]; L._pos.z[r] = seg.z[q];
+        }
         const b = createStickChunkBuilder({ frame, chunkSize: 1 << 16, seed: 1, onChunk: (c) => renderer.addChunk(c, 'base', i) });
         b.push({ count: seg.count, ax: seg.ax, ay: seg.ay, az: seg.az, bx: seg.bx, by: seg.by, bz: seg.bz,
           x: seg.x, y: seg.y, z: seg.z, chan: seg.chan, cat: seg.cat, recIdx: seg.recIdx });
@@ -420,8 +427,10 @@ export function render({ model, el }) {
       },
       onToolChange: (t) => {
         tb.setBand(null);
-        canvas.style.cursor = t === 'knife' ? 'crosshair' : '';
+        measA = null;
+        canvas.style.cursor = (t === 'knife' || t === 'rect' || t === 'lasso' || t === 'measure') ? 'crosshair' : '';
       },
+      clearSelection: () => { selected.clear(); pushSelection(); if (tb) tb.showPick(null); },
     });
     syncChrome();
   };
@@ -487,16 +496,145 @@ export function render({ model, el }) {
     return { title: name, rows };
   };
 
-  let down = null, dragging = false;
+  // a record's WORLD position (blocks/points carry their columns; drillholes
+  // get theirs from the desurvey stash above)
+  const posOf = (li, rec) => {
+    const L = payload && payload.layers[li];
+    if (!L) return null;
+    const c = L._pos || L.cols;
+    if (!c || !c.x) return null;
+    return [c.x[rec], c.y[rec], c.z[rec]];
+  };
+
+  const pointInPoly = (x, y, poly) => {
+    let inside = false;
+    for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
+      const xa = poly[a][0], ya = poly[a][1], xb = poly[b][0], yb = poly[b][1];
+      if ((ya > y) !== (yb > y) && x < ((xb - xa) * (y - ya)) / (yb - ya) + xa) inside = !inside;
+    }
+    return inside;
+  };
+
+  // ── region selection. The ID buffer already answers "which record is at this
+  // pixel" for the whole viewport, so a marquee is: render the region's ids,
+  // keep the pixels inside the shape, and collect the records. Which means what
+  // you select is exactly what you can SEE — occluded elements are not caught,
+  // the same contract as a click. ──
+  const selected = new Map();                              // layer → Set(row)
+  const packSelection = () => {
+    let n = 0, total = 0;
+    for (const set of selected.values()) if (set.size) { n++; total += set.size; }
+    const buf = new ArrayBuffer(4 + n * 8 + total * 4);
+    const dv = new DataView(buf);
+    dv.setUint32(0, n, true);
+    let off = 4;
+    for (const [li, set] of selected) {
+      if (!set.size) continue;
+      dv.setUint32(off, li, true); dv.setUint32(off + 4, set.size, true);
+      off += 8;
+      for (const r of set) { dv.setUint32(off, r, true); off += 4; }
+    }
+    return buf;
+  };
+  const pushSelection = () => {
+    styles().forEach((_s, i) => {
+      const L = payload && payload.layers[i];
+      const set = selected.get(i);
+      if (!L) return;
+      if (!set || !set.size) { renderer.setLayerSelection(i, null); return; }
+      const mask = new Uint8Array(L.count);
+      for (const r of set) if (r < mask.length) mask[r] = 1;
+      renderer.setLayerSelection(i, mask);
+    });
+    model.set('_sel_rows', new DataView(packSelection()));
+    model.save_changes();
+    schedule();
+  };
+  const selectRegion = (rectCss, polyCss, additive) => {
+    if (!payload) return;
+    const vo = viewOpts();
+    const reg = renderer.pickRegion(rectCss, cam, {
+      pointPx: vo.pointPx, blocksAsPoints: vo.asPoints,
+      section: sectionOf(model.get('section'), payload.frame),
+    });
+    if (!additive) selected.clear();
+    if (reg && reg.data) {
+      const { data, w: rw, h: rh, dpr } = reg;
+      for (let row = 0; row < rh; row++) {
+        for (let col = 0; col < rw; col++) {
+          const i = (row * rw + col) * 4;
+          const g = data[i + 1] >>> 0;
+          if (g === 0xFFFFFFFF) continue;                  // nothing at this pixel
+          if (polyCss) {                                   // lasso: rows are BOTTOM-UP
+            const cx = rectCss.x + col / dpr;
+            const cy = rectCss.y + (rh - 1 - row) / dpr;
+            if (!pointInPoly(cx, cy, polyCss)) continue;
+          }
+          const li = g & 0xFFFF;
+          let set = selected.get(li);
+          if (!set) selected.set(li, set = new Set());
+          set.add(data[i] >>> 0);
+        }
+      }
+    }
+    pushSelection();
+    if (tb) {
+      const counts = [...selected.entries()].filter(([, v]) => v.size)
+        .map(([li, v]) => [styleAt(li).name || `layer ${li}`, v.size.toLocaleString()]);
+      tb.showPick(counts.length ? { title: 'selected', rows: counts } : null);
+    }
+  };
+
+  // ── measure: two picks, then distance + bearing + plunge (the numbers a
+  // geologist actually wants off two points) ──
+  let measA = null;
+  const doMeasure = (hit, xy) => {
+    if (!hit) return;
+    const p = posOf(hit.layer, hit.rec);
+    if (!p) return;
+    if (!measA) { measA = { p, xy }; if (tb) { tb.setBand('measure', xy, xy); tb.showPick({ title: 'measure', rows: [['from', `${fmtN(p[0])} ${fmtN(p[1])} ${fmtN(p[2])}`], ['', 'click a second element']] }); } return; }
+    const a = measA.p, b = p;
+    const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+    const dist = Math.hypot(dx, dy, dz);
+    const horiz = Math.hypot(dx, dy);
+    const bearing = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;   // from north, clockwise
+    const plunge = -Math.atan2(dz, horiz) * 180 / Math.PI;              // + is downward
+    model.set('measurement', {
+      from: [a[0], a[1], a[2]], to: [b[0], b[1], b[2]],
+      distance: dist, dx, dy, dz, bearing, plunge,
+    });
+    model.save_changes();
+    if (tb) {
+      tb.setBand('measure', measA.xy, xy);
+      tb.showPick({ title: 'measure', rows: [
+        ['distance', fmtN(dist)], ['dx dy dz', `${fmtN(dx)} ${fmtN(dy)} ${fmtN(dz)}`],
+        ['bearing', `${fmtN(bearing)}\u00b0`], ['plunge', `${fmtN(plunge)}\u00b0`],
+      ] });
+    }
+    measA = null;
+  };
+
+  let down = null, dragging = false, lasso = null;
+  const DRAG_TOOLS = { knife: 'line', rect: 'rect', lasso: 'poly' };
   const onDown = (e) => {
     const t = tb ? tb.tool : 'pick';
-    down = { xy: relXY(e), t };
-    if (t === 'knife') { dragging = true; e.stopPropagation(); e.preventDefault(); }
+    down = { xy: relXY(e), t, shift: e.shiftKey };
+    if (DRAG_TOOLS[t]) {
+      dragging = true;
+      lasso = t === 'lasso' ? [relXY(e)] : null;
+      e.stopPropagation(); e.preventDefault();
+    }
   };
   const onMove = (e) => {
     if (!dragging || !down) return;
     e.stopPropagation();
-    if (tb) tb.setBand(down.xy, relXY(e));
+    const xy = relXY(e);
+    const kind = DRAG_TOOLS[down.t];
+    if (kind === 'poly') {
+      const last = lasso[lasso.length - 1];
+      if (Math.hypot(xy[0] - last[0], xy[1] - last[1]) > 3) lasso.push(xy);
+      if (tb) tb.setBand('poly', lasso);
+    } else if (tb) tb.setBand(kind, down.xy, xy);
   };
   const onUp = (e) => {
     if (!down) return;
@@ -505,19 +643,36 @@ export function render({ model, el }) {
     if (dragging) {
       e.stopPropagation();
       dragging = false;
+      const t0 = down.t, add = down.shift, a = down.xy, path = lasso;
+      lasso = null; down = null;
       if (tb) tb.setBand(null);
-      if (moved > 8) { doKnife(down.xy, xy); if (tb) tb.clearTool(); }
-      down = null;
+      if (t0 === 'lasso') {
+        // a lasso ENDS WHERE IT STARTED, so start-to-end displacement is ~0 for
+        // every real loop — the twitch test has to be the path's EXTENT.
+        if (!path || path.length < 3) return;
+        const xsL = path.map((q) => q[0]), ysL = path.map((q) => q[1]);
+        const x0 = Math.min(...xsL), y0 = Math.min(...ysL);
+        const bw = Math.max(...xsL) - x0, bh = Math.max(...ysL) - y0;
+        if (Math.max(bw, bh) < 8) return;
+        selectRegion({ x: x0, y: y0, w: bw, h: bh }, path, add);
+        return;
+      }
+      if (moved <= 8) return;                              // a twitch is not a gesture
+      if (t0 === 'knife') { doKnife(a, xy); if (tb) tb.clearTool(); return; }
+      if (t0 === 'rect') {
+        selectRegion({ x: Math.min(a[0], xy[0]), y: Math.min(a[1], xy[1]), w: Math.abs(xy[0] - a[0]), h: Math.abs(xy[1] - a[1]) }, null, add);
+      }
       return;
     }
     const t = down.t;
     down = null;
-    if (t !== 'pick' || moved > 4 || !payload) return;     // a drag is navigation, not a pick
+    if ((t !== 'pick' && t !== 'measure') || moved > 4 || !payload) return;   // a drag is navigation
     const vo = viewOpts();
     const hit = renderer.pick(xy[0], xy[1], cam, {
       pointPx: vo.pointPx, blocksAsPoints: vo.asPoints,
       section: sectionOf(model.get('section'), payload.frame),
     });
+    if (t === 'measure') { doMeasure(hit, xy); schedule(); return; }
     renderer.setPicked(hit || null);
     model.set('selection', hit ? { layer: hit.layer, name: styleAt(hit.layer).name || '', row: hit.rec } : {});
     model.save_changes();
@@ -541,6 +696,7 @@ export function render({ model, el }) {
     ['change:toolbar', buildToolbar],
     ['change:edl', invalidate], ['change:edl_strength', invalidate], ['change:budget', invalidate],
     ['change:_fit', () => { needFit = true; invalidate(); }],
+    ['change:_clear_sel', () => { selected.clear(); pushSelection(); if (tb) tb.showPick(null); }],
     ['change:_view', applyView],
   ];
   for (const [ev, fn] of subs) model.on(ev, fn);

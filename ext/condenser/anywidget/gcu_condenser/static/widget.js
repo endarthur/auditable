@@ -5194,6 +5194,9 @@ const ICON = {
   ortho: 'M2.5 3.5h9v7h-9z M2.5 3.5 5 1.5h9v7l-2.5 2',
   pick: 'M3 1.5 11 7l-3.4.7L9 11.8l-1.6.7-1.4-4L3 11z',
   knife: 'M1.5 12.5 8 6l4.5-4.5L11 7l-6 6z M8 6l3 3',
+  rect: 'M2 2.5h3M9 2.5h3M11.5 5v3M11.5 9v0M2 11.5h3M9 11.5h3M2.5 5v3M2.5 9v.5',
+  lasso: 'M7 2c3 0 5.5 1.7 5.5 3.9S10 9.8 7 9.8 1.5 8.1 1.5 5.9 4 2 7 2z M4.6 9.3c-.5 1.2-.2 2.4.9 3',
+  measure: 'M1.5 8.5 8.5 1.5l4 4-7 7z M4 6l1.5 1.5M6.5 3.5 8 5',
   layers: 'M7 1.5 12.5 4.6 7 7.7 1.5 4.6z M1.5 7.4 7 10.5l5.5-3.1M1.5 10.2 7 13.3l5.5-3.1',
   camera: 'M1.5 4.5h2.5l1-1.5h4l1 1.5h2.5v7h-11z M7 9.8a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z',
   close: 'M3.5 3.5l7 7M10.5 3.5l-7 7',
@@ -5260,6 +5263,8 @@ const fmt = (v) => {
  *   fit(), setView(name), toggleOrtho() → bool, isOrtho()
  *   getSection() / setSection(s) / sectionRange() → [lo, hi] along the normal
  *   knife(x1,y1,x2,y2) → set a section from a screen-space drag
+ *   selectRect / selectLasso → region selection (rows go back to Python)
+ *   measure → two-click distance / bearing / plunge
  *   snapshot()
  *   onToolChange(tool)
  */
@@ -5313,16 +5318,21 @@ function createToolbar(host, api) {
   sep();
 
   // ── tools ──
+  const TOOLS = {};
   const setTool = (t) => {
     tool = tool === t ? 'orbit' : t;
-    pickBtn.setAttribute('aria-pressed', String(tool === 'pick'));
-    knifeBtn.setAttribute('aria-pressed', String(tool === 'knife'));
+    for (const [k, b] of Object.entries(TOOLS)) b.setAttribute('aria-pressed', String(tool === k));
     api.onToolChange(tool);
   };
   const pickBtn = btn('pick', 'Pick: click an element to inspect it', () => { closePop(); setTool('pick'); }, true);
+  const rectBtn = btn('rect', 'Rectangle select: drag a box (shift adds)', () => { closePop(); setTool('rect'); }, true);
+  const lassoBtn = btn('lasso', 'Lasso select: draw around elements (shift adds)', () => { closePop(); setTool('lasso'); }, true);
+  const measureBtn = btn('measure', 'Measure: click two elements for distance, bearing and plunge', () => { closePop(); setTool('measure'); }, true);
   const knifeBtn = btn('knife', 'Knife: drag a line to cut a section along it', () => { closePop(); setTool('knife'); }, true);
   pickBtn.setAttribute('aria-pressed', 'true');            // picking is the default posture
   tool = 'pick';
+
+  Object.assign(TOOLS, { pick: pickBtn, rect: rectBtn, lasso: lassoBtn, measure: measureBtn, knife: knifeBtn });
 
   sep();
 
@@ -5402,27 +5412,61 @@ function createToolbar(host, api) {
   bandEl.setAttribute('width', '100%');                    // an SVG with no size
   bandEl.setAttribute('height', '100%');                   // gets a 300x150 box and CLIPS the line
   const line = document.createElementNS(NS, 'line');
-  line.setAttribute('stroke', '#c8781f');
-  line.setAttribute('stroke-width', '1.6');
+  const rect = document.createElementNS(NS, 'rect');
+  const poly = document.createElementNS(NS, 'polyline');
+  const meas = document.createElementNS(NS, 'line');
+  for (const el of [line, rect, poly, meas]) {
+    el.setAttribute('stroke', '#c8781f');
+    el.setAttribute('stroke-width', '1.6');
+    el.setAttribute('fill', 'none');
+  }
   line.setAttribute('stroke-dasharray', '6 4');
+  rect.setAttribute('stroke-dasharray', '5 3');
+  meas.setAttribute('stroke', '#e8e8e8');
+  meas.setAttribute('stroke-dasharray', '4 3');
   const capA = document.createElementNS(NS, 'circle');
   const capB = document.createElementNS(NS, 'circle');
   for (const c of [capA, capB]) { c.setAttribute('r', '3'); c.setAttribute('fill', '#c8781f'); }
-  bandEl.append(line, capA, capB);
+  bandEl.append(rect, poly, line, meas, capA, capB);
+  const hideAll = () => { for (const el of [line, rect, poly, meas, capA, capB]) el.setAttribute('visibility', 'hidden'); };
+  hideAll();
   bandEl.style.display = 'none';
   host.appendChild(bandEl);
 
   return {
     get tool() { return tool; },
-    setBand(a, b) {
-      if (!a) { bandEl.style.display = 'none'; return; }
-      line.setAttribute('x1', a[0]); line.setAttribute('y1', a[1]);
-      line.setAttribute('x2', b[0]); line.setAttribute('y2', b[1]);
-      capA.setAttribute('cx', a[0]); capA.setAttribute('cy', a[1]);
-      capB.setAttribute('cx', b[0]); capB.setAttribute('cy', b[1]);
+    // one band, four shapes: 'line' (knife) · 'rect' · 'poly' (lasso) ·
+    // 'measure'. Passing nothing clears it.
+    setBand(kind, a, b) {
+      hideAll();
+      if (!kind) { bandEl.style.display = 'none'; return; }
       bandEl.style.display = '';
+      if (kind === 'rect') {
+        rect.setAttribute('x', Math.min(a[0], b[0])); rect.setAttribute('y', Math.min(a[1], b[1]));
+        rect.setAttribute('width', Math.abs(b[0] - a[0])); rect.setAttribute('height', Math.abs(b[1] - a[1]));
+        rect.setAttribute('visibility', 'visible');
+        return;
+      }
+      if (kind === 'poly') {
+        poly.setAttribute('points', a.map((p) => `${p[0]},${p[1]}`).join(' '));
+        poly.setAttribute('visibility', 'visible');
+        return;
+      }
+      const el = kind === 'measure' ? meas : line;
+      el.setAttribute('x1', a[0]); el.setAttribute('y1', a[1]);
+      el.setAttribute('x2', b[0]); el.setAttribute('y2', b[1]);
+      el.setAttribute('visibility', 'visible');
+      for (const [c, p] of [[capA, a], [capB, b]]) {
+        c.setAttribute('cx', p[0]); c.setAttribute('cy', p[1]);
+        c.setAttribute('fill', kind === 'measure' ? '#e8e8e8' : '#c8781f');
+        c.setAttribute('visibility', 'visible');
+      }
     },
-    clearTool() { tool = 'pick'; pickBtn.setAttribute('aria-pressed', 'true'); knifeBtn.setAttribute('aria-pressed', 'false'); api.onToolChange(tool); },
+    clearTool() {
+      tool = 'pick';
+      for (const [k, b] of Object.entries(TOOLS)) b.setAttribute('aria-pressed', String(k === 'pick'));
+      api.onToolChange(tool);
+    },
     // pick info → the readout (null hides it)
     showPick(info) {
       if (!info) { pickBox.style.display = 'none'; return; }
@@ -5724,6 +5768,13 @@ function render({ model, el }) {
         if (L.cat_n) renderer.setCategories(L.cat_n);
       } else if (L.kind === 'drillholes') {
         const seg = drillholeSegments(L, cols);
+        // the desurvey computes these, so stash the interval midpoints by ROW:
+        // measure and the readout need a position for a drillhole pick too
+        L._pos = { x: new Float64Array(L.count), y: new Float64Array(L.count), z: new Float64Array(L.count) };
+        for (let q = 0; q < seg.count; q++) {
+          const r = seg.recIdx[q];
+          L._pos.x[r] = seg.x[q]; L._pos.y[r] = seg.y[q]; L._pos.z[r] = seg.z[q];
+        }
         const b = createStickChunkBuilder({ frame, chunkSize: 1 << 16, seed: 1, onChunk: (c) => renderer.addChunk(c, 'base', i) });
         b.push({ count: seg.count, ax: seg.ax, ay: seg.ay, az: seg.az, bx: seg.bx, by: seg.by, bz: seg.bz,
           x: seg.x, y: seg.y, z: seg.z, chan: seg.chan, cat: seg.cat, recIdx: seg.recIdx });
@@ -5881,8 +5932,10 @@ function render({ model, el }) {
       },
       onToolChange: (t) => {
         tb.setBand(null);
-        canvas.style.cursor = t === 'knife' ? 'crosshair' : '';
+        measA = null;
+        canvas.style.cursor = (t === 'knife' || t === 'rect' || t === 'lasso' || t === 'measure') ? 'crosshair' : '';
       },
+      clearSelection: () => { selected.clear(); pushSelection(); if (tb) tb.showPick(null); },
     });
     syncChrome();
   };
@@ -5948,16 +6001,145 @@ function render({ model, el }) {
     return { title: name, rows };
   };
 
-  let down = null, dragging = false;
+  // a record's WORLD position (blocks/points carry their columns; drillholes
+  // get theirs from the desurvey stash above)
+  const posOf = (li, rec) => {
+    const L = payload && payload.layers[li];
+    if (!L) return null;
+    const c = L._pos || L.cols;
+    if (!c || !c.x) return null;
+    return [c.x[rec], c.y[rec], c.z[rec]];
+  };
+
+  const pointInPoly = (x, y, poly) => {
+    let inside = false;
+    for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
+      const xa = poly[a][0], ya = poly[a][1], xb = poly[b][0], yb = poly[b][1];
+      if ((ya > y) !== (yb > y) && x < ((xb - xa) * (y - ya)) / (yb - ya) + xa) inside = !inside;
+    }
+    return inside;
+  };
+
+  // ── region selection. The ID buffer already answers "which record is at this
+  // pixel" for the whole viewport, so a marquee is: render the region's ids,
+  // keep the pixels inside the shape, and collect the records. Which means what
+  // you select is exactly what you can SEE — occluded elements are not caught,
+  // the same contract as a click. ──
+  const selected = new Map();                              // layer → Set(row)
+  const packSelection = () => {
+    let n = 0, total = 0;
+    for (const set of selected.values()) if (set.size) { n++; total += set.size; }
+    const buf = new ArrayBuffer(4 + n * 8 + total * 4);
+    const dv = new DataView(buf);
+    dv.setUint32(0, n, true);
+    let off = 4;
+    for (const [li, set] of selected) {
+      if (!set.size) continue;
+      dv.setUint32(off, li, true); dv.setUint32(off + 4, set.size, true);
+      off += 8;
+      for (const r of set) { dv.setUint32(off, r, true); off += 4; }
+    }
+    return buf;
+  };
+  const pushSelection = () => {
+    styles().forEach((_s, i) => {
+      const L = payload && payload.layers[i];
+      const set = selected.get(i);
+      if (!L) return;
+      if (!set || !set.size) { renderer.setLayerSelection(i, null); return; }
+      const mask = new Uint8Array(L.count);
+      for (const r of set) if (r < mask.length) mask[r] = 1;
+      renderer.setLayerSelection(i, mask);
+    });
+    model.set('_sel_rows', new DataView(packSelection()));
+    model.save_changes();
+    schedule();
+  };
+  const selectRegion = (rectCss, polyCss, additive) => {
+    if (!payload) return;
+    const vo = viewOpts();
+    const reg = renderer.pickRegion(rectCss, cam, {
+      pointPx: vo.pointPx, blocksAsPoints: vo.asPoints,
+      section: sectionOf(model.get('section'), payload.frame),
+    });
+    if (!additive) selected.clear();
+    if (reg && reg.data) {
+      const { data, w: rw, h: rh, dpr } = reg;
+      for (let row = 0; row < rh; row++) {
+        for (let col = 0; col < rw; col++) {
+          const i = (row * rw + col) * 4;
+          const g = data[i + 1] >>> 0;
+          if (g === 0xFFFFFFFF) continue;                  // nothing at this pixel
+          if (polyCss) {                                   // lasso: rows are BOTTOM-UP
+            const cx = rectCss.x + col / dpr;
+            const cy = rectCss.y + (rh - 1 - row) / dpr;
+            if (!pointInPoly(cx, cy, polyCss)) continue;
+          }
+          const li = g & 0xFFFF;
+          let set = selected.get(li);
+          if (!set) selected.set(li, set = new Set());
+          set.add(data[i] >>> 0);
+        }
+      }
+    }
+    pushSelection();
+    if (tb) {
+      const counts = [...selected.entries()].filter(([, v]) => v.size)
+        .map(([li, v]) => [styleAt(li).name || `layer ${li}`, v.size.toLocaleString()]);
+      tb.showPick(counts.length ? { title: 'selected', rows: counts } : null);
+    }
+  };
+
+  // ── measure: two picks, then distance + bearing + plunge (the numbers a
+  // geologist actually wants off two points) ──
+  let measA = null;
+  const doMeasure = (hit, xy) => {
+    if (!hit) return;
+    const p = posOf(hit.layer, hit.rec);
+    if (!p) return;
+    if (!measA) { measA = { p, xy }; if (tb) { tb.setBand('measure', xy, xy); tb.showPick({ title: 'measure', rows: [['from', `${fmtN(p[0])} ${fmtN(p[1])} ${fmtN(p[2])}`], ['', 'click a second element']] }); } return; }
+    const a = measA.p, b = p;
+    const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+    const dist = Math.hypot(dx, dy, dz);
+    const horiz = Math.hypot(dx, dy);
+    const bearing = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;   // from north, clockwise
+    const plunge = -Math.atan2(dz, horiz) * 180 / Math.PI;              // + is downward
+    model.set('measurement', {
+      from: [a[0], a[1], a[2]], to: [b[0], b[1], b[2]],
+      distance: dist, dx, dy, dz, bearing, plunge,
+    });
+    model.save_changes();
+    if (tb) {
+      tb.setBand('measure', measA.xy, xy);
+      tb.showPick({ title: 'measure', rows: [
+        ['distance', fmtN(dist)], ['dx dy dz', `${fmtN(dx)} ${fmtN(dy)} ${fmtN(dz)}`],
+        ['bearing', `${fmtN(bearing)}\u00b0`], ['plunge', `${fmtN(plunge)}\u00b0`],
+      ] });
+    }
+    measA = null;
+  };
+
+  let down = null, dragging = false, lasso = null;
+  const DRAG_TOOLS = { knife: 'line', rect: 'rect', lasso: 'poly' };
   const onDown = (e) => {
     const t = tb ? tb.tool : 'pick';
-    down = { xy: relXY(e), t };
-    if (t === 'knife') { dragging = true; e.stopPropagation(); e.preventDefault(); }
+    down = { xy: relXY(e), t, shift: e.shiftKey };
+    if (DRAG_TOOLS[t]) {
+      dragging = true;
+      lasso = t === 'lasso' ? [relXY(e)] : null;
+      e.stopPropagation(); e.preventDefault();
+    }
   };
   const onMove = (e) => {
     if (!dragging || !down) return;
     e.stopPropagation();
-    if (tb) tb.setBand(down.xy, relXY(e));
+    const xy = relXY(e);
+    const kind = DRAG_TOOLS[down.t];
+    if (kind === 'poly') {
+      const last = lasso[lasso.length - 1];
+      if (Math.hypot(xy[0] - last[0], xy[1] - last[1]) > 3) lasso.push(xy);
+      if (tb) tb.setBand('poly', lasso);
+    } else if (tb) tb.setBand(kind, down.xy, xy);
   };
   const onUp = (e) => {
     if (!down) return;
@@ -5966,19 +6148,36 @@ function render({ model, el }) {
     if (dragging) {
       e.stopPropagation();
       dragging = false;
+      const t0 = down.t, add = down.shift, a = down.xy, path = lasso;
+      lasso = null; down = null;
       if (tb) tb.setBand(null);
-      if (moved > 8) { doKnife(down.xy, xy); if (tb) tb.clearTool(); }
-      down = null;
+      if (t0 === 'lasso') {
+        // a lasso ENDS WHERE IT STARTED, so start-to-end displacement is ~0 for
+        // every real loop — the twitch test has to be the path's EXTENT.
+        if (!path || path.length < 3) return;
+        const xsL = path.map((q) => q[0]), ysL = path.map((q) => q[1]);
+        const x0 = Math.min(...xsL), y0 = Math.min(...ysL);
+        const bw = Math.max(...xsL) - x0, bh = Math.max(...ysL) - y0;
+        if (Math.max(bw, bh) < 8) return;
+        selectRegion({ x: x0, y: y0, w: bw, h: bh }, path, add);
+        return;
+      }
+      if (moved <= 8) return;                              // a twitch is not a gesture
+      if (t0 === 'knife') { doKnife(a, xy); if (tb) tb.clearTool(); return; }
+      if (t0 === 'rect') {
+        selectRegion({ x: Math.min(a[0], xy[0]), y: Math.min(a[1], xy[1]), w: Math.abs(xy[0] - a[0]), h: Math.abs(xy[1] - a[1]) }, null, add);
+      }
       return;
     }
     const t = down.t;
     down = null;
-    if (t !== 'pick' || moved > 4 || !payload) return;     // a drag is navigation, not a pick
+    if ((t !== 'pick' && t !== 'measure') || moved > 4 || !payload) return;   // a drag is navigation
     const vo = viewOpts();
     const hit = renderer.pick(xy[0], xy[1], cam, {
       pointPx: vo.pointPx, blocksAsPoints: vo.asPoints,
       section: sectionOf(model.get('section'), payload.frame),
     });
+    if (t === 'measure') { doMeasure(hit, xy); schedule(); return; }
     renderer.setPicked(hit || null);
     model.set('selection', hit ? { layer: hit.layer, name: styleAt(hit.layer).name || '', row: hit.rec } : {});
     model.save_changes();
@@ -6002,6 +6201,7 @@ function render({ model, el }) {
     ['change:toolbar', buildToolbar],
     ['change:edl', invalidate], ['change:edl_strength', invalidate], ['change:budget', invalidate],
     ['change:_fit', () => { needFit = true; invalidate(); }],
+    ['change:_clear_sel', () => { selected.clear(); pushSelection(); if (tb) tb.showPick(null); }],
     ['change:_view', applyView],
   ];
   for (const [ev, fn] of subs) model.on(ev, fn);

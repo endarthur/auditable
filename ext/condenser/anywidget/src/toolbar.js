@@ -16,6 +16,9 @@ const ICON = {
   ortho: 'M2.5 3.5h9v7h-9z M2.5 3.5 5 1.5h9v7l-2.5 2',
   pick: 'M3 1.5 11 7l-3.4.7L9 11.8l-1.6.7-1.4-4L3 11z',
   knife: 'M1.5 12.5 8 6l4.5-4.5L11 7l-6 6z M8 6l3 3',
+  rect: 'M2 2.5h3M9 2.5h3M11.5 5v3M11.5 9v0M2 11.5h3M9 11.5h3M2.5 5v3M2.5 9v.5',
+  lasso: 'M7 2c3 0 5.5 1.7 5.5 3.9S10 9.8 7 9.8 1.5 8.1 1.5 5.9 4 2 7 2z M4.6 9.3c-.5 1.2-.2 2.4.9 3',
+  measure: 'M1.5 8.5 8.5 1.5l4 4-7 7z M4 6l1.5 1.5M6.5 3.5 8 5',
   layers: 'M7 1.5 12.5 4.6 7 7.7 1.5 4.6z M1.5 7.4 7 10.5l5.5-3.1M1.5 10.2 7 13.3l5.5-3.1',
   camera: 'M1.5 4.5h2.5l1-1.5h4l1 1.5h2.5v7h-11z M7 9.8a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z',
   close: 'M3.5 3.5l7 7M10.5 3.5l-7 7',
@@ -82,6 +85,8 @@ const fmt = (v) => {
  *   fit(), setView(name), toggleOrtho() → bool, isOrtho()
  *   getSection() / setSection(s) / sectionRange() → [lo, hi] along the normal
  *   knife(x1,y1,x2,y2) → set a section from a screen-space drag
+ *   selectRect / selectLasso → region selection (rows go back to Python)
+ *   measure → two-click distance / bearing / plunge
  *   snapshot()
  *   onToolChange(tool)
  */
@@ -135,16 +140,21 @@ export function createToolbar(host, api) {
   sep();
 
   // ── tools ──
+  const TOOLS = {};
   const setTool = (t) => {
     tool = tool === t ? 'orbit' : t;
-    pickBtn.setAttribute('aria-pressed', String(tool === 'pick'));
-    knifeBtn.setAttribute('aria-pressed', String(tool === 'knife'));
+    for (const [k, b] of Object.entries(TOOLS)) b.setAttribute('aria-pressed', String(tool === k));
     api.onToolChange(tool);
   };
   const pickBtn = btn('pick', 'Pick: click an element to inspect it', () => { closePop(); setTool('pick'); }, true);
+  const rectBtn = btn('rect', 'Rectangle select: drag a box (shift adds)', () => { closePop(); setTool('rect'); }, true);
+  const lassoBtn = btn('lasso', 'Lasso select: draw around elements (shift adds)', () => { closePop(); setTool('lasso'); }, true);
+  const measureBtn = btn('measure', 'Measure: click two elements for distance, bearing and plunge', () => { closePop(); setTool('measure'); }, true);
   const knifeBtn = btn('knife', 'Knife: drag a line to cut a section along it', () => { closePop(); setTool('knife'); }, true);
   pickBtn.setAttribute('aria-pressed', 'true');            // picking is the default posture
   tool = 'pick';
+
+  Object.assign(TOOLS, { pick: pickBtn, rect: rectBtn, lasso: lassoBtn, measure: measureBtn, knife: knifeBtn });
 
   sep();
 
@@ -224,27 +234,61 @@ export function createToolbar(host, api) {
   bandEl.setAttribute('width', '100%');                    // an SVG with no size
   bandEl.setAttribute('height', '100%');                   // gets a 300x150 box and CLIPS the line
   const line = document.createElementNS(NS, 'line');
-  line.setAttribute('stroke', '#c8781f');
-  line.setAttribute('stroke-width', '1.6');
+  const rect = document.createElementNS(NS, 'rect');
+  const poly = document.createElementNS(NS, 'polyline');
+  const meas = document.createElementNS(NS, 'line');
+  for (const el of [line, rect, poly, meas]) {
+    el.setAttribute('stroke', '#c8781f');
+    el.setAttribute('stroke-width', '1.6');
+    el.setAttribute('fill', 'none');
+  }
   line.setAttribute('stroke-dasharray', '6 4');
+  rect.setAttribute('stroke-dasharray', '5 3');
+  meas.setAttribute('stroke', '#e8e8e8');
+  meas.setAttribute('stroke-dasharray', '4 3');
   const capA = document.createElementNS(NS, 'circle');
   const capB = document.createElementNS(NS, 'circle');
   for (const c of [capA, capB]) { c.setAttribute('r', '3'); c.setAttribute('fill', '#c8781f'); }
-  bandEl.append(line, capA, capB);
+  bandEl.append(rect, poly, line, meas, capA, capB);
+  const hideAll = () => { for (const el of [line, rect, poly, meas, capA, capB]) el.setAttribute('visibility', 'hidden'); };
+  hideAll();
   bandEl.style.display = 'none';
   host.appendChild(bandEl);
 
   return {
     get tool() { return tool; },
-    setBand(a, b) {
-      if (!a) { bandEl.style.display = 'none'; return; }
-      line.setAttribute('x1', a[0]); line.setAttribute('y1', a[1]);
-      line.setAttribute('x2', b[0]); line.setAttribute('y2', b[1]);
-      capA.setAttribute('cx', a[0]); capA.setAttribute('cy', a[1]);
-      capB.setAttribute('cx', b[0]); capB.setAttribute('cy', b[1]);
+    // one band, four shapes: 'line' (knife) · 'rect' · 'poly' (lasso) ·
+    // 'measure'. Passing nothing clears it.
+    setBand(kind, a, b) {
+      hideAll();
+      if (!kind) { bandEl.style.display = 'none'; return; }
       bandEl.style.display = '';
+      if (kind === 'rect') {
+        rect.setAttribute('x', Math.min(a[0], b[0])); rect.setAttribute('y', Math.min(a[1], b[1]));
+        rect.setAttribute('width', Math.abs(b[0] - a[0])); rect.setAttribute('height', Math.abs(b[1] - a[1]));
+        rect.setAttribute('visibility', 'visible');
+        return;
+      }
+      if (kind === 'poly') {
+        poly.setAttribute('points', a.map((p) => `${p[0]},${p[1]}`).join(' '));
+        poly.setAttribute('visibility', 'visible');
+        return;
+      }
+      const el = kind === 'measure' ? meas : line;
+      el.setAttribute('x1', a[0]); el.setAttribute('y1', a[1]);
+      el.setAttribute('x2', b[0]); el.setAttribute('y2', b[1]);
+      el.setAttribute('visibility', 'visible');
+      for (const [c, p] of [[capA, a], [capB, b]]) {
+        c.setAttribute('cx', p[0]); c.setAttribute('cy', p[1]);
+        c.setAttribute('fill', kind === 'measure' ? '#e8e8e8' : '#c8781f');
+        c.setAttribute('visibility', 'visible');
+      }
     },
-    clearTool() { tool = 'pick'; pickBtn.setAttribute('aria-pressed', 'true'); knifeBtn.setAttribute('aria-pressed', 'false'); api.onToolChange(tool); },
+    clearTool() {
+      tool = 'pick';
+      for (const [k, b] of Object.entries(TOOLS)) b.setAttribute('aria-pressed', String(k === 'pick'));
+      api.onToolChange(tool);
+    },
     // pick info → the readout (null hides it)
     showPick(info) {
       if (!info) { pickBox.style.display = 'none'; return; }
