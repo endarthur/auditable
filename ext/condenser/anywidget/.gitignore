@@ -1,0 +1,6 @@
+# python build/install droppings — the bundled widget.js is a COMMITTED build
+# output (it must ride in the wheel), everything below is not
+*.egg-info/
+__pycache__/
+dist/
+build/
