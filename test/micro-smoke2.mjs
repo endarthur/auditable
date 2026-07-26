@@ -1687,21 +1687,23 @@ await p.close();
   });
   chk(`join scope: selection masks the source (${joinSel.all} cells all → ${joinSel.sel} selected)`, joinSel.all === 200 && joinSel.sel === 100);
 
-  // ── settings window: the PREFS registry renders and persists ──
+  // ── settings window: sectioned rail + the PREFS registry persists ──
   const setw = await wp.evaluate(() => {
     window._micro.openSettingsWindow();
     const win = [...document.querySelectorAll('.fwin')].pop();
-    const rows = win.querySelectorAll('input, select').length;
+    const railBtns = [...win.querySelectorAll('button')].filter((b2) => ['display', 'interaction', 'compute', 'data', 'experimental', 'housekeeping'].includes(b2.textContent));
+    railBtns.find((b2) => b2.textContent === 'interaction').click();
     const sels = [...win.querySelectorAll('select')];
     const stickSel = sels.find((s2) => [...s2.options].some((o) => o.value === 'sticky'));
     stickSel.value = 'sticky'; stickSel.dispatchEvent(new Event('change'));
     const stored = localStorage.getItem('micro.selStick');
     stickSel.value = 'smart'; stickSel.dispatchEvent(new Event('change'));   // restore the default
+    const descs = win.querySelectorAll('div').length;
     window._micro.closeAllWindows();
-    return { title: win.querySelector('.fwin-head .t').textContent, rows, stored };
+    return { title: win.querySelector('.fwin-head .t').textContent, sections: railBtns.length, stored, descs };
   });
-  chk(`settings: the PREFS registry renders (${setw.rows} controls) and a choice persists (selStick → ${setw.stored})`,
-    setw.title === 'settings' && setw.rows >= 10 && setw.stored === 'sticky');
+  chk(`settings: ${setw.sections} sections on the rail, a choice persists (selStick → ${setw.stored})`,
+    setw.title === 'settings' && setw.sections === 6 && setw.stored === 'sticky');
   await wp.close();
 }
 

@@ -10889,43 +10889,76 @@ $('#mData').onclick = () => menuAt($('#mData'), [
 // live here, in localStorage micro.*, never in the project. The window renders
 // itself from PREFS; adding a preference = adding a row.
 const PREFS = [
-  { sec: 'display', label: 'background', kind: 'choice', opts: [['#121212', 'basalt'], ['#000000', 'black'], ['#ffffff', 'white'], ['#f4f2ec', 'paper']], get: () => _bgColor, set: (v) => setBg(v) },
-  { sec: 'display', label: 'block edges', kind: 'toggle', get: () => _blockEdges, set: (v) => setBlockEdges(v) },
-  { sec: 'display', label: 'render budget', kind: 'choice', opts: () => [...$('#budget').options].map((o) => [o.value, o.textContent]), get: () => $('#budget').value, set: (v) => { $('#budget').value = v; $('#budget').dispatchEvent(new Event('change')); requestRender(); } },
-  { sec: 'interaction', label: 'selection tool stays armed', kind: 'choice', opts: [['oneshot', 'never (one shot)'], ['smart', 'with shift/alt held'], ['sticky', 'until Esc']], get: () => _selStick, set: (v) => setSelStick(v) },
-  { sec: 'interaction', label: 'properties auto-apply', kind: 'toggle', get: () => _autoApply, set: (v) => { $('#ppAuto').checked = v; $('#ppAuto').dispatchEvent(new Event('change')); } },
-  { sec: 'interaction', label: 'camera follows the section scrub', kind: 'toggle', get: () => _secFollow, set: (v) => { $('#secFollow').checked = v; $('#secFollow').dispatchEvent(new Event('input')); } },
-  { sec: 'compute', label: 'by-solid compute', kind: 'choice', opts: [['gpu', 'GPU (fast)'], ['cpu', 'CPU (watchdog-safe)']], get: () => (_windingGpu ? 'gpu' : 'cpu'), set: (v) => setWindingGpu(v === 'gpu') },
-  { sec: 'compute', label: 'derived-column residency', kind: 'choice', opts: [['auto', 'auto (scales with RAM)'], ['off', 'off (re-derive on demand)'], ['256', '256 MB'], ['512', '512 MB'], ['1024', '1 GB']], get: () => { try { return localStorage.getItem('micro.pinBudget') || 'auto'; } catch { return 'auto'; } }, set: (v) => setPinBudget(v) },
-  { sec: 'data', label: 'optimize block models to spatial Parquet on save', kind: 'choice', opts: [['on', 'always'], ['off', 'never'], ['ask', 'ask on next save']], get: () => (_autoOptimize || 'ask'), set: (v) => { if (v === 'ask') { _autoOptimize = null; try { localStorage.removeItem('micro.autoOptimize'); } catch { /* private */ } } else setAutoOptimize(v); } },
-  { sec: 'experimental', label: 'natural-language command bar (⌘K, proposes only)', kind: 'toggle', get: () => _nlOn, set: (v) => { nlSetEnabled(v); if (v) nlEnsureTrained(); } },
+  { sec: 'display', label: 'background', desc: 'the scene clear colour — white or paper for print-bound figures (decorations flip to dark ink)', kind: 'choice', opts: [['#121212', 'basalt'], ['#000000', 'black'], ['#ffffff', 'white'], ['#f4f2ec', 'paper']], get: () => _bgColor, set: (v) => setBg(v) },
+  { sec: 'display', label: 'block edges', desc: 'outline every block face — and every cut block on a section', kind: 'toggle', get: () => _blockEdges, set: (v) => setBlockEdges(v) },
+  { sec: 'display', label: 'render budget', desc: 'elements per frame — lower is snappier while orbiting; the picture converges when the camera rests', kind: 'choice', opts: () => [...$('#budget').options].map((o) => [o.value, o.textContent]), get: () => $('#budget').value, set: (v) => { $('#budget').value = v; $('#budget').dispatchEvent(new Event('change')); requestRender(); } },
+  { sec: 'interaction', label: 'selection tool stays armed', desc: 'after a rectangle / lasso: put the tool down, keep it while adding (shift/alt held on release), or keep it until Esc — middle-drag orbits either way', kind: 'choice', opts: [['oneshot', 'never (one shot)'], ['smart', 'with shift/alt held'], ['sticky', 'until Esc']], get: () => _selStick, set: (v) => setSelStick(v) },
+  { sec: 'interaction', label: 'properties auto-apply', desc: 'style edits land as you make them; off = an explicit apply button', kind: 'toggle', get: () => _autoApply, set: (v) => { $('#ppAuto').checked = v; $('#ppAuto').dispatchEvent(new Event('change')); } },
+  { sec: 'interaction', label: 'camera follows the section scrub', desc: 'scrubbing a section slab carries the camera along with it', kind: 'toggle', get: () => _secFollow, set: (v) => { $('#secFollow').checked = v; $('#secFollow').dispatchEvent(new Event('input')); } },
+  { sec: 'compute', label: 'by-solid compute', desc: 'the flag / select-by-solid engine — CPU is slower but cannot trip the GPU driver watchdog on a huge solid', kind: 'choice', opts: [['gpu', 'GPU (fast)'], ['cpu', 'CPU (watchdog-safe)']], get: () => (_windingGpu ? 'gpu' : 'cpu'), set: (v) => setWindingGpu(v === 'gpu') },
+  { sec: 'compute', label: 'derived-column residency', desc: 'how much memory derived columns may keep resident before being re-derived on demand', kind: 'choice', opts: [['auto', 'auto (scales with RAM)'], ['off', 'off (re-derive on demand)'], ['256', '256 MB'], ['512', '512 MB'], ['1024', '1 GB']], get: () => { try { return localStorage.getItem('micro.pinBudget') || 'auto'; } catch { return 'auto'; } }, set: (v) => setPinBudget(v) },
+  { sec: 'data', label: 'optimize models to spatial Parquet on save', desc: 'Morton-sort block models into spatial Parquet when the project saves — smaller, faster to reopen, row-group query skipping', kind: 'choice', opts: [['on', 'always'], ['off', 'never'], ['ask', 'ask on next save']], get: () => (_autoOptimize || 'ask'), set: (v) => { if (v === 'ask') { _autoOptimize = null; try { localStorage.removeItem('micro.autoOptimize'); } catch { /* private */ } } else setAutoOptimize(v); } },
+  { sec: 'experimental', label: 'natural-language command bar', desc: '⌘K, type a phrase — it PROPOSES a command and never runs it; trains on this project\'s vocabulary, in this tab, in about a second', kind: 'toggle', get: () => _nlOn, set: (v) => { nlSetEnabled(v); if (v) nlEnsureTrained(); } },
 ];
-let _settingsWin = null;
+let _settingsWin = null, _settingsSec = 'display';
 function openSettingsWindow() {
   if (_settingsWin) { raiseWindow(_settingsWin.el); return; }
-  const win = floatWin({ title: 'settings', sub: 'this machine', x: innerWidth / 2 - 210, y: 90, w: 420, h: 470, onClose: () => { _settingsWin = null; } });
+  const win = floatWin({ title: 'settings', sub: 'this machine', x: innerWidth / 2 - 280, y: 90, w: 560, h: 440, onClose: () => { _settingsWin = null; } });
   _settingsWin = win;
   win.body.style.cssText += 'display:flex;flex-direction:column';
-  const scroll = document.createElement('div');
-  scroll.style.cssText = 'flex:1;min-height:0;overflow-y:auto;padding:8px 12px;font-family:var(--mono);font-size:12px';
-  win.body.appendChild(scroll);
-  const render = () => {
-    scroll.textContent = '';
-    let lastSec = null;
-    for (const pr of PREFS) {
-      if (pr.sec !== lastSec) {
-        lastSec = pr.sec;
-        const h = document.createElement('div'); h.className = 'sw-h'; h.style.marginTop = '8px'; h.textContent = pr.sec;
-        scroll.appendChild(h);
-      }
+  const split = document.createElement('div');
+  split.style.cssText = 'flex:1;min-height:0;display:flex';
+  const rail = document.createElement('div');
+  rail.style.cssText = 'flex:0 0 118px;border-right:1px solid var(--border);padding:10px 0;display:flex;flex-direction:column;gap:1px;font-family:var(--mono);font-size:12px';
+  const page = document.createElement('div');
+  page.style.cssText = 'flex:1;min-width:0;overflow-y:auto;padding:12px 16px;font-family:var(--mono);font-size:12px';
+  split.append(rail, page);
+  const foot = document.createElement('div');
+  foot.style.cssText = 'flex:0 0 auto;border-top:1px solid var(--border);background:var(--panel);padding:6px 16px;color:var(--dim);font-family:var(--mono);font-size:11px;line-height:1.45';
+  foot.textContent = 'stored in this browser only — nothing leaves this machine (Sealed) · view state travels with the project; data decisions live in its manifests';
+  win.body.append(split, foot);
+  const SECS = [...new Set(PREFS.map((pr) => pr.sec)), 'housekeeping'];
+  const renderRail = () => {
+    rail.textContent = '';
+    for (const sec of SECS) {
+      const bt = document.createElement('button');
+      const on = _settingsSec === sec;
+      bt.style.cssText = 'text-align:left;background:none;border:none;font:inherit;cursor:pointer;padding:6px 14px;border-left:2px solid ' + (on ? 'var(--accent)' : 'transparent') + ';color:' + (on ? 'var(--accent)' : 'var(--muted)');
+      bt.textContent = sec;
+      bt.onclick = () => { _settingsSec = sec; renderRail(); renderPage(); };
+      rail.appendChild(bt);
+    }
+  };
+  const renderPage = () => {
+    page.textContent = '';
+    if (_settingsSec === 'housekeeping') {
+      const mk = (label, title, fn) => {
+        const wrap = document.createElement('div'); wrap.style.cssText = 'margin-bottom:14px';
+        const bt = document.createElement('button'); bt.className = 'awin-btn'; bt.textContent = label; bt.onclick = fn;
+        const d = document.createElement('div'); d.style.cssText = 'color:var(--dim);font-size:11px;line-height:1.5;margin-top:4px'; d.textContent = title;
+        wrap.append(bt, d); page.appendChild(wrap);
+      };
+      mk('forget window layouts', 'clear every remembered per-kind window position and size — windows open at their defaults again', () => {
+        try { for (const k of Object.keys(localStorage)) if (k.startsWith('micro.winGeo.')) localStorage.removeItem(k); } catch { /* private */ }
+        $('#meta').textContent = 'window layouts forgotten — windows open at their defaults again';
+      });
+      mk('reset all preferences', 'every setting back to its default (window layouts and recents stay)', () => {
+        try { for (const k of ['micro.bg', 'micro.edges', 'micro.budget', 'micro.selStick', 'micro.autoApply', 'micro.secFollow', 'micro.windingCpu', 'micro.pinBudget', 'micro.autoOptimize', 'micro.nl']) localStorage.removeItem(k); } catch { /* private */ }
+        $('#meta').textContent = 'preferences reset — reload micro to see every default again';
+      });
+      return;
+    }
+    for (const pr of PREFS.filter((x) => x.sec === _settingsSec)) {
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin:3px 0;color:var(--muted)';
-      const lab = document.createElement('span'); lab.style.cssText = 'flex:1;min-width:0'; lab.textContent = pr.label;
-      row.appendChild(lab);
+      row.style.cssText = 'margin-bottom:14px';
+      const top = document.createElement('div');
+      top.style.cssText = 'display:flex;align-items:center;gap:10px';
+      const lab = document.createElement('span'); lab.style.cssText = 'flex:1;min-width:0;color:var(--text)'; lab.textContent = pr.label;
+      top.appendChild(lab);
       if (pr.kind === 'toggle') {
         const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!pr.get();
         cb.onchange = () => { pr.set(cb.checked); };
-        row.appendChild(cb);
+        top.appendChild(cb);
       } else {
         const sel = document.createElement('select'); sel.className = 'sw-sel';
         const opts = typeof pr.opts === 'function' ? pr.opts() : pr.opts;
@@ -10934,25 +10967,19 @@ function openSettingsWindow() {
         if (![...sel.options].some((o) => o.value === cur)) { const o = document.createElement('option'); o.value = cur; o.textContent = cur; sel.appendChild(o); }
         sel.value = cur;
         sel.onchange = () => { pr.set(sel.value); };
-        row.appendChild(sel);
+        top.appendChild(sel);
       }
-      scroll.appendChild(row);
+      row.appendChild(top);
+      if (pr.desc) {
+        const d = document.createElement('div');
+        d.style.cssText = 'color:var(--dim);font-size:11px;line-height:1.5;margin-top:3px;max-width:52ch';
+        d.textContent = pr.desc;
+        row.appendChild(d);
+      }
+      page.appendChild(row);
     }
-    // housekeeping
-    const h = document.createElement('div'); h.className = 'sw-h'; h.style.marginTop = '10px'; h.textContent = 'housekeeping';
-    scroll.appendChild(h);
-    const hk = document.createElement('div'); hk.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin:3px 0';
-    const forget = document.createElement('button'); forget.className = 'awin-btn'; forget.textContent = 'forget window layouts';
-    forget.title = 'clear every remembered per-kind window position/size';
-    forget.onclick = () => { try { for (const k of Object.keys(localStorage)) if (k.startsWith('micro.winGeo.')) localStorage.removeItem(k); } catch { /* private */ } $('#meta').textContent = 'window layouts forgotten — windows open at their defaults again'; };
-    hk.appendChild(forget);
-    scroll.appendChild(hk);
-    const note = document.createElement('div');
-    note.style.cssText = 'color:var(--dim);font-size:11px;line-height:1.5;margin-top:10px';
-    note.textContent = 'preferences are stored in this browser only — nothing leaves this machine (Sealed). View state travels with the project; data decisions live in its manifests.';
-    scroll.appendChild(note);
   };
-  render();
+  renderRail(); renderPage();
 }
 $('#mTools').onclick = () => menuAt($('#mTools'), [
   { label: 'Measure…', kbd: 'm', action: armMeasure },
