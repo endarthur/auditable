@@ -289,6 +289,37 @@ const r = await page.evaluate(async (port) => {
   const totalOf = (o) => Object.values(o).reduce((a, v) => a + v.length, 0);
   out.rectTotal = totalOf(out.rectSel);
 
+  // THROUGH: the same box, but sweeping the volume behind the surface. A solid
+  // block model hides most of itself, so this must catch strictly MORE.
+  model.set('_clear_sel', 90); await settle();
+  toolBtn('Select through').click();
+  out.throughOn = model._get('select_through');
+  drag([rS.left + rS.width * 0.30, rS.top + rS.height * 0.30],
+       [rS.left + rS.width * 0.62, rS.top + rS.height * 0.66],
+       [[rS.left + rS.width * 0.45, rS.top + rS.height * 0.5], [rS.left + rS.width * 0.62, rS.top + rS.height * 0.66]]);
+  await settle();
+  out.throughSel = unpack(model._get('_sel_rows'));
+  out.throughTotal = Object.values(out.throughSel).reduce((a, v) => a + v.length, 0);
+  // …and a surface selection is a SUBSET of the through selection (same box)
+  // how much of the surface set does the tube contain? Not 100%: the tube tests
+  // an element's CENTRE, the surface tests its rendered PIXELS, so an element
+  // straddling the marquee edge can be caught by one and not the other.
+  {
+    let inBoth = 0, total = 0, missByLayer = {};
+    for (const [li, rows] of Object.entries(out.rectSel)) {
+      const big = new Set(out.throughSel[li] || []);
+      let miss = 0;
+      for (const r of rows) { total++; if (big.has(r)) inBoth++; else miss++; }
+      if (miss) missByLayer[li] = miss;
+    }
+    out.subsetFrac = total ? inBoth / total : 0;
+    out.subsetMiss = missByLayer;
+    out.subsetTotal = total;
+  }
+  toolBtn('Select through').click();                       // back to surface
+  out.throughOff = model._get('select_through');
+  model.set('_clear_sel', 91); await settle();
+
   // LASSO over a deliberately smaller loop → strictly fewer rows
   model.set('_clear_sel', 1); await settle();
   toolBtn('Lasso').click();
@@ -367,9 +398,13 @@ chk(`sectioned=False exempts a layer (exempt ${r.sectionLit.toLocaleString()} px
   r.sectionAllLit < r.sectionLit);
 chk(`pick returns layer + row (${JSON.stringify(r.selection)})`,
   r.selection && Number.isInteger(r.selection.row) && r.selection.row >= 0 && typeof r.selection.name === 'string' && r.selection.name.length > 0);
-chk(`toolbar renders (${r.tbButtons} buttons) with the colour legend`, r.tbButtons === 10 && r.legendShown);
+chk(`toolbar renders (${r.tbButtons} buttons) with the colour legend`, r.tbButtons === 11 && r.legendShown);
 chk(`rectangle select returns rows in the packed wire format (${r.rectTotal.toLocaleString()} rows over ${Object.keys(r.rectSel).length} layer(s))`,
   r.rectTotal > 0 && Object.keys(r.rectSel).length >= 1 && r.rectCursor === 'crosshair');
+chk(`select THROUGH catches the volume behind the surface (${r.throughTotal.toLocaleString()} vs ${r.rectTotal.toLocaleString()} rows on the same box)`,
+  r.throughOn === true && r.throughOff === false && r.throughTotal > r.rectTotal * 1.5);
+chk(`the tube contains ${(r.subsetFrac * 100).toFixed(1)}% of the surface selection (edge elements differ: centre vs pixels)`,
+  r.subsetFrac > 0.9, `missed by layer: ${JSON.stringify(r.subsetMiss)} of ${r.subsetTotal}`);
 chk(`lasso select is tighter than the box (${r.lassoTotal.toLocaleString()} vs ${r.rectTotal.toLocaleString()} rows)`,
   r.lassoTotal > 0 && r.lassoTotal < r.rectTotal);
 chk('clear_selection() from Python empties it', r.clearedTotal === 0);

@@ -431,6 +431,12 @@ export function render({ model, el }) {
         canvas.style.cursor = (t === 'knife' || t === 'rect' || t === 'lasso' || t === 'measure') ? 'crosshair' : '';
       },
       clearSelection: () => { selected.clear(); pushSelection(); if (tb) tb.showPick(null); },
+      toggleThrough: () => {
+        const on = !model.get('select_through');
+        model.set('select_through', on);
+        model.save_changes();
+        return on;
+      },
     });
     syncChrome();
   };
@@ -550,8 +556,63 @@ export function render({ model, el }) {
     model.save_changes();
     schedule();
   };
+  // ── SELECT THROUGH: the swept volume, not the visible surface.
+  //
+  // The ID buffer only ever names the FRONT-MOST element per pixel, so a
+  // surface selection cannot reach what is behind. Through-mode projects every
+  // record to the screen and tests the shape instead — the same construction
+  // micro's selectVolume uses, minus the streaming, because the widget already
+  // holds the columns.
+  //
+  // It defeats OCCLUSION, which is the point — but not display state: a hidden
+  // layer, an isolate-filtered element or a block outside the section slab is
+  // not merely hidden behind something, it is not being shown, so the tube does
+  // not take it. (micro's version tests only layer visibility; this is the
+  // stricter reading and the one that matches what you can see.)
+  const selectThrough = (rectCss, polyCss, additive) => {
+    const vp = cam.state.viewProj, o = payload.frame;
+    const W = canvas.clientWidth || 1, H = canvas.clientHeight || 1;
+    const secAll = sectionOf(model.get('section'), o);
+    if (!additive) selected.clear();
+    styles().forEach((sty, li) => {
+      const L = payload.layers[li];
+      if (!L || sty.visible === false) return;
+      const c = L._pos || L.cols;
+      if (!c || !c.x) return;
+      const val = L.cols.value, th = sty.threshold;
+      const iso = !!(val && th && th.length === 2 && sty.filter_mode !== 'dim');
+      const sec = sty.sectioned === false ? null : secAll;
+      let set = selected.get(li);
+      if (!set) selected.set(li, set = new Set());
+      const n = Math.min(L.count, c.x.length);
+      for (let r = 0; r < n; r++) {
+        if (iso && !(val[r] >= th[0] && val[r] <= th[1])) continue;
+        const X = c.x[r] - o[0], Y = c.y[r] - o[1], Z = c.z[r] - o[2];
+        if (sec && Math.abs(X * sec.n[0] + Y * sec.n[1] + Z * sec.n[2] - sec.d) > sec.half) continue;
+        const cw = vp[3] * X + vp[7] * Y + vp[11] * Z + vp[15];
+        if (cw <= 1e-9) continue;                          // behind the eye
+        const px = ((vp[0] * X + vp[4] * Y + vp[8] * Z + vp[12]) / cw * 0.5 + 0.5) * W;
+        if (px < rectCss.x || px > rectCss.x + rectCss.w) continue;
+        const py = (0.5 - (vp[1] * X + vp[5] * Y + vp[9] * Z + vp[13]) / cw * 0.5) * H;
+        if (py < rectCss.y || py > rectCss.y + rectCss.h) continue;
+        if (polyCss && !pointInPoly(px, py, polyCss)) continue;
+        set.add(r);
+      }
+    });
+    pushSelection();
+    reportSelection();
+  };
+
+  const reportSelection = () => {
+    if (!tb) return;
+    const counts = [...selected.entries()].filter(([, v]) => v.size)
+      .map(([li, v]) => [styleAt(li).name || `layer ${li}`, v.size.toLocaleString()]);
+    tb.showPick(counts.length ? { title: model.get('select_through') ? 'selected (through)' : 'selected', rows: counts } : null);
+  };
+
   const selectRegion = (rectCss, polyCss, additive) => {
     if (!payload) return;
+    if (model.get('select_through')) return selectThrough(rectCss, polyCss, additive);
     const vo = viewOpts();
     const reg = renderer.pickRegion(rectCss, cam, {
       pointPx: vo.pointPx, blocksAsPoints: vo.asPoints,
@@ -578,11 +639,7 @@ export function render({ model, el }) {
       }
     }
     pushSelection();
-    if (tb) {
-      const counts = [...selected.entries()].filter(([, v]) => v.size)
-        .map(([li, v]) => [styleAt(li).name || `layer ${li}`, v.size.toLocaleString()]);
-      tb.showPick(counts.length ? { title: 'selected', rows: counts } : null);
-    }
+    reportSelection();
   };
 
   // ── measure: two picks, then distance + bearing + plunge (the numbers a
@@ -697,6 +754,7 @@ export function render({ model, el }) {
     ['change:edl', invalidate], ['change:edl_strength', invalidate], ['change:budget', invalidate],
     ['change:_fit', () => { needFit = true; invalidate(); }],
     ['change:_clear_sel', () => { selected.clear(); pushSelection(); if (tb) tb.showPick(null); }],
+    ['change:select_through', () => { if (tb) tb.syncThrough(model.get('select_through')); }],
     ['change:_view', applyView],
   ];
   for (const [ev, fn] of subs) model.on(ev, fn);
@@ -706,6 +764,7 @@ export function render({ model, el }) {
   applyHeight();
   applyBackground();
   buildToolbar();
+  if (tb) tb.syncThrough(model.get('select_through'));
   load();
   applyView();                                             // match any camera state already on the widget
 

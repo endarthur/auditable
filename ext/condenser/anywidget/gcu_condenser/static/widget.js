@@ -5197,6 +5197,7 @@ const ICON = {
   rect: 'M2 2.5h3M9 2.5h3M11.5 5v3M11.5 9v0M2 11.5h3M9 11.5h3M2.5 5v3M2.5 9v.5',
   lasso: 'M7 2c3 0 5.5 1.7 5.5 3.9S10 9.8 7 9.8 1.5 8.1 1.5 5.9 4 2 7 2z M4.6 9.3c-.5 1.2-.2 2.4.9 3',
   measure: 'M1.5 8.5 8.5 1.5l4 4-7 7z M4 6l1.5 1.5M6.5 3.5 8 5',
+  through: 'M2.5 4h5v6h-5z M7.5 7h4M9.5 5.2 11.8 7 9.5 8.8',
   layers: 'M7 1.5 12.5 4.6 7 7.7 1.5 4.6z M1.5 7.4 7 10.5l5.5-3.1M1.5 10.2 7 13.3l5.5-3.1',
   camera: 'M1.5 4.5h2.5l1-1.5h4l1 1.5h2.5v7h-11z M7 9.8a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z',
   close: 'M3.5 3.5l7 7M10.5 3.5l-7 7',
@@ -5327,6 +5328,11 @@ function createToolbar(host, api) {
   const pickBtn = btn('pick', 'Pick: click an element to inspect it', () => { closePop(); setTool('pick'); }, true);
   const rectBtn = btn('rect', 'Rectangle select: drag a box (shift adds)', () => { closePop(); setTool('rect'); }, true);
   const lassoBtn = btn('lasso', 'Lasso select: draw around elements (shift adds)', () => { closePop(); setTool('lasso'); }, true);
+  const throughBtn = btn('through', 'Select through: catch everything in the swept volume, not just the visible surface', (b) => {
+    closePop();
+    const on = api.toggleThrough();
+    b.setAttribute('aria-pressed', String(on));
+  }, true);
   const measureBtn = btn('measure', 'Measure: click two elements for distance, bearing and plunge', () => { closePop(); setTool('measure'); }, true);
   const knifeBtn = btn('knife', 'Knife: drag a line to cut a section along it', () => { closePop(); setTool('knife'); }, true);
   pickBtn.setAttribute('aria-pressed', 'true');            // picking is the default posture
@@ -5504,6 +5510,7 @@ function createToolbar(host, api) {
       g.drawImage(legCv, 0, 0, 96, 1, 0, 0, 96, 8);
     },
     syncOrtho(on) { orthoBtn.setAttribute('aria-pressed', String(!!on)); },
+    syncThrough(on) { throughBtn.setAttribute('aria-pressed', String(!!on)); },
     destroy() { closePop(); [style, bar, secBar, pickBox, leg, bandEl].forEach((n) => n.remove()); },
   };
 }
@@ -5936,6 +5943,12 @@ function render({ model, el }) {
         canvas.style.cursor = (t === 'knife' || t === 'rect' || t === 'lasso' || t === 'measure') ? 'crosshair' : '';
       },
       clearSelection: () => { selected.clear(); pushSelection(); if (tb) tb.showPick(null); },
+      toggleThrough: () => {
+        const on = !model.get('select_through');
+        model.set('select_through', on);
+        model.save_changes();
+        return on;
+      },
     });
     syncChrome();
   };
@@ -6055,8 +6068,63 @@ function render({ model, el }) {
     model.save_changes();
     schedule();
   };
+  // ── SELECT THROUGH: the swept volume, not the visible surface.
+  //
+  // The ID buffer only ever names the FRONT-MOST element per pixel, so a
+  // surface selection cannot reach what is behind. Through-mode projects every
+  // record to the screen and tests the shape instead — the same construction
+  // micro's selectVolume uses, minus the streaming, because the widget already
+  // holds the columns.
+  //
+  // It defeats OCCLUSION, which is the point — but not display state: a hidden
+  // layer, an isolate-filtered element or a block outside the section slab is
+  // not merely hidden behind something, it is not being shown, so the tube does
+  // not take it. (micro's version tests only layer visibility; this is the
+  // stricter reading and the one that matches what you can see.)
+  const selectThrough = (rectCss, polyCss, additive) => {
+    const vp = cam.state.viewProj, o = payload.frame;
+    const W = canvas.clientWidth || 1, H = canvas.clientHeight || 1;
+    const secAll = sectionOf(model.get('section'), o);
+    if (!additive) selected.clear();
+    styles().forEach((sty, li) => {
+      const L = payload.layers[li];
+      if (!L || sty.visible === false) return;
+      const c = L._pos || L.cols;
+      if (!c || !c.x) return;
+      const val = L.cols.value, th = sty.threshold;
+      const iso = !!(val && th && th.length === 2 && sty.filter_mode !== 'dim');
+      const sec = sty.sectioned === false ? null : secAll;
+      let set = selected.get(li);
+      if (!set) selected.set(li, set = new Set());
+      const n = Math.min(L.count, c.x.length);
+      for (let r = 0; r < n; r++) {
+        if (iso && !(val[r] >= th[0] && val[r] <= th[1])) continue;
+        const X = c.x[r] - o[0], Y = c.y[r] - o[1], Z = c.z[r] - o[2];
+        if (sec && Math.abs(X * sec.n[0] + Y * sec.n[1] + Z * sec.n[2] - sec.d) > sec.half) continue;
+        const cw = vp[3] * X + vp[7] * Y + vp[11] * Z + vp[15];
+        if (cw <= 1e-9) continue;                          // behind the eye
+        const px = ((vp[0] * X + vp[4] * Y + vp[8] * Z + vp[12]) / cw * 0.5 + 0.5) * W;
+        if (px < rectCss.x || px > rectCss.x + rectCss.w) continue;
+        const py = (0.5 - (vp[1] * X + vp[5] * Y + vp[9] * Z + vp[13]) / cw * 0.5) * H;
+        if (py < rectCss.y || py > rectCss.y + rectCss.h) continue;
+        if (polyCss && !pointInPoly(px, py, polyCss)) continue;
+        set.add(r);
+      }
+    });
+    pushSelection();
+    reportSelection();
+  };
+
+  const reportSelection = () => {
+    if (!tb) return;
+    const counts = [...selected.entries()].filter(([, v]) => v.size)
+      .map(([li, v]) => [styleAt(li).name || `layer ${li}`, v.size.toLocaleString()]);
+    tb.showPick(counts.length ? { title: model.get('select_through') ? 'selected (through)' : 'selected', rows: counts } : null);
+  };
+
   const selectRegion = (rectCss, polyCss, additive) => {
     if (!payload) return;
+    if (model.get('select_through')) return selectThrough(rectCss, polyCss, additive);
     const vo = viewOpts();
     const reg = renderer.pickRegion(rectCss, cam, {
       pointPx: vo.pointPx, blocksAsPoints: vo.asPoints,
@@ -6083,11 +6151,7 @@ function render({ model, el }) {
       }
     }
     pushSelection();
-    if (tb) {
-      const counts = [...selected.entries()].filter(([, v]) => v.size)
-        .map(([li, v]) => [styleAt(li).name || `layer ${li}`, v.size.toLocaleString()]);
-      tb.showPick(counts.length ? { title: 'selected', rows: counts } : null);
-    }
+    reportSelection();
   };
 
   // ── measure: two picks, then distance + bearing + plunge (the numbers a
@@ -6202,6 +6266,7 @@ function render({ model, el }) {
     ['change:edl', invalidate], ['change:edl_strength', invalidate], ['change:budget', invalidate],
     ['change:_fit', () => { needFit = true; invalidate(); }],
     ['change:_clear_sel', () => { selected.clear(); pushSelection(); if (tb) tb.showPick(null); }],
+    ['change:select_through', () => { if (tb) tb.syncThrough(model.get('select_through')); }],
     ['change:_view', applyView],
   ];
   for (const [ev, fn] of subs) model.on(ev, fn);
@@ -6211,6 +6276,7 @@ function render({ model, el }) {
   applyHeight();
   applyBackground();
   buildToolbar();
+  if (tb) tb.syncThrough(model.get('select_through'));
   load();
   applyView();                                             // match any camera state already on the widget
 

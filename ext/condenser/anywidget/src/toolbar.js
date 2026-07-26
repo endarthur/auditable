@@ -19,6 +19,7 @@ const ICON = {
   rect: 'M2 2.5h3M9 2.5h3M11.5 5v3M11.5 9v0M2 11.5h3M9 11.5h3M2.5 5v3M2.5 9v.5',
   lasso: 'M7 2c3 0 5.5 1.7 5.5 3.9S10 9.8 7 9.8 1.5 8.1 1.5 5.9 4 2 7 2z M4.6 9.3c-.5 1.2-.2 2.4.9 3',
   measure: 'M1.5 8.5 8.5 1.5l4 4-7 7z M4 6l1.5 1.5M6.5 3.5 8 5',
+  through: 'M2.5 4h5v6h-5z M7.5 7h4M9.5 5.2 11.8 7 9.5 8.8',
   layers: 'M7 1.5 12.5 4.6 7 7.7 1.5 4.6z M1.5 7.4 7 10.5l5.5-3.1M1.5 10.2 7 13.3l5.5-3.1',
   camera: 'M1.5 4.5h2.5l1-1.5h4l1 1.5h2.5v7h-11z M7 9.8a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z',
   close: 'M3.5 3.5l7 7M10.5 3.5l-7 7',
@@ -149,6 +150,11 @@ export function createToolbar(host, api) {
   const pickBtn = btn('pick', 'Pick: click an element to inspect it', () => { closePop(); setTool('pick'); }, true);
   const rectBtn = btn('rect', 'Rectangle select: drag a box (shift adds)', () => { closePop(); setTool('rect'); }, true);
   const lassoBtn = btn('lasso', 'Lasso select: draw around elements (shift adds)', () => { closePop(); setTool('lasso'); }, true);
+  const throughBtn = btn('through', 'Select through: catch everything in the swept volume, not just the visible surface', (b) => {
+    closePop();
+    const on = api.toggleThrough();
+    b.setAttribute('aria-pressed', String(on));
+  }, true);
   const measureBtn = btn('measure', 'Measure: click two elements for distance, bearing and plunge', () => { closePop(); setTool('measure'); }, true);
   const knifeBtn = btn('knife', 'Knife: drag a line to cut a section along it', () => { closePop(); setTool('knife'); }, true);
   pickBtn.setAttribute('aria-pressed', 'true');            // picking is the default posture
@@ -326,6 +332,7 @@ export function createToolbar(host, api) {
       g.drawImage(legCv, 0, 0, 96, 1, 0, 0, 96, 8);
     },
     syncOrtho(on) { orthoBtn.setAttribute('aria-pressed', String(!!on)); },
+    syncThrough(on) { throughBtn.setAttribute('aria-pressed', String(!!on)); },
     destroy() { closePop(); [style, bar, secBar, pickBox, leg, bandEl].forEach((n) => n.remove()); },
   };
 }

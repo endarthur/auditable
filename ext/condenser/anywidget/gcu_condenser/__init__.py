@@ -276,6 +276,9 @@ class Viewer(anywidget.AnyWidget):
     _fit = traitlets.Int(0).tag(sync=True)
     _view = traitlets.Dict(default_value={}).tag(sync=True)
     _sel_rows = traitlets.Bytes(b"").tag(sync=True)
+    #: False = select the visible surface (what the ID buffer sees); True =
+    #: select THROUGH, catching everything in the swept volume behind it too
+    select_through = traitlets.Bool(False).tag(sync=True)
     _clear_sel = traitlets.Int(0).tag(sync=True)
     #: the last measurement: {'from', 'to', 'distance', 'dx','dy','dz',
     #: 'bearing', 'plunge'} — {} until you measure something
@@ -409,7 +412,7 @@ class Viewer(anywidget.AnyWidget):
         Viewer.__init__(clone, layers,
                         section=self.section, background=self.background, height=self.height,
                         toolbar=self.toolbar, edl=self.edl, edl_strength=self.edl_strength,
-                        budget=self.budget)
+                        budget=self.budget, select_through=self.select_through)
         clone._payload = self._payload                     # same bytes, no re-pack
         clone._view = dict(self._view)
         return clone

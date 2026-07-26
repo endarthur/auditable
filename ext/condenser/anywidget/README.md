@@ -82,6 +82,7 @@ minimum-curvature code micro uses, so a hole lands in the same place in both.
 | **pick** | click an element to inspect it (on by default) |
 | **rectangle** | drag a box to select — shift adds to the selection |
 | **lasso** | draw around elements to select — shift adds |
+| **through** | toggle: select the swept *volume* instead of the visible surface |
 | **measure** | click two elements for distance, bearing and plunge |
 | **knife** | drag a line across the view to cut a section along it |
 | **layers** | show/hide each layer |
@@ -178,10 +179,26 @@ df.iloc[w["model"].selected_rows].FE.mean()
 w.clear_selection()
 ```
 
-Selection uses the same ID buffer as a click, so **what you select is what you
-can see** — occluded elements are not caught, exactly like picking. It rides
-back as packed binary rather than JSON, because a marquee over a big model can
-easily select a million rows.
+Two modes, like micro's:
+
+- **surface** (default) — uses the same ID buffer as a click, so *what you
+  select is what you can see*; occluded elements are not caught.
+- **through** (`w.select_through = True`, or the toolbar toggle) — sweeps the
+  whole volume behind the shape, so a solid block model gives up its interior.
+  On the same box over a solid model that is typically ~10× more rows.
+
+Through-mode defeats *occlusion*, which is the point, but not display state: a
+hidden layer, an isolate-filtered element, or a block outside the section slab
+is not merely behind something, so the tube leaves it alone.
+
+The two modes disagree slightly at the marquee's edge — through tests an
+element's **centre**, surface tests its rendered **pixels**, so a wide splat or a
+long drillhole interval can paint inside a box its centre falls outside of
+(measured: the tube contains ~96% of a surface selection, with the difference
+entirely in points and holes, none in blocks).
+
+Rows ride back as packed binary rather than JSON, because a marquee over a big
+model can easily select a million of them.
 
 Measure takes two clicks and reports what you actually want off two points:
 
