@@ -1752,11 +1752,25 @@ await p.close();
     M.renderer.setFilter(mask, { isolate: true }, L.id); M.requestRender();
     await new Promise((s) => setTimeout(s, 400));
     const rc2 = M.renderer.resolveCount;
-    M.renderer.setFilter(null, {}, L.id);
-    return { rc0, rc1, rc2, changed: before !== after };
+    M.renderer.setFilter(null, {}, L.id); M.requestRender();
+    await new Promise((s) => setTimeout(s, 400));
+    // THE DRILLHOLE SCENE (the regression Arthur hit): sticks layers coexist,
+    // and a ramp poke on the BLOCKS layer must STILL resolve — per-layer dirt,
+    // untouched sticks keep their pixels
+    await M.importDrillholes(M.makeDemoDrillholes(), { radius: 6 }, 'add');
+    await new Promise((s) => setTimeout(s, 1200));
+    const hasSticks = M.layers().some((L2) => L2.dh);
+    const rc3 = M.renderer.resolveCount;
+    for (let t = 0; t < 256; t++) px[t * 4] = 0;            // a different ramp
+    M.renderer.setLayerRamp(L.id, px); M.requestRender();
+    await new Promise((s) => setTimeout(s, 400));
+    const rc4 = M.renderer.resolveCount;
+    return { rc0, rc1, rc2, rc3, rc4, hasSticks, changed: before !== after };
   });
   chk(`deferred re-shade: a ramp poke over the converged frame resolves (${r.rc0}→${r.rc1}) and repaints; isolate still re-rasters (rc stays ${r.rc2})`,
     r.rc1 > r.rc0 && r.rc2 === r.rc1 && r.changed);
+  chk(`deferred re-shade with drillholes loaded: the block ramp poke still resolves (${r.rc3}→${r.rc4})`,
+    r.hasSticks && r.rc4 > r.rc3);
   await rp.close();
 }
 

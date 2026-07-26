@@ -272,9 +272,13 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   let lastKey = '', needClear = true, lastVisible = 0;
   // deferred re-shade state (gl-resolve.js): a COSMETIC change (ramp, clip,
   // colour mode, dim-filter, selection, chanTex values) over a converged frame
-  // resolves per-pixel from the captured id buffer instead of re-rastering
-  let cosmeticDirty = false;                              // a cosmetic setter ran since the last frame
-  let lastCosKey = '';                                    // the cosmetic half of the old draw key
+  // resolves per-pixel from the captured id buffer instead of re-rastering.
+  // Dirt is tracked PER LAYER: a ramp drag on the block model must not care
+  // that a drillhole (sticks) layer shares the scene — untouched layers keep
+  // their accumulated pixels, and only a change to an UNRESOLVABLE layer
+  // falls back to the re-raster.
+  const cosmeticDirtyLayers = new Set();                  // layers a cosmetic setter touched
+  const lastCosSig = new Map();                           // layer → view-opts signature last rastered/resolved
   let idCapture = null;                                   // { tex, w, h } from pickPipe.captureViewport
   const layerMaxRec = new Map();                          // layer → 1 + highest record index seen
   const bakeDirty = new Set();                            // layers whose attr bake is stale
@@ -379,7 +383,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         }
       }
-      if (culled) needClear = true; else cosmeticDirty = true;   // dim-mode filter is a re-shade, not a re-raster
+      if (culled) needClear = true; else cosmeticDirtyLayers.add(layer);   // dim-mode filter is a re-shade, not a re-raster
     },
     setDocBbox(b) { docBbox = b; },
     // Filter compaction (per layer): 'compact' chunks hold ONLY matching elements
@@ -399,7 +403,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     },
     // points layers with a CATEGORY dict color class codes through the 256-wide
     // golden-angle palette instead of the 32-entry LAS classification table
-    setLayerCats(layer, n) { const ls = layerOf(layer); if (ls.catN !== (n || 0)) { ls.catN = n || 0; cosmeticDirty = true; } },
+    setLayerCats(layer, n) { const ls = layerOf(layer); if (ls.catN !== (n || 0)) { ls.catN = n || 0; cosmeticDirtyLayers.add(layer); } },
     // stick thickness (world metres) — a live per-layer knob
     setLayerStickRadius(layer, r) { const ls = layerOf(layer); const v = Math.max(0.05, +r || 1); if (ls.stickRadius !== v) { ls.stickRadius = v; needClear = true; } },
     layerStickRadius(layer) { return layerOf(layer).stickRadius; },
@@ -453,7 +457,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         }
       }
-      cosmeticDirty = true;                                // a wash, not a cull — re-shade path
+      cosmeticDirtyLayers.add(layer);                                // a wash, not a cull — re-shade path
     },
     // per-layer RULE CODES (spec §10.4): one byte per record — which styling
     // rule claimed it (0 = none/else, 1..255 = rule order). Same texture shape
@@ -481,15 +485,18 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         }
       }
-      // rule codes only CULL through catVis, and catVis layers fall back to the
-      // re-raster path anyway — so a code change is cosmetic here
-      cosmeticDirty = true;
+      // rule codes recolour (cosmetic) — but when class EYES are active they
+      // also re-CULL through catVis, which the captured id buffer can't follow
+      if (ls.ruleOn && ls.catVisTex) needClear = true; else cosmeticDirtyLayers.add(layer);
     },
     // rule mode on/off per layer — kept separate from the codes so switching
     // categorized ⇄ rule-based is a flag flip, no re-upload
     setLayerRuleMode(layer, on) {
       const ls = layerOf(layer);
-      if (ls.ruleOn !== !!on) { ls.ruleOn = !!on; cosmeticDirty = true; }
+      if (ls.ruleOn !== !!on) {
+        ls.ruleOn = !!on;
+        if (ls.catVisTex) needClear = true; else cosmeticDirtyLayers.add(layer);   // eyes re-index on the flip
+      }
     },
     // per-layer CATEGORY palette (legend colors/groups baked app-side).
     // pixels = Uint8Array(width*4) RGBA (width 256 for dict layers, 32 for LAS
@@ -506,7 +513,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         gl.bindTexture(gl.TEXTURE_2D, ls.paletteTex);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       }
-      cosmeticDirty = true;
+      cosmeticDirtyLayers.add(layer);
     },
     // per-layer color ramp LUT (layer properties: presets + baked breakpoints).
     // pixels = Uint8Array(256*4) RGBA, or null to fall back to the built-in ramp.
@@ -519,7 +526,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       const ls = layerOf(layer);
       ls.chanTex = tex || null;
       ls.chanTexRange = (tex && range) ? [range[0], Math.max(1e-9, range[1] - range[0])] : null;
-      cosmeticDirty = true;
+      cosmeticDirtyLayers.add(layer);
     },
     setLayerRamp(layer, pixels) {
       const ls = layerOf(layer);
@@ -531,7 +538,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         gl.bindTexture(gl.TEXTURE_2D, ls.rampTex);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       }
-      cosmeticDirty = true;
+      cosmeticDirtyLayers.add(layer);
     },
     // per-CLASS visibility (layer properties): vis = Uint8Array(256) of 0|1, or
     // null to clear. GPU-side — the class code already rides every element as
@@ -579,6 +586,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       layers.delete(layer);
       if (resolvePipe) resolvePipe.dropBake(layer);
       layerMaxRec.delete(layer); bakeDirty.delete(layer);
+      lastCosSig.delete(layer); cosmeticDirtyLayers.delete(layer);
       needClear = true;
     },
     layerElementCount(layer) {
@@ -646,6 +654,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       layers.clear();
       if (resolvePipe) resolvePipe.clear();
       layerMaxRec.clear(); bakeDirty.clear(); idCapture = null;
+      lastCosSig.clear(); cosmeticDirtyLayers.clear();
     },
     resize() {
       const dpr = window.devicePixelRatio || 1;
@@ -661,15 +670,11 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       const vp = cam.state.viewProj;
       const sec = section && section.on ? section : null;
       const secKey = sec ? `${sec.n.join(',')}|${sec.d}|${sec.half}` : 'off';
-      const clipKey = clip ? `${clip[0]}~${clip[1]}` : 'a';
-      const loKey = layerOpts ? JSON.stringify(layerOpts) : '';
       // the old single draw key, SPLIT: structural changes re-raster; cosmetic
-      // ones (colour mode, clip, per-layer view opts — plus whatever set
-      // cosmeticDirty) can deferred-re-shade over the converged frame
+      // ones (colour mode, clip, per-layer view opts — plus whatever the
+      // cosmetic setters touched) can deferred-re-shade over the converged frame
       const structKey = `${pointPx}|${blocksAsPoints ? 'P' : 'B'}${blockEdges ? 'E' : ''}|${secKey}|${canvas.width}x${canvas.height}`;
-      const cosKey = `${colorMode}|${clipKey}|${loKey}`;
       let moving = vpChanged(vp) || structKey !== lastKey || needClear;
-      const cosChanged = cosKey !== lastCosKey || cosmeticDirty;
 
       const db = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
       // per-layer view opts (color mode + clip); the globals when not overridden
@@ -681,28 +686,42 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
         return [zLo, Math.max(zHi - zLo, 1e-6)];
       };
 
-      // ── DEFERRED RE-SHADE (gl-resolve.js): a purely-cosmetic change over a
-      // CONVERGED frame becomes one fullscreen resolve pass per element layer —
-      // O(pixels) at any model size. Anything the id buffer can't express
-      // (culling, opacity, edges, sticks/soup) falls through to the re-raster. ──
-      if (!moving && cosChanged && lastConverged) {
+      // per-layer cosmetic DIRT: explicit setter dirt + drift in the view opts
+      // this layer's raster consumed (colour mode + clip, global or per-layer).
+      // Hidden layers can't change pixels; meshes ignore colour opts entirely
+      // (their cosmetics go through setLayerMeshStyle → needClear).
+      const sigOf = (id) => { const o = lopt(id); return `${o.colorMode}|${o.clip ? `${o.clip[0]}~${o.clip[1]}` : 'a'}`; };
+      const kindBy = new Map();
+      for (const c of chunks) if (activeChunk(c) && !kindBy.has(c._layer)) kindBy.set(c._layer, c.kind);
+      const dirty = new Set(cosmeticDirtyLayers);
+      for (const id of kindBy.keys()) if (lastCosSig.get(id) !== sigOf(id)) dirty.add(id);
+      for (const id of [...dirty]) { const k = kindBy.get(id); if (!k || k === 'mesh') dirty.delete(id); }
+
+      // ── DEFERRED RE-SHADE (gl-resolve.js): cosmetic changes over a CONVERGED
+      // frame become one fullscreen resolve pass per DIRTY layer — O(pixels) at
+      // any model size. Untouched layers (a drillhole sticks layer while the
+      // block ramp drags) keep their accumulated pixels; only a change to a
+      // layer the id buffer can't express (sticks/soup recolour, culling,
+      // opacity, edges) falls through to the re-raster. ──
+      if (!moving && dirty.size && lastConverged) {
         if (!resolvePipe) resolvePipe = createResolvePipeline(gl);
         resolveOk: if (resolvePipe.ok) {
-          const act = chunks.filter(activeChunk);
+          let bail = false;
           const groups = new Map();
-          for (const c of act) {
-            if (c.kind === 'mesh') continue;               // untouched pixels persist correctly
-            if (c.kind !== 'points' && c.kind !== 'blocks') break resolveOk;   // sticks/soup: re-raster
-            let g = groups.get(c._layer); if (!g) groups.set(c._layer, g = []); g.push(c);
+          for (const id of dirty) {
+            const ls = layerOf(id), k = kindBy.get(id);
+            if (k !== 'points' && k !== 'blocks') { bail = true; break; }   // a sticks/soup recolour must re-raster
+            if (ls.opacity < 0.999) { bail = true; break; }   // screen-door holes aren't in the id buffer
+            if (k === 'blocks' && (ls.edges != null ? ls.edges : blockEdges)) { bail = true; break; }   // edge lines need the intra-face hit
+            groups.set(id, []);
+            // NOTE: isolate filters and class eyes (catVis) are FINE here even
+            // though they cull — changing them goes through needClear, so at
+            // this point they are unchanged since the capture and the id
+            // buffer already reflects the culled geometry.
           }
-          if (!groups.size) break resolveOk;
-          for (const [id, group] of groups) {
-            const ls = layerOf(id);
-            if (ls.opacity < 0.999) break resolveOk;       // screen-door isn't in the id buffer
-            if (ls.catVisTex) break resolveOk;             // class eyes CULL geometry
-            if (ls.maskTex && ls.isolate) break resolveOk; // isolate culls too
-            if (group[0].kind === 'blocks' && (ls.edges != null ? ls.edges : blockEdges)) break resolveOk;   // edge lines need the intra-face hit
-          }
+          if (bail || !groups.size) break resolveOk;
+          const act = chunks.filter(activeChunk);
+          for (const c of act) { const g = groups.get(c._layer); if (g) g.push(c); }
           // capture the id buffer LAZILY — ids don't depend on cosmetics, so the
           // pre-change converged geometry still yields the correct capture; a
           // still scene that never gets a cosmetic poke never pays for one
@@ -763,13 +782,17 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
             resolvePipe.resolveLayer(idCapture.tex, id, u);
           }
           resolves++;
-          lastCosKey = cosKey; cosmeticDirty = false;
-          repaintSet.clear();                              // the resolve repainted picked too
+          for (const id of kindBy.keys()) lastCosSig.set(id, sigOf(id));
+          cosmeticDirtyLayers.clear();
+          // repaintSet stays: a pending pick highlight on a NON-resolved layer
+          // is repainted by the next still frame's repaint pass
           return { drawn: 0, converged: true, visible: lastVisible, resolved: true };
         }
       }
-      if (cosChanged) moving = true;                       // no resolve → a cosmetic change re-rasters
-      lastKey = structKey; lastCosKey = cosKey; needClear = false; cosmeticDirty = false;
+      if (dirty.size) moving = true;                       // no resolve → a cosmetic change re-rasters
+      lastKey = structKey; needClear = false;
+      for (const id of kindBy.keys()) lastCosSig.set(id, sigOf(id));
+      cosmeticDirtyLayers.clear();
       if (moving) { repaintSet.clear(); idCapture = null; }   // full redraw covers pending repaint; the capture is stale
 
       // frustum-cull + front-to-back over chunk bboxes (tight, thanks to Morton)
