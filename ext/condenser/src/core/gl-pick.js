@@ -739,5 +739,19 @@ export function createPickPipeline(gl) {
     return out;
   }
 
-  return { pick, pickRegion, NO_LAYER };
+  // deferred re-shade (gl-resolve.js): render the FULL-VIEWPORT id buffer and
+  // hand back the target texture itself — NO readPixels; the resolve pass
+  // samples it on the GPU. The texture stays owned by this pipeline; later
+  // pick()/pickRegion() calls repaint scissored regions of it with the same
+  // camera + geometry, so within one capture generation (camera and structure
+  // frozen — the caller invalidates on any moving frame) the content stays
+  // consistent. Leaves FBO at null; the caller restores its own target.
+  function captureViewport(chunks, cam, opts) {
+    renderInto(0, 0, opts.viewportW, opts.viewportH, chunks, cam, opts);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindVertexArray(null);
+    return { tex: colorTex, w, h };
+  }
+
+  return { pick, pickRegion, captureViewport, NO_LAYER };
 }

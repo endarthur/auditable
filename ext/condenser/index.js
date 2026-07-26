@@ -5415,7 +5415,21 @@ function createPickPipeline(gl) {
     return out;
   }
 
-  return { pick, pickRegion, NO_LAYER };
+  // deferred re-shade (gl-resolve.js): render the FULL-VIEWPORT id buffer and
+  // hand back the target texture itself — NO readPixels; the resolve pass
+  // samples it on the GPU. The texture stays owned by this pipeline; later
+  // pick()/pickRegion() calls repaint scissored regions of it with the same
+  // camera + geometry, so within one capture generation (camera and structure
+  // frozen — the caller invalidates on any moving frame) the content stays
+  // consistent. Leaves FBO at null; the caller restores its own target.
+  function captureViewport(chunks, cam, opts) {
+    renderInto(0, 0, opts.viewportW, opts.viewportH, chunks, cam, opts);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindVertexArray(null);
+    return { tex: colorTex, w, h };
+  }
+
+  return { pick, pickRegion, captureViewport, NO_LAYER };
 }
 
 // ── ../dm/src/dm.js ──
@@ -6243,6 +6257,309 @@ function attachOrbitInput(canvas, cam, { onChange } = {}) {
   };
 }
 
+// ── src/core/gl-resolve.js ──
+
+// @gcu/condenser — DEFERRED RE-SHADE (render-paths spec §2). Once the scene
+// has converged, the pick pipeline's full-viewport (record, layer|face) id
+// buffer is kept as a texture, and COSMETIC changes — ramp, clip, colour
+// mode, filter (dim), selection, chanTex values — run ONE fullscreen resolve
+// pass per element layer instead of re-rasterizing the geometry. O(pixels)
+// at any model size: a ramp drag over a 50M-block model recolours at refresh
+// rate instead of restarting the accumulation.
+//
+// Two GPU pieces, no CPU data needed:
+//   bake    — per layer, scatter each element's (z, value, category, rgb) to
+//             its RECORD's texel in an 8192-wide RGBA32F attribute texture
+//             (one point-draw over the layer's chunks; works for streamed
+//             models whose columns were never CPU-resident).
+//   resolve — fullscreen triangle per layer: id → attr texel → the SAME
+//             colour math the raster shaders use (parity by construction,
+//             including the raster shaders' per-kind wash order), written
+//             into the EDL colour buffer; `discard` leaves background /
+//             mesh / other-layer pixels untouched, and the untouched EDL
+//             depth still shades the presented frame.
+//
+// Blocks' per-face impostor lighting reconstructs from the id buffer's FACE
+// code (gl-pick names the plane the eye ray entered): shade = (0.55 +
+// 0.45·max(n·L,0)) · (cut ? 0.85 : 1) — the exact gl-blocks formula. Splat-
+// demoted pixels (NO_FACE) stay unlit, exactly as rasterized. Out of scope
+// (the caller falls back to re-raster): block EDGE lines (need the intra-face
+// hit position), opacity < 1 (screen-door), catVis / isolate (they CULL
+// geometry, so the id buffer itself goes stale), sticks / soup layers.
+
+
+const TEXW = 8192;
+
+// ── bake shaders: element → its record's texel ──────────────────────────────
+const BAKE_VERT_BLOCKS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aIjk;
+layout(location=1) in float aChan;
+layout(location=2) in float aCat;
+layout(location=3) in uint aRec;
+uniform vec3 uGridOrigin, uGridSize;
+uniform vec2 uChanChunk;                 // this chunk's [min, span] (dequantize aChan)
+uniform vec2 uTexSize;
+flat out vec4 vAttr;
+void main() {
+  int rec = int(aRec);
+  vec2 px = vec2(float(rec & 8191) + 0.5, float(rec >> 13) + 0.5);
+  gl_Position = vec4(px / uTexSize * 2.0 - 1.0, 0.0, 1.0);
+  gl_PointSize = 1.0;
+  float z = uGridOrigin.z + aIjk.z * uGridSize.z;
+  vAttr = vec4(z, uChanChunk.x + aChan * uChanChunk.y, aCat, 0.0);
+}`;
+
+const BAKE_VERT_POINTS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in float aIntensity;
+layout(location=2) in float aClass;
+layout(location=3) in vec3 aRgb;
+layout(location=4) in uint aRec;
+uniform vec3 uBoxMin, uBoxSpan;
+uniform vec2 uTexSize;
+flat out vec4 vAttr;
+void main() {
+  int rec = int(aRec);
+  vec2 px = vec2(float(rec & 8191) + 0.5, float(rec >> 13) + 0.5);
+  gl_Position = vec4(px / uTexSize * 2.0 - 1.0, 0.0, 1.0);
+  gl_PointSize = 1.0;
+  float z = uBoxMin.z + aPos.z * uBoxSpan.z;
+  // rgb packs into one float exactly (24 bits fit f32's 24-bit mantissa)
+  float rgb = floor(aRgb.r * 255.0 + 0.5) + floor(aRgb.g * 255.0 + 0.5) * 256.0 + floor(aRgb.b * 255.0 + 0.5) * 65536.0;
+  vAttr = vec4(z, aIntensity, aClass, rgb);
+}`;
+
+const BAKE_FRAG = `#version 300 es
+precision highp float;
+flat in vec4 vAttr;
+out vec4 outAttr;
+void main() { outAttr = vAttr; }`;
+
+// ── the resolve pass: id → attrs → the raster shaders' colour math ──────────
+const RESOLVE_VERT = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const RESOLVE_FRAG = `#version 300 es
+precision highp float;
+precision highp usampler2D;
+uniform usampler2D uId;                  // RG32UI: R = record, G = layer | face<<16 (NO_LAYER = miss)
+uniform sampler2D uAttr;                 // baked (z, value, cat, rgbPacked) by record
+uniform sampler2D uRamp, uPalette, uMask, uSel, uRule, uChanTex;
+uniform uint uLayerId, uPicked, uPickedLayer;
+uniform int uKind;                       // 0 = points, 1 = blocks
+uniform int uColorMode;
+uniform vec2 uZRange, uChanDoc;
+uniform float uPaletteN, uIntensityScale;
+uniform float uFilterOn, uSelOn, uRuleOn, uChanTexOn;
+uniform vec3 uLightDir, uCutNormal;
+uniform vec3 uFaceN[6];                  // gl-pick's FACE_NORMALS
+out vec4 outColor;
+void main() {
+  ivec2 px = ivec2(gl_FragCoord.xy);
+  uvec2 id = texelFetch(uId, px, 0).rg;
+  if (id.g == 0xFFFFFFFFu) discard;                        // background: untouched
+  uint layer = id.g & 0xFFFFu;
+  if (layer != uLayerId) discard;                          // mesh / other layers: untouched
+  int rec = int(id.r);
+  ivec2 at = ivec2(rec & 8191, rec >> 13);
+  vec4 attr = texelFetch(uAttr, at, 0);
+  float cls = attr.z;
+  if (uRuleOn > 0.5) cls = floor(texelFetch(uRule, at, 0).r * 255.0 + 0.5);
+  vec4 col;
+  if (uColorMode == 0) {                                   // elevation (both kinds)
+    float t = clamp((attr.x - uZRange.x) / max(uZRange.y, 1e-6), 0.0, 1.0);
+    col = texture(uRamp, vec2(t, 0.5));
+  } else if (uColorMode == 1) {
+    if (uKind == 1) {                                      // blocks: grade (doc-normalized)
+      float v = uChanTexOn > 0.5 ? texelFetch(uChanTex, at, 0).r : attr.y;
+      float t = clamp((v - uChanDoc.x) / max(uChanDoc.y, 1e-6), 0.0, 1.0);
+      col = texture(uRamp, vec2(t, 0.5));
+    } else {                                               // points: intensity
+      float t = clamp(attr.y * uIntensityScale, 0.0, 1.0);
+      col = texture(uRamp, vec2(t, 0.5));
+    }
+  } else if (uColorMode == 2) {                            // category / classification
+    col = texture(uPalette, vec2((cls + 0.5) / uPaletteN, 0.5));
+  } else {
+    if (uKind == 1) col = vec4(0.62, 0.63, 0.66, 1.0);     // blocks: solid
+    else {                                                 // points: rgb (unpack)
+      float p3 = attr.w;
+      float b = floor(p3 / 65536.0); p3 -= b * 65536.0;
+      float g = floor(p3 / 256.0); p3 -= g * 256.0;
+      col = vec4(p3 / 255.0, g / 255.0, b / 255.0, 1.0);
+    }
+  }
+  float m = 1.0;
+  if (uFilterOn > 0.5) m = texelFetch(uMask, at, 0).r > 0.5 ? 1.0 : 0.0;
+  float selHit = uSelOn > 0.5 ? texelFetch(uSel, at, 0).r : 0.0;
+  // wash order matches each kind's raster shader EXACTLY: gl.js points dim
+  // THEN sel-wash; gl-blocks sel-washes THEN dims. Only both-at-once pixels
+  // differ between the orders, but parity is the contract here.
+  if (uKind == 1) {
+    if (selHit > 0.5) col = vec4(mix(col.rgb, vec3(1.0, 0.85, 0.3), 0.55), col.a);
+    if (uFilterOn > 0.5 && m < 0.5) col = vec4(col.rgb * 0.3, col.a);
+  } else {
+    if (uFilterOn > 0.5 && m < 0.5) col = vec4(col.rgb * 0.3, col.a);
+    if (selHit > 0.5) col = vec4(mix(col.rgb, vec3(1.0, 0.85, 0.3), 0.55), col.a);
+  }
+  if (id.r == uPicked && layer == uPickedLayer) col = vec4(mix(col.rgb, vec3(1.0, 0.15, 0.7), 0.85) + 0.1, col.a);
+  float shade = 1.0;
+  if (uKind == 1) {                                        // blocks: per-face impostor lighting
+    uint face = (id.g >> 16) & 7u;
+    if (face < 6u) shade = 0.55 + 0.45 * max(dot(uFaceN[face], uLightDir), 0.0);
+    else if (face == 6u) shade = (0.55 + 0.45 * max(dot(uCutNormal, uLightDir), 0.0)) * 0.85;   // the section cut wall
+    // face 7 (NO_FACE): a demoted splat — unlit, as rasterized
+  }
+  outColor = vec4(col.rgb * shade, col.a);
+}`;
+
+function createResolvePipeline(gl) {
+  // the bake target is RGBA32F — colour-renderable only with this extension;
+  // absent (rare on WebGL2-era GPUs) the whole feature quietly disables and
+  // every cosmetic change re-rasters, exactly as before.
+  const floatOk = !!gl.getExtension('EXT_color_buffer_float');
+  const bakeBlocks = makeProgram(gl, BAKE_VERT_BLOCKS, BAKE_FRAG);
+  const bakePoints = makeProgram(gl, BAKE_VERT_POINTS, BAKE_FRAG);
+  const resolveProg = makeProgram(gl, RESOLVE_VERT, RESOLVE_FRAG);
+  const U = (p, n) => gl.getUniformLocation(p, n);
+  const uB = { gridOrigin: U(bakeBlocks, 'uGridOrigin'), gridSize: U(bakeBlocks, 'uGridSize'), chanChunk: U(bakeBlocks, 'uChanChunk'), texSize: U(bakeBlocks, 'uTexSize') };
+  const uP = { boxMin: U(bakePoints, 'uBoxMin'), boxSpan: U(bakePoints, 'uBoxSpan'), texSize: U(bakePoints, 'uTexSize') };
+  const uR = {
+    id: U(resolveProg, 'uId'), attr: U(resolveProg, 'uAttr'), ramp: U(resolveProg, 'uRamp'), palette: U(resolveProg, 'uPalette'),
+    mask: U(resolveProg, 'uMask'), sel: U(resolveProg, 'uSel'), rule: U(resolveProg, 'uRule'), chanTex: U(resolveProg, 'uChanTex'),
+    layerId: U(resolveProg, 'uLayerId'), picked: U(resolveProg, 'uPicked'), pickedLayer: U(resolveProg, 'uPickedLayer'),
+    kind: U(resolveProg, 'uKind'), colorMode: U(resolveProg, 'uColorMode'), zRange: U(resolveProg, 'uZRange'), chanDoc: U(resolveProg, 'uChanDoc'),
+    paletteN: U(resolveProg, 'uPaletteN'), intensityScale: U(resolveProg, 'uIntensityScale'),
+    filterOn: U(resolveProg, 'uFilterOn'), selOn: U(resolveProg, 'uSelOn'), ruleOn: U(resolveProg, 'uRuleOn'), chanTexOn: U(resolveProg, 'uChanTexOn'),
+    lightDir: U(resolveProg, 'uLightDir'), cutNormal: U(resolveProg, 'uCutNormal'), faceN: U(resolveProg, 'uFaceN'),
+  };
+  const bakeFbo = gl.createFramebuffer();
+  const bakes = new Map();                                 // layerId → { tex, h }
+  const faceFlat = new Float32Array(18);
+  for (let i = 0; i < 6; i++) { const n = FACE_NORMALS[i]; faceFlat[i * 3] = n[0]; faceFlat[i * 3 + 1] = n[1]; faceFlat[i * 3 + 2] = n[2]; }
+
+  // one bake VAO per blocks chunk: the same buffers the instanced VAO uses, but
+  // re-pointed per-VERTEX (divisor 0) so one gl.POINTS draw scatters every block
+  function blocksBakeVao(c) {
+    if (c._bakeVao) return c._bakeVao;
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bIjk); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.UNSIGNED_SHORT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bChan); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 1, gl.UNSIGNED_SHORT, true, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bCat); gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.UNSIGNED_BYTE, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.bRec); gl.enableVertexAttribArray(3); gl.vertexAttribIPointer(3, 1, gl.UNSIGNED_INT, 0, 0);
+    gl.bindVertexArray(null);
+    c._bakeVao = vao;
+    return vao;
+  }
+
+  return {
+    ok: floatOk,
+    // (re)bake one layer's attribute texture from its resident chunks.
+    // maxRec = 1 + the highest record index the caller has seen for the layer.
+    // Leaves the FBO at null and the viewport at the bake size — the caller
+    // (inside the EDL sceneDraw) restores its own binding + viewport after.
+    bakeLayer(layerId, chunksOfLayer, maxRec) {
+      if (!floatOk || !chunksOfLayer.length || !maxRec) return null;
+      const h = Math.max(1, Math.ceil(maxRec / TEXW));
+      let b = bakes.get(layerId);
+      if (!b || b.h < h) {
+        if (b) gl.deleteTexture(b.tex);
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, TEXW, h, 0, gl.RGBA, gl.FLOAT, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        b = { tex, h };
+        bakes.set(layerId, b);
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, bakeFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, b.tex, 0);
+      gl.viewport(0, 0, TEXW, b.h);
+      gl.disable(gl.DEPTH_TEST);
+      const kind = chunksOfLayer[0].kind;
+      if (kind === 'blocks') {
+        gl.useProgram(bakeBlocks);
+        gl.uniform2f(uB.texSize, TEXW, b.h);
+        for (const c of chunksOfLayer) {
+          const g = c.grid;
+          gl.uniform3f(uB.gridOrigin, g.originLocal[0], g.originLocal[1], g.originLocal[2]);
+          gl.uniform3f(uB.gridSize, g.size[0], g.size[1], g.size[2]);
+          const span = c.chanRange[1] - c.chanRange[0];
+          gl.uniform2f(uB.chanChunk, c.chanRange[0], span > 0 ? span : 0);
+          gl.bindVertexArray(blocksBakeVao(c));
+          gl.drawArrays(gl.POINTS, 0, c.count);
+        }
+      } else {
+        gl.useProgram(bakePoints);
+        gl.uniform2f(uP.texSize, TEXW, b.h);
+        for (const c of chunksOfLayer) {
+          const bb = c.bboxLocal;
+          gl.uniform3f(uP.boxMin, bb[0], bb[1], bb[2]);
+          gl.uniform3f(uP.boxSpan, bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]);
+          gl.bindVertexArray(c.vao);                       // per-vertex layout already, locations match
+          gl.drawArrays(gl.POINTS, 0, c.count);
+        }
+      }
+      gl.bindVertexArray(null);
+      gl.enable(gl.DEPTH_TEST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return b;
+    },
+    hasBake(layerId) { return bakes.has(layerId); },
+    dropBake(layerId) { const b = bakes.get(layerId); if (b) { gl.deleteTexture(b.tex); bakes.delete(layerId); } },
+    // one fullscreen pass for one layer, into the CURRENTLY BOUND framebuffer
+    // (the EDL colour buffer). `u` carries the same per-layer values the raster
+    // path's begin/setup functions computed. Depth stays untouched.
+    resolveLayer(idTex, layerId, u) {
+      const b = bakes.get(layerId);
+      if (!b) return false;
+      gl.useProgram(resolveProg);
+      gl.disable(gl.DEPTH_TEST);
+      gl.depthMask(false);
+      const bind = (unit, loc, tex) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(loc, unit); };
+      bind(0, uR.id, idTex);
+      bind(1, uR.attr, b.tex);
+      bind(2, uR.ramp, u.ramp);
+      bind(3, uR.palette, u.palette);
+      // every float sampler MUST land on a float texture: an unset sampler
+      // uniform defaults to unit 0 — the INTEGER id texture — and that type
+      // mismatch silently kills the whole draw (GL_INVALID_OPERATION). The
+      // ramp parks the unused ones; their On-flags gate actual sampling.
+      bind(4, uR.mask, u.mask || u.ramp);
+      bind(5, uR.sel, u.sel || u.ramp);
+      bind(6, uR.rule, u.rule || u.ramp);
+      bind(7, uR.chanTex, u.chanTex || u.ramp);
+      gl.uniform1ui(uR.layerId, layerId >>> 0);
+      gl.uniform1ui(uR.picked, u.picked >>> 0);
+      gl.uniform1ui(uR.pickedLayer, u.pickedLayer >>> 0);
+      gl.uniform1i(uR.kind, u.kind === 'blocks' ? 1 : 0);
+      gl.uniform1i(uR.colorMode, u.colorMode | 0);
+      gl.uniform2f(uR.zRange, u.zRange[0], u.zRange[1]);
+      gl.uniform2f(uR.chanDoc, u.chanDoc[0], u.chanDoc[1]);
+      gl.uniform1f(uR.paletteN, u.paletteN);
+      gl.uniform1f(uR.intensityScale, u.intensityScale);
+      gl.uniform1f(uR.filterOn, u.mask ? 1 : 0);
+      gl.uniform1f(uR.selOn, u.sel ? 1 : 0);
+      gl.uniform1f(uR.ruleOn, u.rule ? 1 : 0);
+      gl.uniform1f(uR.chanTexOn, u.chanTex ? 1 : 0);
+      gl.uniform3f(uR.lightDir, u.lightDir[0], u.lightDir[1], u.lightDir[2]);
+      gl.uniform3f(uR.cutNormal, u.cutNormal[0], u.cutNormal[1], u.cutNormal[2]);
+      gl.uniform3fv(uR.faceN, faceFlat);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.depthMask(true);
+      gl.enable(gl.DEPTH_TEST);
+      return true;
+    },
+    clear() { for (const b of bakes.values()) gl.deleteTexture(b.tex); bakes.clear(); },
+  };
+}
+
 // ── src/core/gl.js ──
 
 // @gcu/condenser — the WebGL2 splat renderer. Raw GL, no scene graph: per-chunk
@@ -6452,6 +6769,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   let meshPipe = null;                                    // context-mesh pipeline, lazy
   let soupPipe = null;                                    // streaming-mesh (soup) pipeline, lazy
   let pickPipe = null;                                    // ID-buffer pick pipeline, lazy
+  let resolvePipe = null;                                 // deferred re-shade pipeline, lazy (gl-resolve.js)
   const chunks = [];
   let docBbox = null;                                     // scene bbox (fit + the shared elevation ramp)
   let pickedRec = 0xFFFFFFFF;                             // highlighted RECORD (sentinel = none)
@@ -6498,7 +6816,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     return l;
   }
   const activeChunk = (c) => { const l = layers.get(c._layer); return !!l && l.visible && c._set === l.set; };
-  const freeChunk = (c) => { gl.deleteVertexArray(c.vao); c.buffers.forEach((b) => gl.deleteBuffer(b)); };
+  const freeChunk = (c) => { gl.deleteVertexArray(c.vao); if (c._bakeVao) gl.deleteVertexArray(c._bakeVao); c.buffers.forEach((b) => gl.deleteBuffer(b)); };
   const byLayer = (arr) => {
     const m = new Map();
     for (const c of arr) { let g = m.get(c._layer); if (!g) m.set(c._layer, g = []); g.push(c); }
@@ -6507,6 +6825,21 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   // accumulation state
   const lastVP = new Float32Array(16);
   let lastKey = '', needClear = true, lastVisible = 0;
+  // deferred re-shade state (gl-resolve.js): a COSMETIC change (ramp, clip,
+  // colour mode, dim-filter, selection, chanTex values) over a converged frame
+  // resolves per-pixel from the captured id buffer instead of re-rastering
+  let cosmeticDirty = false;                              // a cosmetic setter ran since the last frame
+  let lastCosKey = '';                                    // the cosmetic half of the old draw key
+  let idCapture = null;                                   // { tex, w, h } from pickPipe.captureViewport
+  const layerMaxRec = new Map();                          // layer → 1 + highest record index seen
+  const bakeDirty = new Set();                            // layers whose attr bake is stale
+  let resolves = 0;                                       // resolve passes run (harness observability)
+  const trackRec = (layer, recIdx) => {
+    let m = layerMaxRec.get(layer) || 0;
+    for (let i = 0; i < recIdx.length; i++) if (recIdx[i] >= m) m = recIdx[i] + 1;
+    layerMaxRec.set(layer, m);
+    bakeDirty.add(layer);
+  };
 
   const vpChanged = (vp) => {
     for (let i = 0; i < 16; i++) if (vp[i] !== lastVP[i]) { lastVP.set(vp); return true; }
@@ -6527,8 +6860,10 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     get vramBytes() { return chunks.reduce((s, c) => s + (c.bytes || 0), 0); },
     layerVramBytes(layer) { return chunks.reduce((s, c) => s + (c._layer === layer ? (c.bytes || 0) : 0), 0); },
     get accumulated() { return chunks.reduce((s, c) => s + (activeChunk(c) ? c.cursor : 0), 0); },   // elements in the current accumulation
+    get resolveCount() { return resolves; },               // deferred re-shade passes run (harness observability)
     addChunk(chunk, set = 'base', layer = 0) {
       const ls = layerOf(layer);
+      idCapture = null;                                   // new geometry: the captured id buffer is stale
       // recIdx stays RAW — the layer rides a per-draw uniform, so there is no
       // per-element rewrite here any more (and no 3-bit ceiling on layers)
       // honest VRAM accounting: every typed array in the CPU chunk becomes a
@@ -6554,6 +6889,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         const up = (chunk.kind === 'blocks' ? blocksPipe : sticksPipe).upload(chunk);
         up._set = set; up._layer = layer; up.bytes = cb;
         chunks.push(up);                                   // GPU owns it now
+        if (chunk.kind === 'blocks' && chunk.recIdx) trackRec(layer, chunk.recIdx);   // re-shade bake bookkeeping
         if (set === 'base') {                              // compact chunks never tighten the ramp
           if (chunk.chanRange[0] < ls.docChan[0]) ls.docChan[0] = chunk.chanRange[0];
           if (chunk.chanRange[1] > ls.docChan[1]) ls.docChan[1] = chunk.chanRange[1];
@@ -6562,6 +6898,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       }
       const up = uploadChunk(gl, chunk); up._set = set; up._layer = layer; up.bytes = cb;
       chunks.push(up);                                     // GPU owns it now; CPU copy dies with the caller
+      if (chunk.recIdx) trackRec(layer, chunk.recIdx);     // re-shade bake bookkeeping (points)
       if (set === 'base') {
         let m = 0; const a = chunk.intensity;
         for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
@@ -6576,6 +6913,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     // discards non-matching, false dims them.
     setFilter(mask, { isolate = false } = {}, layer = 0) {
       const ls = layerOf(layer);
+      const culled = isolate || (ls.isolate && !!ls.maskTex);   // isolate CULLS (now or before) → geometry changes
       ls.isolate = isolate;
       if (!mask) {
         if (ls.maskTex) { gl.deleteTexture(ls.maskTex); ls.maskTex = null; }
@@ -6596,7 +6934,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         }
       }
-      needClear = true;
+      if (culled) needClear = true; else cosmeticDirty = true;   // dim-mode filter is a re-shade, not a re-raster
     },
     setDocBbox(b) { docBbox = b; },
     // Filter compaction (per layer): 'compact' chunks hold ONLY matching elements
@@ -6616,7 +6954,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     },
     // points layers with a CATEGORY dict color class codes through the 256-wide
     // golden-angle palette instead of the 32-entry LAS classification table
-    setLayerCats(layer, n) { const ls = layerOf(layer); if (ls.catN !== (n || 0)) { ls.catN = n || 0; needClear = true; } },
+    setLayerCats(layer, n) { const ls = layerOf(layer); if (ls.catN !== (n || 0)) { ls.catN = n || 0; cosmeticDirty = true; } },
     // stick thickness (world metres) — a live per-layer knob
     setLayerStickRadius(layer, r) { const ls = layerOf(layer); const v = Math.max(0.05, +r || 1); if (ls.stickRadius !== v) { ls.stickRadius = v; needClear = true; } },
     layerStickRadius(layer) { return layerOf(layer).stickRadius; },
@@ -6670,7 +7008,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         }
       }
-      needClear = true;
+      cosmeticDirty = true;                                // a wash, not a cull — re-shade path
     },
     // per-layer RULE CODES (spec §10.4): one byte per record — which styling
     // rule claimed it (0 = none/else, 1..255 = rule order). Same texture shape
@@ -6698,13 +7036,15 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         }
       }
-      needClear = true;
+      // rule codes only CULL through catVis, and catVis layers fall back to the
+      // re-raster path anyway — so a code change is cosmetic here
+      cosmeticDirty = true;
     },
     // rule mode on/off per layer — kept separate from the codes so switching
     // categorized ⇄ rule-based is a flag flip, no re-upload
     setLayerRuleMode(layer, on) {
       const ls = layerOf(layer);
-      if (ls.ruleOn !== !!on) { ls.ruleOn = !!on; needClear = true; }
+      if (ls.ruleOn !== !!on) { ls.ruleOn = !!on; cosmeticDirty = true; }
     },
     // per-layer CATEGORY palette (legend colors/groups baked app-side).
     // pixels = Uint8Array(width*4) RGBA (width 256 for dict layers, 32 for LAS
@@ -6721,7 +7061,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         gl.bindTexture(gl.TEXTURE_2D, ls.paletteTex);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       }
-      needClear = true;
+      cosmeticDirty = true;
     },
     // per-layer color ramp LUT (layer properties: presets + baked breakpoints).
     // pixels = Uint8Array(256*4) RGBA, or null to fall back to the built-in ramp.
@@ -6734,7 +7074,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       const ls = layerOf(layer);
       ls.chanTex = tex || null;
       ls.chanTexRange = (tex && range) ? [range[0], Math.max(1e-9, range[1] - range[0])] : null;
-      needClear = true;
+      cosmeticDirty = true;
     },
     setLayerRamp(layer, pixels) {
       const ls = layerOf(layer);
@@ -6746,7 +7086,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         gl.bindTexture(gl.TEXTURE_2D, ls.rampTex);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       }
-      needClear = true;
+      cosmeticDirty = true;
     },
     // per-CLASS visibility (layer properties): vis = Uint8Array(256) of 0|1, or
     // null to clear. GPU-side — the class code already rides every element as
@@ -6792,6 +7132,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       if (ls && ls.selTex) gl.deleteTexture(ls.selTex);
       if (ls && ls.ruleTex) gl.deleteTexture(ls.ruleTex);
       layers.delete(layer);
+      if (resolvePipe) resolvePipe.dropBake(layer);
+      layerMaxRec.delete(layer); bakeDirty.delete(layer);
       needClear = true;
     },
     layerElementCount(layer) {
@@ -6857,6 +7199,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       chunks.length = 0; needClear = true;
       for (const ls of layers.values()) { if (ls.maskTex) gl.deleteTexture(ls.maskTex); if (ls.catVisTex) gl.deleteTexture(ls.catVisTex); if (ls.rampTex) gl.deleteTexture(ls.rampTex); if (ls.paletteTex) gl.deleteTexture(ls.paletteTex); if (ls.selTex) gl.deleteTexture(ls.selTex); if (ls.ruleTex) gl.deleteTexture(ls.ruleTex); }
       layers.clear();
+      if (resolvePipe) resolvePipe.clear();
+      layerMaxRec.clear(); bakeDirty.clear(); idCapture = null;
     },
     resize() {
       const dpr = window.devicePixelRatio || 1;
@@ -6874,10 +7218,114 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       const secKey = sec ? `${sec.n.join(',')}|${sec.d}|${sec.half}` : 'off';
       const clipKey = clip ? `${clip[0]}~${clip[1]}` : 'a';
       const loKey = layerOpts ? JSON.stringify(layerOpts) : '';
-      const key = `${pointPx}|${colorMode}|${blocksAsPoints ? 'P' : 'B'}${blockEdges ? 'E' : ''}|${secKey}|${clipKey}|${loKey}|${canvas.width}x${canvas.height}`;
-      const moving = vpChanged(vp) || key !== lastKey || needClear;
-      lastKey = key; needClear = false;
-      if (moving) repaintSet.clear();                      // the full redraw covers any pending repaint
+      // the old single draw key, SPLIT: structural changes re-raster; cosmetic
+      // ones (colour mode, clip, per-layer view opts — plus whatever set
+      // cosmeticDirty) can deferred-re-shade over the converged frame
+      const structKey = `${pointPx}|${blocksAsPoints ? 'P' : 'B'}${blockEdges ? 'E' : ''}|${secKey}|${canvas.width}x${canvas.height}`;
+      const cosKey = `${colorMode}|${clipKey}|${loKey}`;
+      let moving = vpChanged(vp) || structKey !== lastKey || needClear;
+      const cosChanged = cosKey !== lastCosKey || cosmeticDirty;
+
+      const db = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
+      // per-layer view opts (color mode + clip); the globals when not overridden
+      const lopt = (id) => (layerOpts && layerOpts[id]) || { colorMode, clip };
+      // elevation ramp = the SCENE z range (layers share vertical space) + clip
+      const zRangeOf = (o) => {
+        const zLo = o.clip && o.clip[0] != null && o.colorMode === 0 ? o.clip[0] : db[2];
+        const zHi = o.clip && o.clip[1] != null && o.colorMode === 0 ? o.clip[1] : db[5];
+        return [zLo, Math.max(zHi - zLo, 1e-6)];
+      };
+
+      // ── DEFERRED RE-SHADE (gl-resolve.js): a purely-cosmetic change over a
+      // CONVERGED frame becomes one fullscreen resolve pass per element layer —
+      // O(pixels) at any model size. Anything the id buffer can't express
+      // (culling, opacity, edges, sticks/soup) falls through to the re-raster. ──
+      if (!moving && cosChanged && lastConverged) {
+        if (!resolvePipe) resolvePipe = createResolvePipeline(gl);
+        resolveOk: if (resolvePipe.ok) {
+          const act = chunks.filter(activeChunk);
+          const groups = new Map();
+          for (const c of act) {
+            if (c.kind === 'mesh') continue;               // untouched pixels persist correctly
+            if (c.kind !== 'points' && c.kind !== 'blocks') break resolveOk;   // sticks/soup: re-raster
+            let g = groups.get(c._layer); if (!g) groups.set(c._layer, g = []); g.push(c);
+          }
+          if (!groups.size) break resolveOk;
+          for (const [id, group] of groups) {
+            const ls = layerOf(id);
+            if (ls.opacity < 0.999) break resolveOk;       // screen-door isn't in the id buffer
+            if (ls.catVisTex) break resolveOk;             // class eyes CULL geometry
+            if (ls.maskTex && ls.isolate) break resolveOk; // isolate culls too
+            if (group[0].kind === 'blocks' && (ls.edges != null ? ls.edges : blockEdges)) break resolveOk;   // edge lines need the intra-face hit
+          }
+          // capture the id buffer LAZILY — ids don't depend on cosmetics, so the
+          // pre-change converged geometry still yields the correct capture; a
+          // still scene that never gets a cosmetic poke never pays for one
+          if (!pickPipe) pickPipe = createPickPipeline(gl);
+          const prevFbo = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+          if (!idCapture || idCapture.w !== canvas.width || idCapture.h !== canvas.height) {
+            idCapture = pickPipe.captureViewport(act, cam, {
+              pointPx, blocksAsPoints, layerStates: layers,
+              section: sec, viewportW: canvas.width, viewportH: canvas.height,
+            });
+          }
+          for (const [id, group] of groups) {              // (re)bake stale attr textures
+            if (!resolvePipe.hasBake(id) || bakeDirty.has(id)) {
+              resolvePipe.bakeLayer(id, group, layerMaxRec.get(id) || 0);
+              bakeDirty.delete(id);
+            }
+          }
+          gl.bindFramebuffer(gl.FRAMEBUFFER, prevFbo);     // back to the EDL target
+          gl.viewport(0, 0, canvas.width, canvas.height);
+          // headlight — the exact formula blocksPipe.begin computes
+          const s = cam.state, v = s.view;
+          let lx = s.eye[0] - s.target[0], ly = s.eye[1] - s.target[1], lz = s.eye[2] - s.target[2];
+          const ll = Math.hypot(lx, ly, lz) || 1;
+          lx = lx / ll + v[1] * 0.4; ly = ly / ll + v[5] * 0.4; lz = lz / ll + v[9] * 0.4;
+          const l2 = Math.hypot(lx, ly, lz) || 1;
+          const lightDir = [lx / l2, ly / l2, lz / l2];
+          for (const [id, group] of groups) {
+            const ls = layerOf(id), o = lopt(id), zr = zRangeOf(o);
+            let u;
+            if (group[0].kind === 'blocks') {
+              const cLo = o.clip && o.clip[0] != null && o.colorMode === 1 ? o.clip[0] : (ls.docChan[0] === Infinity ? 0 : ls.docChan[0]);
+              const cHi = o.clip && o.clip[1] != null && o.colorMode === 1 ? o.clip[1] : ls.docChan[1];
+              // the cut wall faces the viewer: the section normal signed toward the eye
+              const lsec = layerSecOf(ls, sec);
+              let cutN = [0, 0, 1];
+              if (lsec) {
+                const sgn = Math.sign(s.eye[0] * lsec.n[0] + s.eye[1] * lsec.n[1] + s.eye[2] * lsec.n[2] - lsec.d) || 1;
+                cutN = [lsec.n[0] * sgn, lsec.n[1] * sgn, lsec.n[2] * sgn];
+              }
+              u = {
+                kind: 'blocks', colorMode: o.colorMode, zRange: zr,
+                chanDoc: ls.chanTex && ls.chanTexRange ? ls.chanTexRange : [cLo, cHi > cLo ? cHi - cLo : 1],
+                paletteN: 256, intensityScale: 1,
+                ramp: ls.rampTex || ramp, palette: ls.paletteTex || catPalette || palette,
+                mask: ls.maskTex, sel: ls.selTex, rule: ls.ruleOn ? ls.ruleTex : null, chanTex: ls.chanTex,
+                picked: pickedRec, pickedLayer, lightDir, cutNormal: cutN,
+              };
+            } else {
+              u = {
+                kind: 'points', colorMode: o.colorMode, zRange: zr, chanDoc: [0, 1],
+                paletteN: ls.paletteTex ? ls.paletteW : (ls.catN || 32),
+                intensityScale: 65535 / (ls.intensityMax || 1),
+                ramp: ls.rampTex || ramp, palette: ls.paletteTex || (ls.catN && catPalette ? catPalette : palette),
+                mask: ls.maskTex, sel: ls.selTex, rule: ls.ruleOn ? ls.ruleTex : null, chanTex: null,
+                picked: pickedRec, pickedLayer, lightDir: [0, 0, 1], cutNormal: [0, 0, 1],
+              };
+            }
+            resolvePipe.resolveLayer(idCapture.tex, id, u);
+          }
+          resolves++;
+          lastCosKey = cosKey; cosmeticDirty = false;
+          repaintSet.clear();                              // the resolve repainted picked too
+          return { drawn: 0, converged: true, visible: lastVisible, resolved: true };
+        }
+      }
+      if (cosChanged) moving = true;                       // no resolve → a cosmetic change re-rasters
+      lastKey = structKey; lastCosKey = cosKey; needClear = false; cosmeticDirty = false;
+      if (moving) { repaintSet.clear(); idCapture = null; }   // full redraw covers pending repaint; the capture is stale
 
       // frustum-cull + front-to-back over chunk bboxes (tight, thanks to Morton)
       const planes = frustumPlanes(vp);
@@ -6912,15 +7360,6 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
         for (const c of visible) c.cursor = 0;
       }
 
-      const db = docBbox || Float64Array.of(0, 0, 0, 1, 1, 1);
-      // per-layer view opts (color mode + clip); the globals when not overridden
-      const lopt = (id) => (layerOpts && layerOpts[id]) || { colorMode, clip };
-      // elevation ramp = the SCENE z range (layers share vertical space) + clip
-      const zRangeOf = (o) => {
-        const zLo = o.clip && o.clip[0] != null && o.colorMode === 0 ? o.clip[0] : db[2];
-        const zHi = o.clip && o.clip[1] != null && o.colorMode === 0 ? o.clip[1] : db[5];
-        return [zLo, Math.max(zHi - zLo, 1e-6)];
-      };
       // this frame's allotment per chunk: budget share by projected weight, floored
       // so distant chunks keep a sparse presence (coarse prefix always on)
       const allot = (c) => {

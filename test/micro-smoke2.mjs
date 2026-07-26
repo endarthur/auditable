@@ -1723,6 +1723,43 @@ await p.close();
   await wp.close();
 }
 
+// ── §34: deferred re-shade — a cosmetic poke over a converged frame is ONE
+//    fullscreen resolve pass (condenser gl-resolve.js, O(pixels) at any model
+//    size), not a re-raster; a CULLING change (isolate filter) still re-rasters ──
+{
+  const rp = await mkPage('sm2resolve');
+  const r = await rp.evaluate(async () => {
+    const M = window._micro;
+    let csv = 'X,Y,Z,FE\n';                                // small model: converges in a frame or two
+    for (let k = 0; k < 2; k++) for (let j = 0; j < 20; j++) for (let i = 0; i < 20; i++)
+      csv += `${i * 10},${j * 10},${k * 10 + 900},${(10 + i + k * 5).toFixed(1)}\n`;
+    await M.openBlob(new Blob([csv]), 'shade.csv', 'replace');
+    await new Promise((s) => setTimeout(s, 900));
+    document.querySelector('#btnFit').click();
+    await new Promise((s) => setTimeout(s, 1200));          // converge + go idle
+    const L = M.layers()[0];
+    const shot = () => document.querySelector('#cv').toDataURL().slice(1000, 3000);
+    const rc0 = M.renderer.resolveCount;
+    const before = shot();
+    const px = new Uint8Array(256 * 4);                     // a hot ramp nothing defaults to
+    for (let t = 0; t < 256; t++) { px[t * 4] = 255; px[t * 4 + 1] = t; px[t * 4 + 2] = 0; px[t * 4 + 3] = 255; }
+    M.renderer.setLayerRamp(L.id, px); M.requestRender();
+    await new Promise((s) => setTimeout(s, 400));
+    const rc1 = M.renderer.resolveCount;
+    const after = shot();
+    const n = 800;                                          // culling change: must NOT resolve
+    const mask = new Uint8Array(n); for (let q = 0; q < n; q++) mask[q] = q % 2;
+    M.renderer.setFilter(mask, { isolate: true }, L.id); M.requestRender();
+    await new Promise((s) => setTimeout(s, 400));
+    const rc2 = M.renderer.resolveCount;
+    M.renderer.setFilter(null, {}, L.id);
+    return { rc0, rc1, rc2, changed: before !== after };
+  });
+  chk(`deferred re-shade: a ramp poke over the converged frame resolves (${r.rc0}→${r.rc1}) and repaints; isolate still re-rasters (rc stays ${r.rc2})`,
+    r.rc1 > r.rc0 && r.rc2 === r.rc1 && r.changed);
+  await rp.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
