@@ -273,6 +273,9 @@ class Viewer(anywidget.AnyWidget):
     section = traitlets.Dict(allow_none=True, default_value=None).tag(sync=True)
     background = traitlets.Unicode("#121212").tag(sync=True)
     height = traitlets.Int(460).tag(sync=True)
+    #: the in-view toolbar (pick · knife · layers · views · snapshot). Turn it
+    #: off for a clean figure.
+    toolbar = traitlets.Bool(True).tag(sync=True)
     edl = traitlets.Bool(True).tag(sync=True)
     edl_strength = traitlets.Float(1.0).tag(sync=True)
     #: elements drawn per frame before the progressive pass continues
@@ -282,6 +285,7 @@ class Viewer(anywidget.AnyWidget):
 
     def __init__(self, layers, **kw):
         self.layers = list(layers)
+        self._syncing = False
         super().__init__(**kw)
         for i, ly in enumerate(self.layers):
             ly._viewer = self
@@ -290,6 +294,7 @@ class Viewer(anywidget.AnyWidget):
         self._repack()
         self._push_styles()
         self.observe(self._on_selection, names="selection")
+        self.observe(self._on_styles, names="_styles")
 
     # ── data ──
     def _repack(self):
@@ -324,7 +329,21 @@ class Viewer(anywidget.AnyWidget):
         self._payload = _pack({"frame": frame, "layers": heads}, cols)
 
     def _push_styles(self):
+        if self._syncing:
+            return
         self._styles = [ly._style() for ly in self.layers]
+
+    def _on_styles(self, change):
+        """The toolbar edits styles in the browser — mirror them onto the Layer
+        objects so `w["topo"].visible` agrees with what you just clicked."""
+        self._syncing = True
+        try:
+            for ly, st in zip(self.layers, change["new"] or []):
+                for k, v in st.items():
+                    if ly.has_trait(k) and getattr(ly, k) != v:
+                        setattr(ly, k, v)
+        finally:
+            self._syncing = False
 
     def _on_selection(self, change):
         sel = change["new"] or {}
@@ -554,6 +573,8 @@ def drillholes(collar, survey, intervals, bhid="BHID", x="X", y="Y", z="Z", eoh=
         cols["c_eoh"] = _f64(_col(collar, eoh, "collar eoh"))
     extra: dict[str, Any] = {"count": n, "method": method, "dip_convention": dip_convention,
                              "holes": len(hole_names)}
+    if len(hole_names) <= 5000:
+        extra["hole_names"] = hole_names   # the pick readout names the hole
     has_val, labels = _value_and_cat(intervals, value, category, n, cols, extra, "blocks")
 
     # a generous bbox from collars + total depth; the exact one comes back from

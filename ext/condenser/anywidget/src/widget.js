@@ -14,9 +14,10 @@
 import {
   createRenderer, createEdl, createOrbitCamera, attachOrbitInput,
   createChunkBuilder, createBlockChunkBuilder, createStickChunkBuilder,
-  makeBlockGrid, rampPixels,
+  makeBlockGrid, rampPixels, mat4Inverse,
 } from '../../core.js';
 import { dhDesurveySamples } from '../../../drillhole/src/samples.js';
+import { createToolbar } from './toolbar.js';
 
 // ── ramp presets. rampPixels' default is the viridis-ish walk; these are the
 // few a geologist reaches for. Kept here (not in the engine) because they are
@@ -53,7 +54,6 @@ function decodePayload(raw) {
     const T = TYPES[c.type];
     if (T) all[name] = new T(buf, base + bodyStart + c.off, c.len);
   }
-  // each layer's header maps its own column names onto the flat body
   const layers = (head.layers || []).map((L) => {
     const cols = {};
     for (const [name, key] of Object.entries(L.cols || {})) if (all[key]) cols[name] = all[key];
@@ -76,8 +76,7 @@ function modeOf(color, kind, cols) {
 // the section trait → the engine's frame-local plane. `position` is a WORLD
 // coordinate along the normal (that is what a geologist types), so the frame
 // origin comes off it here.
-function sectionOf(sec, origin) {
-  if (!sec) return null;
+function normalOf(sec) {
   let n = sec.normal;
   if (!n) {
     const ax = sec.axis;
@@ -85,7 +84,12 @@ function sectionOf(sec, origin) {
     n = ax === 'x' ? [1, 0, 0] : ax === 'y' ? [0, 1, 0] : [0, 0, 1];
   }
   const L = Math.hypot(n[0], n[1], n[2]) || 1;
-  n = [n[0] / L, n[1] / L, n[2] / L];
+  return [n[0] / L, n[1] / L, n[2] / L];
+}
+function sectionOf(sec, origin) {
+  if (!sec) return null;
+  const n = normalOf(sec);
+  if (!n) return null;
   const d = (+sec.position || 0) - (n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2]);
   const half = Math.max(0.01, (+sec.thickness || 10) / 2);
   return { on: true, n, d, half, d0: d, clip: 'slab', traceHalf: half };
@@ -146,6 +150,12 @@ function drillholeSegments(head, cols) {
   return out;
 }
 
+const fmtN = (v) => {
+  if (v == null || !Number.isFinite(v)) return '—';
+  const a = Math.abs(v);
+  return a >= 1e5 || (a < 0.01 && a > 0) ? v.toExponential(2) : String(Math.round(v * 100) / 100);
+};
+
 // anywidget wants a DEFAULT export; @gcu/build emits named exports only (its
 // rename-on-collision pass needs names). So this is named, and build.js appends
 // the one-line `export default { render }` footer to the bundle.
@@ -156,14 +166,15 @@ export function render({ model, el }) {
   canvas.style.cssText = 'display:block;width:100%;height:100%;';
   host.appendChild(canvas);
   const hud = document.createElement('div');
-  hud.style.cssText = 'position:absolute;left:6px;bottom:5px;font:11px ui-monospace,Menlo,Consolas,monospace;color:#8b8b8b;pointer-events:none;text-shadow:0 1px 2px #000;';
+  hud.className = 'cdhud';
+  hud.style.cssText = 'position:absolute;left:6px;bottom:5px;font:11px ui-monospace,Menlo,Consolas,monospace;color:#8b8b8b;pointer-events:none;text-shadow:0 1px 2px #000;z-index:1;';
   host.appendChild(hud);
   el.appendChild(host);
 
-  let renderer = null, edl = null, cam = null, detach = null, raf = 0, ro = null;
+  let renderer = null, edl = null, cam = null, detach = null, raf = 0, ro = null, tb = null;
   let payload = null, disposed = false, needFit = false, converged = false;
   let docBbox = null;
-  const kinds = [];                                        // layer index → element kind
+  const kinds = [];
 
   try {
     renderer = createRenderer(canvas, { background: [0.07, 0.07, 0.07, 1] });
@@ -178,6 +189,11 @@ export function render({ model, el }) {
 
   const styles = () => model.get('_styles') || [];
   const styleAt = (i) => styles()[i] || {};
+  const viewOpts = () => {                                 // point size / points-view are VIEW-wide in the engine
+    let pointPx = 2.5, asPoints = false;
+    for (const s of styles()) if (s.visible !== false) { pointPx = Math.max(pointPx, s.point_size || 0); asPoints = asPoints || !!s.as_points; }
+    return { pointPx, asPoints };
+  };
 
   const draw = () => {
     raf = 0;
@@ -189,25 +205,15 @@ export function render({ model, el }) {
     cam.setAspect(w / h);
     if (needFit && docBbox) { cam.fit(docBbox); needFit = false; }
 
-    const st = styles();
-    // per-layer colour mode + clip; the engine takes point size / points-view
-    // as VIEW-wide, so those fold across the visible layers
     const layerOpts = {};
-    let pointPx = 2.5, asPoints = false;
-    st.forEach((s, i) => {
+    styles().forEach((s, i) => {
       const cols = payload && payload.layers[i] ? payload.layers[i].cols : {};
-      layerOpts[i] = {
-        colorMode: modeOf(s.color, kinds[i], cols),
-        clip: s.clip && s.clip.length === 2 ? s.clip : null,
-      };
-      if (s.visible !== false) {
-        pointPx = Math.max(pointPx, s.point_size || 0);
-        asPoints = asPoints || !!s.as_points;
-      }
+      layerOpts[i] = { colorMode: modeOf(s.color, kinds[i], cols), clip: s.clip && s.clip.length === 2 ? s.clip : null };
     });
+    const vo = viewOpts();
     const opts = {
       budget: model.get('budget') || 3_000_000,
-      pointPx, blocksAsPoints: asPoints, blockEdges: false,   // edges are a per-layer override
+      pointPx: vo.pointPx, blocksAsPoints: vo.asPoints, blockEdges: false,
       section: sectionOf(model.get('section'), (payload && payload.frame) || [0, 0, 0]),
       clip: null, layerOpts,
     };
@@ -231,7 +237,7 @@ export function render({ model, el }) {
     renderer.clearChunks();
     payload = null; docBbox = null; kinds.length = 0;
     const p = decodePayload(model.get('_payload'));
-    if (!p || !p.layers.length) { hud.textContent = 'no data'; schedule(); return; }
+    if (!p || !p.layers.length) { hud.textContent = 'no data'; if (tb) { tb.showPick(null); tb.syncLegend(null); } schedule(); return; }
     payload = p;
     const frame = { origin: p.frame, crs: null, units: 'm' };
     const bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
@@ -279,6 +285,7 @@ export function render({ model, el }) {
     docBbox = Float64Array.from(bb);
     renderer.setDocBbox(docBbox);
     applyStyles();
+    if (tb) { tb.showPick(null); syncChrome(); }
     needFit = true;
     invalidate();
   };
@@ -296,10 +303,7 @@ export function render({ model, el }) {
       renderer.setLayerRamp(i, stops ? rampPixels(256, stops) : null);
       if (L.kind === 'blocks') renderer.setLayerEdges(i, !!s.block_edges);
       if (L.kind === 'drillholes') renderer.setLayerStickRadius(i, s.radius || 1.5);
-      // threshold → the isolate/dim mask, built here from the value column that
-      // is already resident, so dragging a cutoff never re-sends data
-      const v = L.cols.value;
-      const t = s.threshold;
+      const v = L.cols.value, t = s.threshold;
       if (v && t && t.length === 2) {
         const mask = new Uint8Array(v.length);
         for (let q = 0; q < v.length; q++) mask[q] = (v[q] >= t[0] && v[q] <= t[1]) ? 1 : 0;
@@ -320,38 +324,198 @@ export function render({ model, el }) {
   };
   const applyHeight = () => { host.style.height = `${model.get('height') || 460}px`; invalidate(); };
 
-  // ── the click → `selection` round trip: the ID buffer names the LAYER and the
-  // RECORD, and a record IS the source row, so Python gets back a table index. ──
-  let downAt = null;
-  const onDown = (e) => { downAt = [e.clientX, e.clientY]; };
-  const onUp = (e) => {
-    if (!downAt || !payload) return;
-    const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]);
-    downAt = null;
-    if (moved > 4) return;                                 // a drag is navigation, not a pick
-    const r = canvas.getBoundingClientRect();
+  // ── the section's world extent along its normal, for the scrub slider ──
+  const sectionExtent = (sec) => {
+    if (!payload || !docBbox) return [0, 1];
+    const n = normalOf(sec) || [0, 1, 0], o = payload.frame;
+    let lo = Infinity, hi = -Infinity;
+    for (let c = 0; c < 8; c++) {
+      const p = [docBbox[(c & 1) ? 3 : 0], docBbox[(c & 2) ? 4 : 1], docBbox[(c & 4) ? 5 : 2]];
+      const d = (p[0] + o[0]) * n[0] + (p[1] + o[1]) * n[1] + (p[2] + o[2]) * n[2];
+      if (d < lo) lo = d;
+      if (d > hi) hi = d;
+    }
+    return [lo, hi];
+  };
+
+  // the legend follows the first VISIBLE layer coloured by value
+  const legendInfo = () => {
     const st = styles();
-    let pointPx = 2.5, asPoints = false;
-    st.forEach((s) => { if (s.visible !== false) { pointPx = Math.max(pointPx, s.point_size || 0); asPoints = asPoints || !!s.as_points; } });
-    const hit = renderer.pick(e.clientX - r.left, e.clientY - r.top, cam, {
-      pointPx, blocksAsPoints: asPoints,
+    for (let i = 0; i < st.length; i++) {
+      const s = st[i], L = payload && payload.layers[i];
+      if (!L || s.visible === false || s.color !== 'value') continue;
+      const range = (s.clip && s.clip.length === 2) ? s.clip : (L.value_range || null);
+      if (!range) continue;
+      const stops = RAMPS[s.ramp || 'viridis'];
+      return { range, pixels: rampPixels(256, stops || undefined) };
+    }
+    return null;
+  };
+
+  const syncChrome = () => {
+    if (!tb) return;
+    const sec = model.get('section');
+    tb.syncSection(sec, sec ? sectionExtent(sec) : null);
+    tb.syncLegend(legendInfo());
+    tb.syncOrtho(cam.state.ortho);
+  };
+
+  // ── the toolbar ──
+  const buildToolbar = () => {
+    if (tb) { tb.destroy(); tb = null; }
+    if (model.get('toolbar') === false) return;
+    tb = createToolbar(host, {
+      layers: () => (payload ? payload.layers.map((L, i) => ({ name: styleAt(i).name || L.kind, kind: L.kind, visible: styleAt(i).visible !== false })) : []),
+      setStyle: (i, patch) => {
+        const next = styles().map((s, k) => (k === i ? { ...s, ...patch } : s));
+        model.set('_styles', next);                        // syncs back to the Python Layer
+        model.save_changes();
+        applyStyles();
+        syncChrome();
+      },
+      fit: () => { needFit = true; invalidate(); },
+      setView: (k) => {
+        const c = cam.state;
+        if (k === 'plan') { c.theta = -Math.PI / 2; c.phi = Math.PI / 2 - 0.001; }
+        else if (k === 'north') { c.theta = -Math.PI / 2; c.phi = 0; }
+        else if (k === 'east') { c.theta = Math.PI; c.phi = 0; }
+        else { c.theta = Math.PI / 4; c.phi = Math.PI / 5; }
+        cam.update();
+        needFit = true; invalidate();
+      },
+      toggleOrtho: () => { const on = !cam.state.ortho; cam.setOrtho(on); invalidate(); return on; },
+      isOrtho: () => cam.state.ortho,
+      getSection: () => model.get('section'),
+      setSection: (s) => { model.set('section', s); model.save_changes(); syncChrome(); invalidate(); },
+      snapshot: () => {
+        schedule();
+        requestAnimationFrame(() => {
+          try {
+            const a = document.createElement('a');
+            a.href = canvas.toDataURL('image/png');        // preserveDrawingBuffer keeps this valid
+            a.download = 'condenser.png';
+            a.click();
+          } catch (e) { hud.textContent = `snapshot failed: ${e.message}`; }
+        });
+      },
+      onToolChange: () => { tb.setBand(null); },
+    });
+    syncChrome();
+  };
+
+  // ── pointer: pick / knife (the toolbar decides which) ──
+  const relXY = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+
+  // unproject a screen point onto the horizontal plane through the camera target
+  const groundAt = (sx, sy) => {
+    const w = canvas.clientWidth || 1, h = canvas.clientHeight || 1;
+    const inv = mat4Inverse(cam.state.viewProj);
+    if (!inv) return null;
+    const nx = (sx / w) * 2 - 1, ny = 1 - (sy / h) * 2;
+    const un = (z) => {
+      const x = inv[0] * nx + inv[4] * ny + inv[8] * z + inv[12];
+      const y = inv[1] * nx + inv[5] * ny + inv[9] * z + inv[13];
+      const zz = inv[2] * nx + inv[6] * ny + inv[10] * z + inv[14];
+      const ww = inv[3] * nx + inv[7] * ny + inv[11] * z + inv[15];
+      return [x / ww, y / ww, zz / ww];
+    };
+    const a = un(-1), b = un(1);
+    const dz = b[2] - a[2];
+    const tz = cam.state.target[2];
+    if (Math.abs(dz) < 1e-9) return [a[0], a[1], tz];
+    const t = (tz - a[2]) / dz;
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, tz];
+  };
+
+  const doKnife = (a, b) => {
+    const p1 = groundAt(a[0], a[1]), p2 = groundAt(b[0], b[1]);
+    if (!p1 || !p2) return;
+    const dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) return;
+    const n = [-dy / len, dx / len, 0];                    // horizontal perpendicular to the drag
+    const o = payload ? payload.frame : [0, 0, 0];
+    const position = (p1[0] + o[0]) * n[0] + (p1[1] + o[1]) * n[1] + (p1[2] + o[2]) * n[2];
+    const cur = model.get('section') || {};
+    model.set('section', { normal: n, position, thickness: cur.thickness || 20 });
+    model.save_changes();
+    syncChrome();
+    invalidate();
+  };
+
+  const pickInfo = (hit) => {
+    if (!hit || !payload) return null;
+    const L = payload.layers[hit.layer];
+    if (!L) return null;
+    const c = L.cols, r = hit.rec;
+    const name = styleAt(hit.layer).name || L.kind;
+    const rows = [];
+    if (L.kind === 'drillholes') {
+      const names = L.hole_names || [];
+      const code = c.i_bhid ? c.i_bhid[r] : null;
+      rows.push(['hole', code != null && names[code] != null ? names[code] : `#${code}`]);
+      if (c.i_from) rows.push(['from–to', `${fmtN(c.i_from[r])} – ${fmtN(c.i_to[r])}`]);
+    } else if (c.x) {
+      rows.push(['x y z', `${fmtN(c.x[r])} ${fmtN(c.y[r])} ${fmtN(c.z[r])}`]);
+    }
+    if (c.value) rows.push(['value', fmtN(c.value[r])]);
+    if (c.cat && L.cat_labels) rows.push(['category', L.cat_labels[c.cat[r]] ?? String(c.cat[r])]);
+    rows.push(['row', String(r)]);
+    return { title: name, rows };
+  };
+
+  let down = null, dragging = false;
+  const onDown = (e) => {
+    const t = tb ? tb.tool : 'pick';
+    down = { xy: relXY(e), t };
+    if (t === 'knife') { dragging = true; e.stopPropagation(); e.preventDefault(); }
+  };
+  const onMove = (e) => {
+    if (!dragging || !down) return;
+    e.stopPropagation();
+    if (tb) tb.setBand(down.xy, relXY(e));
+  };
+  const onUp = (e) => {
+    if (!down) return;
+    const xy = relXY(e);
+    const moved = Math.hypot(xy[0] - down.xy[0], xy[1] - down.xy[1]);
+    if (dragging) {
+      e.stopPropagation();
+      dragging = false;
+      if (tb) tb.setBand(null);
+      if (moved > 8) { doKnife(down.xy, xy); if (tb) tb.clearTool(); }
+      down = null;
+      return;
+    }
+    const t = down.t;
+    down = null;
+    if (t !== 'pick' || moved > 4 || !payload) return;     // a drag is navigation, not a pick
+    const vo = viewOpts();
+    const hit = renderer.pick(xy[0], xy[1], cam, {
+      pointPx: vo.pointPx, blocksAsPoints: vo.asPoints,
       section: sectionOf(model.get('section'), payload.frame),
     });
     renderer.setPicked(hit || null);
-    model.set('selection', hit ? { layer: hit.layer, name: (styleAt(hit.layer).name || ''), row: hit.rec } : {});
+    model.set('selection', hit ? { layer: hit.layer, name: styleAt(hit.layer).name || '', row: hit.rec } : {});
     model.save_changes();
+    if (tb) tb.showPick(pickInfo(hit));
     schedule();
   };
-  canvas.addEventListener('pointerdown', onDown);
-  canvas.addEventListener('pointerup', onUp);
-  detach = attachOrbitInput(canvas, cam, { onChange: schedule });
+  // capture on the HOST so the knife can pre-empt the orbit handlers bound to
+  // the canvas (capture runs parent → target)
+  host.addEventListener('pointerdown', onDown, true);
+  host.addEventListener('pointermove', onMove, true);
+  host.addEventListener('pointerup', onUp, true);
+
+  detach = attachOrbitInput(canvas, cam, { onChange: () => { schedule(); if (tb) tb.syncOrtho(cam.state.ortho); } });
 
   const subs = [
     ['change:_payload', load],
-    ['change:_styles', () => { applyStyles(); invalidate(); }],
-    ['change:section', invalidate],
+    ['change:_styles', () => { applyStyles(); syncChrome(); invalidate(); }],
+    ['change:section', () => { syncChrome(); invalidate(); }],
     ['change:background', applyBackground],
     ['change:height', applyHeight],
+    ['change:toolbar', buildToolbar],
     ['change:edl', invalidate], ['change:edl_strength', invalidate], ['change:budget', invalidate],
     ['change:_fit', () => { needFit = true; invalidate(); }],
   ];
@@ -361,19 +525,22 @@ export function render({ model, el }) {
   ro.observe(host);
   applyHeight();
   applyBackground();
+  buildToolbar();
   load();
 
-  return () => {                                           // anywidget teardown
+  return () => {
     disposed = true;
     if (raf) cancelAnimationFrame(raf);
     if (ro) ro.disconnect();
     if (detach) detach();
-    canvas.removeEventListener('pointerdown', onDown);
-    canvas.removeEventListener('pointerup', onUp);
+    if (tb) tb.destroy();
+    host.removeEventListener('pointerdown', onDown, true);
+    host.removeEventListener('pointermove', onMove, true);
+    host.removeEventListener('pointerup', onUp, true);
     for (const [ev, fn] of subs) model.off(ev, fn);
     try { renderer.clearChunks(); } catch { /* context already gone */ }
     const lose = renderer.gl.getExtension('WEBGL_lose_context');
-    if (lose) lose.loseContext();                          // a notebook can build dozens of these
+    if (lose) lose.loseContext();
     el.innerHTML = '';
   };
 }

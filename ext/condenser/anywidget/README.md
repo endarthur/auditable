@@ -70,6 +70,28 @@ the float32 wall on the GPU).
 Drillholes desurvey in the browser through **@gcu/drillhole**, the same
 minimum-curvature code micro uses, so a hole lands in the same place in both.
 
+## The toolbar
+
+| | |
+|---|---|
+| **fit** | reframe on the data |
+| **views** | plan · looking north · looking east · isometric |
+| **ortho** | parallel projection — sections are unreadable in perspective |
+| **pick** | click an element to inspect it (on by default) |
+| **knife** | drag a line across the view to cut a section along it |
+| **layers** | show/hide each layer |
+| **snapshot** | save the view as a PNG |
+
+Plus a **colour legend** bottom-right, a **pick readout** top-right, and a
+**scrub bar** whenever a section exists — slide the plane through the model.
+
+It is deliberately small. The toolbar carries what is awkward from Python
+(mouse-driven geometry) and what you need *while looking* (the readout, the
+legend); everything a line of Python does well stays in Python. Anything you do
+here **round-trips**: hide a layer with the toolbar and `w["topo"].visible` is
+`False` in the kernel, and a knife cut lands in `w.section`. Pass
+`toolbar=False` for a clean figure.
+
 ## The knobs
 
 Per **layer** — every one is live, set it and the view updates with no re-send:
@@ -86,7 +108,7 @@ Per **layer** — every one is live, set it and the view updates with no re-send
 | `sectioned` | `True` · `False` (exempt) · `'front'` · `'behind'` |
 | `selected` | read back: the row picked on this layer |
 
-Per **view**: `section` (or `w.cut(...)`), `background`, `height`, `edl`,
+Per **view**: `section` (or `w.cut(...)`), `background`, `height`, `toolbar`, `edl`,
 `edl_strength`, `budget`, `selection`, `w.fit()`, `w["name"]`, `w.add(layer)`.
 
 ### Seeing inside a model

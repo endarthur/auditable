@@ -150,7 +150,7 @@ const r = await page.evaluate(async (port) => {
 
   const base = lit();
   out.baseLit = base.n;
-  out.hud = (el.querySelector('div') || {}).textContent;
+  out.hud = (el.querySelector('.cdhud') || {}).textContent;
 
   const patch = (i, p) => { model.set('_styles', styles.map((x, k) => (k === i ? { ...x, ...p } : x))); };
 
@@ -173,6 +173,39 @@ const r = await page.evaluate(async (port) => {
   out.sectionAllLit = lit().n;
   model.set('_styles', styles); model.set('section', null); await settle();
 
+  // ── the TOOLBAR ──
+  const host = el.querySelector('div');
+  out.tbButtons = host.querySelectorAll('.cdt button').length;
+  out.legendShown = !!host.querySelector('.cdleg') && host.querySelector('.cdleg').style.display !== 'none';
+
+  // layers popover → toggling a checkbox must reach _styles (and so Python)
+  const layersBtn = [...host.querySelectorAll('.cdt button')].find((b) => (b.title || '').startsWith('Layers'));
+  layersBtn.click();
+  await new Promise((res) => setTimeout(res, 120));
+  const boxes = [...host.querySelectorAll('.cdpop input[type=checkbox]')];
+  out.popRows = boxes.length;
+  if (boxes.length) { boxes[0].checked = false; boxes[0].dispatchEvent(new Event('change')); }
+  await settle();
+  out.tbHidLit = lit().n;
+  out.tbStylesVisible = (model._get('_styles')[0] || {}).visible;
+  if (boxes.length) { boxes[0].checked = true; boxes[0].dispatchEvent(new Event('change')); }
+  await settle();
+
+  // KNIFE: arm it, drag across the view, expect a section with a free normal
+  const knifeBtn = [...host.querySelectorAll('.cdt button')].find((b) => (b.title || '').startsWith('Knife'));
+  knifeBtn.click();
+  const cv0 = document.querySelector('#host canvas');
+  const r0 = cv0.getBoundingClientRect();
+  const kp = (t2, x, y) => host.dispatchEvent(new PointerEvent(t2, { clientX: x, clientY: y, bubbles: true }));
+  kp('pointerdown', r0.left + r0.width * 0.3, r0.top + r0.height * 0.35);
+  kp('pointermove', r0.left + r0.width * 0.5, r0.top + r0.height * 0.5);
+  out.bandShown = host.querySelector('.cdknife').style.display !== 'none';
+  kp('pointerup', r0.left + r0.width * 0.7, r0.top + r0.height * 0.65);
+  await settle();
+  out.knifeSection = model._get('section');
+  out.scrubShown = host.querySelector('.cdsec') && host.querySelector('.cdsec').style.display !== 'none';
+  model.set('section', null); await settle();
+
   // pick → layer + row
   const cv = document.querySelector('#host canvas');
   const rect = cv.getBoundingClientRect();
@@ -186,6 +219,8 @@ const r = await page.evaluate(async (port) => {
     if (sel.row != null && sel.row >= 0) break;
   }
   out.selection = sel;
+  out.pickBoxShown = host.querySelector('.cdpick') && host.querySelector('.cdpick').style.display !== 'none';
+  out.pickBoxText = (host.querySelector('.cdpick') || {}).textContent || '';
 
   let disposeErr = null;
   try { dispose(); } catch (e) { disposeErr = e.message; }
@@ -195,7 +230,7 @@ const r = await page.evaluate(async (port) => {
   // a malformed payload must degrade, not explode
   const m3 = makeModel({ _payload: new DataView(new ArrayBuffer(4)), _styles: [], _fit: 0, section: null, background: '#121212', height: 200, edl: true, edl_strength: 1, budget: 1e6, selection: {} });
   let badErr = null;
-  try { const d3 = render({ model: m3, el }); await settle(); out.badHud = (el.querySelector('div') || {}).textContent; d3(); }
+  try { const d3 = render({ model: m3, el }); await settle(); out.badHud = (el.querySelector('.cdhud') || {}).textContent; d3(); }
   catch (e) { badErr = e.message; }
   out.badErr = badErr;
   return out;
@@ -214,6 +249,13 @@ chk(`sectioned=False exempts a layer (exempt ${r.sectionLit.toLocaleString()} px
   r.sectionAllLit < r.sectionLit);
 chk(`pick returns layer + row (${JSON.stringify(r.selection)})`,
   r.selection && Number.isInteger(r.selection.row) && r.selection.row >= 0 && typeof r.selection.name === 'string' && r.selection.name.length > 0);
+chk(`toolbar renders (${r.tbButtons} buttons) with the colour legend`, r.tbButtons === 7 && r.legendShown);
+chk(`layers popover lists all 3 and a toggle reaches _styles (visible=${r.tbStylesVisible}, ${r.baseLit.toLocaleString()} → ${r.tbHidLit.toLocaleString()} px)`,
+  r.popRows === 3 && r.tbStylesVisible === false && r.tbHidLit < r.baseLit * 0.9);
+chk(`knife drag cuts a section on a free normal (${JSON.stringify(r.knifeSection && r.knifeSection.normal ? r.knifeSection.normal.map((v) => Math.round(v * 100) / 100) : null)})`,
+  r.bandShown && r.knifeSection && Array.isArray(r.knifeSection.normal) && Number.isFinite(r.knifeSection.position) && r.scrubShown);
+chk(`pick readout shows the record (${JSON.stringify((r.pickBoxText || '').slice(0, 42))})`,
+  r.pickBoxShown && /row/.test(r.pickBoxText));
 chk('dispose is clean and empties the host', !r.disposeErr && r.emptied, r.disposeErr || '');
 chk(`a malformed payload degrades quietly (hud "${r.badHud}")`, !r.badErr && /no data/.test(r.badHud || ''), r.badErr || '');
 
