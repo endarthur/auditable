@@ -65,6 +65,18 @@ n = 30000
 px = rng.random(n)*160; py = rng.random(n)*160; pz = 150 + np.sin(px/25)*8 + np.cos(py/30)*6
 topo = cd.points(px, py, pz, value=pz, name="topo", sectioned=False)
 
+# the DATAFRAME-shaped path: size given as COLUMN NAMES, and a scalar size.
+# np.isscalar("DIMX") is True, so a name once reached float() -- guard it.
+tbl = {"XC": np.array(xs, float), "YC": np.array(ys, float), "ZC": np.array(zs, float),
+       "DIMX": np.array(dx), "DIMY": np.array(dy), "DIMZ": np.array(dz), "CU": np.array(val)}
+by_name = cd.blocks(tbl, x="XC", y="YC", z="ZC", value="CU", size=("DIMX", "DIMY", "DIMZ"))
+flat = np.arange(27.0)
+scalar_size = cd.blocks(np.repeat(np.arange(3.), 9) * 10, np.tile(np.repeat(np.arange(3.), 3), 3) * 10,
+                        np.tile(np.arange(3.), 9) * 10, value=flat, size=(10, 10, 10))
+assert by_name.count == model.count, "size-by-name lost rows"
+assert len(by_name._extra["dim_palette"]) == 2, "size-by-name lost the palette"
+assert scalar_size.count == 27, "scalar size failed"
+
 w = cd.view(model, holes, topo, height=460)
 open(r"${T}/multi.bin", "wb").write(w._payload)
 open(r"${T}/styles.json", "w").write(json.dumps(w._styles))
@@ -73,6 +85,8 @@ print(json.dumps({
   "blocks": model.count, "intervals": holes.count, "points": topo.count,
   "palette": len(model._extra["dim_palette"]), "pitch": [a[1] for a in model._extra["axes"]],
   "holes": holes._extra["holes"],
+  "byName": by_name.count, "byNamePalette": len(by_name._extra["dim_palette"]),
+  "scalarSize": scalar_size.count,
 }))
 `;
 let meta;
@@ -86,6 +100,7 @@ try {
 console.log(`ok   python packed ${meta.layers.join(' + ')} → ${(meta.bytes / 1024).toFixed(0)} KB`
   + ` (${meta.blocks} blocks / ${meta.intervals} intervals / ${meta.points.toLocaleString()} points)`);
 console.log(`ok   sub-blocked lattice: fine pitch ${JSON.stringify(meta.pitch)}, ${meta.palette} block sizes, ${meta.holes} holes`);
+console.log(`ok   size= accepts COLUMN NAMES (${meta.byName} blocks, ${meta.byNamePalette} sizes) and scalars (${meta.scalarSize} blocks)`);
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.bin': 'application/octet-stream', '.json': 'application/json' };
 const server = http.createServer(async (req, res) => {

@@ -511,8 +511,12 @@ def blocks(src=None, x="x", y="y", z="z", value=None, category=None, size=None, 
     else:
         if len(size) != 3:
             raise ValueError("gcu-condenser: size must be (dx, dy, dz)")
-        dims = [_f64(_col(src, s, f"size[{i}]", n)) if not np.isscalar(s)
-                else np.full(n, float(s)) for i, s in enumerate(size)]
+        # a NUMBER is a constant size; anything else (a column name or an
+        # array) goes through _col. np.isscalar is a trap here -- it answers
+        # True for a str, which would send a column NAME to float().
+        dims = [np.full(n, float(s)) if isinstance(s, (int, float, np.number))
+                else _f64(_col(src, s, f"size[{i}]", n))
+                for i, s in enumerate(size)]
         axes = [list(_axis_subblocked(a, d, nm)) for a, d, nm in
                 ((xf, dims[0], "x"), (yf, dims[1], "y"), (zf, dims[2], "z"))]
         # palette of HALF-dims, keyed by the distinct (dx, dy, dz) triples
