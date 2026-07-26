@@ -1,70 +1,103 @@
 // @gcu/condenser anywidget — the CROSS-LANGUAGE guard. The Python packer
-// really runs (subprocess), its bytes really cross into a real browser, and
-// the real built widget ESM really renders them. That is the only test that
-// can catch a wire-format drift between the two halves, which is the whole
-// risk surface of a widget.
+// really runs (in the package's own uv venv), its bytes really cross into a
+// real browser, and the real built widget ESM really renders them. That is the
+// only shape that can catch a wire-format drift between the two halves, which
+// is the whole risk surface of a widget.
 //
-//   node test/condenser-widget.mjs        (needs: playwright, python + numpy + anywidget)
+//   uv venv ext/condenser/anywidget/.venv
+//   uv pip install --python ext/condenser/anywidget/.venv -e ext/condenser/anywidget
+//   node test/condenser-widget.mjs
 import { chromium } from 'playwright';
 import http from 'http';
 import { readFile, writeFile, mkdir } from 'fs/promises';
+import { existsSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { extname, join } from 'path';
 
+// the package's own venv — never the machine's global python
+const VENV = ['ext/condenser/anywidget/.venv/Scripts/python.exe', 'ext/condenser/anywidget/.venv/bin/python']
+  .find((p) => existsSync(p));
+const PYTHON = VENV || 'python';
+
 const TMP = join(process.env.CLAUDE_JOB_DIR || '.', 'tmp');
 await mkdir(TMP, { recursive: true });
+const T = TMP.replace(/\\/g, '\\\\');
 
-// ── 1. the Python half: pack a block model and a cloud with the real API ──
+// ── 1. the Python half: a stack that uses every kind + sub-blocking ──
 const PY = `
-import sys, json, numpy as np
-sys.path.insert(0, r"ext/condenser/anywidget")
-import gcu_condenser as cd
+import json, numpy as np, gcu_condenser as cd
 
-xs, ys, zs, vs, cs = [], [], [], [], []
+# a SUB-BLOCKED model: 20 m parents with a 10 m core
+xs, ys, zs, dx, dy, dz, val = [], [], [], [], [], [], []
 for k in range(4):
-    for j in range(12):
-        for i in range(12):
-            xs.append(612000 + i * 10); ys.append(8200000 + j * 10); zs.append(900 + k * 10)
-            vs.append(10.0 + i * 2 + k * 3); cs.append("ore" if i > 5 else "waste")
-x = np.array(xs, float); y = np.array(ys, float); z = np.array(zs, float)
-v = np.array(vs, float); c = np.array(cs)
+    for j in range(8):
+        for i in range(8):
+            if 2 <= i < 6 and 2 <= j < 6:
+                for a in range(2):
+                    for b in range(2):
+                        for c in range(2):
+                            xs.append(i*20+5+a*10); ys.append(j*20+5+b*10); zs.append(k*20+5+c*10)
+                            dx.append(10.); dy.append(10.); dz.append(10.); val.append(30.+i+j)
+            else:
+                xs.append(i*20+10); ys.append(j*20+10); zs.append(k*20+10)
+                dx.append(20.); dy.append(20.); dz.append(20.); val.append(5.+i)
+model = cd.blocks(np.array(xs,float), np.array(ys,float), np.array(zs,float),
+                  value=np.array(val), size=(np.array(dx), np.array(dy), np.array(dz)),
+                  name="model", ramp="turbo")
 
-b = cd.blocks(x, y, z, value=v, category=c)
-open(r"${TMP.replace(/\\/g, '\\\\')}/blocks.bin", "wb").write(b._payload)
+# drillholes through it
+rng = np.random.default_rng(2)
+cid, cx, cy, cz = [], [], [], []
+sid, sd, sa, sdp = [], [], [], []
+iid, ifr, ito, iau = [], [], [], []
+for hn in range(6):
+    hid = "DH%02d" % hn
+    cid.append(hid); cx.append(40.+hn*25); cy.append(60.); cz.append(120.)
+    for d in (0, 40, 80):
+        sid.append(hid); sd.append(float(d)); sa.append(90.+hn*3); sdp.append(-60.-d*0.05)
+    for f in range(0, 80, 2):
+        iid.append(hid); ifr.append(float(f)); ito.append(float(f+2)); iau.append(float(rng.random()*5))
+holes = cd.drillholes({"BHID":cid,"X":cx,"Y":cy,"Z":cz}, {"BHID":sid,"DEPTH":sd,"AZ":sa,"DIP":sdp},
+                      {"BHID":iid,"FROM":ifr,"TO":ito,"AU":iau}, value="AU", radius=2.5, name="holes")
 
-rng = np.random.default_rng(7)
-n = 40000
-px = 611000 + rng.random(n) * 200; py = 8200000 + rng.random(n) * 200; pz = 900 + rng.random(n) * 60
-p = cd.points(px, py, pz, value=pz)
-open(r"${TMP.replace(/\\/g, '\\\\')}/points.bin", "wb").write(p._payload)
+# a topo cloud, exempt from the section
+n = 30000
+px = rng.random(n)*160; py = rng.random(n)*160; pz = 150 + np.sin(px/25)*8 + np.cos(py/30)*6
+topo = cd.points(px, py, pz, value=pz, name="topo", sectioned=False)
 
-print(json.dumps({"blocks": len(b._payload), "points": len(p._payload),
-                  "blockColor": b.color, "cats": b.categories, "n": int(x.size)}))
+w = cd.view(model, holes, topo, height=460)
+open(r"${T}/multi.bin", "wb").write(w._payload)
+open(r"${T}/styles.json", "w").write(json.dumps(w._styles))
+print(json.dumps({
+  "bytes": len(w._payload), "layers": [l.name for l in w.layers],
+  "blocks": model.count, "intervals": holes.count, "points": topo.count,
+  "palette": len(model._extra["dim_palette"]), "pitch": [a[1] for a in model._extra["axes"]],
+  "holes": holes._extra["holes"],
+}))
 `;
 let meta;
 try {
-  const out = execFileSync('python', ['-c', PY], { encoding: 'utf8', cwd: process.cwd() });
-  meta = JSON.parse(out.trim().split('\n').pop());
+  meta = JSON.parse(execFileSync(PYTHON, ['-c', PY], { encoding: 'utf8', cwd: process.cwd() }).trim().split('\n').pop());
 } catch (e) {
-  console.log('FAIL: the Python half did not run —', (e.stderr || e.message || '').toString().trim().split('\n').slice(-3).join('\n'));
+  console.log('FAIL: the Python half did not run —', (e.stderr || e.message || '').toString().trim().split('\n').slice(-4).join('\n'));
+  if (!VENV) console.log('     (no .venv — run: uv venv ext/condenser/anywidget/.venv && uv pip install --python ext/condenser/anywidget/.venv -e ext/condenser/anywidget)');
   process.exit(1);
 }
-console.log(`ok   python packed: ${meta.n} blocks (${meta.blocks} B, color=${meta.blockColor}, cats=${meta.cats.join('/')}) + a 40k cloud (${meta.points} B)`);
+console.log(`ok   python packed ${meta.layers.join(' + ')} → ${(meta.bytes / 1024).toFixed(0)} KB`
+  + ` (${meta.blocks} blocks / ${meta.intervals} intervals / ${meta.points.toLocaleString()} points)`);
+console.log(`ok   sub-blocked lattice: fine pitch ${JSON.stringify(meta.pitch)}, ${meta.palette} block sizes, ${meta.holes} holes`);
 
-// ── 2. serve the repo + the payloads ──
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.bin': 'application/octet-stream' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.bin': 'application/octet-stream', '.json': 'application/json' };
 const server = http.createServer(async (req, res) => {
   try {
-    const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
-    const file = path.startsWith('/tmp/') ? join(TMP, path.slice(5)) : '.' + path;
-    const data = await readFile(file);
-    res.writeHead(200, { 'content-type': MIME[extname(path)] || 'application/octet-stream' });
+    const p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    const data = await readFile(p.startsWith('/tmp/') ? join(TMP, p.slice(5)) : '.' + p);
+    res.writeHead(200, { 'content-type': MIME[extname(p)] || 'application/octet-stream' });
     res.end(data);
   } catch { res.writeHead(404); res.end(); }
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const PORT = server.address().port;
-
 await writeFile(join(TMP, 'host.html'), '<!doctype html><meta charset=utf-8><body style="margin:0;background:#111"><div id=host style="width:760px;height:460px"></div>');
 
 const browser = await chromium.launch({ args: ['--use-gl=angle'] });
@@ -76,13 +109,11 @@ await page.goto(`http://127.0.0.1:${PORT}/tmp/host.html`, { waitUntil: 'load' })
 let fails = 0;
 const chk = (name, cond, extra) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}${extra ? '  — ' + extra : ''}`); if (!cond) fails++; };
 
-// ── 3. drive the REAL widget module with a stub anywidget model ──
 const r = await page.evaluate(async (port) => {
   const mod = await import(`http://127.0.0.1:${port}/ext/condenser/anywidget/gcu_condenser/static/widget.js`);
   const render = mod.default && mod.default.render;
   if (!render) return { err: 'no default.render export' };
 
-  // the anywidget model surface the widget actually uses
   const makeModel = (init) => {
     const state = new Map(Object.entries(init));
     const subs = new Map();
@@ -95,96 +126,76 @@ const r = await page.evaluate(async (port) => {
       _get: (k) => state.get(k),
     };
   };
-  const grab = async (name) => {
-    const buf = await (await fetch(`http://127.0.0.1:${port}/tmp/${name}`)).arrayBuffer();
-    return new DataView(buf);                              // anywidget hands Bytes traits over as a DataView
-  };
-  const settle = () => new Promise((res) => setTimeout(res, 700));
-  const lit = () => {                                      // non-background pixels on the widget canvas
+  const settle = () => new Promise((res) => setTimeout(res, 800));
+  const lit = () => {
     const cv = document.querySelector('#host canvas');
     const gl = cv.getContext('webgl2');
     const px = new Uint8Array(cv.width * cv.height * 4);
     gl.readPixels(0, 0, cv.width, cv.height, gl.RGBA, gl.UNSIGNED_BYTE, px);
-    let n = 0, sum = 0;
-    for (let i = 0; i < px.length; i += 4) { if (px[i] > 30 || px[i + 1] > 30 || px[i + 2] > 30) n++; sum += px[i] + px[i + 1] * 2 + px[i + 2] * 3; }
-    return { n, sig: sum };
+    let n = 0, sig = 0;
+    for (let i = 0; i < px.length; i += 4) { if (px[i] > 30 || px[i + 1] > 30 || px[i + 2] > 30) n++; sig += px[i] + px[i + 1] * 2 + px[i + 2] * 3; }
+    return { n, sig };
   };
 
-  const out = {};
+  const payload = new DataView(await (await fetch(`http://127.0.0.1:${port}/tmp/multi.bin`)).arrayBuffer());
+  const styles = await (await fetch(`http://127.0.0.1:${port}/tmp/styles.json`)).json();
   const el = document.querySelector('#host');
+  const out = {};
   const model = makeModel({
-    _payload: await grab('blocks.bin'), _fit: 0, color: 'value', ramp: 'viridis', clip: [],
-    point_size: 2.5, as_points: false, block_edges: false, edl: true, edl_strength: 1,
-    threshold: [], filter_mode: 'isolate', opacity: 1.0,
-    background: '#121212', height: 460, budget: 3000000, selected: -1,
+    _payload: payload, _styles: styles, _fit: 0, section: null,
+    background: '#121212', height: 460, edl: true, edl_strength: 1, budget: 3000000, selection: {},
   });
   const dispose = render({ model, el });
-  await settle();
+  await settle(); await settle();
 
-  const a = lit();
-  out.blocksLit = a.n;
+  const base = lit();
+  out.baseLit = base.n;
   out.hud = (el.querySelector('div') || {}).textContent;
 
-  model.set('ramp', 'magma'); await settle();
-  const b = lit();
-  out.rampChanged = b.sig !== a.sig && b.n > 0;
+  const patch = (i, p) => { model.set('_styles', styles.map((x, k) => (k === i ? { ...x, ...p } : x))); };
 
-  model.set('color', 'category'); await settle();
-  const c = lit();
-  out.colorChanged = c.sig !== b.sig && c.n > 0;
+  // per-layer visibility
+  patch(0, { visible: false }); await settle();
+  out.hiddenLit = lit().n;
+  model.set('_styles', styles); await settle();
+  out.restoredLit = lit().n;
 
-  model.set('block_edges', true); await settle();
-  out.edgesOk = lit().n > 0;
-  model.set('block_edges', false); await settle();
-
-  // threshold: the cutoff that makes an ore body visible inside a solid model.
-  // A tight window must show STRICTLY FEWER lit pixels than the whole block,
-  // and clearing it must restore them — the mask is rebuilt browser-side, so
-  // this also proves no re-send is needed.
-  model.set('color', 'value'); await settle();
-  const full = lit().n;
-  model.set('threshold', [30, 999]); await settle();
+  // per-layer threshold — carves the block model, leaves the others alone
+  patch(0, { threshold: [25, 99] }); await settle();
   out.thrLit = lit().n;
-  out.thrShrinks = out.thrLit > 0 && out.thrLit < full * 0.75;
-  model.set('threshold', []); await settle();
-  out.thrRestores = Math.abs(lit().n - full) < full * 0.05;
+  model.set('_styles', styles); await settle();
 
-  model.set('opacity', 0.3); await settle();
-  out.opacityChanges = lit().n < full;                     // screen-door drops pixels
-  model.set('opacity', 1.0); await settle();
+  // SECTION: a thin slab cuts; topo is sectioned:false so it survives — proven
+  // by comparing against a run where every layer IS sectioned
+  model.set('section', { axis: 'y', position: 60, thickness: 20 }); await settle();
+  out.sectionLit = lit().n;
+  model.set('_styles', styles.map((x) => ({ ...x, sectioned: true }))); await settle();
+  out.sectionAllLit = lit().n;
+  model.set('_styles', styles); model.set('section', null); await settle();
 
-  // pick: click the middle of the model → a record index comes back
+  // pick → layer + row
   const cv = document.querySelector('#host canvas');
   const rect = cv.getBoundingClientRect();
-  const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
-  cv.dispatchEvent(new PointerEvent('pointerdown', { clientX: cx, clientY: cy, bubbles: true }));
-  cv.dispatchEvent(new PointerEvent('pointerup', { clientX: cx, clientY: cy, bubbles: true }));
-  await settle();
-  out.selected = model._get('selected');
+  let sel = {};
+  for (const [fx, fy] of [[0.5, 0.5], [0.45, 0.55], [0.55, 0.45], [0.5, 0.62], [0.4, 0.45]]) {
+    const cx = rect.left + rect.width * fx, cy = rect.top + rect.height * fy;
+    cv.dispatchEvent(new PointerEvent('pointerdown', { clientX: cx, clientY: cy, bubbles: true }));
+    cv.dispatchEvent(new PointerEvent('pointerup', { clientX: cx, clientY: cy, bubbles: true }));
+    await settle();
+    sel = model._get('selection') || {};
+    if (sel.row != null && sel.row >= 0) break;
+  }
+  out.selection = sel;
 
-  // teardown must be clean, and a second widget must be constructible after it
   let disposeErr = null;
   try { dispose(); } catch (e) { disposeErr = e.message; }
   out.disposeErr = disposeErr;
   out.emptied = el.children.length === 0;
 
-  // ── the point cloud, in a fresh instance ──
-  const model2 = makeModel({
-    _payload: await grab('points.bin'), _fit: 0, color: 'value', ramp: 'turbo', clip: [],
-    point_size: 3, as_points: false, block_edges: false, edl: true, edl_strength: 1,
-    threshold: [], filter_mode: 'isolate', opacity: 1.0,
-    background: '#121212', height: 460, budget: 3000000, selected: -1,
-  });
-  const dispose2 = render({ model: model2, el });
-  await settle(); await settle();
-  out.pointsLit = lit().n;
-  out.pointsHud = (el.querySelector('div') || {}).textContent;
-  dispose2();
-
   // a malformed payload must degrade, not explode
-  const model3 = makeModel({ _payload: new DataView(new ArrayBuffer(4)), _fit: 0, color: 'z', ramp: 'viridis', clip: [], height: 200, budget: 1e6, selected: -1, point_size: 2, edl: true, edl_strength: 1, background: '#121212', threshold: [], filter_mode: 'isolate', opacity: 1.0 });
+  const m3 = makeModel({ _payload: new DataView(new ArrayBuffer(4)), _styles: [], _fit: 0, section: null, background: '#121212', height: 200, edl: true, edl_strength: 1, budget: 1e6, selection: {} });
   let badErr = null;
-  try { const d3 = render({ model: model3, el }); await settle(); out.badHud = (el.querySelector('div') || {}).textContent; d3(); }
+  try { const d3 = render({ model: m3, el }); await settle(); out.badHud = (el.querySelector('div') || {}).textContent; d3(); }
   catch (e) { badErr = e.message; }
   out.badErr = badErr;
   return out;
@@ -192,18 +203,18 @@ const r = await page.evaluate(async (port) => {
 
 if (r.err) { console.log('FAIL:', r.err); process.exit(1); }
 
-chk(`block model renders through the widget (${r.blocksLit.toLocaleString()} lit px, hud "${r.hud}")`,
-  r.blocksLit > 5000 && /576/.test(r.hud || ''));
-chk('ramp trait repaints (viridis → magma)', r.rampChanged);
-chk('color trait repaints (value → category)', r.colorChanged);
-chk('block_edges renders', r.edgesOk);
-chk(`threshold carves the grade shell out of a solid model (${r.thrLit.toLocaleString()} lit px)`, r.thrShrinks);
-chk('clearing threshold restores the full model (no re-send)', r.thrRestores);
-chk('opacity dithers the model see-through', r.opacityChanges);
-chk(`click → selected is a real record index (${r.selected})`, Number.isInteger(r.selected) && r.selected >= 0 && r.selected < 576);
+chk(`three kinds render co-registered in one view (${r.baseLit.toLocaleString()} lit px, hud "${r.hud}")`,
+  r.baseLit > 20000 && /3 layers/.test(r.hud || ''));
+chk(`per-layer visibility: hiding the model drops pixels (${r.baseLit.toLocaleString()} → ${r.hiddenLit.toLocaleString()}) and restores`,
+  r.hiddenLit < r.baseLit * 0.9 && Math.abs(r.restoredLit - r.baseLit) < r.baseLit * 0.05);
+chk(`per-layer threshold carves its own layer only (${r.thrLit.toLocaleString()} lit px)`,
+  r.thrLit > 0 && r.thrLit < r.baseLit);
+chk(`section cuts the scene (${r.baseLit.toLocaleString()} → ${r.sectionLit.toLocaleString()} px)`, r.sectionLit < r.baseLit * 0.95);
+chk(`sectioned=False exempts a layer (exempt ${r.sectionLit.toLocaleString()} px > all-sectioned ${r.sectionAllLit.toLocaleString()} px)`,
+  r.sectionAllLit < r.sectionLit);
+chk(`pick returns layer + row (${JSON.stringify(r.selection)})`,
+  r.selection && Number.isInteger(r.selection.row) && r.selection.row >= 0 && typeof r.selection.name === 'string' && r.selection.name.length > 0);
 chk('dispose is clean and empties the host', !r.disposeErr && r.emptied, r.disposeErr || '');
-chk(`point cloud renders in a fresh instance (${r.pointsLit.toLocaleString()} lit px, hud "${r.pointsHud}")`,
-  r.pointsLit > 5000 && /40,?000/.test(r.pointsHud || ''));
 chk(`a malformed payload degrades quietly (hud "${r.badHud}")`, !r.badErr && /no data/.test(r.badHud || ''), r.badErr || '');
 
 console.log(fails ? `\nCONDENSER WIDGET: ${fails} FAILURES` : '\nCONDENSER WIDGET: PASS');

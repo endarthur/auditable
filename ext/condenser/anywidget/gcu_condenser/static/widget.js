@@ -4782,20 +4782,412 @@ function createEdl(gl) {
 // inlined leaf (every chunk is frame-relative). The full package (main.js)
 // re-exports this same surface plus io/ + grid/.
 
+// ── ../../drillhole/src/desurvey.js ──
+
+// @gcu/drillhole — desurvey: collar + survey stations → the 3D hole trace, and a
+// method-consistent position at any down-hole depth.
+//
+// Conventions (D1): azimuth = degrees clockwise from north; dip = MINING convention,
+// positive DOWN (normalizeSurveys flips neg-down files; detectDipConvention infers
+// from the median); depths/lengths in any consistent unit (metres in practice).
+// World frame: x = east, y = north, z = up.
+//
+// Reverse-vendored from BMA (A7 Phase 0, Arthur 2026-06-11) — developed there in the
+// concat-source style, always intended to live here. BMA + dee re-vendor from here now.
+
+// Unit tangent from azimuth/dip (mining pos-down): x east, y north, z up.
+function dhTangent(azDeg, dipDeg) {
+  let az = azDeg * Math.PI / 180, dip = dipDeg * Math.PI / 180;
+  let c = Math.cos(dip);
+  return [Math.sin(az) * c, Math.cos(az) * c, -Math.sin(dip)];
+}
+
+// 'pos-down' (mining: +60 = 60° below horizontal) vs 'neg-down' (signed math: -60 =
+// below). Inferred from the median dip — exploration holes point down, so the sign of
+// the bulk tells the convention.
+function dhDetectDipConvention(surveys) {
+  let dips = [];
+  for (let i = 0; i < surveys.length; i++) {
+    let d = surveys[i].dip;
+    if (typeof d === 'number' && isFinite(d) && d !== 0) dips.push(d);
+  }
+  if (dips.length === 0) return 'pos-down';
+  dips.sort(function(a, b) { return a - b; });
+  let med = dips[Math.floor(dips.length / 2)];
+  return med < 0 ? 'neg-down' : 'pos-down';
+}
+
+// Sort, dedupe (last wins), normalize dip to pos-down, synthesize a station at depth 0
+// when the list starts deeper (copies the first attitude). Returns { stations:
+// [{depth, az, dip}], dupCount, badCount }.
+function dhNormalizeSurveys(rawSurveys, dipConvention) {
+  let flip = dipConvention === 'neg-down' ? -1 : 1;
+  let clean = [], badCount = 0;
+  for (let i = 0; i < rawSurveys.length; i++) {
+    let s = rawSurveys[i];
+    let depth = s.depth, az = s.az, dip = s.dip * flip;
+    if (!isFinite(depth) || depth < 0 || !isFinite(az) || !isFinite(dip) || Math.abs(dip) > 90.000001) {
+      badCount++;
+      continue;
+    }
+    clean.push({ depth: depth, az: az, dip: dip });
+  }
+  clean.sort(function(a, b) { return a.depth - b.depth; });
+  let stations = [], dupCount = 0;
+  for (let j = 0; j < clean.length; j++) {
+    if (stations.length && Math.abs(stations[stations.length - 1].depth - clean[j].depth) < 1e-9) {
+      stations[stations.length - 1] = clean[j]; // last wins
+      dupCount++;
+    } else {
+      stations.push(clean[j]);
+    }
+  }
+  if (stations.length && stations[0].depth > 1e-9) {
+    stations.unshift({ depth: 0, az: stations[0].az, dip: stations[0].dip });
+  }
+  return { stations: stations, dupCount: dupCount, badCount: badCount };
+}
+
+// Desurvey one hole. Methods:
+// - 'minimumCurvature' (default): circular-arc model, RF = (2/θ)·tan(θ/2)
+// - 'balancedTangential': the same without RF — averages the two end tangents per
+//   segment (matches legacy desurveys from several packages)
+// - 'tangential': straight segments along the LOWER station's attitude (sparse/legacy
+//   surveys; matches dee's simple-tangential seed)
+// collar = [x, y, z]; stations from dhNormalizeSurveys (pos-down). Returns { method,
+// depths, px, py, pz, tx, ty, tz, dogleg, dls } — tangents + method ride along so
+// dhPositionAt interpolates consistently. `dogleg[k]` is the angular change (degrees)
+// between stations k−1 and k; `dls[k]` is the dogleg SEVERITY in °/30 length-units (the
+// metric drilling-QC convention — multiply by ⅓ for °/10 m, or recompute from `dogleg`
+// for °/100 ft). Both are geometry of the survey attitudes — independent of `method` —
+// so they're the same whichever desurvey you pick. dogleg[0] = dls[0] = 0.
+function dhDesurveyHole(collar, stations, method) {
+  method = method || 'minimumCurvature';
+  let n = stations.length;
+  let out = {
+    method: method,
+    depths: new Float64Array(n),
+    px: new Float64Array(n), py: new Float64Array(n), pz: new Float64Array(n),
+    tx: new Float64Array(n), ty: new Float64Array(n), tz: new Float64Array(n),
+    dogleg: new Float64Array(n), dls: new Float64Array(n),
+  };
+  for (let i = 0; i < n; i++) {
+    out.depths[i] = stations[i].depth;
+    let t = dhTangent(stations[i].az, stations[i].dip);
+    out.tx[i] = t[0]; out.ty[i] = t[1]; out.tz[i] = t[2];
+  }
+  out.px[0] = collar[0]; out.py[0] = collar[1]; out.pz[0] = collar[2];
+
+  for (let k = 1; k < n; k++) {
+    let dl = out.depths[k] - out.depths[k - 1];
+    // dogleg angle between the two station tangents — drives both the min-curvature RF
+    // and the QC severity, and is the same for every method (it's the survey geometry).
+    let dot = out.tx[k - 1] * out.tx[k] + out.ty[k - 1] * out.ty[k] + out.tz[k - 1] * out.tz[k];
+    let doglegRad = Math.acos(Math.max(-1, Math.min(1, dot)));
+    out.dogleg[k] = doglegRad * 180 / Math.PI;
+    out.dls[k] = dl > 1e-12 ? out.dogleg[k] / dl * 30 : 0;
+    if (method === 'tangential') {
+      out.px[k] = out.px[k - 1] + dl * out.tx[k];
+      out.py[k] = out.py[k - 1] + dl * out.ty[k];
+      out.pz[k] = out.pz[k - 1] + dl * out.tz[k];
+    } else {
+      let rf = 1; // balanced tangential
+      // minimum curvature: RF = (2/θ)·tan(θ/2)
+      if (method !== 'balancedTangential') rf = doglegRad > 1e-6 ? (2 / doglegRad) * Math.tan(doglegRad / 2) : 1;
+      out.px[k] = out.px[k - 1] + 0.5 * dl * (out.tx[k - 1] + out.tx[k]) * rf;
+      out.py[k] = out.py[k - 1] + 0.5 * dl * (out.ty[k - 1] + out.ty[k]) * rf;
+      out.pz[k] = out.pz[k - 1] + 0.5 * dl * (out.tz[k - 1] + out.tz[k]) * rf;
+    }
+  }
+  return out;
+}
+
+// Position at an arbitrary down-hole depth, consistent with the hole's desurvey method
+// (depths between stations land on the SAME path the stations were placed on):
+// - minimumCurvature: arc-correct (D2) — the closed-form integral of the slerp of the
+//   end tangents: p(s) = p1 + L/(θ·sinθ)·[(cos(θ−φ) − cosθ)·d1 + (1 − cosφ)·d2],
+//   φ = θ·s/L (at s = L this reduces to the RF endpoint formula; the harness pins
+//   mid-segment points to an analytic circle at 1e-14)
+// - tangential: straight along the lower station's attitude (how the segment was built)
+// - balancedTangential: linear along the segment chord
+// Beyond the last station: straight extrapolation along the last tangent (standard
+// practice — intervals routinely outrun the survey).
+function dhPositionAt(hole, depth) {
+  let d = hole.depths, n = d.length;
+  if (n === 0) return null;
+  if (depth <= d[0]) {
+    let s0 = depth - d[0]; // above collar station (negative) — straight
+    return [hole.px[0] + s0 * hole.tx[0], hole.py[0] + s0 * hole.ty[0], hole.pz[0] + s0 * hole.tz[0]];
+  }
+  if (depth >= d[n - 1]) {
+    let sE = depth - d[n - 1];
+    return [hole.px[n - 1] + sE * hole.tx[n - 1], hole.py[n - 1] + sE * hole.ty[n - 1], hole.pz[n - 1] + sE * hole.tz[n - 1]];
+  }
+  // binary search: segment [lo, lo+1] with d[lo] <= depth < d[lo+1]
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    let mid = (lo + hi) >> 1;
+    if (d[mid] <= depth) lo = mid; else hi = mid;
+  }
+  let L = d[lo + 1] - d[lo], s = depth - d[lo];
+  if (L < 1e-12) return [hole.px[lo], hole.py[lo], hole.pz[lo]];
+
+  if (hole.method === 'tangential') {
+    return [
+      hole.px[lo] + s * hole.tx[lo + 1],
+      hole.py[lo] + s * hole.ty[lo + 1],
+      hole.pz[lo] + s * hole.tz[lo + 1],
+    ];
+  }
+  if (hole.method === 'balancedTangential') {
+    let t = s / L;
+    return [
+      hole.px[lo] + t * (hole.px[lo + 1] - hole.px[lo]),
+      hole.py[lo] + t * (hole.py[lo + 1] - hole.py[lo]),
+      hole.pz[lo] + t * (hole.pz[lo + 1] - hole.pz[lo]),
+    ];
+  }
+
+  let d1 = [hole.tx[lo], hole.ty[lo], hole.tz[lo]];
+  let d2 = [hole.tx[lo + 1], hole.ty[lo + 1], hole.tz[lo + 1]];
+  let dot = d1[0] * d2[0] + d1[1] * d2[1] + d1[2] * d2[2];
+  let theta = Math.acos(Math.max(-1, Math.min(1, dot)));
+  if (theta < 1e-9) {
+    return [hole.px[lo] + s * d1[0], hole.py[lo] + s * d1[1], hole.pz[lo] + s * d1[2]];
+  }
+  let phi = theta * s / L;
+  let kk = L / (theta * Math.sin(theta));
+  let a = (Math.cos(theta - phi) - Math.cos(theta)) * kk;
+  let b = (1 - Math.cos(phi)) * kk;
+  return [
+    hole.px[lo] + a * d1[0] + b * d2[0],
+    hole.py[lo] + a * d1[1] + b * d2[1],
+    hole.pz[lo] + a * d1[2] + b * d2[2],
+  ];
+}
+
+// ── ../../drillhole/src/validate.js ──
+
+// @gcu/drillhole — validate: join + check the three tables. Nothing is silently
+// dropped; every exclusion lands in the report with a count and a BHID list.
+//
+// The collar+survey join (dhJoinHoles) and per-hole station normalization
+// (dhNormalizeHoleStations) are factored out so the point-sample locator
+// (dhDesurveySamples) reuses the exact same hole-building — one join, two consumers.
+
+
+// Build the per-hole structure from collars + surveys (NOT normalized yet — callers
+// normalize only the holes that pass their own gate, so a skipped hole doesn't accrue
+// advisory counts). Returns { holes: bhid→{bhid,collar,eoh,rawSurveys}, order: [] }.
+function dhJoinHoles(tables, dipConvention, hit) {
+  let holes = {}, order = [];
+  for (let ci = 0; ci < (tables.collars || []).length; ci++) {
+    let c0 = tables.collars[ci];
+    let bid = String(c0.bhid).trim();
+    if (!bid) { hit('bad-collar', 'Collar rows with missing BHID or non-numeric coordinates', null); continue; }
+    if (!isFinite(c0.x) || !isFinite(c0.y) || !isFinite(c0.z)) {
+      hit('bad-collar', 'Collar rows with missing BHID or non-numeric coordinates', bid);
+      continue;
+    }
+    if (holes[bid]) { hit('dup-collar', 'Duplicate collar BHIDs (first kept)', bid); continue; }
+    holes[bid] = { bhid: bid, collar: [c0.x, c0.y, c0.z], eoh: isFinite(c0.eoh) ? c0.eoh : null, rawSurveys: [] };
+    order.push(bid);
+  }
+  for (let si = 0; si < (tables.surveys || []).length; si++) {
+    let s0 = tables.surveys[si];
+    let sb = String(s0.bhid).trim();
+    let h = holes[sb];
+    if (!h) { hit('orphan-survey', 'Survey rows whose BHID has no collar (excluded)', sb); continue; }
+    h.rawSurveys.push({ depth: s0.depth, az: s0.az, dip: s0.dip });
+  }
+  return { holes: holes, order: order };
+}
+
+// Normalize one hole's raw surveys → hole.stations (pos-down, sorted, deduped, depth-0
+// synthesized), with the no-usable-survey straight-down fallback and the survey-side
+// past-EOH advisory. Counts ride into `hit`. Mutates + returns the hole.
+function dhNormalizeHoleStations(hole, dipConvention, hit) {
+  let norm = dhNormalizeSurveys(hole.rawSurveys, dipConvention);
+  if (norm.badCount) for (let bi = 0; bi < norm.badCount; bi++) hit('bad-survey', 'Survey rows with non-numeric depth/azimuth or |dip| > 90 (excluded)', hole.bhid);
+  if (norm.dupCount) for (let di = 0; di < norm.dupCount; di++) hit('dup-survey-depth', 'Duplicate survey depths in a hole (last kept)', hole.bhid);
+  if (norm.stations.length === 0) {
+    hit('collar-no-survey', 'Holes with no usable survey (desurveyed straight down)', hole.bhid);
+    norm.stations = [{ depth: 0, az: 0, dip: 90 }];
+  }
+  hole.stations = norm.stations;
+  if (hole.eoh != null && norm.stations[norm.stations.length - 1].depth > hole.eoh + 1e-9) {
+    hit('past-eoh', 'Survey or interval depths past the collar EOH (kept — EOH is advisory)', hole.bhid);
+  }
+  return hole;
+}
+
+// tables = {
+//   collars:  [{ bhid, x, y, z, eoh }],            // eoh optional/null
+//   surveys:  [{ bhid, depth, az, dip }],          // dip raw (per file)
+//   intervals: { bhid: [], from: [], to: [],
+//                cols: [{ name, type: 'num'|'cat', values: [] }] }
+// }
+// opts = { dipConvention: 'auto'|'pos-down'|'neg-down', method }
+function dhValidate(tables, opts) {
+  opts = opts || {};
+  let checks = {};
+  function hit(id, label, bhid) {
+    let c = checks[id];
+    if (!c) { c = checks[id] = { id: id, label: label, count: 0, bhids: [] }; }
+    c.count++;
+    if (bhid != null && c.bhids.indexOf(bhid) < 0 && c.bhids.length < 200) c.bhids.push(bhid);
+  }
+
+  let dipConvention = opts.dipConvention || 'auto';
+  if (dipConvention === 'auto') dipConvention = dhDetectDipConvention(tables.surveys || []);
+
+  let joined = dhJoinHoles(tables, dipConvention, hit);
+  let holes = joined.holes, order = joined.order;
+  for (let oi = 0; oi < order.length; oi++) holes[order[oi]].iv = [];
+
+  // intervals
+  let iv = tables.intervals || { bhid: [], from: [], to: [], cols: [] };
+  let nIv = iv.bhid.length;
+  for (let ii = 0; ii < nIv; ii++) {
+    let ib = String(iv.bhid[ii]).trim();
+    let h2 = holes[ib];
+    if (!h2) { hit('orphan-interval', 'Interval rows whose BHID has no collar (excluded)', ib); continue; }
+    let f = iv.from[ii], t = iv.to[ii];
+    if (!isFinite(f) || !isFinite(t) || f < 0 || t <= f) {
+      hit('bad-interval', 'Interval rows with FROM ≥ TO, negative or non-numeric depths (excluded)', ib);
+      continue;
+    }
+    h2.iv.push(ii);
+  }
+
+  // per-hole structure (normalize only the holes that have intervals)
+  let ready = [];
+  for (let oi = 0; oi < order.length; oi++) {
+    let hh = holes[order[oi]];
+    if (hh.iv.length === 0) { hit('collar-no-intervals', 'Collars with no interval rows (hole skipped)', hh.bhid); continue; }
+
+    dhNormalizeHoleStations(hh, dipConvention, hit);
+
+    // interval-side past-EOH advisory (kept, counted)
+    if (hh.eoh != null) {
+      for (let ei = 0; ei < hh.iv.length; ei++) {
+        if (iv.to[hh.iv[ei]] > hh.eoh + 1e-9) {
+          hit('past-eoh', 'Survey or interval depths past the collar EOH (kept — EOH is advisory)', hh.bhid);
+          break;
+        }
+      }
+    }
+
+    // overlap flag (composited as-is; SUPPORT double-counts — flagged per hole)
+    let idx = hh.iv.slice().sort(function(a, b) { return iv.from[a] - iv.from[b]; });
+    for (let vi = 1; vi < idx.length; vi++) {
+      if (iv.from[idx[vi]] < iv.to[idx[vi - 1]] - 1e-9) {
+        hit('overlap', 'Holes with overlapping intervals (composited as-is; SUPPORT double-counts)', hh.bhid);
+        break;
+      }
+    }
+    hh.iv = idx;
+    ready.push(hh);
+  }
+
+  return { holes: ready, checks: checks, dipConvention: dipConvention, intervals: iv };
+}
+
+// ── ../../drillhole/src/samples.js ──
+
+// @gcu/drillhole — point-sample locator. Some data is point-support, not intervals:
+// single-depth assays (handheld XRF, density readings) or already-composited samples
+// re-imported. Compositing (length-weighting into windows) doesn't apply — you just
+// want each sample placed in 3D on the desurveyed trace. This is that path; it reuses
+// the same collar+survey join + station normalization as dhValidate.
+
+
+// tables = { collars, surveys, samples: { bhid:[], depth:[], cols:[{name,type,values}] } }
+// opts   = { dipConvention, method }
+// Returns { header: ['BHID','X','Y','Z','DEPTH', ...cols], rows, report } — one located
+// row per valid sample (sorted down-hole within each hole), with the same non-silent
+// consistency report style as the interval pipeline.
+function dhDesurveySamples(tables, opts) {
+  opts = opts || {};
+  let checks = {};
+  function hit(id, label, bhid) {
+    let c = checks[id];
+    if (!c) { c = checks[id] = { id: id, label: label, count: 0, bhids: [] }; }
+    c.count++;
+    if (bhid != null && c.bhids.indexOf(bhid) < 0 && c.bhids.length < 200) c.bhids.push(bhid);
+  }
+
+  let dipConvention = opts.dipConvention || 'auto';
+  if (dipConvention === 'auto') dipConvention = dhDetectDipConvention(tables.surveys || []);
+
+  let joined = dhJoinHoles(tables, dipConvention, hit);
+  let holes = joined.holes, order = joined.order;
+  for (let oi = 0; oi < order.length; oi++) holes[order[oi]].smp = [];
+
+  // samples → per-hole index lists
+  let smp = tables.samples || { bhid: [], depth: [], cols: [] };
+  let cols = smp.cols || [];
+  let nS = smp.bhid.length;
+  for (let ii = 0; ii < nS; ii++) {
+    let bid = String(smp.bhid[ii]).trim();
+    let h = holes[bid];
+    if (!h) { hit('orphan-sample', 'Sample rows whose BHID has no collar (excluded)', bid); continue; }
+    let d = smp.depth[ii];
+    if (!isFinite(d) || d < 0) { hit('bad-sample', 'Sample rows with negative or non-numeric depth (excluded)', bid); continue; }
+    h.smp.push(ii);
+  }
+
+  let header = ['BHID', 'X', 'Y', 'Z', 'DEPTH'];
+  for (let hc = 0; hc < cols.length; hc++) header.push(cols[hc].name);
+  let rows = [];
+  let nHoles = 0;
+
+  for (let oi = 0; oi < order.length; oi++) {
+    let hh = holes[order[oi]];
+    if (hh.smp.length === 0) { hit('collar-no-samples', 'Collars with no sample rows (hole skipped)', hh.bhid); continue; }
+    dhNormalizeHoleStations(hh, dipConvention, hit);
+    let path = dhDesurveyHole(hh.collar, hh.stations, opts.method);
+    nHoles++;
+
+    // EOH advisory (kept, counted)
+    if (hh.eoh != null) {
+      for (let ei = 0; ei < hh.smp.length; ei++) {
+        if (smp.depth[hh.smp[ei]] > hh.eoh + 1e-9) {
+          hit('past-eoh', 'Sample depths past the collar EOH (kept — EOH is advisory)', hh.bhid);
+          break;
+        }
+      }
+    }
+
+    let idx = hh.smp.slice().sort(function(a, b) { return smp.depth[a] - smp.depth[b]; });
+    for (let k = 0; k < idx.length; k++) {
+      let ii = idx[k], d = smp.depth[ii];
+      let pos = dhPositionAt(path, d);
+      let row = [hh.bhid, pos[0], pos[1], pos[2], d];
+      for (let c = 0; c < cols.length; c++) row.push(cols[c].values[ii]);
+      rows.push(row);
+    }
+  }
+
+  let checkList = [];
+  for (let k in checks) checkList.push(checks[k]);
+  return { header: header, rows: rows, report: { checks: checkList, nHoles: nHoles, nSamples: rows.length, dipConvention: dipConvention } };
+}
+
 // ── src/widget.js ──
 
 // @gcu/condenser — the anywidget (Jupyter) front half. Glue only: it decodes
-// the packed columnar payload the Python side sends, feeds it through the
-// engine's chunk builders, and drives one progressive render loop per widget
-// instance. All the rendering intelligence (Morton order, prefix LOD, box
-// impostors, EDL, the ID-buffer pick) is @gcu/condenser/core, unchanged — the
-// SAME engine micro ships, so a notebook and the desktop tool agree by
-// construction.
+// the packed columnar payload, feeds each layer through the engine's chunk
+// builders, and drives one progressive render loop per widget instance. All
+// the rendering intelligence (Morton order, prefix LOD, box impostors, capsule
+// impostors, EDL, true sections, the ID-buffer pick) is @gcu/condenser/core,
+// unchanged — the SAME engine micro ships, so a notebook and the desktop tool
+// agree by construction. Drillholes desurvey through @gcu/drillhole, also the
+// same code, so a hole lands in the same place in both.
 //
-// anywidget contract (0.9+): default-export an object with render({model, el}),
-// returning a cleanup function. Model traits are the wire; `_payload` carries
-// the data as one atomic Bytes blob (see the format note below), everything
-// else is a small scalar the user can poke from Python.
+// anywidget contract: default-export an object with render({model, el}),
+// returning a cleanup function. `_payload` is one atomic Bytes blob holding
+// EVERY layer against ONE shared frame; `_styles` is a per-layer style dict.
 
 
 // ── ramp presets. rampPixels' default is the viridis-ish walk; these are the
@@ -4812,14 +5204,11 @@ const RAMPS = {
 
 const TYPES = { f64: Float64Array, f32: Float32Array, u32: Uint32Array, u16: Uint16Array, u8: Uint8Array };
 
-// ── the wire format (must mirror gcu_condenser/__init__.py's _pack) ──
+// ── the wire format (mirrors gcu_condenser/__init__.py's _pack) ──
 //   'CDNS' | u32 version | u32 headerLen | header JSON (utf-8) | pad | body
-// Column offsets in the header are RELATIVE TO THE BODY START, which both
-// sides derive identically as (12 + headerLen) rounded up to 8 — so the header
-// stays self-describing without its offsets depending on its own length. Every
-// column is 8-aligned within the body (f64 requires it). ONE trait carries all
-// of it, so a data change is ATOMIC: a header can never arrive describing
-// buffers that haven't landed yet.
+// Column offsets are RELATIVE TO THE BODY START, which both sides derive as
+// (12 + headerLen) rounded up to 8 — self-describing without the offsets
+// depending on the header's own length. ONE blob keeps a data change ATOMIC.
 function decodePayload(raw) {
   if (!raw) return null;
   const buf = raw instanceof ArrayBuffer ? raw : (raw.buffer || raw);
@@ -4831,232 +5220,334 @@ function decodePayload(raw) {
   const headerLen = dv.getUint32(8, true);
   const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, base + 12, headerLen)));
   const bodyStart = (12 + headerLen + 7) & ~7;
-  const cols = {};
+  const all = {};
   for (const [name, c] of Object.entries(head.cols || {})) {
     const T = TYPES[c.type];
-    if (T) cols[name] = new T(buf, base + bodyStart + c.off, c.len);
+    if (T) all[name] = new T(buf, base + bodyStart + c.off, c.len);
   }
-  return { head, cols };
+  // each layer's header maps its own column names onto the flat body
+  const layers = (head.layers || []).map((L) => {
+    const cols = {};
+    for (const [name, key] of Object.entries(L.cols || {})) if (all[key]) cols[name] = all[key];
+    return { ...L, cols };
+  });
+  return { frame: head.frame, layers };
 }
 
 // which engine colour mode a `color` choice means, per element kind. The engine
-// numbers differ by pipeline (points: 1 = intensity, blocks: 1 = grade), so the
-// widget speaks names and translates here.
+// numbers differ by pipeline (points: 1 = intensity, blocks/sticks: 1 = grade),
+// so the widget speaks names and translates here.
 function modeOf(color, kind, cols) {
-  if (color === 'value' && cols.value) return 1;
+  if (color === 'value' && (cols.value || cols.value_u16)) return 1;
   if (color === 'category' && cols.cat) return 2;
   if (color === 'rgb' && cols.rgb && kind === 'points') return 3;
-  if (color === 'flat') return kind === 'blocks' ? 3 : 0;  // blocks: 3 = solid; points have no flat → z
-  return 0;                                                // 'z' (elevation) is the honest default
+  if (color === 'flat') return kind === 'points' ? 0 : 3;  // blocks/sticks: 3 = solid
+  return 0;                                                // 'z' (elevation)
+}
+
+// the section trait → the engine's frame-local plane. `position` is a WORLD
+// coordinate along the normal (that is what a geologist types), so the frame
+// origin comes off it here.
+function sectionOf(sec, origin) {
+  if (!sec) return null;
+  let n = sec.normal;
+  if (!n) {
+    const ax = sec.axis;
+    if (!ax) return null;
+    n = ax === 'x' ? [1, 0, 0] : ax === 'y' ? [0, 1, 0] : [0, 0, 1];
+  }
+  const L = Math.hypot(n[0], n[1], n[2]) || 1;
+  n = [n[0] / L, n[1] / L, n[2] / L];
+  const d = (+sec.position || 0) - (n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2]);
+  const half = Math.max(0.01, (+sec.thickness || 10) / 2);
+  return { on: true, n, d, half, d0: d, clip: 'slab', traceHalf: half };
+}
+
+// ── drillholes: three tables → desurveyed capsule segments ──
+// The interval FROM and TO depths are located as two point-samples on the
+// desurveyed trace (arc-correct via positionAt), then paired back into a
+// segment keyed by source row — the same construction condenser's own file
+// provider uses, so notebook and micro place a hole identically.
+function drillholeSegments(head, cols) {
+  const nC = cols.c_bhid.length, nS = cols.s_bhid.length, n = cols.i_bhid.length;
+  const collars = new Array(nC);
+  for (let i = 0; i < nC; i++) {
+    collars[i] = { bhid: String(cols.c_bhid[i]), x: cols.c_x[i], y: cols.c_y[i], z: cols.c_z[i] };
+    if (cols.c_eoh) collars[i].eoh = cols.c_eoh[i];
+  }
+  const surveys = new Array(nS);
+  for (let i = 0; i < nS; i++) surveys[i] = { bhid: String(cols.s_bhid[i]), depth: cols.s_depth[i], az: cols.s_az[i], dip: cols.s_dip[i] };
+
+  const bhid = new Array(2 * n), depth = new Float64Array(2 * n);
+  const rowIdx = new Float64Array(2 * n), endIdx = new Float64Array(2 * n);
+  for (let i = 0; i < n; i++) {
+    const hb = String(cols.i_bhid[i]);
+    bhid[2 * i] = hb; bhid[2 * i + 1] = hb;
+    depth[2 * i] = cols.i_from[i]; depth[2 * i + 1] = cols.i_to[i];
+    rowIdx[2 * i] = i; rowIdx[2 * i + 1] = i;
+    endIdx[2 * i] = 0; endIdx[2 * i + 1] = 1;
+  }
+  const ds = dhDesurveySamples(
+    { collars, surveys, samples: { bhid, depth, cols: [{ name: '__row', values: rowIdx }, { name: '__end', values: endIdx }] } },
+    { method: head.method || 'minimumCurvature', dipConvention: head.dip_convention || 'auto' },
+  );
+
+  const endA = new Map(), endB = new Map();                // src row → [x,y,z]
+  for (const row of ds.rows) (row[6] | 0) === 0 ? endA.set(row[5] | 0, [row[1], row[2], row[3]]) : endB.set(row[5] | 0, [row[1], row[2], row[3]]);
+  const placed = [];
+  for (const src of endA.keys()) if (endB.has(src)) placed.push(src);
+  placed.sort((a, b) => a - b);
+  const k = placed.length;
+  const out = {
+    count: k,
+    ax: new Float64Array(k), ay: new Float64Array(k), az: new Float64Array(k),
+    bx: new Float64Array(k), by: new Float64Array(k), bz: new Float64Array(k),
+    x: new Float64Array(k), y: new Float64Array(k), z: new Float64Array(k),
+    chan: new Float64Array(k), cat: cols.cat ? new Uint8Array(k) : null,
+    recIdx: new Uint32Array(k),
+  };
+  for (let i = 0; i < k; i++) {
+    const s = placed[i], A = endA.get(s), B = endB.get(s);
+    out.ax[i] = A[0]; out.ay[i] = A[1]; out.az[i] = A[2];
+    out.bx[i] = B[0]; out.by[i] = B[1]; out.bz[i] = B[2];
+    out.x[i] = (A[0] + B[0]) / 2; out.y[i] = (A[1] + B[1]) / 2; out.z[i] = (A[2] + B[2]) / 2;
+    out.chan[i] = cols.value && Number.isFinite(cols.value[s]) ? cols.value[s] : 0;
+    if (out.cat) out.cat[i] = cols.cat[s];
+    out.recIdx[i] = s;                                     // the INTERVAL row — the pick's join key
+  }
+  return out;
 }
 
 // anywidget wants a DEFAULT export; @gcu/build emits named exports only (its
 // rename-on-collision pass needs names). So this is named, and build.js appends
 // the one-line `export default { render }` footer to the bundle.
 function render({ model, el }) {
-  {
-    // ── DOM: a sized host + the canvas the engine owns ──
-    const host = document.createElement('div');
-    host.style.cssText = 'position:relative;width:100%;background:#121212;border-radius:3px;overflow:hidden;';
-    const canvas = document.createElement('canvas');
-    canvas.style.cssText = 'display:block;width:100%;height:100%;';
-    host.appendChild(canvas);
-    const hud = document.createElement('div');
-    hud.style.cssText = 'position:absolute;left:6px;bottom:5px;font:11px ui-monospace,Menlo,Consolas,monospace;color:#8b8b8b;pointer-events:none;text-shadow:0 1px 2px #000;';
-    host.appendChild(hud);
-    el.appendChild(host);
+  const host = document.createElement('div');
+  host.style.cssText = 'position:relative;width:100%;background:#121212;border-radius:3px;overflow:hidden;';
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText = 'display:block;width:100%;height:100%;';
+  host.appendChild(canvas);
+  const hud = document.createElement('div');
+  hud.style.cssText = 'position:absolute;left:6px;bottom:5px;font:11px ui-monospace,Menlo,Consolas,monospace;color:#8b8b8b;pointer-events:none;text-shadow:0 1px 2px #000;';
+  host.appendChild(hud);
+  el.appendChild(host);
 
-    let renderer = null, edl = null, cam = null, detach = null, raf = 0, ro = null;
-    let doc = null, kind = 'points', payload = null, disposed = false;
-    let converged = false, needFit = false;
+  let renderer = null, edl = null, cam = null, detach = null, raf = 0, ro = null;
+  let payload = null, disposed = false, needFit = false, converged = false;
+  let docBbox = null;
+  const kinds = [];                                        // layer index → element kind
 
-    try {
-      renderer = createRenderer(canvas, { background: [0.07, 0.07, 0.07, 1] });
-      edl = createEdl(renderer.gl);
-      cam = createOrbitCamera();
-    } catch (e) {                                          // no WebGL2 (headless CI, locked-down VM)
-      host.style.height = '80px';
-      hud.style.cssText += 'position:static;padding:10px;color:#d07a5c;';
-      hud.textContent = `condenser: ${e.message}`;
-      return () => { el.innerHTML = ''; };
-    }
+  try {
+    renderer = createRenderer(canvas, { background: [0.07, 0.07, 0.07, 1] });
+    edl = createEdl(renderer.gl);
+    cam = createOrbitCamera();
+  } catch (e) {                                            // no WebGL2 (headless CI, locked-down VM)
+    host.style.height = '80px';
+    hud.style.cssText += 'position:static;padding:10px;color:#d07a5c;';
+    hud.textContent = `condenser: ${e.message}`;
+    return () => { el.innerHTML = ''; };
+  }
 
-    const draw = () => {
-      raf = 0;
-      if (disposed) return;
-      const dpr = window.devicePixelRatio || 1;
-      const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
-      const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
-      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; renderer.invalidate(); }
-      cam.setAspect(w / h);
-      if (needFit && doc) { cam.fit(doc.bboxLocal); needFit = false; }
-      const opts = {
-        budget: model.get('budget') || 3_000_000,
-        pointPx: model.get('point_size') || 2.5,
-        colorMode: modeOf(model.get('color'), kind, payload ? payload.cols : {}),
-        blocksAsPoints: !!model.get('as_points'),
-        blockEdges: !!model.get('block_edges'),
-        section: null,
-        clip: model.get('clip') && model.get('clip').length === 2 ? model.get('clip') : null,
+  const styles = () => model.get('_styles') || [];
+  const styleAt = (i) => styles()[i] || {};
+
+  const draw = () => {
+    raf = 0;
+    if (disposed) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+    const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; renderer.invalidate(); }
+    cam.setAspect(w / h);
+    if (needFit && docBbox) { cam.fit(docBbox); needFit = false; }
+
+    const st = styles();
+    // per-layer colour mode + clip; the engine takes point size / points-view
+    // as VIEW-wide, so those fold across the visible layers
+    const layerOpts = {};
+    let pointPx = 2.5, asPoints = false;
+    st.forEach((s, i) => {
+      const cols = payload && payload.layers[i] ? payload.layers[i].cols : {};
+      layerOpts[i] = {
+        colorMode: modeOf(s.color, kinds[i], cols),
+        clip: s.clip && s.clip.length === 2 ? s.clip : null,
       };
-      const r = edl.render(w, h, cam, () => renderer.draw(cam, opts),
-        { enabled: model.get('edl') !== false, strength: model.get('edl_strength') != null ? model.get('edl_strength') : 1.0 });
-      converged = r.converged;
-      if (doc) {
-        const acc = renderer.accumulated, tot = renderer.elementCount;
-        hud.textContent = converged
-          ? `${tot.toLocaleString()} ${kind === 'blocks' ? 'blocks' : 'points'}`
-          : `${tot.toLocaleString()} · ${Math.round((100 * acc) / (tot || 1))}%`;
+      if (s.visible !== false) {
+        pointPx = Math.max(pointPx, s.point_size || 0);
+        asPoints = asPoints || !!s.as_points;
       }
-      if (!converged) schedule();                          // keep accumulating until the frame settles
+    });
+    const opts = {
+      budget: model.get('budget') || 3_000_000,
+      pointPx, blocksAsPoints: asPoints, blockEdges: false,   // edges are a per-layer override
+      section: sectionOf(model.get('section'), (payload && payload.frame) || [0, 0, 0]),
+      clip: null, layerOpts,
     };
-    const schedule = () => { if (!raf && !disposed) raf = requestAnimationFrame(draw); };
-    const invalidate = () => { renderer.invalidate(); schedule(); };
+    const r = edl.render(w, h, cam, () => renderer.draw(cam, opts),
+      { enabled: model.get('edl') !== false, strength: model.get('edl_strength') != null ? model.get('edl_strength') : 1.0 });
+    converged = r.converged;
+    if (payload) {
+      const tot = renderer.elementCount, acc = renderer.accumulated;
+      const n = payload.layers.length;
+      const what = n === 1 ? (kinds[0] === 'blocks' ? 'blocks' : kinds[0] === 'drillholes' ? 'intervals' : 'points')
+        : `elements · ${n} layers`;
+      hud.textContent = converged ? `${tot.toLocaleString()} ${what}` : `${tot.toLocaleString()} · ${Math.round((100 * acc) / (tot || 1))}%`;
+    }
+    if (!converged) schedule();
+  };
+  const schedule = () => { if (!raf && !disposed) raf = requestAnimationFrame(draw); };
+  const invalidate = () => { renderer.invalidate(); schedule(); };
 
-    // ── load: payload → chunk builders → GPU. Rebuilt wholesale on any data
-    // change (a notebook re-run means new data, not an incremental edit). ──
-    const load = () => {
-      renderer.clearChunks();
-      doc = null; payload = null;
-      const p = decodePayload(model.get('_payload'));
-      if (!p || !p.head.count) { hud.textContent = 'no data'; schedule(); return; }
-      payload = p;
-      const { head, cols } = p;
-      kind = head.kind;
-      const frame = { origin: head.frame, crs: head.crs || null, units: head.units || 'm' };
-      const n = head.count;
-      if (kind === 'blocks') {
-        // Python inferred the lattice (np.unique over resident columns is exact
-        // and trivial); the engine's own inferAxis is for STREAMING sweeps where
-        // nothing is resident — a different situation, not a duplicate.
-        const grid = makeBlockGrid(head.axes.map(([origin, pitch, count]) => ({ origin, pitch, count })), frame);
-        const b = createBlockChunkBuilder({ frame, grid, chunkSize: 1 << 18, seed: 1, onChunk: (c) => renderer.addChunk(c, 'base', 0) });
-        b.push({ count: n, x: cols.x, y: cols.y, z: cols.z, chan: cols.value || null, cat: cols.cat || null, recStart: 0 });
+  // ── load: payload → chunk builders → GPU, one engine layer per data layer ──
+  const load = () => {
+    renderer.clearChunks();
+    payload = null; docBbox = null; kinds.length = 0;
+    const p = decodePayload(model.get('_payload'));
+    if (!p || !p.layers.length) { hud.textContent = 'no data'; schedule(); return; }
+    payload = p;
+    const frame = { origin: p.frame, crs: null, units: 'm' };
+    const bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+
+    p.layers.forEach((L, i) => {
+      const cols = L.cols;
+      kinds[i] = L.kind;
+      let doc = null;
+      if (L.kind === 'blocks') {
+        const grid = makeBlockGrid(L.axes.map(([origin, pitch, count]) => ({ origin, pitch, count })), frame);
+        const b = createBlockChunkBuilder({
+          frame, grid, chunkSize: 1 << 18, seed: 1,
+          dimPalette: L.dim_palette || null,               // sub-blocked: per-code half-dims
+          onChunk: (c) => renderer.addChunk(c, 'base', i),
+        });
+        b.push({ count: L.count, x: cols.x, y: cols.y, z: cols.z, chan: cols.value || null, cat: cols.cat || null, dim: cols.dim || null, recStart: 0 });
         doc = b.flush();
-        if (head.cat_n) renderer.setCategories(head.cat_n);
+        if (L.cat_n) renderer.setCategories(L.cat_n);
+      } else if (L.kind === 'drillholes') {
+        const seg = drillholeSegments(L, cols);
+        const b = createStickChunkBuilder({ frame, chunkSize: 1 << 16, seed: 1, onChunk: (c) => renderer.addChunk(c, 'base', i) });
+        b.push({ count: seg.count, ax: seg.ax, ay: seg.ay, az: seg.az, bx: seg.bx, by: seg.by, bz: seg.bz,
+          x: seg.x, y: seg.y, z: seg.z, chan: seg.chan, cat: seg.cat, recIdx: seg.recIdx });
+        doc = b.flush();
+        if (L.cat_n) renderer.setCategories(L.cat_n);
       } else {
-        const b = createChunkBuilder({ frame, chunkSize: 1 << 19, seed: 1, onChunk: (c) => renderer.addChunk(c, 'base', 0) });
+        const b = createChunkBuilder({ frame, chunkSize: 1 << 19, seed: 1, onChunk: (c) => renderer.addChunk(c, 'base', i) });
         b.push({
-          count: n, x: cols.x, y: cols.y, z: cols.z,
-          intensity: cols.value_u16 || new Uint16Array(n),  // points colour-by-value rides the intensity channel
-          classification: cols.cat || new Uint8Array(n),
+          count: L.count, x: cols.x, y: cols.y, z: cols.z,
+          intensity: cols.value_u16 || new Uint16Array(L.count),
+          classification: cols.cat || new Uint8Array(L.count),
           rgb: cols.rgb || null, recStart: 0,
         });
         doc = b.flush();
-        if (head.cat_n) renderer.setLayerCats(0, head.cat_n);
+        if (L.cat_n) renderer.setLayerCats(i, L.cat_n);
       }
-      renderer.setDocBbox(doc.bboxLocal);
-      applyRamp();
-      applyThreshold();
-      applyOpacity();
-      needFit = true;
-      invalidate();
-    };
+      if (doc && doc.bboxLocal) {
+        for (let a = 0; a < 3; a++) {
+          if (doc.bboxLocal[a] < bb[a]) bb[a] = doc.bboxLocal[a];
+          if (doc.bboxLocal[a + 3] > bb[a + 3]) bb[a + 3] = doc.bboxLocal[a + 3];
+        }
+      }
+    });
 
-    const applyRamp = () => {
-      const name = model.get('ramp') || 'viridis';
-      const stops = RAMPS[name];
-      renderer.setLayerRamp(0, stops ? rampPixels(256, stops) : null);
-      schedule();
-    };
+    docBbox = Float64Array.from(bb);
+    renderer.setDocBbox(docBbox);
+    applyStyles();
+    needFit = true;
+    invalidate();
+  };
 
-    // ── threshold: the grade shell. A block model is SOLID — from outside you
-    // see waste, so a cutoff is not a nicety, it's how you look at an ore body
-    // at all. The mask is built here from the value column already on hand, so
-    // dragging a cutoff never re-sends data. isolate hides; dim keeps the rest
-    // as grey context. ──
-    const applyThreshold = () => {
-      if (!payload) return;
-      const t = model.get('threshold');
-      const v = payload.cols.value;
-      if (!v || !t || t.length !== 2) { renderer.setFilter(null, {}, 0); schedule(); return; }
-      const [lo, hi] = t;
-      const mask = new Uint8Array(v.length);
-      for (let i = 0; i < v.length; i++) mask[i] = (v[i] >= lo && v[i] <= hi) ? 1 : 0;
-      renderer.setFilter(mask, { isolate: model.get('filter_mode') !== 'dim' }, 0);
-      schedule();
-    };
+  // ── styles: everything the engine keeps per LAYER ──
+  const applyStyles = () => {
+    if (!payload) return;
+    styles().forEach((s, i) => {
+      const L = payload.layers[i];
+      if (!L) return;
+      renderer.setLayerVisible(i, s.visible !== false);
+      renderer.setLayerOpacity(i, s.opacity == null ? 1 : s.opacity);
+      renderer.setLayerSectioned(i, s.sectioned === undefined ? true : s.sectioned);
+      const stops = RAMPS[s.ramp || 'viridis'];
+      renderer.setLayerRamp(i, stops ? rampPixels(256, stops) : null);
+      if (L.kind === 'blocks') renderer.setLayerEdges(i, !!s.block_edges);
+      if (L.kind === 'drillholes') renderer.setLayerStickRadius(i, s.radius || 1.5);
+      // threshold → the isolate/dim mask, built here from the value column that
+      // is already resident, so dragging a cutoff never re-sends data
+      const v = L.cols.value;
+      const t = s.threshold;
+      if (v && t && t.length === 2) {
+        const mask = new Uint8Array(v.length);
+        for (let q = 0; q < v.length; q++) mask[q] = (v[q] >= t[0] && v[q] <= t[1]) ? 1 : 0;
+        renderer.setFilter(mask, { isolate: s.filter_mode !== 'dim' }, i);
+      } else {
+        renderer.setFilter(null, {}, i);
+      }
+    });
+    schedule();
+  };
 
-    // per-layer opacity is a screen-door dither, not alpha blending — so depth
-    // stays exact and no sorting is needed. Pairs with filter_mode='dim': the
-    // context turns to ghost and the shell inside becomes visible through it.
-    const applyOpacity = () => {
-      const o = model.get('opacity');
-      renderer.setLayerOpacity(0, o == null ? 1 : o);
-      schedule();
-    };
+  const applyBackground = () => {
+    const hex = String(model.get('background') || '#121212').replace('#', '');
+    if (hex.length !== 6) return;
+    const v = parseInt(hex, 16);
+    renderer.setBackground([((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255, 1]);
+    schedule();
+  };
+  const applyHeight = () => { host.style.height = `${model.get('height') || 460}px`; invalidate(); };
 
-    const applyBackground = () => {
-      const hex = String(model.get('background') || '#121212').replace('#', '');
-      if (hex.length !== 6) return;
-      const v = parseInt(hex, 16);
-      renderer.setBackground([((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255, 1]);
-      schedule();
-    };
+  // ── the click → `selection` round trip: the ID buffer names the LAYER and the
+  // RECORD, and a record IS the source row, so Python gets back a table index. ──
+  let downAt = null;
+  const onDown = (e) => { downAt = [e.clientX, e.clientY]; };
+  const onUp = (e) => {
+    if (!downAt || !payload) return;
+    const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]);
+    downAt = null;
+    if (moved > 4) return;                                 // a drag is navigation, not a pick
+    const r = canvas.getBoundingClientRect();
+    const st = styles();
+    let pointPx = 2.5, asPoints = false;
+    st.forEach((s) => { if (s.visible !== false) { pointPx = Math.max(pointPx, s.point_size || 0); asPoints = asPoints || !!s.as_points; } });
+    const hit = renderer.pick(e.clientX - r.left, e.clientY - r.top, cam, {
+      pointPx, blocksAsPoints: asPoints,
+      section: sectionOf(model.get('section'), payload.frame),
+    });
+    renderer.setPicked(hit || null);
+    model.set('selection', hit ? { layer: hit.layer, name: (styleAt(hit.layer).name || ''), row: hit.rec } : {});
+    model.save_changes();
+    schedule();
+  };
+  canvas.addEventListener('pointerdown', onDown);
+  canvas.addEventListener('pointerup', onUp);
+  detach = attachOrbitInput(canvas, cam, { onChange: schedule });
 
-    // ── the click → `selected` round trip: the ID buffer names the RECORD, and
-    // a record IS the source row, so Python reads back a DataFrame index. ──
-    let downAt = null;
-    const onDown = (e) => { downAt = [e.clientX, e.clientY]; };
-    const onUp = (e) => {
-      if (!downAt || !doc) return;
-      const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]);
-      downAt = null;
-      if (moved > 4) return;                               // a drag is navigation, not a pick
-      const r = canvas.getBoundingClientRect();
-      const hit = renderer.pick(e.clientX - r.left, e.clientY - r.top, cam, {
-        pointPx: model.get('point_size') || 2.5, blocksAsPoints: !!model.get('as_points'), section: null,
-      });
-      renderer.setPicked(hit || null);
-      model.set('selected', hit ? hit.rec : -1);
-      model.save_changes();
-      schedule();
-    };
-    canvas.addEventListener('pointerdown', onDown);
-    canvas.addEventListener('pointerup', onUp);
+  const subs = [
+    ['change:_payload', load],
+    ['change:_styles', () => { applyStyles(); invalidate(); }],
+    ['change:section', invalidate],
+    ['change:background', applyBackground],
+    ['change:height', applyHeight],
+    ['change:edl', invalidate], ['change:edl_strength', invalidate], ['change:budget', invalidate],
+    ['change:_fit', () => { needFit = true; invalidate(); }],
+  ];
+  for (const [ev, fn] of subs) model.on(ev, fn);
 
-    detach = attachOrbitInput(canvas, cam, { onChange: schedule });
+  ro = new ResizeObserver(() => invalidate());
+  ro.observe(host);
+  applyHeight();
+  applyBackground();
+  load();
 
-    const applyHeight = () => { host.style.height = `${model.get('height') || 420}px`; invalidate(); };
-
-    // ── trait reactions ──
-    const subs = [
-      ['change:_payload', load],
-      ['change:ramp', applyRamp],
-      ['change:background', applyBackground],
-      ['change:height', applyHeight],
-      ['change:threshold', applyThreshold], ['change:filter_mode', applyThreshold],
-      ['change:opacity', applyOpacity],
-      ['change:color', invalidate], ['change:clip', invalidate],
-      ['change:point_size', invalidate], ['change:as_points', invalidate],
-      ['change:block_edges', invalidate], ['change:edl', invalidate],
-      ['change:edl_strength', invalidate], ['change:budget', invalidate],
-    ];
-    for (const [ev, fn] of subs) model.on(ev, fn);
-    // an explicit fit request from Python (a counter — any bump refits)
-    model.on('change:_fit', () => { needFit = true; invalidate(); });
-
-    ro = new ResizeObserver(() => invalidate());
-    ro.observe(host);
-
-    applyHeight();
-    applyBackground();
-    load();
-
-    return () => {                                         // anywidget teardown
-      disposed = true;
-      if (raf) cancelAnimationFrame(raf);
-      if (ro) ro.disconnect();
-      if (detach) detach();
-      canvas.removeEventListener('pointerdown', onDown);
-      canvas.removeEventListener('pointerup', onUp);
-      for (const [ev, fn] of subs) model.off(ev, fn);
-      try { renderer.clearChunks(); } catch { /* context already gone */ }
-      const lose = renderer.gl.getExtension('WEBGL_lose_context');
-      if (lose) lose.loseContext();                        // a notebook can build dozens of these
-      el.innerHTML = '';
-    };
-  }
+  return () => {                                           // anywidget teardown
+    disposed = true;
+    if (raf) cancelAnimationFrame(raf);
+    if (ro) ro.disconnect();
+    if (detach) detach();
+    canvas.removeEventListener('pointerdown', onDown);
+    canvas.removeEventListener('pointerup', onUp);
+    for (const [ev, fn] of subs) model.off(ev, fn);
+    try { renderer.clearChunks(); } catch { /* context already gone */ }
+    const lose = renderer.gl.getExtension('WEBGL_lose_context');
+    if (lose) lose.loseContext();                          // a notebook can build dozens of these
+    el.innerHTML = '';
+  };
 }
 
 export {

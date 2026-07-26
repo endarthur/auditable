@@ -15,7 +15,7 @@ const r = await bundle({
   at: import.meta.url,
   entry: 'src/widget.js',
   outFile: OUT,
-  inline: ['../core.js'],
+  inline: ['../core.js', '../../drillhole/src/samples.js', '../../drillhole/src/desurvey.js', '../../drillhole/src/validate.js'],
   sourcemap: false,
   meta: false,
 });

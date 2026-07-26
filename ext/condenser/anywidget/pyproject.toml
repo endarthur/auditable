@@ -20,6 +20,10 @@ classifiers = [
 ]
 dependencies = ["anywidget>=0.9", "numpy>=1.21"]
 
+[project.optional-dependencies]
+# `uv pip install -e ".[dev]"` — everything the example notebook needs
+dev = ["jupyterlab>=4", "pandas>=1.5"]
+
 [project.urls]
 Homepage = "https://gentropic.org/micro"
 Source = "https://github.com/endarthur/auditable"
