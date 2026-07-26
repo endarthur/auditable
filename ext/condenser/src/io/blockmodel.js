@@ -13,7 +13,7 @@
 //   RawChunk = { count, x, y, z: Float64Array, chan: Float64Array,
 //                cat: Uint8Array|null, recStart }
 
-import { inferAxis } from './blocks.js';
+import { inferAxis } from '../grid/infer.js';
 
 const X_RE = /^(x|xc|xcent(er|re)?|xmid|east(ing)?|xworld|centroid_?x)$/i;
 const Y_RE = /^(y|yc|ycent(er|re)?|ymid|north(ing)?|yworld|centroid_?y)$/i;

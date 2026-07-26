@@ -25,7 +25,7 @@
 //   recIdx: Uint32Array   — row number in the source file: THE join key (§4).
 // }
 
-import { makeFrame, frameFromBounds } from '../../frame/src/frame.js';
+import { makeFrame, frameFromBounds } from '../../../frame/src/frame.js';
 import { mortonKeys, radixSortIndices } from './morton.js';
 
 // mulberry32 — tiny seeded PRNG; good enough for a decorrelating shuffle.

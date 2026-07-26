@@ -1,7 +1,7 @@
 // ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
 // @gcu/condenser — Streaming no-preprocess renderer for massive spatial elements (point clouds, block models): stream-parse → quantize → chunk → prefix-LOD → progressive accumulation → EDL. The engine under micro.
 
-// ── src/las.js ──
+// ── src/io/las.js ──
 
 // @gcu/condenser — LAS provider (uncompressed point record formats 0–3 and 6–8).
 // Header-driven: the public header block gives bbox, count, format, and scale/offset
@@ -349,7 +349,7 @@ function rebaseRecord(from, to, d) {
   };
 }
 
-// ── src/morton.js ──
+// ── src/core/morton.js ──
 
 // @gcu/condenser — Morton (Z-order) keys + a radix sort over indices.
 // Batch-wise spatial chunking (micro-spec §2.1.3): quantize each point to a
@@ -411,7 +411,7 @@ function radixSortIndices(keys, n) {
   return src;
 }
 
-// ── src/chunks.js ──
+// ── src/core/chunks.js ──
 
 // @gcu/condenser — the chunk store: RawChunks (world f64, from a provider) →
 // render-ready Chunks (frame-local uint16 positions + attributes + record index).
@@ -610,7 +610,7 @@ function createChunkBuilder({ frame, chunkSize = 1 << 20, batchSize = 0, morton 
   };
 }
 
-// ── src/blocks.js ──
+// ── src/core/blocks.js ──
 
 // @gcu/condenser — block-model chunks: IJK-exact representation (micro-spec §2.5).
 //
@@ -636,32 +636,6 @@ function createChunkBuilder({ frame, chunkSize = 1 << 20, batchSize = 0, morton 
 //   bboxLocal: Float64Array(6)                          — outer faces, for culling
 // }
 
-
-/**
- * Infer a regular grid from per-axis distinct centroid values (collected by a
- * provider's discovery sweep). Returns { origin (CENTROID of block 0 — i.e. the
- * first lattice value), pitch, count } per axis, or null when the axis isn't a
- * consistent lattice. `values` must be sorted ascending, deduped.
- */
-function inferAxis(values, { rel = 1e-6 } = {}) {
-  if (!values.length) return null;
-  if (values.length === 1) return { origin: values[0], pitch: 0, count: 1 };
-  let pitch = Infinity;
-  for (let i = 1; i < values.length; i++) {
-    const d = values[i] - values[i - 1];
-    if (d > 0 && d < pitch) pitch = d;
-  }
-  if (!Number.isFinite(pitch) || pitch <= 0) return null;
-  const span = values[values.length - 1] - values[0];
-  const count = Math.round(span / pitch) + 1;
-  if (count > 65535) return null;                          // beyond u16 IJK — not this path
-  const eps = Math.max(pitch * 1e-3, Math.abs(values[0]) * rel);
-  for (const v of values) {
-    const k = Math.round((v - values[0]) / pitch);
-    if (Math.abs(values[0] + k * pitch - v) > eps) return null;   // off-lattice → not regular
-  }
-  return { origin: values[0], pitch, count };
-}
 
 // Grid from three axes (world coords) + a frame → the block-chunk grid descriptor.
 // origin here is the centroid of block (0,0,0), frame-local.
@@ -812,7 +786,40 @@ function createBlockChunkBuilder({ frame, grid, dimPalette = null, chunkSize = 1
   };
 }
 
-// ── src/grid-join.js ──
+// ── src/grid/infer.js ──
+
+// @gcu/condenser — grid inference (the grid layer): recover a regular lattice
+// from what a provider's discovery sweep observed. Home of the axis inference
+// today and the rotated-basis inference tomorrow (micro-rotated-models spec:
+// cluster nearest-neighbour centroid displacements → U/V/W generators).
+
+/**
+ * Infer a regular grid from per-axis distinct centroid values (collected by a
+ * provider's discovery sweep). Returns { origin (CENTROID of block 0 — i.e. the
+ * first lattice value), pitch, count } per axis, or null when the axis isn't a
+ * consistent lattice. `values` must be sorted ascending, deduped.
+ */
+function inferAxis(values, { rel = 1e-6 } = {}) {
+  if (!values.length) return null;
+  if (values.length === 1) return { origin: values[0], pitch: 0, count: 1 };
+  let pitch = Infinity;
+  for (let i = 1; i < values.length; i++) {
+    const d = values[i] - values[i - 1];
+    if (d > 0 && d < pitch) pitch = d;
+  }
+  if (!Number.isFinite(pitch) || pitch <= 0) return null;
+  const span = values[values.length - 1] - values[0];
+  const count = Math.round(span / pitch) + 1;
+  if (count > 65535) return null;                          // beyond u16 IJK — not this path
+  const eps = Math.max(pitch * 1e-3, Math.abs(values[0]) * rel);
+  for (const v of values) {
+    const k = Math.round((v - values[0]) / pitch);
+    if (Math.abs(values[0] + k * pitch - v) > eps) return null;   // off-lattice → not regular
+  }
+  return { origin: values[0], pitch, count };
+}
+
+// ── src/grid/grid-join.js ──
 
 // @gcu/condenser — grid compatibility + volume-weighted resample (micro join).
 //
@@ -1079,7 +1086,7 @@ function commonLattice(grids, opts = {}) {
   return { ok: true, ...out };
 }
 
-// ── src/blockmodel.js ──
+// ── src/io/blockmodel.js ──
 
 // @gcu/condenser — delimited block-model provider (CSV/GSLIB-ish exports).
 // Centroid columns (XC/YC/ZC by convention, overridable) + one scalar grade
@@ -1865,7 +1872,7 @@ function dhDesurveySamples(tables, opts) {
   return { header: header, rows: rows, report: { checks: checkList, nHoles: nHoles, nSamples: rows.length, dipConvention: dipConvention } };
 }
 
-// ── src/drillholes.js ──
+// ── src/io/drillholes.js ──
 
 // @gcu/condenser — drillhole provider: collar + survey + interval tables →
 // desurveyed interval midpoints as an element layer (micro-layers spec §5).
@@ -2194,7 +2201,7 @@ async function openDrillholeTraces({ collar, survey }, opts = {}) {
   return { header, streamChunks, fetchRecord, recordPosition: () => null };
 }
 
-// ── src/sticks.js ──
+// ── src/core/sticks.js ──
 
 // @gcu/condenser — stick chunks: drillhole interval SEGMENTS (desurveyed
 // endpoint pairs) as instanced capsule impostors (micro-layers spec §6).
@@ -2313,7 +2320,7 @@ function createStickChunkBuilder({ frame, chunkSize = 1 << 17, batchSize = 0, se
   };
 }
 
-// ── src/gl-util.js ──
+// ── src/core/gl-util.js ──
 
 // @gcu/condenser — shared GL scaffolding (used by the splat + impostor pipelines).
 function compile(gl, type, src) {
@@ -2331,7 +2338,7 @@ function makeProgram(gl, vsrc, fsrc) {
   return p;
 }
 
-// ── src/gl-sticks.js ──
+// ── src/core/gl-sticks.js ──
 
 // @gcu/condenser — capsule impostors for drillhole sticks (micro-layers §6).
 // gl-blocks' trick with a different intersection: one instanced quad per
@@ -3075,7 +3082,7 @@ function _writeTypedArray(dst, offset, src, info) {
   dst.set(view, offset);
 }
 
-// ── src/ply.js ──
+// ── src/io/ply.js ──
 
 // @gcu/condenser — PLY point-cloud provider (ascii + binary_little_endian).
 // Reads the vertex element only (meshes: faces are ignored — micro shows the
@@ -3290,7 +3297,7 @@ async function openPly(blob, { signal, onProgress } = {}) {
   return { header, streamChunks, fetchRecord };
 }
 
-// ── src/mesh.js ──
+// ── src/io/mesh-io.js ──
 
 // @gcu/condenser — context-tier mesh providers (micro-layers §7, tier 1).
 // Wireframes, solids, TINs: whole-file reads into { vertices, triangles },
@@ -3448,6 +3455,12 @@ async function openPlyMesh(blob) {
   return { header: meshHeader(ply.format === 'ascii' ? 'ply-ascii' : 'ply-binary', vertices, triangles), vertices, triangles };
 }
 
+// ── src/core/mesh-geom.js ──
+
+// @gcu/condenser — mesh GEOMETRY builders (core: no I/O). World-f64 vertices
+// → frame-local Float32 chunks for the static indexed pipeline (gl-mesh.js),
+// plus the heightfield triangulator (a regular grid IS a single-valued
+// surface). The file readers (.msh/.obj/.ply) live in io/mesh-io.js.
 // ── world f64 → one frame-local GPU-ready chunk ──
 // Float32 positions are safe at frame-local magnitudes (the whole point of
 // @gcu/frame); indices stay u32. Context meshes are ONE chunk — they draw
@@ -3522,7 +3535,7 @@ function buildHeightfieldMesh(grid, { stride = 1, frame = null, flatZ = null } =
   return { kind: 'mesh', pos, idx: Uint32Array.from(tris), normal, values, count: (tris.length / 3) | 0, vertexCount: nv, bboxLocal: Float64Array.from(bb) };
 }
 
-// ── src/gl-mesh.js ──
+// ── src/core/gl-mesh.js ──
 
 // @gcu/condenser — the context-mesh pipeline (micro-layers §7, tier 1).
 // Static indexed triangles: one VAO + element buffer per mesh, drawn whole on
@@ -3734,7 +3747,7 @@ function createMeshPipeline(gl) {
   return { upload, begin, draw };
 }
 
-// ── src/soup.js ──
+// ── src/core/soup-geom.js ──
 
 // @gcu/condenser — streaming-tier meshes (micro-layers §7, tier 2): TRIANGLE
 // SOUP under the full chunk discipline. Photogrammetry-scale meshes (10⁷–10⁸
@@ -3889,6 +3902,14 @@ async function* soupFromMesh({ vertices, triangles }, { batchTris = 1 << 16 } = 
   }
   if (n) yield emitBatch(verts, vo, ia, ib, ic, n);
 }
+
+// ── src/io/soup-io.js ──
+
+// @gcu/condenser — the streaming triangle-soup PROVIDER (io): openPlySoup
+// walks a photogrammetry-scale PLY in two passes, neither holding the file,
+// and emits RawChunk batches for core/soup-geom's builder. The geometry
+// discipline (Morton, shuffle, quantize) lives in core/soup-geom.js.
+
 
 /**
  * openPlySoup(blob) — the TRUE streaming provider (binary_le + ascii PLY, the
@@ -4049,7 +4070,7 @@ async function openPlySoup(blob, { onProgress } = {}) {
   return { header, streamChunks };
 }
 
-// ── src/gl-soup.js ──
+// ── src/core/gl-soup.js ──
 
 // @gcu/condenser — the streaming-mesh (triangle soup) pipeline (micro-layers
 // §7 tier 2). The points pipeline's shape over TRIANGLES: u16 positions
@@ -4215,7 +4236,7 @@ function createSoupPipeline(gl) {
   return { upload, begin, drawSlice };
 }
 
-// ── src/gl-blocks.js ──
+// ── src/core/gl-blocks.js ──
 
 // @gcu/condenser — box impostors for block models (micro-spec §2.3).
 // One screen-aligned quad per block (instanced TRIANGLE_STRIP — no point-sprite
@@ -4652,7 +4673,7 @@ function createBlocksPipeline(gl) {
   return { upload, drawSlice, begin, setRepaint };
 }
 
-// ── src/gl-pick.js ──
+// ── src/core/gl-pick.js ──
 
 // @gcu/condenser — GPU ID-buffer picking. On click, the visible chunks re-render
 // once into an offscreen target with the fragment shaders outputting the RECORD
@@ -5659,7 +5680,7 @@ function readDM(buffer) {
   };
 }
 
-// ── src/dm-provider.js ──
+// ── src/io/dm-provider.js ──
 
 // @gcu/condenser — Datamine .dm block-model provider, over @gcu/dm's windowed
 // reader (micro-spec Addendum A.2). The DD page carries the grid definition as
@@ -5991,7 +6012,7 @@ async function openDmWireframe(ptBlob, trBlob) {
   return { header: { kind: 'mesh', format: 'dm-wireframe', vertexCount: n, triCount: triangles.length / 3 | 0, bbox: { min, max }, dropped }, vertices, triangles };
 }
 
-// ── src/camera.js ──
+// ── src/core/camera.js ──
 
 // @gcu/condenser — minimal mat4 math + an orbit camera. Raw WebGL2 needs ~four
 // matrix ops, not a scene graph (dee's camera is Three-coupled — micro-spec §5
@@ -6222,7 +6243,7 @@ function attachOrbitInput(canvas, cam, { onChange } = {}) {
   };
 }
 
-// ── src/gl.js ──
+// ── src/core/gl.js ──
 
 // @gcu/condenser — the WebGL2 splat renderer. Raw GL, no scene graph: per-chunk
 // VAOs over the quantized buffers (positions stay uint16 on the GPU — denormalized
@@ -7130,7 +7151,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   };
 }
 
-// ── src/edl.js ──
+// ── src/core/edl.js ──
 
 // @gcu/condenser — Eye-Dome Lighting post-pass (Boucheny 2009 / Ribes & Boucheny).
 // The scene renders into an offscreen framebuffer (color + depth texture); a
@@ -7243,6 +7264,11 @@ function createEdl(gl) {
 
 // @gcu/condenser — streaming no-preprocess renderer for massive spatial elements.
 // The engine under micro (the scope over lamina's slide). Curated public surface.
+//
+// Three layers (see core.js for the engine-only entry):
+//   core/ — chunk builders + GL pipelines + camera + EDL + Morton. Zero I/O.
+//   io/   — file providers (LAS, PLY, delimited/dm block models, drillholes, meshes).
+//   grid/ — lattice inference + the join/resample/reconcile engine.
 // mesh export (micro): the ARANZ writer rides the already-inlined @gcu/msh
 
 export {
@@ -7261,11 +7287,11 @@ export {
   mortonKey,
   mortonKeys,
   radixSortIndices,
-  inferAxis,
   makeBlockGrid,
   buildBlockChunk,
   blockLocalCenter,
   createBlockChunkBuilder,
+  inferAxis,
   floatGcd,
   axisMap,
   gridsCompatible,

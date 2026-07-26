@@ -13,7 +13,7 @@
 // v1 scope: regular uniform grids (INC as DD constants). Sub-blocked models
 // (per-record INC) and non-model .dm files are a later milestone.
 
-import { detectDM, parseHeader, recordRange, decodeRecord, readField } from '../../dm/src/dm.js';
+import { detectDM, parseHeader, recordRange, decodeRecord, readField } from '../../../dm/src/dm.js';
 
 const DEF_NAMES = new Set(['IJK', 'XC', 'YC', 'ZC', 'XINC', 'YINC', 'ZINC', 'XMORIG', 'YMORIG', 'ZMORIG', 'NX', 'NY', 'NZ']);
 

@@ -13,8 +13,8 @@
 // streaming machinery is for the 10⁸ element tables), which also makes
 // fetchRecord O(1) and channel switches free.
 
-import { dhDesurveySamples } from '../../drillhole/src/samples.js';
-import { dhValidate } from '../../drillhole/src/validate.js';
+import { dhDesurveySamples } from '../../../drillhole/src/samples.js';
+import { dhValidate } from '../../../drillhole/src/validate.js';
 import { sniffDelimited, lineFields } from './blockmodel.js';
 
 const BHID_RE = /^(bhid|holeid|hole_?id|dhid|dh_?id|hole|collar_?id|id)$/i;

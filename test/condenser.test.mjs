@@ -766,7 +766,7 @@ test('sticks: builder — batch morton, doc totals, recIdx passthrough', () => {
 });
 
 // ── context meshes (micro-layers §7 tier 1): providers + the frame-local chunk ──
-import { openMsh, openObj, openPlyMesh, buildMeshChunk } from '../ext/condenser/src/mesh.js';
+import { openMsh, openObj, openPlyMesh, buildMeshChunk } from '../ext/condenser/src/main.js';
 import { writeMSH } from '../ext/msh/msh.js';
 
 // a unit tetra pushed to UTM-ish coordinates — 4 verts, 4 faces
@@ -853,7 +853,7 @@ test('mesh: buildMeshChunk — frame rebase, bbox, element count = triangles', (
 });
 
 // ── streaming-tier soup (micro-layers §7 tier 2) ──
-import { buildSoupChunk, soupLocalCentroid, createSoupChunkBuilder, soupFromMesh, openPlySoup } from '../ext/condenser/src/soup.js';
+import { buildSoupChunk, soupLocalCentroid, createSoupChunkBuilder, soupFromMesh, openPlySoup } from '../ext/condenser/src/main.js';
 
 test('soup: chunk build — u16 quantize round-trips centroids to chunk-span precision', () => {
   const frame = { origin: [612000, 7765000, 700] };
