@@ -1704,6 +1704,22 @@ await p.close();
   });
   chk(`settings: ${setw.sections} sections on the rail, a choice persists (selStick → ${setw.stored})`,
     setw.title === 'settings' && setw.sections === 6 && setw.stored === 'sticky');
+
+  // ── the g-leader: save a view slot, move, recall; a bare digit does nothing ──
+  await wp.evaluate(() => document.body.focus());
+  const cam0 = await wp.evaluate(() => JSON.stringify(window._micro.cam.state));
+  await wp.keyboard.press('g'); await wp.waitForTimeout(80);
+  await wp.keyboard.press('Shift+Digit3'); await wp.waitForTimeout(250);
+  const slotSaved = await wp.evaluate(() => window._micro.views().some((v) => v.name === 'slot 3'));
+  await wp.evaluate(() => { window._micro.cam.orbit(0.8, 0.3); window._micro.requestRender(); });
+  await wp.waitForTimeout(120);
+  await wp.keyboard.press('Digit3'); await wp.waitForTimeout(150);   // bare digit: must NOT recall
+  const camAfterBare = await wp.evaluate(() => JSON.stringify(window._micro.cam.state));
+  await wp.keyboard.press('g'); await wp.waitForTimeout(80);
+  await wp.keyboard.press('Digit3'); await wp.waitForTimeout(300);
+  const camRecalled = await wp.evaluate(() => JSON.stringify(window._micro.cam.state));
+  chk('g-leader: Shift+digit saves a named slot, bare digit is inert, g+digit recalls',
+    slotSaved && camAfterBare !== cam0 && camRecalled === cam0);
   await wp.close();
 }
 

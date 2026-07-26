@@ -10464,6 +10464,33 @@ async function saveViewAs() {
   $('#meta').textContent = `${existing ? 'updated' : 'saved'} bookmark “${name}”${_project ? ` → ${v.file}` : ' (in memory — save the project to keep it)'}`;
 }
 function applyView(v) { applyCamera(v.camera); applySection(v.section); $('#meta').textContent = `bookmark “${v.name}”`; }
+// view SLOTS — the g-leader's targets. g then a digit recalls; g then
+// Shift+digit saves the current view into "slot N". Name-addressed on
+// purpose (the bookmark list is name-SORTED, so Nth-in-list renumbers as
+// bookmarks accrue — "slot 2" must always mean the same view); recall falls
+// back to Nth-in-list so plain bookmarks stay reachable.
+function slotView(n) { return _views.find((v) => v.name === `slot ${n}`); }
+async function saveViewSlot(n) {
+  const existing = slotView(n);
+  const v = existing || { name: `slot ${n}`, file: 'bookmarks/' + bmSlug(`slot ${n}`) + '.json' };
+  v.camera = captureCamera(); v.section = captureSection();
+  if (!existing) { _views.push(v); _views.sort((a, b) => a.name.localeCompare(b.name)); }
+  await writeViewFile(v, 'bookmark', { app: 'micro', kind: 'bookmark', name: v.name, camera: v.camera, section: v.section });
+  markProjectDirty();
+  $('#meta').textContent = `${existing ? 'updated' : 'saved'} slot ${n} — g ${n} recalls it${_project ? '' : ' (in memory — save the project to keep it)'}`;
+}
+function recallViewSlot(n) {
+  const v = slotView(n) || _views[n - 1];                  // named slot first, Nth bookmark as the fallback
+  if (v) applyView(v);
+  else $('#meta').textContent = `no view in slot ${n} — g then Shift+${n} saves the current view there`;
+}
+let _gotoArm = 0;                                          // the g-leader timer (0 = disarmed)
+function gotoDisarm() { if (_gotoArm) { clearTimeout(_gotoArm); _gotoArm = 0; } }
+function armGoto() {
+  gotoDisarm();
+  _gotoArm = setTimeout(() => { _gotoArm = 0; $('#meta').textContent = ''; }, 2500);
+  $('#meta').textContent = 'goto — 1–9 recalls a view slot · Shift+digit saves the current view · Esc cancels';
+}
 async function removeBookmark(v) {
   _views = _views.filter((x) => x !== v);
   if (_project && v.file) { try { await removeFileAt(_project.dir, v.file); } catch { /* already gone */ } }
@@ -10834,7 +10861,7 @@ $('#mView').onclick = () => menuAt($('#mView'), [
   { label: 'Bookmarks', submenu: () => bookmarksMenuItems() },
   { label: 'Scenes', submenu: () => scenesMenuItems() },
 ]);
-// bookmarks = viewpoints (camera + section); number keys 1–9 jump to the first nine
+// bookmarks = viewpoints (camera + section); the g-leader jumps: g·digit recalls a slot, g·Shift+digit saves one
 function bookmarksMenuItems() {
   const items = _views.map((v, i) => ({ label: `⤷ ${v.name}`, kbd: i < 9 ? String(i + 1) : undefined, action: () => applyView(v) }));
   if (items.length) items.push({ sep: true });
@@ -11019,6 +11046,7 @@ pick a preset (plan · N–S · E–W), press <code>k</code> (or <code>c</code> 
 <b>slab · front · behind</b> — keep a band of ±thickness, or everything on one side of the plane<br>
 <b>plane</b> — outline the cut plane in the view · <b>2D</b> — face-on + orthographic + rotation locked (drags pan; the paper-section view) · right-click a layer → <b>Cut by sections</b>: follow · keep front only · keep behind only · don't cut (keep topo whole for context, or split one model at the plane while another follows the slab)<br>
 <code>l</code> — face the section (<code>⇧L</code> its back) · <code>,</code> <code>.</code> — walk the section one slab at a time · <code>⌃</code>wheel scrubs · <code>⌥</code>wheel thickens the slab · <b>follow</b> — the camera walks with the scrub (the cut stays put on screen) · the number is slab half-thickness (m)<br><br>
+<b>goto</b> — <code>g</code> then <code>1</code>–<code>9</code> recalls a view slot; <code>g</code> then <code>Shift+digit</code> saves the current view into that slot (a bookmark named “slot N” — camera + section, travels with the project). <code>F1</code> opens this help<br><br>
 <b>selection</b> (<code>r</code> rectangle · <code>v</code> lasso, or Tools menu) — drag over the scene: what you SEE gets selected (occlusion-honest, all visible layers at once), tinted gold; <b>shift</b> adds, <b>alt</b> subtracts, <code>Esc</code> clears; releasing WITH shift/alt keeps the tool armed for the next gesture (middle-drag still orbits; Settings → interaction to change); the attribute table's <b>selected</b> view lists the grabbed rows; selections persist in the project<br>
 The <b>select-through</b> toolbar toggle (the stacked layers, also Tools → Select through) flips the tools to the extruded tube: EVERYTHING whose position projects inside the shape — occluded included — via one pass over the data (a load-sweep's cost; drillholes are instant)<br><br>
 <b>attribute table</b> (<code>t</code> / right-click a layer / Data menu) — the layer's rows as a floating, layer-pinned window (open several); windowed reads, so a 1.8M-row model scrolls cold; <b>matches</b> shows only the filtered rows; click a row to pick it in the scene — picks scroll the table to their row; ƒ columns included; read-only<br><br>
@@ -12435,6 +12463,18 @@ window.addEventListener('keydown', (e) => {
   if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // typing, not commanding
   const k = e.key;
   if (e.ctrlKey || e.metaKey || e.altKey) return;         // reserved combos (⌘K palette, Alt+K NL bar, ⌘S save…) handled elsewhere — Alt must not trigger the single-key reflexes (k=knife)
+  if (_gotoArm) {                                          // g-leader armed: the next digit is a view slot
+    if (k === 'Shift' || k === 'Control' || k === 'Alt' || k === 'Meta') return;   // a modifier press is not the next key
+    if (/^Digit[1-9]$/.test(e.code)) {
+      e.preventDefault();
+      const n = +e.code.slice(5), withShift = e.shiftKey;
+      gotoDisarm();
+      if (withShift) saveViewSlot(n); else recallViewSlot(n);
+      return;
+    }
+    gotoDisarm(); $('#meta').textContent = '';             // any other key disarms…
+    if (k === 'Escape') return;                            // …Esc quietly; the rest fall through to their normal job
+  }
   if (k === 'f') $('#btnFit').click();
   else if (k === 'k' || k === 'c') { $('#secMode').value = 'knife'; $('#secMode').dispatchEvent(new Event('input')); }   // k = knife, c = cut (same verb, two reflexes)
   else if (k === 'Escape' && _knifeArm) { armKnife(false); $('#secMode').value = 'off'; $('#secMode').dispatchEvent(new Event('input')); }
@@ -12472,7 +12512,8 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'Escape' && (_measure.arm || _measure.b)) clearMeasure();
   else if (k === 'o') { cam.setOrtho(!cam.state.ortho); requestRender(); }
   else if (k === 'x') toggleSection();
-  else if (k >= '1' && k <= '9') { const v = _views[+k - 1]; if (v) applyView(v); }   // jump to bookmark N
+  else if (k === 'g') armGoto();                          // the goto leader — bare digits are NOT bound (a stray digit must never teleport the camera)
+  else if (k === 'F1') { e.preventDefault(); showHelp('keyboard & mouse', HELP_KEYS); }
 });
 
 // Synthetic QF block model AS A CSV BLOB — exercises the full provider path
