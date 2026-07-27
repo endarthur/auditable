@@ -276,27 +276,44 @@ Everything interactive here runs in the browser, so an exported view stays live
 the kernel gone. Only the write-backs (`selection`, `selected_rows`,
 `measurement`) have nowhere to land.
 
+**Exporting a whole notebook — no function call needed.** This is the normal
+Jupyter path:
+
+1. JupyterLab → **Settings → Save Widget State Automatically**
+2. Save the notebook
+3. `jupyter nbconvert --to html nb.ipynb`
+
+The widget state (including the widget's own JavaScript) rides in the notebook's
+metadata, so the exported page carries both the code and the data. Verified end
+to end: a notebook exported this way opens in a browser with no kernel and the
+3D is fully interactive.
+
+**Exporting one view on its own** — a single widget as a standalone file, no
+notebook involved:
+
 ```python
 cd.export_html(w, "model.html")
 ```
 
-For a whole notebook: turn on **Settings → Save Widget State Automatically** in
-JupyterLab, save, then `jupyter nbconvert --to html nb.ipynb`.
+This exists because the stock `embed_minimal_html(...)` **silently produces a
+blank widget**: ipywidgets drops any trait equal to its default, and anywidget's
+`_esm` — the widget's own JavaScript — *is* its default, so the file comes out
+with no code in it and no error. `export_html` pins `drop_defaults=False`.
 
-Two things to know:
+Two things to know either way:
 
-- **`drop_defaults=False` is mandatory**, which is why `export_html` exists.
-  ipywidgets drops any trait equal to its default, and anywidget's `_esm` — the
-  widget's own JavaScript — *is* its default, so the stock
-  `embed_minimal_html(...)` call silently writes a file with no code in it and
-  renders nothing.
 - **Viewing needs network**, even though the data is embedded: the page pulls
-  the ipywidgets html-manager from a CDN. nbconvert can be pointed at a local
-  copy instead (`--HTMLExporter.jupyter_widgets_base_url=./vendor/`), which is
-  the route to a genuinely offline export.
+  the ipywidgets html-manager from a CDN (unpkg for nbconvert, jsdelivr for the
+  standalone). nbconvert can be pointed at a local copy
+  (`--HTMLExporter.jupyter_widgets_base_url=./vendor/`), which is the route to a
+  genuinely offline export.
+- Size: the payload is base64 in the state, so budget about **+33%** over the
+  figures above.
 
-Size: the payload is base64 in the state, so budget about +33% over the figures
-above.
+One thing not verified here: whether JupyterLab's own *Save Widget State* keeps
+`_esm` (it is the same drop-defaults trap). If an export ever comes out blank,
+that is the first thing to check — `grep -c _esm nb.ipynb` on the saved
+notebook should be `1`, not `0`.
 
 ## Honest notes
 
