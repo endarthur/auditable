@@ -4,20 +4,33 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gcu-condenser"
-version = "0.1.0"
-description = "Block models and big point clouds in a Jupyter notebook — the @gcu/condenser streaming renderer as an anywidget."
+# single-sourced from the module below, so the two can never drift
+dynamic = ["version"]
+description = "Block models, drillholes and big point clouds in a Jupyter notebook — the @gcu/condenser streaming renderer as an anywidget."
 readme = "README.md"
-requires-python = ">=3.9"
+# 3.10 is a SUPPORT decision, not a syntax one: the code itself runs on 3.9
+# (verified), but on 3.9 pip resolves anywidget back to 0.9.x — a different
+# frontend generation whose JS contract we do not test against. One anywidget
+# to support beats two supported blind. 3.9 is also EOL (Oct 2025).
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Arthur Endlein Correia" }]
-keywords = ["jupyter", "widget", "anywidget", "point cloud", "block model", "mining", "geology", "webgl"]
+keywords = ["jupyter", "widget", "anywidget", "point cloud", "block model", "drillhole", "mining", "geology", "webgl"]
 classifiers = [
   "Framework :: Jupyter",
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Scientific/Engineering :: Visualization",
 ]
+# the whole dependency list. numpy>=1.21 and both numpy majors are verified
+# (1.21.6 / 1.23.5 / 1.26.4 / 2.x) — `np.unique(..., axis=0,
+# return_inverse=True)` is the one call whose shape changed across the 2.0
+# boundary, and the sub-blocking path that uses it is covered.
 dependencies = ["anywidget>=0.9", "numpy>=1.21"]
 
 [project.optional-dependencies]
@@ -27,6 +40,9 @@ dev = ["jupyterlab>=4", "pandas>=1.5"]
 [project.urls]
 Homepage = "https://gentropic.org/micro"
 Source = "https://github.com/endarthur/auditable"
+
+[tool.hatch.version]
+path = "gcu_condenser/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["gcu_condenser"]

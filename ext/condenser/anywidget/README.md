@@ -44,6 +44,30 @@ If you want general meshes, volumes, streamlines or a full VTK pipeline, use
 pyvista. If you want to look at a mine-scale model with its drillholes and click
 on it, this is smaller and faster.
 
+## Requirements
+
+**Python 3.10+**, and two dependencies: **anywidget** and **numpy**. That is the
+whole list — no VTK, no WASM, no CDN.
+
+| | | |
+|---|---|---|
+| Python | `>=3.10` | verified on 3.10 · 3.11 · 3.12 · 3.13 |
+| `anywidget` | `>=0.9` | developed against 0.11 |
+| `numpy` | `>=1.21` | verified on 1.21 · 1.23 · 1.26 · 2.x |
+
+3.10 is a *support* decision rather than a syntax one — the code runs fine on
+3.9, but on 3.9 pip resolves anywidget back to 0.9.x, a different frontend
+generation whose JS contract isn't tested here. One anywidget to support beats
+two supported blind. (3.9 is also EOL as of October 2025.)
+
+Both numpy majors work: `np.unique(..., axis=0, return_inverse=True)` — used by
+the sub-blocking path — changed its result shape across the 2.0 boundary, and
+that path is covered on each side.
+
+`pandas` is *not* required: every constructor takes plain arrays, and a "table"
+is anything indexable by column name (a DataFrame, a polars frame, or a dict of
+arrays). It's a `[dev]` extra only because the example notebook uses it.
+
 ## Install
 
 Not on PyPI yet. From the repo, with [uv](https://docs.astral.sh/uv/):
