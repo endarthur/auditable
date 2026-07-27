@@ -7,7 +7,7 @@ impostors with per-face lighting and correct occlusion), drillholes as
 desurveyed capsules, clouds as EDL-lit splats -- all co-registered in one
 local frame, all progressive, straight from numpy columns.
 
-    import gcu_condenser as cd
+    import gcu.condenser as cd
 
     cd.blocks(df, x="XC", y="YC", z="ZC", value="FE")        # on its own
     cd.view(                                                  # …or stacked
@@ -151,7 +151,7 @@ def _axis_from_centroids(v, name):
         raise ValueError(
             f"gcu-condenser: {name} centroids are not on a regular lattice. "
             "Pass size=(dx, dy, dz) if this is a sub-blocked model, or use "
-            "gcu_condenser.points(...) to view the centroids."
+            "gcu.condenser.points(...) to view the centroids."
         )
     if count > _U16MAX:
         raise ValueError(f"gcu-condenser: axis {name} needs {count} cells (max {_U16MAX})")
@@ -185,7 +185,7 @@ def _axis_subblocked(v, size, name):
             return lo, pitch, count
     raise ValueError(
         f"gcu-condenser: sub-blocked axis {name} is not on a common fine lattice "
-        "(the sub-division is not a whole multiple). Use gcu_condenser.points(...)."
+        "(the sub-division is not a whole multiple). Use gcu.condenser.points(...)."
     )
 
 
@@ -610,7 +610,7 @@ def blocks(src=None, x="x", y="y", z="z", value=None, category=None, size=None, 
         if uniq.shape[0] > 256:
             raise ValueError(
                 f"gcu-condenser: {uniq.shape[0]} distinct block sizes (max 256). "
-                "Round the size columns, or use gcu_condenser.points(...)."
+                "Round the size columns, or use gcu.condenser.points(...)."
             )
         cols["dim"] = codes.astype(np.uint8)
         extra["dim_palette"] = (uniq / 2.0).tolist()

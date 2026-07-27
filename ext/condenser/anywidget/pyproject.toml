@@ -42,11 +42,13 @@ Homepage = "https://gentropic.org/micro"
 Source = "https://github.com/endarthur/auditable"
 
 [tool.hatch.version]
-path = "gcu_condenser/__init__.py"
+path = "gcu/condenser/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["gcu_condenser"]
+# PEP 420 namespace: no gcu/__init__.py anywhere, so gcu.dm / gcu.expr
+# can ship as separate distributions under the same namespace later.
+packages = ["gcu"]
 
 # the bundled ES module IS the widget — it must ride in the wheel
 [tool.hatch.build.targets.wheel.force-include]
-"gcu_condenser/static/widget.js" = "gcu_condenser/static/widget.js"
+"gcu/condenser/static/widget.js" = "gcu/condenser/static/widget.js"

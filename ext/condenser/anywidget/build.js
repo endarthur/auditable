@@ -8,9 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { bundle } from '../../build/src/main.js';
 
-const OUT = 'gcu_condenser/static/widget.js';
+const OUT = 'gcu/condenser/static/widget.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
-mkdirSync(join(HERE, 'gcu_condenser/static'), { recursive: true });
+mkdirSync(join(HERE, 'gcu.condenser/static'), { recursive: true });
 const r = await bundle({
   at: import.meta.url,
   entry: 'src/widget.js',

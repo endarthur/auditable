@@ -3,7 +3,7 @@
 **Block models, drillholes and big point clouds — in a Jupyter notebook.**
 
 ```python
-import numpy as np, gcu_condenser as cd
+import numpy as np, gcu.condenser as cd
 
 cd.blocks(df, x="XC", y="YC", z="ZC", value="FE")        # on its own
 w = cd.view(                                              # …or stacked, co-registered

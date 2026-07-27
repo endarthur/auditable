@@ -25,7 +25,7 @@ const T = TMP.replace(/\\/g, '\\\\');
 
 // ── 1. the Python half: a stack that uses every kind + sub-blocking ──
 const PY = `
-import json, numpy as np, gcu_condenser as cd
+import json, numpy as np, gcu.condenser as cd
 
 # a SUB-BLOCKED model: 20 m parents with a 10 m core
 xs, ys, zs, dx, dy, dz, val = [], [], [], [], [], [], []
@@ -125,7 +125,7 @@ let fails = 0;
 const chk = (name, cond, extra) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}${extra ? '  — ' + extra : ''}`); if (!cond) fails++; };
 
 const r = await page.evaluate(async (port) => {
-  const mod = await import(`http://127.0.0.1:${port}/ext/condenser/anywidget/gcu_condenser/static/widget.js`);
+  const mod = await import(`http://127.0.0.1:${port}/ext/condenser/anywidget/gcu/condenser/static/widget.js`);
   const render = mod.default && mod.default.render;
   if (!render) return { err: 'no default.render export' };
 
@@ -258,7 +258,7 @@ const r = await page.evaluate(async (port) => {
   d2(); el2.remove();
 
   // ── RECTANGLE selection: drag a box, get rows back in the packed wire format
-  // that gcu_condenser decodes (u32 n, then per layer: idx, count, rows...) ──
+  // that gcu.condenser decodes (u32 n, then per layer: idx, count, rows...) ──
   const cvS = document.querySelector('#host canvas');
   const rS = cvS.getBoundingClientRect();
   const drag = (from, to, path) => {
