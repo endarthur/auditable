@@ -25,24 +25,43 @@ Start with **[`example.ipynb`](example.ipynb)** — a runnable tour, no data fil
 
 ## Why this and not pyvista / k3d
 
-For general 3D in Python those are excellent and this is not trying to replace
-them. Two things here are genuinely different:
+pyvista is excellent and this does not replace it. The honest comparison, from
+a bench of the shapes a resource geologist actually has (128×128×80 lattice;
+build time and the bytes that must reach the browser):
 
-- **Block models are first class.** A model draws as instanced ray-traced box
-  impostors on the inferred lattice — per-face lighting, exact silhouettes,
-  correct occlusion, one quad per block — including **sub-blocked** models,
-  where every block renders at its true size. Glyphing cubes through a general
-  mesh pipeline costs an order of magnitude more and falls over at mine scale.
-  1.9M blocks pack in 75 ms and paint in ~0.4 s.
-- **Scale without preprocessing.** Progressive prefix-LOD is the *default* path,
-  not an opt-in decimation you have to configure.
+| | condenser | pyvista |
+|---|---|---|
+| **full** regular lattice, 1.3M cells | 56 ms · 40 MiB | **1 ms · 41 MiB** (`ImageData`) |
+| **sparse** model (a deposit, 150k of those cells) | **7 ms · 4.6 MiB** | 74 ms · 17.7 MiB |
+| **sub-blocked**, 90k blocks, 2 sizes | **47 ms · 2.8 MiB** | 73 ms · 30.2 MiB (glyph) |
+| point cloud, 5M | 187 ms · 162 MiB | 134 ms · 153 MiB |
+
+Read that honestly:
+
+- **For a full regular lattice, pyvista wins outright.** `ImageData` is
+  *implicit* — VTK materialises no geometry at all. If your model is a complete
+  box and you are happy in a VTK pipeline, use pyvista.
+- **A real model is not a box.** The moment you keep only the cells that exist,
+  `threshold` materialises explicit hexahedra — 547k points for 150k cells —
+  and it is 10× slower to build and ~4× more to ship.
+- **Sub-blocked models cannot be `ImageData` at all**, so the only route is
+  glyphing cubes: 540k cells and 720k points for 90k blocks, ~11× the bytes.
+  That is the case that scales worst, and it is common.
+- **Point clouds are a wash** on construction. Nothing to claim here.
+
+The advantage that does *not* show in that table is **rendering**, which is what
+the engine is actually for: one instanced quad per block with a ray-traced
+impostor rather than 12 triangles, and progressive prefix-LOD as the default
+path — so a model paints early and sharpens, instead of stalling until it can
+draw everything. VTK renders all-or-nothing. Measuring that fairly needs a GPU
+on both sides, so it is stated here as a design difference, not a benchmark.
 
 Plus the posture the same audience tends to care about: **no network, no WASM,
-no runtime downloads.** The ES module is bundled into the wheel.
+no runtime downloads**; the ES module is bundled into the wheel.
 
-If you want general meshes, volumes, streamlines or a full VTK pipeline, use
-pyvista. If you want to look at a mine-scale model with its drillholes and click
-on it, this is smaller and faster.
+Short version: general meshes, volumes, streamlines, a full VTK pipeline, or a
+complete regular lattice → pyvista. A sparse or sub-blocked mine-scale model
+with its drillholes, that you want to click on → this.
 
 ## Requirements
 
@@ -262,7 +281,11 @@ section.look("north", ortho=True)     # …two panels, one dataset
   subdivision). When they don't, the error says so and points at `cd.points(...)`
   rather than drawing a subtly wrong grid.
 - The payload crosses the Jupyter comm channel as one blob, so a layer is
-  bounded by your deployment's message limit — roughly 2M blocks ≈ 62 MB.
+  bounded by your deployment's message limit — roughly 2M blocks ≈ 62 MB, and a
+  5M-point cloud is ~162 MB, which is past what many deployments allow.
+  Coordinates go over as f64 today even though the engine quantises them per
+  chunk anyway, so there is a straightforward ~3× saving available here that
+  has not been taken yet.
 
 ## Testing
 
