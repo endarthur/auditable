@@ -35,7 +35,7 @@ import numpy as np
 import traitlets
 
 __version__ = "0.2.0"
-__all__ = ["Viewer", "Layer", "view", "points", "blocks", "drillholes"]
+__all__ = ["Viewer", "Layer", "view", "points", "blocks", "drillholes", "export_html"]
 
 _STATIC = pathlib.Path(__file__).parent / "static" / "widget.js"
 _U16MAX = 65535
@@ -528,6 +528,37 @@ def _value_and_cat(src, value, category, n, cols, extra, kind):
         extra["cat_n"] = len(labels)
         extra["cat_labels"] = labels
     return (val is not None), labels
+
+
+def export_html(viewer, path, title="condenser", offline_note=True):
+    """Write a standalone HTML file that still works with **no kernel**.
+
+    Everything this widget does interactively — orbit, pick, knife, section
+    scrub, layers, selection, snapshot — runs in the browser, so an exported
+    view stays live. Only the write-backs to Python (`selection`,
+    `selected_rows`, `measurement`) have nowhere to land.
+
+    ``drop_defaults=False`` is not optional here and is the reason this helper
+    exists: ipywidgets drops any trait whose value equals its default, and
+    anywidget's ``_esm`` (the widget's own JavaScript) *is* its default — so the
+    stock call silently produces a file containing no code and renders nothing.
+
+    The page loads the ipywidgets html-manager from a CDN, so **viewing needs
+    network** even though the data is embedded. For a notebook export the same
+    applies, and nbconvert lets you point that elsewhere::
+
+        jupyter nbconvert --to html nb.ipynb \
+            --HTMLExporter.jupyter_widgets_base_url=./vendor/
+    """
+    from ipywidgets.embed import embed_minimal_html
+
+    path = pathlib.Path(path)
+    embed_minimal_html(str(path), views=[viewer], drop_defaults=False, title=title)
+    if offline_note:
+        size = path.stat().st_size
+        print(f"{path} ({size / 1024 / 1024:.1f} MiB) — self-contained data; "
+              "the widget runtime still loads from a CDN, so viewing needs network.")
+    return path
 
 
 def _resolve(src, x, y, z):

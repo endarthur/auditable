@@ -269,6 +269,35 @@ section.look("north", ortho=True)     # …two panels, one dataset
 
 `copy()` reuses the payload bytes, so it costs a widget, not a re-pack.
 
+## Exporting: it keeps working without a kernel
+
+Everything interactive here runs in the browser, so an exported view stays live
+— orbit, pick, knife, section scrub, layers, selection, snapshot all work with
+the kernel gone. Only the write-backs (`selection`, `selected_rows`,
+`measurement`) have nowhere to land.
+
+```python
+cd.export_html(w, "model.html")
+```
+
+For a whole notebook: turn on **Settings → Save Widget State Automatically** in
+JupyterLab, save, then `jupyter nbconvert --to html nb.ipynb`.
+
+Two things to know:
+
+- **`drop_defaults=False` is mandatory**, which is why `export_html` exists.
+  ipywidgets drops any trait equal to its default, and anywidget's `_esm` — the
+  widget's own JavaScript — *is* its default, so the stock
+  `embed_minimal_html(...)` call silently writes a file with no code in it and
+  renders nothing.
+- **Viewing needs network**, even though the data is embedded: the page pulls
+  the ipywidgets html-manager from a CDN. nbconvert can be pointed at a local
+  copy instead (`--HTMLExporter.jupyter_widgets_base_url=./vendor/`), which is
+  the route to a genuinely offline export.
+
+Size: the payload is base64 in the state, so budget about +33% over the figures
+above.
+
 ## Honest notes
 
 - `filter_mode='dim'` suits **point clouds** — on a solid block model the dimmed
