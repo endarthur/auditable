@@ -1,0 +1,46 @@
+{
+  "name": "@gcu/facet",
+  "version": "0.1.0",
+  "description": "Structural geology on a triangulated surface: plane fitting by PCA of vertex positions, geodesic brush and traces, fracture-network topology, painted-color set detection.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "dependencies": {
+    "@gcu/bearing": "*",
+    "@gcu/groma": "*"
+  },
+  "keywords": [
+    "structural-geology",
+    "outcrop",
+    "attitude",
+    "dip",
+    "fracture",
+    "mesh",
+    "geodesic",
+    "auditable",
+    "gcu"
+  ],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gentropic/auditable.git",
+    "directory": "ext/facet"
+  },
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/facet",
+  "bugs": {
+    "url": "https://github.com/gentropic/auditable/issues"
+  }
+}
