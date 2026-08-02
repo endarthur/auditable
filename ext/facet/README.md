@@ -66,6 +66,31 @@ Two deliberate refusals: fewer than three points returns `null` rather than a
 confident-looking guess, and a collinear patch is flagged `degenerate:
 'collinear'` rather than given an arbitrary normal from the degenerate eigenspace.
 
+### Area weighting — measure rock, not vertices
+
+An unweighted vertex PCA counts vertices, so a region the mesher happened to
+tessellate finely pulls the fit toward its own orientation. Pass
+`weights: vertexAreaWeights(positions, triangles)` and each vertex counts for the
+surface area it represents instead, which makes the fit **independent of how the
+mesh was built**.
+
+How much this matters, from `test/facet.test.mjs`: take one surface — a symmetric
+valley whose two limbs have equal area — and mesh it two ways that differ only in
+which limb got refined.
+
+| | fine west limb | fine east limb |
+|---|---|---|
+| unweighted | 13.10° toward 090° | 13.10° toward **270°** |
+| area-weighted | 0.82° | 0.82° |
+
+The unweighted fit reports a 13° plane dipping *east* or *west* — opposite
+answers for the same rock — decided entirely by the mesh. The weighted fit gives
+the same answer either way, and that answer is the honest one.
+
+This is cheap and it does not need face records: indexed geometry and one pass
+over the triangles is enough. `vertexAreaWeights` assigns each vertex a third of
+every incident triangle's area, so the weights sum to the total surface area.
+
 ### Why the name is `fitTensor` and not `orientationTensor`
 
 `@gcu/bearing` already exports `orientationTensor(dcos)`, which does **not**

@@ -22,7 +22,7 @@
 // convention and converts at a single boundary (`attitude`), which is the fix for
 // the original's five hand-rolled and mutually disagreeing conversions.
 
-export { attitude, normalOf, fitTensor, fitPlane } from './fit.js';
+export { attitude, normalOf, fitTensor, fitPlane, vertexAreaWeights } from './fit.js';
 export { brush, distanceToRay } from './brush.js';
 export { geodesic, geodesicField, geodesicBall } from './geodesic.js';
 export { nodeClasses } from './network.js';

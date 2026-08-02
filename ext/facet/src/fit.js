@@ -66,51 +66,98 @@ export function normalOf(dipDirection, dip) {
 }
 
 /**
+ * Per-vertex weights proportional to the surface area each vertex represents:
+ * a third of the area of every triangle touching it, which is the standard
+ * barycentric lumped area.
+ *
+ * Pass these to `fitTensor`/`fitPlane` to make a fit **triangulation-independent**.
+ * An unweighted vertex PCA counts vertices, not rock, so a corner that the mesher
+ * happened to tessellate finely pulls the answer toward its own orientation —
+ * a bias that is invisible on a perfectly flat patch (where every weighting gives
+ * the same plane) and shows up exactly where it matters, on a patch with real
+ * curvature. Weighting by area approximates integrating over the surface instead.
+ *
+ * The spec assigned this to face records in v2; it does not need them. Indexed
+ * geometry and one pass over the triangles is enough.
+ *
+ * @param {ArrayLike<number>} positions  flat xyz
+ * @param {ArrayLike<number>} triangles  flat vertex indices
+ * @param {number} [vertexCount]         defaults to positions.length / 3
+ * @returns {Float64Array} one weight per vertex; 0 for unreferenced vertices
+ */
+export function vertexAreaWeights(positions, triangles, vertexCount) {
+  const nv = vertexCount != null ? vertexCount : Math.floor(positions.length / 3);
+  const w = new Float64Array(nv);
+  const nt = Math.floor(triangles.length / 3);
+  for (let f = 0; f < nt; f++) {
+    const a = triangles[f * 3], b = triangles[f * 3 + 1], c = triangles[f * 3 + 2];
+    if (a >= nv || b >= nv || c >= nv) continue;
+    const ax = positions[a * 3], ay = positions[a * 3 + 1], az = positions[a * 3 + 2];
+    const ux = positions[b * 3] - ax, uy = positions[b * 3 + 1] - ay, uz = positions[b * 3 + 2] - az;
+    const vx = positions[c * 3] - ax, vy = positions[c * 3 + 1] - ay, vz = positions[c * 3 + 2] - az;
+    const cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+    const third = Math.hypot(cx, cy, cz) / 6;          // ‖u×v‖/2 is the area; /3 each
+    w[a] += third; w[b] += third; w[c] += third;
+  }
+  return w;
+}
+
+/**
  * The mean-centered covariance of a set of points.
  *
  * @param {ArrayLike<number>} positions  flat xyz, length 3·nv
  * @param {ArrayLike<number>} [indices]  which vertices to include; all if omitted
- * @returns {{tensor: Float64Array, centroid: number[], n: number}}
+ * @param {object} [opts]
+ * @param {ArrayLike<number>} [opts.weights]  per-VERTEX weights, indexed the same
+ *        way as `positions` (not parallel to `indices`) — normally from
+ *        `vertexAreaWeights`. Without them every point counts equally.
+ * @returns {{tensor: Float64Array, centroid: number[], n: number, weight: number}}
  *          `tensor` is row-major 3×3 (symmetric), ready for `symmetricEigen3`.
+ *          `n` is the point count; `weight` their total weight.
  */
-export function fitTensor(positions, indices) {
+export function fitTensor(positions, indices, { weights } = {}) {
   const n = indices ? indices.length : Math.floor(positions.length / 3);
   const centroid = [0, 0, 0];
   const tensor = new Float64Array(9);
-  if (n <= 0) return { tensor, centroid, n: 0 };
+  if (n <= 0) return { tensor, centroid, n: 0, weight: 0 };
 
   const at = (k) => (indices ? indices[k] : k) * 3;
+  const wt = weights ? (k) => weights[indices ? indices[k] : k] : () => 1;
 
   // pass 1 — the centroid, accumulated relative to the first point so that the
   // sum stays patch-sized even when the coordinates are UTM
   const o = at(0);
   const ox = positions[o], oy = positions[o + 1], oz = positions[o + 2];
-  let sx = 0, sy = 0, sz = 0;
+  let sx = 0, sy = 0, sz = 0, sw = 0;
   for (let k = 0; k < n; k++) {
-    const i = at(k);
-    sx += positions[i] - ox;
-    sy += positions[i + 1] - oy;
-    sz += positions[i + 2] - oz;
+    const i = at(k), w = wt(k);
+    sx += (positions[i] - ox) * w;
+    sy += (positions[i + 1] - oy) * w;
+    sz += (positions[i + 2] - oz) * w;
+    sw += w;
   }
-  centroid[0] = ox + sx / n;
-  centroid[1] = oy + sy / n;
-  centroid[2] = oz + sz / n;
+  // a patch of zero total weight (every vertex unreferenced by any triangle)
+  // still has a well-defined centroid — fall back to counting points
+  if (!(sw > 0)) return fitTensor(positions, indices);
+  centroid[0] = ox + sx / sw;
+  centroid[1] = oy + sy / sw;
+  centroid[2] = oz + sz / sw;
 
   // pass 2 — the covariance of the centered points
   let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
   for (let k = 0; k < n; k++) {
-    const i = at(k);
+    const i = at(k), w = wt(k);
     const dx = positions[i] - centroid[0];
     const dy = positions[i + 1] - centroid[1];
     const dz = positions[i + 2] - centroid[2];
-    xx += dx * dx; xy += dx * dy; xz += dx * dz;
-    yy += dy * dy; yz += dy * dz; zz += dz * dz;
+    xx += w * dx * dx; xy += w * dx * dy; xz += w * dx * dz;
+    yy += w * dy * dy; yz += w * dy * dz; zz += w * dz * dz;
   }
-  const inv = 1 / n;
+  const inv = 1 / sw;
   tensor[0] = xx * inv; tensor[1] = xy * inv; tensor[2] = xz * inv;
   tensor[3] = xy * inv; tensor[4] = yy * inv; tensor[5] = yz * inv;
   tensor[6] = xz * inv; tensor[7] = yz * inv; tensor[8] = zz * inv;
-  return { tensor, centroid, n };
+  return { tensor, centroid, n, weight: sw };
 }
 
 /**
@@ -124,6 +171,10 @@ export function fitTensor(positions, indices) {
  *        normal is oriented to agree with the patch's mean surface normal (so it
  *        points out of the outcrop rather than at an arbitrary hemisphere), and
  *        Fisher statistics over the vertex normals are returned.
+ * @param {ArrayLike<number>} [opts.weights]  per-vertex weights, normally from
+ *        `vertexAreaWeights` — see there for why this matters. The Fisher
+ *        statistics stay unweighted, since they describe the scatter of the
+ *        normals themselves rather than the surface they sit on.
  * @param {number} [opts.collinearTol=1e-9]  e1/e0 below this means the points are
  *        collinear and the plane is not determined.
  * @returns {null | {
@@ -136,8 +187,8 @@ export function fitTensor(positions, indices) {
  *     be exactly the kind of plausible wrongness this package exists to avoid.
  */
 export function fitPlane(positions, indices, opts = {}) {
-  const { normals, collinearTol = 1e-9 } = opts;
-  const { tensor, centroid, n } = fitTensor(positions, indices);
+  const { normals, weights, collinearTol = 1e-9 } = opts;
+  const { tensor, centroid, n } = fitTensor(positions, indices, { weights });
   if (n < 3) return null;
 
   const { values, vectors } = symmetricEigen3(tensor);

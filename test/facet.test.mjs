@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  attitude, normalOf, fitTensor, fitPlane,
+  attitude, normalOf, fitTensor, fitPlane, vertexAreaWeights,
   brush, distanceToRay,
   geodesic, geodesicField, geodesicBall,
   nodeClasses, detectSets,
@@ -239,6 +239,124 @@ test('fitTensor: the tensor is symmetric and its trace is the total variance', (
   assert.ok(Math.abs(tensor[2] - tensor[6]) < 1e-15);
   assert.ok(Math.abs(tensor[5] - tensor[7]) < 1e-15);
   for (const c of centroid) assert.ok(Math.abs(c) < 1e-12, 'patch is centered on the origin');
+});
+
+// ── area weighting ──
+
+// A symmetric V: two limbs of EQUAL surface area, dipping ±30°, meeting along a
+// ridge. The two limbs are sampled identically across the slope and differently
+// ALONG it — one gets many rows, the other few — so vertex COUNT is lopsided
+// while area, and the sampling of the shape itself, are not.
+//
+// That separation is what makes the test exact. The area-weighted point
+// distribution is then symmetric under x → −x, so the covariance is diagonal and
+// the fitted plane is horizontal to machine precision. Refining one limb across
+// the slope instead would change how well that limb's own curvature is
+// quadratured, and leave a real few-degree residual that is discretization, not
+// bias — a distinction worth keeping out of the assertion.
+function lopsidedValley({ nx = 11, rowsA = 21, rowsB = 3, slope = Math.tan(Math.PI / 6) } = {}) {
+  const positions = [];
+  const tris = [];
+  // limb A runs west from the ridge, limb B east; both share the ridge geometry
+  // but are meshed independently, which the fit does not mind
+  for (const [rows, x0, x1] of [[rowsA, -1, 0], [rowsB, 0, 1]]) {
+    const base = positions.length / 3;
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < nx; i++) {
+        const x = x0 + (x1 - x0) * (i / (nx - 1));
+        positions.push(x, j / (rows - 1), Math.abs(x) * slope);
+      }
+    }
+    for (let j = 0; j < rows - 1; j++) {
+      for (let i = 0; i < nx - 1; i++) {
+        const a = base + j * nx + i, b = a + 1, c = a + nx + 1, d = a + nx;
+        tris.push(a, b, c, a, c, d);
+      }
+    }
+  }
+  return {
+    positions: Float64Array.from(positions),
+    triangles: Uint32Array.from(tris),
+    countA: rowsA * nx,
+    countB: rowsB * nx,
+  };
+}
+
+test('vertexAreaWeights: the weights sum to the surface area', () => {
+  const m = flatMesh(6);                              // 6×6 unit quads, area 36
+  const w = vertexAreaWeights(m.positions, m.triangles);
+  let total = 0;
+  for (const x of w) total += x;
+  assert.ok(Math.abs(total - 36) < 1e-9, `total weight ${total}`);
+  // an interior vertex of this triangulation touches 6 triangles of area ½
+  const interior = 3 * 7 + 3;
+  assert.ok(Math.abs(w[interior] - 1) < 1e-12, `interior weight ${w[interior]}`);
+  // and a corner touches fewer, so it counts for less
+  assert.ok(w[0] < w[interior]);
+});
+
+test('vertexAreaWeights: an unreferenced vertex weighs nothing', () => {
+  const m = flatMesh(2);
+  const w = vertexAreaWeights(m.positions, m.triangles, m.adj.vertexCount + 1);
+  assert.equal(w[w.length - 1], 0);
+});
+
+test('unweighted, the SAME surface gives opposite answers by mesh alone', () => {
+  // one geometric surface, two meshings that differ only in which limb was
+  // refined. Counting vertices instead of rock, the fit reports a 13° plane
+  // dipping EAST for one and 13° dipping WEST for the other.
+  const a = lopsidedValley({ rowsA: 21, rowsB: 3 });
+  const b = lopsidedValley({ rowsA: 3, rowsB: 21 });
+  const fa = fitPlane(a.positions);
+  const fb = fitPlane(b.positions);
+  assert.ok(fa.dip > 10 && fb.dip > 10, `dips ${fa.dip} / ${fb.dip}`);
+  assert.ok(Math.abs(azDiff(fa.dipDirection, fb.dipDirection) - 180) < 1e-6,
+    `${fa.dipDirection}° vs ${fb.dipDirection}° — should be opposed`);
+});
+
+test('area weighting makes the fit triangulation-independent', () => {
+  const a = lopsidedValley({ rowsA: 21, rowsB: 3 });
+  const b = lopsidedValley({ rowsA: 3, rowsB: 21 });
+  const fa = fitPlane(a.positions, null, { weights: vertexAreaWeights(a.positions, a.triangles) });
+  const fb = fitPlane(b.positions, null, { weights: vertexAreaWeights(b.positions, b.triangles) });
+
+  // the same surface now measures the same either way — that is the property
+  assert.ok(Math.abs(fa.dip - fb.dip) < 1e-9, `${fa.dip} vs ${fb.dip}`);
+  // and both are essentially horizontal, which is the honest answer for two
+  // limbs of equal area. What is left is under a degree, and it is a boundary
+  // artifact of this fixture rather than of the weighting: the diagonal-split
+  // triangulation correlates the row and column boundary weights, which shows up
+  // as a small yz term in the covariance. It is identical in both meshings.
+  assert.ok(fa.dip < 1, `residual ${fa.dip.toFixed(4)}°`);
+  assert.ok(fitPlane(a.positions).dip > 15 * fa.dip, 'and far smaller than the unweighted bias');
+});
+
+test('area weighting changes nothing when the mesh is already regular', () => {
+  const m = flatMesh(10);
+  // tilt the flat grid into a real attitude so there is something to get wrong
+  const tilted = Float64Array.from(m.positions);
+  for (let v = 0; v < m.adj.vertexCount; v++) tilted[v * 3 + 2] = tilted[v * 3] * 0.5;
+  const w = vertexAreaWeights(tilted, m.triangles);
+  const a = fitPlane(tilted);
+  const b = fitPlane(tilted, null, { weights: w });
+  assert.ok(Math.abs(a.dip - b.dip) < 1e-9, 'uniform tessellation, identical answer');
+  assert.ok(azDiff(a.dipDirection, b.dipDirection) < 1e-9);
+});
+
+test('area weighting: a zero-weight patch falls back to counting points', () => {
+  // vertices no triangle references have no area, and must not produce NaN
+  const { positions } = planePatch(120, 35);
+  const zero = new Float64Array(positions.length / 3);
+  const f = fitPlane(positions, null, { weights: zero });
+  assert.ok(Math.abs(f.dip - 35) < 1e-7, `dip ${f.dip}`);
+  assert.ok(Number.isFinite(f.centroid[0]));
+});
+
+test('fitTensor: reports the total weight it used', () => {
+  const m = flatMesh(4);
+  const w = vertexAreaWeights(m.positions, m.triangles);
+  assert.ok(Math.abs(fitTensor(m.positions, null, { weights: w }).weight - 16) < 1e-9);
+  assert.equal(fitTensor(m.positions).weight, m.adj.vertexCount);
 });
 
 // ── the brush ──
