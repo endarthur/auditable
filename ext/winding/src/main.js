@@ -1,7 +1,7 @@
 // WINDING — Generalized Winding Number Block Model Evaluator
 // Main API: Winding.create({ device?, worker?, gpu? }), setMesh(), evaluate()
 
-import { buildBVH } from './bvh.js';
+import { buildBVH } from '../../groma/src/bvh.js';
 import { evaluateCPU } from './cpu.js';
 import { createGPUEvaluator, evaluateGPU } from './gpu.js';
 import { initWindingWorker, evaluateWorker } from './worker.js';
@@ -151,4 +151,4 @@ export { Winding, buildBVH };
 export { evaluateCPU, solidAngle, windingBrute, windingBVH } from './cpu.js';
 // Ray → mesh over the same BVH: the CPU half of mesh picking (the GPU ID-buffer
 // says WHICH mesh; this says which triangle, where, and which way it faces).
-export { raycastBVH } from './ray.js';
+export { raycastBVH } from '../../groma/src/ray.js';

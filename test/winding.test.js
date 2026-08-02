@@ -91,7 +91,7 @@ let buildBVH, solidAngle, windingBrute, windingBVH, evaluateCPU;
 
 async function loadModules() {
   if (buildBVH) return;
-  const bvhMod = await import('../ext/winding/src/bvh.js');
+  const bvhMod = await import('../ext/groma/src/bvh.js');
   const cpuMod = await import('../ext/winding/src/cpu.js');
   buildBVH = bvhMod.buildBVH;
   solidAngle = cpuMod.solidAngle;

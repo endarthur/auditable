@@ -1,0 +1,42 @@
+{
+  "name": "@gcu/groma",
+  "version": "0.1.0",
+  "description": "Robust geometry base: BVH build and ray queries, CSR mesh topology (vertex-vertex and vertex-face adjacency), connected components. Zero dependencies, typed arrays throughout.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": [
+    "bvh",
+    "raycast",
+    "mesh",
+    "topology",
+    "adjacency",
+    "csr",
+    "geometry",
+    "auditable",
+    "gcu"
+  ],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gentropic/auditable.git",
+    "directory": "ext/groma"
+  },
+  "homepage": "https://github.com/gentropic/auditable/tree/main/ext/groma",
+  "bugs": {
+    "url": "https://github.com/gentropic/auditable/issues"
+  }
+}

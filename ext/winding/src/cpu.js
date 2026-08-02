@@ -1,7 +1,7 @@
 // CPU winding number evaluation
 // Used for testing and as fallback when WebGPU is unavailable
 
-import { NODE_SIZE } from './bvh.js';
+import { NODE_SIZE } from '../../groma/src/bvh.js';
 
 const PI4 = 4 * Math.PI;
 

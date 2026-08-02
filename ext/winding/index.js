@@ -1,7 +1,7 @@
 // ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
 // @gcu/winding — Generalized winding number solid containment for triangle meshes. CPU + WebGPU evaluators with BVH acceleration and optional Web Worker offload.
 
-// ── src/bvh.js ──
+// ── ../groma/src/bvh.js ──
 
 // BVH (Bounding Volume Hierarchy) construction for triangle meshes
 // Flat array layout for GPU-friendly traversal
@@ -1071,7 +1071,7 @@ function rebaseRecord(from, to, d) {
   };
 }
 
-// ── src/ray.js ──
+// ── ../groma/src/ray.js ──
 
 // Ray → mesh, over the BVH this package already builds.
 //

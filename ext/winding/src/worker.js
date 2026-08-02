@@ -1,7 +1,7 @@
 // Web Worker for off-main-thread winding number evaluation (CPU and GPU paths)
 // Worker blob inlines all evaluation code via Function.toString() + JSON.stringify()
 
-import { NODE_SIZE } from './bvh.js';
+import { NODE_SIZE } from '../../groma/src/bvh.js';
 import { solidAngle, windingBrute, windingBVH, evaluateCPU, WINDING_BETA2 } from './cpu.js';
 import { createGPUEvaluator, evaluateGPU, WGSL_SHADER, WGSL_FINALIZE } from './gpu.js';
 
