@@ -1868,6 +1868,123 @@ await p.close();
   await rp.close();
 }
 
+
+// ═══ derived columns across a project round trip ═══════════════════════════════
+// The subsystems that hold most of the column-storage call sites — calc columns,
+// element persistence, styling restore, the paint column registry — had no
+// durable coverage at all. These assert the BEHAVIOR rather than the storage
+// shape ("a calc still resolves after a reload"), so they stay true through the
+// (location, name) re-keying and are what will prove it correct.
+{
+  const pc = await mkPage('sm2cols');
+  const before = await pc.evaluate(async () => {
+    const M = window._micro;
+    let t = 'XC,YC,ZC,FE\n';
+    for (let k = 0; k < 2; k++) for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++)
+      t += `${5 + i * 10},${5 + j * 10},${5 + k * 10},${10 + i}\n`;
+    await M.openBlob(new Blob([t]), 'w.csv', 'replace');
+    await new Promise((z) => setTimeout(z, 1400));
+    // a box over part of the model → a real category (paint) column with lineage
+    const V = [[0, 0, 0], [25, 0, 0], [25, 25, 0], [0, 25, 0], [0, 0, 25], [25, 0, 25], [25, 25, 25], [0, 25, 25]];
+    const T = [[1, 2, 3], [1, 3, 4], [5, 7, 6], [5, 8, 7], [1, 5, 6], [1, 6, 2], [2, 6, 7], [2, 7, 3], [3, 7, 8], [3, 8, 4], [4, 8, 5], [4, 5, 1]];
+    const obj = V.map((v) => `v ${v.join(' ')}`).join('\n') + '\n' + T.map((x) => `f ${x.join(' ')}`).join('\n');
+    await M.openBlob(new Blob([obj]), 'box.obj', 'add');
+    await new Promise((z) => setTimeout(z, 1400));
+    await M.runSolidRecipe({ geometry: 'box.obj', do: 'flag', which: 'inside', column: 'INBOX', value: 'IN', targets: ['w.csv'] });
+    await new Promise((z) => setTimeout(z, 800));
+
+    const L = M.layers().find((x) => x.name === 'w.csv');
+    // a calc, a calc ON that calc, and a calc referencing the PAINT column —
+    // the three composition shapes the resolver core exists to support
+    M.applyCalcCols(L, [
+      { name: 'DBL', expr: 'FE * 2' },
+      { name: 'QUAD', expr: 'DBL * 2' },
+      { name: 'TAG', expr: 'if(INBOX == "IN", 1, 0)' },
+    ]);
+    await M.materializeCalcCol(L, 'DBL');                   // → a Parquet sidecar matcol
+    await new Promise((z) => setTimeout(z, 800));
+    M.setLayerColorSel(L, 'paint:INBOX');
+    M.setRampCfg(L, { mode: 'fixed', lo: 1, hi: 9 });
+
+    const qd = await M.realizeCalc(L, 'QUAD');
+    const tg = await M.realizeCalc(L, 'TAG');
+    const paint = M.paintColByName(L, 'INBOX');
+    return {
+      calc: (L.calcCols || []).map((c) => [c.name, c.expr]),
+      census: M.schemaExt(L, L.docs.blockDoc.header).map((c) => c.name),
+      quad: [...qd.slice(0, 5)],
+      tagSum: [...tg].reduce((a, b) => a + b, 0),
+      mat: (M.matColGet(L, 'DBL') || {}).name,
+      matVals: [...(M.matColGet(L, 'DBL').fvalues || []).slice(0, 5)],
+      paintDict: paint ? paint.dict.filter(Boolean) : null,
+      paintNonBlank: paint ? [...paint.codes].filter((c) => c).length : 0,
+      colorSel: L.colorSel,
+      exportCols: (M.exportColumnsOf(L) || []).map((c) => (typeof c === 'string' ? c : c.name)),
+    };
+  });
+  // materializing DBL moves it OUT of calcCols and into the sidecar, which is the
+  // point of materializing — so QUAD is now a calc over a MATERIALIZED column, and
+  // TAG a calc over a PAINT column. Both composition shapes, in one fixture.
+  chk(`round trip: the fixture builds paint + calc-over-matcol + calc-over-paint (${before.calc.map((c) => c[0])})`,
+    before.calc.length === 2 && before.mat === 'DBL' && before.paintNonBlank === 16
+    && before.quad[0] === 40 && before.tagSum === 16);
+
+  await saveProject(pc);
+  await pc.evaluate(async () => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2cols');
+    await window._micro.openProjectDir(dir);
+  });
+  await pc.waitForFunction(() => window._micro.layers().some((L) => L.name === 'w.csv'), null, { timeout: 60000 });
+  await new Promise((z) => setTimeout(z, 1500));
+
+  const after = await pc.evaluate(async () => {
+    const M = window._micro;
+    const L = M.layers().find((x) => x.name === 'w.csv');
+    const qd = await M.realizeCalc(L, 'QUAD');
+    const tg = await M.realizeCalc(L, 'TAG');
+    const paint = M.paintColByName(L, 'INBOX');
+    const mc = M.matColGet(L, 'DBL');
+    await M.ensureStoredValues(L, new Set(['dbl']));
+    return {
+      calc: (L.calcCols || []).map((c) => [c.name, c.expr]),
+      census: M.schemaExt(L, L.docs.blockDoc.header).map((c) => c.name),
+      quad: [...qd.slice(0, 5)],
+      tagSum: [...tg].reduce((a, b) => a + b, 0),
+      mat: (mc || {}).name,
+      matVals: mc && mc.fvalues ? [...mc.fvalues.slice(0, 5)] : null,
+      paintDict: paint ? paint.dict.filter(Boolean) : null,
+      paintNonBlank: paint ? [...paint.codes].filter((c) => c).length : 0,
+      colorSel: L.colorSel,
+      exportCols: (M.exportColumnsOf(L) || []).map((c) => (typeof c === 'string' ? c : c.name)),
+      row: M.extendRow(L, await M.fetchLayerRow(L, 0), 0),
+    };
+  });
+
+  chk(`round trip: calc columns come back with their expressions (${JSON.stringify(after.calc)})`,
+    JSON.stringify(after.calc) === JSON.stringify(before.calc));
+  chk(`round trip: a calc ON a calc still resolves (QUAD ${after.quad.slice(0, 3)})`,
+    JSON.stringify(after.quad) === JSON.stringify(before.quad));
+  chk(`round trip: a calc referencing a PAINT column still resolves (sum ${after.tagSum})`,
+    after.tagSum === before.tagSum && after.tagSum > 0);
+  chk(`round trip: the materialized column keeps its values (${after.matVals && after.matVals.slice(0, 3)})`,
+    after.mat === 'DBL' && JSON.stringify(after.matVals) === JSON.stringify(before.matVals));
+  chk(`round trip: the paint column keeps its dictionary and codes (${after.paintDict}, ${after.paintNonBlank})`,
+    JSON.stringify(after.paintDict) === JSON.stringify(before.paintDict)
+    && after.paintNonBlank === before.paintNonBlank);
+  // this one FAILED when written: the manifest emitted every materialized column
+  // and then every category column, so (INBOX, DBL) came back as (DBL, INBOX) and
+  // the census shifted under every positional consumer after a reload
+  chk(`round trip: the census order is stable (${JSON.stringify(after.census)})`,
+    JSON.stringify(after.census) === JSON.stringify(before.census));
+  chk(`round trip: the EXPORT column list is stable too (${after.exportCols.length} columns)`,
+    JSON.stringify(after.exportCols) === JSON.stringify(before.exportCols) && after.exportCols.length > 0);
+  chk(`round trip: styling restores (color by ${after.colorSel})`,
+    after.colorSel === before.colorSel && before.colorSel === 'paint:INBOX');
+  chk('round trip: a full extended row reads back every census slot',
+    Array.isArray(after.row) && after.row.length === after.census.length);
+  await pc.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
