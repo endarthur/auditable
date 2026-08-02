@@ -1774,6 +1774,49 @@ await p.close();
   await rp.close();
 }
 
+
+// ── LOCATIONS: an element's record spaces, and the count that used to lie ──────
+// attrRowCountOf fell through to renderer.layerElementCount, so a mesh reported
+// its TRIANGLE count as though those were attribute rows. Every caller happened
+// to guard with `kind !== 'mesh'` separately, so the wrong number was latent
+// rather than visible — exactly the kind of thing that bites the first caller
+// who forgets. These assert the count is honest and the record spaces are named.
+{
+  const rp = await mkPage('sm2loc');
+  const r = await rp.evaluate(async () => {
+    const M = window._micro;
+    let t = 'XC,YC,ZC,FE\n';
+    for (let k = 0; k < 2; k++) for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++)
+      t += `${5 + i * 10},${5 + j * 10},${5 + k * 10},${40 + k}\n`;
+    await M.openBlob(new Blob([t]), 'blocks.csv', 'replace');
+    await new Promise((z) => setTimeout(z, 1200));
+    // a quad -> 4 vertices, 2 faces: the two counts DIFFER, so a mix-up shows
+    const obj = ['v 0 0 80', 'v 40 0 80', 'v 40 40 80', 'v 0 40 80', 'f 1 2 3', 'f 1 3 4'].join('\n') + '\n';
+    await M.openBlob(new Blob([obj]), 'lid.obj', 'add');
+    await new Promise((z) => setTimeout(z, 1500));
+    const B = M.layers().find((L) => L.name === 'blocks.csv');
+    const Me = M.layers().find((L) => L.kind === 'mesh');
+    return {
+      blockRows: M.attrRowCountOf(B), blockHas: M.hasRecords(B), blockLoc: M.primaryLocationOf(B),
+      blockLocs: M.locationsOf(B).map((l) => [l.name, l.count, l.shape]),
+      meshRows: M.attrRowCountOf(Me), meshHas: M.hasRecords(Me), meshLoc: M.primaryLocationOf(Me),
+      meshLocs: M.locationsOf(Me).map((l) => [l.name, l.count]),
+      meshLine: M.propKindLine(Me),
+      meshTris: M.renderer.layerElementCount(Me.id),
+    };
+  });
+  chk(`locations: a block model is one 'cells' location of ${r.blockRows} rows`,
+    r.blockRows === 32 && r.blockHas === true && r.blockLoc === 'cells'
+    && JSON.stringify(r.blockLocs) === JSON.stringify([['cells', 32, 'table']]));
+  chk(`locations: a mesh reports ZERO attribute rows, not its ${r.meshTris} triangles`,
+    r.meshRows === 0 && r.meshHas === false && r.meshTris === 2);
+  chk(`locations: the mesh names BOTH record spaces (${JSON.stringify(r.meshLocs)})`,
+    r.meshLoc === 'vertices' && JSON.stringify(r.meshLocs) === JSON.stringify([['vertices', 4], ['faces', 2]]));
+  chk(`locations: the properties line says so too - "${r.meshLine}"`,
+    /4 vertices/.test(r.meshLine) && /2 faces/.test(r.meshLine));
+  await rp.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

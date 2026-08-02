@@ -2617,7 +2617,7 @@ async function selectByGridSurface(gridL, { mode = 'below', meshB = null, target
   const epoch = ++_selEpoch;
   if (combine === 'replace') clearSelection({ silent: true });
   const v = combine === 'subtract' ? 0 : 1;
-  const Ls = targets || _layers.filter((L) => L.visible && L.kind !== 'mesh' && !L.docs.gridDoc && attrRowCountOf(L) > 0);
+  const Ls = targets || _layers.filter((L) => L.visible && hasRecords(L) && !L.docs.gridDoc);
   const bbox4 = targetsXYBbox(Ls);
   const surfA = surfaceFromGrid(await residentGridForEval(gridL, bbox4));
   const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? surfaceFromGrid(await residentGridForEval(meshB, bbox4)) : null;
@@ -2734,7 +2734,7 @@ async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = n
   const epoch = ++_selEpoch;
   if (combine === 'replace') clearSelection({ silent: true });
   const v = combine === 'subtract' ? 0 : 1;
-  const Ls = targets || _layers.filter((L) => L.visible && L.kind !== 'mesh' && attrRowCountOf(L) > 0);
+  const Ls = targets || _layers.filter((L) => L.visible && hasRecords(L));
   let S = null, SB = null;                                 // the sparse-path BVHs, built lazily
   for (let li = 0; li < Ls.length; li++) {
     const L = Ls[li];
@@ -5780,7 +5780,7 @@ function openSolidDialog(meshL0) {
   const gridsG = _layers.filter((L) => L.docs.gridDoc);
   const geoms = [...solids, ...gridsG];
   if (!geoms.length) { $('#meta').textContent = 'select by solid / surface: open a context-tier mesh (.msh / .obj / small .ply) or a grid (.tif / .grd / .asc) first'; return; }
-  const elements = _layers.filter((L) => L.kind !== 'mesh' && !L.docs.gridDoc && attrRowCountOf(L) > 0);
+  const elements = _layers.filter((L) => hasRecords(L) && !L.docs.gridDoc);
   if (!elements.length) { $('#meta').textContent = 'select by solid / surface: no element layers to classify'; return; }
   _sbDlg = {
     solid: (meshL0 && geoms.includes(meshL0) ? meshL0 : geoms[0]).id,
@@ -5950,7 +5950,7 @@ function renderSolidDialog() {
       mkRadios(mkRow2('combine'), 'sbcomb', [['replace', 'replace'], ['add', 'add'], ['subtract', 'subtract']], d.combine, (k) => { d.combine = k; });
     }
     const tRow = mkRow2('layers');
-    for (const L of _layers.filter((x) => x.kind !== 'mesh' && !x.docs.gridDoc && attrRowCountOf(x) > 0)) {
+    for (const L of _layers.filter((x) => hasRecords(x) && !x.docs.gridDoc)) {
       const flaggable = d.act !== 'flag' || !!layerTableHeader(L);
       const lab = document.createElement('label');
       if (!flaggable) { lab.className = 'dis'; lab.title = 'flag columns need a table-backed layer'; }
@@ -6067,7 +6067,7 @@ async function sbStateFromParams(p) {
     d.ratioLid = M.id;
   } else {
     const wanted = Array.isArray(p.targets) && p.targets.length ? p.targets.map(String) : null;
-    const elements = _layers.filter((L) => L.kind !== 'mesh' && !L.docs.gridDoc && attrRowCountOf(L) > 0);
+    const elements = _layers.filter((L) => hasRecords(L) && !L.docs.gridDoc);
     for (const L of elements) if (wanted ? wanted.some((n2) => L.name === n2 || L.label === n2) : L.visible) d.targets.add(L.id);
     if (wanted) {
       const missing = wanted.filter((n2) => !elements.some((L) => L.name === n2 || L.label === n2));
@@ -10899,7 +10899,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
     if (b) b.click();
   } },
   { sep: true },
-  { label: 'Attribute table', kbd: 't', action: () => { const L = activeLayer(); if (L && L.kind !== 'mesh') openAttrTable(L); } },
+  { label: 'Attribute table', kbd: 't', action: () => { const L = activeLayer(); if (L && hasRecords(L)) openAttrTable(L); } },
   { label: 'Paint to column…', kbd: 'b', action: () => { const L = activeLayer(); if (L) openPaintPalette(L); } },
   { sep: true },
   { label: 'Filter…', kbd: '/', action: () => $('#filter').focus() },
@@ -12030,7 +12030,7 @@ const COMMANDS = [
   // validate-vs-drillholes temporarily DISABLED (pending a rework of the window) — when: false hides it everywhere
   { id: 'validate', group: 'Analyse', title: 'Validate vs drillholes…', kw: 'declustered sample bias check reconcile composite', when: () => false, run: (c) => openValidation(c.L) },
   { id: 'join', group: 'Analyse', title: 'Join / reconcile…', kw: 'merge compare delta reconciliation spatial key', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); _propTab = 'join'; openProps(); } },
-  { id: 'table', group: 'Analyse', title: 'Attribute table…', kw: 'rows data grid', when: (c) => c.L && c.L.kind !== 'mesh', run: (c) => openAttrTable(c.L) },
+  { id: 'table', group: 'Analyse', title: 'Attribute table…', kw: 'rows data grid', when: (c) => c.L && hasRecords(c.L), run: (c) => openAttrTable(c.L) },
   { id: 'filter', group: 'Analyse', title: 'Filter…', kw: 'query where expression', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); $('#filter').focus(); } },
   { id: 'scan', group: 'Analyse', title: 'Scan columns (stats)', kw: 'histogram quantiles mean', when: (c) => c.L && layerTableHeader(c.L), run: (c) => scanColumns(c.L).then(() => { if (_propOpen) renderProps(); }).catch(() => {}) },
   { id: 'measure', group: 'Analyse', title: 'Measure…', kw: 'distance ruler', run: () => armMeasure() },
@@ -12495,7 +12495,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'h') { const Lh = activeLayer(); if (Lh) { Lh.visible = !Lh.visible; applyTreeVisibility(); renderLayers(); $('#meta').textContent = `${Lh.label || Lh.name} ${Lh.visible ? 'shown' : 'hidden'}`; } }   // h: hide/show the active layer (compare-overlays flick)
   else if (k === 'H') soloActiveLayer();                  // ⇧H: solo the active layer (again = restore; re-solos if active changed)
   else if (k === 'F2') { const Lr = activeLayer(); if (Lr) { e.preventDefault(); renameActiveLayer(Lr); } }   // F2: rename (the Windows reflex)
-  else if (k === 't') { const Lt = activeLayer(); if (Lt && Lt.kind !== 'mesh') openAttrTable(Lt); }
+  else if (k === 't') { const Lt = activeLayer(); if (Lt && hasRecords(Lt)) openAttrTable(Lt); }
   else if (k === 'r') armSelect('rect');
   else if (k === 'v') armSelect('lasso');
   else if (k === 'b') { const Lb = activeLayer(); if (Lb) openPaintPalette(Lb); }
@@ -12986,10 +12986,66 @@ function attrColumnsOf(L) {
   if (L.docs.lasDoc) return [{ name: 'X', num: true }, { name: 'Y', num: true }, { name: 'Z', num: true }, { name: 'intensity', num: true }, { name: 'classification', num: true }];
   return null;
 }
-function attrRowCountOf(L) {
+// ── LOCATIONS — where an element's records live ───────────────────────────────
+// A layer is an ELEMENT, and its records live in one or more named LOCATIONS: a
+// record space at a stated granularity. A column is keyed `(location, name)`, so
+// a collar attribute and an interval assay never collide on one element
+// (column-substrate spec §3.1). The element MANIFEST has spoken this language
+// since it landed — every column it writes carries a `loc` — while the in-memory
+// model still assumed one flat record space per layer. These functions are that
+// vocabulary, and `primaryLocationOf` is the naming rule the manifest already
+// used, lifted out of it so there is one definition rather than two.
+//
+// Nearly every element has exactly ONE location, which is why the flat
+// assumption survived this long: a block model is `cells`, a grid is `nodes`, a
+// point cloud is `points`. A surface mesh is the first with genuinely two —
+// `vertices` and `faces` — which is what forces the key to become explicit.
+function primaryLocationOf(L) {
+  const d = (L && L.docs) || {};
+  if (d.meshDoc) return 'vertices';
+  if (d.gridDoc) return 'nodes';
   const h = layerHeaderOf(L);
+  return (L && L.dh) || (h && h.kind === 'drillholes') ? 'intervals' : 'cells';
+}
+// The record spaces an element's GEOMETRY defines, whether or not attributes
+// hang off them yet. Distinct from attrRowCountOf below, and the distinction is
+// the point: a mesh has 4 M triangles as geometry and no attribute rows at all.
+function locationsOf(L) {
+  const d = (L && L.docs) || {};
+  if (d.meshDoc) {
+    const h = d.meshDoc.header || {};
+    if (h.soup) return [];                                 // streamed — keeps no CPU records to attach to
+    return [{ name: 'vertices', count: h.vertexCount | 0, shape: 'table' },
+            { name: 'faces', count: h.triCount | 0, shape: 'table' }];
+  }
+  const n = attrRowCountOf(L);
+  return n ? [{ name: primaryLocationOf(L), count: n, shape: d.gridDoc ? 'array' : 'table' }] : [];
+}
+// How many ATTRIBUTE ROWS a location has — NOT how many things the renderer drew.
+//
+// Those two used to be the same expression: the old body fell through to
+// `renderer.layerElementCount`, so a mesh (whose header carries vertexCount and
+// triCount but no `count`) reported its TRIANGLE count — a plausible number with
+// no attribute row behind it. Nothing here guarded that; roughly fifteen call
+// sites each separately remembered to write `L.kind !== 'mesh'`, and any that
+// forgot got the wrong answer silently. The guard belongs in one place, so it is
+// here, and `hasRecords` below is what those call sites should ask.
+//
+// A mesh's vertices and faces are real record spaces (see locationsOf) but carry
+// no attribute table yet — the provider that gives them one is a later step, and
+// until it lands zero is the honest answer rather than a stand-in.
+function attrRowCountOf(L, loc) {
+  const d = (L && L.docs) || {};
+  if (d.meshDoc) return 0;
+  const h = layerHeaderOf(L);
+  const name = loc || primaryLocationOf(L);
+  if (name !== primaryLocationOf(L)) return 0;             // single-location elements: nothing else exists
   return (h && h.count) || renderer.layerElementCount(L.id) || 0;
 }
+// "Does this location have an attribute table behind it?" — the predicate the
+// paint / filter / export / join call sites want, in place of hand-rolled
+// kind tests.
+function hasRecords(L, loc) { return attrRowCountOf(L, loc) > 0; }
 function openAttrTable(L) {
   if (_attrTables.has(L.id)) { const t2 = _attrTables.get(L.id); t2.win.el.style.zIndex = ++_fwinZ; t2.win.el.classList.remove('min'); return; }
   const cols = attrColumnsOf(L);
@@ -13171,8 +13227,8 @@ function layerMenu(L, x, y) {
     ...(reinterpretOptions(L).length ? [{ label: 'Reinterpret as…', action: () => setTimeout(() => reinterpretMenu(L, x, y), 0) }] : []),
     ...(canReloadLayer(L) ? [{ label: 'Reload from disk', action: () => reloadLayerFromDisk(L) }] : []),
     { sep: true },                                          // ── inspect / analyze ──
-    ...(L.kind !== 'mesh' ? [{ label: 'Attribute table…', kbd: 't', action: () => openAttrTable(L) }] : []),
-    ...(L.kind !== 'mesh' ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
+    ...(hasRecords(L) ? [{ label: 'Attribute table…', kbd: 't', action: () => openAttrTable(L) }] : []),
+    ...(hasRecords(L) ? [{ label: 'Filter…', kbd: '/', action: () => { setActiveLayer(L.id); $('#filter').focus(); } }] : []),
     ...(layerTableHeader(L) && numericColsOf(L).length ? [{ label: 'Stats…', action: () => openStats(L) }] : []),
     ...(gridAxesOf(L) ? [{ label: 'Grade-tonnage…', action: () => openGradeTonnage(L) }, { label: 'Swath plot…', action: () => openSwath(L) }] : []),
     ...(L._filterMask ? [{ label: 'Filter → selection', action: () => filterToSelection(L) }] : []),
@@ -13333,7 +13389,14 @@ function layerHeaderOf(L) {
 function propKindLine(L) {
   const h = layerHeaderOf(L);
   const n = renderer.layerElementCount(L.id) || 0;
-  if (L.kind === 'mesh') return `${h && h.soup ? 'streamed' : 'context'} mesh · ${n.toLocaleString()} triangles`;
+  if (L.kind === 'mesh') {
+    // a mesh is the one element with two record spaces, so name both rather than
+    // reporting triangles as though they were the whole story
+    const tier = h && h.soup ? 'streamed' : 'context';
+    const locs = locationsOf(L);
+    if (!locs.length) return `${tier} mesh · ${n.toLocaleString()} triangles`;   // streamed: no CPU records
+    return `${tier} mesh · ${locs.map((l) => `${l.count.toLocaleString()} ${l.name}`).join(' · ')}`;
+  }
   if (L.kind === 'table') return `table · ${(h ? h.count : 0).toLocaleString()} rows · ${h ? h.columns.length : 0} columns · no geometry`;
   if (L.dh) return `drillholes · ${n.toLocaleString()} intervals`;
   if (L.docs.blockDoc && L.docs.blockDoc.header.grid) return `block model · ${n.toLocaleString()} blocks`;
@@ -14769,7 +14832,7 @@ function layerColumnsOps(L, h, loc, idp) {
 }
 function buildElementManifest(L) {
   const h = layerTableHeader(L); if (!h) return null;
-  const loc = (L.dh || h.kind === 'drillholes') ? 'intervals' : 'cells';
+  const loc = primaryLocationOf(L);                        // one naming rule, shared with the in-memory model
   const m = h.mapping || {};
   const src = basename(L.name);
   const fmt = /\.parquet$/i.test(src) ? 'parquet' : (h.dm ? 'dm' : 'csv');
@@ -17146,7 +17209,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(hit);
 });
 
-window._micro = { openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
