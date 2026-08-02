@@ -31,12 +31,12 @@ export function buildMeshChunk({ vertices, triangles, frame }) {
 
 // A regular grid IS a single-valued heightfield — triangulate its lattice into a
 // mesh chunk with per-vertex smooth normals (grid-gradient central differences)
-// and a per-vertex value (the caller maps it to a colour via its own colormap).
+// and a per-vertex value (the caller maps it to a color via its own colormap).
 // Quads touching a nodata corner are dropped → clean holes. Coords are frame-
 // local. Strided to a display cap by the caller (bounded triangle count).
 // flatZ (a world elevation) makes a FLAT horizontal sheet at that z instead of a
 // heightfield — for a 2D data grid (grade/geochem) with no DEM; `values` stays the
-// grid value so the caller still colours by it, and the normal is straight up.
+// grid value so the caller still colors by it, and the normal is straight up.
 export function buildHeightfieldMesh(grid, { stride = 1, frame = null, flatZ = null } = {}) {
   const { nx, ny, data, x0, y0, dx, dy, nodata } = grid;
   const o = (frame && frame.origin) || [0, 0, 0];

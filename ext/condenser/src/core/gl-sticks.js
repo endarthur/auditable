@@ -4,7 +4,7 @@
 // segment axis and the axis⊥view direction), fragment ray-capsule test with a
 // real gl_FragDepth + surface normal (headlight shading). <2px → splat
 // demotion; a cheap no-gl_FragDepth program serves fully-demoted far chunks.
-// Radius is a live per-layer uniform (world metres) — the "stick thickness"
+// Radius is a live per-layer uniform (world meters) — the "stick thickness"
 // knob. Mask / section / picked-glow / repaint identical to blocks.
 
 import { makeProgram } from './gl-util.js';
@@ -25,7 +25,7 @@ layout(location=3) in float aCat;       // uint8 raw
 layout(location=4) in uint aRec;        // uint32 partitioned record id
 uniform mat4 uViewProj;
 uniform vec3 uEye;
-uniform float uRadius;                  // stick radius, world metres
+uniform float uRadius;                  // stick radius, world meters
 uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat, uOrtho;
 uniform vec3 uFwd;
 uniform int uColorMode;                 // 0 elevation | 1 channel | 2 category | 3 solid

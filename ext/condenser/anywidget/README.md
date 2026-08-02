@@ -39,10 +39,10 @@ build time and the bytes that must reach the browser):
 Read that honestly:
 
 - **For a full regular lattice, pyvista wins outright.** `ImageData` is
-  *implicit* — VTK materialises no geometry at all. If your model is a complete
+  *implicit* — VTK materializes no geometry at all. If your model is a complete
   box and you are happy in a VTK pipeline, use pyvista.
 - **A real model is not a box.** The moment you keep only the cells that exist,
-  `threshold` materialises explicit hexahedra — 547k points for 150k cells —
+  `threshold` materializes explicit hexahedra — 547k points for 150k cells —
   and it is 10× slower to build and ~4× more to ship.
 - **Sub-blocked models cannot be `ImageData` at all**, so the only route is
   glyphing cubes: 540k cells and 720k points for 90k blocks, ~11× the bytes.
@@ -131,7 +131,7 @@ minimum-curvature code micro uses, so a hole lands in the same place in both.
 | **layers** | show/hide each layer |
 | **snapshot** | save the view as a PNG |
 
-Plus a **colour legend** bottom-right, a **pick readout** top-right, and a
+Plus a **color legend** bottom-right, a **pick readout** top-right, and a
 **scrub bar** whenever a section exists — slide the plane through the model.
 
 It is deliberately small. The toolbar carries what is awkward from Python
@@ -148,8 +148,8 @@ Per **layer** — every one is live, set it and the view updates with no re-send
 | trait | |
 |---|---|
 | `color` | `'z'` · `'value'` · `'category'` · `'rgb'` · `'flat'` |
-| `ramp` | `viridis` · `magma` · `turbo` · `greys` · `spectral` · `fire` |
-| `clip` | `[lo, hi]` — clamp the colour scale |
+| `ramp` | `viridis` · `magma` · `turbo` · `grays` · `spectral` · `fire` |
+| `clip` | `[lo, hi]` — clamp the color scale |
 | `threshold` | `[lo, hi]` — **cutoff on the value column** |
 | `filter_mode` | `'isolate'` (hide the rest) or `'dim'` |
 | `opacity` | screen-door see-through, `1.0` = solid |
@@ -235,8 +235,8 @@ hidden layer, an isolate-filtered element, or a block outside the section slab
 is not merely behind something, so the tube leaves it alone.
 
 The two modes disagree slightly at the marquee's edge — through tests an
-element's **centre**, surface tests its rendered **pixels**, so a wide splat or a
-long drillhole interval can paint inside a box its centre falls outside of
+element's **center**, surface tests its rendered **pixels**, so a wide splat or a
+long drillhole interval can paint inside a box its center falls outside of
 (measured: the tube contains ~96% of a surface selection, with the difference
 entirely in points and holes, none in blocks).
 
@@ -329,7 +329,7 @@ notebook should be `1`, not `0`.
 - The payload crosses the Jupyter comm channel as one blob, so a layer is
   bounded by your deployment's message limit — roughly 2M blocks ≈ 62 MB, and a
   5M-point cloud is ~162 MB, which is past what many deployments allow.
-  Coordinates go over as f64 today even though the engine quantises them per
+  Coordinates go over as f64 today even though the engine quantizes them per
   chunk anyway, so there is a straightforward ~3× saving available here that
   has not been taken yet.
 

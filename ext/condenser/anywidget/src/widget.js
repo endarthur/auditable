@@ -26,10 +26,11 @@ const RAMPS = {
   viridis: null,                                           // the engine default
   magma: [[0, 0, 4], [80, 18, 123], [182, 54, 121], [252, 137, 97], [252, 253, 191]],
   turbo: [[48, 18, 59], [28, 156, 220], [96, 252, 100], [249, 190, 60], [122, 4, 3]],
-  greys: [[20, 20, 20], [90, 90, 90], [150, 150, 150], [205, 205, 205], [250, 250, 250]],
+  grays: [[20, 20, 20], [90, 90, 90], [150, 150, 150], [205, 205, 205], [250, 250, 250]],
   spectral: [[94, 79, 162], [102, 194, 165], [255, 255, 191], [253, 174, 97], [158, 1, 66]],
   fire: [[10, 5, 40], [120, 20, 90], [220, 80, 40], [250, 180, 50], [255, 250, 200]],
 };
+RAMPS.greys = RAMPS.grays;    // matplotlib spells it 'Greys'; don't punish the muscle memory
 
 const TYPES = { f64: Float64Array, f32: Float32Array, u32: Uint32Array, u16: Uint16Array, u8: Uint8Array };
 
@@ -62,7 +63,7 @@ function decodePayload(raw) {
   return { frame: head.frame, layers };
 }
 
-// which engine colour mode a `color` choice means, per element kind. The engine
+// which engine color mode a `color` choice means, per element kind. The engine
 // numbers differ by pipeline (points: 1 = intensity, blocks/sticks: 1 = grade),
 // so the widget speaks names and translates here.
 function modeOf(color, kind, cols) {
@@ -350,7 +351,7 @@ export function render({ model, el }) {
     return [lo, hi];
   };
 
-  // the legend follows the first VISIBLE layer coloured by value
+  // the legend follows the first VISIBLE layer colored by value
   const legendInfo = () => {
     const st = styles();
     for (let i = 0; i < st.length; i++) {

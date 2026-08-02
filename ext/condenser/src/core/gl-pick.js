@@ -369,7 +369,7 @@ const MISS_CLEAR = new Uint32Array([0xFFFFFFFF, 0xFFFFFFFF, 0, 0]);
 // WebGL2 has no gl_PrimitiveID, and un-indexing a mesh purely to carry a
 // per-vertex triangle id would triple its vertex memory — for a click.
 //
-// The geometry and the SECTION behaviour mirror gl-mesh exactly (including the
+// The geometry and the SECTION behavior mirror gl-mesh exactly (including the
 // trace-over-the-wall depth flatten): you must pick what you see, or the ID
 // buffer is lying.
 const PICK_VERT_MSH = `#version 300 es

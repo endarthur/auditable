@@ -1,9 +1,9 @@
 // @gcu/condenser — DEFERRED RE-SHADE (render-paths spec §2). Once the scene
 // has converged, the pick pipeline's full-viewport (record, layer|face) id
-// buffer is kept as a texture, and COSMETIC changes — ramp, clip, colour
+// buffer is kept as a texture, and COSMETIC changes — ramp, clip, color
 // mode, filter (dim), selection, chanTex values — run ONE fullscreen resolve
 // pass per element layer instead of re-rasterizing the geometry. O(pixels)
-// at any model size: a ramp drag over a 50M-block model recolours at refresh
+// at any model size: a ramp drag over a 50M-block model recolors at refresh
 // rate instead of restarting the accumulation.
 //
 // Two GPU pieces, no CPU data needed:
@@ -12,9 +12,9 @@
 //             (one point-draw over the layer's chunks; works for streamed
 //             models whose columns were never CPU-resident).
 //   resolve — fullscreen triangle per layer: id → attr texel → the SAME
-//             colour math the raster shaders use (parity by construction,
+//             color math the raster shaders use (parity by construction,
 //             including the raster shaders' per-kind wash order), written
-//             into the EDL colour buffer; `discard` leaves background /
+//             into the EDL color buffer; `discard` leaves background /
 //             mesh / other-layer pixels untouched, and the untouched EDL
 //             depth still shades the presented frame.
 //
@@ -78,7 +78,7 @@ flat in vec4 vAttr;
 out vec4 outAttr;
 void main() { outAttr = vAttr; }`;
 
-// ── the resolve pass: id → attrs → the raster shaders' colour math ──────────
+// ── the resolve pass: id → attrs → the raster shaders' color math ──────────
 const RESOLVE_VERT = `#version 300 es
 void main() {
   vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
@@ -161,9 +161,9 @@ void main() {
     else if (face == 6u) shade = (0.55 + 0.45 * max(dot(uCutNormal, uLightDir), 0.0)) * 0.85;   // the section cut wall
     // face 7 (NO_FACE): a demoted splat — unlit, as rasterized (and no edges)
     // BLOCK EDGE LINES (gl-blocks' exact math): the capture depth gives back
-    // the hit point — unproject it, snap the block centre from the face plane
+    // the hit point — unproject it, snap the block center from the face plane
     // + the regular lattice, and the box-local coords fall out. Sub-blocked
-    // models (per-block half-dims) can't reconstruct the centre this way and
+    // models (per-block half-dims) can't reconstruct the center this way and
     // fall back to the re-raster before we get here.
     if (uEdgesOn > 0.5 && face < 7u) {
       float dz = texelFetch(uDepth, px, 0).r;
@@ -229,7 +229,7 @@ void main() {
 }`;
 
 export function createResolvePipeline(gl) {
-  // the bake target is RGBA32F — colour-renderable only with this extension;
+  // the bake target is RGBA32F — color-renderable only with this extension;
   // absent (rare on WebGL2-era GPUs) the whole feature quietly disables and
   // every cosmetic change re-rasters, exactly as before.
   const floatOk = !!gl.getExtension('EXT_color_buffer_float');
@@ -328,7 +328,7 @@ export function createResolvePipeline(gl) {
     hasBake(layerId) { return bakes.has(layerId); },
     dropBake(layerId) { const b = bakes.get(layerId); if (b) { gl.deleteTexture(b.tex); bakes.delete(layerId); } },
     // one fullscreen pass for one layer, into the CURRENTLY BOUND framebuffer
-    // (the EDL colour buffer). `u` carries the same per-layer values the raster
+    // (the EDL color buffer). `u` carries the same per-layer values the raster
     // path's begin/setup functions computed. Depth stays untouched.
     resolveLayer(idTex, layerId, u) {
       const b = bakes.get(layerId);

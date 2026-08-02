@@ -29,7 +29,7 @@ void main() {
 }`;
 
 // Per-vertex drape (uVColor) + smooth normals (uVNormal) are OPT-IN — default 0
-// keeps the flat-shaded solid-tint behaviour byte-for-byte. The heightfield
+// keeps the flat-shaded solid-tint behavior byte-for-byte. The heightfield
 // surface sets both: vColor from a colormap, vNormal from the grid gradient, and
 // the normal's z is divided by uZExag (inverse-transpose of the display z-scale)
 // so lighting matches the vertically-exaggerated relief.
@@ -76,7 +76,7 @@ void main() {
 // plane is edge-on (invisible). This program pulls each in-slab fragment's DEPTH
 // onto the camera-side slab face (minus an epsilon), so the whole in-slab mesh
 // projects onto the section and draws over the wall — the wireframe-trace-on-a-
-// section-plot look. Colour/shading unchanged; costs early-z only while sectioned.
+// section-plot look. Color/shading unchanged; costs early-z only while sectioned.
 const FRAG_OVERLAY = `#version 300 es
 precision highp float;
 in vec3 vWorldPos;
@@ -179,7 +179,7 @@ export function createMeshPipeline(gl) {
     const { prog, uni } = section ? overlay : base;
     gl.useProgram(prog);
     gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
-    gl.uniform1f(uni.vColor, vcolor ? 1 : 0);              // heightfield drape colours
+    gl.uniform1f(uni.vColor, vcolor ? 1 : 0);              // heightfield drape colors
     gl.uniform1f(uni.vNormal, vnormal ? 1 : 0);            // smooth grid normals
     gl.uniform1f(uni.zExag, s.zExag || 1);                 // normal correction under exaggeration
     gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);

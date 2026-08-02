@@ -302,7 +302,7 @@ const r = await page.evaluate(async (port) => {
   out.throughTotal = Object.values(out.throughSel).reduce((a, v) => a + v.length, 0);
   // …and a surface selection is a SUBSET of the through selection (same box)
   // how much of the surface set does the tube contain? Not 100%: the tube tests
-  // an element's CENTRE, the surface tests its rendered PIXELS, so an element
+  // an element's CENTER, the surface tests its rendered PIXELS, so an element
   // straddling the marquee edge can be caught by one and not the other.
   {
     let inBoth = 0, total = 0, missByLayer = {};
@@ -398,12 +398,12 @@ chk(`sectioned=False exempts a layer (exempt ${r.sectionLit.toLocaleString()} px
   r.sectionAllLit < r.sectionLit);
 chk(`pick returns layer + row (${JSON.stringify(r.selection)})`,
   r.selection && Number.isInteger(r.selection.row) && r.selection.row >= 0 && typeof r.selection.name === 'string' && r.selection.name.length > 0);
-chk(`toolbar renders (${r.tbButtons} buttons) with the colour legend`, r.tbButtons === 11 && r.legendShown);
+chk(`toolbar renders (${r.tbButtons} buttons) with the color legend`, r.tbButtons === 11 && r.legendShown);
 chk(`rectangle select returns rows in the packed wire format (${r.rectTotal.toLocaleString()} rows over ${Object.keys(r.rectSel).length} layer(s))`,
   r.rectTotal > 0 && Object.keys(r.rectSel).length >= 1 && r.rectCursor === 'crosshair');
 chk(`select THROUGH catches the volume behind the surface (${r.throughTotal.toLocaleString()} vs ${r.rectTotal.toLocaleString()} rows on the same box)`,
   r.throughOn === true && r.throughOff === false && r.throughTotal > r.rectTotal * 1.5);
-chk(`the tube contains ${(r.subsetFrac * 100).toFixed(1)}% of the surface selection (edge elements differ: centre vs pixels)`,
+chk(`the tube contains ${(r.subsetFrac * 100).toFixed(1)}% of the surface selection (edge elements differ: center vs pixels)`,
   r.subsetFrac > 0.9, `missed by layer: ${JSON.stringify(r.subsetMiss)} of ${r.subsetTotal}`);
 chk(`lasso select is tighter than the box (${r.lassoTotal.toLocaleString()} vs ${r.rectTotal.toLocaleString()} rows)`,
   r.lassoTotal > 0 && r.lassoTotal < r.rectTotal);

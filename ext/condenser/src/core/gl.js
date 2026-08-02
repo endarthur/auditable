@@ -271,7 +271,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
   const lastVP = new Float32Array(16);
   let lastKey = '', needClear = true, lastVisible = 0;
   // deferred re-shade state (gl-resolve.js): a COSMETIC change (ramp, clip,
-  // colour mode, dim-filter, selection, chanTex values) over a converged frame
+  // color mode, dim-filter, selection, chanTex values) over a converged frame
   // resolves per-pixel from the captured id buffer instead of re-rastering.
   // Dirt is tracked PER LAYER: a ramp drag on the block model must not care
   // that a drillhole (sticks) layer shares the scene — untouched layers keep
@@ -297,7 +297,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
 
   return {
     gl,
-    // background clear colour (also the figure/screenshot backdrop, since EDL
+    // background clear color (also the figure/screenshot backdrop, since EDL
     // passes through background pixels untouched). rgba 0-1; a moving frame
     // re-clears so it takes effect next redraw.
     setBackground(rgba) { if (rgba && rgba.length >= 3) { background[0] = rgba[0]; background[1] = rgba[1]; background[2] = rgba[2]; background[3] = rgba[3] != null ? rgba[3] : 1; needClear = true; } },
@@ -404,7 +404,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     // points layers with a CATEGORY dict color class codes through the 256-wide
     // golden-angle palette instead of the 32-entry LAS classification table
     setLayerCats(layer, n) { const ls = layerOf(layer); if (ls.catN !== (n || 0)) { ls.catN = n || 0; cosmeticDirtyLayers.add(layer); } },
-    // stick thickness (world metres) — a live per-layer knob
+    // stick thickness (world meters) — a live per-layer knob
     setLayerStickRadius(layer, r) { const ls = layerOf(layer); const v = Math.max(0.05, +r || 1); if (ls.stickRadius !== v) { ls.stickRadius = v; needClear = true; } },
     layerStickRadius(layer) { return layerOf(layer).stickRadius; },
     layerChanRange(layer) { const ls = layers.get(layer); return ls && ls.docChan[0] !== Infinity ? [ls.docChan[0], ls.docChan[1]] : null; },
@@ -485,7 +485,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         }
       }
-      // rule codes recolour (cosmetic) — but when class EYES are active they
+      // rule codes recolor (cosmetic) — but when class EYES are active they
       // also re-CULL through catVis, which the captured id buffer can't follow
       if (ls.ruleOn && ls.catVisTex) needClear = true; else cosmeticDirtyLayers.add(layer);
     },
@@ -517,7 +517,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
     },
     // per-layer color ramp LUT (layer properties: presets + baked breakpoints).
     // pixels = Uint8Array(256*4) RGBA, or null to fall back to the built-in ramp.
-    // OPT-IN: drive block colour from an R32F VALUE texture (one texel per record,
+    // OPT-IN: drive block color from an R32F VALUE texture (one texel per record,
     // 8192-wide rows) instead of the baked aChan buffer. `range` = [lo, hi] for the
     // ramp normalization — a computed texture has no docChan of its own. Pass a
     // null texture to fall back to aChan. The caller OWNS the texture (create,
@@ -671,7 +671,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       const sec = section && section.on ? section : null;
       const secKey = sec ? `${sec.n.join(',')}|${sec.d}|${sec.half}` : 'off';
       // the old single draw key, SPLIT: structural changes re-raster; cosmetic
-      // ones (colour mode, clip, per-layer view opts — plus whatever the
+      // ones (color mode, clip, per-layer view opts — plus whatever the
       // cosmetic setters touched) can deferred-re-shade over the converged frame
       const structKey = `${pointPx}|${blocksAsPoints ? 'P' : 'B'}${blockEdges ? 'E' : ''}|${secKey}|${canvas.width}x${canvas.height}`;
       let moving = vpChanged(vp) || structKey !== lastKey || needClear;
@@ -687,8 +687,8 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       };
 
       // per-layer cosmetic DIRT: explicit setter dirt + drift in the view opts
-      // this layer's raster consumed (colour mode + clip, global or per-layer).
-      // Hidden layers can't change pixels; meshes ignore colour opts entirely
+      // this layer's raster consumed (color mode + clip, global or per-layer).
+      // Hidden layers can't change pixels; meshes ignore color opts entirely
       // (their cosmetics go through setLayerMeshStyle → needClear).
       const sigOf = (id) => { const o = lopt(id); return `${o.colorMode}|${o.clip ? `${o.clip[0]}~${o.clip[1]}` : 'a'}`; };
       const kindBy = new Map(), subBy = new Set();
@@ -704,7 +704,7 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
       // frame become one fullscreen resolve pass per DIRTY layer — O(pixels) at
       // any model size. Untouched layers (a drillhole sticks layer while the
       // block ramp drags) keep their accumulated pixels; only a change to a
-      // layer the id buffer can't express (sticks/soup recolour, culling,
+      // layer the id buffer can't express (sticks/soup recolor, culling,
       // opacity, edges) falls through to the re-raster. ──
       if (!moving && dirty.size && lastConverged) {
         if (!resolvePipe) resolvePipe = createResolvePipeline(gl);
@@ -713,10 +713,10 @@ export function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = 
           const groups = new Map();
           for (const id of dirty) {
             const ls = layerOf(id), k = kindBy.get(id);
-            if (k !== 'points' && k !== 'blocks') { bail = true; break; }   // a sticks/soup recolour must re-raster
+            if (k !== 'points' && k !== 'blocks') { bail = true; break; }   // a sticks/soup recolor must re-raster
             if (ls.opacity < 0.999) { bail = true; break; }   // screen-door holes aren't in the id buffer
             // edge lines RESOLVE for regular grids (the capture depth unprojects
-            // the hit point, the lattice snaps the centre); sub-blocked models
+            // the hit point, the lattice snaps the center); sub-blocked models
             // have per-block half-dims the depth alone can't recover
             if (k === 'blocks' && (ls.edges != null ? ls.edges : blockEdges) && subBy.has(id)) { bail = true; break; }
             groups.set(id, []);

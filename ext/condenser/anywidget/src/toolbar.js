@@ -224,7 +224,7 @@ export function createToolbar(host, api) {
   pickBox.style.display = 'none';
   host.appendChild(pickBox);
 
-  // ── the colour legend ──
+  // ── the color legend ──
   const leg = document.createElement('div');
   leg.className = 'cdleg';
   leg.style.display = 'none';
@@ -313,7 +313,7 @@ export function createToolbar(host, api) {
       slider.value = String(Math.round(((sec.position - range[0]) / span) * 1000));
       if (document.activeElement !== thick) thick.value = String(sec.thickness);
     },
-    // the ramp + range of the first value-coloured visible layer
+    // the ramp + range of the first value-colored visible layer
     syncLegend(info) {
       if (!info) { leg.style.display = 'none'; return; }
       leg.style.display = '';

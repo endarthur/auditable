@@ -203,7 +203,7 @@ class Layer(traitlets.HasTraits):
     color = traitlets.Unicode("z").tag(style=True)
     #: viridis | magma | turbo | greys | spectral | fire
     ramp = traitlets.Unicode("viridis").tag(style=True)
-    #: [lo, hi] clamp for the colour scale, [] = the data range
+    #: [lo, hi] clamp for the color scale, [] = the data range
     clip = traitlets.List(traitlets.Float(), default_value=[]).tag(style=True)
     #: [lo, hi] cutoff on the value column — how you see inside a solid model
     threshold = traitlets.List(traitlets.Float(), default_value=[]).tag(style=True)
@@ -317,7 +317,7 @@ class Viewer(anywidget.AnyWidget):
     def _repack(self):
         """Pack every layer into ONE blob against ONE shared frame.
 
-        The frame is the union-bbox centre: layers MUST share it or they render
+        The frame is the union-bbox center: layers MUST share it or they render
         offset from each other, and a local origin is also what keeps mine-grid
         coordinates off the float32 wall on the GPU (@gcu/frame).
         """
@@ -515,7 +515,7 @@ def _value_and_cat(src, value, category, n, cols, extra, kind):
         extra["value_range"] = [lo, hi]
         cols["value"] = vf
         if kind == "points":
-            # the points pipeline colours from its u16 intensity channel: map the
+            # the points pipeline colors from its u16 intensity channel: map the
             # value onto it so `hi` lands on 65535 and the ramp spans the data
             span = hi - lo if hi > lo else 1.0
             q = np.clip((vf - lo) / span, 0.0, 1.0)
@@ -663,7 +663,7 @@ def drillholes(collar, survey, intervals, bhid="BHID", x="X", y="Y", z="Z", eoh=
 
     The desurvey runs in the browser through **@gcu/drillhole**, the same
     minimum-curvature code micro uses, so a hole lands in exactly the same place
-    in both. `value`/`category` colour the intervals; a pick returns the
+    in both. `value`/`category` color the intervals; a pick returns the
     INTERVAL ROW.
 
         cd.drillholes(collars, surveys, assays, value="AU")

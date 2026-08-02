@@ -2346,7 +2346,7 @@ function makeProgram(gl, vsrc, fsrc) {
 // segment axis and the axis⊥view direction), fragment ray-capsule test with a
 // real gl_FragDepth + surface normal (headlight shading). <2px → splat
 // demotion; a cheap no-gl_FragDepth program serves fully-demoted far chunks.
-// Radius is a live per-layer uniform (world metres) — the "stick thickness"
+// Radius is a live per-layer uniform (world meters) — the "stick thickness"
 // knob. Mask / section / picked-glow / repaint identical to blocks.
 
 
@@ -2366,7 +2366,7 @@ layout(location=3) in float aCat;       // uint8 raw
 layout(location=4) in uint aRec;        // uint32 partitioned record id
 uniform mat4 uViewProj;
 uniform vec3 uEye;
-uniform float uRadius;                  // stick radius, world metres
+uniform float uRadius;                  // stick radius, world meters
 uniform float uPerspScale, uDemotePx, uPointPx, uFixedSplat, uOrtho;
 uniform vec3 uFwd;
 uniform int uColorMode;                 // 0 elevation | 1 channel | 2 category | 3 solid
@@ -3490,12 +3490,12 @@ function buildMeshChunk({ vertices, triangles, frame }) {
 
 // A regular grid IS a single-valued heightfield — triangulate its lattice into a
 // mesh chunk with per-vertex smooth normals (grid-gradient central differences)
-// and a per-vertex value (the caller maps it to a colour via its own colormap).
+// and a per-vertex value (the caller maps it to a color via its own colormap).
 // Quads touching a nodata corner are dropped → clean holes. Coords are frame-
 // local. Strided to a display cap by the caller (bounded triangle count).
 // flatZ (a world elevation) makes a FLAT horizontal sheet at that z instead of a
 // heightfield — for a 2D data grid (grade/geochem) with no DEM; `values` stays the
-// grid value so the caller still colours by it, and the normal is straight up.
+// grid value so the caller still colors by it, and the normal is straight up.
 function buildHeightfieldMesh(grid, { stride = 1, frame = null, flatZ = null } = {}) {
   const { nx, ny, data, x0, y0, dx, dy, nodata } = grid;
   const o = (frame && frame.origin) || [0, 0, 0];
@@ -3567,7 +3567,7 @@ void main() {
 }`;
 
 // Per-vertex drape (uVColor) + smooth normals (uVNormal) are OPT-IN — default 0
-// keeps the flat-shaded solid-tint behaviour byte-for-byte. The heightfield
+// keeps the flat-shaded solid-tint behavior byte-for-byte. The heightfield
 // surface sets both: vColor from a colormap, vNormal from the grid gradient, and
 // the normal's z is divided by uZExag (inverse-transpose of the display z-scale)
 // so lighting matches the vertically-exaggerated relief.
@@ -3614,7 +3614,7 @@ void main() {
 // plane is edge-on (invisible). This program pulls each in-slab fragment's DEPTH
 // onto the camera-side slab face (minus an epsilon), so the whole in-slab mesh
 // projects onto the section and draws over the wall — the wireframe-trace-on-a-
-// section-plot look. Colour/shading unchanged; costs early-z only while sectioned.
+// section-plot look. Color/shading unchanged; costs early-z only while sectioned.
 const FRAG_OVERLAY$gl_mesh = `#version 300 es
 precision highp float;
 in vec3 vWorldPos;
@@ -3717,7 +3717,7 @@ function createMeshPipeline(gl) {
     const { prog, uni } = section ? overlay : base;
     gl.useProgram(prog);
     gl.uniformMatrix4fv(uni.viewProj, false, s.viewProj);
-    gl.uniform1f(uni.vColor, vcolor ? 1 : 0);              // heightfield drape colours
+    gl.uniform1f(uni.vColor, vcolor ? 1 : 0);              // heightfield drape colors
     gl.uniform1f(uni.vNormal, vnormal ? 1 : 0);            // smooth grid normals
     gl.uniform1f(uni.zExag, s.zExag || 1);                 // normal correction under exaggeration
     gl.uniform3f(uni.eye, s.eye[0], s.eye[1], s.eye[2]);
@@ -5045,7 +5045,7 @@ const MISS_CLEAR = new Uint32Array([0xFFFFFFFF, 0xFFFFFFFF, 0, 0]);
 // WebGL2 has no gl_PrimitiveID, and un-indexing a mesh purely to carry a
 // per-vertex triangle id would triple its vertex memory — for a click.
 //
-// The geometry and the SECTION behaviour mirror gl-mesh exactly (including the
+// The geometry and the SECTION behavior mirror gl-mesh exactly (including the
 // trace-over-the-wall depth flatten): you must pick what you see, or the ID
 // buffer is lying.
 const PICK_VERT_MSH = `#version 300 es
@@ -6293,10 +6293,10 @@ function attachOrbitInput(canvas, cam, { onChange } = {}) {
 
 // @gcu/condenser — DEFERRED RE-SHADE (render-paths spec §2). Once the scene
 // has converged, the pick pipeline's full-viewport (record, layer|face) id
-// buffer is kept as a texture, and COSMETIC changes — ramp, clip, colour
+// buffer is kept as a texture, and COSMETIC changes — ramp, clip, color
 // mode, filter (dim), selection, chanTex values — run ONE fullscreen resolve
 // pass per element layer instead of re-rasterizing the geometry. O(pixels)
-// at any model size: a ramp drag over a 50M-block model recolours at refresh
+// at any model size: a ramp drag over a 50M-block model recolors at refresh
 // rate instead of restarting the accumulation.
 //
 // Two GPU pieces, no CPU data needed:
@@ -6305,9 +6305,9 @@ function attachOrbitInput(canvas, cam, { onChange } = {}) {
 //             (one point-draw over the layer's chunks; works for streamed
 //             models whose columns were never CPU-resident).
 //   resolve — fullscreen triangle per layer: id → attr texel → the SAME
-//             colour math the raster shaders use (parity by construction,
+//             color math the raster shaders use (parity by construction,
 //             including the raster shaders' per-kind wash order), written
-//             into the EDL colour buffer; `discard` leaves background /
+//             into the EDL color buffer; `discard` leaves background /
 //             mesh / other-layer pixels untouched, and the untouched EDL
 //             depth still shades the presented frame.
 //
@@ -6369,7 +6369,7 @@ flat in vec4 vAttr;
 out vec4 outAttr;
 void main() { outAttr = vAttr; }`;
 
-// ── the resolve pass: id → attrs → the raster shaders' colour math ──────────
+// ── the resolve pass: id → attrs → the raster shaders' color math ──────────
 const RESOLVE_VERT = `#version 300 es
 void main() {
   vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
@@ -6452,9 +6452,9 @@ void main() {
     else if (face == 6u) shade = (0.55 + 0.45 * max(dot(uCutNormal, uLightDir), 0.0)) * 0.85;   // the section cut wall
     // face 7 (NO_FACE): a demoted splat — unlit, as rasterized (and no edges)
     // BLOCK EDGE LINES (gl-blocks' exact math): the capture depth gives back
-    // the hit point — unproject it, snap the block centre from the face plane
+    // the hit point — unproject it, snap the block center from the face plane
     // + the regular lattice, and the box-local coords fall out. Sub-blocked
-    // models (per-block half-dims) can't reconstruct the centre this way and
+    // models (per-block half-dims) can't reconstruct the center this way and
     // fall back to the re-raster before we get here.
     if (uEdgesOn > 0.5 && face < 7u) {
       float dz = texelFetch(uDepth, px, 0).r;
@@ -6520,7 +6520,7 @@ void main() {
 }`;
 
 function createResolvePipeline(gl) {
-  // the bake target is RGBA32F — colour-renderable only with this extension;
+  // the bake target is RGBA32F — color-renderable only with this extension;
   // absent (rare on WebGL2-era GPUs) the whole feature quietly disables and
   // every cosmetic change re-rasters, exactly as before.
   const floatOk = !!gl.getExtension('EXT_color_buffer_float');
@@ -6619,7 +6619,7 @@ function createResolvePipeline(gl) {
     hasBake(layerId) { return bakes.has(layerId); },
     dropBake(layerId) { const b = bakes.get(layerId); if (b) { gl.deleteTexture(b.tex); bakes.delete(layerId); } },
     // one fullscreen pass for one layer, into the CURRENTLY BOUND framebuffer
-    // (the EDL colour buffer). `u` carries the same per-layer values the raster
+    // (the EDL color buffer). `u` carries the same per-layer values the raster
     // path's begin/setup functions computed. Depth stays untouched.
     resolveLayer(idTex, layerId, u) {
       const b = bakes.get(layerId);
@@ -6940,7 +6940,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
   const lastVP = new Float32Array(16);
   let lastKey = '', needClear = true, lastVisible = 0;
   // deferred re-shade state (gl-resolve.js): a COSMETIC change (ramp, clip,
-  // colour mode, dim-filter, selection, chanTex values) over a converged frame
+  // color mode, dim-filter, selection, chanTex values) over a converged frame
   // resolves per-pixel from the captured id buffer instead of re-rastering.
   // Dirt is tracked PER LAYER: a ramp drag on the block model must not care
   // that a drillhole (sticks) layer shares the scene — untouched layers keep
@@ -6966,7 +6966,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
 
   return {
     gl,
-    // background clear colour (also the figure/screenshot backdrop, since EDL
+    // background clear color (also the figure/screenshot backdrop, since EDL
     // passes through background pixels untouched). rgba 0-1; a moving frame
     // re-clears so it takes effect next redraw.
     setBackground(rgba) { if (rgba && rgba.length >= 3) { background[0] = rgba[0]; background[1] = rgba[1]; background[2] = rgba[2]; background[3] = rgba[3] != null ? rgba[3] : 1; needClear = true; } },
@@ -7073,7 +7073,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     // points layers with a CATEGORY dict color class codes through the 256-wide
     // golden-angle palette instead of the 32-entry LAS classification table
     setLayerCats(layer, n) { const ls = layerOf(layer); if (ls.catN !== (n || 0)) { ls.catN = n || 0; cosmeticDirtyLayers.add(layer); } },
-    // stick thickness (world metres) — a live per-layer knob
+    // stick thickness (world meters) — a live per-layer knob
     setLayerStickRadius(layer, r) { const ls = layerOf(layer); const v = Math.max(0.05, +r || 1); if (ls.stickRadius !== v) { ls.stickRadius = v; needClear = true; } },
     layerStickRadius(layer) { return layerOf(layer).stickRadius; },
     layerChanRange(layer) { const ls = layers.get(layer); return ls && ls.docChan[0] !== Infinity ? [ls.docChan[0], ls.docChan[1]] : null; },
@@ -7154,7 +7154,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         }
       }
-      // rule codes recolour (cosmetic) — but when class EYES are active they
+      // rule codes recolor (cosmetic) — but when class EYES are active they
       // also re-CULL through catVis, which the captured id buffer can't follow
       if (ls.ruleOn && ls.catVisTex) needClear = true; else cosmeticDirtyLayers.add(layer);
     },
@@ -7186,7 +7186,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
     },
     // per-layer color ramp LUT (layer properties: presets + baked breakpoints).
     // pixels = Uint8Array(256*4) RGBA, or null to fall back to the built-in ramp.
-    // OPT-IN: drive block colour from an R32F VALUE texture (one texel per record,
+    // OPT-IN: drive block color from an R32F VALUE texture (one texel per record,
     // 8192-wide rows) instead of the baked aChan buffer. `range` = [lo, hi] for the
     // ramp normalization — a computed texture has no docChan of its own. Pass a
     // null texture to fall back to aChan. The caller OWNS the texture (create,
@@ -7340,7 +7340,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       const sec = section && section.on ? section : null;
       const secKey = sec ? `${sec.n.join(',')}|${sec.d}|${sec.half}` : 'off';
       // the old single draw key, SPLIT: structural changes re-raster; cosmetic
-      // ones (colour mode, clip, per-layer view opts — plus whatever the
+      // ones (color mode, clip, per-layer view opts — plus whatever the
       // cosmetic setters touched) can deferred-re-shade over the converged frame
       const structKey = `${pointPx}|${blocksAsPoints ? 'P' : 'B'}${blockEdges ? 'E' : ''}|${secKey}|${canvas.width}x${canvas.height}`;
       let moving = vpChanged(vp) || structKey !== lastKey || needClear;
@@ -7356,8 +7356,8 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       };
 
       // per-layer cosmetic DIRT: explicit setter dirt + drift in the view opts
-      // this layer's raster consumed (colour mode + clip, global or per-layer).
-      // Hidden layers can't change pixels; meshes ignore colour opts entirely
+      // this layer's raster consumed (color mode + clip, global or per-layer).
+      // Hidden layers can't change pixels; meshes ignore color opts entirely
       // (their cosmetics go through setLayerMeshStyle → needClear).
       const sigOf = (id) => { const o = lopt(id); return `${o.colorMode}|${o.clip ? `${o.clip[0]}~${o.clip[1]}` : 'a'}`; };
       const kindBy = new Map(), subBy = new Set();
@@ -7373,7 +7373,7 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
       // frame become one fullscreen resolve pass per DIRTY layer — O(pixels) at
       // any model size. Untouched layers (a drillhole sticks layer while the
       // block ramp drags) keep their accumulated pixels; only a change to a
-      // layer the id buffer can't express (sticks/soup recolour, culling,
+      // layer the id buffer can't express (sticks/soup recolor, culling,
       // opacity, edges) falls through to the re-raster. ──
       if (!moving && dirty.size && lastConverged) {
         if (!resolvePipe) resolvePipe = createResolvePipeline(gl);
@@ -7382,10 +7382,10 @@ function createRenderer(canvas, { background = [0.07, 0.07, 0.07, 1] } = {}) {
           const groups = new Map();
           for (const id of dirty) {
             const ls = layerOf(id), k = kindBy.get(id);
-            if (k !== 'points' && k !== 'blocks') { bail = true; break; }   // a sticks/soup recolour must re-raster
+            if (k !== 'points' && k !== 'blocks') { bail = true; break; }   // a sticks/soup recolor must re-raster
             if (ls.opacity < 0.999) { bail = true; break; }   // screen-door holes aren't in the id buffer
             // edge lines RESOLVE for regular grids (the capture depth unprojects
-            // the hit point, the lattice snaps the centre); sub-blocked models
+            // the hit point, the lattice snaps the center); sub-blocked models
             // have per-block half-dims the depth alone can't recover
             if (k === 'blocks' && (ls.edges != null ? ls.edges : blockEdges) && subBy.has(id)) { bail = true; break; }
             groups.set(id, []);
