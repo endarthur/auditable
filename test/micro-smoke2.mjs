@@ -1803,17 +1803,68 @@ await p.close();
       meshLocs: M.locationsOf(Me).map((l) => [l.name, l.count]),
       meshLine: M.propKindLine(Me),
       meshTris: M.renderer.layerElementCount(Me.id),
+      meshCols: (M.attrColumnsOf(Me) || []).map((c) => c.name),
+      meshRow2: await M.fetchLayerRow(Me, 2),
     };
   });
   chk(`locations: a block model is one 'cells' location of ${r.blockRows} rows`,
     r.blockRows === 32 && r.blockHas === true && r.blockLoc === 'cells'
     && JSON.stringify(r.blockLocs) === JSON.stringify([['cells', 32, 'table']]));
-  chk(`locations: a mesh reports ZERO attribute rows, not its ${r.meshTris} triangles`,
-    r.meshRows === 0 && r.meshHas === false && r.meshTris === 2);
+  chk(`locations: a mesh reports its ${r.meshRows} VERTEX rows, not its ${r.meshTris} triangles`,
+    r.meshRows === 4 && r.meshHas === true && r.meshTris === 2);
+  chk(`locations: the vertex table's columns are the coordinates (${JSON.stringify(r.meshCols)})`,
+    JSON.stringify(r.meshCols) === JSON.stringify(['X', 'Y', 'Z']));
+  chk(`locations: a vertex row reads back its own coordinates (${JSON.stringify(r.meshRow2)})`,
+    JSON.stringify(r.meshRow2) === JSON.stringify([40, 40, 80]));
   chk(`locations: the mesh names BOTH record spaces (${JSON.stringify(r.meshLocs)})`,
     r.meshLoc === 'vertices' && JSON.stringify(r.meshLocs) === JSON.stringify([['vertices', 4], ['faces', 2]]));
   chk(`locations: the properties line says so too - "${r.meshLine}"`,
     /4 vertices/.test(r.meshLine) && /2 faces/.test(r.meshLine));
+  await rp.close();
+}
+
+
+// ── the mesh VERTEX location, end to end ──────────────────────────────────────
+// A painted PLY carries its set colors as vertex properties. This walks the
+// whole chain: condenser keeps them at read, meshDoc names them in its header,
+// the vertex table lists them as columns, and a row reads its own values back.
+// That chain is what a ply2atti import will ride on.
+{
+  const rp = await mkPage('sm2meshvtx');
+  const r = await rp.evaluate(async () => {
+    const M = window._micro;
+    const ply = [
+      'ply', 'format ascii 1.0', 'element vertex 4',
+      'property float x', 'property float y', 'property float z',
+      'property uchar red', 'property uchar green', 'property uchar blue',
+      'element face 2', 'property list uchar int vertex_indices', 'end_header',
+      '0 0 80 255 0 0', '40 0 80 255 0 0', '40 40 80 0 255 0', '0 40 80 0 255 0',
+      '3 0 1 2', '3 0 2 3',
+    ].join('\n') + '\n';
+    await M.openBlob(new Blob([ply]), 'painted.ply', 'replace');
+    await new Promise((z) => setTimeout(z, 1600));
+    const L = M.layers().find((x) => x.kind === 'mesh');
+    if (!L) return { err: 'no mesh layer' };
+    const cols = (M.attrColumnsOf(L) || []).map((c) => c.name);
+    const rows = [];
+    for (let k = 0; k < 4; k++) rows.push(await M.fetchLayerRow(L, k));
+    // the attribute table must now open on a mesh — it is a record-bearing layer
+    M.openAttrTable(L);
+    await new Promise((z) => setTimeout(z, 500));
+    const opened = M.attrTables.has(L.id);
+    // and the parse is shared: a solid query must not re-read the file
+    const before = L.docs.meshDoc._vtxData;
+    await M.meshSolidOf(L).catch(() => null);
+    return { cols, rows, opened, shared: before === L.docs.meshDoc._vtxData && !!before, n: M.attrRowCountOf(L) };
+  });
+  chk(`mesh vertices: a painted PLY's colors ARE columns (${JSON.stringify(r.cols)})`,
+    JSON.stringify(r.cols) === JSON.stringify(['X', 'Y', 'Z', 'red', 'green', 'blue']));
+  chk(`mesh vertices: ${r.n} rows read back their own coordinates and colors`,
+    r.n === 4
+    && JSON.stringify(r.rows[0]) === JSON.stringify([0, 0, 80, 255, 0, 0])
+    && JSON.stringify(r.rows[2]) === JSON.stringify([40, 40, 80, 0, 255, 0]));
+  chk('mesh vertices: the attribute table opens on a mesh', r.opened === true);
+  chk('mesh vertices: a solid query reuses the vertex parse rather than re-reading', r.shared === true);
   await rp.close();
 }
 
