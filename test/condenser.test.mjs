@@ -803,6 +803,64 @@ test('mesh: ply ascii faces — vertices + fanned faces, mixed blank lines', asy
   assert.equal(m.header.triCount, 4);                               // 1 + 1 + quad(2)
   assert.deepEqual([...m.triangles.slice(6)], [0, 1, 2, 0, 2, 3]);
   assert.equal(m.vertices[3 * 3 + 2], 800);
+  assert.deepEqual(m.header.vertexColumns, [], 'no extra vertex properties here');
+});
+
+// ── per-vertex attributes: the mesh's own columns ──
+// A painted outcrop carries its set colors as vertex properties. Dropping them
+// was silent data loss, and it is what the ply2atti workflow depends on.
+test('mesh: ply ascii — non-coordinate vertex properties become typed columns', async () => {
+  const ply = [
+    'ply', 'format ascii 1.0', 'element vertex 4',
+    'property float x', 'property float y', 'property float z',
+    'property uchar red', 'property uchar green', 'property uchar blue',
+    'property float quality',
+    'element face 1', 'property list uchar int vertex_indices', 'end_header',
+    '612000 7765000 700 255 0 0 0.5', '612100 7765000 700 255 0 0 0.25',
+    '612050 7765100 700 0 255 0 0.75', '612050 7765050 800 0 255 0 1',
+    '3 0 1 2',
+  ].join('\n');
+  const m = await openPlyMesh(new Blob([ply]));
+  assert.deepEqual(m.header.vertexColumns, ['red', 'green', 'blue', 'quality']);
+  assert.ok(m.attrs.red instanceof Uint8Array, 'uchar keeps its byte width');
+  assert.ok(m.attrs.quality instanceof Float32Array, 'float stays float');
+  assert.deepEqual([...m.attrs.red], [255, 255, 0, 0]);
+  assert.deepEqual([...m.attrs.green], [0, 0, 255, 255]);
+  assert.deepEqual([...m.attrs.blue], [0, 0, 0, 0]);
+  assert.deepEqual([...m.attrs.quality], [0.5, 0.25, 0.75, 1]);
+  assert.equal(m.vertices[0], 612000, 'coordinates still land correctly');
+  assert.equal(m.vertices[3 * 3 + 2], 800);
+});
+
+test('mesh: ply binary — vertex attributes read at their own offsets', async () => {
+  const head = [
+    'ply', 'format binary_little_endian 1.0', 'element vertex 4',
+    'property float x', 'property float y', 'property float z',
+    'property uchar red', 'property uchar green', 'property uchar blue',
+    'element face 1', 'property list uchar int vertex_indices', 'end_header', '',
+  ].join('\n');
+  const hb = new TextEncoder().encode(head);
+  const stride = 12 + 3;                                            // 3 floats + 3 bytes
+  const body = new ArrayBuffer(4 * stride + (1 + 3 * 4));
+  const dv = new DataView(body);
+  const RGB = [[255, 0, 0], [255, 0, 0], [0, 0, 255], [0, 0, 255]];
+  for (let i = 0; i < 4; i++) {
+    for (let k = 0; k < 3; k++) dv.setFloat32(i * stride + k * 4, TETRA_V[3 * i + k] - 612000, true);
+    for (let k = 0; k < 3; k++) dv.setUint8(i * stride + 12 + k, RGB[i][k]);
+  }
+  let off = 4 * stride;
+  dv.setUint8(off, 3); off += 1;
+  for (const v of [0, 1, 2]) { dv.setInt32(off, v, true); off += 4; }
+  const m = await openPlyMesh(new Blob([hb, body]));
+  assert.equal(m.header.vertexCount, 4);
+  assert.equal(m.header.triCount, 1);
+  assert.deepEqual(m.header.vertexColumns, ['red', 'green', 'blue']);
+  assert.deepEqual([...m.attrs.red], [255, 255, 0, 0]);
+  assert.deepEqual([...m.attrs.blue], [0, 0, 255, 255]);
+  // the fixture offsets every component by 612000, so check the z RELIEF:
+  // the apex sits 100 above the base, and would not if the attribute bytes had
+  // shifted the coordinate reads off their stride
+  assert.equal(m.vertices[3 * 3 + 2] - m.vertices[2], 100, 'z survives the wider stride');
 });
 
 test('mesh: ply binary faces — sequential walk over variable-size records', async () => {

@@ -3310,7 +3310,14 @@ async function openPly(blob, { signal, onProgress } = {}) {
 //   openMsh(blob)      — Leapfrog ARANZ-1.0 .msh via @gcu/msh
 //   openObj(blob)      — Wavefront OBJ (v/f; fans n-gons; negative indices)
 //   openPlyMesh(blob)  — PLY with a face element (ascii + binary_little_endian)
-// header = { kind:'mesh', format, vertexCount, triCount, bbox:{min,max} }
+// header = { kind:'mesh', format, vertexCount, triCount, bbox:{min,max}, vertexColumns }
+//
+// PLY additionally returns `attrs` — one typed array per non-coordinate vertex
+// property, named as the file named them, with `header.vertexColumns` listing
+// them in file order. That is where a painted mesh's red/green/blue lives, and
+// where nx/ny/nz and per-vertex quality live, so the vertex record space has
+// real columns rather than only coordinates. OBJ and .msh declare no per-vertex
+// attributes in their formats, so they report an empty list.
 
 
 function meshBbox(vertices) {
@@ -3331,8 +3338,19 @@ function meshHeader(format, vertices, triangles) {
     vertexCount: (vertices.length / 3) | 0,
     triCount: (triangles.length / 3) | 0,
     bbox: meshBbox(vertices),
+    vertexColumns: [],            // per-vertex attribute names carried by the file
   };
 }
+
+// A per-vertex attribute keeps the width the file declared: a painted mesh's
+// red/green/blue is three bytes per vertex, and widening it to Float64 would
+// cost 24 on a model with millions of them.
+const ARRAY_FOR = {
+  char: Int8Array, int8: Int8Array, uchar: Uint8Array, uint8: Uint8Array,
+  short: Int16Array, int16: Int16Array, ushort: Uint16Array, uint16: Uint16Array,
+  int: Int32Array, int32: Int32Array, uint: Uint32Array, uint32: Uint32Array,
+  float: Float32Array, float32: Float32Array, double: Float64Array, float64: Float64Array,
+};
 
 // ── Leapfrog .msh ──
 async function openMsh(blob) {
@@ -3398,6 +3416,17 @@ async function openPlyMesh(blob) {
   const SIZES = { char: 1, int8: 1, uchar: 1, uint8: 1, short: 2, int16: 2, ushort: 2, uint16: 2, int: 4, int32: 4, uint: 4, uint32: 4, float: 4, float32: 4, double: 8, float64: 8 };
   const GETTERS = { 1: 'getUint8', 2: 'getUint16', 4: 'getUint32' };
 
+  // Every vertex property that is not a coordinate becomes a per-vertex column:
+  // red/green/blue from a painted mesh, nx/ny/nz, quality, confidence, whatever
+  // the producing tool wrote. These are the mesh's own data and dropping them
+  // was silent loss — a painted outcrop's set colors live here.
+  const attrProps = ply.props
+    .map((p, i) => ({ p, i }))
+    .filter(({ i }) => i !== px && i !== py && i !== pz)
+    .map(({ p, i }) => ({ ...p, field: i, arr: new (ARRAY_FOR[p.type] || Float64Array)(nv) }));
+  const attrs = {};
+  for (const a of attrProps) attrs[a.name] = a.arr;
+
   if (ply.format === 'ascii') {
     const text = await blob.text();
     const lines = text.slice(ply.dataOffset).split('\n');
@@ -3407,6 +3436,7 @@ async function openPlyMesh(blob) {
       if (!t) continue;
       const f = t.split(/\s+/);
       vertices[3 * rec] = +f[px]; vertices[3 * rec + 1] = +f[py]; vertices[3 * rec + 2] = +f[pz];
+      for (const a of attrProps) a.arr[rec] = +f[a.field];
       rec++;
     }
     let fc = 0;
@@ -3426,6 +3456,7 @@ async function openPlyMesh(blob) {
       vertices[3 * i] = dv[ply.props[px].getter](base + ply.props[px].offset, true);
       vertices[3 * i + 1] = dv[ply.props[py].getter](base + ply.props[py].offset, true);
       vertices[3 * i + 2] = dv[ply.props[pz].getter](base + ply.props[pz].offset, true);
+      for (const a of attrProps) a.arr[i] = dv[a.getter](base + a.offset, true);
     }
     // faces: sequential walk (variable-size records). Only the vertex-index
     // list is kept; other per-face properties are stepped over.
@@ -3452,7 +3483,9 @@ async function openPlyMesh(blob) {
   if (!tris.length) throw new Error('ply: face element yielded no triangles');
   const triangles = Uint32Array.from(tris);
   for (let i = 0; i < triangles.length; i++) if (triangles[i] >= nv) throw new Error(`ply: face index ${triangles[i]} out of range (${nv} vertices)`);
-  return { header: meshHeader(ply.format === 'ascii' ? 'ply-ascii' : 'ply-binary', vertices, triangles), vertices, triangles };
+  const header = meshHeader(ply.format === 'ascii' ? 'ply-ascii' : 'ply-binary', vertices, triangles);
+  header.vertexColumns = attrProps.map((a) => a.name);
+  return { header, vertices, triangles, attrs };
 }
 
 // ── src/core/mesh-geom.js ──
