@@ -1985,6 +1985,65 @@ await p.close();
   await pc.close();
 }
 
+
+// ── a .dm auto-optimized to Parquet, then re-channelled ───────────────────────
+// Reported from real use: open a .dm, save, auto-optimize converts it to Parquet
+// and the layer reports ZERO blocks; after a reload, changing the display column
+// empties it again. One root cause behind both — the channel-switch dispatch was
+// `.dm ? openDmBlob : openBlocksBlob`, written before Parquet existed, so a
+// Parquet layer was handed to the DELIMITED reader, which sniffed its bytes as
+// text, found no rows, and replaced a good document with an empty one. The layer
+// kept its count and its columns and drew nothing, which is why it read as data
+// loss. Auto-optimize was only ever tested over CSV, and the .dm section turns it
+// off, so the combination was uncovered.
+{
+  const pd = await mkPage('sm2dmpq');
+  await pd.evaluate(async () => {
+    const { makeDM } = await import('/test/dm-make.mjs');
+    const fields = [
+      { name: 'XC', type: 'N' }, { name: 'YC', type: 'N' }, { name: 'ZC', type: 'N' },
+      { name: 'XINC', type: 'N', constant: 10 }, { name: 'YINC', type: 'N', constant: 10 }, { name: 'ZINC', type: 'N', constant: 5 },
+      { name: 'XMORIG', type: 'N', constant: 1000 }, { name: 'YMORIG', type: 'N', constant: 2000 }, { name: 'ZMORIG', type: 'N', constant: 400 },
+      { name: 'NX', type: 'N', constant: 8 }, { name: 'NY', type: 'N', constant: 6 }, { name: 'NZ', type: 'N', constant: 4 },
+      { name: 'FE', type: 'N' }, { name: 'AU', type: 'N' }, { name: 'LITO', type: 'A', width: 8 },
+    ];
+    const rows = [];
+    for (let k = 0; k < 4; k++) for (let j = 0; j < 6; j++) for (let i = 0; i < 8; i++)
+      rows.push({ XC: 1005 + i * 10, YC: 2005 + j * 10, ZC: 402.5 + k * 5,
+        FE: 20 + i, AU: 0.5 + k, LITO: (i + j) % 2 ? 'BIF' : 'CANGA' });
+    await window._micro.openBlob(new Blob([makeDM(fields, rows, { precision: 'ep' })]), 'bm.dm', 'replace');
+  });
+  await pd.waitForFunction(() => { const L = window._micro.layers()[0]; return L && window._micro.renderer.layerElementCount(L.id) === 192; }, null, { timeout: 60000 });
+
+  // convert exactly as an auto-optimizing save does
+  await pd.evaluate(() => window._micro.convertLayerToParquet(window._micro.layers()[0], { keepOriginal: true }));
+  await pd.waitForFunction(() => /\d+ blocks|blocks ·/.test(document.querySelector('#meta').textContent), null, { timeout: 60000 });
+  await new Promise((z) => setTimeout(z, 1200));
+  const conv = await pd.evaluate(() => {
+    const M = window._micro, L = M.layers()[0];
+    return { name: L.name, rows: M.attrRowCountOf(L), drawn: M.renderer.layerElementCount(L.id), pq: !!L.docs.blockDoc.parquet };
+  });
+  chk(`dm→parquet: the converted model still DRAWS (${conv.drawn} of ${conv.rows}, “${conv.name}”, parquet-backed ${conv.pq})`,
+    conv.rows === 192 && conv.drawn === 192 && conv.pq === true);
+
+  // and switching the display column must not empty it — the same handler, and
+  // the second half of the report. Drive the real select, not the setter.
+  const swapped = await pd.evaluate(async () => {
+    const M = window._micro, L = M.layers()[0];
+    M.setActiveLayer(L.id);
+    const sel = document.querySelector('#colorBy');
+    const opt = [...sel.options].map((o) => o.value).filter((v) => v.startsWith('chan:'));
+    const cur = sel.value;
+    const next = opt.find((v) => v !== cur) || opt[0];
+    sel.value = next; sel.dispatchEvent(new Event('change'));
+    await new Promise((z) => setTimeout(z, 2000));
+    return { next, drawn: M.renderer.layerElementCount(L.id), rows: M.attrRowCountOf(L), chans: opt.length };
+  });
+  chk(`dm→parquet: switching the display column keeps the blocks (${swapped.drawn} drawn, by ${swapped.next})`,
+    swapped.drawn === 192 && swapped.rows === 192);
+  await pd.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

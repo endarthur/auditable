@@ -8602,8 +8602,19 @@ $('#colorBy').addEventListener('change', () => {
   dispatchEvent(new Event('micro:project-dirty'));
   if (v.startsWith('chan:') && _dhDoc && +v.slice(5) !== _dhDoc.header.mapping.chan) { reopenDhChan(+v.slice(5)); return; }
   if (v.startsWith('chan:') && _blockDoc && +v.slice(5) !== _blockDoc.header.mapping.chan) {
-    const open = _blockDoc.header.dm ? openDmBlob : openBlocksBlob;
-    open(_blockDoc.blob, _blockDoc.name, { chan: +v.slice(5), keepFilter: true, forcePoints: _blockDoc.forcePoints, layer: _activeId, first: false });
+    // Three sources, not two. This dispatch predated Parquet and sent it down the
+    // delimited branch, where openBlocksBlob sniffed the Parquet bytes as text,
+    // found no rows, and replaced a good document with an empty one — the layer
+    // kept its count and its columns and drew nothing. Parquet re-opens through
+    // its own provider, and takes the new channel as a mapping patch because it
+    // resolves columns by mapping rather than by an opts.chan index.
+    const chan = +v.slice(5);
+    const o = { keepFilter: true, forcePoints: _blockDoc.forcePoints, layer: _activeId, first: false };
+    if (_blockDoc.header.dm) openDmBlob(_blockDoc.blob, _blockDoc.name, { ...o, chan });
+    else if (_blockDoc.parquet) {
+      const m = _blockDoc.header.mapping;
+      openParquetBlocks(_blockDoc.blob, _blockDoc.name, { ...o, mapping: { x: m.x, y: m.y, z: m.z, chan, cat: m.cat } });
+    } else openBlocksBlob(_blockDoc.blob, _blockDoc.name, { ...o, chan });
   } else requestRender();
 });
 for (const id of ['clipMin', 'clipMax']) $('#' + id).addEventListener('input', () => {
@@ -15730,10 +15741,19 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
   closeAttrTable(L.id);
   const m = { ...doc.header.mapping, ...patch };
   const style = captureLayerStyling(L, { clearCats });                // id is reused in place (layer: L.id) → identity intact, styling only
-  await openBlocksBlob(doc.blob, doc.name, {
+  const ropts = {
     layer: L.id, first: false, forcePoints: doc.forcePoints,
     mapping: { x: m.x, y: m.y, z: m.z, chan: m.chan, cat: m.cat },
-  });
+  };
+  // A Parquet-backed layer MUST re-open through its own provider. openBlocksBlob
+  // with no provider falls back to the delimited reader, which sniffs Parquet
+  // bytes as text, finds no rows, and replaces a perfectly good document with an
+  // empty one — the layer keeps its columns and its count but draws nothing.
+  // (The reload-from-disk path below already guards `!doc.parquet`; this one did
+  // not, so changing the display or category column on any Parquet model emptied
+  // it, as did the re-key that runs at the end of an auto-optimize.)
+  if (doc.parquet) await openParquetBlocks(doc.blob, doc.name, ropts);
+  else await openBlocksBlob(doc.blob, doc.name, ropts);
   applyLayerStyling(layerById(L.id), style, { clearCats });
   markProjectDirty();
   if (_propOpen) { _propFor = null; renderProps(); }
