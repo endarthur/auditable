@@ -2135,6 +2135,44 @@ await p.close();
   await pm.close();
 }
 
+
+// ── record numbering across a row the loader threw away ──────────────────────
+// A delimited source drops rows with unparseable coordinates at load, so the
+// renderer never numbers them. Six sweeps re-derived that rule independently and
+// computeGT/computeSwath got it wrong — they counted every row, then used the
+// count to index the selection mask and the materialized columns, so after the
+// first bad row every block read another block's selection and another block's
+// grade. layerRecords owns the rule now; this pins it.
+{
+  const pn = await mkPage('sm2recnum');
+  const r = await pn.evaluate(async () => {
+    const M = window._micro;
+    const NL = String.fromCharCode(10);
+    // FE is a pure function of X, and row 3 has an unparseable X
+    let t = 'XC,YC,ZC,FE' + NL;
+    for (let i = 0; i < 8; i++) t += (i === 3 ? 'n/a' : String(5 + i * 10)) + ',5,5,' + (i * 100) + NL;
+    await M.openBlob(new Blob([t]), 'gap.csv', 'replace');
+    await new Promise((z) => setTimeout(z, 1400));
+    const L = M.layers()[0];
+    const n = M.attrRowCountOf(L);
+    const seen = [];
+    for await (const { f, rec } of M.layerRecords(L)) seen.push({ rec, x: +f[0], fe: +f[3] });
+    // and the independent ladder must agree record-for-record
+    const viaFetch = [];
+    for (let k = 0; k < n; k++) { const row = await M.fetchLayerRow(L, k); viaFetch.push(+row[0]); }
+    return { n, seen, viaFetch, caps: M.blockCaps(L) };
+  });
+  chk(`record numbering: the bad row is not a record (${r.n} of 8 rows, delimited ${!r.caps.rowIsRecord})`,
+    r.n === 7 && r.caps.rowIsRecord === false);
+  chk('record numbering: layerRecords numbers 0..n-1 with no gap',
+    r.seen.length === 7 && r.seen.every((e, i) => e.rec === i));
+  chk(`record numbering: it agrees with fetchLayerRow record-for-record (${JSON.stringify(r.seen.map((e) => e.x))})`,
+    JSON.stringify(r.seen.map((e) => e.x)) === JSON.stringify(r.viaFetch));
+  chk('record numbering: every record still carries its OWN grade (FE = (X-5)/10*100)',
+    r.seen.every((e) => Math.abs(e.fe - (e.x - 5) / 10 * 100) < 1e-6));
+  await pn.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

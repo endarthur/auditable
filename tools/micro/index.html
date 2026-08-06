@@ -1251,7 +1251,7 @@ function filterToSelection(L, mode = 'replace') {
   if (!L || !L._filterMask) { $('#meta').textContent = 'filter → selection: no active filter — run one in the filter box first'; return; }
   if (mode === 'replace') clearSelection({ silent: true });
   const n = attrRowCountOf(L);
-  if (!n) return;
+  if (!n) { $('#meta').textContent = 'filter → selection: this layer has no records'; return; }
   if (!L._selMask || L._selMask.length !== n) L._selMask = new Uint8Array(n);
   const m = L._filterMask, lim = Math.min(n, m.length);
   for (let i = 0; i < lim; i++) if (m[i]) L._selMask[i] = 1;
@@ -3015,7 +3015,14 @@ async function assignDomains(solids, L, { name = 'DOMAIN', res = [2, 2, 2], onPr
         mode: 'proportion', resolution, variant: 'solid',
         onProgress: (f) => { if (onProgress) onProgress((k + f) / (solids.length + 0.3), meshL.label || meshL.name); },
       });
-    } catch (e) { if (e.message === 'cancelled') return null; }
+    } catch (e) {
+      if (e.message === 'cancelled') return null;
+      // every sibling (selectBySolid / ratioBySolid / flagBySolid) reports this.
+      // Swallowing it made a solid that FAILED indistinguishable from one that
+      // legitimately claims nothing — a wrong domain coding with no indication.
+      $('#meta').textContent = `assign domains: “${meshL.label || meshL.name}” failed — ${e.message}`;
+      throw e;
+    }
     if (epoch !== _ratioEpoch) return null;
     fields.push(dense);                                    // null = unreadable mesh → claims nothing
   }
@@ -3296,18 +3303,16 @@ async function computeGT(L, cols, weightCol, nCut, onProgress, selMask) {
   const dScale = wspec.unit ? unitConvert(1, wspec.unit, 't/m3') : 1;
   const dConst = wspec.const != null && Number.isFinite(+wspec.const) ? +wspec.const : null;
   const ser = cols.map(() => ({ g: [], w: [] }));
-  let gmin = Infinity, gmax = -Infinity, rc = 0, rec = 0;
-  for await (const batch of layerRows(L, null)) {
-    for (const f0 of batch) {
-      const inSel = !selMask || (rec < selMask.length && selMask[rec]);
-      const f = extendRow(L, f0, rec); rec++;              // append calc/paint/materialized values at their schema positions
-      if (!inSel) continue;
+  let gmin = Infinity, gmax = -Infinity, rc = 0;
+  for await (const { f, rec: rAt } of layerRecords(L)) {
+    rc++;
+    if (!selMask || (rAt < selMask.length && selMask[rAt])) {
       const wt = (wi >= 0 ? (+f[wi] || 0) : dConst != null ? dConst : 1) * dScale * vol;
       for (let s = 0; s < idx.length; s++) { const v = +f[idx[s]]; if (Number.isFinite(v)) { ser[s].g.push(v); ser[s].w.push(wt); if (v < gmin) gmin = v; if (v > gmax) gmax = v; } }
     }
-    rc += batch.length; if (onProgress) onProgress(rc);
-    await new Promise((r) => setTimeout(r));
+    if ((rc & 0xffff) === 0) { if (onProgress) onProgress(rc); await new Promise((r) => setTimeout(r)); }   // yield per 64k, not per batch
   }
+  if (onProgress) onProgress(rc);
   if (!Number.isFinite(gmin)) return null;
   const cuts = []; for (let i = 0; i <= nCut; i++) cuts.push(gmin + (gmax - gmin) * i / nCut);
   const gt = ser.map((d) => {
@@ -4774,11 +4779,11 @@ async function computeSwath(L, cols, dir, bandWidth, offset, weightCol, onProgre
   const h = layerTableHeader(L), m = h.mapping, schema = schemaExt(L, h), nameIdx = (nm) => schema.findIndex((c) => c.name === nm);
   const idx = cols.map(nameIdx);                            // source AND derived (calc/estimated) columns
   const wi = weightCol ? nameIdx(weightCol) : -1, vol = blockVolumeOf(L);
-  const bands = new Map(); let rc = 0, rec = 0;
-  for await (const batch of layerRows(L, null)) {
-    for (const f0 of batch) {
-      const inSel = !selMask || (rec < selMask.length && selMask[rec]);
-      const f = extendRow(L, f0, rec); rec++;              // m.x/y/z stay valid (source indices); grades read via schema
+  const bands = new Map(); let rc = 0;                     // layerRecords owns the record number now
+  for await (const { f, rec: rAt } of layerRecords(L)) {
+    {
+      rc++;
+      const inSel = !selMask || (rAt < selMask.length && selMask[rAt]);
       if (!inSel) continue;
       const x = +f[m.x], y = +f[m.y], z = +f[m.z]; if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
       const t = x * dir[0] + y * dir[1] + z * dir[2], bi = Math.floor((t - offset) / bandWidth);
@@ -4786,8 +4791,9 @@ async function computeSwath(L, cols, dir, bandWidth, offset, weightCol, onProgre
       const wt = (wi >= 0 ? (+f[wi] || 0) : 1) * vol; e.tw += wt; e.n++;
       for (let s = 0; s < idx.length; s++) { const v = +f[idx[s]]; if (Number.isFinite(v)) { e.w[s] += wt; e.wg[s] += wt * v; } }
     }
-    rc += batch.length; if (onProgress) onProgress(rc); await new Promise((r) => setTimeout(r));
+    if ((rc & 0xffff) === 0) { if (onProgress) onProgress(rc); await new Promise((r) => setTimeout(r)); }   // yield per 64k, not per batch
   }
+  if (onProgress) onProgress(rc);
   const keys = [...bands.keys()].sort((a, b) => a - b);
   const profile = keys.map((bi) => { const e = bands.get(bi); return { band: bi, center: offset + (bi + 0.5) * bandWidth, mean: cols.map((_, s) => (e.w[s] > 0 ? e.wg[s] / e.w[s] : NaN)), tonnage: e.tw, count: e.n }; });
   return { profile, weighted: wi >= 0 };
@@ -8639,10 +8645,41 @@ function blockCaps(L) {
   const dm = !!d.header.dm, pq = !!d.parquet;
   return {
     rowIsRecord: dm || pq,                                 // delimited renumbers; these do not
+    nullFill: dm,                                          // .dm returns null for a blank field; CSV returns ''
     stats: pq,                                             // Parquet footer min/max → chunk pruning
     projection: pq || dm,                                  // Parquet columns / .dm strided reads
     randomAccess: true,                                    // all three can fetch one record
   };
+}
+// ONE owner of "what number is this record". Six sweeps used to re-derive this
+// rule independently and two of them got it wrong: a DELIMITED source drops rows
+// with unparseable coordinates at load, so the renderer never numbered them and a
+// consumer must skip the same rows to stay aligned; `.dm` and Parquet number every
+// row (blockCaps.rowIsRecord). computeGT and computeSwath incremented
+// unconditionally, then used that number to index the selection mask and the
+// materialized/painted columns — so on a delimited model with one bad coordinate,
+// every later block read another block's selection state and another block's grade.
+//
+// Yields the row ALREADY extended (calc/paint/materialized appended at their census
+// positions) with the record index it belongs to, and applies the `.dm` null-fill
+// that only two of thirteen extendRow callers remembered.
+async function* layerRecords(L, onProgress) {
+  const h = layerTableHeader(L);
+  const m = (h && h.mapping) || {};
+  const caps = blockCaps(L);
+  const gate = !caps.rowIsRecord && m.x != null && m.y != null && m.z != null;
+  const fill = caps.nullFill;
+  let rec = 0;
+  for await (const batch of layerRows(L, onProgress || null)) {
+    for (const f0 of batch) {
+      if (gate) {
+        const xv = +f0[m.x], yv = +f0[m.y], zv = +f0[m.z];
+        if (!Number.isFinite(xv) || !Number.isFinite(yv) || !Number.isFinite(zv)) continue;   // renderer numbering
+      }
+      const rAt = rec++;
+      yield { f: extendRow(L, fill ? f0.map((v) => (v == null ? '' : v)) : f0, rAt), rec: rAt, raw: f0 };
+    }
+  }
 }
 // ONE way to get a cold position stream for a layer's records, whatever the
 // source. This dispatch was inlined at each consumer, and Parquet — a blockDoc
@@ -11350,6 +11387,15 @@ async function recordPosition(hit) {
   const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
   if (dd) return dd.recordPosition(rec);
+  // grids and meshes: this ladder is the third copy of the doc-kind dispatch, and
+  // it was the one missing them — so Measure and section-plane placement silently
+  // did nothing on a grid-as-points layer (pickHitPoint bails on a null position)
+  // while clicking the SAME point for a record panel worked, because showRecord's
+  // copy has the branch. fetchLayerRow is the complete ladder; defer to it.
+  if (docs.gridDoc || docs.meshDoc) {
+    const row = await fetchLayerRow(L, rec);
+    return row && Number.isFinite(+row[0]) ? [+row[0], +row[1], +row[2]] : null;
+  }
   const m = bd && bd.header.mapping;
   if (bd && bd.parquet) { const row = await readParquetRow(bd.parquet.buf, rec, bd.parquet.meta); const cn = bd.parquet.coordNames; return row ? [+row[cn[0]], +row[cn[1]], +row[cn[2]]] : null; }
   if (bd && bd.header.dm) {
@@ -12147,7 +12193,7 @@ const COMMANDS = [
   { id: 'join', group: 'Analyse', title: 'Join / reconcile…', kw: 'merge compare delta reconciliation spatial key', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); _propTab = 'join'; openProps(); } },
   { id: 'table', group: 'Analyse', title: 'Attribute table…', kw: 'rows data grid', when: (c) => c.L && hasRecords(c.L), run: (c) => openAttrTable(c.L) },
   { id: 'filter', group: 'Analyse', title: 'Filter…', kw: 'query where expression', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); $('#filter').focus(); } },
-  { id: 'scan', group: 'Analyse', title: 'Scan columns (stats)', kw: 'histogram quantiles mean', when: (c) => c.L && layerTableHeader(c.L), run: (c) => scanColumns(c.L).then(() => { if (_propOpen) renderProps(); }).catch(() => {}) },
+  { id: 'scan', group: 'Analyse', title: 'Scan columns (stats)', kw: 'histogram quantiles mean', when: (c) => c.L && layerTableHeader(c.L), run: (c) => scanColumns(c.L).then(() => { if (_propOpen) renderProps(); }).catch((e) => { $('#meta').textContent = `scan columns: ${e.message}`; }) },
   { id: 'measure', group: 'Analyse', title: 'Measure…', kw: 'distance ruler', run: () => armMeasure() },
   { id: 'props', group: 'Layer', title: 'Properties…', kw: 'style colour clip', when: (c) => c.L, run: (c) => { setActiveLayer(c.L.id); openProps(); } },
   { id: 'lineage', group: 'Layer', title: 'Lineage…', kw: 'provenance audit report history derivation', when: (c) => c.L && c.L.lineage, run: (c) => openLineageWindow(c.L) },
@@ -15504,6 +15550,7 @@ async function sampleRow(L) {
   try {
     if (d.dhDoc) return d.dhDoc.fetchRecord(0);
     if (d.blockDoc && d.blockDoc.header.dm) return await fetchDmRecord(d.blockDoc.blob, d.blockDoc.header.dm, 0);
+    if (d.blockDoc && d.blockDoc.parquet) return await fetchLayerRow(L, 0);   // NOT the delimited reader
     if (d.blockDoc) return await fetchCsvRecord(0, d.blockDoc);
   } catch { /* no sample — type defaults */ }
   return null;
@@ -15888,7 +15935,22 @@ async function reloadLayerFromDisk(L) {
     });
     const L2 = layerById(L.id);
     applyLayerStyling(L2, style);
-    if (L2 && L2.id === _activeId && L2.filterExpr) await applyBlockFilter(L2.filterExpr);   // before the message — the filter scan posts its own status
+    // Fresh bytes invalidate everything DERIVED from the old ones. This branch
+    // reuses the layer object, so nothing is cleared for free: the column stats,
+    // the filter-pushdown bands and the JS-side filter mask all survived a reload
+    // of different data and were then persisted into the project on the next save.
+    // The size-diff note above is the only hint, and a same-size edit gives none.
+    if (L2) {
+      L2._colStats = null;
+      L2._bands = null;
+      L2._catCounts = null;
+      L2._filterMask = null;                               // the GPU filter was cleared by the re-open; keep JS in step
+      pinEvictLayer(L2.id);                                // pinned columns belong to the OLD bytes
+    }
+    // applyBlockFilter acts on the ACTIVE layer (it takes no layer argument), so a
+    // background layer cannot be re-swept here — nulling its mask above is what
+    // matters: it can no longer disagree with the GPU, and it re-sweeps on focus.
+    if (L2 && L2.id === _activeId && L2.filterExpr) await applyBlockFilter(L2.filterExpr);   // the filter scan posts its own status
     $('#meta').textContent = `reloaded ${(L2 && (L2.label || L2.name)) || L.name} from disk${sizeNote}`;
   } else {
     // dm / parquet / mesh / grid / las / ply: remove → re-open fresh → restore
@@ -17348,7 +17410,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(hit);
 });
 
-window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, attrColumnsOf, fetchLayerRow, meshVertexData, meshVertexHeader, extendRow, schemaExt, calcFns, blockCaps, docPositionStream, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, attrColumnsOf, fetchLayerRow, meshVertexData, meshVertexHeader, extendRow, schemaExt, calcFns, blockCaps, docPositionStream, layerRecords, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
