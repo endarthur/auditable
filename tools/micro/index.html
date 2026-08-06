@@ -1360,11 +1360,7 @@ async function selectVolume(poly, mode, isRect) {
       } else {
         // re-open the provider for a fresh position stream (the docs keep the
         // blob + header; the stream is a cold recipe by design)
-        let streamChunks = null;
-        if (d.blockDoc && d.blockDoc.header.dm) ({ streamChunks } = await openDmModel(d.blockDoc.blob));
-        else if (d.blockDoc) ({ streamChunks } = await openBlockModel(d.blockDoc.blob, { mapping: d.blockDoc.header.mapping }));
-        else if (d.lasDoc) ({ streamChunks } = await openLas(d.lasDoc.blob));
-        else if (d.plyDoc) ({ streamChunks } = await openPly(d.plyDoc.blob));
+        const streamChunks = await docPositionStream(d);
         if (!streamChunks) continue;
         let done = 0;
         for await (const rc2 of streamChunks({ chunkPoints: 1 << 18 })) {
@@ -1639,10 +1635,8 @@ async function paintVolume(poly, code, isRect) {
     if (d.dhDoc && d.dhDoc.recordPosition) {
       for (let r = 0; r < n; r++) { const pos = d.dhDoc.recordPosition(r); if (pos && hit(pos[0], pos[1], pos[2])) hits.push(r); }
     } else {
-      let streamChunks = null;
-      if (d.blockDoc && d.blockDoc.header.dm) ({ streamChunks } = await openDmModel(d.blockDoc.blob));
-      else if (d.blockDoc) ({ streamChunks } = await openBlockModel(d.blockDoc.blob, { mapping: d.blockDoc.header.mapping }));
-      else return;
+      const streamChunks = await docPositionStream(d);
+      if (!streamChunks) return;
       let done = 0;
       for await (const rc2 of streamChunks({ chunkPoints: 1 << 18 })) {
         if (epoch !== _selEpoch) return;
@@ -8470,7 +8464,11 @@ async function openBlocksBlob(blob, name, opts = {}) {
   const prov = opts.provider ? await opts.provider() : null;
   const { header, streamChunks } = prov || await openBlockModel(blob, discovered ? { discovered } : (mapping ? { mapping } : {}));
   if (opts.forcePoints) header.grid = null;
-  _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints, parquet: prov ? prov.parquet : null };
+  // keep the provider's STREAM, not just its data. It used to be used once at
+  // open and discarded, so every later consumer re-derived how to read this
+  // source from format flags — which is how Parquet kept landing in the
+  // delimited branch. A doc that carries its own reader cannot be misread.
+  _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints, parquet: prov ? prov.parquet : null, streamChunks };
   registerDocs(lid, header.grid ? 'blocks' : 'points');
   fitFromHeader(header, opts.first !== false && opts.chan == null);
   renderer.setCategories(header.categories ? header.categories.length : 0);
@@ -8529,7 +8527,7 @@ async function openDmBlob(blob, name, opts = {}) {
   const gb = blob.size / 1073741824;
   const onProgress = (p) => { $('#meta').textContent = `${name} — discovery sweep ${Math.round(100 * p.done / (p.total || 1))}% of ${p.total.toLocaleString()} records${gb > 0.5 ? ` (${gb.toFixed(1)} GB)` : ''}…`; };
   const { header, streamChunks } = await openDmModel(blob, { ...(mapping ? { mapping } : {}), forcePoints: opts.forcePoints, onProgress, cached: opts.cached || null });
-  _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints };
+  _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints, streamChunks };
   registerDocs(lid, header.grid ? 'blocks' : 'points');
   fitFromHeader(header, opts.first !== false && opts.chan == null);
   renderer.setCategories(header.categories ? 1 : 0);
@@ -8610,6 +8608,22 @@ function reopenBlockChan(doc, chan, extra = {}) {
     return openParquetBlocks(doc.blob, doc.name, { ...o, mapping: { x: m.x, y: m.y, z: m.z, chan, cat: m.cat } });
   }
   return openBlocksBlob(doc.blob, doc.name, { ...o, chan });
+}
+// ONE way to get a cold position stream for a layer's records, whatever the
+// source. This dispatch was inlined at each consumer, and Parquet — a blockDoc
+// whose `header.dm` is falsy — kept falling into the DELIMITED branch, where the
+// CSV reader found no rows and the consumer silently did nothing. Volume
+// selection and volume painting were both dead on Parquet models for that reason.
+// A doc opened through a provider now carries its own reader and is asked for it;
+// the rest re-open cold exactly as before.
+async function docPositionStream(d) {
+  if (!d) return null;
+  if (d.blockDoc && d.blockDoc.streamChunks) return d.blockDoc.streamChunks;
+  if (d.blockDoc && d.blockDoc.header.dm) return (await openDmModel(d.blockDoc.blob)).streamChunks;
+  if (d.blockDoc) return (await openBlockModel(d.blockDoc.blob, { mapping: d.blockDoc.header.mapping })).streamChunks;
+  if (d.lasDoc) return (await openLas(d.lasDoc.blob)).streamChunks;
+  if (d.plyDoc) return (await openPly(d.plyDoc.blob)).streamChunks;
+  return null;
 }
 // switching the grade channel = re-stream sweep 2 with a new mapping (windowed ethos)
 $('#colorBy').addEventListener('change', () => {

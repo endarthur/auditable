@@ -2041,6 +2041,27 @@ await p.close();
   });
   chk(`dm→parquet: switching the display column keeps the blocks (${swapped.drawn} drawn, by ${swapped.next})`,
     swapped.drawn === 192 && swapped.rows === 192);
+
+  // volume selection reads records through a COLD position stream, and its
+  // dispatch had no Parquet branch either — a Parquet blockDoc fell to the
+  // delimited reader and the box selected nothing at all. Same for painting.
+  const vol = await pd.evaluate(async () => {
+    const M = window._micro, L = M.layers()[0];
+    M.setActiveLayer(L.id);
+    M.clearSelection({ silent: true });
+    document.querySelector('#btnFit').click();
+    await new Promise((z) => setTimeout(z, 600));
+    // a screen rectangle over the whole viewport: "through" selection projects
+    // every record, so a working Parquet stream selects them all and a broken
+    // one selects none — the difference the missing branch made
+    const c = document.querySelector('canvas');
+    const w = c.clientWidth, h = c.clientHeight;
+    await M.selectVolume([[2, 2], [w - 2, 2], [w - 2, h - 2], [2, h - 2]], 'replace', true);
+    await new Promise((z) => setTimeout(z, 1500));
+    return { sel: L._selCount || 0, rows: M.attrRowCountOf(L) };
+  }).catch((e) => ({ err: String(e).slice(0, 120) }));
+  chk(`dm→parquet: volume selection reaches a Parquet model (${vol.sel} of ${vol.rows} selected)`,
+    !vol.err && vol.sel === 192);
   await pd.close();
 }
 
