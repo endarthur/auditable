@@ -2029,8 +2029,19 @@ async function convertLayerToParquet(L, cvOpts = {}) {
   // (The streaming path preserves FILE ORDER — record identity is unchanged,
   // so paint/selection need no permutation at all.)
   if (order) {
-    for (const col of L.paintCols || []) { const nc = new Uint8Array(n); for (let i = 0; i < n; i++) nc[i] = col.codes[order[i]]; col.codes = nc; }
+    for (const col of L.paintCols || []) {
+      const nc = new Uint8Array(n); for (let i = 0; i < n; i++) nc[i] = col.codes[order[i]]; col.codes = nc;
+      // fvalues is the TRUTH for a materialized column — codes are only its
+      // 256-level display view. Permuting one and not the other left every
+      // estimated grade attached to the wrong block: the colour stayed right
+      // (codes moved) while export, filter and grade-tonnage read shuffled
+      // numbers, and persistElement then baked the misordering into the sidecar.
+      if (col.fvalues && col.fvalues.length === n) {
+        const nf = new Float32Array(n); for (let i = 0; i < n; i++) nf[i] = col.fvalues[order[i]]; col.fvalues = nf;
+      }
+    }
     if (L._selMask && L._selMask.length === n) { const nm = new Uint8Array(n); for (let i = 0; i < n; i++) nm[i] = L._selMask[order[i]]; L._selMask = nm; applyLayerSelection(L); }
+    if (L._filterMask) L._filterMask = null;                // rebuilt by the re-sweep below; stale rows would be misaligned
   }
   L._colStats = null;                                      // aggregate — recomputed on demand
   addPaintColorOptions(L);
@@ -14313,27 +14324,21 @@ async function ensureCatCounts(L, info) {
       const c = code.get(String(f[ci]).trim());
       if (c != null) { counts.set(c, (counts.get(c) || 0) + 1); total++; }
     }
-  } else if (d.blockDoc && d.blockDoc.header.dm) {
+  } else if (d.blockDoc) {
+    // ONE loop for all three block sources. It was two — a `.dm` branch and a
+    // delimited branch with an identical body — and Parquet, being neither, fell
+    // into the delimited one and had its binary bytes parsed as text. The Classes
+    // tab then showed counts of zero or nonsense beside category NAMES that were
+    // perfectly correct (those come from the footer), which is the hardest kind of
+    // wrong to notice. layerRows already abstracts the row source, so asking it
+    // fixes the bug and deletes the duplication together.
     const m = d.blockDoc.header.mapping;
     const code = new Map(info.names.map((n, i) => [n, i]));
-    const { recordBatches } = await openDmModel(d.blockDoc.blob);
-    for await (const { rows } of recordBatches()) {
-      for (const f of rows) {
-        if (!Number.isFinite(+f[m.x]) || !Number.isFinite(+f[m.y]) || !Number.isFinite(+f[m.z])) continue;
-        const c = code.get(String(f[m.cat]).trim());
-        if (c != null) counts.set(c, (counts.get(c) || 0) + 1);
-        total++;
-      }
-    }
-  } else if (d.blockDoc) {
-    const { blob, header } = d.blockDoc;
-    const m = header.mapping;
-    const code = new Map(info.names.map((n, i) => [n, i]));
-    for await (const batch of lineFields(blob, header.delim, header.hasHeaderRow !== undefined ? header.hasHeaderRow : !!header.columns)) {
+    for await (const batch of layerRows(L, null)) {
       for (const f of batch) {
         if (!Number.isFinite(+f[m.x]) || !Number.isFinite(+f[m.y]) || !Number.isFinite(+f[m.z])) continue;
         const c = code.get(String(f[m.cat]).trim());
-        if (c != null) { counts.set(c, (counts.get(c) || 0) + 1); }
+        if (c != null) counts.set(c, (counts.get(c) || 0) + 1);
         total++;
       }
     }

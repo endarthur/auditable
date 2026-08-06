@@ -2084,6 +2084,57 @@ await p.close();
   await pd.close();
 }
 
+
+// ── a materialized column must survive the Morton reorder ─────────────────────
+// "Store as Parquet" spatially re-sorts every base column and permutes each paint
+// column's `codes`. It did NOT permute `fvalues` — the full-precision backing that
+// IS the truth for a materialized column, read positionally by export, filter and
+// grade-tonnage. So the colour stayed right while the numbers shuffled, and
+// persistElement baked the misordering into the sidecar. This pins a value to a
+// coordinate and checks they are still together afterwards.
+{
+  const pm = await mkPage('sm2matorder');
+  const r = await pm.evaluate(async () => {
+    const M = window._micro;
+    // FE is a pure function of X, so every block's value is predictable from
+    // its own coordinates — misalignment cannot hide behind a plausible number
+    let t = 'XC,YC,ZC,FE' + String.fromCharCode(10);
+    for (let k = 0; k < 3; k++) for (let j = 0; j < 4; j++) for (let i = 0; i < 6; i++)
+      t += `${5 + i * 10},${5 + j * 10},${5 + k * 10},${i * 100}` + String.fromCharCode(10);
+    await M.openBlob(new Blob([t]), 'ord.csv', 'replace');
+    await new Promise((z) => setTimeout(z, 1400));
+    const L = M.layers()[0];
+    // a materialized column carrying that same predictable value
+    M.applyCalcCols(L, [{ name: 'EST', expr: 'FE * 2' }]);
+    await M.materializeCalcCol(L, 'EST');
+    await new Promise((z) => setTimeout(z, 900));
+
+    const check = async (tag) => {
+      const mc = M.matColGet(L, 'EST');
+      const nrec = M.attrRowCountOf(L);
+      let bad = 0, sample = null;
+      for (let rec = 0; rec < nrec; rec++) {
+        const row = await M.fetchLayerRow(L, rec);
+        const want = (+row[0] - 5) / 10 * 200;              // EST = FE*2 = ((X-5)/10)*100*2
+        const got = mc.fvalues[rec];
+        if (Math.abs(got - want) > 1e-6) { bad++; if (!sample) sample = { tag, rec, x: +row[0], want, got }; }
+      }
+      return { bad, nrec, sample };
+    };
+
+    const before = await check('before');
+    await M.convertLayerToParquet(L, { keepOriginal: true });
+    await new Promise((z) => setTimeout(z, 1600));
+    const after = await check('after');
+    return { before, after, name: M.layers()[0].name };
+  });
+  chk(`materialize order: the column is aligned before the reorder (${r.before.bad} mismatches of ${r.before.nrec})`,
+    r.before.bad === 0 && r.before.nrec === 72);
+  chk(`materialize order: it is STILL aligned after Store-as-Parquet (${r.after.bad} mismatches of ${r.after.nrec}${r.after.sample ? ', e.g. x=' + r.after.sample.x + ' want ' + r.after.sample.want + ' got ' + r.after.sample.got : ''})`,
+    r.after.bad === 0 && r.after.nrec === 72);
+  await pm.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
