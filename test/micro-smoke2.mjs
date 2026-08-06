@@ -2062,6 +2062,25 @@ await p.close();
   }).catch((e) => ({ err: String(e).slice(0, 120) }));
   chk(`dm→parquet: volume selection reaches a Parquet model (${vol.sel} of ${vol.rows} selected)`,
     !vol.err && vol.sel === 192);
+
+  // the capability record itself. Four consumers (export, spatial join, rules,
+  // column scan) decide whether to re-drop invalid-coordinate rows from this ONE
+  // predicate, so testing it once tests all four. Delimited renumbers what
+  // survives its load; .dm keeps true row numbers and Parquet emits every row.
+  const caps = await pd.evaluate(async () => {
+    const M = window._micro;
+    const pq = M.blockCaps(M.layers()[0]);                 // the converted Parquet model
+    let t = 'XC,YC,ZC,FE' + String.fromCharCode(10);
+    for (let i = 0; i < 8; i++) t += `${i * 10},0,0,${i}` + String.fromCharCode(10);
+    await M.openBlob(new Blob([t]), 'plain.csv', 'add');
+    await new Promise((z) => setTimeout(z, 1200));
+    const csv = M.blockCaps(M.layers().find((L) => L.name === 'plain.csv'));
+    return { pq, csv };
+  });
+  chk(`capabilities: Parquet is row-is-record with stats + projection (${JSON.stringify(caps.pq)})`,
+    caps.pq.rowIsRecord === true && caps.pq.stats === true && caps.pq.projection === true);
+  chk(`capabilities: a delimited model renumbers, and offers neither (${JSON.stringify(caps.csv)})`,
+    caps.csv.rowIsRecord === false && caps.csv.stats === false && caps.csv.projection === false);
   await pd.close();
 }
 

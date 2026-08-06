@@ -1843,7 +1843,7 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
   const parts = [colIdx.map((i) => esc(cols[i].name)).join(sep) + '\r\n'];
   let buf = [];
   const m = h.mapping || {};
-  const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm && !L.docs.blockDoc.parquet)   // Parquet is GAPLESS like .dm (its stream emits every row), NOT delimited
+  const isDelim = !blockCaps(L).rowIsRecord;
   const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm);
   let rec = 0, written = 0;
   for await (const batch of layerRows(L, null)) {
@@ -3085,7 +3085,7 @@ async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], co
     // this side's 3D selection, when asked for — record numbering mirrors
     // runExport's: invalid-coord DELIMITED rows aren't records (renderer numbering)
     const selMask = useSelection && L._selMask && L._selCount ? L._selMask : null;
-    const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm && !L.docs.blockDoc.parquet)   // Parquet is GAPLESS like .dm (its stream emits every row), NOT delimited
+    const isDelim = !blockCaps(L).rowIsRecord;
     let rec2 = 0;
     let rc = 0;
     for await (const batch of layerRows(L, null)) {
@@ -8608,6 +8608,30 @@ function reopenBlockChan(doc, chan, extra = {}) {
     return openParquetBlocks(doc.blob, doc.name, { ...o, mapping: { x: m.x, y: m.y, z: m.z, chan, cat: m.cat } });
   }
   return openBlocksBlob(doc.blob, doc.name, { ...o, chan });
+}
+// What a block source CAN DO, asked instead of what it IS. One definition, so a
+// new source is right everywhere at once instead of in however many places
+// remembered to name it (column-substrate spec §5: capabilities over identity).
+//
+// `rowIsRecord` is the one that bit us, four times. A DELIMITED source drops rows
+// with unparseable coordinates at load and renumbers what survives, so a consumer
+// re-reading the source must drop the same rows to stay aligned. `.dm` skips bad
+// rows but keeps their TRUE row numbers, and Parquet emits every row — so for both,
+// a source row's index IS its record index, and skipping anything shifts the lot.
+//
+// The format test below is deliberately the LAST one left: it is what providers
+// will declare for themselves, and when they do, this function keeps its shape.
+function blockCaps(L) {
+  const d = (L && L.docs && L.docs.blockDoc) || null;
+  if (!d) return { rowIsRecord: true, stats: false, projection: false, randomAccess: false };
+  if (d.caps) return d.caps;                               // declared by its provider
+  const dm = !!d.header.dm, pq = !!d.parquet;
+  return {
+    rowIsRecord: dm || pq,                                 // delimited renumbers; these do not
+    stats: pq,                                             // Parquet footer min/max → chunk pruning
+    projection: pq || dm,                                  // Parquet columns / .dm strided reads
+    randomAccess: true,                                    // all three can fetch one record
+  };
 }
 // ONE way to get a cold position stream for a layer's records, whatever the
 // source. This dispatch was inlined at each consumer, and Parquet — a blockDoc
@@ -14575,7 +14599,7 @@ async function runRules(L, force) {
   const codes = new Uint8Array(n);
   const counts = new Uint32Array(rules.length + 1);
   const m = h.mapping || {};
-  const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm && !L.docs.blockDoc.parquet)   // Parquet is GAPLESS like .dm (its stream emits every row), NOT delimited
+  const isDelim = !blockCaps(L).rowIsRecord;
   const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm);
   let rec = 0;
   $('#meta').textContent = 'rules: sweeping…';
@@ -15583,7 +15607,7 @@ async function scanColumns(L, onTick, { bands = false } = {}) {
   let rows = 0;
   // renderer record numbering for painted lookups (delimited skips bad-coord rows)
   const mSc = h.mapping || {};
-  const isDelimSc = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm && !L.docs.blockDoc.parquet)   // Parquet is GAPLESS like .dm (its stream emits every row), NOT delimited
+  const isDelimSc = !blockCaps(L).rowIsRecord;
   let recSc = 0;
   for await (const batch of layerRows(L, onTick ? (a, b) => onTick(a, b) : null)) {
     for (const f0 of batch) {
@@ -17319,7 +17343,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(hit);
 });
 
-window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, attrColumnsOf, fetchLayerRow, meshVertexData, meshVertexHeader, extendRow, schemaExt, calcFns, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, attrColumnsOf, fetchLayerRow, meshVertexData, meshVertexHeader, extendRow, schemaExt, calcFns, blockCaps, docPositionStream, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
