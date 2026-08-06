@@ -1849,7 +1849,7 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
   const parts = [colIdx.map((i) => esc(cols[i].name)).join(sep) + '\r\n'];
   let buf = [];
   const m = h.mapping || {};
-  const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm);
+  const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm && !L.docs.blockDoc.parquet)   // Parquet is GAPLESS like .dm (its stream emits every row), NOT delimited
   const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm);
   let rec = 0, written = 0;
   for await (const batch of layerRows(L, null)) {
@@ -3091,7 +3091,7 @@ async function runSpatialJoin({ leftL, rightL, target, columns, derived = [], co
     // this side's 3D selection, when asked for — record numbering mirrors
     // runExport's: invalid-coord DELIMITED rows aren't records (renderer numbering)
     const selMask = useSelection && L._selMask && L._selCount ? L._selMask : null;
-    const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm);
+    const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm && !L.docs.blockDoc.parquet)   // Parquet is GAPLESS like .dm (its stream emits every row), NOT delimited
     let rec2 = 0;
     let rc = 0;
     for await (const batch of layerRows(L, null)) {
@@ -8595,6 +8595,22 @@ function setColorLabels(header) {
   sel.innerHTML = h;
   sel.value = header.mapping.chan != null ? `chan:${header.mapping.chan}` : 'elev';
 }
+// Re-open a block model on a new grade channel. THREE sources, not two — and the
+// dispatch lives HERE, once, because it existed in three copies and two of them
+// were wrong. A Parquet layer handed to openBlocksBlob gets its bytes sniffed as
+// delimited text, yielding no rows and an empty layer that keeps its name, its
+// columns and its count; Parquet must re-open through its own provider, and takes
+// the channel as a mapping patch because it resolves columns by mapping rather
+// than by an opts.chan index.
+function reopenBlockChan(doc, chan, extra = {}) {
+  const o = { keepFilter: true, forcePoints: doc.forcePoints, layer: _activeId, first: false, ...extra };
+  if (doc.header.dm) return openDmBlob(doc.blob, doc.name, { ...o, chan });
+  if (doc.parquet) {
+    const m = doc.header.mapping;
+    return openParquetBlocks(doc.blob, doc.name, { ...o, mapping: { x: m.x, y: m.y, z: m.z, chan, cat: m.cat } });
+  }
+  return openBlocksBlob(doc.blob, doc.name, { ...o, chan });
+}
 // switching the grade channel = re-stream sweep 2 with a new mapping (windowed ethos)
 $('#colorBy').addEventListener('change', () => {
   const v = $('#colorBy').value;
@@ -8608,13 +8624,7 @@ $('#colorBy').addEventListener('change', () => {
     // kept its count and its columns and drew nothing. Parquet re-opens through
     // its own provider, and takes the new channel as a mapping patch because it
     // resolves columns by mapping rather than by an opts.chan index.
-    const chan = +v.slice(5);
-    const o = { keepFilter: true, forcePoints: _blockDoc.forcePoints, layer: _activeId, first: false };
-    if (_blockDoc.header.dm) openDmBlob(_blockDoc.blob, _blockDoc.name, { ...o, chan });
-    else if (_blockDoc.parquet) {
-      const m = _blockDoc.header.mapping;
-      openParquetBlocks(_blockDoc.blob, _blockDoc.name, { ...o, mapping: { x: m.x, y: m.y, z: m.z, chan, cat: m.cat } });
-    } else openBlocksBlob(_blockDoc.blob, _blockDoc.name, { ...o, chan });
+    reopenBlockChan(_blockDoc, +v.slice(5));
   } else requestRender();
 });
 for (const id of ['clipMin', 'clipMax']) $('#' + id).addEventListener('input', () => {
@@ -10254,8 +10264,7 @@ async function openProjectDir(dir) {
       if (ls.colorSel && ls.colorSel !== $('#colorBy').value && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) {
         L.colorSel = ls.colorSel;
         if (ls.colorSel.startsWith('chan:') && _blockDoc && +ls.colorSel.slice(5) !== _blockDoc.header.mapping.chan) {
-          const open2 = _blockDoc.header.dm ? openDmBlob : openBlocksBlob;
-          await open2(_blockDoc.blob, _blockDoc.name, { chan: +ls.colorSel.slice(5), keepFilter: false, forcePoints: _blockDoc.forcePoints, layer: _activeId, first: false });
+          await reopenBlockChan(_blockDoc, +ls.colorSel.slice(5), { keepFilter: false });
         }
         if ([...$('#colorBy').options].some((o) => o.value === ls.colorSel)) $('#colorBy').value = ls.colorSel;
       }
@@ -14552,7 +14561,7 @@ async function runRules(L, force) {
   const codes = new Uint8Array(n);
   const counts = new Uint32Array(rules.length + 1);
   const m = h.mapping || {};
-  const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm);
+  const isDelim = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm && !L.docs.blockDoc.parquet)   // Parquet is GAPLESS like .dm (its stream emits every row), NOT delimited
   const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm);
   let rec = 0;
   $('#meta').textContent = 'rules: sweeping…';
@@ -15560,7 +15569,7 @@ async function scanColumns(L, onTick, { bands = false } = {}) {
   let rows = 0;
   // renderer record numbering for painted lookups (delimited skips bad-coord rows)
   const mSc = h.mapping || {};
-  const isDelimSc = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm);
+  const isDelimSc = !!(L.docs.blockDoc && !L.docs.blockDoc.header.dm && !L.docs.blockDoc.parquet)   // Parquet is GAPLESS like .dm (its stream emits every row), NOT delimited
   let recSc = 0;
   for await (const batch of layerRows(L, onTick ? (a, b) => onTick(a, b) : null)) {
     for (const f0 of batch) {
