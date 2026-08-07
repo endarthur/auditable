@@ -6605,7 +6605,7 @@ async function writeGridDisplayCache(L, dir) {
   const gh = await resolveFileHandle(dir, rel + '.disp.grd', { create: true });
   let w = await gh.createWritable(); await w.write(writeSurferGrd(g)); await w.close();
   const jh = await resolveFileHandle(dir, rel + '.disp.json', { create: true });
-  w = await jh.createWritable(); await w.write(JSON.stringify({ v: 1, size: gd.blob.size, nx: g.nx, ny: g.ny })); await w.close();
+  w = await jh.createWritable(); await w.write(JSON.stringify({ v: 1, size: gd.blob.size, nx: g.nx, ny: g.ny, band: (g.band || 0) })); await w.close();   // band is part of the identity: a multi-band GeoTIFF is ONE file size for every band
   return null;
 }
 // New grid / block model dialog: type + extent (parameters or cover a layer /
@@ -6824,6 +6824,7 @@ const allocLayerId = () => {
   return null;
 };
 function closeAllLayers() {
+  for (const L of _layers) pinEvictLayer(L.id);            // nothing pinned survives a clear
   for (const [lid] of _attrTables) closeAttrTable(lid);
   renderer.clearChunks(); renderer.setPicked(null);
   _layers = []; _activeId = 0; frame = null; _docBbox = null;
@@ -10314,7 +10315,12 @@ async function openProjectDir(dir) {
       if (ls.kind !== 'mesh' && /\.(tif|tiff)$/i.test(ls.source)) {
         try {
           const jj = JSON.parse(await (await (await resolveFileHandle(dir, ls.source + '.disp.json')).getFile()).text());
-          if (jj && jj.v === 1 && jj.size === file.size) {
+          // size alone cannot identify a band — every band of a multi-band GeoTIFF
+          // shares one file size, so a cache built while viewing band A was being
+          // served for band B: right numbers under the cursor (eval windows the
+          // source at full res), wrong picture on screen. Caches written before
+          // this carry no `band`, so they only match band 0.
+          if (jj && jj.v === 1 && jj.size === file.size && (jj.band || 0) === (ls.band || 0)) {
             const grd = await readSurferGrd(await (await resolveFileHandle(dir, ls.source + '.disp.grd')).getFile());
             overR.displayCache = grd;
           }
@@ -13371,6 +13377,11 @@ function removeLayerUI(id) {
   dispatchEvent(new Event('micro:project-dirty'));
   closeAttrTable(id);
   renderer.removeLayer(id);
+  // pinned columns outlive their layer otherwise — a leak, and worse: layer ids
+  // come from a recycled 64-slot pool, so a NEW layer taking a freed id could be
+  // served a dead layer's cached values whenever the size:rowCount guard happened
+  // to match (two exports of the same shape, a re-imported template).
+  pinEvictLayer(id);
   _layers = _layers.filter((l) => l.id !== id);
   recomputeUnion();
   if (!_layers.length) { closeAllLayers(); $('#empty').style.display = ''; $('#meta').textContent = ''; return; }
