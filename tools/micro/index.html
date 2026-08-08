@@ -2625,8 +2625,17 @@ async function residentGridForEval(gridL, bbox4) {
     const win = windowForWorldBbox(gd.source.g, 0, bbox4, 2);
     if (win.width <= 0 || win.height <= 0) return gd.grid;
     $('#meta').textContent = `${gridL.label || gridL.name} — reading full-res window ${win.width}×${win.height}…`;
-    return await gridWindowFromGTiff(gd.source.g, 0, win);
-  } catch { return gd.grid; }
+    // the BAND is part of what is being evaluated: this is the sole eval path
+    // for every by-surface query and surface-extend, and omitting it sampled
+    // band 0's elevations whenever the user had picked another band
+    return await gridWindowFromGTiff(gd.source.g, 0, win, gd.source.band || 0);
+  } catch (e) {
+    // degrading to the DISPLAY grid changes the answer's resolution — say so
+    // rather than silently serving coarse numbers (the display grid may be a
+    // decimated overview on a big COG)
+    if (!gd.fullRes) $('#meta').textContent = `${gridL.label || gridL.name} — full-res read failed (${e.message}); using the display grid`;
+    return gd.grid;
+  }
 }
 // fraction of a block column [z−hz, z+hz] that lies BELOW the surface, averaged
 // over an rx×ry plan sub-sample of the footprint (±hx,±hy). hz=0 (points) → a
@@ -3289,6 +3298,25 @@ function numericColsOf(L) {
   return [...base, ...calc, ...paintNum];                                                       // GT/swath/stats read these via schemaExt + extendRow
 }
 function blockVolumeOf(L) { const a = gridAxesOf(L); return a ? (Math.abs((a.x.pitch || 1) * (a.y.pitch || 1) * (a.z.pitch || 1)) || 1) : 1; }
+// A sub-blocked model's blocks are NOT all the fine-lattice size — each carries
+// its own DIMX/Y/Z. GT/swath weighted every block by the constant fine pitch, so
+// a big parent block counted as one fine cell: tonnage silently under-weighted.
+// This returns a per-record volume from the row when the model is sub-blocked
+// (the dim columns are indices into the same row layerRecords yields), and the
+// constant otherwise. `vc` is the precomputed {dc, base} so the hot path is a
+// multiply, not a header lookup per record.
+function volumeContextOf(L) {
+  const bd = L.docs && L.docs.blockDoc, h = bd && bd.header;
+  const base = blockVolumeOf(L);
+  const dc = h && h.subBlocked && h.dimCols;               // { x, y, z } → column indices, or falsy
+  return { base, dc };
+}
+function volumeAt(vc, f) {
+  if (!vc.dc) return vc.base;
+  const dx = +f[vc.dc.x], dy = +f[vc.dc.y], dz = +f[vc.dc.z];
+  const v = Math.abs(dx * dy * dz);
+  return v > 0 ? v : vc.base;                              // a missing/zero dim → the fine pitch, honest not zero
+}
 // grade-tonnage: for each series column, cutoff → (tonnage above, mean grade above)
 // weight: a column name (back-compat) or { col?, const?, unit? } — `unit` is a
 // DECLARED density unit ('t/m3' | 'kg/m3' | 'lb/ft3'…), converted to t/m³ via
@@ -3429,7 +3457,7 @@ function openGradeTonnage(L, ropts) {
       let weightFn = null, filterFn = null;
       if (s.weight && s.weight.trim()) { try { weightFn = compileValue(s.weight, schema, { decimal: '.' }); } catch { throw new Error(`series weight "${s.weight}": invalid`); } }
       if (s.filter && s.filter.trim()) { try { filterFn = compileBool(s.filter, schema, { decimal: '.' }); } catch { throw new Error(`series filter "${s.filter}": invalid`); } }
-      return { s, L: Lx, support: blockVolumeOf(Lx), gradeFn, weightFn, filterFn, g: [], w: [], n: 0, weighted: !!weightFn };
+      return { s, L: Lx, vc: volumeContextOf(Lx), gradeFn, weightFn, filterFn, g: [], w: [], n: 0, weighted: !!weightFn };
     }).filter(Boolean);
     let total = 0;
     for (const se of series) {
@@ -3446,7 +3474,7 @@ function openGradeTonnage(L, ropts) {
           if (mask && !(rr < mask.length && mask[rr])) continue;
           if (se.filterFn && !se.filterFn(row)) continue;
           const g = +se.gradeFn(row); if (!Number.isFinite(g)) continue;
-          const w = (se.weightFn ? (+se.weightFn(row) || 0) * dScale : 1) * se.support;
+          const w = (se.weightFn ? (+se.weightFn(row) || 0) * dScale : 1) * volumeAt(se.vc, row);
           if (!(w > 0)) continue;
           se.g.push(g); se.w.push(w); se.n++;
         }
@@ -4829,7 +4857,7 @@ async function scanSwath(st, onProgress) {
     let weightFn = null, filterFn = null;
     if (s.weight && s.weight.trim()) { try { weightFn = compileValue(s.weight, schema, { decimal: '.' }); } catch { throw new Error(`series weight "${s.weight}": invalid`); } }
     if (s.filter && s.filter.trim()) { try { filterFn = compileBool(s.filter, schema, { decimal: '.' }); } catch { throw new Error(`series filter "${s.filter}": invalid`); } }
-    return { s, L, m, support: blockVolumeOf(L), gradeFn, weightFn, filterFn, fine: dirs.map(() => new Map()), n: 0 };
+    return { s, L, m, vc: volumeContextOf(L), gradeFn, weightFn, filterFn, fine: dirs.map(() => new Map()), n: 0 };
   }).filter(Boolean);
   if (!series.length) return null;
   const range = dirs.map((dir) => { let lo = Infinity, hi = -Infinity; for (const se of series) { const [a, b] = projRange(se.L, dir); if (a < lo) lo = a; if (b > hi) hi = b; } return [lo, hi]; });
@@ -4850,7 +4878,7 @@ async function scanSwath(st, onProgress) {
         const x = +row[m.x], y = +row[m.y], z = +row[m.z]; if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
         if (se.filterFn && !se.filterFn(row)) continue;
         const g = +se.gradeFn(row); if (!Number.isFinite(g)) continue;
-        const w = se.weightFn ? (+se.weightFn(row) || 0) : se.support; if (!(w > 0)) continue;
+        const w = (se.weightFn ? (+se.weightFn(row) || 0) : 1) * volumeAt(se.vc, row); if (!(w > 0)) continue;
         for (let di = 0; di < dirs.length; di++) {
           const d = dirs[di], t = x * d[0] + y * d[1] + z * d[2], bi = Math.floor((t - fineOrigin[di]) / fineW[di]);
           let e = se.fine[di].get(bi); if (!e) { e = { sw: 0, swg: 0, n: 0 }; se.fine[di].set(bi, e); }
@@ -6459,9 +6487,13 @@ $('#sfGo').onclick = async () => {
 async function exportGridAsc(L) {
   const gd = L.docs.gridDoc; if (!gd) return;
   let g = gd.grid;
-  if (gd.source && gd.source.g && gd.level) {              // display is an overview — export FULL res
+  if (gd.source && gd.source.g && !gd.fullRes) {           // display is decimated — export FULL res
+    // was gated on `gd.level`, which is 0 (falsy) for a big single-level TIFF
+    // decimated by step — exactly the common non-COG case, which therefore
+    // exported the coarse display grid while claiming full resolution. And the
+    // reload must decode the SELECTED band, not default to band 0.
     $('#meta').textContent = `${L.label || L.name} — decoding full resolution for export…`;
-    try { g = await gridFromGTiff(gd.source.g, 0); } catch { g = gd.grid; }
+    try { g = await gridFromGTiff(gd.source.g, 0, gd.source.band || 0); } catch { g = gd.grid; }
   }
   if (!g) return;
   if (Math.abs(g.dx - g.dy) > g.dx * 1e-3) $('#meta').textContent = `note: non-square grid exported at cellsize ${g.dx}`;
@@ -7076,7 +7108,8 @@ async function readAnyGrid(blob, name, displayCache = null, band = 0) {
       const grid = displayCache;
       grid.crs = grid.crs || g.geo.crs;
       grid.form = `GeoTIFF ${g.images[0].width}×${g.images[0].height} · display cache`;
-      grid._src = { g, level: 0, name, step: 2 };          // step>1 → not fullRes → eval windows
+      grid.band = band; grid.bands = g.images[0].samplesPerPixel;
+      grid._src = { g, level: 0, name, step: 2, band };    // step>1 → not fullRes → eval windows; band rides along
       return grid;
     }
     // decode an OVERVIEW within a decode budget for the display — a big COG
