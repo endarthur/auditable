@@ -890,6 +890,7 @@ import { readGTiff, gridFromGTiff, gridWindowFromGTiff, gridDecimatedFromGTiff, 
 import { parquetInfo, parquetInfoAsync, streamParquetColumns, readParquetRange, readParquetRow, writeParquet, createParquetBlobWriter } from '../../ext/parquet/index.js';   // Apache Parquet block models (columnar, streamed row-group by row-group)
 import { v3, dirTrendPlunge, frameDipDirDipRake, swathDir } from './src/geom.js';   // first module carved from the monolith
 import { SURFER_BLANK, writeSurferGrd, readSurferGrd, readEsriAsc, writeEsriAsc } from './src/grid-io.js';   // grid serialization
+import { S } from './src/state.js';                        // shared mutable app state (S.layers, S.project, …)
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -916,8 +917,8 @@ function currentDrawOpts() {
   const clipOf = (L) => { const c = [L.clip[0].trim(), L.clip[1].trim()]; return [c[0] === '' ? null : +c[0], c[1] === '' ? null : +c[1]]; };
   const modeOf = (v) => (v === 'elev' ? 0 : v && v.startsWith('chan:') ? 1 : v === 'cat' || v === 'rules' || (v && v.startsWith('paint:')) ? 2 : v === 'solid' ? 3 : +v || 0);
   const layerOpts = {};
-  for (const L of _layers) layerOpts[L.id] = { colorMode: L.id === _activeId ? resolveColorMode() : modeOf(L.colorSel), clip: L.id === _activeId ? [clipV('clipMin'), clipV('clipMax')] : clipOf(L) };
-  return { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', blockEdges: _blockEdges, section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')], layerOpts: _layers.length ? layerOpts : null };
+  for (const L of S.layers) layerOpts[L.id] = { colorMode: L.id === _activeId ? resolveColorMode() : modeOf(L.colorSel), clip: L.id === _activeId ? [clipV('clipMin'), clipV('clipMax')] : clipOf(L) };
+  return { budget: +$('#budget').value, pointPx: +$('#ptPx').value, colorMode: resolveColorMode(), blocksAsPoints: _viewMode === 'points', blockEdges: _blockEdges, section: currentSection(), clip: [clipV('clipMin'), clipV('clipMax')], layerOpts: S.layers.length ? layerOpts : null };
 }
 function loop(t) {
   if (dirty || !converged) {                               // keep converging while still (progressive accumulation)
@@ -1237,7 +1238,7 @@ function pipTest(x, y, poly) {
 }
 function clearSelection({ silent } = {}) {
   let had = false;
-  for (const L of _layers) {
+  for (const L of S.layers) {
     if (L._selMask) { had = true; L._selMask = null; L._selCount = 0; renderer.setLayerSelection(L.id, null); attrTableSelChanged(L.id); refreshLinkedWindows(L); }
   }
   if (had) { markProjectDirty(); requestRender(); if (!silent) $('#meta').textContent = 'selection cleared'; }
@@ -1289,7 +1290,7 @@ async function selectionToColumn(L) {
 }
 function selectionStatus() {
   let total = 0, nL = 0;
-  for (const L of _layers) if (L._selCount) { total += L._selCount; nL++; }
+  for (const L of S.layers) if (L._selCount) { total += L._selCount; nL++; }
   $('#meta').textContent = total
     ? `selected: ${total.toLocaleString()} element${total === 1 ? '' : 's'}${nL > 1 ? ` across ${nL} layers` : ''} — shift adds · alt subtracts · Esc clears`
     : 'selection: nothing there';
@@ -1316,7 +1317,7 @@ function selectByPolygon(poly, mode, isRect) {
     }
   }
   if (mode === 'replace') clearSelection({ silent: true });
-  for (const L of _layers) {
+  for (const L of S.layers) {
     const hits = perLayer.get(L.id);
     if (!hits) continue;
     // a mesh hit is encoded as record 0 (the CPU resolves the triangle on a
@@ -1358,7 +1359,7 @@ async function selectVolume(poly, mode, isRect) {
   };
   if (mode === 'replace') clearSelection({ silent: true });
   const v = mode === 'subtract' ? 0 : 1;
-  for (const L of _layers) {
+  for (const L of S.layers) {
     if (!L.visible || L.kind === 'mesh') continue;
     const d = L.docs;
     const n = attrRowCountOf(L);
@@ -2072,7 +2073,7 @@ async function convertLayerToParquet(L, cvOpts = {}) {
 // ── the export dialog ──
 let _exDlg = null;
 function openExportDialog(L0) {
-  const layers = _layers.filter((L) => layerTableHeader(L));
+  const layers = S.layers.filter((L) => layerTableHeader(L));
   if (!layers.length) { $('#meta').textContent = 'export: no table-backed layers (blocks or drillholes)'; return; }
   const L = L0 && layerTableHeader(L0) ? L0 : (activeLayer() && layerTableHeader(activeLayer()) ? activeLayer() : layers[0]);
   _exDlg = { lid: L.id, scope: 'all', off: new Set(), delim: ',', dec: false, name: null, format: 'csv', codec: 'SNAPPY', spatialSort: true };
@@ -2097,7 +2098,7 @@ function renderExportDialog() {
   };
   // layer
   const lSel = document.createElement('select');
-  for (const L2 of _layers.filter((x) => layerTableHeader(x))) {
+  for (const L2 of S.layers.filter((x) => layerTableHeader(x))) {
     const o = document.createElement('option'); o.value = String(L2.id); o.textContent = L2.label || L2.name; lSel.appendChild(o);
   }
   lSel.value = String(d.lid);
@@ -2373,7 +2374,7 @@ let _windingGpu = (() => { try { return localStorage.getItem('micro.windingCpu')
 function setWindingGpu(on) {
   _windingGpu = !!on;
   try { localStorage.setItem('micro.windingCpu', on ? '0' : '1'); } catch { /* private */ }
-  for (const L of _layers) {                                // drop cached engines so the next run uses the chosen backend
+  for (const L of S.layers) {                                // drop cached engines so the next run uses the chosen backend
     if (L._windingEngine && L._windingEngine.terminate) L._windingEngine.terminate();
     if (L._peelEngine && L._peelEngine.terminate) L._peelEngine.terminate();
     L._windingEngine = null; L._windingMeshes = null; L._peelEngine = null; L._peelMeshes = null;
@@ -2692,7 +2693,7 @@ async function selectByGridSurface(gridL, { mode = 'below', meshB = null, target
   const epoch = ++_selEpoch;
   if (combine === 'replace') clearSelection({ silent: true });
   const v = combine === 'subtract' ? 0 : 1;
-  const Ls = targets || _layers.filter((L) => L.visible && hasRecords(L) && !L.docs.gridDoc);
+  const Ls = targets || S.layers.filter((L) => L.visible && hasRecords(L) && !L.docs.gridDoc);
   const bbox4 = targetsXYBbox(Ls);
   const surfA = surfaceFromGrid(await residentGridForEval(gridL, bbox4));
   const surfB = mode === 'between' && meshB && meshB.docs.gridDoc ? surfaceFromGrid(await residentGridForEval(meshB, bbox4)) : null;
@@ -2809,7 +2810,7 @@ async function selectBySolid(meshL, { mode = 'inside', meshB = null, targets = n
   const epoch = ++_selEpoch;
   if (combine === 'replace') clearSelection({ silent: true });
   const v = combine === 'subtract' ? 0 : 1;
-  const Ls = targets || _layers.filter((L) => L.visible && hasRecords(L));
+  const Ls = targets || S.layers.filter((L) => L.visible && hasRecords(L));
   let S = null, SB = null;                                 // the sparse-path BVHs, built lazily
   for (let li = 0; li < Ls.length; li++) {
     const L = Ls[li];
@@ -3564,7 +3565,7 @@ function openGradeTonnage(L, ropts) {
     const dot = document.createElement('span'); dot.className = 'sw-dot'; dot.style.background = s.color; dot.title = 'cycle colour';
     dot.onclick = () => { s.color = SERIES_COLORS[(SERIES_COLORS.indexOf(s.color) + 1) % SERIES_COLORS.length]; dot.style.background = s.color; if (st.scan) plot(); };
     const laySel = document.createElement('select'); laySel.className = 'sw-sel';
-    for (const Lx of _layers.filter((x) => numericColsOf(x).length && (x.docs.blockDoc || x.docs.dhDoc))) { const o = document.createElement('option'); o.value = Lx.id; o.textContent = Lx.label || Lx.name; if (Lx.id === s.layerId) o.selected = true; laySel.append(o); }
+    for (const Lx of S.layers.filter((x) => numericColsOf(x).length && (x.docs.blockDoc || x.docs.dhDoc))) { const o = document.createElement('option'); o.value = Lx.id; o.textContent = Lx.label || Lx.name; if (Lx.id === s.layerId) o.selected = true; laySel.append(o); }
     laySel.onchange = () => { s.layerId = +laySel.value; const cols = numericColsOf(layerById(s.layerId)); if (!cols.includes(s.col)) s.col = cols[0] || s.col; markStale(); buildRail(); };
     const x = document.createElement('button'); x.className = 'sw-x'; x.textContent = '×'; x.title = 'remove series'; x.onclick = () => { if (st.series.length > 1) { st.series.splice(i, 1); markStale(); buildRail(); } };
     top.append(dot, laySel, x); box.append(top);
@@ -3742,7 +3743,7 @@ function analysisSerCfg(series) {
 function analysisSerRestore(cfgSeries, L) {
   const out = [];
   for (const c of cfgSeries || []) {
-    const Lx = _layers.find((x) => x.name === c.layer) || L;
+    const Lx = S.layers.find((x) => x.name === c.layer) || L;
     if (!Lx) continue;
     out.push({ layerId: Lx.id, col: c.col, unit: c.unit || '', weight: c.weight || '', filter: c.filter || '', color: c.color || SERIES_COLORS[out.length % SERIES_COLORS.length] });
   }
@@ -4045,7 +4046,7 @@ function routineTargets(tool, params, slug, P) {
 }
 // does a layer already carry this column? (any kind — source, ƒ, painted, stored)
 function layerHasColumn(name, layerName) {
-  const L = _layers.find((x) => x.name === layerName || x.label === layerName);
+  const L = S.layers.find((x) => x.name === layerName || x.label === layerName);
   if (!L) return false;
   const h = layerTableHeader(L);
   const all = [
@@ -4149,7 +4150,7 @@ async function runRoutine(r, opts = {}) {
   const missingR = [...new Set(steps.filter((st) => st.recipe && !byName.get(st.recipe)).map((st) => st.recipe))];
   if (missingR.length) { $('#meta').textContent = `routine: missing recipe${missingR.length > 1 ? 's' : ''} — ${missingR.join(', ')}`; return; }
   // pre-flight 2: every referenced layer is loaded (routines never prompt mid-run)
-  const loaded = new Set(_layers.map((L) => L.name));
+  const loaded = new Set(S.layers.map((L) => L.name));
   const missingL = new Set();
   for (const st of steps) {
     if (st.guard) continue;
@@ -4170,7 +4171,7 @@ async function runRoutine(r, opts = {}) {
     if (pr.col) cols.push({ layer: pr.layer, col: pr.col });
     for (const { layer, col } of cols) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(col).trim())) continue;   // an expression, not a bare name
-      const L2 = _layers.find((x) => x.name === layer); const h2 = L2 && layerTableHeader(L2);
+      const L2 = S.layers.find((x) => x.name === layer); const h2 = L2 && layerTableHeader(L2);
       if (!h2) continue;
       if (!validate(String(col).trim(), schemaExt(L2, h2)).ok) badCols.push(`${col}${layer ? ' on ' + layer : ''}`);
     }
@@ -4351,9 +4352,9 @@ function runRecipe(r, andRun = true) {
       : openSwath(Lp, { cfg: r.params, run: andRun });
   };
   const wantName = (r.params.series && r.params.series[0] && r.params.series[0].layer) || r.params.layer;
-  const L = _layers.find((x) => x.name === wantName);
+  const L = S.layers.find((x) => x.name === wantName);
   if (L) { open2(L); return; }
-  const cands = _layers.filter((x) => (r.tool === 'stats' || r.tool === 'calccols' ? !!layerTableHeader(x) : gridAxesOf(x)));
+  const cands = S.layers.filter((x) => (r.tool === 'stats' || r.tool === 'calccols' ? !!layerTableHeader(x) : gridAxesOf(x)));
   if (!cands.length) { $('#meta').textContent = `recipe “${r.name}”: wants “${wantName || 'a block model'}” and no suitable layer is loaded`; return; }
   setTimeout(() => menuXY(innerWidth / 2 - 140, innerHeight / 3, [
     ...cands.map((c) => ({ label: `“${r.name}” wants ${wantName} — use ${c.label || c.name}`, action: () => open2(c) })),
@@ -4781,7 +4782,7 @@ function openInputsDialog(r) {
     return src ? src.value : null;
   };
   const fillCols = (sel, inp) => {
-    const L2 = _layers.find((x) => x.name === layerValOf(inp)) || activeLayer();
+    const L2 = S.layers.find((x) => x.name === layerValOf(inp)) || activeLayer();
     const cur = sel.value;
     sel.textContent = '';
     for (const c of colChoicesOf(L2)) { const o = document.createElement('option'); o.value = o.textContent = c; sel.appendChild(o); }
@@ -4796,7 +4797,7 @@ function openInputsDialog(r) {
     if (ty === 'choice' || ty === 'layer' || ty === 'column') {
       f = document.createElement('select');
       if (ty === 'choice') for (const o of inp.options || []) { const op = document.createElement('option'); op.value = op.textContent = String(o); f.appendChild(op); }
-      if (ty === 'layer') for (const L2 of _layers) { const op = document.createElement('option'); op.value = op.textContent = L2.name; f.appendChild(op); }
+      if (ty === 'layer') for (const L2 of S.layers) { const op = document.createElement('option'); op.value = op.textContent = L2.name; f.appendChild(op); }
       if (ty === 'column') fillCols(f, inp);
       const want = vals[inp.name] !== undefined ? vals[inp.name] : inp.default;
       if (want !== undefined && [...f.options].some((o) => o.value === String(want))) f.value = String(want);
@@ -5012,7 +5013,7 @@ function openSwath(L, ropts) {
     const di = st.axis, bw = effWidth(), off = effOffset();
     const b = binSwath(st.scan, di, bw, off);
     if (!b.keys.length) { win.sub.textContent = 'no data in range'; st._plotSpec = null; renderChart(); return; }
-    const multi = _layers.length > 1 || st.series.length > 1;
+    const multi = S.layers.length > 1 || st.series.length > 1;
     const gl = st.gradeUnit === 'pct' ? '%' : st.gradeUnit;
     const spec = { xLabel: `distance along ${st.scan.dirNames[di]}`, leftLabel: `mean grade${gl ? ` (${gl})` : ''}`, rightLabel: st.bars === 'tonnage' ? 'weight' : 'count', series: [], ...rangesOf(st) };
     const prim = b.out[0];
@@ -5148,7 +5149,7 @@ function openSwath(L, ropts) {
     const dot = document.createElement('span'); dot.className = 'sw-dot'; dot.style.background = s.color; dot.title = 'cycle colour';
     dot.onclick = () => { s.color = SERIES_COLORS[(SERIES_COLORS.indexOf(s.color) + 1) % SERIES_COLORS.length]; dot.style.background = s.color; if (st.scan) plot(); };
     const laySel = document.createElement('select'); laySel.className = 'sw-sel';
-    for (const Lx of _layers.filter((x) => numericColsOf(x).length && (x.docs.blockDoc || x.docs.dhDoc))) { const o = document.createElement('option'); o.value = Lx.id; o.textContent = Lx.label || Lx.name; if (Lx.id === s.layerId) o.selected = true; laySel.append(o); }
+    for (const Lx of S.layers.filter((x) => numericColsOf(x).length && (x.docs.blockDoc || x.docs.dhDoc))) { const o = document.createElement('option'); o.value = Lx.id; o.textContent = Lx.label || Lx.name; if (Lx.id === s.layerId) o.selected = true; laySel.append(o); }
     laySel.onchange = () => { s.layerId = +laySel.value; const cols = numericColsOf(layerById(s.layerId)); if (!cols.includes(s.col)) s.col = cols[0] || s.col; markStale(); buildRail(); };
     const x = document.createElement('button'); x.className = 'sw-x'; x.textContent = '×'; x.title = 'remove series'; x.onclick = () => { if (st.series.length > 1) { st.series.splice(i, 1); markStale(); buildRail(); } };
     top.append(dot, laySel, x); box.append(top);
@@ -5416,7 +5417,7 @@ function openStats(L, ropts) {
 // overlay model-grade vs sample-grade per slab. (Support differs — samples are
 // point support, blocks are block support — so a GLOBAL grade offset can be
 // real; the swaths flag LOCAL/conditional bias.)
-const drillholeLayers = () => _layers.filter((L) => L.dh && L.docs.dhDoc);
+const drillholeLayers = () => S.layers.filter((L) => L.dh && L.docs.dhDoc);
 function extractSamples(D, gradeCol) {
   const dh = D.docs && D.docs.dhDoc, h = layerTableHeader(D); if (!dh || !h) return [];
   const gi = h.columns.indexOf(gradeCol); if (gi < 0) return [];
@@ -5815,9 +5816,9 @@ function exportLineageReport(L) {
 // ── the assign-domains dialog ──
 let _adDlg = null;
 function openDomainsDialog() {
-  const solids = _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
+  const solids = S.layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
   if (!solids.length) { $('#meta').textContent = 'assign domains: open the domain solids first (context-tier meshes)'; return; }
-  const grids = _layers.filter((L) => { const doc = L.docs.blockDoc; return doc && (doc.grid || (doc.header && doc.header.grid)); });
+  const grids = S.layers.filter((L) => { const doc = L.docs.blockDoc; return doc && (doc.grid || (doc.header && doc.header.grid)); });
   if (!grids.length) { $('#meta').textContent = 'assign domains: needs a regular block model layer'; return; }
   _adDlg = {
     picks: new Set(solids.map((L) => L.id)),
@@ -5839,7 +5840,7 @@ function renderDomainsDialog() {
     body.appendChild(row);
     return row;
   };
-  const solids = _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
+  const solids = S.layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
   const sRow = mkRow2('solids');
   sRow.style.alignItems = 'flex-start';
   const list = document.createElement('div');
@@ -5854,7 +5855,7 @@ function renderDomainsDialog() {
     list.appendChild(lab);
   }
   sRow.appendChild(list);
-  const grids = _layers.filter((L) => { const doc = L.docs.blockDoc; return doc && (doc.grid || (doc.header && doc.header.grid)); });
+  const grids = S.layers.filter((L) => { const doc = L.docs.blockDoc; return doc && (doc.grid || (doc.header && doc.header.grid)); });
   const gSel = document.createElement('select');
   for (const L of grids) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; gSel.appendChild(o); }
   gSel.value = String(d.lid);
@@ -5883,7 +5884,7 @@ function adProgress(frac, label) {
 $('#adCancel').onclick = () => { sbCancelActive(); $('#adDlg').classList.remove('show'); _adDlg = null; };
 $('#adGo').onclick = async () => {
   const d = _adDlg; if (!d) return;
-  const solids = _layers.filter((L) => d.picks.has(L.id));
+  const solids = S.layers.filter((L) => d.picks.has(L.id));
   const L = layerById(d.lid);
   if (!solids.length || !L) { $('#adDlgMsg').textContent = 'pick at least one solid'; return; }
   const btn = $('#adGo');
@@ -5903,11 +5904,11 @@ $('#adGo').onclick = async () => {
 // ── the select-by-solid dialog ──
 let _sbDlg = null;
 function openSolidDialog(meshL0) {
-  const solids = _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
-  const gridsG = _layers.filter((L) => L.docs.gridDoc);
+  const solids = S.layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
+  const gridsG = S.layers.filter((L) => L.docs.gridDoc);
   const geoms = [...solids, ...gridsG];
   if (!geoms.length) { $('#meta').textContent = 'select by solid / surface: open a context-tier mesh (.msh / .obj / small .ply) or a grid (.tif / .grd / .asc) first'; return; }
-  const elements = _layers.filter((L) => hasRecords(L) && !L.docs.gridDoc);
+  const elements = S.layers.filter((L) => hasRecords(L) && !L.docs.gridDoc);
   if (!elements.length) { $('#meta').textContent = 'select by solid / surface: no element layers to classify'; return; }
   _sbDlg = {
     solid: (meshL0 && geoms.includes(meshL0) ? meshL0 : geoms[0]).id,
@@ -5955,8 +5956,8 @@ function renderSolidDialog() {
       row.appendChild(lab);
     }
   };
-  const solids = _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
-  const gridsG = _layers.filter((L) => L.docs.gridDoc);
+  const solids = S.layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
+  const gridsG = S.layers.filter((L) => L.docs.gridDoc);
   const geoms = [...solids, ...gridsG];
   const sSel = document.createElement('select');
   for (const L of geoms) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = (L.docs.gridDoc ? '▦ ' : '') + (L.label || L.name); sSel.appendChild(o); }
@@ -6014,11 +6015,11 @@ function renderSolidDialog() {
   }
   if (isSurf && d.side === 'between') {
     const others = geomIsGrid
-      ? _layers.filter((L) => L.docs.gridDoc && L.id !== d.solid)
-      : _layers.filter((L) => L.kind === 'mesh' && L.id !== d.solid && L.docs.meshDoc && !L.docs.meshDoc.header.soup && L._solidMesh && !L._solidMesh.closed);
+      ? S.layers.filter((L) => L.docs.gridDoc && L.id !== d.solid)
+      : S.layers.filter((L) => L.kind === 'mesh' && L.id !== d.solid && L.docs.meshDoc && !L.docs.meshDoc.header.soup && L._solidMesh && !L._solidMesh.closed);
     if (!others.length) {
       body.appendChild(ppNote(geomIsGrid ? 'between needs a SECOND grid surface layer' : 'between needs a SECOND open surface layer (open one, or wait for topology reads)'));
-      if (!geomIsGrid) _layers.filter((L) => L.kind === 'mesh' && L.id !== d.solid && L.docs.meshDoc && !L.docs.meshDoc.header.soup && !L._solidMesh)
+      if (!geomIsGrid) S.layers.filter((L) => L.kind === 'mesh' && L.id !== d.solid && L.docs.meshDoc && !L.docs.meshDoc.header.soup && !L._solidMesh)
         .forEach((L) => solidOrientedMesh(L).then(() => { if (_sbDlg === d) renderSolidDialog(); }));
       $('#sbGo').disabled = true;
     } else {
@@ -6033,7 +6034,7 @@ function renderSolidDialog() {
     }
   }
   if (d.act === 'ratio') {
-    const grids = _layers.filter((L) => { const doc = L.docs.blockDoc; return doc && (doc.grid || (doc.header && doc.header.grid)); });
+    const grids = S.layers.filter((L) => { const doc = L.docs.blockDoc; return doc && (doc.grid || (doc.header && doc.header.grid)); });
     if (!grids.length) { body.appendChild(ppNote('fraction-inside needs a regular block model layer')); $('#sbGo').disabled = true; return; }
     $('#sbGo').disabled = false;
     if (d.ratioLid == null || !grids.some((L) => L.id === d.ratioLid)) d.ratioLid = grids[0].id;
@@ -6077,7 +6078,7 @@ function renderSolidDialog() {
       mkRadios(mkRow2('combine'), 'sbcomb', [['replace', 'replace'], ['add', 'add'], ['subtract', 'subtract']], d.combine, (k) => { d.combine = k; });
     }
     const tRow = mkRow2('layers');
-    for (const L of _layers.filter((x) => hasRecords(x) && !x.docs.gridDoc)) {
+    for (const L of S.layers.filter((x) => hasRecords(x) && !x.docs.gridDoc)) {
       const flaggable = d.act !== 'flag' || !!layerTableHeader(L);
       const lab = document.createElement('label');
       if (!flaggable) { lab.className = 'dis'; lab.title = 'flag columns need a table-backed layer'; }
@@ -6128,12 +6129,12 @@ async function sbExecute(d, onProgress) {
     if (!col) return { ok: false, msg: $('#meta').textContent };
   } else if (d.act === 'flag') {
     const defName = sbDefaultName(d);
-    const made = await flagBySolid(meshL, _layers.filter((L) => d.targets.has(L.id)), {
+    const made = await flagBySolid(meshL, S.layers.filter((L) => d.targets.has(L.id)), {
       name: (d.flagName || defName).trim() || defName, label: d.flagLabel || 'IN', mode: d.side, meshB, method, onProgress,
     });
     if (!made) return { ok: false, msg: $('#meta').textContent || 'no layer took the column' };
   } else {
-    await selectBySolid(meshL, { mode: d.side, meshB, targets: _layers.filter((L) => d.targets.has(L.id)), combine: d.combine, method, onProgress });
+    await selectBySolid(meshL, { mode: d.side, meshB, targets: S.layers.filter((L) => d.targets.has(L.id)), combine: d.combine, method, onProgress });
   }
   return { ok: true };
 }
@@ -6150,7 +6151,7 @@ function sbCfgOf(d) {
     p.column = (d.name || sbDefaultName(d)).trim() || sbDefaultName(d);
     p.probes = d.res.slice();
   } else {
-    p.targets = _layers.filter((L) => d.targets.has(L.id)).map((L) => L.name);
+    p.targets = S.layers.filter((L) => d.targets.has(L.id)).map((L) => L.name);
     if (d.act === 'flag') { p.column = (d.flagName || sbDefaultName(d)).trim() || sbDefaultName(d); p.value = d.flagLabel || 'IN'; }
     if (d.act === 'select') p.combine = d.combine;
   }
@@ -6158,7 +6159,7 @@ function sbCfgOf(d) {
 }
 // recipe params → dialog state. Throws with a named-layer message when a
 // referenced layer isn't loaded (routines surface it before anything runs).
-const sbFindLayer = (name) => _layers.find((x) => x.name === name || x.label === name);
+const sbFindLayer = (name) => S.layers.find((x) => x.name === name || x.label === name);
 async function sbStateFromParams(p) {
   const geomL = sbFindLayer(String(p.geometry || ''));
   if (!geomL) throw new Error(`solid recipe: geometry layer “${p.geometry || '?'}” is not loaded`);
@@ -6194,7 +6195,7 @@ async function sbStateFromParams(p) {
     d.ratioLid = M.id;
   } else {
     const wanted = Array.isArray(p.targets) && p.targets.length ? p.targets.map(String) : null;
-    const elements = _layers.filter((L) => hasRecords(L) && !L.docs.gridDoc);
+    const elements = S.layers.filter((L) => hasRecords(L) && !L.docs.gridDoc);
     for (const L of elements) if (wanted ? wanted.some((n2) => L.name === n2 || L.label === n2) : L.visible) d.targets.add(L.id);
     if (wanted) {
       const missing = wanted.filter((n2) => !elements.some((L) => L.name === n2 || L.label === n2));
@@ -6312,7 +6313,7 @@ async function buildEmptyBlockCsv({ x0, y0, z0, dx, dy, dz, nx, ny, nz, fill = 0
 // resulting node count live, choose the top or bottom surface, rasterize
 let _rgDlg = null;
 function openMeshGridDialog(meshL0) {
-  const meshes = _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
+  const meshes = S.layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup);
   if (!meshes.length) { $('#meta').textContent = 'mesh → grid: needs a context-tier mesh (.msh / .obj / small .ply)'; return; }
   const meshL = meshL0 && meshes.includes(meshL0) ? meshL0 : meshes[0];
   const bb = meshL.bboxLocal ? { min: [meshL.bboxLocal[0] + frame.origin[0], meshL.bboxLocal[1] + frame.origin[1]], max: [meshL.bboxLocal[3] + frame.origin[0], meshL.bboxLocal[4] + frame.origin[1]] } : null;
@@ -6333,7 +6334,7 @@ function renderMeshGridDialog() {
   mSel.value = String(d.mesh);
   mSel.onchange = () => { d.mesh = +mSel.value; renderMeshGridDialog(); };
   row('surface', mSel);
-  const gridLayers = _layers.filter((L) => L.docs.gridDoc);
+  const gridLayers = S.layers.filter((L) => L.docs.gridDoc);
   const eSel = document.createElement('select');
   { const o = document.createElement('option'); o.value = 'mesh'; o.textContent = 'the mesh bounds'; eSel.appendChild(o); }
   for (const L of gridLayers) { const o = document.createElement('option'); o.value = 'G' + L.id; o.textContent = `match: ${L.label || L.name}`; eSel.appendChild(o); }
@@ -6377,7 +6378,7 @@ $('#rgGo').onclick = async () => {
 // downstream flag/between/reconcile consume heightfields natively and exactly,
 // and a naive TIN would be 2 tris/cell of bloat. Mesh-native (exact vertices)
 // waits on CDT; grid→simplified-TIN is a separate roadmapped verb.
-const surfaceableLayers = () => _layers.filter((L) => (L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup) || L.docs.gridDoc);
+const surfaceableLayers = () => S.layers.filter((L) => (L.kind === 'mesh' && L.docs.meshDoc && !L.docs.meshDoc.header.soup) || L.docs.gridDoc);
 // any surface source (mesh or grid layer) → Float32 heights on a target lattice
 async function gridOnLattice(L, geom, onProgress) {
   if (L.docs.gridDoc) {
@@ -6411,7 +6412,7 @@ function openSurfaceTools(mode, L0) {
 // the footprint's world XY bbox [minX, minY, maxX, maxY]
 function sfFootBbox(d) {
   if (d.mode === 'combine') return targetsXYBbox(d.srcs.map(layerById).filter(Boolean));
-  if (d.foot === 'all') return targetsXYBbox(_layers);
+  if (d.foot === 'all') return targetsXYBbox(S.layers);
   const L = layerById(+d.foot); const bb = L && layerWorldBbox(L);
   return bb ? [bb[0], bb[1], bb[3], bb[4]] : null;
 }
@@ -6436,7 +6437,7 @@ function renderSurfaceTools() {
     row('surface', laySel(d.src, (v) => { d.src = v; d.cell = surfCellOf(layerById(v)); renderSurfaceTools(); }));
     const fSel = document.createElement('select');
     { const o = document.createElement('option'); o.value = 'all'; o.textContent = 'all layers (union)'; fSel.append(o); }
-    for (const L of _layers) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; fSel.append(o); }
+    for (const L of S.layers) { const o = document.createElement('option'); o.value = String(L.id); o.textContent = L.label || L.name; fSel.append(o); }
     fSel.value = d.foot; fSel.onchange = () => { d.foot = fSel.value; renderSurfaceTools(); };
     row('footprint', fSel);
     const eSel = document.createElement('select');
@@ -6490,7 +6491,7 @@ $('#sfGo').onclick = async () => {
       applyGridExtend(grid, d.fill, false);
       const base = (L.label || L.name).replace(/\.[^.]+$/, '');
       const lin = mkLineage('surface.extend', { footprint: d.foot === 'all' ? 'all layers' : (layerById(+d.foot) || {}).name, cell: geom.dx, fill: d.fill }, [L.lineage]);
-      await openBlob(new Blob([writeEsriAsc(grid)]), `${base}_ext.asc`, _layers.length ? 'add' : 'replace', null, { lineage: lin });
+      await openBlob(new Blob([writeEsriAsc(grid)]), `${base}_ext.asc`, S.layers.length ? 'add' : 'replace', null, { lineage: lin });
     } else {
       const Ls = d.srcs.map(layerById).filter(Boolean);
       if (Ls.length < 2) throw new Error('combine needs two surfaces');
@@ -6514,7 +6515,7 @@ $('#sfGo').onclick = async () => {
       if (d.combFill !== 'none') { $('#sfDlgMsg').textContent = `filling (${d.combFill})…`; applyGridExtend(grid, d.combFill, false); }
       const names = Ls.map((L) => (L.label || L.name).replace(/\.[^.]+$/, ''));
       const lin = mkLineage('surface.combine', { rule: d.rule, of: names, cell: geom.dx, fill: d.combFill }, Ls.map((L) => L.lineage));
-      await openBlob(new Blob([writeEsriAsc(grid)]), `${d.rule}_${names.join('_').slice(0, 40)}.asc`, _layers.length ? 'add' : 'replace', null, { lineage: lin });
+      await openBlob(new Blob([writeEsriAsc(grid)]), `${d.rule}_${names.join('_').slice(0, 40)}.asc`, S.layers.length ? 'add' : 'replace', null, { lineage: lin });
     }
     $('#sfDlg').classList.remove('show'); _sfDlg = null;
   } catch (e) { $('#sfDlgMsg').textContent = e.message; }
@@ -6692,13 +6693,13 @@ function ngGroups() {
   return gs;
 }
 function ngSourceBbox(d) {
-  if (d.src === 'all') return unionWorldBbox(_layers.map(layerWorldBbox));
+  if (d.src === 'all') return unionWorldBbox(S.layers.map(layerWorldBbox));
   if (d.src && d.src[0] === 'G') { const g = ngGroups()[+d.src.slice(1)]; return g ? unionWorldBbox(groupLayerIds(g).map((id) => layerWorldBbox(layerById(id)))) : null; }
   return d.src ? layerWorldBbox(layerById(+d.src.slice(1))) : null;
 }
 // block-model layers eligible for the common-grid creator, and the common
 // lattice covering the selected ones at the chosen resolution.
-const ngBlockLayers = () => _layers.filter((L) => gridAxesOf(L));
+const ngBlockLayers = () => S.layers.filter((L) => gridAxesOf(L));
 function compatAxes(d) {
   const sel = ngBlockLayers().filter((L) => d.compatSel.has(L.id));
   if (sel.length < 1) return { ok: false, reason: 'pick at least one model' };
@@ -6715,11 +6716,11 @@ function resolveGeom(d) {
   return { isBM, x0, y0, z0, nx, ny, nz, dx, dy, dz };
 }
 function openNewDialog() {
-  const bb = _docBbox && frame ? unionWorldBbox(_layers.map(layerWorldBbox)) : null;
+  const bb = _docBbox && frame ? unionWorldBbox(S.layers.map(layerWorldBbox)) : null;
   _ngDlg = {
     kind: 'create',
-    type: 'grid', mode: _layers.length ? 'cover' : 'params',
-    src: _layers.length ? 'all' : null,
+    type: 'grid', mode: S.layers.length ? 'cover' : 'params',
+    src: S.layers.length ? 'all' : null,
     x0: bb ? +bb[0].toFixed(2) : 0, y0: bb ? +bb[4].toFixed(2) : 0, z0: bb ? +bb[2].toFixed(2) : 0,
     dx: 10, dy: 10, dz: 10, nx: 50, ny: 50, nz: 20, fill: 0, valName: 'VAL',
     align: false, ax: 0, ay: 0, az: 0,
@@ -6737,7 +6738,7 @@ function renderNewDialog() {
   const num = (key, w = 90) => { const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any'; inp.value = String(d[key]); inp.style.width = w + 'px'; inp.oninput = () => { d[key] = +inp.value; updTally(); }; return inp; };
   const radios = (r, group, pairs, cur, pick) => { for (const [k, lab] of pairs) { const l = document.createElement('label'); const rb = document.createElement('input'); rb.type = 'radio'; rb.name = group; rb.checked = cur === k; rb.onchange = () => { pick(k); }; l.append(rb, lab); r.appendChild(l); } };
   if (d.mode !== 'compat') radios(row('type'), 'ngtype', [['grid', 'grid (heightfield)'], ['block', 'block model']], d.type, (k) => { d.type = k; renderNewDialog(); });
-  const modes = [...(_layers.length ? [['cover', 'cover a layer']] : []), ...(ngBlockLayers().length ? [['compat', 'cover compatible models']] : []), ['params', 'from parameters']];
+  const modes = [...(S.layers.length ? [['cover', 'cover a layer']] : []), ...(ngBlockLayers().length ? [['compat', 'cover compatible models']] : []), ['params', 'from parameters']];
   radios(row('extent'), 'ngmode', modes, d.mode, (k) => { d.mode = k; if (k === 'compat') d.type = 'block'; renderNewDialog(); });
   if (d.mode === 'compat') {
     const list = document.createElement('div'); list.style.cssText = 'display:flex;flex-direction:column;gap:2px;margin:2px 0 6px';
@@ -6760,7 +6761,7 @@ function renderNewDialog() {
     const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); };
     add('all', 'all layers');
     ngGroups().forEach((g, i) => add('G' + i, `▸ group: ${g.name}`));
-    for (const L of _layers) add('L' + L.id, L.label || L.name);
+    for (const L of S.layers) add('L' + L.id, L.label || L.name);
     sel.value = d.src || 'all';
     sel.onchange = () => { d.src = sel.value; updTally(); };
     row('source', sel);
@@ -6813,10 +6814,10 @@ $('#ngGo').onclick = async () => {
     if (isBM) {
       $('#ngDlgMsg').textContent = 'building…';
       const blob = await buildEmptyBlockCsv({ x0, y0, z0, dx, dy, dz, nx, ny, nz, fill: d.fill, valName: d.valName, onProgress: (f) => { $('#ngDlgMsg').textContent = `building ${Math.round(f * 100)}%…`; } });
-      await openBlob(blob, d.mode === 'compat' ? 'common_model.csv' : 'new_model.csv', _layers.length ? 'add' : 'replace', null, { lineage: gridLin });
+      await openBlob(blob, d.mode === 'compat' ? 'common_model.csv' : 'new_model.csv', S.layers.length ? 'add' : 'replace', null, { lineage: gridLin });
     } else {
       const grid = buildEmptyGrid({ x0, y0, dx, nx, ny, fill: d.fill });
-      await openBlob(new Blob([writeEsriAsc(grid)]), 'new_grid.asc', _layers.length ? 'add' : 'replace', null, { lineage: gridLin });
+      await openBlob(new Blob([writeEsriAsc(grid)]), 'new_grid.asc', S.layers.length ? 'add' : 'replace', null, { lineage: gridLin });
     }
     $('#ngDlg').classList.remove('show'); _ngDlg = null;
   } catch (e) { $('#ngDlgMsg').textContent = e.message; }
@@ -6881,13 +6882,10 @@ async function streamInto(cb, streamChunks, header, name, chunkPoints, lid = _ac
   recomputeUnion();
   return doc;
 }
-// ── layers (micro-layers spec §1): each opened dataset is a layer — its docs,
-// bbox, view state (color/clip/filter), and visibility. The renderer partitions
-// record ids (layer << 29 | record), so picks resolve to the right source. One
+// ── layers (micro-layers spec §1): see src/state.js — S.layers/S.activeId. One
 // layer open == exactly the old single-doc behavior (ids 0-shifted, panel hidden).
-let _layers = [];
 let _activeId = 0;
-const layerById = (id) => _layers.find((l) => l.id === id) || null;
+const layerById = (id) => S.layers.find((l) => l.id === id) || null;
 const activeLayer = () => layerById(_activeId);
 const LAYER_CAP = 64;                                     // a UI limit now, not an arithmetic one
 const allocLayerId = () => {
@@ -6898,10 +6896,10 @@ const allocLayerId = () => {
   return null;
 };
 function closeAllLayers() {
-  for (const L of _layers) pinEvictLayer(L.id);            // nothing pinned survives a clear
+  for (const L of S.layers) pinEvictLayer(L.id);            // nothing pinned survives a clear
   for (const [lid] of _attrTables) closeAttrTable(lid);
   renderer.clearChunks(); renderer.setPicked(null);
-  _layers = []; _activeId = 0; frame = null; _docBbox = null;
+  S.layers = []; _activeId = 0; frame = null; _docBbox = null;
   _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null; _gridDoc = null;
   _filterExpr = ''; _filterEpoch++;
   $('#filter').value = ''; syncFilterClear();
@@ -6911,7 +6909,7 @@ function closeAllLayers() {
 }
 function recomputeUnion() {
   let u = null;
-  for (const L of _layers) {
+  for (const L of S.layers) {
     const b = L.bboxLocal; if (!b) continue;
     if (!u) u = Float64Array.from(b);
     else for (let i = 0; i < 3; i++) { if (b[i] < u[i]) u[i] = b[i]; if (b[i + 3] > u[i + 3]) u[i + 3] = b[i + 3]; }
@@ -6966,10 +6964,10 @@ async function openDmWireframeBlob(ptFile, trFile, mode = 'replace', at = null) 
   if (mode !== 'add') closeAllLayers();
   const lid = allocLayerId();
   if (lid == null) { $('#meta').textContent = `layer limit reached (${LAYER_CAP}) — remove one first`; return; }
-  const first = _layers.length === 0;
+  const first = S.layers.length === 0;
   const base = trFile.name.replace(/\.dm$/i, '').replace(/tr$/i, '');
   const name = `${base || 'wireframe'} (Datamine wireframe)`;
-  _layers.push({ id: lid, name, kind: 'mesh', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'loose', lineage: openLineage(name, trFile) });
+  S.layers.push({ id: lid, name, kind: 'mesh', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'loose', lineage: openLineage(name, trFile) });
   _activeId = lid;
   $('#empty').style.display = 'none';
   $('#meta').textContent = `${name} — joining points + triangles…`;
@@ -7008,8 +7006,8 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     || (/\.(csv|txt|dat|tsv)$/i.test(name) && !over.mapping && !over.discovered && !isMesh && over.asKind == null && !await delimitedHasCoords(blob));
   const lid = allocLayerId();
   if (lid == null) { $('#meta').textContent = `layer limit reached (${LAYER_CAP}) — remove one first`; return; }
-  const first = _layers.length === 0;
-  _layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: (typeof File !== 'undefined' && blob instanceof File && _fileHandles.get(blob)) || null, storage: 'loose', lineage: over.lineage || openLineage(name, blob) });
+  const first = S.layers.length === 0;
+  S.layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: (typeof File !== 'undefined' && blob instanceof File && _fileHandles.get(blob)) || null, storage: 'loose', lineage: over.lineage || openLineage(name, blob) });
   _activeId = lid;
   _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null; _gridDoc = null;
   $('#meta').textContent = `${name} — reading…`;
@@ -7049,8 +7047,8 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   } catch (e) {
     $('#meta').textContent = `${name} — ${e.message}`;
     renderer.removeLayer(lid);
-    _layers = _layers.filter((l) => l.id !== lid);
-    if (_layers.length) setActiveLayer(_layers[0].id);
+    S.layers = S.layers.filter((l) => l.id !== lid);
+    if (S.layers.length) setActiveLayer(S.layers[0].id);
     else $('#empty').style.display = '';
     renderLayers();
   }
@@ -7061,7 +7059,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
 // selected (which is how you say "I mean this surface").
 function syncMeshPickable() {
   if (!renderer.setLayerPickable) return;
-  for (const L of _layers) {
+  for (const L of S.layers) {
     if (L.kind !== 'mesh') continue;
     const opaque = (L.opacity == null || L.opacity >= 0.95);
     renderer.setLayerPickable(L.id, opaque || L.id === _activeId);
@@ -7259,7 +7257,7 @@ async function meshToGridLayer(meshL, { cell, keep = 'top', extend = 'none', hol
   // stamp lineage like the sibling surface tools do — a rasterized DEM reshapes
   // topology (z-buffered overhangs, dropped vertical faces) and had no provenance
   const lin = mkLineage('rasterize', { of: meshL.name, cell, keep, extend, holesOnly }, [meshL.lineage].filter(Boolean));
-  await openBlob(new Blob([writeEsriAsc(grid)]), `${base}.asc`, _layers.length ? 'add' : 'replace', null, { lineage: lin });
+  await openBlob(new Blob([writeEsriAsc(grid)]), `${base}.asc`, S.layers.length ? 'add' : 'replace', null, { lineage: lin });
   return grid;
 }
 // Colour a heightfield mesh's vertices — by ELEVATION (its own values) or DRAPED
@@ -7295,7 +7293,7 @@ function rebuildSurface(L) {
   const hf = buildHeightfieldMesh(gd.grid, { stride: gd.stride, frame, flatZ }); if (!hf) return;
   let zmin = Infinity, zmax = -Infinity;                    // grid VALUE range (= colour range for elevation/value)
   for (let i = 0; i < hf.count; i++) { const z = hf.values[i]; if (z < zmin) zmin = z; if (z > zmax) zmax = z; }
-  const drapeLayer = L.drapeSource ? _layers.find((x) => x.name === L.drapeSource && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid) : null;
+  const drapeLayer = L.drapeSource ? S.layers.find((x) => x.name === L.drapeSource && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid) : null;
   const color = surfaceColorArray(hf, drapeLayer ? drapeLayer.docs.gridDoc.grid : null, (rampCfgOf(L) || {}).preset, zmin, zmax);
   const smooth = L.surfaceSmooth !== false;                 // faceted (no normals → flat per-triangle shading) reads the cell structure
   const vis = L.visible, sec = renderer.layerSectioned(L.id), op = L.opacity != null ? L.opacity : 1;
@@ -7421,14 +7419,14 @@ async function applyLayerSurface(L, s) {
   let L2 = L;
   if (needsReopen) {
     const blob = gd.blob, name = L.name, keep = captureReopenIdentity(L);
-    renderer.removeLayer(L.id); _layers = _layers.filter((l) => l.id !== L.id);
+    renderer.removeLayer(L.id); S.layers = S.layers.filter((l) => l.id !== L.id);
     preregisterReopenHandle(blob, keep);
     await openBlob(blob, name, 'add', null, { asKind: s.gridSurface ? 'surface' : 'points', band: s.band || 0, flatZ: s.gridSurface && s.flatZ != null ? s.flatZ : null, smooth: s.gridSurface ? !s.faceted : undefined });
     L2 = restoreReopenIdentity(activeLayer(), keep);
   }
   if (L2 && L2.gridSurface) {                                // drape: in-place rebuild, no reopen
     const want = s.drape || null;
-    if ((L2.drapeSource || null) !== want) { const g = want ? _layers.find((x) => x.name === want && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid) : null; recolorSurface(L2, g); }
+    if ((L2.drapeSource || null) !== want) { const g = want ? S.layers.find((x) => x.name === want && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid) : null; recolorSurface(L2, g); }
   }
   return L2;
 }
@@ -7449,13 +7447,13 @@ async function setGridBand(L, band) {
   const wasSurface = !!L.gridSurface, drape = L.drapeSource, flatZ = L.surfaceFlatZ, smooth = L.surfaceSmooth;
   const keep = captureReopenIdentity(L);
   renderer.removeLayer(L.id);
-  _layers = _layers.filter((l) => l.id !== L.id);
+  S.layers = S.layers.filter((l) => l.id !== L.id);
   preregisterReopenHandle(blob, keep);
   await openBlob(blob, name, 'add', null, { asKind: wasSurface ? 'surface' : 'points', band, flatZ: wasSurface ? flatZ : null, smooth: wasSurface ? smooth : undefined });
   const L2 = restoreReopenIdentity(activeLayer(), keep);
   if (L2) {
     if (keep.visible === false) applyTreeVisibility();
-    if (wasSurface && drape) { const g = _layers.find((x) => x.name === drape && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid); if (g) recolorSurface(L2, g); }
+    if (wasSurface && drape) { const g = S.layers.find((x) => x.name === drape && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid); if (g) recolorSurface(L2, g); }
   }
   renderLayers(); markProjectDirty();
   $('#meta').textContent = `${name} — band ${band + 1} of ${gd.grid.bands}`;
@@ -7608,10 +7606,10 @@ async function openObjSplit(blob, name, mode) {
   let skipped = 0;
   for (const [gname, faces] of parts) {
     const gblob = new Blob([head + faces.join('\n') + '\n']);
-    const before = _layers.length;
+    const before = S.layers.length;
     await openBlob(gblob, `${base} · ${gname}.obj`, first ? 'replace' : 'add');
     first = false;
-    if (_layers.length > before || (before && mode !== 'add' && _layers.length === 1)) {
+    if (S.layers.length > before || (before && mode !== 'add' && S.layers.length === 1)) {
       const L = activeLayer();
       if (L && !ids.includes(L.id)) ids.push(L.id); else skipped++;
     } else skipped++;
@@ -7662,10 +7660,10 @@ async function openLfmSplit(blob, name, mode) {
   for (const m of r.meshes) {
     $('#meta').textContent = `${name} — writing ${m.name}…`;
     const buf = await writeLFM({ collectionName: m.name, meshes: [m] });
-    const before = _layers.length;
+    const before = S.layers.length;
     await openBlob(new Blob([buf]), `${base} · ${m.name}.lfm`, first ? 'replace' : 'add', null, { tint: lfmTint(m.colour) || undefined });
     first = false;
-    if (_layers.length > before || (before && mode !== 'add' && _layers.length === 1)) {
+    if (S.layers.length > before || (before && mode !== 'add' && S.layers.length === 1)) {
       const L = activeLayer();
       if (L && !ids.includes(L.id)) ids.push(L.id); else skipped++;
     } else skipped++;
@@ -7744,9 +7742,9 @@ async function openDrillholeLayer(files, opts = {}, mode = 'add') {
   if (mode !== 'add') closeAllLayers();
   const lid = allocLayerId();
   if (lid == null) { $('#meta').textContent = `layer limit reached (${LAYER_CAP}) — remove one first`; return; }
-  const first = _layers.length === 0;
+  const first = S.layers.length === 0;
   const name = (files.intervals && files.intervals.name) || 'drillholes';
-  _layers.push({ id: lid, name, label: `holes · ${name}`, kind: 'points', dh: true, docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'loose', lineage: openLineage(name, files.intervals) });
+  S.layers.push({ id: lid, name, label: `holes · ${name}`, kind: 'points', dh: true, docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'loose', lineage: openLineage(name, files.intervals) });
   _activeId = lid;
   _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   $('#meta').textContent = `${name} — desurveying…`;
@@ -7781,8 +7779,8 @@ async function openDrillholeLayer(files, opts = {}, mode = 'add') {
   } catch (e) {
     $('#meta').textContent = `${name} — ${e.message}`;
     renderer.removeLayer(lid);
-    _layers = _layers.filter((l) => l.id !== lid);
-    if (_layers.length) setActiveLayer(_layers[0].id);
+    S.layers = S.layers.filter((l) => l.id !== lid);
+    if (S.layers.length) setActiveLayer(S.layers[0].id);
     else $('#empty').style.display = '';
     renderLayers();
   }
@@ -7796,7 +7794,7 @@ async function reopenDhChan(chan) {
   const style = captureLayerStyling(L);                               // was DROPPED — a re-channel keeps the same columns, so styling should ride through
   const keepFilter = L.filterExpr;
   renderer.removeLayer(L.id);
-  _layers = _layers.filter((l) => l.id !== L.id);
+  S.layers = S.layers.filter((l) => l.id !== L.id);
   await openDrillholeLayer(files, cfg, 'add');
   const L2 = restoreReopenIdentity(activeLayer(), id);
   if (L2) {
@@ -7969,7 +7967,7 @@ const dhGroupName = (collarName) => basename(String(collarName)).replace(/\.[^.]
 async function openFilesDialog(files) {
   const rows = [];
   for (const f of files) rows.push(await describeFile(f));
-  _ofDlg = { rows, dhCfg: {}, mode: _layers.length ? 'add' : 'replace' };
+  _ofDlg = { rows, dhCfg: {}, mode: S.layers.length ? 'add' : 'replace' };
   renderOfDialog();
   $('#ofDlg').classList.add('show');
 }
@@ -8072,7 +8070,7 @@ function renderOfDialog() {
   for (const [v, label] of [['add', 'add to the view'], ['replace', 'replace the view']]) {
     const lab = document.createElement('label');
     const rb = document.createElement('input'); rb.type = 'radio'; rb.name = 'ofMode';
-    rb.checked = _ofDlg.mode === v; rb.disabled = v === 'add' && !_layers.length;
+    rb.checked = _ofDlg.mode === v; rb.disabled = v === 'add' && !S.layers.length;
     rb.onchange = () => { _ofDlg.mode = v; };
     lab.append(rb, ' ' + label);
     modeRow.appendChild(lab);
@@ -8105,7 +8103,7 @@ $('#ofOpen').onclick = async () => {
   // non-compound rows: everything loaded that isn't a drillhole role or a wireframe half
   const toLoad = st.rows.filter((r) => r.load && !inSet.has(r.file) && !wire.wfFiles.has(r.file) && !['collar', 'survey', 'intervals'].includes(r.asKind));
   if (st.mode === 'replace') closeAllLayers();
-  let first = st.mode === 'replace' || !_layers.length;
+  let first = st.mode === 'replace' || !S.layers.length;
   for (const { pt, tr } of wire.pairs) { await openDmWireframeBlob(pt.file, tr.file, first ? 'replace' : 'add'); first = false; }
   for (const r of toLoad) {
     const over = {};
@@ -8231,7 +8229,7 @@ $('#dhImport').onclick = async () => {
   // one dh layer per interval table, all sharing collar + survey (a set)
   const key = 'dhset:' + (++_dhSetSeq);
   const ids = [];
-  let first = !_layers.length;
+  let first = !S.layers.length;
   for (const iv of intervals) {
     const mappings = {};
     if (collarMap) mappings.collar = collarMap;
@@ -9625,7 +9623,7 @@ async function openRecent(entry) {
       _fileHandles.set(f, h);
       // a recent is the picker with the file pre-picked: same dialog, same
       // add/replace radio. An empty view opens straight — nothing to replace.
-      if (_layers.length) return openFilesDialog([f]);
+      if (S.layers.length) return openFilesDialog([f]);
       return openBlob(f, f.name, 'replace');
     } catch { $('#meta').textContent = `couldn't reopen “${entry.name}” — pick it again`; return openFilePicker(); }
   }
@@ -9736,7 +9734,7 @@ function openOptimizeDialog(cands, { fromSave = false } = {}) {
   });
 }
 async function maybeAutoOptimize() {
-  let cands = _layers.filter((L) => L.docs.blockDoc && !L.docs.blockDoc.parquet && layerTableHeader(L) && (layerTableHeader(L).mapping || {}).x != null);
+  let cands = S.layers.filter((L) => L.docs.blockDoc && !L.docs.blockDoc.parquet && layerTableHeader(L) && (layerTableHeader(L).mapping || {}).x != null);
   const big = cands.filter((L) => layerTableHeader(L).count > OPTIMIZE_MAX_BLOCKS);
   if (big.length) { $('#meta').textContent = `optimize: ${big.map((L) => L.label || L.name).join(', ')} over ${(OPTIMIZE_MAX_BLOCKS / 1e6)}M blocks — kept as-is (convert explicitly via the layer menu; it streams with bounded memory but takes a while)`; cands = cands.filter((L) => !big.includes(L)); }
   if (!cands.length) return;
@@ -9841,7 +9839,7 @@ function rleDecodeBytes(runs, n) {
 function projectManifest() {
   return {
     app: 'micro', version: 1, name: _project.name,
-    layers: _layers.map((L) => ({
+    layers: S.layers.map((L) => ({
       source: L._relpath || L.name,
       dh: L.dh && L.docs.dhDoc ? (L._setPath ? { set: L._setPath, interval: L._intervalName } : {
         collar: basename(layerFiles(L)[0].name), survey: basename(layerFiles(L)[1].name), intervals: basename(layerFiles(L)[2].name),
@@ -9886,7 +9884,7 @@ function projectManifest() {
     // bookmarks + scenes now live as files in bookmarks/ and scenes/ (not in
     // project.json) — see flushViewsScenes / loadViewsScenes
     tree: (() => {                                         // groups (§4.1) — layers by manifest index
-      const idOf = new Map(_layers.map((L, i) => [L.id, i]));
+      const idOf = new Map(S.layers.map((L, i) => [L.id, i]));
       return treeToManifest(idOf);
     })(),
   };
@@ -9895,7 +9893,7 @@ async function rememberProject(dir) {
   try {
     const list = (await _idb.get(PROJECTS_KEY)) || [];
     const links = {};
-    for (const L of _layers) if (L.storage === 'external' && L.handle) links[L.name] = L.handle;
+    for (const L of S.layers) if (L.storage === 'external' && L.handle) links[L.name] = L.handle;
     const next = [{ name: dir.name, handle: dir, links }].concat(list.filter((e) => e.name !== dir.name)).slice(0, 8);
     await _idb.set(PROJECTS_KEY, next);
     renderEmptyProjects();
@@ -10054,7 +10052,7 @@ async function saveProject() {
     // (convertLayerToParquet). Write the Parquet INTO the project + delete the old
     // source here — so triage sees a clean in-project layer (no spurious "copy
     // outside files in?" prompt) and the folder shows the .parquet only.
-    for (const L of _layers) {
+    for (const L of S.layers) {
       const orphan = L._optimizedOrphan; if (!orphan) continue;
       L._optimizedOrphan = null;
       try {
@@ -10070,7 +10068,7 @@ async function saveProject() {
       } catch { /* falls back to normal triage; an orphan is harmless clutter */ }
     }
     const outside = [];
-    for (const L of _layers) {
+    for (const L of S.layers) {
       const flist = layerFiles(L);
       if (!flist.length) { L.storage = 'volatile'; continue; }   // samples: nothing to reference
       let allIn = true;
@@ -10096,7 +10094,7 @@ async function saveProject() {
     }
     // record each layer's real path for the manifest + write the drillhole-set
     // descriptor (the one compound load: three CSVs + desurvey config → .holes.json)
-    for (const L of _layers) {
+    for (const L of S.layers) {
       L._relpath = undefined; L._setPath = undefined;
       if (L.storage === 'external') { L._relpath = basename(L.name); continue; }
       if (L.storage !== 'project') continue;
@@ -10105,7 +10103,7 @@ async function saveProject() {
     // drillhole sets: group dh layers by _setKey → ONE .holes.json per set with
     // an intervals[] array (multiple interval tables share one collar+survey)
     const dhGroups = new Map();
-    for (const L of _layers) {
+    for (const L of S.layers) {
       if (!(L.dh && L.docs.dhDoc && L.storage === 'project')) continue;
       const key = L._setKey || ('solo:' + L.id);
       if (!dhGroups.has(key)) dhGroups.set(key, []);
@@ -10124,15 +10122,15 @@ async function saveProject() {
     // grid display-cache sidecars: the decimated/overview DISPLAY grid, stored
     // as compact Surfer binary so a huge DEM's project reopens WITHOUT
     // re-decimating the source (eval still windows the source at full res)
-    for (const L of _layers) { try { await writeGridDisplayCache(L, dir); } catch { /* cache, never a failure */ } }
-    for (const L of _layers) { try { if (layerTableHeader(L) || (L.docs && L.docs.gridDoc)) await persistElement(L); } catch { /* the element manifest + sidecar cols are derived — never a save failure */ } }
+    for (const L of S.layers) { try { await writeGridDisplayCache(L, dir); } catch { /* cache, never a failure */ } }
+    for (const L of S.layers) { try { if (layerTableHeader(L) || (L.docs && L.docs.gridDoc)) await persistElement(L); } catch { /* the element manifest + sidecar cols are derived — never a save failure */ } }
     // derived-cache sidecars (spec section 12): the discovery header + column
     // stats + BAND min/max travel WITH the data — reopening skips the discovery
     // sweep, the styling/statistics UIs wake up already scanned, and .dm filters
     // get parquet-style pushdown (bands prove page-runs can't match). Built here
     // when missing — the one full read per file, ever (size-keyed). CSV + .dm +
     // parquet all get one; parquet skips bands (its footer already has them).
-    for (const L of _layers) {
+    for (const L of S.layers) {
       const doc = L.docs.blockDoc;
       if (!doc || L.storage !== 'project') continue;
       try {
@@ -10172,7 +10170,7 @@ async function saveProject() {
     updateProjectTitle();
     renderLayers();
     rememberProject(dir);                                  // refresh the stored links alongside
-    const ext = _layers.filter((L) => L.storage === 'external').length;
+    const ext = S.layers.filter((L) => L.storage === 'external').length;
     $('#meta').textContent = `project saved — ${_project.name}/project.json${ext ? ` · ${ext} linked outside the folder` : ''}`;
   } catch (e) {
     $('#meta').textContent = `project save failed — ${e.message}`;
@@ -10296,7 +10294,7 @@ async function openProjectDir(dir) {
           catch { missing = dhRef[role]; break; }
         }
         if (missing) { $('#meta').textContent = `project: drillhole file “${missing}” missing from the folder — layer skipped`; plRow(i, `skipped — ${missing} missing`, 'skip'); continue; }
-        await openDrillholeLayer(dhFiles, dhRef.config || {}, _layers.length ? 'add' : 'replace');
+        await openDrillholeLayer(dhFiles, dhRef.config || {}, S.layers.length ? 'add' : 'replace');
         const Ld = activeLayer();
         if (Ld) {
           Ld.storage = 'project';
@@ -10386,7 +10384,7 @@ async function openProjectDir(dir) {
           }
         } catch { /* no sidecar — full discovery as usual */ }
       }
-      await openBlob(file, basename(ls.source), i === 0 || !_layers.length ? 'replace' : 'add', null, overR);
+      await openBlob(file, basename(ls.source), i === 0 || !S.layers.length ? 'replace' : 'add', null, overR);
       { const Lx = activeLayer(); if (Lx) { Lx.storage = ls.external ? 'external' : 'project'; if (ls.label) Lx.label = ls.label; if (ls.opacity != null && Lx.kind !== 'mesh') { Lx.opacity = ls.opacity; renderer.setLayerOpacity(Lx.id, ls.opacity); } if (ls.recHide && ls.recHide.length) Lx._recHide = new Set(ls.recHide); if (ls.legend) Lx.legend = true; if (ls.legendTitle) Lx.legendTitle = ls.legendTitle; if (ls.edges != null) { Lx.edges = ls.edges; renderer.setLayerEdges(Lx.id, ls.edges); } if (ls.gtUnits) Lx.gtUnits = ls.gtUnits; } }   // mesh opacity rides overR
       const L = activeLayer();
       if (!L) { plRow(i, 'failed to open', 'skip'); continue; }   // that open failed; its layer rolled back
@@ -10422,16 +10420,16 @@ async function openProjectDir(dir) {
     applyCamera(mf.camera);
     applySection(mf.section);
     // drapes come after ALL layers land — the drape grid may load later than its surface
-    for (const L of _layers) {
+    for (const L of S.layers) {
       if (!L._pendingDrape) continue;
-      const g = _layers.find((x) => x.name === L._pendingDrape && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid);
+      const g = S.layers.find((x) => x.name === L._pendingDrape && x.docs && x.docs.gridDoc && x.docs.gridDoc.grid);
       L._pendingDrape = null;
       if (g) { try { recolorSurface(L, g); } catch { /* drape grid gone/incompatible → stays elevation */ } }
     }
     await loadRecipes(dir);                                // recipes/ *.yaml → Tools → Recipes
     // pinned analysis windows come back configured (after ALL layers landed —
     // series may reference other layers). Run stays manual: no surprise scans.
-    for (const L of _layers) {
+    for (const L of S.layers) {
       const a = L.analysis;
       if (!a || !a.open || !a.open.length) continue;
       if (a.open.includes('gt')) { try { openGradeTonnage(L); } catch { /* layer no longer qualifies */ } }
@@ -10443,7 +10441,7 @@ async function openProjectDir(dir) {
     updateProjectTitle();
     rememberProject(dir);
     plEnd();
-    $('#meta').textContent = `project “${_project.name}” — ${_layers.length} layer${_layers.length === 1 ? '' : 's'}`;
+    $('#meta').textContent = `project “${_project.name}” — ${S.layers.length} layer${S.layers.length === 1 ? '' : 's'}`;
     requestRender();
   } catch (e) {
     plEnd();
@@ -10470,7 +10468,7 @@ async function tidyProject() {
     if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'tidy: write permission denied'; return; }
     let moved = 0, collided = 0;
     const claimed = new Map();                                      // target path → the curRel that took it, this pass
-    for (const L of _layers) {
+    for (const L of S.layers) {
       if (L.storage !== 'project') continue;
       for (const fd of layerFiles(L)) {
         const target = relPathFor(L, fd.name);
@@ -10520,7 +10518,7 @@ async function scanFolderForNewData() {
     // path of each layer's handle (set at push time, so it holds even while a
     // block model is still discovering and its blob isn't populated yet)
     const referenced = new Set(), refPaths = new Set();
-    for (const L of _layers) {
+    for (const L of S.layers) {
       for (const fd of layerFiles(L)) if (fd.blob) referenced.add(basename(fd.name) + ':' + fd.blob.size);
       if (L.handle && dir.resolve) { try { const pp = await dir.resolve(L.handle); if (pp) refPaths.add(pp.join('/')); } catch { /* not a descendant */ } }
     }
@@ -10559,7 +10557,7 @@ async function scanFolderForNewData() {
       const ivs = Array.isArray(desc.intervals) ? desc.intervals : [desc.intervals];
       claimed.add(joinPath(setDir, desc.collar)); claimed.add(joinPath(setDir, desc.survey));
       for (const iv of ivs) claimed.add(joinPath(setDir, iv));
-      if (_layers.some((L) => L.dh && L._setPath === e.path)) continue;   // already loaded
+      if (S.layers.some((L) => L.dh && L._setPath === e.path)) continue;   // already loaded
       newSets.push({ e, desc, setDir, ivs });
     }
     // loose data files not referenced by a layer and not part of a descriptor
@@ -10579,7 +10577,7 @@ async function scanFolderForNewData() {
         const ids = [];
         for (const iv of s.ivs) {                            // one dh layer per interval table, sharing the set
           const intervals = await resolveDhFile(dir, s.setDir, iv);
-          await openDrillholeLayer({ collar, survey, intervals }, s.desc.config || {}, _layers.length ? 'add' : 'replace');
+          await openDrillholeLayer({ collar, survey, intervals }, s.desc.config || {}, S.layers.length ? 'add' : 'replace');
           const L = activeLayer(); if (L) { L.storage = 'project'; L._setPath = s.e.path; L._setKey = s.e.path; L._intervalName = iv; ids.push(L.id); }
         }
         if (ids.length) createLayerGroup(dhGroupName(s.desc.collar), ids, { collapsed: false, dhSet: true });
@@ -10597,9 +10595,9 @@ async function scanFolderForNewData() {
 // File → New project: back to the empty slate. Confirmed — it closes every
 // layer and drops the project link; nothing on disk is touched.
 async function newProject() {
-  if (!_layers.length && !_project) { $('#meta').textContent = 'already a fresh slate'; return; }
+  if (!S.layers.length && !_project) { $('#meta').textContent = 'already a fresh slate'; return; }
   const parts = [];
-  if (_layers.length) parts.push(`${_layers.length} layer${_layers.length === 1 ? '' : 's'}`);
+  if (S.layers.length) parts.push(`${S.layers.length} layer${S.layers.length === 1 ? '' : 's'}`);
   if (_project) parts.push(`the project link (${_project.name})`);
   const warn = _project && _project.dirty ? ' Unsaved project changes will be lost.' : '';
   if (!(await microConfirm('new project', `This closes ${parts.join(' and ')}.${warn} Files on disk are untouched.`))) return;
@@ -10718,7 +10716,7 @@ async function removeBookmark(v) {
 function captureScene(name, withSel) {
   return {
     name, camera: captureCamera(), section: captureSection(),
-    layers: _layers.map((L) => {
+    layers: S.layers.map((L) => {
       const o = { name: L.name, visible: L.visible !== false, colorSel: L.colorSel || '', filter: L.filterExpr || '', ...captureLayerSurface(L) };
       if (withSel && L._selMask && L._selCount) o.sel = rleEncode(L._selMask);   // opt-in; selection can be large (RLE'd)
       return o;
@@ -10729,7 +10727,7 @@ async function applyScene(s) {
   applyCamera(s.camera); applySection(s.section);
   const prevActive = _activeId;
   for (const sl of (s.layers || [])) {
-    let L = _layers.find((x) => x.name === sl.name) || _layers.find((x) => (x.label || x.name) === sl.name);
+    let L = S.layers.find((x) => x.name === sl.name) || S.layers.find((x) => (x.label || x.name) === sl.name);
     if (!L) continue;
     L = await applyLayerSurface(L, sl) || L;   // surface/drape/flatZ/faceted/band FIRST (may reopen → fresh L), then vis/color/filter on it
     if (sl.visible != null) { L.visible = !!sl.visible; renderer.setLayerVisible(L.id, L.visible); }
@@ -10741,7 +10739,7 @@ async function applyScene(s) {
   }
   if (layerById(prevActive)) setActiveLayer(prevActive);
   applyTreeVisibility(); renderLayers(); requestRender();
-  const missing = (s.layers || []).filter((sl) => !_layers.some((x) => x.name === sl.name || (x.label || x.name) === sl.name)).map((sl) => sl.name);
+  const missing = (s.layers || []).filter((sl) => !S.layers.some((x) => x.name === sl.name || (x.label || x.name) === sl.name)).map((sl) => sl.name);
   $('#meta').textContent = `scene “${s.name}”${missing.length ? ` · ${missing.length} layer${missing.length === 1 ? '' : 's'} not loaded (${missing.slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''})` : ''}`;
 }
 async function saveSceneAs(withSel) {
@@ -11013,7 +11011,7 @@ async function showMemoryInfo() {
   const rows = [];
   const row = (k, v) => rows.push(`<tr><td class="fi-k">${escM(k)}</td><td>${v}</td></tr>`);
   let total = 0;
-  for (const L of _layers) {
+  for (const L of S.layers) {
     const b = renderer.layerVramBytes(L.id);
     total += b;
     row(L.label || L.name, `${escM(fmtSize(b))} <span class="fi-x">· ${escM((renderer.layerElementCount(L.id) || 0).toLocaleString())} elements${L.visible ? '' : ' · hidden (still resident)'}</span>`);
@@ -11091,14 +11089,14 @@ function scenesMenuItems() {
   const items = _scenes.map((s) => ({ label: `◆ ${s.name}`, action: () => applyScene(s) }));
   if (items.length) items.push({ sep: true });
   items.push({ label: 'Save scene…', action: () => saveSceneAs(false) });
-  if (_layers.some((L) => L._selMask && L._selCount)) items.push({ label: 'Save scene (with selection)…', action: () => saveSceneAs(true) });
+  if (S.layers.some((L) => L._selMask && L._selCount)) items.push({ label: 'Save scene (with selection)…', action: () => saveSceneAs(true) });
   if (_scenes.length) items.push({ label: 'Remove scene', submenu: () => _scenes.map((s) => ({ label: s.name, action: () => removeScene(s) })) });
   return items;
 }
 // Data = the dataset's interpretation + derived state (lamina's grammar:
 // intake wizards, the properties panel's deep tabs, filter state)
 const openPropsTab = (tab) => {
-  if (!_layers.length) return;
+  if (!S.layers.length) return;
   _propTab = tab;
   try { localStorage.setItem('micro.propTab', tab); } catch { /* ignore */ }
   openProps();
@@ -11107,7 +11105,7 @@ $('#mData').onclick = () => menuAt($('#mData'), [
   { label: 'Import drillholes…', action: () => openDhDialog(null) },
   { label: 'New grid / block model…', action: () => openNewDialog() },
   { sep: true },
-  { label: 'Layer properties…', action: () => { if (_layers.length) openProps(); } },
+  { label: 'Layer properties…', action: () => { if (S.layers.length) openProps(); } },
   { label: 'Source (mapping / desurvey)…', action: () => openPropsTab('source') },
   { label: 'Calculated columns…', action: () => openCalcWindow(activeLayer()) },
   { label: 'Scan columns', action: () => {
@@ -11417,7 +11415,7 @@ function* sampleRawChunks(n) {
 async function openSample(n = 2_000_000) {
   closeAllLayers(); requestRender();
   const lid = allocLayerId();
-  _layers.push({ id: lid, name: 'sample bench scan', kind: 'points', docs: {}, bboxLocal: null, colorSel: '0', clip: ['', ''], filterExpr: '', visible: true });
+  S.layers.push({ id: lid, name: 'sample bench scan', kind: 'points', docs: {}, bboxLocal: null, colorSel: '0', clip: ['', ''], filterExpr: '', visible: true });
   _activeId = lid;
   _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   setColorLabels(null);
@@ -11735,7 +11733,7 @@ function legendAvailable(L) {
   if (String(sel).startsWith('chan:')) return !!rampRangeFor(L);
   const info = layerClassInfo(L); if (!info) return false; const leg = ensureLegend(L, info); return !!(leg && leg.entries && leg.entries.length);
 }
-function legendLayers() { return _layers.filter((L) => L.legend && L.visible && legendAvailable(L)); }
+function legendLayers() { return S.layers.filter((L) => L.legend && L.visible && legendAvailable(L)); }
 function anyLegend() { return legendLayers().length > 0; }
 // draw ONE legend for layer L at (bx, by); returns the vertical extent consumed
 // (so multiple legends can stack down the right column). Caption defaults to the
@@ -11852,7 +11850,7 @@ function openDecoPanel() {
     // ── legends (per-layer, stack) ──
     const secL = document.createElement('div'); secL.className = 'deco-sec';
     const hL = document.createElement('div'); hL.className = 'deco-h'; hL.textContent = 'legends'; secL.append(hL);
-    const cands = _layers.filter((L) => L.visible && legendAvailable(L));
+    const cands = S.layers.filter((L) => L.visible && legendAvailable(L));
     if (!cands.length) { const e = document.createElement('div'); e.className = 'deco-empty'; e.textContent = 'no coloured layers to key'; secL.append(e); }
     for (const L of cands) {
       const row = document.createElement('div'); row.className = 'deco-legrow';
@@ -11900,11 +11898,11 @@ function decorationsMenu() { openDecoPanel(); }   // back-compat alias (View men
 // per-layer cut modes captured BY NAME (only non-default: false/'front'/'behind');
 // applying resets everything to follow, then sets the listed overrides
 function captureCutModes() {
-  return _layers.map((L) => ({ layer: L.name, mode: renderer.layerSectioned(L.id) })).filter((x) => x.mode !== true);
+  return S.layers.map((L) => ({ layer: L.name, mode: renderer.layerSectioned(L.id) })).filter((x) => x.mode !== true);
 }
 function applyCutModes(modes) {
-  for (const L of _layers) renderer.setLayerSectioned(L.id, true);   // reset to follow
-  for (const { layer, mode } of (modes || [])) { const L = _layers.find((x) => x.name === layer); if (L) renderer.setLayerSectioned(L.id, mode); }
+  for (const L of S.layers) renderer.setLayerSectioned(L.id, true);   // reset to follow
+  for (const { layer, mode } of (modes || [])) { const L = S.layers.find((x) => x.name === layer); if (L) renderer.setLayerSectioned(L.id, mode); }
 }
 // a figure recipe captures the whole picture: camera + decorations + background
 // + export scale + the SECTION (position, thickness, orientation) + per-layer
@@ -12147,15 +12145,15 @@ let _solo = null;                                          // { id, prev: Map(id
 function soloActiveLayer() {
   const La = activeLayer(); if (!La) return;
   if (_solo && _solo.id === La.id) {
-    for (const L of _layers) if (_solo.prev.has(L.id)) L.visible = _solo.prev.get(L.id);
+    for (const L of S.layers) if (_solo.prev.has(L.id)) L.visible = _solo.prev.get(L.id);
     _solo = null;
     $('#meta').textContent = 'solo off';
   } else {
     if (!_solo) {
-      if (_layers.length < 2) { $('#meta').textContent = 'solo: only one layer'; return; }
-      _solo = { id: La.id, prev: new Map(_layers.map((L) => [L.id, L.visible])) };
+      if (S.layers.length < 2) { $('#meta').textContent = 'solo: only one layer'; return; }
+      _solo = { id: La.id, prev: new Map(S.layers.map((L) => [L.id, L.visible])) };
     } else _solo.id = La.id;                               // re-solo the new active, keep the original snapshot
-    for (const L of _layers) L.visible = L.id === La.id;
+    for (const L of S.layers) L.visible = L.id === La.id;
     $('#meta').textContent = `solo — ${La.label || La.name} (⇧H restores)`;
   }
   applyTreeVisibility(); renderLayers();
@@ -12220,10 +12218,10 @@ const COMMANDS = [
   { id: 'blockedges', group: 'View', title: 'Toggle block edges', kw: 'borders lines wireframe outline grid', when: (c) => c.L && !!c.L.docs.blockDoc, run: () => setBlockEdges(!_blockEdges) },
   { id: 'secfollow', group: 'View', title: 'Section: camera follows the scrub', kw: 'walk slicer step through benches follow', when: () => !!currentSection(), run: () => { const c = $('#secFollow'); c.checked = !c.checked; c.dispatchEvent(new Event('input')); $('#meta').textContent = `section follow ${c.checked ? 'on' : 'off'}`; } },
   { id: 'sec2d', group: 'View', title: 'Section: 2D lock (face-on, ortho, no orbit)', kw: 'paper plan flat lock rotation', when: () => !!currentSection(), run: () => { const c = $('#sec2D'); c.checked = !c.checked; c.dispatchEvent(new Event('input')); } },
-  { id: 'solo', group: 'View', title: 'Solo the active layer', kw: 'hide others isolate only', when: (c) => c.L && _layers.length > 1, run: () => soloActiveLayer() },
+  { id: 'solo', group: 'View', title: 'Solo the active layer', kw: 'hide others isolate only', when: (c) => c.L && S.layers.length > 1, run: () => soloActiveLayer() },
   { id: 'copyin', group: 'File', title: 'Copy layer into project…', kw: 'import move file folder store persist', when: (c) => canCopyIntoProject(c.L), run: (c) => copyLayerIntoProject(c.L) },
   { id: 'rename', group: 'Layer', title: 'Rename layer…', kw: 'label title F2', when: (c) => !!c.L, run: (c) => renameActiveLayer(c.L) },
-  { id: 'rename-batch', group: 'Layer', title: 'Rename layers…', kw: 'batch prefix suffix regex replace', when: () => _layers.length >= 2, run: () => openBatchRename(_lpSel.size >= 2 ? lpSelIds().map(layerById) : _layers.slice()) },
+  { id: 'rename-batch', group: 'Layer', title: 'Rename layers…', kw: 'batch prefix suffix regex replace', when: () => S.layers.length >= 2, run: () => openBatchRename(_lpSel.size >= 2 ? lpSelIds().map(layerById) : S.layers.slice()) },
   { id: 'sel-column', group: 'Layer', title: 'Selection → column…', kw: 'materialize save flag 0 1 paint selected', when: (c) => !!(c.L && c.L._selCount), run: (c) => selectionToColumn(c.L) },
   { id: 'filter-sel', group: 'Layer', title: 'Filter → selection', kw: 'matches convert select expression reproducible', when: (c) => !!(c.L && c.L._filterMask), run: (c) => filterToSelection(c.L) },
   { id: 'run-recipe', group: 'Analysis', title: 'Run recipe…', kw: 'saved yaml grade-tonnage swath analysis rerun', when: () => _recipes.length > 0, run: () => setTimeout(() => menuXY(innerWidth / 2 - 130, innerHeight / 3, recipesMenuItems()), 0) },
@@ -12232,9 +12230,9 @@ const COMMANDS = [
   { id: 'surf-extend', group: 'Layer', title: 'Extend surface to footprint…', kw: 'grow cover topo grid mesh fill trend', when: () => surfaceableLayers().length > 0, run: (cx) => openSurfaceTools('extend', cx.L) },
   { id: 'surf-combine', group: 'Layer', title: 'Combine surfaces…', kw: 'min max priority mean merge patch topo union overlap', when: () => surfaceableLayers().length >= 2, run: (cx) => openSurfaceTools('combine', cx.L) },
   { id: 'stats', group: 'Analysis', title: 'Stats…', kw: 'summary table group by mean std quantiles domain report', when: (c) => !!(c.L && layerTableHeader(c.L) && numericColsOf(c.L).length), run: (c) => openStats(c.L) },
-  { id: 'export-mesh', group: 'Layer', title: 'Export mesh(es)…', kw: 'obj ply msh lfm wavefront leapfrog save', when: () => _layers.some((L) => L.kind === 'mesh' && L.docs.meshDoc), run: (c) => {
+  { id: 'export-mesh', group: 'Layer', title: 'Export mesh(es)…', kw: 'obj ply msh lfm wavefront leapfrog save', when: () => S.layers.some((L) => L.kind === 'mesh' && L.docs.meshDoc), run: (c) => {
     const sel = lpSelIds().map(layerById).filter((x) => x && x.kind === 'mesh' && x.docs.meshDoc);
-    openMeshExportDialog(sel.length ? sel : (c.L && c.L.kind === 'mesh' ? [c.L] : _layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc)));
+    openMeshExportDialog(sel.length ? sel : (c.L && c.L.kind === 'mesh' ? [c.L] : S.layers.filter((L) => L.kind === 'mesh' && L.docs.meshDoc)));
   } },
   { id: 'decopanel', group: 'View', title: 'Decorations & figure…', kw: 'legend scale bar north title background export panel', run: () => openDecoPanel() },
   { id: 'decoscale', group: 'View', title: 'Toggle scale bar', kw: 'decoration ruler', run: () => setDeco('scale', !_deco.scale) },
@@ -12255,12 +12253,12 @@ const COMMANDS = [
   { id: 'sellasso', group: 'Select', title: 'Select — lasso', kw: 'freehand pick', run: () => armSelect('lasso') },
   { id: 'selthrough', group: 'Select', title: 'Toggle select-through (volume)', kw: 'occluded tube', run: () => setSelThrough(!_selThrough) },
   { id: 'selclear', group: 'Select', title: 'Clear selection', kw: 'deselect', run: () => clearSelection() },
-  { id: 'solid', group: 'Select', title: 'Select by solid / surface…', kw: 'winding flag ratio fraction inside', when: () => _layers.some((L) => L.kind === 'mesh'), run: () => openSolidDialog(null) },
-  { id: 'domains', group: 'Select', title: 'Assign domains…', kw: 'coded model solids', when: () => _layers.some((L) => L.kind === 'mesh'), run: () => openDomainsDialog() },
+  { id: 'solid', group: 'Select', title: 'Select by solid / surface…', kw: 'winding flag ratio fraction inside', when: () => S.layers.some((L) => L.kind === 'mesh'), run: () => openSolidDialog(null) },
+  { id: 'domains', group: 'Select', title: 'Assign domains…', kw: 'coded model solids', when: () => S.layers.some((L) => L.kind === 'mesh'), run: () => openDomainsDialog() },
   { id: 'gt', group: 'Analyse', title: 'Grade-tonnage…', kw: 'cutoff tonnes curve reserve', when: (c) => c.L && gridAxesOf(c.L), run: (c) => openGradeTonnage(c.L) },
   { id: 'swath', group: 'Analyse', title: 'Swath plot…', kw: 'drift bias direction trend plunge dip rake', when: (c) => c.L && gridAxesOf(c.L), run: (c) => openSwath(c.L) },
   // validate-vs-drillholes temporarily DISABLED (pending a rework of the window) — when: false hides it everywhere
-  { id: 'validate', group: 'Analyse', title: 'Validate vs drillholes…', kw: 'declustered sample bias check reconcile composite', when: (c) => c.L && gridAxesOf(c.L) && _layers.some((L) => L.dh), run: (c) => openValidation(c.L) },
+  { id: 'validate', group: 'Analyse', title: 'Validate vs drillholes…', kw: 'declustered sample bias check reconcile composite', when: (c) => c.L && gridAxesOf(c.L) && S.layers.some((L) => L.dh), run: (c) => openValidation(c.L) },
   { id: 'join', group: 'Analyse', title: 'Join / reconcile…', kw: 'merge compare delta reconciliation spatial key', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); _propTab = 'join'; openProps(); } },
   { id: 'table', group: 'Analyse', title: 'Attribute table…', kw: 'rows data grid', when: (c) => c.L && hasRecords(c.L), run: (c) => openAttrTable(c.L) },
   { id: 'filter', group: 'Analyse', title: 'Filter…', kw: 'query where expression', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); $('#filter').focus(); } },
@@ -12281,7 +12279,7 @@ const COMMANDS = [
   { id: 'helpkeys', group: 'Help', title: 'Keyboard & mouse help…', kw: 'shortcuts docs guide', run: () => showHelp('keyboard & mouse', HELP_KEYS) },
 ];
 let _palOpen = false, _palSel = 0, _palItems = [], _palNlMode = false;
-const palCtx = () => ({ L: activeLayer(), layers: _layers, project: _project });
+const palCtx = () => ({ L: activeLayer(), layers: S.layers, project: _project });
 // ══ EXPERIMENTAL: the natural-language command bar (@gcu/dispatch) ═══════════
 // OFF BY DEFAULT. Enabled from Help → About. The hard rule, enforced here rather
 // than merely intended: dispatch **PROPOSES, IT NEVER ACTS**. A recognised phrase
@@ -12358,7 +12356,7 @@ const NL_RUN = {
   'micro.setLayerVisibility': (a) => ({ say: `${a.action === 'hide' ? 'Hide' : 'Show'} ${a.layer}`,
     run: () => {
       const vis = a.action !== 'hide';
-      const L = _layers.find((x) => (x.label || x.name) === a.layer || x.name === a.layer);
+      const L = S.layers.find((x) => (x.label || x.name) === a.layer || x.name === a.layer);
       if (L) { L.visible = vis; applyTreeVisibility(); renderLayers(); requestRender(); return; }   // renderLayers → the tree checkbox updates too
       const g = nlFindGroup(a.layer);
       if (g) { g.visible = vis; applyTreeVisibility(); renderLayers(); requestRender(); return; }
@@ -12399,7 +12397,7 @@ function nlSectionAt(axis, position) {
 // STABILITY matters a great deal.
 function nlSessionVocab() {
   const numCols = {}, catCols = {}, catValues = {}, layers = {};
-  for (const L of _layers) {
+  for (const L of S.layers) {
     const nm = L.label || L.name;
     const bare = nm.replace(/\.[a-z0-9]+$/i, '');            // "drillholes.csv" → "drillholes"
     const byKind = {
@@ -12444,7 +12442,7 @@ function nlSessionVocab() {
 // the active layer costs nothing (the target is resolved per phrase, not per model).
 function nlSessionKey() {
   const gs = []; const gw = (arr) => { for (const nd of arr || []) if (nd && typeof nd === 'object' && nd.group) { gs.push(nd.name); gw(nd.children); } }; gw(_layerTree);
-  return _layers.map((L) => `${L.id}:${L.label || L.name}:${(numericColsOf(L) || []).length}`).join('|') + '#' + gs.join(',');
+  return S.layers.map((L) => `${L.id}:${L.label || L.name}:${(numericColsOf(L) || []).length}`).join('|') + '#' + gs.join(',');
 }
 async function nlEnsureTrained() {
   const key = nlSessionKey();
@@ -12489,7 +12487,7 @@ function nlLayerFromTags(q, tags) {
   // names into fragments made "model" match every *_model.csv, so the first layer
   // always won and "colour copper_model by CU" resolved to iron_model.)
   const hits = [];
-  for (const L of _layers) {
+  for (const L of S.layers) {
     const nm = (L.label || L.name);
     const syns = [nm.toLowerCase(), nm.toLowerCase().replace(/\.[a-z0-9]+$/, '')];
     if (syns.some((sy) => sy === text) || text === nm.toLowerCase()) hits.push(L);
@@ -12506,12 +12504,12 @@ function nlResolveTarget(q, tags, column) {
   if (!column) return A;
   const has = (L) => layerHasColumn(column, L.label || L.name) || layerHasColumn(column, L.name);   // (column, layer) — that order
   if (A && has(A)) return A;
-  const have = _layers.filter(has);
+  const have = S.layers.filter(has);
   if (have.length === 1) return have[0];                     // only one layer HAS it → obviously that one
   return A;                                                  // absent everywhere, or ambiguous → active; run() says what's missing
 }
 // name the layer in the proposal whenever the project holds more than one
-const nlOn = (L) => (_layers.length > 1 && L ? ` on ${L.label || L.name}` : '');
+const nlOn = (L) => (S.layers.length > 1 && L ? ` on ${L.label || L.name}` : '');
 // act on the resolved layer: micro's controls follow the ACTIVE layer, so make it active first
 function nlFocus(L) { if (L && L.id !== _activeId) setActiveLayer(L.id); }
 // resolve a GROUP node by name (case-insensitive) — groups are visibility targets too
@@ -12571,7 +12569,7 @@ function nlStarters() {
   const col = Object.keys(V.numCols)[0];
   const catCol = Object.keys(V.catValues)[0]; const catVal = catCol && Object.keys(V.catValues[catCol])[0];
   let grp = null; for (const nd of _layerTree || []) if (!grp && nd && typeof nd === 'object' && nd.group && nd.name) grp = nd.name;
-  const lay = _layers[0] && (_layers[0].label || _layers[0].name);
+  const lay = S.layers[0] && (S.layers[0].label || S.layers[0].name);
   const s = [];
   if (col) { s.push(`colour by ${col}`); s.push(`${col} > 60`); }
   if (catVal) s.push(`only ${String(catVal).toLowerCase()}`);
@@ -12736,10 +12734,10 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'Escape' && _selArm) disarmSelect();
   else if (k === 'Escape' && !_knifeArm && !_measure.arm && !_measure.b) clearSelection();
   else if (k === ',' || k === '.') scrubSection(k === ',' ? -1 : 1);   // walk the section (Leapfrog convention)
-  else if ((k === '[' || k === ']') && _layers.length > 1) {   // step the active layer (wraps)
-    const i = _layers.findIndex((L) => L.id === _activeId);
-    const j = (i + (k === ']' ? 1 : -1) + _layers.length) % _layers.length;
-    setActiveLayer(_layers[j].id);
+  else if ((k === '[' || k === ']') && S.layers.length > 1) {   // step the active layer (wraps)
+    const i = S.layers.findIndex((L) => L.id === _activeId);
+    const j = (i + (k === ']' ? 1 : -1) + S.layers.length) % S.layers.length;
+    setActiveLayer(S.layers[j].id);
   }
   else if (k === 'Escape' && (_measure.arm || _measure.b)) clearMeasure();
   else if (k === 'o') { cam.setOrtho(!cam.state.ortho); requestRender(); }
@@ -13447,10 +13445,10 @@ function removeLayerUI(id) {
   // served a dead layer's cached values whenever the size:rowCount guard happened
   // to match (two exports of the same shape, a re-imported template).
   pinEvictLayer(id);
-  _layers = _layers.filter((l) => l.id !== id);
+  S.layers = S.layers.filter((l) => l.id !== id);
   recomputeUnion();
-  if (!_layers.length) { closeAllLayers(); $('#empty').style.display = ''; $('#meta').textContent = ''; return; }
-  if (_activeId === id) setActiveLayer(_layers[0].id);
+  if (!S.layers.length) { closeAllLayers(); $('#empty').style.display = ''; $('#meta').textContent = ''; return; }
+  if (_activeId === id) setActiveLayer(S.layers[0].id);
   renderLayers(); requestRender();
 }
 function layerMenu(L, x, y) {
@@ -13542,7 +13540,7 @@ function layerMenu(L, x, y) {
       { label: `Opacity (${Math.round((L.opacity != null ? L.opacity : 1) * 100)}%)`, submenu: () => opacityMenuItems(L) },
     ] : []),
     ...(L.gridSurface ? [{ label: 'Drape', submenu: () => {
-      const grids = _layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
+      const grids = S.layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
       return [{ label: (L.drapeSource ? '' : '✓ ') + 'elevation', action: () => recolorSurface(L, null) },
         ...(grids.length ? grids.map((g) => ({ label: (L.drapeSource === g.name ? '✓ ' : '') + (g.label || g.name), action: () => recolorSurface(L, g) })) : [{ label: '(load another grid to drape over it)', action: () => {} }])];
     } }] : []),
@@ -13700,7 +13698,7 @@ function renderStyleTab(body, L) {
     if (L.gridSurface) {                                    // a heightfield surface: colour by elevation or a draped grid
       const sel = document.createElement('select');
       const optE = document.createElement('option'); optE.value = ''; optE.textContent = 'elevation'; sel.appendChild(optE);
-      const grids = _layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
+      const grids = S.layers.filter((g) => g !== L && g.docs && g.docs.gridDoc && g.docs.gridDoc.grid);
       for (const g of grids) { const o = document.createElement('option'); o.value = g.name; o.textContent = g.label || g.name; sel.appendChild(o); }
       sel.value = L.drapeSource || '';
       sel.onchange = () => { const g = grids.find((x) => x.name === sel.value); recolorSurface(L, g || null); };
@@ -15906,14 +15904,14 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
   // whatever activeLayer() happened to be — corrupting an unrelated layer and
   // losing the drillhole one. redesurveySet loops this, so one failure could
   // cascade across several layers.
-  const beforeIds = new Set(_layers.map((l) => l.id));
+  const beforeIds = new Set(S.layers.map((l) => l.id));
   try {
     await openDrillholeLayer(files, cfg, 'add');
   } catch (e) { $('#meta').textContent = `re-desurvey: ${(L.label || L.name)} — ${e.message} (kept the original)`; return; }
-  const L2 = _layers.find((l) => !beforeIds.has(l.id) && l.dh) || null;   // the freshly-opened dh layer, not "whatever is active"
+  const L2 = S.layers.find((l) => !beforeIds.has(l.id) && l.dh) || null;   // the freshly-opened dh layer, not "whatever is active"
   if (!L2) { $('#meta').textContent = `re-desurvey: ${(L.label || L.name)} — reopen produced no layer (kept the original)`; return; }
   renderer.removeLayer(oldId);
-  _layers = _layers.filter((l) => l.id !== oldId);
+  S.layers = S.layers.filter((l) => l.id !== oldId);
   _activeId = L2.id;
   restoreReopenIdentity(L2, id);
   L2._setKey = setKey; L2._intervalName = intervalName;             // stay in the same drillhole set
@@ -15978,7 +15976,7 @@ async function reopenAs(L, kind) {
   }
   const keep = captureReopenIdentity(L);
   renderer.removeLayer(L.id);
-  _layers = _layers.filter((l) => l.id !== L.id);
+  S.layers = S.layers.filter((l) => l.id !== L.id);
   preregisterReopenHandle(blob, keep);
   await openBlob(blob, name, 'add', null, { asKind: kind });
   restoreReopenIdentity(activeLayer(), keep);   // incl. visible — reinterpreting a hidden layer used to bring it back visible
@@ -16050,7 +16048,7 @@ async function reloadLayerFromDisk(L) {
     const filterExpr = L.filterExpr;
     const wasActive = L.id === _activeId;
     renderer.removeLayer(L.id);
-    _layers = _layers.filter((l) => l.id !== L.id);
+    S.layers = S.layers.filter((l) => l.id !== L.id);
     preregisterReopenHandle(fresh, keep);
     await openBlob(fresh, L.name, 'add', null, doc && doc.forcePoints ? { asKind: 'points' } : undefined);
     const L2 = restoreReopenIdentity(activeLayer(), keep);
@@ -16177,8 +16175,8 @@ function setRampCfg(L, patch) {
 // resamples a compatible right model onto a target grid; key mode hash-joins by
 // a key column. Both emit a NEW layer. Reconcile is a spatial preset (Δ column).
 let _joinForm = null;
-const joinTableLayers = (L) => _layers.filter((x) => x.id !== L.id && layerTableHeader(x));
-const joinBlockLayers = (L) => _layers.filter((x) => x.id !== L.id && gridAxesOf(x));
+const joinTableLayers = (L) => S.layers.filter((x) => x.id !== L.id && layerTableHeader(x));
+const joinBlockLayers = (L) => S.layers.filter((x) => x.id !== L.id && gridAxesOf(x));
 const shortName = (L) => (L.label || L.name || '').replace(/\.[^.]+$/, '');
 function renderJoinTab(body, L) {
   if (!layerTableHeader(L)) { body.appendChild(ppNote('join needs a table-backed layer')); return; }
@@ -16640,7 +16638,7 @@ function treeSync() {
     return nd.children.length > 0;                         // empty groups dissolve
   });
   _layerTree = prune(_layerTree);
-  for (const L of _layers) if (!seen.has(L.id)) _layerTree.push(L.id);
+  for (const L of S.layers) if (!seen.has(L.id)) _layerTree.push(L.id);
 }
 function applyTreeVisibility() {
   treeSync();
@@ -16774,7 +16772,7 @@ function treeMove(node, target, where) {
 // ranges over the visible rows, plain click clears — right-click a selected
 // row offers "Group N selected…"
 const _lpSel = new Set();
-function lpSelIds() { return _layers.filter((L) => _lpSel.has(L.id)).map((L) => L.id); }
+function lpSelIds() { return S.layers.filter((L) => _lpSel.has(L.id)).map((L) => L.id); }
 function lpSelRange(toId) {
   const lids = [...document.querySelectorAll('#lpRows .lp-row')].map((r) => (r.dataset.lid != null ? +r.dataset.lid : null));
   const a = lids.indexOf(_activeId), b2 = lids.indexOf(toId);
@@ -16970,7 +16968,7 @@ function surveyRowMenu(nd, x, y) {
 function ensureDhSetGroups() {
   treeSync();
   const bySet = new Map();
-  for (const L of _layers) {
+  for (const L of S.layers) {
     if (!(L.dh && L.docs.dhDoc) || L.trace || dhSetGroupOf(L.id)) continue;
     const k = L._setKey || ('solo:' + L.id);
     if (!bySet.has(k)) bySet.set(k, []);
@@ -17043,7 +17041,7 @@ async function redesurveySet(nd, patch) {
 // shows full hole coverage even where an interval table has gaps.
 const setHasTraces = (nd) => groupLayerIds(nd).some((id) => { const L = layerById(id); return L && L.trace; });
 function hideHoleTraces(nd) {
-  for (const id of groupLayerIds(nd).slice()) { const L = layerById(id); if (L && L.trace) { renderer.removeLayer(id); _layers = _layers.filter((l) => l.id !== id); } }
+  for (const id of groupLayerIds(nd).slice()) { const L = layerById(id); if (L && L.trace) { renderer.removeLayer(id); S.layers = S.layers.filter((l) => l.id !== id); } }
   treeSync(); renderLayers(); requestRender();
 }
 async function showHoleTraces(nd) {
@@ -17062,7 +17060,7 @@ async function showHoleTraces(nd) {
     info = { ...info, blobs: { ...info.blobs, collar: new File([kept.join('\n')], basename(info.blobs.collar.name || 'collars.csv'), { type: 'text/csv' }) } };
   }
   // NOT made active — a non-active layer renders modeOf(colorSel), i.e. solid grey
-  _layers.push({ id: lid, name, label: name, kind: 'points', trace: true, docs: {}, bboxLocal: null, colorSel: 'solid', clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'volatile', lineage: null });
+  S.layers.push({ id: lid, name, label: name, kind: 'points', trace: true, docs: {}, bboxLocal: null, colorSel: 'solid', clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'volatile', lineage: null });
   $('#meta').textContent = `${name} — desurveying…`;
   try {
     const { header, streamChunks, fetchRecord } = await openDrillholeTraces({ collar: info.blobs.collar, survey: info.blobs.survey }, { ...info.config });
@@ -17075,7 +17073,7 @@ async function showHoleTraces(nd) {
     treeSync(); treeMove(lid, nd, 'into');    // nest under the set
     renderLayers(); requestRender();
     $('#meta').textContent = `${header.holes} hole trace${header.holes === 1 ? '' : 's'} · ${header.count.toLocaleString()} segments`;
-  } catch (e) { $('#meta').textContent = `traces — ${e.message}`; renderer.removeLayer(lid); _layers = _layers.filter((l) => l.id !== lid); renderLayers(); }
+  } catch (e) { $('#meta').textContent = `traces — ${e.message}`; renderer.removeLayer(lid); S.layers = S.layers.filter((l) => l.id !== lid); renderLayers(); }
 }
 function redesurveyMenu(nd, x, y) {
   menuXY(x, y, [
@@ -17270,10 +17268,10 @@ function renderLayers() {
     }
   };
   walk(_layerTree, 0, false);
-  if (_layers.length >= 1 && !_lpUserHidden) toggleLayersPanel(true);   // the panel is the layer's front door — right-click is the menu
-  if (_layers.length === 0) toggleLayersPanel(false);
+  if (S.layers.length >= 1 && !_lpUserHidden) toggleLayersPanel(true);   // the panel is the layer's front door — right-click is the menu
+  if (S.layers.length === 0) toggleLayersPanel(false);
   if (_propOpen && _propFor !== _activeId) renderProps();  // re-target, never rebuild under a typing cursor
-  if (_propOpen && !_layers.length) closeProps();
+  if (_propOpen && !S.layers.length) closeProps();
 }
 
 // ── pick → record inspector: a CLICK (not a drag) GPU-picks the element under
@@ -17434,7 +17432,7 @@ async function showRecord(hit) {
   _recLayer = L;                        // gate the field picker to the picked layer's own hidden set
   attrTableReveal(lid, rec);
   const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
-  const tag = _layers.length > 1 && L ? `${L.label || L.name} · ` : '';
+  const tag = S.layers.length > 1 && L ? `${L.label || L.name} · ` : '';
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
   if (docs.gridDoc) {
     const gd = docs.gridDoc, g = gd.grid;
@@ -17517,7 +17515,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(hit);
 });
 
-window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, attrColumnsOf, fetchLayerRow, meshVertexData, meshVertexHeader, extendRow, schemaExt, calcFns, blockCaps, docPositionStream, layerRecords, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => _layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, attrColumnsOf, fetchLayerRow, meshVertexData, meshVertexHeader, extendRow, schemaExt, calcFns, blockCaps, docPositionStream, layerRecords, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => _recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => _layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => S.layers, setActiveLayer, activeId: () => _activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => _project, views: () => _views, scenes: () => _scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
