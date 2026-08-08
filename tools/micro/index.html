@@ -6605,7 +6605,7 @@ async function writeGridDisplayCache(L, dir) {
   const gh = await resolveFileHandle(dir, rel + '.disp.grd', { create: true });
   let w = await gh.createWritable(); await w.write(writeSurferGrd(g)); await w.close();
   const jh = await resolveFileHandle(dir, rel + '.disp.json', { create: true });
-  w = await jh.createWritable(); await w.write(JSON.stringify({ v: 1, size: gd.blob.size, nx: g.nx, ny: g.ny, band: (g.band || 0) })); await w.close();   // band is part of the identity: a multi-band GeoTIFF is ONE file size for every band
+  w = await jh.createWritable(); await w.write(JSON.stringify({ v: 1, size: gd.blob.size, mtime: (gd.blob.lastModified || 0), nx: g.nx, ny: g.ny, band: (g.band || 0) })); await w.close();   // band is part of the identity: a multi-band GeoTIFF is ONE file size for every band
   return null;
 }
 // New grid / block model dialog: type + extent (parameters or cover a layer /
@@ -10114,7 +10114,7 @@ async function saveProject() {
           await scanColumns(L, (a, b) => { $('#meta').textContent = `indexing ${L.label || L.name} — ${b ? Math.round(100 * a / b) : 0}%…`; }, { bands: !isPq });
         }
         const meta = {
-          v: 2, size: doc.blob.size,
+          v: 2, size: doc.blob.size, mtime: (doc.blob.lastModified || 0),
           header: isDmL
             ? { kind: 'dm', count: h.count, bbox: h.bbox, grid: h.grid, subBlocked: h.subBlocked || false, dimPalette: h.dimPalette || null, categories: h.categories || null }
             : isPq
@@ -10320,7 +10320,7 @@ async function openProjectDir(dir) {
           // served for band B: right numbers under the cursor (eval windows the
           // source at full res), wrong picture on screen. Caches written before
           // this carry no `band`, so they only match band 0.
-          if (jj && jj.v === 1 && jj.size === file.size && (jj.band || 0) === (ls.band || 0)) {
+          if (jj && jj.v === 1 && jj.size === file.size && (!jj.mtime || jj.mtime === file.lastModified) && (jj.band || 0) === (ls.band || 0)) {
             const grd = await readSurferGrd(await (await resolveFileHandle(dir, ls.source + '.disp.grd')).getFile());
             overR.displayCache = grd;
           }
@@ -10334,7 +10334,10 @@ async function openProjectDir(dir) {
         try {
           const mh = await resolveFileHandle(dir, ls.source + '.meta.json');
           const mj = JSON.parse(await (await mh.getFile()).text());
-          if (mj && (mj.v === 1 || mj.v === 2) && mj.size === file.size) {
+          // size alone cannot tell an edited file from an untouched one — any rewrite
+          // preserving the byte count defeated this. Sidecars written before this carry
+          // no mtime, so they still match on size and keep working.
+          if (mj && (mj.v === 1 || mj.v === 2) && mj.size === file.size && (!mj.mtime || mj.mtime === file.lastModified)) {
             sidecar = mj;
             if (mj.header && (mj.header.kind === 'dm' || mj.header.kind === 'parquet')) overR.cached = mj.header;
             else overR.discovered = mj.header;
