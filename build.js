@@ -1733,6 +1733,31 @@ if (target === 'micro') {
   if (!appMatch) { console.error('Error: tools/micro/index.html — inline module script not found.'); process.exit(1); }
   let appSrc = appMatch[1];
   for (const [from, to] of Object.entries(SPEC)) appSrc = appSrc.split(`from '${from}'`).join(`from '${to}'`);
+  // Pull in any ./src/<name>.js sibling modules the app imports, register each as
+  // an ES module, and rewrite the import to #<name>. Recurses so a src module can
+  // import another. This is the seam that lets the monolith be carved into
+  // tools/micro/src/*.js one module at a time while the single-file deploy stays
+  // the same registry/blob-URL bundle the auditable target uses.
+  const srcSeen = new Set();
+  const collectSrc = (src) => {
+    let out = src;
+    const re = /from '\.\/src\/([\w.-]+)\.js'/g;
+    let m2;
+    while ((m2 = re.exec(src)) !== null) {
+      const nm = m2[1];
+      out = out.split(`from './src/${nm}.js'`).join(`from '#${nm}'`);
+      if (srcSeen.has(nm)) continue;
+      srcSeen.add(nm);
+      const sp = path.join(micDir, 'src', `${nm}.js`);
+      if (!fs.existsSync(sp)) { console.error(`Error: tools/micro/src/${nm}.js not found (imported by the app)`); process.exit(1); }
+      let ss = fs.readFileSync(sp, 'utf8');
+      for (const [from, to] of Object.entries(SPEC)) ss = ss.split(`from '${from}'`).join(`from '${to}'`);
+      ss = collectSrc(ss);
+      modules.push({ name: nm, source: ss.trim() });
+    }
+    return out;
+  };
+  appSrc = collectSrc(appSrc);
   modules.push({ name: 'app', source: appSrc.trim() });
 
   const entries = modules.map((m) =>

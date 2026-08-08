@@ -888,6 +888,7 @@ import { Peel } from '../../ext/peel/index.js';   // depth-peel by-solid — fas
 import { readLFM, writeLFM } from '../../ext/lfm/lfm.js';   // Leapfrog model files (multi-mesh + colours)
 import { readGTiff, gridFromGTiff, gridWindowFromGTiff, gridDecimatedFromGTiff, stepForCap, windowForWorldBbox, pickOverviewForCap } from '../../ext/gtiff/index.js';   // GeoTIFF DEMs + windowed/decimated reads (spec 7.1)
 import { parquetInfo, parquetInfoAsync, streamParquetColumns, readParquetRange, readParquetRow, writeParquet, createParquetBlobWriter } from '../../ext/parquet/index.js';   // Apache Parquet block models (columnar, streamed row-group by row-group)
+import { v3, dirTrendPlunge, frameDipDirDipRake, swathDir } from './src/geom.js';   // first module carved from the monolith
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -4824,29 +4825,7 @@ function openInputsDialog(r) {
   return win;
 }
 // ── swath (drift) analysis ────────────────────────────────────────────────────
-// small vector helpers
-const v3 = { dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s], add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], norm: (a) => { const n = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / n, a[1] / n, a[2] / n]; } };
-// trend (azimuth, clockwise from north) + plunge (below horizontal) → unit vector
-// in world (X=east, Y=north, Z=up)
-function dirTrendPlunge(trendDeg, plungeDeg) {
-  const T = trendDeg * Math.PI / 180, P = plungeDeg * Math.PI / 180;
-  return v3.norm([Math.cos(P) * Math.sin(T), Math.cos(P) * Math.cos(T), -Math.sin(P)]);
-}
-// dip-direction / dip / rake → an orthonormal TRIO [rakeLine, inPlanePerp, pole]
-function frameDipDirDipRake(ddDeg, dipDeg, rakeDeg) {
-  const DD = ddDeg * Math.PI / 180, D = dipDeg * Math.PI / 180, R = rakeDeg * Math.PI / 180;
-  const ddVec = [Math.cos(D) * Math.sin(DD), Math.cos(D) * Math.cos(DD), -Math.sin(D)];   // down-dip (steepest)
-  const strike = [-Math.cos(DD), Math.sin(DD), 0];                                        // horizontal in-plane (trend DD−90)
-  const rakeLine = v3.norm(v3.add(v3.scale(strike, Math.cos(R)), v3.scale(ddVec, Math.sin(R))));
-  const inPlane = v3.norm(v3.add(v3.scale(strike, -Math.sin(R)), v3.scale(ddVec, Math.cos(R))));
-  const pole = v3.norm(v3.cross(strike, ddVec));
-  return [rakeLine, inPlane, pole];
-}
-function swathDir(st) {
-  if (st.mode === 'axes') return [[1, 0, 0], [0, 1, 0], [0, 0, 1]][st.axis];
-  if (st.mode === 'oriented') return frameDipDirDipRake(st.dd, st.dip, st.rake)[st.axis];
-  return dirTrendPlunge(st.trend, st.plunge);
-}
+// v3 / swath-direction helpers moved to ./src/geom.js (first extracted module)
 const AXIS_NAMES = { axes: ['X (east)', 'Y (north)', 'Z (elev)'], oriented: ['rake line', 'in-plane ⟂', 'pole'] };
 // projected extent along dir from the layer bbox corners
 function projRange(L, dir) {
