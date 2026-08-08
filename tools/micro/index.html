@@ -3434,19 +3434,24 @@ function openGradeTonnage(L, ropts) {
     let total = 0;
     for (const se of series) {
       const Lx = se.L, mask = scopeMask(st, Lx);
-      let rec = 0;
-      for await (const batch of layerRows(Lx, null)) {
-        for (const f of batch) {
-          const rr = rec++; if (mask && !(rr < mask.length && mask[rr])) continue;
-          const row = extendRow(Lx, f, rr);
+      // layerRecords owns the record number — the raw rec++ this replaces was the
+      // mis-numbering bug (a delimited source's bad-coordinate rows were counted
+      // though the renderer never numbered them, shifting every later record's
+      // selection membership and derived-column reads). The fix landed first in
+      // computeGT, which turned out to be DEAD CODE — this closure is what the
+      // GT window actually runs.
+      for await (const { f: row, rec: rr } of layerRecords(Lx)) {
+        {
+          total++; if ((total & 0xffff) === 0) { if (onProgress) onProgress(total); await new Promise((r) => setTimeout(r)); }
+          if (mask && !(rr < mask.length && mask[rr])) continue;
           if (se.filterFn && !se.filterFn(row)) continue;
           const g = +se.gradeFn(row); if (!Number.isFinite(g)) continue;
           const w = (se.weightFn ? (+se.weightFn(row) || 0) * dScale : 1) * se.support;
           if (!(w > 0)) continue;
           se.g.push(g); se.w.push(w); se.n++;
         }
-        total += batch.length; if (onProgress) onProgress(total); await new Promise((r) => setTimeout(r));
       }
+      if (onProgress) onProgress(total);
       const ord = [...se.g.keys()].sort((a, b) => se.g[b] - se.g[a]);
       const gsorted = new Float64Array(ord.length), cw = new Float64Array(ord.length + 1), cwg = new Float64Array(ord.length + 1);
       for (let k = 0; k < ord.length; k++) { gsorted[k] = se.g[ord[k]]; cw[k + 1] = cw[k] + se.w[ord[k]]; cwg[k + 1] = cwg[k] + se.w[ord[k]] * se.g[ord[k]]; }
@@ -4836,12 +4841,13 @@ async function scanSwath(st, onProgress) {
     // without the scope's mask contributes ALL its rows (e.g. comparing a
     // filtered model against unfiltered samples) — the sub line names the scope.
     const L = se.L, m = se.m, selMask = scopeMask(st, L);
-    let rec = 0;
-    for await (const batch of layerRows(L, null)) {
-      for (const f of batch) {
-        const rr = rec++; if (selMask && !(rr < selMask.length && selMask[rr])) continue;
-        const x = +f[m.x], y = +f[m.y], z = +f[m.z]; if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-        const row = extendRow(L, f, rr);
+    // layerRecords owns the record number (see scanGT) — source columns keep
+    // their positions in the extended row, so m.x/y/z still index correctly
+    for await (const { f: row, rec: rr } of layerRecords(L)) {
+      {
+        total++; if ((total & 0xffff) === 0) { if (onProgress) onProgress(total); await new Promise((r) => setTimeout(r)); }
+        if (selMask && !(rr < selMask.length && selMask[rr])) continue;
+        const x = +row[m.x], y = +row[m.y], z = +row[m.z]; if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
         if (se.filterFn && !se.filterFn(row)) continue;
         const g = +se.gradeFn(row); if (!Number.isFinite(g)) continue;
         const w = se.weightFn ? (+se.weightFn(row) || 0) : se.support; if (!(w > 0)) continue;
@@ -4852,8 +4858,8 @@ async function scanSwath(st, onProgress) {
         }
         se.n++;
       }
-      total += batch.length; if (onProgress) onProgress(total); await new Promise((r) => setTimeout(r));
     }
+    if (onProgress) onProgress(total);
   }
   return { dirs, dirNames: swathDirNames(st), series, range, fineW, fineOrigin };
 }
@@ -5016,16 +5022,14 @@ function openSwath(L, ropts) {
       const h = layerTableHeader(Lx), m = h.mapping, n = attrRowCountOf(Lx);
       if (!Lx._selMask || Lx._selMask.length !== n) Lx._selMask = new Uint8Array(n);
       win.sub.textContent = `selecting in ${Lx.label || Lx.name}…`;
-      let rec = 0;
-      for await (const batch of layerRows(Lx, null)) {
-        for (const f of batch) {
-          const rr = rec++;
-          const x = +f[m.x], y = +f[m.y], z = +f[m.z];
-          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+      let seen = 0;                                       // layerRecords owns the record number (see scanGT)
+      for await (const { f, rec: rr } of layerRecords(Lx)) {
+        const x = +f[m.x], y = +f[m.y], z = +f[m.z];
+        if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
           const t = x * dir[0] + y * dir[1] + z * dir[2];
           if (t >= a && t < b2 && rr < n) Lx._selMask[rr] = 1;
         }
-        await new Promise((r2) => setTimeout(r2));
+        if (((++seen) & 0xffff) === 0) await new Promise((r2) => setTimeout(r2));
       }
       applyLayerSelection(Lx);
     }
@@ -5256,11 +5260,12 @@ function openStats(L, ropts) {
     const TD = tdigest();
     const mkAcc = () => colFns.map(() => ({ n: 0, sw: 0, swx: 0, swx2: 0, min: Infinity, max: -Infinity, td: TD.create() }));
     const groups = new Map();
-    let overflow = false, rec = 0, total = 0;
-    for await (const batch of layerRows(L, null)) {
-      for (const f of batch) {
-        const rr = rec++; if (mask && !(rr < mask.length && mask[rr])) continue;
-        const row = extendRow(L, f, rr);
+    let overflow = false, total = 0;
+    // layerRecords owns the record number (see scanGT)
+    for await (const { f: row, rec: rr } of layerRecords(L)) {
+      {
+        total++; if ((total & 0xffff) === 0) { if (onProgress) onProgress(total); await new Promise((r) => setTimeout(r)); }
+        if (mask && !(rr < mask.length && mask[rr])) continue;
         let g = '';
         if (groupFn) { const gv = groupFn(row); g = gv == null || gv === '' ? '—' : String(gv); }
         let A = groups.get(g);
@@ -5276,8 +5281,8 @@ function openStats(L, ropts) {
           TD.push(a.td, x);
         }
       }
-      total += batch.length; if (onProgress) onProgress(total); await new Promise((r) => setTimeout(r));   // cooperative — orbiting stays live
     }
+    if (onProgress) onProgress(total);
     const rows = [];
     for (const g of [...groups.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
       const A = groups.get(g);
@@ -15959,6 +15964,7 @@ async function reloadLayerFromDisk(L) {
       L2._bands = null;
       L2._catCounts = null;
       L2._filterMask = null;                               // the GPU filter was cleared by the re-open; keep JS in step
+      L2._selMask = null; L2._selCount = 0;                // and the selection's GPU twin was cleared too — same reasoning, missed first pass
       pinEvictLayer(L2.id);                                // pinned columns belong to the OLD bytes
     }
     // applyBlockFilter acts on the ACTIVE layer (it takes no layer argument), so a
