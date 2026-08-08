@@ -1271,6 +1271,7 @@ async function selectionToColumn(L) {
   const out = addPaintValue(L, col, '0'), inn = addPaintValue(L, col, '1');
   const m = L._selMask, codes = col.codes, n = codes.length;
   for (let r = 0; r < n; r++) codes[r] = (r < m.length && m[r]) ? inn : out;
+  col.lineage = mkLineage('selection', { rows: L._selCount, of: L.name });   // a selection-derived flag is a derived column, not hand paint
   paintRecount(col);
   addPaintColorOptions(L);
   const t2 = _attrTables.get(L.id); if (t2 && t2.invalidate) t2.invalidate();
@@ -2914,6 +2915,7 @@ async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = 
     $('#meta').textContent = `ratio by solid: mapping ${done.toLocaleString()} records…`;
     await new Promise((r2) => setTimeout(r2));
   }
+  col.lineage = mkLineage('fraction', { by: 'solid', solid: meshL.name, mode, touched }, [meshL.lineage, L.lineage]);
   paintRecount(col);
   L._colStats = null;
   addPaintColorOptions(L);
@@ -2930,6 +2932,7 @@ async function ratioBySolid(meshL, L, { name, res = 3, mode = 'inside', meshB = 
 async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside', meshB = null, onProgress = null, method = 'winding' } = {}) {
   if (meshL.docs.gridDoc) return flagByGridSurface(meshL, targets, { name, label, mode, meshB, onProgress });
   const between = mode === 'between';
+  const failed = [];                                       // targets that errored mid-loop → thrown after, not swallowed
   const variant = between ? 'below' : (SB_VARIANT[mode] || 'solid');
   const want = mode !== 'outside';
   const epoch = ++_ratioEpoch;
@@ -2991,7 +2994,13 @@ async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside'
           await new Promise((r2) => setTimeout(r2));
         }
       }
-    } catch (e) { if (e.message !== 'cancelled') $('#meta').textContent = `flag by solid: ${L.name} — ${e.message}`; return made; }
+    } catch (e) {
+      if (e.message === 'cancelled') return made;
+      // a real failure on ONE target used to `return made` — reporting the
+      // targets flagged before it as success and silently skipping the rest.
+      failed.push(`${L.name}: ${e.message}`); continue;
+    }
+    col.lineage = mkLineage('flag', { by: 'solid', solid: meshL.name, mode, label, inside: cnt }, [meshL.lineage, L.lineage]);
     paintRecount(col);
     L._colStats = null;
     addPaintColorOptions(L);
@@ -3001,6 +3010,7 @@ async function flagBySolid(meshL, targets, { name, label = 'IN', mode = 'inside'
     $('#meta').textContent = `flag by solid: ${cnt.toLocaleString()} of ${n.toLocaleString()} inside → ${name} · filter with ${name} == "${label}"`;
   }
   markProjectDirty(); requestRender();
+  if (failed.length) throw new Error(`flag by solid failed on ${failed.length} of ${targets.length} target${targets.length > 1 ? 's' : ''} — ${failed[0]}`);
   return made;
 }
 // ── ASSIGN DOMAINS (§7.2's payoff): one proportion field per solid, ONE
@@ -3453,6 +3463,14 @@ function openGradeTonnage(L, ropts) {
       const Lx = layerById(s.layerId); if (!Lx) return null;
       const h = layerTableHeader(Lx); if (!h) return null;
       const schema = schemaExt(Lx, h);
+      // a valid but UNKNOWN column name compiles to a BLANK closure (() => null),
+      // and +null === 0 is finite — so a renamed/removed column silently produced
+      // a flat grade-0 curve at full tonnage. Refuse a bare missing name loudly;
+      // a real expression stays free-form.
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(s.col).trim())) {
+        const _v = validate(String(s.col).trim(), schema);
+        if (!_v.ok) throw new Error(`series column "${s.col}": ${(_v.errors[0] && _v.errors[0].message) || 'unknown column'} — pick another, or reopen the layer that has it`);
+      }
       let gradeFn; try { gradeFn = compileValue(quoteIdent(s.col), schema, { decimal: '.' }); } catch { return null; }   // a NAME as an expression → quote (spaces/hyphens)
       let weightFn = null, filterFn = null;
       if (s.weight && s.weight.trim()) { try { weightFn = compileValue(s.weight, schema, { decimal: '.' }); } catch { throw new Error(`series weight "${s.weight}": invalid`); } }
@@ -4125,6 +4143,25 @@ async function runRoutine(r, opts = {}) {
     for (const nm of routineLayerNames({ params: rc ? { ...rc.params, ...st } : st })) if (nm && !loaded.has(nm)) missingL.add(nm);
   }
   if (missingL.size) { $('#meta').textContent = `routine: load these layers first — ${[...missingL].join(', ')} (routines run without prompts)`; return; }
+  // pre-flight 3: a referenced column must still resolve on its layer's schema.
+  // A renamed/removed column would otherwise compile to a blank that reads 0 and
+  // a routine would write a plausible-looking zero-grade report marked ✓.
+  const badCols = [];
+  for (const st of steps) {
+    if (st.guard) continue;
+    const rc = st.recipe ? byName.get(st.recipe) : null;
+    const pr = rc ? { ...rc.params, ...st } : st;
+    const cols = [];
+    for (const ser of pr.series || []) if (ser.col) cols.push({ layer: ser.layer || pr.layer, col: ser.col });
+    if (pr.col) cols.push({ layer: pr.layer, col: pr.col });
+    for (const { layer, col } of cols) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(col).trim())) continue;   // an expression, not a bare name
+      const L2 = _layers.find((x) => x.name === layer); const h2 = L2 && layerTableHeader(L2);
+      if (!h2) continue;
+      if (!validate(String(col).trim(), schemaExt(L2, h2)).ok) badCols.push(`${col}${layer ? ' on ' + layer : ''}`);
+    }
+  }
+  if (badCols.length) { $('#meta').textContent = `routine: column${badCols.length > 1 ? 's' : ''} not found — ${[...new Set(badCols)].join(', ')} (renamed or removed?)`; return; }
   // output routing
   const outDir = routineOutDir(P);
   const outPath = (slug) => routineOutPath(P, slug);
@@ -4853,6 +4890,14 @@ async function scanSwath(st, onProgress) {
     const L = layerById(s.layerId); if (!L) return null;
     const h = layerTableHeader(L); if (!h || !h.mapping) return null;
     const m = h.mapping, schema = schemaExt(L, h);
+    // a valid but UNKNOWN column name compiles to a BLANK closure (() => null),
+    // and +null === 0 is finite — so a renamed/removed column silently produced
+    // a flat grade-0 curve at full tonnage. Refuse a bare missing name loudly;
+    // a real expression stays free-form.
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(s.col).trim())) {
+      const _v = validate(String(s.col).trim(), schema);
+      if (!_v.ok) throw new Error(`series column "${s.col}": ${(_v.errors[0] && _v.errors[0].message) || 'unknown column'} — pick another, or reopen the layer that has it`);
+    }
     let gradeFn; try { gradeFn = compileValue(quoteIdent(s.col), schema, { decimal: '.' }); } catch { return null; }   // a NAME as an expression → quote
     let weightFn = null, filterFn = null;
     if (s.weight && s.weight.trim()) { try { weightFn = compileValue(s.weight, schema, { decimal: '.' }); } catch { throw new Error(`series weight "${s.weight}": invalid`); } }
