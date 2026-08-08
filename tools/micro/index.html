@@ -1144,7 +1144,7 @@ cv.addEventListener('pointerup', (e) => {
   armKnife(false);
   const [ex, ey] = knifeSnap(st.x, st.y, e.clientX, e.clientY, e);
   if (knifeCut(st.x - r.left, st.y - r.top, ex - r.left, ey - r.top)) {
-    $('#meta').textContent = _blockDoc ? _blockDoc.metaLine : $('#meta').textContent.replace(/^knife:.*/, '');
+    $('#meta').textContent = activeDocs().blockDoc ? activeDocs().blockDoc.metaLine : $('#meta').textContent.replace(/^knife:.*/, '');
   } else {
     $('#secMode').value = 'off'; $('#secMode').dispatchEvent(new Event('input'));
   }
@@ -6827,7 +6827,7 @@ $('#btnShot').onclick = () => {
   cv.toBlob((blob) => {
     if (!blob) return;
     const a = document.createElement('a');
-    const stem = (_blockDoc && _blockDoc.name || _lasDoc && 'pointcloud' || 'micro').replace(/\.[^.]*$/, '').replace(/[^\w.-]+/g, '_');
+    const stem = (activeDocs().blockDoc && activeDocs().blockDoc.name || activeDocs().lasDoc && 'pointcloud' || 'micro').replace(/\.[^.]*$/, '').replace(/[^\w.-]+/g, '_');
     a.href = URL.createObjectURL(blob); a.download = `micro_${stem}.png`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }, 'image/png');
@@ -6885,6 +6885,9 @@ async function streamInto(cb, streamChunks, header, name, chunkPoints, lid = S.a
 // layer open == exactly the old single-doc behavior (ids 0-shifted, panel hidden).
 const layerById = (id) => S.layers.find((l) => l.id === id) || null;
 const activeLayer = () => layerById(S.activeId);
+// the ACTIVE layer's docs (always an object) — the one way to ask "what file is
+// under the shared controls right now"; replaces the _blockDoc/… shadow globals
+const activeDocs = () => { const L = activeLayer(); return (L && L.docs) || {}; };
 const LAYER_CAP = 64;                                     // a UI limit now, not an arithmetic one
 const allocLayerId = () => {
   // one pool. The old 7-layer ceiling came from packing the layer into 3 spare
@@ -6898,7 +6901,6 @@ function closeAllLayers() {
   for (const [lid] of _attrTables) closeAttrTable(lid);
   renderer.clearChunks(); renderer.setPicked(null);
   S.layers = []; S.activeId = 0; frame = null; _docBbox = null;
-  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null; _gridDoc = null;
   _filterExpr = ''; _filterEpoch++;
   $('#filter').value = ''; syncFilterClear();
   $('#recPanel').classList.remove('show');
@@ -6915,13 +6917,13 @@ function recomputeUnion() {
   _docBbox = u;
   if (u) renderer.setDocBbox(u);
 }
-// sync the shared controls (color/clip/filter) + doc aliases to the active layer
+// sync the shared controls (color/clip/filter) to the active layer
 function setActiveLayer(id) {
   const L = layerById(id); if (!L) return;
   S.activeId = id;
   syncMeshPickable();                                      // selecting a surface is what makes it clickable
-  _blockDoc = L.docs.blockDoc || null; _lasDoc = L.docs.lasDoc || null; _plyDoc = L.docs.plyDoc || null; _dhDoc = L.docs.dhDoc || null;
-  setColorLabels(_blockDoc ? _blockDoc.header : _dhDoc ? _dhDoc.header : _lasDoc ? { kind: 'las' } : _plyDoc ? _plyDoc.header : null);
+  const d = L.docs || {};
+  setColorLabels(d.blockDoc ? d.blockDoc.header : d.dhDoc ? d.dhDoc.header : d.lasDoc ? { kind: 'las' } : d.plyDoc ? d.plyDoc.header : null);
   addPaintColorOptions(L);
   if (L.colorSel != null && [...$('#colorBy').options].some((o) => o.value === L.colorSel)) $('#colorBy').value = L.colorSel;
   $('#clipMin').value = L.clip[0]; $('#clipMax').value = L.clip[1];
@@ -7007,7 +7009,6 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   const first = S.layers.length === 0;
   S.layers.push({ id: lid, name, kind: 'points', docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: (typeof File !== 'undefined' && blob instanceof File && _fileHandles.get(blob)) || null, storage: 'loose', lineage: over.lineage || openLineage(name, blob) });
   S.activeId = lid;
-  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null; _gridDoc = null;
   $('#meta').textContent = `${name} — reading…`;
   $('#empty').style.display = 'none';
   try {
@@ -7029,8 +7030,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
     else if (!/\.(las)$/i.test(name)) throw new Error(`micro doesn’t read ${(name.match(/\.[^.]+$/) || ['this file'])[0]} — it reads .csv .txt .dat .tsv .xlsx .dm .parquet .las .ply .xyz .pts .msh .obj .lfm .tif .grd .asc`);
     else {
       const { header, streamChunks } = await openLas(blob);
-      _lasDoc = { blob, header }; _blockDoc = null; _plyDoc = null;
-      registerDocs(lid, 'points');
+      registerDocs(lid, 'points', { lasDoc: { blob, header } });
       fitFromHeader(header, first);
       setColorLabels(null);
       const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
@@ -7063,11 +7063,14 @@ function syncMeshPickable() {
     renderer.setLayerPickable(L.id, opaque || L.id === S.activeId);
   }
 }
-// snapshot the doc aliases into the layer (the aliases always mirror the ACTIVE layer)
-function registerDocs(lid, kind) {
+// register a layer's docs. The open path hands its doc over EXPLICITLY — the
+// old shadow-global relay (_blockDoc/_dhDoc/…, snapshotted here) was a second
+// source of truth that only coincided with L.docs while that layer was active,
+// which is the seam the 2026-08 dispatch bugs grew from.
+function registerDocs(lid, kind, docs = {}) {
   const L = layerById(lid); if (!L) return;
   L.kind = kind;
-  L.docs = { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc, dhDoc: _dhDoc, gridDoc: _gridDoc };
+  L.docs = docs;
 }
 // ── grids (§7.1): GeoTIFF / Surfer .grd / ESRI ASCII → ONE gridDoc shape ──
 // { nx, ny, data, x0, y0, dx, dy, nodata, crs, form } — row 0 is the NORTH
@@ -7108,9 +7111,8 @@ async function readAnyGrid(blob, name, displayCache = null, band = 0) {
   return readEsriAsc(blob);
 }
 // grid → the POINTS pipeline (spec §7.1 v1: heightfield cells as records,
-// zero new GL). The FULL grid stays on the layer for the coming
+// zero new GL). The FULL grid stays on the layer (L.docs.gridDoc) for the
 // surface-flag/ratio evaluation; display decimates by stride to a cap.
-let _gridDoc = null;
 const GRID_DISPLAY_CAP = 4_000_000;
 // ESRI ASCII grid writer — the trivial format everything reads; also the blob
 // "nice" step (1 / 2 / 2.5 / 5 × 10ⁿ) for a default cell size
@@ -7480,8 +7482,7 @@ async function openGridBlob(blob, name, opts = {}) {
       max: [grid.x0 + (nx - 1) * grid.dx, grid.y0, zmax],
     },
   };
-  _gridDoc = { blob, name, grid, stride, source: grid._src || null, level: grid._src ? grid._src.level : 0, fullRes: !grid._src || (grid._src.level === 0 && grid._src.step === 1) };
-  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
+  const gridDoc = { blob, name, grid, stride, source: grid._src || null, level: grid._src ? grid._src.level : 0, fullRes: !grid._src || (grid._src.level === 0 && grid._src.step === 1) };
   // "Show as surface": a grid IS a heightfield — triangulate it into a shaded
   // relief mesh coloured by elevation (§17 heightfield-drape Phase 1), instead of
   // the raw elevation point cloud. gridDoc stays for by-surface eval; per-cell
@@ -7491,18 +7492,18 @@ async function openGridBlob(blob, name, opts = {}) {
     const hf = buildHeightfieldMesh(grid, { stride, frame, flatZ });
     if (!hf) throw new Error('grid is all nodata');
     const color = surfaceColorArray(hf, opts.drape || null, (rampCfgOf(layerById(lid)) || {}).preset, zmin, zmax);
-    registerDocs(lid, 'mesh');
+    registerDocs(lid, 'mesh', { gridDoc });
     fitFromHeader({ ...header, bbox: { min: hf.bboxLocal.slice(0, 3).map((v, i) => v + (frame ? frame.origin[i] : 0)), max: hf.bboxLocal.slice(3, 6).map((v, i) => v + (frame ? frame.origin[i] : 0)) } }, opts.first !== false);
     const smooth = opts.smooth !== false;
     renderer.setLayerMeshStyle(lid, { tint: [0.6, 0.63, 0.66], opacity: 1 });
     renderer.addChunk({ kind: 'mesh', pos: hf.pos, idx: hf.idx, color, normal: smooth ? hf.normal : null, count: hf.count, bboxLocal: hf.bboxLocal }, 'base', lid);
     const Lg = layerById(lid);
-    if (Lg) { Lg.bboxLocal = hf.bboxLocal; Lg.docs.gridDoc = _gridDoc; Lg.tint = '#9aa0a6'; Lg.gridSurface = true; Lg.surfaceFlatZ = flatZ; Lg.surfaceSmooth = smooth; }
+    if (Lg) { Lg.bboxLocal = hf.bboxLocal; Lg.tint = '#9aa0a6'; Lg.gridSurface = true; Lg.surfaceFlatZ = flatZ; Lg.surfaceSmooth = smooth; }
     recomputeUnion(); requestRender();
     $('#meta').textContent = `${name} — surface · ${hf.vertexCount.toLocaleString()} nodes${stride > 1 ? ` (every ${stride}ᵗʰ)` : ''}${grid.crs ? ` · ${grid.crs}` : ''}`;
     return;
   }
-  registerDocs(lid, 'points');
+  registerDocs(lid, 'points', { gridDoc });
   fitFromHeader(header, opts.first !== false);
   setColorLabels(null);
   const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
@@ -7536,9 +7537,9 @@ async function openGridBlob(blob, name, opts = {}) {
   }
   flush();
   const doc = cb.flush();
-  _gridDoc.dispIdx = dispIdx;
+  gridDoc.dispIdx = dispIdx;
   const L = layerById(lid);
-  if (L) { L.bboxLocal = doc.bboxLocal; L.docs.gridDoc = _gridDoc; }
+  if (L) L.bboxLocal = doc.bboxLocal;
   recomputeUnion();
   $('#meta').textContent = `${name} — ${nx.toLocaleString()}×${ny.toLocaleString()} ${grid.form}${grid.crs ? ` · ${grid.crs}` : ''}` +
     `${stride > 1 ? ` · showing every ${stride}ᵗʰ node (${shown.toLocaleString()})` : ` · ${shown.toLocaleString()} nodes`}`;
@@ -7546,13 +7547,11 @@ async function openGridBlob(blob, name, opts = {}) {
 }
 // PLY path: discovery sweep (no header bbox) → the points pipeline. The
 // provider owns fetchRecord (O(1) binary / sweep ascii) for the pick join.
-let _plyDoc = null;
 async function openPlyBlob(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : S.activeId;
   $('#meta').textContent = `${name} — reading header…`;
   const { header, streamChunks, fetchRecord } = await openPly(blob);
-  _plyDoc = { blob, name, header, fetchRecord }; _lasDoc = null; _blockDoc = null;
-  registerDocs(lid, 'points');
+  registerDocs(lid, 'points', { plyDoc: { blob, name, header, fetchRecord } });
   fitFromHeader(header, opts.first !== false);
   setColorLabels(null);
   const cb = createChunkBuilder({ frame, chunkSize: 1 << 18, batchSize: 1 << 22, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
@@ -7673,7 +7672,6 @@ async function openLfmSplit(blob, name, mode) {
 async function openMeshDoc(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : S.activeId;
   $('#meta').textContent = `${name} — reading mesh…`;
-  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   const L = layerById(lid);
   const setupLayer = (header) => {
     if (!L) return;
@@ -7744,15 +7742,14 @@ async function openDrillholeLayer(files, opts = {}, mode = 'add') {
   const name = (files.intervals && files.intervals.name) || 'drillholes';
   S.layers.push({ id: lid, name, label: `holes · ${name}`, kind: 'points', dh: true, docs: {}, bboxLocal: null, colorSel: null, clip: ['', ''], filterExpr: '', visible: true, handle: null, storage: 'loose', lineage: openLineage(name, files.intervals) });
   S.activeId = lid;
-  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   $('#meta').textContent = `${name} — desurveying…`;
   $('#empty').style.display = 'none';
   try {
     const { header, streamChunks, fetchRecord, recordPosition } = await openDrillholes(
       { collar: files.collar, survey: files.survey, intervals: files.intervals }, opts);
-    _dhDoc = { blobs: { ...files }, header, fetchRecord, recordPosition, config: { ...opts } };
-    peekCollarCols(_dhDoc);                                // warm the collar-column cache (menu + manifest)
-    registerDocs(lid, 'points');
+    const dhDoc = { blobs: { ...files }, header, fetchRecord, recordPosition, config: { ...opts } };
+    peekCollarCols(dhDoc);                                 // warm the collar-column cache (menu + manifest)
+    registerDocs(lid, 'points', { dhDoc });
     fitFromHeader(header, first);
     renderer.setCategories(header.categories ? 1 : 0);
     renderer.setLayerCats(lid, header.categories ? 256 : 0);
@@ -7768,8 +7765,8 @@ async function openDrillholeLayer(files, opts = {}, mode = 'add') {
     if (L) { L.bboxLocal = doc.bboxLocal; L.colorSel = $('#colorBy').value; }
     recomputeUnion();
     const warn = header.report.checks.reduce((t, c) => t + c.count, 0);
-    _dhDoc.metaLine = `${name} — ${header.placed.toLocaleString()}/${header.count.toLocaleString()} intervals · ${header.holes} holes · ${header.method === 'minimumCurvature' ? 'min curvature' : header.method} · dip ${header.dipConvention}${warn ? ` · ⚠ ${warn} check${warn > 1 ? 's' : ''} (File info)` : ''}`;
-    $('#meta').textContent = _dhDoc.metaLine;
+    dhDoc.metaLine = `${name} — ${header.placed.toLocaleString()}/${header.count.toLocaleString()} intervals · ${header.holes} holes · ${header.method === 'minimumCurvature' ? 'min curvature' : header.method} · dip ${header.dipConvention}${warn ? ` · ⚠ ${warn} check${warn > 1 ? 's' : ''} (File info)` : ''}`;
+    $('#meta').textContent = dhDoc.metaLine;
     ensureDhSetGroups();                                   // every dh layer lives in its SET group (the group IS the element)
     renderLayers();
     dispatchEvent(new Event('micro:project-dirty'));
@@ -7785,8 +7782,8 @@ async function openDrillholeLayer(files, opts = {}, mode = 'add') {
 }
 // re-channel a drillhole layer (all in memory upstream — cheap)
 async function reopenDhChan(chan) {
-  const L = activeLayer(); if (!L || !L.dh || !_dhDoc) return;
-  const files = _dhDoc.blobs, cfg = { ..._dhDoc.config, chan };
+  const L = activeLayer(); if (!L || !L.dh || !L.docs.dhDoc) return;
+  const files = L.docs.dhDoc.blobs, cfg = { ...L.docs.dhDoc.config, chan };
   const id = captureReopenIdentity(L);
   const setKey = L._setKey, intervalName = L._intervalName;
   const style = captureLayerStyling(L);                               // was DROPPED — a re-channel keeps the same columns, so styling should ride through
@@ -8345,7 +8342,6 @@ async function openParquetBlocks(blob, name, opts = {}) {
 }
 // Block-model path (.csv etc.): two-sweep provider → regular grid → box impostors.
 // Not a regular grid → the points pipeline still shows the centroids.
-let _blockDoc = null, _lasDoc = null, _dhDoc = null;
 // ── the TABLE kind: a tabular layer with NO geometry ─────────────────────────
 // A join source, a routine's parameter table, a cut-off / density lookup, an
 // analysis result. It lives in the layer list, opens an attribute table, filters
@@ -8482,17 +8478,17 @@ async function applyTableFilter(L, expr) {
 }
 async function openBlocksBlob(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : S.activeId;
-  _lasDoc = null; _plyDoc = null;
   // a cached discovery skips sweep 1: project sidecars pass opts.discovered;
-  // a channel switch on the SAME blob reuses the live header (grid / index /
-  // categories are mapping-independent — only the chan pick changes)
+  // a channel switch on the SAME blob reuses the TARGET LAYER's live header
+  // (grid / index / categories are mapping-independent — only the chan changes)
+  const prevDoc = (layerById(lid) || {}).docs && layerById(lid).docs.blockDoc || null;
   const discovered = opts.discovered
-    || (opts.chan != null && _blockDoc && _blockDoc.header && _blockDoc.blob === blob
-      ? { ..._blockDoc.header, mapping: { ..._blockDoc.header.mapping, chan: opts.chan } }
+    || (opts.chan != null && prevDoc && prevDoc.header && prevDoc.blob === blob
+      ? { ...prevDoc.header, mapping: { ...prevDoc.header.mapping, chan: opts.chan } }
       : null);
   $('#meta').textContent = `${name} — ${discovered ? 'reading…' : 'discovering grid…'}`;
   const mapping = opts.mapping
-    || (opts.chan != null && _blockDoc && _blockDoc.header ? { ..._blockDoc.header.mapping, chan: opts.chan } : null);
+    || (opts.chan != null && prevDoc && prevDoc.header ? { ...prevDoc.header.mapping, chan: opts.chan } : null);
   renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);
   const prov = opts.provider ? await opts.provider() : null;
   const { header, streamChunks } = prov || await openBlockModel(blob, discovered ? { discovered } : (mapping ? { mapping } : {}));
@@ -8501,21 +8497,21 @@ async function openBlocksBlob(blob, name, opts = {}) {
   // open and discarded, so every later consumer re-derived how to read this
   // source from format flags — which is how Parquet kept landing in the
   // delimited branch. A doc that carries its own reader cannot be misread.
-  _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints, parquet: prov ? prov.parquet : null, streamChunks };
-  registerDocs(lid, header.grid ? 'blocks' : 'points');
+  const blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints, parquet: prov ? prov.parquet : null, streamChunks };
+  registerDocs(lid, header.grid ? 'blocks' : 'points', { blockDoc });
   fitFromHeader(header, opts.first !== false && opts.chan == null);
   renderer.setCategories(header.categories ? header.categories.length : 0);
   setColorLabels(header);
   if (header.grid) {
     const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
-    _blockDoc.grid = grid;
+    blockDoc.grid = grid;
     const dimPalette = header.subBlocked ? header.dimPalette : null;
     const cb = createBlockChunkBuilder({ frame, grid, dimPalette, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });   // 128k/chunk, 16 chunks per Morton batch: tight bboxes are what give the frustum test teeth
     const doc = await streamInto(cb, streamChunks, header, name, 1 << 18, lid);
-    _blockDoc.metaLine = header.subBlocked
+    blockDoc.metaLine = header.subBlocked
       ? `${name} — ${doc.count.toLocaleString()} sub-blocks · fine ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch} · ${header.dimPalette.length} sizes${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`
       : `${name} — ${doc.count.toLocaleString()} blocks · grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
-    $('#meta').textContent = _blockDoc.metaLine;
+    $('#meta').textContent = blockDoc.metaLine;
     if (_filterExpr.trim() && opts.keepFilter) applyBlockFilter(_filterExpr);
   } else {
     // centroids as points (sub-blocked / irregular): grade → the intensity slot
@@ -8535,8 +8531,8 @@ async function openBlocksBlob(blob, name, opts = {}) {
     const doc = cb.flush();
     const L2 = layerById(lid); if (L2) L2.bboxLocal = doc.bboxLocal;
     recomputeUnion();
-    _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} centroids${_blockDoc.forcePoints ? '' : ' (no regular grid detected — points view)'}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
-    $('#meta').textContent = _blockDoc.metaLine;
+    blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} centroids${blockDoc.forcePoints ? '' : ' (no regular grid detected — points view)'}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
+    $('#meta').textContent = blockDoc.metaLine;
     if (_filterExpr.trim() && opts.keepFilter) applyBlockFilter(_filterExpr);
   }
   requestRender();
@@ -8545,7 +8541,7 @@ async function openBlocksBlob(blob, name, opts = {}) {
 // (micro-spec Addendum A.2). Record numbers are RAW, so picks fetch O(1).
 async function openDmBlob(blob, name, opts = {}) {
   const lid = opts.layer != null ? opts.layer : S.activeId;
-  _lasDoc = null; _plyDoc = null;
+  const prevDoc = (layerById(lid) || {}).docs && layerById(lid).docs.blockDoc || null;
   // a lone Datamine wireframe half → guide the user to open the pair (a wireframe
   // is a points file + a triangles file; one alone isn't a viewable model)
   if (opts.chan == null) {
@@ -8553,25 +8549,25 @@ async function openDmBlob(blob, name, opts = {}) {
     if (role) { const other = role === 'points' ? 'triangles (…tr.dm)' : 'points (…pt.dm)'; throw new Error(`Datamine wireframe ${role} file — open it together with its ${other} file to view the mesh`); }
   }
   $('#meta').textContent = `${name} — reading DD…`;
-  const mapping = opts.chan != null && _blockDoc && _blockDoc.header ? { chan: opts.chan } : null;
+  const mapping = opts.chan != null && prevDoc && prevDoc.header ? { chan: opts.chan } : null;
   renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);
   // sub-blocked / irregular models run a FULL discovery sweep before the first
   // chunk (a 13 GB file reads silently for a minute otherwise) — show progress
   const gb = blob.size / 1073741824;
   const onProgress = (p) => { $('#meta').textContent = `${name} — discovery sweep ${Math.round(100 * p.done / (p.total || 1))}% of ${p.total.toLocaleString()} records${gb > 0.5 ? ` (${gb.toFixed(1)} GB)` : ''}…`; };
   const { header, streamChunks } = await openDmModel(blob, { ...(mapping ? { mapping } : {}), forcePoints: opts.forcePoints, onProgress, cached: opts.cached || null });
-  _blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints, streamChunks };
-  registerDocs(lid, header.grid ? 'blocks' : 'points');
+  const blockDoc = { blob, name, header, metaLine: '', forcePoints: opts.forcePoints, streamChunks };
+  registerDocs(lid, header.grid ? 'blocks' : 'points', { blockDoc });
   fitFromHeader(header, opts.first !== false && opts.chan == null);
   renderer.setCategories(header.categories ? 1 : 0);
   setColorLabels(header);
   if (header.grid) {
     const grid = makeBlockGrid([header.grid.x, header.grid.y, header.grid.z], frame);
-    _blockDoc.grid = grid;
+    blockDoc.grid = grid;
     const dimPalette = header.subBlocked ? header.dimPalette : null;
     const cb = createBlockChunkBuilder({ frame, grid, dimPalette, chunkSize: 1 << 17, batchSize: 1 << 21, seed: 1, onChunk: (c) => { renderer.addChunk(c, 'base', lid); requestRender(); } });
     const doc = await streamInto(cb, streamChunks, header, name, 1 << 18, lid);
-    _blockDoc.metaLine = header.subBlocked
+    blockDoc.metaLine = header.subBlocked
       ? `${name} — ${doc.count.toLocaleString()} sub-blocks · .dm fine ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch} · ${header.dimPalette.length} sizes${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`
       : `${name} — ${doc.count.toLocaleString()} blocks · .dm grid ${header.grid.x.count}×${header.grid.y.count}×${header.grid.z.count} @ ${header.grid.x.pitch}×${header.grid.y.pitch}×${header.grid.z.pitch}${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
   } else {
@@ -8592,9 +8588,9 @@ async function openDmBlob(blob, name, opts = {}) {
     const doc = cb.flush();
     const L2 = layerById(lid); if (L2) L2.bboxLocal = doc.bboxLocal;
     recomputeUnion();
-    _blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} centroids (sub-blocked .dm — points view)${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
+    blockDoc.metaLine = `${name} — ${doc.count.toLocaleString()} centroids (sub-blocked .dm — points view)${header.attributes.length ? ' · ' + header.attributes.join(', ') : ''}`;
   }
-  $('#meta').textContent = _blockDoc.metaLine;
+  $('#meta').textContent = blockDoc.metaLine;
   if (_filterExpr.trim() && opts.keepFilter) applyBlockFilter(_filterExpr);
   requestRender();
 }
@@ -8718,15 +8714,15 @@ $('#colorBy').addEventListener('change', () => {
   const v = $('#colorBy').value;
   const L = activeLayer(); if (L) { L.colorSel = v; applyRamp(L, true); syncRuleMode(L); }
   dispatchEvent(new Event('micro:project-dirty'));
-  if (v.startsWith('chan:') && _dhDoc && +v.slice(5) !== _dhDoc.header.mapping.chan) { reopenDhChan(+v.slice(5)); return; }
-  if (v.startsWith('chan:') && _blockDoc && +v.slice(5) !== _blockDoc.header.mapping.chan) {
+  if (v.startsWith('chan:') && activeDocs().dhDoc && +v.slice(5) !== activeDocs().dhDoc.header.mapping.chan) { reopenDhChan(+v.slice(5)); return; }
+  if (v.startsWith('chan:') && activeDocs().blockDoc && +v.slice(5) !== activeDocs().blockDoc.header.mapping.chan) {
     // Three sources, not two. This dispatch predated Parquet and sent it down the
     // delimited branch, where openBlocksBlob sniffed the Parquet bytes as text,
     // found no rows, and replaced a good document with an empty one — the layer
     // kept its count and its columns and drew nothing. Parquet re-opens through
     // its own provider, and takes the new channel as a mapping patch because it
     // resolves columns by mapping rather than by an opts.chan index.
-    reopenBlockChan(_blockDoc, +v.slice(5));
+    reopenBlockChan(activeDocs().blockDoc, +v.slice(5));
   } else requestRender();
 });
 for (const id of ['clipMin', 'clipMax']) $('#' + id).addEventListener('input', () => {
@@ -8753,8 +8749,8 @@ async function applyBlockFilter(expr) {
   // mask on a 1.8M-block layer
   const AL = activeLayer();
   if (AL && AL.kind === 'table') return applyTableFilter(AL, expr);   // no geometry to mask — the table view is the whole effect
-  const fBlockDoc = AL ? AL.docs.blockDoc : _blockDoc;
-  const fDhDoc = AL ? AL.docs.dhDoc : _dhDoc;
+  const fBlockDoc = AL ? AL.docs.blockDoc : null;
+  const fDhDoc = AL ? AL.docs.dhDoc : null;
   if (!fBlockDoc && !fDhDoc) { $('#meta').textContent = 'filter: open a block model or drillholes first'; return; }
   const lid = S.activeId;                                   // the sweep belongs to THIS layer even if focus moves
   const Lr = layerById(lid); if (Lr) Lr.filterExpr = expr;
@@ -9117,13 +9113,13 @@ async function applyBlockFilter(expr) {
 // keywords, and DATA VALUES (the category dictionary — picking "HEMATITE" from the
 // list is how you dodge the bare-word-vs-quoted footgun). ──
 function columnValues(name) {
-  const h = (_blockDoc || _dhDoc) && (_blockDoc || _dhDoc).header;
+  const h = (activeDocs().blockDoc || activeDocs().dhDoc) && (activeDocs().blockDoc || activeDocs().dhDoc).header;
   if (!h || !h.categories) return [];
   const lc = String(name).toLowerCase();
   const catName = h.mapping.cat != null ? h.columns[h.mapping.cat] : null;
   return catName && catName.toLowerCase() === lc ? h.categories : [];
 }
-const filterCtx = () => ((_blockDoc || _dhDoc) ? { columns: schemaExt(activeLayer(), (_blockDoc || _dhDoc).header), values: columnValues } : null);
+const filterCtx = () => { const d = activeDocs(), fd = d.blockDoc || d.dhDoc; return fd ? { columns: schemaExt(activeLayer(), fd.header), values: columnValues } : null; };
 const _ac = { input: null, res: null, sel: 0, suppress: false };
 function attachAutocomplete(input, getCtx) {
   input.addEventListener('input', () => acRefresh(input, getCtx));
@@ -10393,8 +10389,8 @@ async function openProjectDir(dir) {
       // color channel first (may re-stream), then filter (sweeps), then the rest
       if (ls.colorSel && ls.colorSel !== $('#colorBy').value && [...$('#colorBy').options].some((o) => o.value === ls.colorSel)) {
         L.colorSel = ls.colorSel;
-        if (ls.colorSel.startsWith('chan:') && _blockDoc && +ls.colorSel.slice(5) !== _blockDoc.header.mapping.chan) {
-          await reopenBlockChan(_blockDoc, +ls.colorSel.slice(5), { keepFilter: false });
+        if (ls.colorSel.startsWith('chan:') && L.docs.blockDoc && +ls.colorSel.slice(5) !== L.docs.blockDoc.header.mapping.chan) {
+          await reopenBlockChan(L.docs.blockDoc, +ls.colorSel.slice(5), { keepFilter: false });
         }
         if ([...$('#colorBy').options].some((o) => o.value === ls.colorSel)) $('#colorBy').value = ls.colorSel;
       }
@@ -10905,8 +10901,9 @@ function copyText(text) {
 }
 function showFileInfo() {
   const AL0 = activeLayer();
-  const meshDoc = AL0 && AL0.docs ? AL0.docs.meshDoc : null;
-  const doc = meshDoc || _blockDoc || _dhDoc || _plyDoc || _lasDoc;
+  const d0 = (AL0 && AL0.docs) || {};
+  const meshDoc = d0.meshDoc || null;
+  const doc = meshDoc || d0.blockDoc || d0.dhDoc || d0.plyDoc || d0.lasDoc;
   if (!doc) { showHelp('file info', 'no file open'); return; }
   const h = doc.header;
   const escA = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -10920,15 +10917,15 @@ function showFileInfo() {
   // full-width wrapping row — for prose (drillhole checks) that would blow out
   // the nowrap key column and push every value off-screen
   const wide = (html) => rows.push(`<tr><td colspan="2" class="fi-w">${html}</td></tr>`);
-  row('file', V(meshDoc ? meshDoc.name : _blockDoc ? _blockDoc.name : _plyDoc ? _plyDoc.name : 'point cloud'));
-  row('kind', V(meshDoc ? `${h.soup ? 'streamed mesh' : 'context mesh'} (${h.format})` : _dhDoc ? `drillholes (${h.method === 'minimumCurvature' ? 'minimum curvature' : h.method}, dip ${h.dipConvention})` : _lasDoc ? `LAS ${h.version} · point format ${h.format}` : _plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
+  row('file', V(meshDoc ? meshDoc.name : d0.blockDoc ? d0.blockDoc.name : d0.plyDoc ? d0.plyDoc.name : 'point cloud'));
+  row('kind', V(meshDoc ? `${h.soup ? 'streamed mesh' : 'context mesh'} (${h.format})` : d0.dhDoc ? `drillholes (${h.method === 'minimumCurvature' ? 'minimum curvature' : h.method}, dip ${h.dipConvention})` : d0.lasDoc ? `LAS ${h.version} · point format ${h.format}` : d0.plyDoc ? `PLY ${h.format === 'ascii' ? 'ascii' : 'binary (little-endian)'}` : h.dm ? 'Datamine .dm block model' : h.grid ? 'delimited block model' : 'delimited points'));
   if (meshDoc) {
     row('triangles', num(h.triCount)); row('vertices', num(h.vertexCount));
     const tp = AL0 && AL0._solidMesh;
     if (tp) row('topology', V(tp.closed ? 'closed solid (watertight)' : `open surface · ${tp.boundaryEdges.toLocaleString()} boundary edges`));
   }
   else row('records', num(h.count));
-  if (_dhDoc) {
+  if (d0.dhDoc) {
     row('holes', num(h.holes));
     row('placed', num(h.placed));
     for (const c of h.report.checks) wide(`${sep('⚠')} ${escA(c.label)} ${sep('—')} ${V(c.count)}${c.bhids.length ? ' ' + sep('·') + ' ' + V(c.bhids.slice(0, 8).join(', ') + (c.bhids.length > 8 ? '…' : '')) : ''}`);
@@ -11412,7 +11409,6 @@ async function openSample(n = 2_000_000) {
   const lid = allocLayerId();
   S.layers.push({ id: lid, name: 'sample bench scan', kind: 'points', docs: {}, bboxLocal: null, colorSel: '0', clip: ['', ''], filterExpr: '', visible: true });
   S.activeId = lid;
-  _blockDoc = null; _lasDoc = null; _plyDoc = null; _dhDoc = null;
   setColorLabels(null);
   $('#empty').style.display = 'none';
   $('#meta').textContent = 'sample — generating…';
@@ -11442,7 +11438,7 @@ let _measure = { arm: 0, a: null, b: null, mouse: null };  // a/b = frame-local 
 async function recordPosition(hit) {
   const lid = hit.layer, rec = hit.rec;                    // measure works ACROSS layers
   const L = layerById(lid);
-  const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
+  const docs = L ? L.docs : {};
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
   if (dd) return dd.recordPosition(rec);
   if (docs.tracesDoc) return docs.tracesDoc.recordPosition(rec);   // Measure on a hole trace → its collar
@@ -17368,7 +17364,7 @@ $('#rpList').addEventListener('contextmenu', (e) => {
 });
 $('#rpClose').onclick = () => { $('#recPanel').classList.remove('show'); $('#rpCfg').classList.remove('show'); renderer.setPicked(null); requestRender(); };
 
-async function fetchCsvRecord(rec, doc = _blockDoc) {
+async function fetchCsvRecord(rec, doc = activeDocs().blockDoc) {
   const { blob, header } = doc;
   // sparse line-offset index (built during discovery): jump to the nearest
   // anchor + walk ≤k lines, instead of sweeping the file from byte 0
@@ -17425,7 +17421,7 @@ async function showRecord(hit) {
   _recFace = (L && L.kind === 'blocks' && hit.face != null && hit.face <= 6) ? hit.face : null;
   _recLayer = L;                        // gate the field picker to the picked layer's own hidden set
   attrTableReveal(lid, rec);
-  const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
+  const docs = L ? L.docs : {};
   const tag = S.layers.length > 1 && L ? `${L.label || L.name} · ` : '';
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
   if (docs.gridDoc) {
@@ -17509,7 +17505,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(hit);
 });
 
-window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, attrColumnsOf, fetchLayerRow, meshVertexData, meshVertexHeader, extendRow, schemaExt, calcFns, blockCaps, docPositionStream, layerRecords, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => S.recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => S.layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => _blockDoc, layers: () => S.layers, setActiveLayer, activeId: () => S.activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => S.project, views: () => S.views, scenes: () => S.scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, attrColumnsOf, fetchLayerRow, meshVertexData, meshVertexHeader, extendRow, schemaExt, calcFns, blockCaps, docPositionStream, layerRecords, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => S.recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => S.layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => activeDocs().blockDoc || null, layers: () => S.layers, setActiveLayer, activeId: () => S.activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => S.project, views: () => S.views, scenes: () => S.scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>
