@@ -2173,6 +2173,51 @@ await p.close();
   await pn.close();
 }
 
+
+// ── the pick ray is correct under vertical exaggeration ──────────────────────
+// pixelRay unprojects through inverse(viewProj), which INCLUDES zExag. Round-trip
+// a point OFF the z-scale centre: the camera target is the fixed point of the
+// z-scale, so a point offset from it in z is where the old geometric ray (which
+// ignored zExag) drifted. Project the point through the full viewProj to a pixel,
+// then pixelRay at that pixel must return a ray through it — in viewProj's own
+// coordinate space, so no frame bookkeeping (a probe confirmed target round-trips
+// to ~1e-3 at every exaggeration).
+{
+  const pz = await mkPage('sm2zexag');
+  const r = await pz.evaluate(async () => {
+    const M = window._micro;
+    let t = 'XC,YC,ZC,FE' + String.fromCharCode(10);
+    for (let k = 0; k < 5; k++) for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++)
+      t += `${i * 10},${j * 10},${k * 10},${k}` + String.fromCharCode(10);
+    await M.openBlob(new Blob([t]), 'z.csv', 'replace');
+    await new Promise((z) => setTimeout(z, 1200));
+    document.querySelector('#btnFit').click();
+    await new Promise((z) => setTimeout(z, 400));
+    const cv = document.querySelector('canvas'), rect = cv.getBoundingClientRect();
+    const missOffCentre = () => {
+      const st = M.cam.state, vp = st.viewProj;
+      const Q = [st.target[0] + 6, st.target[1] - 4, st.target[2] + 15];   // off the z-scale centre
+      const cw = vp[3] * Q[0] + vp[7] * Q[1] + vp[11] * Q[2] + vp[15];
+      const nx = (vp[0] * Q[0] + vp[4] * Q[1] + vp[8] * Q[2] + vp[12]) / cw;
+      const ny = (vp[1] * Q[0] + vp[5] * Q[1] + vp[9] * Q[2] + vp[13]) / cw;
+      const px = (nx + 1) * 0.5 * rect.width, py = (1 - ny) * 0.5 * rect.height;
+      const ray = M.pixelRay(px, py), o = ray.o, d = ray.d;
+      const w = [Q[0] - o[0], Q[1] - o[1], Q[2] - o[2]];
+      const tp = w[0] * d[0] + w[1] * d[1] + w[2] * d[2];
+      return Math.hypot(w[0] - tp * d[0], w[1] - tp * d[1], w[2] - tp * d[2]);
+    };
+    const out = {};
+    for (const ex of [1, 3, 8]) { M.setZExag(ex); M.requestRender(); await new Promise((z) => setTimeout(z, 250)); out['m' + ex] = missOffCentre(); }
+    M.setZExag(1);
+    return out;
+  });
+  const near = (v) => v < 0.1;                             // 0.1 world units; the old bug drifts by the z-scale (whole units, growing)
+  chk(`zExag pick: an off-centre point round-trips at ×1 (${r.m1.toExponential(1)})`, near(r.m1));
+  chk(`zExag pick: STILL round-trips at ×3 and ×8 — the ray follows the exaggeration, not drifts (${r.m3.toExponential(1)}, ${r.m8.toExponential(1)})`,
+    near(r.m3) && near(r.m8));
+  await pz.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
