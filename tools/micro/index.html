@@ -1921,9 +1921,9 @@ async function runExport(L, { scope = 'all', colIdx = null, delim = ',', decimal
 // remap). A subsequent project save stores the optimized copy.
 async function convertLayerToParquet(L, cvOpts = {}) {
   const h = layerTableHeader(L);
-  if (!h || (L.docs.blockDoc && L.docs.blockDoc.parquet)) { $('#meta').textContent = 'materialize: needs a non-Parquet block model'; return; }
+  if (!h || (L.docs.blockDoc && L.docs.blockDoc.parquet)) { $('#meta').textContent = 'store as Parquet: needs a non-Parquet block model'; return; }
   const m = h.mapping || {};
-  if (m.x == null || m.y == null || m.z == null) { $('#meta').textContent = 'materialize: needs X/Y/Z columns'; return; }
+  if (m.x == null || m.y == null || m.z == null) { $('#meta').textContent = 'store as Parquet: needs X/Y/Z columns'; return; }
   const names = h.columns, isNum = names.map((_, k) => colIsNumeric(L, h, k));
   const isDm = !!(L.docs.blockDoc && L.docs.blockDoc.header.dm), isDelim = !!(L.docs.blockDoc && !isDm);
   const intern = names.map((_, k) => (isNum[k] ? null : new Map()));   // one string object per distinct value, not per row
@@ -1969,7 +1969,7 @@ async function convertLayerToParquet(L, cvOpts = {}) {
         await new Promise((r) => setTimeout(r));
       }
       flushGroup();
-      if (!n) { $('#meta').textContent = 'materialize: empty model'; return; }
+      if (!n) { $('#meta').textContent = 'store as Parquet: empty model'; return; }
       outBlob = w.finish();
     } catch (e) { $('#meta').textContent = `materialize: ${e.message}`; return; }
   } else {
@@ -2000,7 +2000,7 @@ async function convertLayerToParquet(L, cvOpts = {}) {
     }
   } catch (e) { $('#meta').textContent = `materialize: ${e.message}`; return; }
   n = rc;
-  if (!n) { $('#meta').textContent = 'materialize: empty model'; return; }
+  if (!n) { $('#meta').textContent = 'store as Parquet: empty model'; return; }
   // 2. Morton order → 3. write the base columns Morton-sorted (spatial index).
   // Each source column is RELEASED right after its reorder — no full double-copy.
   $('#meta').textContent = 'materialize: spatial sort + write…';
@@ -2016,7 +2016,7 @@ async function convertLayerToParquet(L, cvOpts = {}) {
   const savedActive = _activeId; setActiveLayer(L.id);
   try {
     await openParquetBlocks(outBlob, `${base}.parquet`, { layer: L.id, first: false });
-  } catch (e) { $('#meta').textContent = `materialize: reopen — ${e.message}`; setActiveLayer(savedActive); return; }
+  } catch (e) { $('#meta').textContent = `store as Parquet: reopen — ${e.message}`; setActiveLayer(savedActive); return; }
   L.name = `${base}.parquet`;                              // so save/reload routes to the parquet path
   L.lineage = optLineage;                                  // provenance: this layer was optimized in place
   if (keepLabel) L.label = keepLabel;
@@ -6225,7 +6225,7 @@ async function openSolidRecipeConfigured(params) {         // preview: the dialo
     _sbDlg = await sbStateFromParams(params);
     renderSolidDialog();
     $('#sbDlg').classList.add('show');
-  } catch (e) { $('#meta').textContent = e.message; }
+  } catch (e) { $('#meta').textContent = `by-solid recipe: ${e.message}`; }
 }
 $('#sbRcp').onclick = () => {
   const d = _sbDlg; if (!d) return;
@@ -7342,7 +7342,10 @@ async function meshToGridLayer(meshL, { cell, keep = 'top', extend = 'none', hol
   });
   if (extend && extend !== 'none') { $('#meta').textContent = `${meshL.label || meshL.name} — extending (${extend})…`; applyGridExtend(grid, extend, holesOnly); }
   const base = (meshL.label || meshL.name).replace(/\.[^.]+$/, '');
-  await openBlob(new Blob([writeEsriAsc(grid)]), `${base}.asc`, _layers.length ? 'add' : 'replace');
+  // stamp lineage like the sibling surface tools do — a rasterized DEM reshapes
+  // topology (z-buffered overhangs, dropped vertical faces) and had no provenance
+  const lin = mkLineage('rasterize', { of: meshL.name, cell, keep, extend, holesOnly }, [meshL.lineage].filter(Boolean));
+  await openBlob(new Blob([writeEsriAsc(grid)]), `${base}.asc`, _layers.length ? 'add' : 'replace', null, { lineage: lin });
   return grid;
 }
 // Colour a heightfield mesh's vertices — by ELEVATION (its own values) or DRAPED
@@ -12292,6 +12295,10 @@ const COMMANDS = [
   { id: 'new', group: 'File', title: 'New grid / block model…', kw: 'create empty cover common lattice', run: () => openNewDialog() },
   { id: 'newproj', group: 'File', title: 'New project (clear)', kw: 'reset slate', run: () => newProject() },
   { id: 'save', group: 'File', title: 'Save project', kw: 'store', when: () => hasFSAA, run: () => saveProject() },
+  // on Firefox/Safari the whole projects story is unavailable (no File System
+  // Access API) — say so instead of the commands just not existing
+  { id: 'nofs', group: 'File', title: 'Save / open project (needs Chrome or Edge)', kw: 'store firefox safari unsupported', when: () => !hasFSAA,
+    run: () => { $('#meta').textContent = 'projects need the File System Access API — use Chrome or Edge to save/open a project folder. Viewing, filtering and analysis work in any browser.'; } },
   { id: 'tidy', group: 'File', title: 'Tidy project folder', kw: 'organize subfolders kind reorganize move drillholes models clouds meshes grids', when: () => hasFSAA && !!_project, run: () => tidyProject() },
   { id: 'scan', group: 'File', title: 'Scan folder for new data', kw: 'import inbox dropped rescan pick up new files refresh', when: () => hasFSAA && !!_project, run: () => scanFolderForNewData() },
   { id: 'png', group: 'File', title: 'Save viewport PNG', kw: 'screenshot image capture', run: () => $('#btnShot').click() },
@@ -12339,11 +12346,11 @@ const COMMANDS = [
   { id: 'gt', group: 'Analyse', title: 'Grade-tonnage…', kw: 'cutoff tonnes curve reserve', when: (c) => c.L && gridAxesOf(c.L), run: (c) => openGradeTonnage(c.L) },
   { id: 'swath', group: 'Analyse', title: 'Swath plot…', kw: 'drift bias direction trend plunge dip rake', when: (c) => c.L && gridAxesOf(c.L), run: (c) => openSwath(c.L) },
   // validate-vs-drillholes temporarily DISABLED (pending a rework of the window) — when: false hides it everywhere
-  { id: 'validate', group: 'Analyse', title: 'Validate vs drillholes…', kw: 'declustered sample bias check reconcile composite', when: () => false, run: (c) => openValidation(c.L) },
+  { id: 'validate', group: 'Analyse', title: 'Validate vs drillholes…', kw: 'declustered sample bias check reconcile composite', when: (c) => c.L && gridAxesOf(c.L) && _layers.some((L) => L.dh), run: (c) => openValidation(c.L) },
   { id: 'join', group: 'Analyse', title: 'Join / reconcile…', kw: 'merge compare delta reconciliation spatial key', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); _propTab = 'join'; openProps(); } },
   { id: 'table', group: 'Analyse', title: 'Attribute table…', kw: 'rows data grid', when: (c) => c.L && hasRecords(c.L), run: (c) => openAttrTable(c.L) },
   { id: 'filter', group: 'Analyse', title: 'Filter…', kw: 'query where expression', when: (c) => c.L && layerTableHeader(c.L), run: (c) => { setActiveLayer(c.L.id); $('#filter').focus(); } },
-  { id: 'scan', group: 'Analyse', title: 'Scan columns (stats)', kw: 'histogram quantiles mean', when: (c) => c.L && layerTableHeader(c.L), run: (c) => scanColumns(c.L).then(() => { if (_propOpen) renderProps(); }).catch((e) => { $('#meta').textContent = `scan columns: ${e.message}`; }) },
+  { id: 'scancols', group: 'Analyse', title: 'Scan columns (stats)', kw: 'histogram quantiles mean', when: (c) => c.L && layerTableHeader(c.L), run: (c) => scanColumns(c.L).then(() => { if (_propOpen) renderProps(); }).catch((e) => { $('#meta').textContent = `scan columns: ${e.message}`; }) },
   { id: 'measure', group: 'Analyse', title: 'Measure…', kw: 'distance ruler', run: () => armMeasure() },
   { id: 'props', group: 'Layer', title: 'Properties…', kw: 'style colour clip', when: (c) => c.L, run: (c) => { setActiveLayer(c.L.id); openProps(); } },
   { id: 'lineage', group: 'Layer', title: 'Lineage…', kw: 'provenance audit report history derivation', when: (c) => c.L && c.L.lineage, run: (c) => openLineageWindow(c.L) },
