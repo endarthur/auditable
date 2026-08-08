@@ -7438,6 +7438,14 @@ function captureLayerStyling(L, { clearCats = false } = {}) {
     colTypes: L.colTypes, calcCols: L.calcCols, ramps: L.ramps,
     catHidden: clearCats ? null : L.catHidden, catLegend: clearCats ? null : L.catLegend,
     rules: L.rules, ruleHidden: L.ruleHidden, paintCols: L.paintCols,
+    // a re-desurvey/re-map/re-channel keeps the SAME rows, so these survive too.
+    // They were dropped on every re-desurvey — most consequentially the interval
+    // filter, hole filter and color-by, which a method/dip comparison silently
+    // reset each time.
+    filterExpr: L.filterExpr, colorSel: L.colorSel,
+    holeFilter: L.holeFilter, _holeIds: L._holeIds, _holeMask: L._holeMask,
+    opacity: L.opacity, clip: L.clip, gtUnits: L.gtUnits,
+    legend: L.legend, legendTitle: L.legendTitle, edges: L.edges, _recHide: L._recHide,
   };
 }
 function applyLayerStyling(L2, keep, { clearCats = false } = {}) {
@@ -7452,6 +7460,17 @@ function applyLayerStyling(L2, keep, { clearCats = false } = {}) {
   }
   if (keep.rules) { L2.rules = keep.rules; L2.ruleHidden = keep.ruleHidden; L2._rulesDirty = true; if (ruleModeOf(L2)) { renderer.setLayerRuleMode(L2.id, true); runRules(L2, true); } }
   if (keep.paintCols) { L2.paintCols = keep.paintCols; addPaintColorOptions(L2); if (paintActiveCol(L2)) syncRuleMode(L2); }
+  // the rows are unchanged, so re-apply the row-scoped view state
+  if (keep.opacity != null) { L2.opacity = keep.opacity; renderer.setLayerOpacity(L2.id, keep.opacity); }
+  if (keep.clip) L2.clip = keep.clip;
+  if (keep.gtUnits) L2.gtUnits = keep.gtUnits;
+  if (keep.legend != null) L2.legend = keep.legend;
+  if (keep.legendTitle != null) L2.legendTitle = keep.legendTitle;
+  if (keep.edges != null) L2.edges = keep.edges;
+  if (keep._recHide) L2._recHide = keep._recHide;
+  if (keep.holeFilter) { L2.holeFilter = keep.holeFilter; L2._holeIds = keep._holeIds; L2._holeMask = keep._holeMask; }
+  if (keep.colorSel && [...$('#colorBy').options].some((o) => o.value === keep.colorSel)) { L2.colorSel = keep.colorSel; setLayerColorSel(L2, keep.colorSel); }
+  if (keep.filterExpr) { L2.filterExpr = keep.filterExpr; }        // the sweep is driven by the caller when this layer is active
   return L2;
 }
 // ── the SINGLE per-layer surface-presentation state ──
@@ -11479,6 +11498,8 @@ async function recordPosition(hit) {
   const docs = L ? L.docs : { blockDoc: _blockDoc, lasDoc: _lasDoc, plyDoc: _plyDoc };
   const bd = docs.blockDoc, pd = docs.plyDoc, ld = docs.lasDoc, dd = docs.dhDoc;
   if (dd) return dd.recordPosition(rec);
+  if (docs.tracesDoc) return docs.tracesDoc.recordPosition(rec);   // Measure on a hole trace → its collar
+
   // grids and meshes: this ladder is the third copy of the doc-kind dispatch, and
   // it was the one missing them — so Measure and section-plane placement silently
   // did nothing on a grid-as-points layer (pickHitPoint bails on a null position)
@@ -15204,8 +15225,10 @@ async function broadcastCollarCol(L, colName) {
   const names = cells2(lines[0]), low = names.map((x) => x.toLowerCase());
   const ci = low.indexOf(String(colName).toLowerCase());
   if (ci < 0) { $('#meta').textContent = `broadcast: “${colName}” not in the collar file`; return; }
-  const bhidName = h.columns[im.bhid];
-  let ki = low.indexOf(String(bhidName).toLowerCase()); if (ki < 0) ki = 0;   // convention: the hole id leads the collar file
+  // the resolved collar mapping first (see collarKeyIndex); name-match only as fallback
+  const cm = dh.header.collarMapping || {};
+  let ki = (cm.bhid != null && cm.bhid >= 0 && cm.bhid < low.length) ? cm.bhid : low.indexOf(String(h.columns[im.bhid]).toLowerCase());
+  if (ki < 0) ki = 0;
   const map = new Map(); let numeric = true, seen = 0;
   for (let i = 1; i < lines.length; i++) {
     const c = cells2(lines[i]); if (c.length <= Math.max(ci, ki)) continue;
@@ -15215,7 +15238,7 @@ async function broadcastCollarCol(L, colName) {
   if (!seen) numeric = false;
   const n = attrRowCountOf(L) || 0;
   $('#meta').textContent = `broadcast: ${colName} → ${n.toLocaleString()} intervals…`;
-  const lin = mkLineage('broadcast', { from: 'collars', column: colName, key: bhidName, holes: map.size }, [L.lineage].filter(Boolean));
+  const lin = mkLineage('broadcast', { from: 'collars', column: colName, key: names[ki], holes: map.size }, [L.lineage].filter(Boolean));
   if (numeric) {
     const vals = new Float32Array(n); let rec = 0;
     for await (const batch of layerRows(L, null)) { for (const f0 of batch) { if (rec >= n) break; const v = map.get(String(f0[im.bhid] ?? '').trim()); const x = v === '' || v == null ? NaN : +v; vals[rec] = Number.isFinite(x) ? x : NaN; rec++; } await new Promise((r) => setTimeout(r)); }
@@ -15919,15 +15942,26 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
   const id = captureReopenIdentity(L);                                // label · visible · storage (handle n/a for compound dh)
   const setKey = L._setKey, intervalName = L._intervalName;           // dh-set membership (dh-specific, not generic identity)
   const style = captureLayerStyling(L, { clearCats });
-  renderer.removeLayer(L.id);
-  _layers = _layers.filter((l) => l.id !== L.id);
-  await openDrillholeLayer(files, cfg, 'add');
-  const L2 = restoreReopenIdentity(activeLayer(), id);
-  if (L2) {
-    L2._setKey = setKey; L2._intervalName = intervalName;             // stay in the same drillhole set
-    applyLayerStyling(L2, style, { clearCats });
-    if (id.visible === false) applyTreeVisibility();
-  }
+  const oldId = L.id;
+  // open FIRST, remove the old layer only on success. The old order removed L
+  // and then, if openDrillholeLayer threw, grafted L's identity/styling onto
+  // whatever activeLayer() happened to be — corrupting an unrelated layer and
+  // losing the drillhole one. redesurveySet loops this, so one failure could
+  // cascade across several layers.
+  const beforeIds = new Set(_layers.map((l) => l.id));
+  try {
+    await openDrillholeLayer(files, cfg, 'add');
+  } catch (e) { $('#meta').textContent = `re-desurvey: ${(L.label || L.name)} — ${e.message} (kept the original)`; return; }
+  const L2 = _layers.find((l) => !beforeIds.has(l.id) && l.dh) || null;   // the freshly-opened dh layer, not "whatever is active"
+  if (!L2) { $('#meta').textContent = `re-desurvey: ${(L.label || L.name)} — reopen produced no layer (kept the original)`; return; }
+  renderer.removeLayer(oldId);
+  _layers = _layers.filter((l) => l.id !== oldId);
+  _activeId = L2.id;
+  restoreReopenIdentity(L2, id);
+  L2._setKey = setKey; L2._intervalName = intervalName;             // stay in the same drillhole set
+  applyLayerStyling(L2, style, { clearCats });
+  if (id.visible === false) applyTreeVisibility();
+  if (L2.id === _activeId && L2.filterExpr) { $('#filter').value = L2.filterExpr; await applyBlockFilter(L2.filterExpr); }
   renderLayers();
   if (_propOpen) { _propFor = null; renderProps(); }
 }
@@ -16860,10 +16894,17 @@ function collarCells(lines) {
   return (ln) => ln.split(delim).map((x) => x.trim().replace(/^"|"$/g, ''));
 }
 function collarKeyIndex(dh, low) {                         // the hole-id column on the COLLAR side
-  const im = dh.header.intervalMapping || {};
+  // the RESOLVED collar mapping is the truth — it was sniffed/mapped against the
+  // collar file's own columns at import. The old path searched the collar header
+  // for the INTERVAL table's bhid column NAME and fell back to column 0, so a set
+  // whose collar and assay files named the hole-id column differently joined on
+  // the wrong column (hole filter / broadcast / traces all silently misjoined).
+  const cm = dh.header.collarMapping || {};
+  if (cm.bhid != null && cm.bhid >= 0 && cm.bhid < low.length) return cm.bhid;
+  const im = dh.header.intervalMapping || {};              // fallback: name-match, then leading column
   const bhidName = im.bhid != null ? dh.header.columns[im.bhid] : null;
   const ki = bhidName ? low.indexOf(String(bhidName).toLowerCase()) : -1;
-  return ki >= 0 ? ki : 0;                                 // convention: the hole id leads the collar file
+  return ki >= 0 ? ki : 0;
 }
 async function applyHoleFilter(L, expr) {
   const dh = L && L.docs && L.docs.dhDoc; if (!dh) return { err: 'not a drillhole layer' };
@@ -17003,7 +17044,13 @@ async function addIntervalToSet(nd) {
   const info = dhSetInfo(nd); if (!info) return;
   const file = await pickIntervalFile(); if (!file) return;
   await openDrillholeLayer({ collar: info.blobs.collar, survey: info.blobs.survey, intervals: file }, { ...info.config }, 'add');
-  const L2 = activeLayer(); if (L2) { L2._setKey = info.setKey; L2._intervalName = file.name; treeMove(L2.id, nd, 'into'); }
+  const L2 = activeLayer(); if (L2) {
+    L2._setKey = info.setKey; L2._intervalName = file.name; treeMove(L2.id, nd, 'into');
+    // inherit the set's hole filter — a filtered set that gains an interval table
+    // otherwise shows ALL holes on the new one while its siblings show a subset
+    const sib = groupLayerIds(nd).map(layerById).find((x) => x && x.dh && x.holeFilter && x !== L2);
+    if (sib) { await applyHoleFilter(L2, sib.holeFilter); }
+  }
   markProjectDirty();
 }
 // promote a lone dh layer into a set by adding a second interval table
@@ -17027,6 +17074,10 @@ async function redesurveySet(nd, patch) {
     await reopenDh(L, patch);
     const L2 = activeLayer(); if (L2) treeMove(L2.id, nd, 'into');
   }
+  // the trace sticks are desurveyed from the OLD geometry — rebuild them, the
+  // way filterHolesSet does after a hole-filter change, or they render the old
+  // paths while the interval sticks show the new ones
+  if (setHasTraces(nd)) { hideHoleTraces(nd); await showHoleTraces(nd); }
   renderLayers(); markProjectDirty();
 }
 // derived collar→EOH hole traces for a set: a non-persisted (volatile) sticks

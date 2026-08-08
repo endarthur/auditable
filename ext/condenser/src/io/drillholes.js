@@ -325,5 +325,13 @@ export async function openDrillholeTraces({ collar, survey }, opts = {}) {
     }
   }
   const fetchRecord = (rec) => (rec >= 0 && rec < tCollar.rows.length ? tCollar.rows[rec] : null);
-  return { header, streamChunks, fetchRecord, recordPosition: () => null };
+  // a trace record is a hole; its position is the collar (endpoint 0). Coarse
+  // but correct — the same "fall back to the centroid" the picker uses when a hit
+  // has no face. Was a hard `() => null`, which made Measure silently no-op on a
+  // trace segment.
+  const recordPosition = (rec) => {
+    const c = collars[rec];
+    return c && Number.isFinite(c.x) ? [c.x, c.y, c.z] : null;
+  };
+  return { header, streamChunks, fetchRecord, recordPosition };
 }
