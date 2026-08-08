@@ -1751,7 +1751,11 @@ if (target === 'micro') {
       const sp = path.join(micDir, 'src', `${nm}.js`);
       if (!fs.existsSync(sp)) { console.error(`Error: tools/micro/src/${nm}.js not found (imported by the app)`); process.exit(1); }
       let ss = fs.readFileSync(sp, 'utf8');
-      for (const [from, to] of Object.entries(SPEC)) ss = ss.split(`from '${from}'`).join(`from '${to}'`);
+      // src modules sit one level deeper than the app, so their dev-correct ext
+      // path has one more '../' than the SPEC key; rewrite both forms.
+      for (const [from, to] of Object.entries(SPEC)) ss = ss.split(`from '${from}'`).join(`from '${to}'`).split(`from '../${from}'`).join(`from '${to}'`);
+      // a src module importing a sibling uses './x.js', not './src/x.js'
+      ss = ss.replace(/from '\.\/([\w.-]+)\.js'/g, "from './src/$1.js'");
       ss = collectSrc(ss);
       modules.push({ name: nm, source: ss.trim() });
     }

@@ -19,4 +19,14 @@ export const S = {
 
   // ── recipes (Tools → Recipes): op-shaped YAML files in recipes/
   recipes: [],                                              // { name, tool, params, file }
+
+  // ── long-lived app objects, assigned once at boot (the renderer is created by
+  // the app module; modules that need it read it here)
+  renderer: null,
 };
+
+export const layerById = (id) => S.layers.find((l) => l.id === id) || null;
+export const activeLayer = () => layerById(S.activeId);
+// the ACTIVE layer's docs (always an object) — the one way to ask "what file is
+// under the shared controls right now"; replaces the _blockDoc/… shadow globals
+export const activeDocs = () => { const L = activeLayer(); return (L && L.docs) || {}; };
