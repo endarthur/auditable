@@ -874,7 +874,7 @@
   <footer><span id="meta">—</span><span id="stats"></span><span id="camTP" title="camera look direction — plunge → trend"></span></footer>
 
 <script type="module">
-import { openLas, decodeLasRecords, openPly, openBlockModel, openTable, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, buildHeightfieldMesh, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, createRenderer, createEdl, mulberry32, writeMSH, layerOfId, faceOfId, isMiss, FACE_NAMES, FACE_NORMALS, FACE_CUT } from '../../ext/condenser/src/main.js';
+import { openLas, decodeLasRecords, openPly, openBlockModel, openTable, openDmModel, fetchDmRecord, peekDmColumns, dmWireframeRole, openDmWireframe, fetchDelimitedRecord, openDrillholes, openDrillholeTraces, sniffDrillholeFiles, classifyDrillholeHeader, sniffDelimited, parseLasHeader, parsePlyHeader, mapColumns, createStickChunkBuilder, categoryPalettePixels, palettePixels, openMsh, openObj, openPlyMesh, buildMeshChunk, buildHeightfieldMesh, openPlySoup, soupFromMesh, createSoupChunkBuilder, lineFields, documentFrame, createChunkBuilder, createBlockChunkBuilder, makeBlockGrid, inferAxis, mortonKeys, radixSortIndices, gridsCompatible, makeResampler, makeBoxAggregator, commonLattice, createOrbitCamera, attachOrbitInput, mat4Inverse, createRenderer, createEdl, mulberry32, writeMSH, layerOfId, faceOfId, isMiss, FACE_NAMES, FACE_NORMALS, FACE_CUT } from '../../ext/condenser/src/main.js';
 import { deriveVocab as nlDeriveVocab, trainSession as nlTrainSession, tokenize as nlTokenize, normText as nlNormText } from '../../ext/dispatch/index.js';   // @gcu/dispatch — session-trained NL → command. EXPERIMENTAL, off by default.
 import { declusterWeights, declusterSweep, declusterCell } from '../../ext/gsjs/src/decluster.js';   // @gcu/gsjs math (cell declustering) — the surface, not a reimplementation
 import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/units — grade/density unit declarations (grade-tonnage)
@@ -994,20 +994,27 @@ function currentSection() {
 function pixelRay(cssX, cssY) {
   const st = cam.state, r = cv.getBoundingClientRect();
   const ndcX = (2 * cssX / r.width) - 1, ndcY = 1 - (2 * cssY / r.height);
-  const v = st.view;
-  const right = [v[0], v[4], v[8]], up = [v[1], v[5], v[9]];
-  const f = [st.target[0] - st.eye[0], st.target[1] - st.eye[1], st.target[2] - st.eye[2]];
-  const fl = Math.hypot(...f) || 1;
-  const fwd = f.map((c) => c / fl);
-  if (st.ortho) {                                          // parallel rays offset across the film
-    const hh = st.halfH, hw = hh * st.aspect;
-    const o = [0, 1, 2].map((i) => st.eye[i] + right[i] * ndcX * hw + up[i] * ndcY * hh);
-    return { o, d: fwd };
-  }
-  const tanF = Math.tan(st.fovY / 2);
-  const d = [0, 1, 2].map((i) => fwd[i] + right[i] * ndcX * tanF * st.aspect + up[i] * ndcY * tanF);
+  // Unproject the pixel through inverse(viewProj) — which INCLUDES vertical
+  // exaggeration. The old geometric construction from eye/view/fov ignored zExag,
+  // so Measure and the knife landed on the wrong world point (off by the z-scale)
+  // whenever exaggeration was active, though the picked PIXEL was drawn exaggerated.
+  // inverse(viewProj) maps clip → REAL world (the camera's own contract), for both
+  // ortho and perspective, so this is one path instead of two.
+  const inv = mat4Inverse(st.viewProj);
+  if (!inv) return { o: st.eye.slice(), d: [0, 0, -1] };   // singular — degrade rather than throw
+  const un = (nz) => {                                     // NDC (x,y,nz) → world
+    const x = ndcX, y = ndcY, z = nz;
+    const w = inv[3] * x + inv[7] * y + inv[11] * z + inv[15];
+    return [
+      (inv[0] * x + inv[4] * y + inv[8] * z + inv[12]) / w,
+      (inv[1] * x + inv[5] * y + inv[9] * z + inv[13]) / w,
+      (inv[2] * x + inv[6] * y + inv[10] * z + inv[14]) / w,
+    ];
+  };
+  const near = un(-1), far = un(1);
+  const d = [far[0] - near[0], far[1] - near[1], far[2] - near[2]];
   const dl = Math.hypot(...d) || 1;
-  return { o: st.eye.slice(), d: d.map((c) => c / dl) };
+  return { o: near, d: d.map((c) => c / dl) };
 }
 // Where EXACTLY did the ray meet the thing it picked? The GPU already solved the
 // ray-box entry to write true depth, and it told us WHICH FACE it entered through
@@ -1310,6 +1317,11 @@ function selectByPolygon(poly, mode, isRect) {
   for (const L of _layers) {
     const hits = perLayer.get(L.id);
     if (!hits) continue;
+    // a mesh hit is encoded as record 0 (the CPU resolves the triangle on a
+    // single click) — so a lasso over an opaque mesh set _selMask[0]=1 for it,
+    // inflating _selCount and corrupting selection→column, with no visible mark.
+    // Rectangle/lasso select is for record-bearing layers only.
+    if (L.kind === 'mesh') continue;
     const n = attrRowCountOf(L);
     if (!n) continue;
     if (!L._selMask || L._selMask.length !== n) L._selMask = new Uint8Array(n);
