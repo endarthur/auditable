@@ -10078,7 +10078,7 @@ async function copyLayerIn(L, dir) {
     const rel = joinPath(kd, basename(fd.name));
     let exists = null;
     try { exists = await resolveFileHandle(dir, rel); } catch { /* not there */ }
-    if (exists) { const f = await exists.getFile(); if (f.size === fd.blob.size) { if (!L.dh) L.handle = exists; continue; } }
+    if (exists) { const f = await exists.getFile(); if (sameSourceFile(f, fd.blob)) { if (!L.dh) L.handle = exists; continue; } }
     const fh = await resolveFileHandle(dir, rel, { create: true });
     const w = await fh.createWritable();
     await fd.blob.stream().pipeTo(w);
@@ -10116,6 +10116,16 @@ function askCopyOutside(outside) {
     $('#svCancel').onclick = () => finish('link');         // dismiss = the non-destructive default, as before
     $('#svDlg').classList.add('show');
   });
+}
+// Does an on-disk file identify as THIS layer's source? Size, plus last-modified
+// when the in-memory blob carries one (a File does; a synthetic/converted blob
+// does not). Narrows the old size-only test, which aliased any two same-name,
+// same-size files onto one — collapsing unrelated data. A mismatch is safe: the
+// layer just writes its own (correct) bytes instead of aliasing.
+function sameSourceFile(diskFile, blob) {
+  if (diskFile.size !== blob.size) return false;
+  if (blob.lastModified && diskFile.lastModified) return diskFile.lastModified === blob.lastModified;
+  return true;   // one side has no timestamp — size is all we can compare
 }
 async function saveProject() {
   if (!_project) return saveProjectAs();
@@ -10155,7 +10165,7 @@ async function saveProject() {
             try {
               const ex = await resolveFileHandle(dir, rel);
               const f = await ex.getFile();
-              if (f.size === fd.blob.size) { inFolder = true; if (!L.dh) L.handle = ex; break; }
+              if (sameSourceFile(f, fd.blob)) { inFolder = true; if (!L.dh) L.handle = ex; break; }
             } catch { /* not there */ }
           }
         }
@@ -10255,6 +10265,19 @@ async function saveProject() {
 // drillhole project-restore branches (all three are per-record layer state)
 async function restoreStyleExtras(L, ls) {
   if (ls.lineage) L.lineage = ls.lineage;                  // provenance survives project round trips
+  // drillhole layers `continue` past the shared post-open restore block, so these
+  // per-layer fields were dropped on every reload — most consequentially gtUnits,
+  // the grade-unit / density declaration that changes what grade-tonnage MEANS.
+  // restoreStyleExtras is the one place the dh branch does reach; restore them here.
+  if (L.dh) {
+    if (ls.opacity != null) { L.opacity = ls.opacity; renderer.setLayerOpacity(L.id, ls.opacity); }
+    if (ls.clip) L.clip = ls.clip;
+    if (ls.gtUnits) L.gtUnits = ls.gtUnits;
+    if (ls.legend != null) L.legend = ls.legend;
+    if (ls.legendTitle != null) L.legendTitle = ls.legendTitle;
+    if (ls.edges != null) L.edges = ls.edges;
+    if (ls.recHide) L._recHide = ls.recHide;
+  }
   if (ls.analysis) L.analysis = ls.analysis;               // GT/swath setups (windows reopen after all layers land — series may span them)
   if (ls.rules) {
     L.rules = ls.rules;
@@ -10528,7 +10551,8 @@ async function tidyProject() {
   if (!ok) return;
   try {
     if (dir.requestPermission && await dir.requestPermission({ mode: 'readwrite' }) !== 'granted') { $('#meta').textContent = 'tidy: write permission denied'; return; }
-    let moved = 0;
+    let moved = 0, collided = 0;
+    const claimed = new Map();                                      // target path → the curRel that took it, this pass
     for (const L of _layers) {
       if (L.storage !== 'project') continue;
       for (const fd of layerFiles(L)) {
@@ -10536,7 +10560,13 @@ async function tidyProject() {
         let curRel = null;                                          // where the file is now
         if (!L.dh && L.handle && dir.resolve) { try { const p = await dir.resolve(L.handle); if (p) curRel = p.join('/'); } catch { /* not a descendant */ } }
         if (!curRel) { for (const c of [target, basename(fd.name)]) { try { await resolveFileHandle(dir, c); curRel = c; break; } catch { /* not there */ } } }
-        if (!curRel || curRel === target) continue;                 // not found, or already placed
+        if (!curRel || curRel === target) { if (curRel === target) claimed.set(target, curRel); continue; }   // not found, or already placed
+        // two layers of the same kind sharing a basename would land on ONE path —
+        // the second used to OVERWRITE the first's just-moved file (data loss).
+        // Refuse the collision, leave the file where it is, and report it.
+        const taken = claimed.get(target);
+        if (taken != null && taken !== curRel) { collided++; $('#meta').textContent = `tidy: “${basename(fd.name)}” collides in ${target.split('/')[0]}/ — left in place`; continue; }
+        claimed.set(target, curRel);
         const bytes = await (await (await resolveFileHandle(dir, curRel)).getFile()).arrayBuffer();
         const nh = await resolveFileHandle(dir, target, { create: true });
         const w = await nh.createWritable(); await w.write(bytes); await w.close();
@@ -10555,7 +10585,8 @@ async function tidyProject() {
     }
     markProjectDirty();
     await saveProject();                                            // rewrites project.json + writes descriptors at the new paths
-    $('#meta').textContent = moved ? `project tidied — ${moved} file${moved === 1 ? '' : 's'} moved into kind folders` : 'project already tidy';
+    $('#meta').textContent = (moved ? `project tidied — ${moved} file${moved === 1 ? '' : 's'} moved into kind folders` : 'project already tidy')
+      + (collided ? ` · ${collided} left in place (name collision — rename to move)` : '');
   } catch (e) { $('#meta').textContent = `tidy failed — ${e.message}`; }
 }
 // Folder-as-inbox: rescan the project folder for data files dropped in by hand
@@ -10585,7 +10616,13 @@ async function scanFolderForNewData() {
       }
     };
     await walk(dir, '');
-    const isSidecar = (n) => n === 'project.json' || /(\.meta\.json|\.disp\.grd|\.disp\.json)$/i.test(n);
+    // a sidecar is not new data: element manifests, the cache sidecars, and
+    // ANYTHING inside a `<layer>.cols/` folder (the materialized-column Parquets).
+    // Without the .cols rule an orphaned matcol fragment — left behind by a tidy
+    // or a layer removal — was re-offered to the user as a top-level data layer.
+    const isSidecar = (fullPath, n) => n === 'project.json'
+      || /(\.meta\.json|\.disp\.grd|\.disp\.json|\.element\.json)$/i.test(n)
+      || /\.cols\//i.test(fullPath);
     const isData = (n) => /\.(las|ply|xyz|pts|csv|txt|dat|parquet|pq|dm|obj|msh|lfm|tif|tiff|grd|asc)$/i.test(n);
     // new drillhole-set descriptors (claim their member CSVs so they don't also
     // show up as loose files)
@@ -10611,7 +10648,7 @@ async function scanFolderForNewData() {
     // loose data files not referenced by a layer and not part of a descriptor
     const looseFiles = [];
     for (const e of found) {
-      if (!isData(e.name) || isSidecar(e.name) || claimed.has(e.path) || refPaths.has(e.path)) continue;
+      if (!isData(e.name) || isSidecar(e.path, e.name) || claimed.has(e.path) || refPaths.has(e.path)) continue;
       const file = await e.handle.getFile();
       if (referenced.has(basename(e.name) + ':' + file.size)) continue;
       _fileHandles.set(file, e.handle);                       // so opened layers ride the folder handle (no re-copy)
