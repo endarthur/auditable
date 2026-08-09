@@ -895,6 +895,7 @@ import { blockCaps, layerHeaderOf, layerBlob, layerTableHeader, colIsNumeric, bl
 import { alignAxis, coverGeometry, buildEmptyGrid, buildEmptyBlockCsv, rasterizeMeshToGrid, markGridExterior, fillGridNearest, fillGridTrend, applyGridExtend, surfaceFromGrid, gridAxesOf } from './src/grid-ops.js';   // the pure grid kernel (cover/rasterize/fill/sample)
 import { PAINT_BLANK, paintRecount, matColSourceHash, matColLooseId, matColList, isStoredCat, storedCols, matColGet, matColCodes, matColSet, matColEncode, matColDecodeStr, matColDecode, pinBudgetBytes, setPinBudget, pinStats, pinTrim, pinPutMatcol, pinTouchMatcol, pinPut, pinGet, pinEvictLayer, pinWindow, ensureStoredValues, setColumnsChangedHook, setSidecarReader } from './src/columns.js';   // derived-column storage: matcols + the budgeted pin cache
 import { numericColsOf, blockVolumeOf, volumeContextOf, volumeAt, computeGT, computeSwath, extractSamples, autoDeclusterSizes, computeSampleSwath } from './src/analysis.js';   // the pure compute behind GT / swath / validation
+import { fmtSize, layerBytes, layerFiles, basename, joinPath, kindDir, relPathFor, resolveFileHandle, removeFileAt, layerRelpath, resolveDhFile, dhSetName } from './src/paths.js';   // project folder layout + path resolution
 const __MICRO_BUILD__ = 'dev';                             // stamped '<version> · <hash> · <date>' by node build.js --target=micro
 
 const $ = (s) => document.querySelector(s);
@@ -9475,67 +9476,8 @@ async function saveProjectAs() {
 // external — honest that the folder alone doesn't carry it); outside without
 // a handle (drag-drops, generated samples) can only be copied or located again
 // on reopen. One compact menu covers all outside layers per save.
-const fmtSize = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + ' GB' : b >= 1 << 20 ? (b / (1 << 20)).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
-const layerBytes = (L) => layerFiles(L).reduce((t, fd) => t + (fd.blob && fd.blob.size || 0), 0);
-// every file a layer depends on — one for most kinds, three for drillholes
-function layerFiles(L) {
-  if (L.dh && L.docs.dhDoc) {
-    const bl = L.docs.dhDoc.blobs;
-    return [['collar', bl.collar], ['survey', bl.survey], ['intervals', bl.intervals]]
-      .map(([role, blob]) => ({ role, name: (blob && blob.name) || `${role}.csv`, blob }));
-  }
-  const blob = layerBlob(L);
-  return blob ? [{ role: 'source', name: L.name, blob }] : [];
-}
-// ── project folder layout: kind subfolders (mirror the layer taxonomy) ──────
-// Files live in a folder named for their layer kind; resolution walks
-// subfolders and stays backward-compatible with flat (bare-name) projects.
-// Drillholes — the one compound load — get a `.holes.json` descriptor binding
-// their three CSVs + desurvey config into one loadable set.
-const basename = (p) => String(p).split('/').pop();
-const joinPath = (a, b) => (a ? a.replace(/\/$/, '') + '/' + b : b);
-function kindDir(L) {
-  if (L.dh) return 'drillholes';
-  const d = L.docs || {};
-  if (d.tableDoc) return 'tables';
-  if (d.meshDoc) return 'meshes';
-  if (d.gridDoc) return 'grids';
-  if (d.blockDoc) return 'models';
-  if (d.lasDoc || d.plyDoc) return 'clouds';
-  return '';
-}
-const relPathFor = (L, name) => joinPath(kindDir(L), basename(name));
-async function resolveFileHandle(dir, relpath, { create = false } = {}) {
-  const parts = String(relpath).split('/').filter(Boolean);
-  const name = parts.pop();
-  let d = dir;
-  for (const seg of parts) d = await d.getDirectoryHandle(seg, { create });
-  return d.getFileHandle(name, { create });
-}
-async function removeFileAt(dir, relpath) {
-  const parts = String(relpath).split('/').filter(Boolean);
-  const name = parts.pop();
-  let d = dir;
-  for (const seg of parts) { try { d = await d.getDirectoryHandle(seg); } catch { return; } }
-  try { await d.removeEntry(name); } catch { /* already gone */ }
-}
-// where a layer's primary file actually lives (real path via its handle, else
-// the canonical kind-folder path)
-async function layerRelpath(L, dir) {
-  if (!L.dh && L.handle && dir.resolve) { try { const p = await dir.resolve(L.handle); if (p) return p.join('/'); } catch { /* not a descendant */ } }
-  return relPathFor(L, L.name);
-}
-// resolve a drillhole-set member: relative to the DESCRIPTOR's folder first,
-// then the project ROOT (root-file projects — the files matched at the legacy
-// root when saved, but the descriptor lives in drillholes/), then drillholes/
-async function resolveDhFile(dir, setDir, name) {
-  for (const rel of [joinPath(setDir, name), basename(name), joinPath('drillholes', name)]) {
-    try { return await (await resolveFileHandle(dir, rel)).getFile(); } catch { /* next */ }
-  }
-  throw new Error(name + ' missing');
-}
-// the drillhole-set descriptor filename (lives in drillholes/)
-const dhSetName = (L) => (basename(String(L.name || 'holes')).replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'holes') + '.holes.json';
+// (fmtSize / layerBytes / layerFiles / basename / joinPath / kindDir / relPathFor /
+// resolveFileHandle / removeFileAt / layerRelpath / resolveDhFile / dhSetName live in src/paths.js)
 // the copy-into-project verb (layer context menu + the command palette): one
 // SIZED consent step (never copy without consent — the G1 storage rule), then
 // copyLayerIn routes the file to its kind folder.
