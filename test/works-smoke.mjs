@@ -1498,9 +1498,22 @@ const omf1 = await page.evaluate(async () => {
 
 exportedHtml = await page.evaluate(async () => {
   const W = window.WKS;
-  return await W.buildWorksHtml(await W.serializeWorkspace(W.vfs));
+  // plant a mid-close dialog remnant — the EXPORT DIALOG's own 120ms fade
+  // races the DOM clone (a captured backdrop = an invisible full-viewport
+  // click shield baked into the file; Arthur's Edge export, 2026-08-09).
+  // buildWorksHtml must strip it.
+  const ghost = document.createElement('div');
+  ghost.className = 'gcu-dialog-backdrop gcu-dialog-closing';
+  ghost.style.cssText = 'z-index:9100;';
+  document.body.appendChild(ghost);
+  const html = await W.buildWorksHtml(await W.serializeWorkspace(W.vfs));
+  ghost.remove();
+  return html;
 });
 const exportLooksRight = /<!--WORKS-VFS/.test(exportedHtml) && /<\/html>/.test(exportedHtml);
+// the class name appears in the runtime's CSS/JS — what must NOT survive is an
+// ELEMENT carrying it (match the tag, not the stylesheet)
+const exportNoDialogGhost = !/<div[^>]*class="[^"]*gcu-dialog-backdrop/.test(exportedHtml);
 
 await page.goto(`http://127.0.0.1:${port}/exported-workspace.html`);
 await page.waitForFunction(
@@ -2101,6 +2114,8 @@ const checks = {
       && dup.dstId !== dup.origId,
   // Workspace export / import (Chunk 5b)
   'export builds a self-contained HTML':   exportLooksRight,
+  // a dialog caught mid-close must NOT bake into the export as a click shield
+  'export strips transient dialog chrome': exportNoDialogGhost,
   'imported workspace uses a memory home': imported.home === 'memory',
   'imported workspace has its projects':   imported.nbExists,
   'imported workspace keeps its files':    imported.note === 'survives reload',

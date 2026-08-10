@@ -261,7 +261,14 @@ export async function buildWorksHtml(dump) {
   }
   const status = clone.querySelector('#works-status');
   if (status) status.textContent = 'starting…';
-  clone.querySelectorAll('.works-reconnect').forEach((el) => el.remove());
+  // Transient chrome must NOT travel: a cloned dialog has no JS left to ever
+  // remove it. The EXPORT DIALOG itself is the live case — its 120ms closing
+  // fade races this very clone (clicking "Export" starts the fade, the clone
+  // happens next), and a captured `.gcu-dialog-backdrop` is an invisible
+  // full-viewport z-9100 click shield: the exported file loads fine and then
+  // eats every input (Arthur's Edge session lost the race, 2026-08-09).
+  clone.querySelectorAll('.works-reconnect, .gcu-dialog, .gcu-dialog-backdrop, .gcu-menu')
+    .forEach((el) => el.remove());
 
   const gz = await _gzipBytes(new TextEncoder().encode(JSON.stringify(dump)));
   const b64 = (GZIP_TAG + _bytesToB64(gz)).replace(/.{1,76}/g, '$&\n');
