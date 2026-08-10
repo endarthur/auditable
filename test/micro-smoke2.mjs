@@ -2218,6 +2218,103 @@ await p.close();
   await pz.close();
 }
 
+// ── §35: tidyProject migrates a FLAT legacy project into kind folders (files
+//     MOVED not copied, project.json rewritten, second tidy a no-op) and
+//     scanFolderForNewData is the folder-as-inbox (a hand-dropped file is
+//     offered; sidecars, .cols fragments, and referenced files are skipped;
+//     a re-scan finds nothing). These two MOVE FILES and had no test anywhere
+//     (the 2026-08 deep review's worst coverage desert) — guard them BEFORE
+//     the project-lifecycle carve touches them. ──
+{
+  // open a small block model + save (auto-routes to models/), then FORGE the
+  // legacy flat layout: move models/t.csv (+ sidecar) to the ROOT and rewrite
+  // project.json's source paths — a faithful pre-kind-folder project.
+  const pt = await mkPage('sm2tidy');
+  await pt.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('sm2tidy', { recursive: true }); } catch { /* fresh */ } });
+  await pt.evaluate(async () => {
+    let t = 'XC,YC,ZC,FE\n';
+    for (let k = 0; k < 4; k++) for (let j = 0; j < 6; j++) for (let i = 0; i < 6; i++) t += `${i * 5},${j * 5},${k * 5},${(i + j + k) % 7}\n`;
+    await window._micro.openBlob(new Blob([t]), 't.csv', 'replace');
+    await new Promise((z) => setTimeout(z, 1200));
+  });
+  await saveProject(pt);
+  const forged = await pt.evaluate(async () => {
+    const root = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2tidy');
+    const models = await root.getDirectoryHandle('models');
+    const move = async (from, name) => {
+      let src; try { src = await from.getFileHandle(name); } catch { return false; }
+      const bytes = await (await src.getFile()).arrayBuffer();
+      const dst = await root.getFileHandle(name, { create: true });
+      const w = await dst.createWritable(); await w.write(bytes); await w.close();
+      await from.removeEntry(name); return true;
+    };
+    const moved = await move(models, 't.csv');
+    await move(models, 't.csv.meta.json');
+    const pj = await root.getFileHandle('project.json');
+    const txt = await (await pj.getFile()).text();
+    const w = await pj.createWritable(); await w.write(txt.split('models/t.csv').join('t.csv')); await w.close();
+    return { moved, hadPath: txt.includes('models/t.csv') };
+  });
+  chk('tidy setup: forged a legacy FLAT project (file at root, project.json rewritten)', forged.moved && forged.hadPath);
+  await pt.close();
+  // the flat project still OPENS (backward compat), then TIDY moves it home
+  const pt2 = await mkPage('sm2tidy');
+  await pt2.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2tidy'); await window._micro.openProjectDir(dir); });
+  await pt2.waitForFunction(() => window._micro.layers().length === 1 && window._micro.renderer.layerElementCount(window._micro.layers()[0].id) === 144, null, { timeout: 60000 });
+  chk('flat legacy project still OPENS (144 blocks placed)', true);
+  pt2.evaluate(() => window._micro.tidyProject());
+  await pt2.waitForFunction(() => document.querySelector('#pmDlg').classList.contains('show'), null, { timeout: 10000 });
+  await pt2.evaluate(() => document.querySelector('#pmOk').click());
+  await pt2.waitForFunction(() => /project tidied|already tidy|tidy failed/.test(document.querySelector('#meta').textContent), null, { timeout: 90000 });
+  const tidied = await pt2.evaluate(async () => {
+    const meta = document.querySelector('#meta').textContent;
+    const root = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2tidy');
+    const has = async (dir, name) => { try { await dir.getFileHandle(name); return true; } catch { return false; } };
+    const models = await root.getDirectoryHandle('models');
+    const pjTxt = await (await (await root.getFileHandle('project.json')).getFile()).text();
+    return { meta, atModels: await has(models, 't.csv'), atRoot: await has(root, 't.csv'), src: pjTxt.includes('models/t.csv') };
+  });
+  chk(`tidy MOVED the file into models/ and the root copy is GONE — “${tidied.meta}”`, /project tidied — 1 file/.test(tidied.meta) && tidied.atModels && !tidied.atRoot);
+  chk('tidy rewrote project.json (source = models/t.csv)', tidied.src);
+  pt2.evaluate(() => window._micro.tidyProject());
+  await pt2.waitForFunction(() => document.querySelector('#pmDlg').classList.contains('show'), null, { timeout: 10000 });
+  await pt2.evaluate(() => { document.querySelector('#meta').textContent = ''; document.querySelector('#pmOk').click(); });
+  await pt2.waitForFunction(() => /already tidy|project tidied|tidy failed/.test(document.querySelector('#meta').textContent), null, { timeout: 90000 });
+  const again = await pt2.evaluate(() => document.querySelector('#meta').textContent);
+  chk(`a second tidy is a NO-OP — “${again}”`, /already tidy/.test(again));
+  await pt2.close();
+  // the tidied project reloads with its records intact
+  const pt3 = await mkPage('sm2tidy');
+  await pt3.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2tidy'); await window._micro.openProjectDir(dir); });
+  await pt3.waitForFunction(() => window._micro.layers().length === 1 && window._micro.renderer.layerElementCount(window._micro.layers()[0].id) === 144, null, { timeout: 60000 });
+  chk('the TIDIED project reloads (144 blocks intact)', true);
+  // ── folder-as-inbox: drop extra.csv + a stray sidecar + an orphan .cols
+  // fragment into models/ by hand; the scan offers ONLY the data file ──
+  await pt3.evaluate(async () => {
+    const root = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2tidy');
+    const models = await root.getDirectoryHandle('models');
+    const wr = async (dir, name, text) => { const h = await dir.getFileHandle(name, { create: true }); const w = await h.createWritable(); await w.write(text); await w.close(); };
+    let t = 'XC,YC,ZC,AU\n';
+    for (let i = 0; i < 27; i++) t += `${(i % 3) * 5},${((i / 3 | 0) % 3) * 5},${(i / 9 | 0) * 5},${i}\n`;
+    await wr(models, 'extra.csv', t);
+    await wr(models, 'stray.csv.meta.json', '{}');
+    const cols = await models.getDirectoryHandle('t.csv.cols', { create: true });
+    await wr(cols, 'orphan.parquet', 'not real parquet');
+    window._micro.scanFolderForNewData();
+  });
+  await pt3.waitForFunction(() => document.querySelector('#ofDlg').classList.contains('show') || /scan/.test(document.querySelector('#meta').textContent), null, { timeout: 60000 });
+  const offer = await pt3.evaluate(() => ({ show: document.querySelector('#ofDlg').classList.contains('show'), body: document.querySelector('#ofDlgBody').textContent }));
+  chk('scan offers ONLY the hand-dropped extra.csv (sidecar + .cols fragment skipped)', offer.show && /extra\.csv/.test(offer.body) && !/stray|orphan|t\.csv/.test(offer.body));
+  await pt3.evaluate(() => document.querySelector('#ofOpen').click());
+  await pt3.waitForFunction(() => window._micro.layers().length === 2, null, { timeout: 60000 });
+  chk('opening the offer lands the layer (2 layers)', true);
+  pt3.evaluate(() => window._micro.scanFolderForNewData());
+  await pt3.waitForFunction(() => /scan: no new data|scan failed|scan:/.test(document.querySelector('#meta').textContent) && !document.querySelector('#ofDlg').classList.contains('show'), null, { timeout: 60000 });
+  const meta2 = await pt3.evaluate(() => document.querySelector('#meta').textContent);
+  chk(`a re-scan finds nothing new (the opened file is referenced) — “${meta2}”`, /no new data/.test(meta2));
+  await pt3.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);
