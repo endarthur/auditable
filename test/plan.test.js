@@ -1294,3 +1294,21 @@ describe('plan: resolveCalendarPreset', () => {
     assert.deepEqual(holidays, []);
   });
 });
+
+describe('plan: gantt calendar shapes', () => {
+  // gantt must accept BOTH holiday forms the calendar contract allows: plain
+  // date strings (what schedule/isWorkday take — the example notebooks use
+  // this) and { date, label } objects (the plan tool's calendar panel). The
+  // string form used to throw (h.date on a string → undefined.split).
+  const tasks = [{ id: 'a', name: 'A', duration: 3 }, { id: 'b', name: 'B', duration: 2, deps: ['a'] }];
+  it('renders with string holidays', () => {
+    const result = sched.schedule(tasks, { holidays: ['2026-04-03'] }, '2026-03-16');
+    const svg = render.gantt(result, { width: 840, calendar: { holidays: ['2026-04-03'] } });
+    assert.ok(svg.includes('<svg'));
+  });
+  it('renders with { date, label } holidays', () => {
+    const result = sched.schedule(tasks, { holidays: ['2026-04-03'] }, '2026-03-16');
+    const svg = render.gantt(result, { width: 840, calendar: { holidays: [{ date: '2026-04-03', label: 'x' }] } });
+    assert.ok(svg.includes('<svg'));
+  });
+});

@@ -159,10 +159,13 @@ function gantt(scheduleResult, options = {}) {
         }
       }
     }
-    // Individual holidays
+    // Individual holidays — the calendar contract accepts BOTH plain date
+    // strings ('2026-04-03', what schedule/isWorkday take) and { date, label }
+    // objects (the plan tool's calendar panel); gantt read only .date and
+    // threw on the string form
     if (calendar.holidays) {
       for (const h of calendar.holidays) {
-        const hd = _parseDate(h.date);
+        const hd = _parseDate(typeof h === 'string' ? h : h.date);
         if (hd >= minDate && hd <= maxDate) {
           const hx = dateToX(hd);
           svg += _line(hx, headerHeight, hx, height, colors.blocked, 'stroke-width="1" opacity="0.25" stroke-dasharray="2,3"');

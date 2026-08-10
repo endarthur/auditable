@@ -172,7 +172,7 @@ To save, run the last cell.
 /// code
 // %manual
 // Ctrl+Enter to open file picker
-const f = await file(".plan,.json");
+const f = await std.file(".plan,.json");
 const samplePlan = plan.parsePlan(f.text);
 ui.display(`Loaded "${samplePlan.title}" — replace samplePlan above to use it.`);
 
@@ -180,5 +180,5 @@ ui.display(`Loaded "${samplePlan.title}" — replace samplePlan above to use it.
 // %manual
 // Ctrl+Enter to download current project as .plan
 const json = plan.serializePlan(project);
-download(json, project.title + ".plan", "application/json");
+std.download(json, project.title + ".plan", "application/json");
 ui.display("Downloaded " + project.title + ".plan");
