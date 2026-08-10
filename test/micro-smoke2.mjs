@@ -2315,6 +2315,46 @@ await p.close();
   await pt3.close();
 }
 
+// ── §36: category re-key on .dm — "Use as category" works on Datamine models
+//     (numeric domain codes dict-encode as strings), and the choice PERSISTS
+//     across a project save/reload (mapping rides ls.mapping → openDmBlob).
+//     The delimited/parquet paths had this; .dm was the excluded source. ──
+{
+  const pq = await mkPage('sm2dmcat');
+  await pq.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('sm2dmcat', { recursive: true }); } catch { /* fresh */ } });
+  await pq.evaluate(async () => {
+    const { makeDM } = await import('/test/dm-make.mjs');
+    const fields = [
+      { name: 'XC', type: 'N' }, { name: 'YC', type: 'N' }, { name: 'ZC', type: 'N' },
+      { name: 'XINC', type: 'N', constant: 5 }, { name: 'YINC', type: 'N', constant: 5 }, { name: 'ZINC', type: 'N', constant: 5 },
+      { name: 'FE', type: 'N' }, { name: 'DOMAIN', type: 'N' }, { name: 'LITO', type: 'A', width: 8 },
+    ];
+    const rows = [];
+    for (let k = 0; k < 4; k++) for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++)
+      rows.push({ XC: i * 5, YC: j * 5, ZC: k * 5, FE: 20 + i, DOMAIN: (k % 3 + 1) * 100, LITO: (i + j) % 2 ? 'BIF' : 'CANGA' });
+    await window._micro.openBlob(new Blob([makeDM(fields, rows)]), 'cat.dm', 'replace');
+  });
+  await pq.waitForFunction(() => window._micro.layers().length && window._micro.renderer.layerElementCount(window._micro.layers()[0].id) === 64, null, { timeout: 60000 });
+  const before = await pq.evaluate(() => { const h = window._micro.layers()[0].docs.blockDoc.header; return { cat: h.columns[h.mapping.cat], cats: h.categories }; });
+  chk(`.dm default category is the first alpha column (${before.cat}: ${(before.cats || []).join('/')})`, before.cat === 'LITO');
+  await pq.evaluate(async () => { const L = window._micro.layers()[0]; const h = L.docs.blockDoc.header; await window._micro.useAsCategory(L, h.columns.indexOf('DOMAIN')); });
+  await pq.waitForFunction(() => { const L = window._micro.layers()[0]; const h = L.docs && L.docs.blockDoc && L.docs.blockDoc.header; return h && h.columns[h.mapping.cat] === 'DOMAIN'; }, null, { timeout: 60000 });
+  const after = await pq.evaluate(() => { const h = window._micro.layers()[0].docs.blockDoc.header; return { cats: h.categories }; });
+  chk(`"Use as category" re-keys a .dm to a NUMERIC domain column (dict: ${(after.cats || []).join('/')})`, ['100', '200', '300'].every((v) => (after.cats || []).includes(v)));
+  await pq.evaluate(() => { const i = document.querySelector('#filter'); i.value = 'DOMAIN == 200'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); });
+  await pq.waitForFunction(() => window._micro.layers()[0]._filterMask, null, { timeout: 60000 });
+  const hits = await pq.evaluate(() => { const m = window._micro.layers()[0]._filterMask; let n = 0; for (let i = 0; i < m.length; i++) n += m[i]; return n; });
+  chk(`the filter matches the numeric category (DOMAIN == 200 → ${hits} of 64)`, hits === 16);
+  await saveProject(pq);
+  await pq.close();
+  const pq2 = await mkPage('sm2dmcat');
+  await pq2.evaluate(async () => { const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('sm2dmcat'); await window._micro.openProjectDir(dir); });
+  await pq2.waitForFunction(() => window._micro.layers().length && window._micro.renderer.layerElementCount(window._micro.layers()[0].id) === 64, null, { timeout: 60000 });
+  const re2 = await pq2.evaluate(() => { const h = window._micro.layers()[0].docs.blockDoc.header; return { cat: h.columns[h.mapping.cat], cats: h.categories }; });
+  chk(`the re-keyed category PERSISTS across save/reload (${re2.cat}: ${(re2.cats || []).join('/')})`, re2.cat === 'DOMAIN' && ['100', '200', '300'].every((v) => (re2.cats || []).includes(v)));
+  await pq2.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

@@ -6789,7 +6789,7 @@ async function openBlob(blob, name, mode = 'replace', at = null, over = {}) {
   $('#empty').style.display = 'none';
   try {
     if (isMesh && /\.(msh|obj|lfm|ply)$/i.test(name)) { await openMeshDoc(blob, name, { layer: lid, first, tint: over.tint, opacity: over.opacity, forceSoup: over.forceSoup }); }
-    else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first, forcePoints, cached: over.cached }); }
+    else if (/\.dm$/i.test(name)) { await openDmBlob(blob, name, { layer: lid, first, forcePoints, cached: over.cached, mapping: over.mapping }); }
     // grid stays extension-driven (no table→grid provider yet); asKind only picks points↔surface.
     else if ((over.asKind == null || over.asKind === 'surface' || over.asKind === 'points') && /\.(tif|tiff|grd)$/i.test(name)) { await openGridBlob(blob, name, { layer: lid, first, displayCache: over.displayCache, surface: over.asKind === 'surface', flatZ: over.flatZ != null ? over.flatZ : null, band: over.band || 0, smooth: over.smooth }); }
     else if ((over.asKind == null || over.asKind === 'surface' || over.asKind === 'points') && /\.asc$/i.test(name) && await ascLooksLikeGrid(blob)) { await openGridBlob(blob, name, { layer: lid, first, surface: over.asKind === 'surface', flatZ: over.flatZ != null ? over.flatZ : null, smooth: over.smooth }); }
@@ -8197,7 +8197,11 @@ async function openDmBlob(blob, name, opts = {}) {
     if (role) { const other = role === 'points' ? 'triangles (…tr.dm)' : 'points (…pt.dm)'; throw new Error(`Datamine wireframe ${role} file — open it together with its ${other} file to view the mesh`); }
   }
   $('#meta').textContent = `${name} — reading DD…`;
-  const mapping = opts.chan != null && prevDoc && prevDoc.header ? { chan: opts.chan } : null;
+  // an explicit full mapping (project restore / cat re-key) wins; else a chan
+  // switch reuses the live layer's header, optionally re-keying the category
+  let mapping = opts.mapping || null;
+  if (!mapping && (opts.chan != null || opts.cat != null) && prevDoc && prevDoc.header)
+    mapping = { chan: opts.chan != null ? opts.chan : prevDoc.header.mapping.chan, ...(opts.cat != null ? { cat: opts.cat } : {}) };
   renderer.removeLayer(lid); if (!opts.keepFilter) renderer.setFilter(null, {}, lid);
   // sub-blocked / irregular models run a FULL discovery sweep before the first
   // chunk (a 13 GB file reads silently for a minute otherwise) — show progress
@@ -9420,9 +9424,10 @@ function projectManifest() {
         : undefined,
       sel: L._selMask && L._selCount ? rleEncode(L._selMask) : undefined,
       lineage: L.lineage || undefined,                     // provenance chain (how this layer was made)
-      // delimited parsing intent: the column mapping (incl. a re-keyed category)
-      // — indices are stable because the file rides in the project
-      mapping: L.docs.blockDoc && !L.docs.blockDoc.header.dm ? L.docs.blockDoc.header.mapping : undefined,
+      // parsing intent: the column mapping (incl. a re-keyed category) —
+      // indices are stable because the file rides in the project. .dm too:
+      // its restore threads mapping through openDmBlob (chan + cat honored).
+      mapping: L.docs.blockDoc ? L.docs.blockDoc.header.mapping : undefined,
     })),
     camera: captureCamera(),
     section: captureSection(),
@@ -14534,7 +14539,7 @@ function renderColumnsTab(body, L) {
         ...(spatial ? [] : [
           { sep: true },
           ...(isNum && L.docs.blockDoc ? [{ label: 'Use as color channel', action: () => { const v = `chan:${i}`; if ([...$('#colorBy').options].some((o) => o.value === v)) { $('#colorBy').value = v; $('#colorBy').dispatchEvent(new Event('change')); } } }] : []),
-          ...(L.docs.blockDoc && !L.docs.blockDoc.header.dm && i !== m.cat ? [{ label: 'Use as category', action: () => useAsCategory(L, i) }] : []),
+          ...(L.docs.blockDoc && i !== m.cat ? [{ label: 'Use as category', action: () => useAsCategory(L, i) }] : []),
           ...(L.dh && L.docs.dhDoc && i !== m.cat ? [{ label: 'Use as category', action: () => useAsCategory(L, i) }] : []),
         ]),
       ]);
@@ -14619,7 +14624,7 @@ async function reopenDh(L, patch, { clearCats = false } = {}) {
 }
 // re-open a delimited layer with a patched column mapping (X/Y/Z/cat re-keys)
 async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
-  const doc = L.docs.blockDoc; if (!doc || doc.header.dm) return;
+  const doc = L.docs.blockDoc; if (!doc) return;
   closeAttrTable(L.id);
   const m = { ...doc.header.mapping, ...patch };
   const style = captureLayerStyling(L, { clearCats });                // id is reused in place (layer: L.id) → identity intact, styling only
@@ -14627,6 +14632,14 @@ async function reopenWithMapping(L, patch, { clearCats = false } = {}) {
     layer: L.id, first: false, forcePoints: doc.forcePoints,
     mapping: { x: m.x, y: m.y, z: m.z, chan: m.chan, cat: m.cat },
   };
+  // .dm resolves columns by chan/cat indices (x/y/z come from the DD page)
+  if (doc.header.dm) {
+    await openDmBlob(doc.blob, doc.name, { layer: L.id, first: false, forcePoints: doc.forcePoints, chan: m.chan, cat: m.cat });
+    applyLayerStyling(layerById(L.id), style, { clearCats });
+    markProjectDirty();
+    if (_propOpen) { _propFor = null; renderProps(); }
+    return;
+  }
   // A Parquet-backed layer MUST re-open through its own provider. openBlocksBlob
   // with no provider falls back to the delimited reader, which sniffs Parquet
   // bytes as text, finds no rows, and replaces a perfectly good document with an
@@ -16194,7 +16207,7 @@ cv.addEventListener('pointerup', (e) => {
   showRecord(hit);
 });
 
-window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, attrColumnsOf, fetchLayerRow, meshVertexData, meshVertexHeader, extendRow, schemaExt, calcFns, blockCaps, docPositionStream, layerRecords, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => S.recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => S.layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => activeDocs().blockDoc || null, layers: () => S.layers, setActiveLayer, activeId: () => S.activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => S.project, views: () => S.views, scenes: () => S.scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
+window._micro = { attrRowCountOf, locationsOf, hasRecords, primaryLocationOf, propKindLine, attrColumnsOf, fetchLayerRow, meshVertexData, meshVertexHeader, extendRow, schemaExt, calcFns, blockCaps, docPositionStream, layerRecords, openBlob, openBatchRename, groupMenu, openMeshExportDialog, exportMeshes, selectionToColumn, filterToSelection, applyCalcCols, openSurfaceTools, gridOnLattice, setSwathBand, saveRecipe, loadRecipes, runRecipe, runRoutine, expandRoutine, routineLoadParams, routineReadTableFull, routineEval, routineSubst, routineFilterRows, routineTargets, layerHasColumn, resultToLayer, fileLayerByPath, ensureGroupPath, openRoutineWindow, openInputsDialog, openRoutineTracker, recipesMenuItems, _recipesList: () => S.recipes, openStats, runFigureRecipe, captureFigureCfg, openSample, openBlocksBlob, makeSampleBlockCsv, openDemoProject, makeDemoBlockCsv, makeDemoDrillholes, setZExag, recolorSurface, setSurfaceFlatZ, setSurfaceSmooth, setGridBand, applyBlockFilter, showRecord, knifeCut, addRecent, fetchCsvRecord, currentSection, convertMeshLayer, openProps, showMemoryInfo, setRampCfg, bakeRampPixels, rampRangeFor, applyCatLegend, runRules, syncRuleMode, applyRuleVisibility, openPaintPalette, createPaintCol, addPaintValue, paintArm, paintDisarm, paintApply, paintUndo, paintColByName, setLayerColorSel, runExport, openExportDialog, exportColumnsOf, selectBySolid, ratioBySolid, flagBySolid, selectByGridSurface, ratioByGridSurface, flagByGridSurface, matColSet, matColList, matColGet, persistElement, loadElement, matColDelete, ensureStoredValues, pinPutMatcol, buildElementManifest, buildDhSetManifest, buildGridElementManifest, descFromElement, broadcastCollarCol, materializeCalcCol, setPinBudget, pinStats, rampRangeFor, meshToGridLayer, rasterizeMeshToGrid, applyGridExtend, fillGridNearest, fillGridTrend, markGridExterior, residentGridForEval, surfaceFromGrid, writeEsriAsc, writeSurferGrd, readSurferGrd, writeGridDisplayCache, exportGridAsc, openMeshGridDialog, openNewDialog, buildEmptyGrid, buildEmptyBlockCsv, alignAxis, coverGeometry, openGridBlob, meshSolidOf, openSolidDialog, openParquetBlocks, convertLayerToParquet, setAutoOptimize, setWindingGpu, runSolidRecipe, openSolidRecipeConfigured, sbCfgOf, gridAxesOf, runSpatialJoin, runReconcile, runKeyJoin, spatialJoinToCols, keyJoinToCols, gridsCompatible, commonLattice, openProps, numericColsOf, openGradeTonnage, computeGT, openSwath, computeSwath, swathDir, dirTrendPlunge, frameDipDirDipRake, openLineageWindow, openCalcWindow, ensureCalcDisplay, realizeCalc, realizeCalcPinned, exportLineageReport, lineageReportHtml, openPalette, closePalette, COMMANDS, openValidation, extractSamples, computeSampleSwath, declusterWeights, setDeco, setDecoTitle, setLayerLegend, exportFigure, setFigScale, drawDecorations, decorationsMenu, openDecoPanel, setBg, setBlockEdges, windowsMenu, cascadeWindows, closeAllWindows, sealedInfo, openSettingsWindow, setSelStick, createLayerGroup, layerTree: () => S.layerTree, applyTreeVisibility, treeMove, addIntervalToSet, redesurveySet, reopenDh, showHoleTraces, applyHoleFilter, filterHolesSet, dhFilterSweep, openCsvTableWindow, collarsRowMenu, surveyRowMenu, openDhDialog, openObjSplit, openLfmSplit, assignDomains, openDomainsDialog, openAttrTable, attrTables: _attrTables, selectByPolygon, selectVolume, clearSelection, setSelThrough, blockDoc: () => activeDocs().blockDoc || null, layers: () => S.layers, setActiveLayer, activeId: () => S.activeId, openProjectDir, saveProject, saveProjectAs, tidyProject, scanFolderForNewData, reloadLayerFromDisk, canReloadLayer, openTableBlob, applyTableFilter, useAsCategory, reopenWithMapping, openXlsxBlob, openWorkbook, openFilesDialog, reopenAs, reinterpretOptions, project: () => S.project, views: () => S.views, scenes: () => S.scenes, toggleFilterDrawer, renderFilterDrawer, saveViewAs, applyView, saveSceneAs, applyScene, captureScene, removeBookmark, removeScene, importDrillholes: openDrillholeLayer, recordPosition, pickHitPoint, pixelRay, blockHalfDims, meshHitAt, showMeshRecord, syncMeshPickable, nlSetEnabled, nlEnsureTrained, nlPropose, showAbout, nlStats: () => _nlStats, nlHoldOut: (texts) => { _nlExclude = texts ? new Set(texts.map(nlNormText)) : null; _nlDispatcher = null; _nlKey = ''; }, renderer, cam, get frame() { return frame; }, requestRender, docBbox: rendererDocBbox };
 </script>
 </body>
 </html>

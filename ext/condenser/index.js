@@ -5925,8 +5925,13 @@ async function openDmModel(blob, { mapping = null, forcePoints = false, onProgre
     .filter((o) => o.c.type === 'N' && !o.c.isConstant && !DEF_NAMES.has(o.c.name))
     .map((o) => ({ i: o.i, name: o.c.name }));
   const chan = mapping && mapping.chan != null ? mapping.chan : (numericColumns[0] ? numericColumns[0].i : null);
-  const catIdx = h.columns.findIndex((c) => c.type === 'A' && !c.isConstant);
-  const categories = catIdx >= 0 ? (cached && cached.categories ? [...cached.categories] : []) : null;   // fills incrementally during the sweep (or prefilled from a sidecar)
+  // category: an explicit mapping.cat wins (any column — numeric domain codes
+  // dict-encode as strings below); default = the first non-constant alpha
+  const catIdx = mapping && mapping.cat != null ? mapping.cat : h.columns.findIndex((c) => c.type === 'A' && !c.isConstant);
+  // a sidecar's categories describe the column it was written for — a re-keyed
+  // cat must rebuild its dict during the sweep, not inherit the old column's
+  const cachedCats = cached && cached.categories && (!cached.mapping || cached.mapping.cat == null || cached.mapping.cat === catIdx) ? cached.categories : null;
+  const categories = catIdx >= 0 ? (cachedCats ? [...cachedCats] : []) : null;   // fills incrementally during the sweep (or prefilled from a sidecar)
   const catCode = catIdx >= 0 ? new Map(categories.map((v, i) => [v, i])) : null;
 
   const header = {
@@ -5964,7 +5969,8 @@ async function openDmModel(blob, { mapping = null, forcePoints = false, onProgre
         buf.x[fill] = xv; buf.y[fill] = yv; buf.z[fill] = zv;
         buf.chan[fill] = CH ? CH[k] : 0;                   // NaN already when missing
         if (buf.cat) {
-          const v = CA[k];                                 // '' when missing
+          const raw = CA[k];                               // '' when missing; a NUMERIC cat column dict-encodes as strings
+          const v = raw == null || raw === '' || (typeof raw === 'number' && !Number.isFinite(raw)) ? '' : String(raw);
           let code = catCode.get(v);
           if (code === undefined) {
             if (catCode.size < 255) { code = catCode.size; catCode.set(v, code); categories.push(v); }
