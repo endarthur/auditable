@@ -6,7 +6,7 @@ import { getSettings, applySettings, resolveExecMode, resolveRunOnLoad, getEdito
 import { runAll } from './exec.js';
 import { setMsg } from './ui.js';
 import { cryptoIsEncrypted, cryptoIsLocked, cryptoBuildBlock, cryptoDetect } from './crypto.js';
-import { serializeCells, encodeModules, decodeModules, esc as _esc, buildTxtExport, serializeVfs, hydrateVfs, parseNotebookTxt } from './serialize.js';
+import { serializeCells, encodeModules, decodeModules, esc as _esc, buildTxtExport, serializeVfs, hydrateVfs, parseNotebookTxt, commentSafeJson } from './serialize.js';
 import { flushPendingDirty, hydrateModulesFromVfs, isLegacyFormat, importLegacyFormat, migrateLegacyDump } from './persist.js';
 import { getHost } from './host.js';
 import { Dialog } from '#dialog';
@@ -343,7 +343,7 @@ export async function buildNotebookHtml(opts = {}) {
         const block = await cryptoBuildBlock(dump);
         dataBlocks = '<!-- encrypted notebook data: passphrase required to access cells, settings, modules, files -->\n<!--AUDITABLE-CRYPTO\n' + JSON.stringify(block) + '\nAUDITABLE-CRYPTO-->';
       } else {
-        dataBlocks = '<!-- auditable notebook data: VFS dump (persistent mounts only) -->\n<!--AUDITABLE-VFS\n' + JSON.stringify(dump) + '\nAUDITABLE-VFS-->';
+        dataBlocks = '<!-- auditable notebook data: VFS dump (persistent mounts only) -->\n<!--AUDITABLE-VFS\n' + commentSafeJson(dump) + '\nAUDITABLE-VFS-->';
       }
     } else {
       // Fallback path (no VFS available — shouldn't happen in browser builds)

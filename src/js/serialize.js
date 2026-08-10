@@ -35,6 +35,18 @@ export function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// JSON destined for an HTML comment block (<!--AUDITABLE-VFS … -->): a literal
+// `-->` anywhere in the payload — a cell with `i --> 0`, a cleartext module
+// whose source draws mermaid arrows — closes the comment early and TRUNCATES
+// the saved notebook. `-->` can only occur inside a JSON string (outside
+// strings, `>` never appears), so re-spelling that `>` as the six-char JSON
+// escape sequence backslash-u003e keeps the payload byte-safe for comment
+// embedding while parsing IDENTICALLY — readers, old runtimes included,
+// need no change.
+export function commentSafeJson(obj) {
+  return JSON.stringify(obj).replace(/-->/g, '--\\u003e');
+}
+
 // ── NOTEBOOK HTML PARSING ──
 // Extract cells, settings, modules, fs, and title from notebook HTML source.
 

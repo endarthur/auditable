@@ -13,7 +13,7 @@ import { $, S } from './state.js';
 import { addCell } from './cell-ops.js';
 import { applySettings } from './settings.js';
 import { isCollapsed } from './dag.js';
-import { parseNotebookTxt, serializeNotebookTxt, serializeVfs, hydrateVfs } from './serialize.js';
+import { parseNotebookTxt, serializeNotebookTxt, serializeVfs, hydrateVfs, commentSafeJson } from './serialize.js';
 import { cryptoIsLocked, cryptoBuildBlock, cryptoDetect } from './crypto.js';
 import { hydrateAllSavedOutputs, sweepOrphanOutputs } from './outputs.js';
 import { extractOutline } from './outline.js';
@@ -49,7 +49,7 @@ export class CleartextPersister extends Persister {
   async serializeBlock(vfs) {
     const dump = await serializeVfs(vfs);
     return '<!-- auditable notebook data: VFS dump (persistent mounts only) -->\n'
-         + '<!--AUDITABLE-VFS\n' + JSON.stringify(dump) + '\nAUDITABLE-VFS-->';
+         + '<!--AUDITABLE-VFS\n' + commentSafeJson(dump) + '\nAUDITABLE-VFS-->';
   }
 }
 

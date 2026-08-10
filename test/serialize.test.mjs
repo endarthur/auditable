@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 // serialize.js has ZERO DOM dependencies — no document shim needed
 import {
   serializeCells, encodeModules, decodeModules, esc,
-  parseNotebookHtml, buildTxtExport, PERSISTENT_MOUNTS
+  parseNotebookHtml, buildTxtExport, PERSISTENT_MOUNTS, commentSafeJson
 } from '../src/js/serialize.js';
 
 // Guard: /var must stay persistent so std.data packs (installed to /var/data)
@@ -184,5 +184,26 @@ describe('serialize: buildTxtExport', () => {
       settings: { theme: 'dark', fontSize: 13, width: '860' },
     });
     assert.ok(!txt.includes('/// settings:'));
+  });
+});
+
+describe('commentSafeJson — comment-block-safe VFS dumps', () => {
+  it('a payload containing --> cannot close the HTML comment early', () => {
+    const dump = {
+      '/var/notebook.txt': { type: 'file', kind: 'text', content: '/// code\nlet i = 5; while (i --> 0) print(i);' },
+      '/var/modules/x/source': { type: 'file', kind: 'text', content: 'lines.push(a + " --> " + b); // mermaid arrow' },
+    };
+    const json = commentSafeJson(dump);
+    assert.ok(!json.includes('-->'), 'no comment terminator survives in the payload');
+    assert.deepEqual(JSON.parse(json), dump);              // parses IDENTICALLY — readers unchanged
+    const block = '<!--AUDITABLE-VFS\n' + json + '\nAUDITABLE-VFS-->';
+    const m = block.match(/<!--AUDITABLE-VFS\n([\s\S]*?)\nAUDITABLE-VFS-->/);
+    assert.deepEqual(JSON.parse(m[1]), dump);              // the block round-trips whole
+    assert.equal(block.indexOf('-->'), block.length - 3);  // the ONLY --> is the real terminator
+  });
+  it('longer arrows and nested comment markers survive byte-exactly', () => {
+    const v = { a: 'x ---> y', b: '<!-- inner -->', c: 'a->b -->> c' };
+    assert.deepEqual(JSON.parse(commentSafeJson(v)), v);
+    assert.ok(!commentSafeJson(v).includes('-->'));
   });
 });

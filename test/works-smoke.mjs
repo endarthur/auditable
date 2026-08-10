@@ -662,11 +662,18 @@ if (nbFrame) {
       JSON.stringify({ alias: 'npm:rehydrate-probe', kind: 'js',
         url: 'https://esm.sh/rehydrate-probe', size: 33 }));
   });
-  await page.waitForTimeout(400);   // debounce + signal hop + rehydrate
-  nbAutoRehydrate = await nbFrame.evaluate(() => ({
-    hasEntry: !!(window._installedModules
-      && window._installedModules['npm:rehydrate-probe']),
-  }));
+  // poll, don't sleep: the path is signal hop + 200ms debounce + an async
+  // /lib walk — measured ~450ms on a quiet machine, so a fixed 400ms wait
+  // was a knife-edge (3 deterministic-looking failures, 2026-08-10). The
+  // contract is "arrives without reload", bounded here at 5s.
+  nbAutoRehydrate = { hasEntry: false };
+  for (let i = 0; i < 50 && !nbAutoRehydrate.hasEntry; i++) {
+    await page.waitForTimeout(100);
+    nbAutoRehydrate = await nbFrame.evaluate(() => ({
+      hasEntry: !!(window._installedModules
+        && window._installedModules['npm:rehydrate-probe']),
+    }));
+  }
 }
 
 // Shell cells (`!cmd` → notebook.shell + display). Opens a dedicated
@@ -976,8 +983,11 @@ const ctx = await page.evaluate(async () => {
   // Stage a fake pkg-installed module before exporting and verify the
   // dump carries its bytes.
   await W.vfs.mkdir('/lib/npm/export-probe', { recursive: true });
+  // the `-->` is load-bearing: a raw comment terminator in a cleartext module
+  // (carotte's mermaid arrows, 2026-08-10) used to close the AUDITABLE-VFS
+  // comment early and TRUNCATE the export — the writer must \u-escape it
   await W.vfs.writeFile('/lib/npm/export-probe/source',
-    'export const tag = () => "exported";');
+    'export const tag = () => "exported"; // A --> B mermaid arrow');
   await W.vfs.writeFile('/lib/npm/export-probe/meta.json',
     JSON.stringify({ alias: 'npm:export-probe', kind: 'js',
       url: 'https://esm.sh/export-probe', size: 35 }));
@@ -989,6 +999,15 @@ const ctx = await page.evaluate(async () => {
   // text's `"exported"` becomes the JSON-escaped `\"exported\"`.
   const hasModule = exportedHtml.includes('/lib/npm/export-probe/source')
                  && exportedHtml.includes('export const tag = () => \\"exported\\"');
+  // the block must survive an arrow-bearing payload WHOLE: parse it back out
+  // of the comment and find the full module source (terminator escaped)
+  const blockM = exportedHtml.match(/<!--AUDITABLE-VFS\n([\s\S]*?)\nAUDITABLE-VFS-->/);
+  let blockWhole = false;
+  try {
+    const parsed = JSON.parse(blockM[1]);
+    blockWhole = /A --> B mermaid arrow/.test(parsed['/lib/npm/export-probe/source'].content)
+              && !blockM[1].includes('-->');
+  } catch { blockWhole = false; }
 
   // Round-trip: re-import the exported HTML as a new project — its data
   // sibling must come back intact.
@@ -1006,7 +1025,7 @@ const ctx = await page.evaluate(async () => {
   return {
     newFilePath, newFileExists,
     exportPath: '/projects/Export Test',
-    hasBlock, hasTitle, hasModule,
+    hasBlock, hasTitle, hasModule, blockWhole,
     rtPath, rtDataMatches: rtData === 'a,b\n1,2\n',
     fromFilePath, fromFileTitle: fromFileMeta.title,
   };
@@ -2055,6 +2074,9 @@ const checks = {
   'tree: Export project builds an .html':   ctx.hasBlock && ctx.hasTitle,
   // pkg-spec §7: workspace /lib modules inlined into the export
   'tree: Export inlines workspace /lib':    ctx.hasModule,
+  // a `-->` in a cleartext module must not close the AUDITABLE-VFS comment
+  // early (carotte truncation, 2026-08-10): the block parses back WHOLE
+  'tree: export block survives --> payload': ctx.blockWhole,
   'tree: exported .html round-trips':       ctx.rtPath === '/projects/Export Test-2'
       && ctx.rtDataMatches,
   'tree: Import file (right-click) works':  ctx.fromFilePath === '/projects/From File'

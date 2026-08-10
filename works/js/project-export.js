@@ -72,8 +72,15 @@ export async function buildProjectExportHtml(projPath) {
   // Fetch the embedded notebook runtime (decompressed at boot to a blob URL).
   const runtime = await fetch(surfaceUrl('notebook')).then((r) => r.text());
 
+  // A literal `-->` in the payload (a cell with `i --> 0`; a cleartext /lib
+  // module drawing mermaid arrows — carotte's toMermaid was the live case)
+  // closes the HTML comment early and TRUNCATES the export. `-->` only occurs
+  // inside JSON strings, so re-spelling its `>` as the JSON \u-escape keeps
+  // the payload comment-safe and parses identically — readers need no change.
+  // (Same convention as src/js/serialize.js commentSafeJson — separate bundle.)
+  const safeJson = JSON.stringify(dump).replace(/-->/g, '--\\u003e');
   const block = '<!-- auditable notebook data: VFS dump (persistent mounts only) -->\n'
-    + '<!--AUDITABLE-VFS\n' + JSON.stringify(dump) + '\nAUDITABLE-VFS-->';
+    + '<!--AUDITABLE-VFS\n' + safeJson + '\nAUDITABLE-VFS-->';
 
   // Patch <title>, the docTitle input value, and inject the data block. The
   // replacements MUST be function-form: `block` is JSON containing `$&`/`$'`/
