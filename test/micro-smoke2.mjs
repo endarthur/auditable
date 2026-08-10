@@ -2355,6 +2355,52 @@ await p.close();
   await pq2.close();
 }
 
+// ── §37: the stats FAST PATH — after a filter scan pins the columns, the stats
+//     window accumulates over pinned 256K windows (censusChunkCols) instead of
+//     decoding rows. The guard is a PARITY check: pinned rows == row-path rows
+//     (pins dropped via setPinBudget('off')), with __statsFast proving the fast
+//     path actually ran (non-vacuous). ──
+{
+  const ps = await mkPage('sm2statfast');
+  const teed = await ps.evaluate(async () => {
+    const M = window._micro;
+    let t = 'XC,YC,ZC,FE,LITO\n';
+    for (let k = 0; k < 4; k++) for (let j = 0; j < 6; j++) for (let i = 0; i < 6; i++)
+      t += `${i * 5},${j * 5},${k * 5},${(i + j * 2 + k * 3) % 11},${(i + k) % 2 ? 'BIF' : 'CANGA'}\n`;
+    await M.openBlob(new Blob([t]), 's.csv', 'replace');
+    await new Promise((z) => setTimeout(z, 1200));
+    // a complete filter scan tees the pins for FE + LITO (+ coords)
+    const inp = document.querySelector('#filter'); inp.value = 'FE >= 0 and LITO != "ZZZ"'; inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    await new Promise((res) => { const t2 = setInterval(() => { if (M.layers()[0]._filterMask) { clearInterval(t2); res(); } }, 100); });
+    return M.pinStats();
+  });
+  chk(`filter scan teed the pin cache (${teed.cols} columns pinned)`, teed.cols > 0);
+  const runStats = () => ps.evaluate(async () => {
+    const M = window._micro;
+    for (const w of document.querySelectorAll('.fwin')) delete w._statsRows;   // only FRESH results resolve the poll
+    M.openStats(M.layers()[0], { run: true, cfg: { cols: ['FE'], groupBy: 'LITO', weight: '', scope: 'all' } });
+    const el = await new Promise((res) => { const t2 = setInterval(() => { for (const w of document.querySelectorAll('.fwin')) if (w._statsRows) { clearInterval(t2); res(w); } }, 100); });
+    const rows = el._statsRows.map((r) => ({ ...r, td: undefined }));
+    el.querySelector('.fwin-head button, .fwin-x')?.click();
+    return { rows, fast: window.__statsFast || 0 };
+  });
+  const r1 = await runStats();
+  chk(`stats used the PINNED window path (fast-path runs: ${r1.fast})`, r1.fast >= 1);
+  await ps.evaluate(() => { window._micro.setPinBudget('off'); });   // drops every pin → the row path
+  const r2 = await runStats();
+  chk('dropping the pins falls back to the row path', r2.fast === r1.fast);
+  const near = (a2, b2) => (a2 == null && b2 == null) || Math.abs(a2 - b2) < 1e-9 || (Number.isNaN(a2) && Number.isNaN(b2));
+  const same = r1.rows.length === r2.rows.length && r1.rows.every((ra, i) => {
+    const rb = r2.rows[i];
+    return ra.group === rb.group && ra.col === rb.col && ra.n === rb.n
+      && near(ra.mean, rb.mean) && near(ra.std, rb.std) && near(ra.min, rb.min) && near(ra.max, rb.max)
+      && near(ra.q25, rb.q25) && near(ra.q50, rb.q50) && near(ra.q75, rb.q75);
+  });
+  chk(`PARITY: pinned rows == row-path rows (${r1.rows.length} rows, groups ${r1.rows.map((r) => r.group).join('/')})`, same && r1.rows.length === 2);
+  await ps.evaluate(() => { window._micro.setPinBudget('auto'); });
+  await ps.close();
+}
+
 console.log(ok ? '\nMICRO SMOKE 2: PASS' : '\nMICRO SMOKE 2: FAIL');
 await b.close(); server.close();
 process.exit(ok ? 0 : 1);

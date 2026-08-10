@@ -5120,6 +5120,90 @@ function statsGroupCols(L) {
   for (const c of (L.paintCols || [])) if (c.kind !== 'ratio') out.push(c.name);
   return out;
 }
+// stats over PINNED columns: when every base column in the request's dependency
+// cone is pinned (a prior complete filter scan teed it), accumulate over 256K
+// typed windows via censusChunkCols — the tier-3 engine — instead of decoding
+// every row. st.cols and st.groupBy are bare NAMES (the window's selects), so
+// they read straight off their census slots; only the free-text weight
+// expression compiles chunk-wise. Identical accumulators and row order →
+// identical results; anything unpinned → null (the row path takes over).
+function scanStatsPinned(L, st, mask) {
+  const h = layerTableHeader(L); if (!h) return null;
+  const censusSchema = schemaExt(L, h);
+  const slotOf = (nm) => censusSchema.findIndex((c) => c.name === nm);
+  const colSlots = st.cols.map(slotOf); if (colSlots.some((i) => i < 0)) return null;
+  const gbSlot = st.groupBy ? slotOf(st.groupBy) : -1; if (st.groupBy && gbSlot < 0) return null;
+  // the dependency cone: requested columns + groupBy + the weight expression
+  const needL = new Set([...st.cols, ...(st.groupBy ? [st.groupBy] : [])].map((c) => String(c).toLowerCase()));
+  let weightAst = null;
+  if (st.weight && st.weight.trim()) { try { weightAst = parse(st.weight); } catch { return null; } for (const d of expandedDeps(L, weightAst)) needL.add(d); }
+  for (const c of [...st.cols, ...(st.groupBy ? [st.groupBy] : [])]) { let a; try { a = parse(quoteIdent(c)); } catch { return null; } for (const d of expandedDeps(L, a)) needL.add(d); }
+  // base deps must be PINNED; paint/calc resolve from RAM inside censusChunkCols
+  const baseLow = new Map(h.columns.map((c) => [String(c).toLowerCase(), c]));
+  const pcsLow = new Set((L.paintCols || []).map((c) => String(c.name).toLowerCase()));
+  const ccsLow = new Set((L.calcCols || []).map((c) => String(c.name).toLowerCase()));
+  const baseNames = [];
+  for (const k of needL) {
+    if (ccsLow.has(k) || pcsLow.has(k)) continue;
+    const bn = baseLow.get(k); if (!bn) continue;          // unknown name → blank, same as everywhere
+    if (!pinGet(L, bn)) return null;
+    baseNames.push(bn);
+  }
+  const baseLen = h.columns.length, paintLen = (L.paintCols || []).length;
+  let calcChunkFns = null, weightChunk = null;
+  try {
+    calcChunkFns = calcOrder(L).filter((it) => needL.has(String(it.c.name).toLowerCase()))
+      .map((it) => ({ slot: baseLen + paintLen + it.idx, fn: compileChunk(it.c.expr, censusSchema, { decimal: '.' }) }));
+    if (weightAst) weightChunk = compileChunk(st.weight, censusSchema, { decimal: '.' });
+  } catch { return null; }
+  const total = attrRowCountOf(L) || 0; if (!total) return null;
+  const TD = tdigest();
+  const mkAcc = () => st.cols.map(() => ({ n: 0, sw: 0, swx: 0, swx2: 0, min: Infinity, max: -Infinity, td: TD.create() }));
+  const groups = new Map();
+  let overflow = false;
+  const scr = {};
+  for (let at = 0; at < total; at += (1 << 18)) {
+    const n = Math.min(1 << 18, total - at);
+    const byName = {};
+    baseNames.forEach((bn, ci) => { byName[bn] = pinWindow(pinGet(L, bn), at, n, scr[ci] || (scr[ci] = [])); });
+    const ccols = censusChunkCols(L, h, byName, at, n, needL, calcChunkFns);
+    const colArrs = colSlots.map((sIdx) => ccols[sIdx]);
+    if (colArrs.some((a) => !a)) return null;              // an evicted matcol mid-scan → the row path re-faults it
+    const gArr = gbSlot >= 0 ? ccols[gbSlot] : null;
+    if (gbSlot >= 0 && !gArr) return null;
+    const wArr = weightChunk ? weightChunk(ccols, n).buf : null;
+    for (let i = 0; i < n; i++) {
+      const r = at + i;
+      if (mask && !(r < mask.length && mask[r])) continue;
+      let g = '';
+      if (gArr) { const gv = gArr[i]; g = gv == null || gv === '' ? '—' : String(gv); }
+      let A = groups.get(g);
+      if (!A) { if (groups.size >= 256) { overflow = true; continue; } A = mkAcc(); groups.set(g, A); }
+      const w = wArr ? (+wArr[i] || 0) : 1;
+      if (!(w > 0)) continue;
+      for (let s = 0; s < colArrs.length; s++) {
+        const x = +colArrs[s][i];
+        if (!Number.isFinite(x)) continue;
+        const a = A[s];
+        a.n++; a.sw += w; a.swx += w * x; a.swx2 += w * x * x;
+        if (x < a.min) a.min = x; if (x > a.max) a.max = x;
+        TD.push(a.td, x);
+      }
+    }
+  }
+  const rows = [];
+  for (const g of [...groups.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
+    const A = groups.get(g);
+    for (let s = 0; s < st.cols.length; s++) {
+      const a = A[s]; if (!a.n) continue;
+      const mean = a.swx / a.sw, vr = Math.max(0, a.swx2 / a.sw - mean * mean);
+      const td = TD.result(a.td), q = (p) => quantileFromCentroids(td.centroids, td.count, p);
+      rows.push({ group: g, col: st.cols[s], n: a.n, mean, std: Math.sqrt(vr), min: a.min, max: a.max, q25: q(0.25), q50: q(0.5), q75: q(0.75) });
+    }
+  }
+  window.__statsFast = (window.__statsFast || 0) + 1;      // test observability (smoke2 §37 asserts non-vacuity)
+  return { rows, groupBy: st.groupBy, weighted: !!weightChunk, overflow };
+}
 function openStats(L, ropts) {
   if (!L || !layerTableHeader(L)) { $('#meta').textContent = 'stats: needs a table-backed layer'; return; }
   const ex = _statsWins.get(L.id); if (ex) { if (!ropts) { ex.win.el.style.zIndex = ++_fwinZ; return; } ex.win.close(); }
@@ -5176,6 +5260,10 @@ function openStats(L, ropts) {
     if (st.groupBy) { try { groupFn = compileValue(st.groupBy, schema, { decimal: '.' }); } catch { throw new Error(`group by "${st.groupBy}": invalid`); } }
     if (st.weight && st.weight.trim()) { try { weightFn = compileValue(st.weight, schema, { decimal: '.' }); } catch { throw new Error(`weight "${st.weight}": invalid`); } }
     const mask = scopeMask(st, L);
+    // materialized inputs must be resident for BOTH paths (evicted → blanks otherwise)
+    await ensureStoredValues(L, new Set([...st.cols, st.groupBy, st.weight].filter(Boolean).map((x) => String(x).toLowerCase())));
+    const fast = scanStatsPinned(L, st, mask);             // pinned columns → the tier-3 window path
+    if (fast) return fast;
     const TD = tdigest();
     const mkAcc = () => colFns.map(() => ({ n: 0, sw: 0, swx: 0, swx2: 0, min: Infinity, max: -Infinity, td: TD.create() }));
     const groups = new Map();
