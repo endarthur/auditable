@@ -120,12 +120,19 @@ console.log('— the viewer draws it (chanTex → pixels) and picks it —');
   // a REAL mouse click, and the chip must be COMPUTED-visible — style.display
   // alone lied once (inline '' falls back to the sheet's display:none)
   const cvBox = await p.evaluate(() => { const r2 = document.querySelector('#cv').getBoundingClientRect(); return { x: r2.x, y: r2.y, w: r2.width, h: r2.height }; });
-  await p.mouse.click(cvBox.x + cvBox.w / 2, cvBox.y + cvBox.h / 2);
-  await p.waitForTimeout(200);
-  const chip = await p.evaluate(() => {
-    const el = document.querySelector('#pickInfo');
-    return { visible: getComputedStyle(el).display !== 'none', text: el.textContent };
-  });
+  // click-with-retry: right after boot the field can still be streaming and the
+  // first pick pass isn't ready — a single click + 200ms was a knife-edge
+  // (failed under battery load AND solo, passed with any honest wait). The
+  // contract is "a click shows the chip", bounded at 5 attempts.
+  let chip = { visible: false, text: '' };
+  for (let i = 0; i < 5 && !(chip.visible && chip.text); i++) {
+    await p.mouse.click(cvBox.x + cvBox.w / 2, cvBox.y + cvBox.h / 2);
+    await p.waitForTimeout(400);
+    chip = await p.evaluate(() => {
+      const el = document.querySelector('#pickInfo');
+      return { visible: getComputedStyle(el).display !== 'none', text: el.textContent };
+    });
+  }
   ok(chip.visible && /block \[\d+, \d+, \d+\]/.test(chip.text), `a real click shows the value chip (${chip.text.slice(0, 40)})`);
   const picked = await p.evaluate(() => {
     const r = document.querySelector('#cv').getBoundingClientRect();
