@@ -425,3 +425,26 @@ export function attrRowCountOf(L, loc) {
 // paint / filter / export / join call sites want, in place of hand-rolled
 // kind tests.
 export function hasRecords(L, loc) { return attrRowCountOf(L, loc) > 0; }
+// one representative row for TYPE sniffing — dispatched per source (Parquet
+// goes through fetchLayerRow, NOT the delimited reader)
+export async function sampleRow(L) {
+  const d = L.docs || {};
+  try {
+    if (d.dhDoc) return d.dhDoc.fetchRecord(0);
+    if (d.blockDoc && d.blockDoc.header.dm) return await fetchDmRecord(d.blockDoc.blob, d.blockDoc.header.dm, 0);
+    if (d.blockDoc && d.blockDoc.parquet) return await fetchLayerRow(L, 0);   // NOT the delimited reader
+    if (d.blockDoc) return await fetchCsvRecord(0, d.blockDoc);
+  } catch { /* no sample — type defaults */ }
+  return null;
+}
+// re-apply a layer's persisted column-type overrides onto its (rebuilt) header
+export function applyColTypes(L) {
+  const h = layerTableHeader(L); if (!h || !L.colTypes) return;
+  for (const [name, ty] of Object.entries(L.colTypes)) {
+    const i = h.columns.indexOf(name); if (i < 0) continue;
+    const at = (h.numericColumns || (h.numericColumns = [])).findIndex((c) => c.i === i);
+    if (ty === 'number' && at < 0) h.numericColumns.push({ i, name });
+    if (ty === 'string' && at >= 0) h.numericColumns.splice(at, 1);
+  }
+  h.numericColumns.sort((a, b) => a.i - b.i);
+}
