@@ -39,9 +39,18 @@ export function matColCodes(fvalues, min, max) {
   for (let i = 0; i < fvalues.length; i++) { const v = fvalues[i]; codes[i] = Number.isFinite(v) ? 1 + Math.max(0, Math.min(254, Math.round(254 * (v - min) / span))) : 0; }
   return codes;
 }
+// golden-angle hues, same family as the category palette — the default color
+// for a rule / a restored category without one
+export function ruleDefaultColor(i) {
+  const h = (i * 137.508) % 360, s = 0.62, v = 0.86;
+  const f = (n2) => { const k = (n2 + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+  const hx = (x) => Math.round(x * 255).toString(16).padStart(2, '0');
+  return '#' + hx(f(5)) + hx(f(3)) + hx(f(1));
+}
 // the app's UI reaction to a changed column set (color-by options track it)
 let _onColumnsChanged = () => {};
 export function setColumnsChangedHook(fn) { _onColumnsChanged = fn; }
+export const columnsChanged = (L) => _onColumnsChanged(L);   // for sibling modules (element-store)
 // attach (or replace) a materialized column: fvalues (truth) + derived paint codes
 export function matColSet(L, name, fvalues, meta = {}) {
   let mn = Infinity, mx = -Infinity, nn = 0;

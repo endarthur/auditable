@@ -893,7 +893,8 @@ import { SURFER_BLANK, writeSurferGrd, readSurferGrd, readEsriAsc, writeEsriAsc 
 import { S, layerById, activeLayer, activeDocs } from './src/state.js';   // shared mutable app state (S.layers, S.project, …) + the layer accessors
 import { blockCaps, layerHeaderOf, layerBlob, layerTableHeader, colIsNumeric, blockSchema, schemaExt, calcOrder, calcFns, extendRow, layerRows, layerRecords, docPositionStream, reReadMesh, openLfmMesh, meshVertexData, meshVertexHeader, fetchCsvRecord, fetchLayerRow, attrColumnsOf, primaryLocationOf, locationsOf, attrRowCountOf, hasRecords } from './src/records.js';   // record identity + doc-kind dispatch (the ladders live there now)
 import { alignAxis, coverGeometry, buildEmptyGrid, buildEmptyBlockCsv, rasterizeMeshToGrid, markGridExterior, fillGridNearest, fillGridTrend, applyGridExtend, surfaceFromGrid, gridAxesOf } from './src/grid-ops.js';   // the pure grid kernel (cover/rasterize/fill/sample)
-import { PAINT_BLANK, paintRecount, matColSourceHash, matColLooseId, matColList, isStoredCat, storedCols, matColGet, matColCodes, matColSet, matColEncode, matColDecodeStr, matColDecode, pinBudgetBytes, setPinBudget, pinStats, pinTrim, pinPutMatcol, pinTouchMatcol, pinPut, pinGet, pinEvictLayer, pinWindow, ensureStoredValues, setColumnsChangedHook, setSidecarReader } from './src/columns.js';   // derived-column storage: matcols + the budgeted pin cache
+import { PAINT_BLANK, paintRecount, matColSourceHash, matColLooseId, matColList, isStoredCat, storedCols, matColGet, matColCodes, matColSet, matColEncode, matColDecodeStr, matColDecode, pinBudgetBytes, setPinBudget, pinStats, pinTrim, pinPutMatcol, pinTouchMatcol, pinPut, pinGet, pinEvictLayer, pinWindow, ensureStoredValues, setColumnsChangedHook, ruleDefaultColor } from './src/columns.js';   // derived-column storage: matcols + the budgeted pin cache
+import { _idb, readSidecarCol, persistElement, loadElement, matColDelete } from './src/element-store.js';   // where columns/manifests persist (project dir / IDB); self-registers the sidecar reader
 import { numericColsOf, blockVolumeOf, volumeContextOf, volumeAt, computeGT, computeSwath, extractSamples, autoDeclusterSizes, computeSampleSwath } from './src/analysis.js';   // the pure compute behind GT / swath / validation
 import { fmtSize, layerBytes, layerFiles, basename, joinPath, kindDir, relPathFor, resolveFileHandle, removeFileAt, layerRelpath, resolveDhFile, dhSetName } from './src/paths.js';   // project folder layout + path resolution
 import { elementGeometry, layerColumnsOps, buildElementManifest, dhElementName, peekCollarCols, buildDhSetManifest, descFromElement, buildGridElementManifest, elementHydrate } from './src/manifest.js';   // element-manifest builders + hydrate (persistence stays here)
@@ -904,7 +905,6 @@ const cv = $('#cv');
 const renderer = createRenderer(cv);
 S.renderer = renderer;                                     // modules (records.js) read it off S
 setColumnsChangedHook((L) => addPaintColorOptions(L));     // columns.js → the color-by select tracks the column set
-setSidecarReader((L, name) => readSidecarCol(L, name));    // columns.js residency ← the app's project-FS/IDB reader
 const edl = createEdl(renderer.gl);
 const cam = createOrbitCamera();
 let dirty = true, lastDrawn = 0, frame = null;
@@ -9135,25 +9135,7 @@ for (const ev of ['scroll', 'keyup', 'click', 'input']) $('#filter').addEventLis
 // handle persists (reopening re-grants permission via the browser — no silent
 // re-read); without one (drag / <input> fallback) we keep the name and re-pick.
 // Transparent (shown on the empty state), clearable, disableable (File menu).
-const _idb = (() => {
-  let db;
-  const open = () => (db ||= new Promise((res, rej) => {
-    const r = indexedDB.open('micro', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('kv');
-    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
-  }));
-  const tx = async (mode, fn) => {
-    const d = await open();
-    return new Promise((res, rej) => {
-      const t = d.transaction('kv', mode), req = fn(t.objectStore('kv'));
-      t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
-    });
-  };
-  return {
-    async get(k) { try { return await tx('readonly', (st) => st.get(k)); } catch { return undefined; } },
-    async set(k, v) { try { await tx('readwrite', (st) => st.put(v, k)); } catch { /* best-effort */ } },
-  };
-})();
+// (_idb — the IndexedDB kv — lives in src/element-store.js)
 const _fileHandles = new WeakMap();                        // File → FileSystemFileHandle (picker/recents/project opens)
 const RECENTS_KEY = '__recents__', RECENTS_MAX = 12;
 let _recents = [];
@@ -14031,12 +14013,7 @@ function addPaintColorOptions(L) {
   }
   for (const o of [...sel.options]) if (o.value.startsWith('calc:') && !(L.calcCols || []).some((c) => c.ty !== 'string' && 'calc:' + c.name === o.value)) o.remove();
 }
-function ruleDefaultColor(i) {                             // golden-angle hues, same family as the category palette
-  const h = (i * 137.508) % 360, s = 0.62, v = 0.86;
-  const f = (n2) => { const k = (n2 + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
-  const hx = (x) => Math.round(x * 255).toString(16).padStart(2, '0');
-  return '#' + hx(f(5)) + hx(f(3)) + hx(f(1));
-}
+// (ruleDefaultColor lives in src/columns.js)
 function applyRulePalette(L, force) {
   if (!force) return stageGate(L, () => applyRulePalette(L, true));
   const rules = rulesOf(L);
@@ -14392,87 +14369,9 @@ async function broadcastCollarCol(L, colName) {
 // that lets element.json REPLACE .holes.json; returns null for anything else)
 // (descFromElement / buildGridElementManifest / elementHydrate live in src/manifest.js)
 // (matColEncode / matColDecodeStr / matColDecode live in src/columns.js)
-async function persistElement(L) {
-  const cols = storedCols(L);
-  const elem = buildElementManifest(L) || buildGridElementManifest(L);
-  if (!elem) return 'none';
-  if (L.storage === 'project' && S.project && S.project.dir) {
-    const rel = await layerRelpath(L, S.project.dir);
-    for (const c of cols) {
-      if (c.mat && !c.fvalues) continue;                   // evicted: the sidecar file already holds these values
-      const fh = await resolveFileHandle(S.project.dir, `${rel}.cols/${c.name}.parquet`, { create: true }); const w = await fh.createWritable(); await w.write(matColEncode(c)); await w.close();
-    }
-    if (!L.dh) { const mh = await resolveFileHandle(S.project.dir, `${rel}.element.json`, { create: true }); const w = await mh.createWritable(); await w.write(JSON.stringify(elem, null, 2)); await w.close(); }   // dh members ride the SET manifest
-    return 'project';
-  }
-  try { const id = matColLooseId(L); for (const c of cols) { if (c.mat && !c.fvalues) continue; await _idb.set(`matcol:${id}:col:${c.name}`, matColEncode(c).buffer); } await _idb.set(`matcol:${id}:element`, elem); return 'idb'; }
-  catch { return 'memory'; }
-}
-async function loadElement(L, dir) {
-  let elem = null, man = null, get = null;
-  if (dir && L.storage === 'project') {
-    const rel = await layerRelpath(L, dir);
-    get = async (nm) => { try { return await (await (await resolveFileHandle(dir, `${rel}.cols/${nm}.parquet`)).getFile()).arrayBuffer(); } catch { return await (await (await resolveFileHandle(dir, `${rel}.cols/${nm}.f32`)).getFile()).arrayBuffer(); } };   // legacy .f32 fallback
-    const manRel = L.dh && L._setPath && /\.element\.json$/i.test(L._setPath) ? L._setPath : `${rel}.element.json`;   // dh members share the SET manifest
-    try { elem = JSON.parse(await (await (await resolveFileHandle(dir, manRel)).getFile()).text()); }
-    catch { try { man = JSON.parse(await (await (await resolveFileHandle(dir, `${rel}.cols/manifest.json`)).getFile()).text()); } catch { get = null; } }   // legacy v2
-  }
-  if (!elem && !man) {
-    try {
-      const id = matColLooseId(L);
-      elem = await _idb.get(`matcol:${id}:element`);
-      if (!elem) man = await _idb.get(`matcol:${id}:manifest`);
-      if (elem || man) get = async (nm) => await _idb.get(`matcol:${id}:col:${nm}`);
-    } catch { /* none */ }
-  }
-  const cur = matColSourceHash(L);
-  let mats = [];
-  if (elem && elem.v === 1) {
-    const locs = elem.locations || {};
-    let lk = Object.keys(locs)[0];
-    if (L.dh) { const me = basename(L.name); lk = Object.keys(locs).find((k) => locs[k].source && locs[k].source.file === me) || lk; }
-    mats = elementHydrate(L, elem, lk);                    // derived ƒ restore even when materialized are stale
-    const hash = lk && locs[lk] && locs[lk].source && locs[lk].source.hash;
-    if (hash && hash !== cur) { if (mats.length) $('#meta').textContent = `${L.name}: materialized columns are stale (source changed) — re-run to refresh`; return 0; }
-  } else if (man && man.cols) {
-    if (man.sourceHash && man.sourceHash !== cur) { $('#meta').textContent = `${L.name}: materialized columns are stale (source changed) — re-run to refresh`; return 0; }
-    mats = man.cols;
-  }
-  if (!mats.length || !get) return 0;
-  let loaded = 0;
-  for (const cm of mats) {
-    try {
-      const buf = await get(cm.name); if (!buf) continue;
-      if (cm.type === 'category') {                        // stored category: string column → dict/codes, legend from the manifest
-        const vals = await matColDecodeStr(buf);
-        const dict = [''], colors = [PAINT_BLANK];
-        for (const [, v] of Object.entries(cm.categories || {}).sort((a, b2) => +a[0] - +b2[0])) { dict.push(v.name); colors.push(v.color || ruleDefaultColor(dict.length - 2)); }
-        const codeOf = new Map(dict.map((d, i2) => [d, i2]));
-        const codes = new Uint8Array(vals.length);
-        for (let i2 = 0; i2 < vals.length; i2++) {
-          const v = vals[i2]; if (v == null || v === '') continue;
-          let code = codeOf.get(v);
-          if (code == null) { if (dict.length >= 256) continue; code = dict.length; dict.push(v); colors.push(ruleDefaultColor(dict.length - 2)); codeOf.set(v, code); }
-          codes[i2] = code;
-        }
-        const col = { name: cm.name, dict, colors, blankColor: cm.blankColor || PAINT_BLANK, codes, lineage: cm.lineage };
-        paintRecount(col);
-        L.paintCols = ((L.paintCols || []).filter((c) => c.name !== cm.name)); L.paintCols.push(col);
-        L._colStats = null; L._calcFns = null;
-        if (L.id === S.activeId) addPaintColorOptions(L);
-      } else matColSet(L, cm.name, await matColDecode(buf), { lineage: cm.lineage });
-      loaded++;
-    } catch { /* skip a missing file */ }
-  }
-  return loaded;
-}
-async function matColDelete(L, name) {
-  L.paintCols = (L.paintCols || []).filter((c) => c.name !== name); L._colStats = null; L._calcFns = null; addPaintColorOptions(L);
-  try {
-    if (L.storage === 'project' && S.project && S.project.dir) { const rel = await layerRelpath(L, S.project.dir); try { await removeFileAt(S.project.dir, `${rel}.cols/${name}.parquet`); } catch { /* absent */ } try { await removeFileAt(S.project.dir, `${rel}.cols/${name}.f32`); } catch { /* absent */ } await persistElement(L); }
-    else { const id = matColLooseId(L); const e2 = buildElementManifest(L); if (e2) await _idb.set(`matcol:${id}:element`, e2); }
-  } catch { /* best-effort */ }
-}
+// (persistElement lives in src/element-store.js)
+// (loadElement lives in src/element-store.js)
+// (matColDelete lives in src/element-store.js)
 // freeze a computed calc column into a stored materialized column (same name):
 // evaluate its expression across every record → matColSet, drop the calc col. Bakes
 // an expensive expression, or keeps a derived column without carrying its inputs.
@@ -14573,15 +14472,7 @@ function expandedDeps(L, ast) {
 // (the PIN CACHE — pinBudgetBytes/setPinBudget/pinStats/pinTrim/pinPutMatcol/
 // pinTouchMatcol — lives in src/columns.js; readSidecarCol below is the injected
 // sidecar reader, see setSidecarReader at boot)
-async function readSidecarCol(L, name) {
-  try {
-    if (L.storage === 'project' && S.project && S.project.dir) {
-      const rel = await layerRelpath(L, S.project.dir);
-      return await (await (await resolveFileHandle(S.project.dir, `${rel}.cols/${name}.parquet`)).getFile()).arrayBuffer();
-    }
-    return await _idb.get(`matcol:${matColLooseId(L)}:col:${name}`);
-  } catch { return null; }
-}
+// (readSidecarCol lives in src/element-store.js — registered as columns.js's sidecar reader there)
 // (ensureStoredValues lives in src/columns.js)
 // (pinPut / pinGet / pinEvictLayer / pinWindow live in src/columns.js)
 // the shared TIER-3 sweep: evaluate the filter over PINNED columns in 256K
