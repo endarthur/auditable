@@ -786,7 +786,19 @@ chk(`recipes: hand-authored YAML lists (${rcp && rcp.menu}) + auto-runs (${rcp &
   // the demo must NOT eat the 7-slot element-layer budget: its context surfaces
   // are meshes, so a visitor can still open their own data afterwards
   await pv.click('#sampleDemo');
-  await pv.waitForFunction(() => window._micro.layers().length > 5, null, { timeout: 60000 });
+  // 180s: the demo assembles 7 layers (desurvey + terrain + meshes) and the CI
+  // runner is 2-core software-GL — locally this takes seconds. On timeout,
+  // report WHERE it stalled (#meta narrates each demo stage) instead of a bare
+  // TimeoutError.
+  try {
+    await pv.waitForFunction(() => window._micro.layers().length > 5, null, { timeout: 180000 });
+  } catch (e) {
+    const state = await pv.evaluate(() => ({
+      layers: window._micro.layers().length,
+      meta: document.querySelector('#meta')?.textContent || '',
+    }));
+    throw new Error(`demo assembly stalled: layers=${state.layers}, meta="${state.meta}" — ${e.message}`);
+  }
   await pv.waitForTimeout(1500);
   // The demo used to spend six of seven PICKABLE-layer slots, because the layer id
   // was packed into the pick record (3 bits → 7 layers). It isn't any more, so
