@@ -2,6 +2,7 @@
 /// title: gsjs — multiple-pass estimation (variance-calibrated search)
 /// module: @gcu/gsjs ext/gsjs/index.js
 /// module: @gcu/plot ext/plot/index.js
+/// module: @atra/gslib ext/atra/lib/gslib.js
 /// settings: {"theme":"dark","fontSize":13,"width":"940","runOnLoad":"yes"}
 
 /// md
@@ -19,11 +20,12 @@ The calibration target for every pass:
 
 **Var(Z\*) / Var(Z₍NN₎) ≈ f**,  where  **f = (σ² − γ̄(V,V)) / σ²**
 
-γ̄(V,V) is the average variogram inside one SMU block V — so *f* is the fraction of the sample-scale
+γ̄(V,V) is the average variogram inside one SMU block V (20×20 m here) — so *f* is the fraction of the sample-scale
 variance a block of that size should keep. Each pass is tuned (search radius for *coverage*, min/max
 samples for *variance*) until its ratio lands inside the *f* window.
 
-This notebook builds the whole workflow on **@gcu/gsjs** with a synthetic deposit whose truth we know —
+This notebook builds the whole workflow on **@gcu/gsjs**, over a deposit simulated *unconditionally* by
+GSLIB's `sgsim` (Wasm) from a **known variogram** — truth with a pedigree —
 so the final grade–tonnage verdict is judged against *reality*, the way the Misima case study judged
 against blast-holes. It follows the lesson by Harding & Deutsch:
 [geostatisticslessons.com/lessons/multipass](https://geostatisticslessons.com/lessons/multipass).
@@ -31,34 +33,39 @@ Every parameter below is a live control — retune the passes and watch the cali
 
 /// code collapsed
 // %collapsed
-// ── a synthetic deposit, drilled at three spacings ──────────────────────────
-// The truth: a broad structured field with an enriched core — which is exactly
-// where the (synthetic) geologists spent the infill budget. A short-wavelength
-// term gives the variogram a real nugget at drill spacing but averages away
-// inside a block, so support matters, as it does in life.
-function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
-const rng = mulberry32(41);
-const EXT = 800, B = 10, NX = 80, NY = 80;                 // 800×800 m, 10×10 m SMU blocks
-const CX = 330, CY = 380;                                  // the enriched core
-// short-scale structure as a random-phase cosine bank (turning-bands flavour):
-// aperiodic, spatially CORRELATED at 15-45 m, deterministic from the seed —
-// dense drilling partially resolves it, sparse drilling cannot. That contrast
-// is the whole reason multiple passes exist.
-const bank = Array.from({ length: 14 }, () => {
-  const th = rng()*Math.PI*2, wl = 15 + rng()*30, ph = rng()*Math.PI*2;
-  return { kx: Math.cos(th)*2*Math.PI/wl, ky: Math.sin(th)*2*Math.PI/wl, ph };
-});
-const bankNorm = 0.40/Math.sqrt(bank.length/2);
-function trueGrade(x, y) {
-  const hot = Math.exp(-(((x-CX)**2 + (y-CY)**2)) / (2*170*170));
-  const struct = Math.sin(x/120)*Math.cos(y/150) + 0.7*Math.sin((x + 0.6*y)/190);
-  let micro = 0;
-  for (const w of bank) micro += Math.cos(w.kx*x + w.ky*y + w.ph);
-  return Math.max(0.02, 1.6 + 1.1*struct + 3.2*hot + bankNorm*micro);
-}
-// three drilling zones by distance from the core: 25 m infill, 50 m, 100 m
+// ── the deposit: one unconditional SGSIM realization ────────────────────────
+// The world is BUILT from a known variogram: GSLIB's sgsim (compiled to Wasm,
+// via @atra/gslib) simulates a Gaussian field on a fine 5 m point grid, and
+// grades are an affine map of it — which preserves the variogram exactly. So
+// everything the workflow "discovers" below (the model, γ̄(V,V), f) can be
+// checked against the truth, and the experimental variogram has a real sill.
+const { sgsim } = await load("@atra/gslib");
+const EXT = 800, B = 20, NX = 40, NY = 40;                 // 800×800 m, 20×20 m SMU blocks
+const FN = 160, FS = 5;                                    // point support: 160×160 nodes at 5 m
+const VG_TRUE = { nugget: 0.45, structures: [
+  { type: "spherical", contribution: 0.15, range: 12 },   // dies inside a 20 m block — sub-SMU variability
+  { type: "spherical", contribution: 0.40, range: 300 },  // the estimable signal, well inside every drill spacing
+] };
+const engine = sgsim({ grid: { nx: FN, ny: FN, xsiz: FS, ysiz: FS }, variogram: VG_TRUE,
+  search: { radius: 240, ndmax: 12, nodmax: 12 } });
+invalidation.then(() => engine.dispose());
+const gauss = engine.run(69069);                            // ONE unconditional realization, unit variance
+const G_MEAN = 2.5, G_SD = 0.9;                             // grades = affine map of the Gaussian field
+const gradeAt = (x, y) => {
+  const ix = Math.min(FN-1, Math.max(0, Math.floor(x/FS))), iy = Math.min(FN-1, Math.max(0, Math.floor(y/FS)));
+  return Math.max(0.02, G_MEAN + G_SD*gauss[iy*FN + ix]);
+};
+// a planned concentric campaign: densest drilling over the project core.
+// (grade-CHASING infill would also work, but it pushes the experimental
+// variogram above the declustered sill — the dense, preferentially high-grade
+// core feeds (Δmean)² into every between-zone pair. Try it: replace the
+// centre with the argmax of a neighbourhood grade average.)
+const CX = 400, CY = 400;
+// three drilling zones by distance from that core: 25 m infill, 50 m, 100 m
 const zoneOf = (x, y) => { const r = Math.hypot(x-CX, y-CY); return r < 170 ? 1 : r < 330 ? 2 : 3; };
 const SPACING = { 1: 25, 2: 50, 3: 100 };
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const rng = mulberry32(41);
 const data = [];
 for (const z of [1, 2, 3]) {
   const s = SPACING[z];
@@ -66,15 +73,16 @@ for (const z of [1, 2, 3]) {
     if (zoneOf(x, y) !== z) continue;
     const jx = x + (rng()-0.5)*0.4*s, jy = y + (rng()-0.5)*0.4*s;
     if (jx < 2 || jy < 2 || jx > EXT-2 || jy > EXT-2) continue;
-    data.push([jx, jy, 0, trueGrade(jx, jy)]);
+    data.push([jx, jy, 0, gradeAt(jx, jy)]);
   }
 }
-// block truth: 4×4 discretized average per SMU — this notebook's "blast-hole reference"
+// block truth: the mean of the 4×4 point nodes inside each 20 m block — the
+// change of support is REAL averaging of the same point field the holes sample
 const truthBlocks = new Float64Array(NX*NY);
 const blockZone = new Uint8Array(NX*NY);
 for (let iy = 0, b = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++, b++) {
   let s2 = 0;
-  for (let u = 0; u < 4; u++) for (let v = 0; v < 4; v++) s2 += trueGrade(ix*B + (u+0.5)*B/4, iy*B + (v+0.5)*B/4);
+  for (let u = 0; u < 4; u++) for (let v = 0; v < 4; v++) s2 += gradeAt(ix*B + (u+0.5)*FS, iy*B + (v+0.5)*FS);
   truthBlocks[b] = s2/16;
   blockZone[b] = zoneOf(ix*B + B/2, iy*B + B/2);
 }
@@ -115,10 +123,12 @@ ui.display(`${data.length} samples over ${NX}×${NY} blocks of ${B}×${B} m — 
 /// md
 ## the variogram and the change of support
 
-One omnidirectional experimental variogram, one modelled spherical structure — enough for a clean 2D
-demonstration (real 3D work models directions; see the *variography* example). The declustered variance
-σ² sets the sill, and the average variogram inside one 10×10 m block gives γ̄(V,V) — together they fix the
-change-of-support factor **f**, and with it the calibration window every pass must land in.
+Because the deposit is a simulation, the variogram model is *known* — the experimental points computed
+from the drillhole samples should land on it, and here they do (in real work, this plot is where you fit).
+The declustered variance σ² and the average variogram inside one 20×20 m block, γ̄(V,V), fix the
+change-of-support factor **f** — and with it the calibration window every pass must land in. The dots
+wander around the model at long lags — one finite realization holds its own version of the sill
+(ergodic fluctuation), which is why the fit anchors to the *declustered* σ² of the data actually drilled.
 
 /// code
 const gsjs = await load("@gcu/gsjs");
@@ -133,9 +143,16 @@ const sigma2 = sv/sw;
 
 // experimental (omnidirectional) + a modelled spherical fit
 const expv = gsjs.experimental(data, { lags: { size: 15, n: 18 }, directions: [{ name: "omni", azimuth: 0, atol: 90, dtol: 90 }] });
-const NUG = 0.13*sigma2, RANGE = 190, SILLC = sigma2 - NUG;
-const model = { nugget: NUG, structures: [{ type: "spherical", range: RANGE, contribution: SILLC }] };
-const gam = (h) => h < 1e-9 ? 0 : NUG + SILLC*(h < RANGE ? 1.5*h/RANGE - 0.5*(h/RANGE)**3 : 1);
+// the model SHAPE is known — the world was simulated from it (nugget fraction,
+// type, range survive the affine map). The SILL is fitted to the realized σ²:
+// one finite realization holds less variance than the model prescribes for an
+// infinite domain (ergodic fluctuation), and the fit follows the data, as it
+// would in real work.
+const NUG = VG_TRUE.nugget*sigma2;
+const STRUCTS = VG_TRUE.structures.map(st => ({ type: st.type, range: st.range, contribution: st.contribution*sigma2 }));
+const model = { nugget: NUG, structures: STRUCTS };
+const sph = (h, a) => h < a ? 1.5*h/a - 0.5*(h/a)**3 : 1;
+const gam = (h) => h < 1e-9 ? 0 : NUG + STRUCTS.reduce((acc, st) => acc + st.contribution*sph(h, st.range), 0);
 
 // γ̄(V,V): average model variogram between 8×8 discretization points of one SMU
 const ND = 8, pts = [];
@@ -144,13 +161,16 @@ let gbar = 0;
 for (const p of pts) for (const q of pts) gbar += gam(Math.hypot(p[0]-q[0], p[1]-q[1]));
 gbar /= pts.length*pts.length;
 const f = (sigma2 - gbar)/sigma2;
-const fWin = [f*0.925, f*1.075];                            // "within 5–10 % of f" — ±7.5 % here
+const fWin = [f*0.90, f*1.10];                              // "within 5–10 % of f" — the 10 % bound here
 
 const { fig, ax } = plt.subplots(1, 1, { figsize: [6.2, 3.2] });
-const lags = expv.directions[0].lags.filter(l => l.npair > 0 && l.h > 0);
+// npair>=30 drops noise bins; h>15 drops the coincident-pair bin (jittered
+// boundary holes < 5 m apart read the SAME fine node -> a spurious gamma=0)
+const lags = expv.directions[0].lags.filter(l => l.npair >= 30 && l.h > 15);
+window.__mpLags = expv.directions[0].lags;                  // probe surface (smoke assertions)
 ax.scatter(lags.map(l => l.h), lags.map(l => l.gamma), { s: 14, label: "experimental (omni)" });
 const hs = Array.from({length: 60}, (_, i) => i*4.5);
-ax.plot(hs, hs.map(gam), { label: `spherical · c0 ${NUG.toFixed(2)} · range ${RANGE}` });
+ax.plot(hs, hs.map(gam), { label: `the TRUE model · c0 ${NUG.toFixed(2)} + sph(${STRUCTS[0].range}) + sph(${STRUCTS[1].range})` });
 ax.plot([0, 270], [sigma2, sigma2], { linestyle: "--", label: "σ² (declustered)" });
 ax.set_xlabel("lag (m)"); ax.set_ylabel("γ(h)"); ax.legend();
 ui.display(fig.show());
@@ -194,16 +214,20 @@ it (equivalent to hard-coding earlier passes and estimating only what remains). 
 - **min samples** stays at ~75 % of max, so a pass reads *one* data spacing instead of blending two;
 - too smooth (ratio below the window) → *lower* the sample counts; too noisy → *raise* them.
 
-Move the sliders and read the table: the defaults land each pass inside the *f* window — then break the
-calibration on purpose and watch the verdicts flip.
+Move the sliders and read the table: the defaults land all three passes inside the *f* window — note
+how few samples that takes (3–4, 3–4, 2–3): in a deposit this noisy, keeping block-scale variance
+means keeping the neighbourhoods small. Then break the calibration on purpose and watch the verdicts
+flip: push a pass's samples up and it over-smooths; push pass 3's radius out with samples at the
+floor and it can refuse to calibrate at all — the "spacing can't support this block size" verdict,
+the lesson's cue to downgrade confidence rather than force it.
 
 /// code
-const r1 = ui.slider("pass 1 · radius (m)", 60, { min: 25, max: 120, step: 5 });
-const m1 = ui.slider("pass 1 · max samples", 8, { min: 4, max: 32, step: 1 });
-const r2 = ui.slider("pass 2 · radius (m)", 135, { min: 50, max: 200, step: 5 });
-const m2 = ui.slider("pass 2 · max samples", 20, { min: 4, max: 32, step: 1 });
+const r1 = ui.slider("pass 1 · radius (m)", 30, { min: 25, max: 120, step: 5 });
+const m1 = ui.slider("pass 1 · max samples", 4, { min: 3, max: 32, step: 1 });
+const r2 = ui.slider("pass 2 · radius (m)", 55, { min: 50, max: 200, step: 5 });
+const m2 = ui.slider("pass 2 · max samples", 4, { min: 3, max: 32, step: 1 });
 const r3 = ui.slider("pass 3 · radius (m)", 190, { min: 100, max: 350, step: 10 });
-const m3 = ui.slider("pass 3 · max samples", 7, { min: 3, max: 32, step: 1 });
+const m3 = ui.slider("pass 3 · max samples", 3, { min: 3, max: 32, step: 1 });
 
 /// code
 // ── the three calibrated passes + the two straw men ─────────────────────────
@@ -245,7 +269,10 @@ const rows = PASSES.map((p, i) => {
     pass: `${i+1} (≈${SPACING[i+1]} m)`, search: `${p.radius} m · ${p.ndmin}–${p.ndmax}`,
     "blocks caught": `${(100*caught.n/(NX*NY)).toFixed(1)}% (zone ≈${(100*zoneShare[i]).toFixed(0)}%)`,
     "Var(Z*)/Var(NN)": ratio.toFixed(3),
-    verdict: inWin ? "✓ in window" : ratio < fWin[0] ? "↓ too smooth — fewer samples" : "↑ too noisy — more samples",
+    verdict: inWin ? "✓ in window"
+      : ratio < fWin[0] ? (p.ndmax <= 3 ? "↓ below window at minimum samples — spacing can't support this block size"
+                                        : "↓ too smooth — fewer samples")
+      : "↑ too noisy — more samples",
   };
 });
 const un = [...mpePass].filter(p => p === 0).length;
@@ -327,15 +354,15 @@ const scoreAt = (est, status, cut) => {
   }
   return { t: 100*(ton - tTon)/tTon, g: 100*((met/ton)/(tMet/tTon) - 1) };
 };
-const LO = 1.4, HI = 3.2;                                  // below and above the mean grade
-const fmtPct = (v) => (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+const LO = 2.2, HI = 3.0;                                  // below and above the mean grade
+const fmtPct = (v) => Number.isFinite(v) ? (v >= 0 ? "+" : "") + v.toFixed(1) + "%" : "— (no blocks selected)";
 ui.table([["SPLS", splsEst, splsT.status], ["NN", nnEst, okAll], ["MPE", mpeEst, mpeStatus]].map(([name, est, st2]) => {
   const lo = scoreAt(est, st2, LO), hi = scoreAt(est, st2, HI);
   return { model: name,
     [`tonnes @ ${LO} (below mean)`]: fmtPct(lo.t), [`grade @ ${LO}`]: fmtPct(lo.g),
     [`tonnes @ ${HI} (above mean)`]: fmtPct(hi.t), [`grade @ ${HI}`]: fmtPct(hi.g) };
 }));
-ui.display(`error vs truth — over-smoothing (SPLS) inflates tonnage below the mean; no smoothing (NN) over-selects above it; the calibrated MPE stays close on both sides`);
+ui.display(`error vs truth — over-smoothing (SPLS) inflates tonnage below the mean; no smoothing (NN) over-selects above it; the calibrated MPE stays closest to the truth on both sides`);
 
 /// md
 ## pitfalls the lesson flags (and this notebook inherits)
@@ -346,8 +373,9 @@ ui.display(`error vs truth — over-smoothing (SPLS) inflates tonnage below the 
   ndmin ≈ 0.75·ndmax keeps each pass reading one spacing.
 - **Drillholes are strings.** In 3D, cap samples per hole (2–3) and use octant limits, or the search
   reads one hole's string as a neighbourhood — `search.perHoleMax` and `search.sectors` in gsjs.
-- **Sparse domains may not calibrate.** With too little data the ratio can refuse to enter the window —
-  prefer coverage and stability over forcing it (the lesson's Domain 4).
+- **Sparse domains may not calibrate.** With too little data the ratio can refuse to enter the window
+  even at minimum samples — try pass 3 with a 300 m radius. Prefer coverage and stability over forcing
+  it (the lesson's Domain 4), and let the refusal downgrade the classification instead.
 - **Clustered drilling is greedy.** Infill chases grade, so dense zones are also high-variance zones;
   the ratio is taken against NN precisely because NN implicitly declusters.
 
