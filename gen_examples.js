@@ -102,6 +102,7 @@ const categories = {
     'example_gsjs_domains.txt',
     'example_gsjs_tour.txt',
     'example_gsjs_estimate.txt',
+    'example_gsjs_multipass.txt',
   ],
 
   // gis — spatial analysis: maps, raster, hydrology
