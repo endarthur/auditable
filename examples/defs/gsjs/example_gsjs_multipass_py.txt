@@ -367,7 +367,7 @@ print(f"window for every pass: {f_win[0]:.3f}–{f_win[1]:.3f} (f = {f:.3f}) · 
 ## what each model looks like
 
 Pass classification first — the calibrated searches should paint the drilling zones back (the lesson's
-Figure 3): pass 1 (bright) where the infill is, pass 3 in the sparse ground. Then the three estimates on
+Figure 3): pass 1 (amber) where the infill is, pass 3 (violet) in the sparse ground. Then the three estimates on
 one grade scale: SPLS visibly flattens the field; NN is a mosaic of sample polygons; MPE keeps the
 structure without the noise.
 
@@ -375,9 +375,11 @@ structure without the noise.
 mpe_show = [mpe_est[b] if mpe_pass[b] > 0 else -999 for b in range(NX * NY)]
 spls_show = [spls_est[b] if spls_t.status[b] == gsjs.STATUS.OK else -999 for b in range(NX * NY)]
 
+# a color LIST is a categorical cmap (matplotlib ListedColormap) — the zone
+# colours from the drilling map, so the passes visibly paint the campaign back
 figA, (axP, axM) = plt.subplots(1, 2, figsize=[820, 400])
-axP.imshow(mpe_pass, NX, NY, cmap="viridis", vmin=0, vmax=3)
-axP.set_title("pass classification — 1 core · 2 ring · 3 sparse")
+axP.imshow(mpe_pass, NX, NY, cmap=["#222222", ZCOL[1], ZCOL[2], ZCOL[3]], vmin=0, vmax=3)
+axP.set_title("pass classification — amber 1 · blue 2 · violet 3")
 axM.imshow(mpe_show, NX, NY, cmap="viridis", vmin=G_LO, vmax=G_HI, nodata=-999)
 axM.set_title("MPE estimate")
 display(figA.show())

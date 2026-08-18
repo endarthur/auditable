@@ -285,6 +285,12 @@ const _cmaps = {
 
 function getCmap(name) {
   if (typeof name === 'function') return name;
+  // an array of colors is a categorical map (matplotlib's ListedColormap):
+  // [0,1) splits into equal buckets, one color each
+  if (Array.isArray(name)) {
+    const n = name.length;
+    return (t) => name[Math.max(0, Math.min(n - 1, Math.floor(Math.max(0, Math.min(1, t)) * n)))];
+  }
   return _cmaps[name] || _cmaps.viridis;
 }
 

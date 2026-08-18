@@ -142,6 +142,14 @@ describe('Colormaps', () => {
     assert.equal(v(0.5), getCmap('viridis')(0.5));
   });
 
+  it('getCmap treats a color array as categorical (ListedColormap)', () => {
+    const c = getCmap(['#111111', '#222222', '#333333']);
+    assert.equal(c(0), '#111111');
+    assert.equal(c(0.5), '#222222');
+    assert.equal(c(1), '#333333');   // t=1 clamps into the last bucket
+    assert.equal(c(-1), '#111111');
+  });
+
   it('getCmap passes through functions', () => {
     const fn = (t) => `rgb(${t},0,0)`;
     assert.equal(getCmap(fn), fn);
