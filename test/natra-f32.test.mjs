@@ -115,14 +115,21 @@ test('matmul performance: 100×100 f32 vs f64 (sanity check that sgemm is faster
   // Warm up
   for (let i = 0; i < 3; i++) ctx.scope(s => { s.matmul(A_f32, B_f32); });
   for (let i = 0; i < 3; i++) ctx.scope(s => { s.matmul(A_f64, B_f64); });
-  const t0 = performance.now();
-  for (let i = 0; i < 30; i++) ctx.scope(s => { s.matmul(A_f32, B_f32); });
-  const t32 = performance.now() - t0;
-  const t1 = performance.now();
-  for (let i = 0; i < 30; i++) ctx.scope(s => { s.matmul(A_f64, B_f64); });
-  const t64 = performance.now() - t1;
+  // Best-of-trials: a single timed block loses to one scheduler hiccup on a
+  // shared CI runner; the MIN across interleaved trials is what the code can
+  // actually do, so noise spikes can't flip the comparison.
+  const trial = (Am, Bm) => {
+    const t = performance.now();
+    for (let i = 0; i < 10; i++) ctx.scope(s => { s.matmul(Am, Bm); });
+    return performance.now() - t;
+  };
+  let t32 = Infinity, t64 = Infinity;
+  for (let k = 0; k < 5; k++) {
+    t32 = Math.min(t32, trial(A_f32, B_f32));
+    t64 = Math.min(t64, trial(A_f64, B_f64));
+  }
   // f32 should be roughly 2× faster than f64 at this size (4-lane vs 2-lane SIMD)
   // Allow some variance — just check f32 is meaningfully faster
-  console.log(`  100×100 matmul: f32=${(t32/30).toFixed(3)}ms, f64=${(t64/30).toFixed(3)}ms`);
+  console.log(`  100×100 matmul (best of 5×10): f32=${(t32/10).toFixed(3)}ms, f64=${(t64/10).toFixed(3)}ms`);
   assert.ok(t32 < t64 * 0.85, `expected f32 to be < 85% of f64 time, got f32=${t32}ms f64=${t64}ms`);
 });
