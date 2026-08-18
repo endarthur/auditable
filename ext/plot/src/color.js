@@ -1,67 +1,54 @@
-// Colormaps — polynomial approximation (same as stdlib.js)
+// Colormaps — perceptual maps interpolate anchor stops sampled from the
+// reference palettes (the retired polynomial fits went badly wrong at the
+// ends: viridis(1) came out green, coolwarm(1) white).
 
-function _poly(coeffs, t) {
-  let r = coeffs[coeffs.length - 1];
-  for (let i = coeffs.length - 2; i >= 0; i--) r = r * t + coeffs[i];
-  return r;
-}
-
-function _cmap(rC, gC, bC) {
+function _lerpCmap(stops) {
   return (t) => {
     t = Math.max(0, Math.min(1, t));
-    return `rgb(${Math.round(Math.max(0, Math.min(255, _poly(rC, t) * 255)))},${
-      Math.round(Math.max(0, Math.min(255, _poly(gC, t) * 255)))},${
-      Math.round(Math.max(0, Math.min(255, _poly(bC, t) * 255)))})`;
+    const x = t * (stops.length - 1);
+    const k = Math.min(stops.length - 2, Math.floor(x));
+    const f = x - k;
+    const c = [0, 1, 2].map((i) => Math.round(stops[k][i] + (stops[k + 1][i] - stops[k][i]) * f));
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
   };
 }
 
 // Direct-function colormaps for the easy ones — jet, gray, hot, cool
-// are well-defined by closed-form ramps. Polynomial fits used only
-// for perceptual maps (viridis/plasma/etc.) where the curve is
-// non-trivial. Approximate fits — visual fidelity is "close enough"
-// for notebook plots, not pixel-perfect against matplotlib.
+// are well-defined by closed-form ramps.
 function _rgb(r, g, b) {
   const cl = (v) => Math.max(0, Math.min(255, Math.round(v * 255)));
   return `rgb(${cl(r)},${cl(g)},${cl(b)})`;
 }
 
 const _cmaps = {
-  viridis: _cmap(
-    [0.267, 0.004, 5.294, -14.05, 8.5],
-    [0.004, 1.384, 0.098, -2.74, 2.23],
-    [0.329, 1.44, -5.11, 6.87, -3.57]
-  ),
-  coolwarm: _cmap(
-    [0.23, 2.82, -4.67, 3.54, -0.93],
-    [0.30, 1.26, -3.87, 6.49, -3.19],
-    [0.75, 0.53, -3.04, 5.56, -2.82]
-  ),
-  turbo: _cmap(
-    [0.19, 3.08, -3.92, 1.66],
-    [0.08, 3.54, -8.42, 5.79],
-    [0.58, -2.58, 7.52, -11.42, 6.88]
-  ),
-  // perceptual maps — single-color-family approximations
-  plasma: _cmap(
-    [0.05, 2.1, 0.9, -2.6, 1.5],
-    [0.03, 0.0, 1.2, 0.4, -0.6],
-    [0.53, -1.3, 0.6, 0.0, 0.0]
-  ),
-  inferno: _cmap(
-    [0.0, 0.4, 4.0, -4.0, 1.0],
-    [0.0, -0.6, 3.0, -1.5, 0.0],
-    [0.0, 1.0, -3.0, 4.0, -1.4]
-  ),
-  magma: _cmap(
-    [0.0, 0.4, 3.5, -3.5, 1.2],
-    [0.0, -0.3, 1.8, -0.5, 0.0],
-    [0.0, 1.6, -2.5, 1.0, 0.4]
-  ),
-  cividis: _cmap(
-    [0.0, 0.3, 2.5, -2.5, 1.2],
-    [0.13, 0.6, 1.5, -1.5, 0.5],
-    [0.32, 1.1, -2.5, 0.5, 0.7]
-  ),
+  viridis: _lerpCmap([
+    [68, 1, 84], [72, 40, 120], [62, 74, 137], [49, 104, 142], [33, 145, 140],
+    [53, 183, 121], [109, 205, 89], [180, 222, 44], [253, 231, 37],
+  ]),
+  coolwarm: _lerpCmap([
+    [59, 76, 192], [98, 130, 234], [141, 176, 254], [184, 208, 249], [221, 221, 221],
+    [245, 196, 173], [244, 154, 123], [222, 96, 77], [180, 4, 38],
+  ]),
+  turbo: _lerpCmap([
+    [48, 18, 59], [70, 107, 227], [40, 167, 221], [32, 229, 181], [110, 252, 107],
+    [202, 240, 52], [253, 188, 39], [240, 96, 12], [122, 4, 3],
+  ]),
+  plasma: _lerpCmap([
+    [13, 8, 135], [84, 2, 163], [139, 10, 165], [185, 50, 137], [219, 92, 104],
+    [244, 136, 73], [254, 188, 43], [244, 238, 39], [240, 249, 33],
+  ]),
+  inferno: _lerpCmap([
+    [0, 0, 4], [40, 11, 84], [101, 21, 110], [159, 42, 99], [212, 72, 66],
+    [245, 125, 21], [250, 193, 39], [245, 240, 132], [252, 255, 164],
+  ]),
+  magma: _lerpCmap([
+    [0, 0, 4], [40, 11, 84], [101, 21, 110], [158, 47, 127], [222, 73, 104],
+    [247, 120, 107], [254, 176, 120], [254, 229, 160], [252, 253, 191],
+  ]),
+  cividis: _lerpCmap([
+    [0, 32, 77], [26, 51, 105], [60, 77, 110], [92, 102, 112], [124, 123, 120],
+    [155, 148, 115], [187, 173, 108], [222, 202, 92], [255, 234, 70],
+  ]),
   // direct-function ramps
   jet: (t) => {
     t = Math.max(0, Math.min(1, t));

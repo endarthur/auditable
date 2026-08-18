@@ -1,0 +1,489 @@
+/// auditable
+/// title: gsjs — multiple-pass estimation (Python)
+/// module: @gcu/adder ext/adder/index.js
+/// module: @gcu/gsjs ext/gsjs/index.js
+/// module: @gcu/plot ext/plot/index.js
+/// module: @atra/gslib ext/atra/lib/gslib.js
+/// settings: {"theme":"dark","fontSize":13,"width":"940","runOnLoad":"yes"}
+
+/// md
+# multiple-pass estimation — calibrating the search to the drilling
+
+A deposit is rarely drilled evenly: infill drilling concentrates where the work is, so one search
+configuration cannot be right everywhere. A **single pass with a large search** (SPLS) over-smooths —
+estimates shift toward the mean, low blocks are lifted over the cutoff, and ore tonnes inflate. A
+**nearest-neighbour model** doesn't smooth at all — it reproduces sample-scale variance and overstates
+grade instead. **Multiple-pass estimation (MPE)** runs kriging in sequential passes, each tuned to one
+drill-spacing zone, and *calibrates* each pass so the estimates carry the right block-scale variance —
+the amount predicted by change-of-support theory.
+
+The calibration target for every pass:
+
+**Var(Z\*) / Var(Z₍NN₎) ≈ f**,  where  **f = (σ² − γ̄(V,V)) / σ²**
+
+γ̄(V,V) is the average variogram inside one SMU block V (20×20 m here) — so *f* is the fraction of the
+sample-scale variance a block of that size should keep. Each pass is tuned (search radius for *coverage*,
+min/max samples for *variance*) until its ratio lands inside the *f* window.
+
+This is the **Python edition** of the multipass example — every cell is adder, a JS-targeting Python
+dialect that runs entirely in this page (a JS twin lives in the examples folder). The deposit is
+simulated *unconditionally* by GSLIB's `sgsim` (Wasm) from a **known variogram** — truth with a
+pedigree — so the final grade–tonnage verdict is judged against *reality*, the way the Misima case
+study judged against blast-holes. It follows the lesson by Harding & Deutsch:
+[geostatisticslessons.com/lessons/multipass](https://geostatisticslessons.com/lessons/multipass).
+Every parameter below is a live control — retune the passes and watch the calibration table answer.
+
+/// adder collapsed
+# ── the deposit: one unconditional SGSIM realization ────────────────────────
+# The world is BUILT from a known variogram: GSLIB's sgsim (compiled to Wasm)
+# simulates a Gaussian field on a fine 5 m point grid, and grades are an
+# affine map of it — which preserves the variogram exactly. So everything the
+# workflow "discovers" below (the model, γ̄(V,V), f) can be checked against
+# the truth, and the experimental variogram has a real sill.
+import js
+import gslib
+import plt
+
+EXT = 800
+B = 20                                  # 20×20 m SMU blocks
+NX = 40
+NY = 40
+FN = 160                                # point support: 160×160 nodes at 5 m
+FS = 5
+VG_TRUE = {"nugget": 0.45, "structures": [
+    # dies inside a 20 m block — sub-SMU variability
+    {"type": "spherical", "contribution": 0.15, "range": 12},
+    # the estimable signal, well inside every drill spacing
+    {"type": "spherical", "contribution": 0.40, "range": 300},
+]}
+engine = gslib.sgsim({"grid": {"nx": FN, "ny": FN, "xsiz": FS, "ysiz": FS},
+                      "variogram": VG_TRUE,
+                      "search": {"radius": 240, "ndmax": 12, "nodmax": 12}})
+gauss = engine.run(69069)               # ONE unconditional realization, unit variance
+G_MEAN = 2.5                            # grades = affine map of the Gaussian field
+G_SD = 0.9
+
+def grade_at(x, y):
+    ix = min(FN - 1, max(0, int(x // FS)))
+    iy = min(FN - 1, max(0, int(y // FS)))
+    return max(0.02, G_MEAN + G_SD * gauss[iy * FN + ix])
+
+# a planned concentric campaign: densest drilling over the project core.
+# (grade-CHASING infill would also work, but it pushes the experimental
+# variogram above the declustered sill — the dense, preferentially high-grade
+# core feeds (Δmean)² into every between-zone pair.)
+CX = 400
+CY = 400
+
+def zone_of(x, y):
+    r = ((x - CX) ** 2 + (y - CY) ** 2) ** 0.5
+    return 1 if r < 170 else (2 if r < 330 else 3)
+
+SPACING = {1: 25, 2: 50, 3: 100}
+
+# mulberry32, ported bit-for-bit (via js.Math.imul) so the drill pattern —
+# and every number in the calibration table — matches the JS twin exactly
+M32 = 4294967296
+
+def _shr(x, k):                         # JS  x >>> k  on the 32-bit pattern
+    return (x % M32) // (2 ** k)
+
+def mulberry32(seed):
+    state = {"a": seed % M32}
+    def rand():
+        state["a"] = (state["a"] + 1831565813) % M32          # 0x6D2B79F5
+        a = state["a"]
+        t = js.Math.imul(a ^ _shr(a, 15), 1 | a) % M32
+        t = ((t + js.Math.imul(t ^ _shr(t, 7), 61 | t)) ^ t) % M32
+        return (t ^ _shr(t, 14)) % M32 / M32
+    return rand
+
+rand = mulberry32(41)
+data = []
+for z in [1, 2, 3]:
+    s = SPACING[z]
+    nsteps = int((EXT - s / 2) // s) + 1
+    for xi in range(nsteps):
+        x = s / 2 + xi * s
+        for yi in range(nsteps):
+            y = s / 2 + yi * s
+            if zone_of(x, y) != z:
+                continue
+            jx = x + (rand() - 0.5) * 0.4 * s
+            jy = y + (rand() - 0.5) * 0.4 * s
+            if jx < 2 or jy < 2 or jx > EXT - 2 or jy > EXT - 2:
+                continue
+            data.append([jx, jy, 0, grade_at(jx, jy)])
+
+# block truth: the mean of the 4×4 point nodes inside each 20 m block — the
+# change of support is REAL averaging of the same point field the holes sample
+truth_blocks = []
+block_zone = []
+for iy in range(NY):
+    for ix in range(NX):
+        acc = 0
+        for u in range(4):
+            for v in range(4):
+                acc += grade_at(ix * B + (u + 0.5) * FS, iy * B + (v + 0.5) * FS)
+        truth_blocks.append(acc / 16)
+        block_zone.append(zone_of(ix * B + B / 2, iy * B + B / 2))
+
+G_LO = 0.0                              # one grade scale for every map in the notebook
+G_HI = 6.0
+
+fig0, (axL, axR) = plt.subplots(1, 2, figsize=[820, 400])
+axL.imshow(truth_blocks, NX, NY, cmap="viridis", vmin=G_LO, vmax=G_HI)
+axL.set_title("true block grades (the reference)")
+ZCOL = {1: "#c89b3c", 2: "#4a78b0", 3: "#7a5cb0"}
+for z in [1, 2, 3]:
+    xs = [d[0] / B for d in data if zone_of(d[0], d[1]) == z]
+    ys = [d[1] / B for d in data if zone_of(d[0], d[1]) == z]
+    axR.scatter(xs, ys, c=ZCOL[z], s=4, label=f"{SPACING[z]} m")
+axR.set_title(f"drilling — 25 m core · 50 m · 100 m ({len(data)} samples)")
+axR.legend()
+display(fig0.show())
+print(f"{len(data)} samples over {NX}×{NY} blocks of {B}×{B} m — three drill spacings, one deposit")
+
+/// md
+## the variogram and the change of support
+
+Because the deposit is a simulation, the variogram model is *known* — the experimental points computed
+from the drillhole samples should land on it, and here they do (in real work, this plot is where you fit).
+The declustered variance σ² and the average variogram inside one 20×20 m block, γ̄(V,V), fix the
+change-of-support factor **f** — and with it the calibration window every pass must land in. The dots
+wander around the model at long lags — one finite realization holds its own version of the sill
+(ergodic fluctuation), which is why the fit anchors to the *declustered* σ² of the data actually drilled.
+
+/// adder
+import gsjs
+
+# declustered mean/variance (cell size = the sparse spacing)
+dres = gsjs.declusterWeights(data, 100)
+dw = dres.weights
+sw = 0.0
+sm = 0.0
+for i in range(len(data)):
+    sw += dw[i]
+    sm += dw[i] * data[i][3]
+d_mean = sm / sw
+sv = 0.0
+for i in range(len(data)):
+    sv += dw[i] * (data[i][3] - d_mean) ** 2
+sigma2 = sv / sw
+
+# experimental (omnidirectional)
+expv = gsjs.experimental(data, {"lags": {"size": 15, "n": 18},
+    "directions": [{"name": "omni", "azimuth": 0, "atol": 90, "dtol": 90}]})
+
+# the model SHAPE is known — the world was simulated from it (nugget fraction,
+# type, range survive the affine map). The SILL is fitted to the realized σ²:
+# one finite realization holds less variance than the model prescribes for an
+# infinite domain (ergodic fluctuation), and the fit follows the data, as it
+# would in real work.
+NUG = VG_TRUE["nugget"] * sigma2
+STRUCTS = [{"type": st["type"], "range": st["range"], "contribution": st["contribution"] * sigma2}
+           for st in VG_TRUE["structures"]]
+model = {"nugget": NUG, "structures": STRUCTS}
+
+def sph(h, a):
+    return 1.5 * h / a - 0.5 * (h / a) ** 3 if h < a else 1.0
+
+def gam(h):
+    if h < 1e-9:
+        return 0.0
+    g = NUG
+    for st in STRUCTS:
+        g += st["contribution"] * sph(h, st["range"])
+    return g
+
+# γ̄(V,V): average model variogram between 8×8 discretization points of one SMU
+ND = 8
+pts = [[(u + 0.5) * B / ND, (v + 0.5) * B / ND] for u in range(ND) for v in range(ND)]
+gbar = 0.0
+for p in pts:
+    for q in pts:
+        gbar += gam(((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2) ** 0.5)
+gbar /= len(pts) ** 2
+f = (sigma2 - gbar) / sigma2
+f_win = [f * 0.90, f * 1.10]            # "within 5–10 % of f" — the 10 % bound here
+
+fig, ax = plt.subplots(1, 1, figsize=[620, 320])
+# npair>=30 drops noise bins; h>15 drops the coincident-pair bin (jittered
+# boundary holes < 5 m apart read the SAME fine node → a spurious gamma=0)
+lags = [l for l in expv.directions[0].lags if l.npair >= 30 and l.h > 15]
+ax.scatter([l.h for l in lags], [l.gamma for l in lags], s=14, label="experimental (omni)")
+hs = [i * 4.5 for i in range(60)]
+ax.plot(hs, [gam(h) for h in hs],
+        label=f"the TRUE model · c0 {NUG:.2f} + sph({STRUCTS[0]['range']}) + sph({STRUCTS[1]['range']})")
+ax.plot([0, 270], [sigma2, sigma2], linestyle="--", label="σ² (declustered)")
+ax.set_xlabel("lag (m)")
+ax.set_ylabel("γ(h)")
+ax.legend()
+display(fig.show())
+print(f"σ² = {sigma2:.3f} · γ̄(V,V) = {gbar:.3f} → f = {f:.3f} — a {B}×{B} m block should keep {100 * f:.0f}% of the sample variance. Calibration window: {f_win[0]:.3f}–{f_win[1]:.3f}")
+
+/// md
+## the nearest-neighbour reference
+
+The NN model answers one question: *what does no smoothing look like?* Every block takes its nearest
+sample's value — data-scale variance at block support, and the denominator of every calibration ratio
+below. (Because each sample rules its own polygon, NN is also implicitly declustered — which is why the
+ratio is taken against it rather than against raw sample variance.)
+
+/// adder
+nn_est = []
+for iy in range(NY):
+    for ix in range(NX):
+        bx = ix * B + B / 2
+        by = iy * B + B / 2
+        best = 1e30
+        bi = 0
+        for i in range(len(data)):
+            d2 = (data[i][0] - bx) ** 2 + (data[i][1] - by) ** 2
+            if d2 < best:
+                best = d2
+                bi = i
+        nn_est.append(data[bi][3])
+
+def v_of(arr, sel=None):
+    n = 0
+    m = 0.0
+    for b in range(len(arr)):
+        if sel is not None and not sel(b):
+            continue
+        n += 1
+        m += arr[b]
+    m /= n
+    v = 0.0
+    for b in range(len(arr)):
+        if sel is not None and not sel(b):
+            continue
+        v += (arr[b] - m) ** 2
+    return {"n": n, "mean": m, "var": v / n}
+
+nn_all = v_of(nn_est)
+print(f"NN model: mean {nn_all['mean']:.3f} · variance {nn_all['var']:.3f} (the “no smoothing” end of the spectrum)")
+
+/// md
+## the passes — tune each one into its window
+
+Three passes for three drill spacings, estimated in order; a block keeps the **first** pass that catches
+it (equivalent to hard-coding earlier passes and estimating only what remains). Per the lesson:
+
+- **search radius** controls *coverage* — which blocks a pass reaches;
+- **max samples** controls *variance* — more samples, more smoothing, lower ratio;
+- **min samples** stays at ~75 % of max, so a pass reads *one* data spacing instead of blending two;
+- too smooth (ratio below the window) → *lower* the sample counts; too noisy → *raise* them.
+
+Move the sliders and read the table: the defaults land all three passes inside the *f* window — note
+how few samples that takes (3–4, 3–4, 2–3): in a deposit this noisy, keeping block-scale variance
+means keeping the neighbourhoods small. Then break the calibration on purpose and watch the verdicts
+flip: push a pass's samples up and it over-smooths; push pass 3's radius out with samples at the
+floor and it can refuse to calibrate at all — the "spacing can't support this block size" verdict,
+the lesson's cue to downgrade confidence rather than force it.
+
+/// adder
+r1 = ui.slider("pass 1 · radius (m)", 30, {"min": 25, "max": 120, "step": 5})
+m1 = ui.slider("pass 1 · max samples", 4, {"min": 3, "max": 32, "step": 1})
+r2 = ui.slider("pass 2 · radius (m)", 55, {"min": 50, "max": 200, "step": 5})
+m2 = ui.slider("pass 2 · max samples", 4, {"min": 3, "max": 32, "step": 1})
+r3 = ui.slider("pass 3 · radius (m)", 190, {"min": 100, "max": 350, "step": 10})
+m3 = ui.slider("pass 3 · max samples", 3, {"min": 3, "max": 32, "step": 1})
+
+/// adder
+# ── the three calibrated passes + the two straw men ─────────────────────────
+grid = {"nx": NX, "ny": NY, "nz": 1, "xmn": B / 2, "ymn": B / 2, "zmn": 0,
+        "xsiz": B, "ysiz": B, "zsiz": B}
+disc = {"nx": 4, "ny": 4, "nz": 1}
+
+def nmin(m):                            # the 75 % rule
+    return max(2, round(0.75 * m))
+
+PASSES = [
+    {"radius": r1, "ndmax": m1, "ndmin": nmin(m1)},
+    {"radius": r2, "ndmax": m2, "ndmin": nmin(m2)},
+    {"radius": r3, "ndmax": m3, "ndmin": nmin(m3)},
+]
+t0 = js.performance.now()
+pass_runs = []
+for p in PASSES:
+    t = gsjs.krige({"data": data, "variogram": model, "ktype": "OK", "grid": grid,
+                    "discretization": disc,
+                    "search": {"radius": p["radius"], "ndmin": p["ndmin"], "ndmax": p["ndmax"]}})
+    pass_runs.append({"tensor": t, "est": gsjs.realize(t, t.values)})
+
+# hard-code: first pass that caught a block wins; later passes fill what remains
+mpe_est = [0.0] * (NX * NY)
+mpe_pass = [0] * (NX * NY)
+for b in range(NX * NY):
+    for pi in range(3):
+        if pass_runs[pi]["tensor"].status[b] == gsjs.STATUS.OK:
+            mpe_est[b] = pass_runs[pi]["est"][b]
+            mpe_pass[b] = pi + 1
+            break
+
+# the straw men: one big smooth pass, and NN from above
+spls_t = gsjs.krige({"data": data, "variogram": model, "ktype": "OK", "grid": grid,
+                     "discretization": disc,
+                     "search": {"radius": 320, "ndmin": 2, "ndmax": 40}})
+spls_est = gsjs.realize(spls_t, spls_t.values)
+t_krige = js.performance.now() - t0
+
+# per-pass calibration: coverage vs the zone share, variance ratio vs the f window
+zone_share = [sum(1 for z in block_zone if z == zz) / (NX * NY) for zz in [1, 2, 3]]
+rows = []
+for i in range(3):
+    p = PASSES[i]
+    def sel(b, _pi=i + 1):
+        return mpe_pass[b] == _pi
+    caught = v_of(mpe_est, sel)
+    nn = v_of(nn_est, sel)
+    ratio = caught["var"] / nn["var"] if caught["n"] > 1 else float("nan")
+    in_win = f_win[0] <= ratio <= f_win[1]
+    if in_win:
+        verdict = "✓ in window"
+    elif ratio < f_win[0]:
+        verdict = ("↓ below window at minimum samples — spacing can't support this block size"
+                   if p["ndmax"] <= 3 else "↓ too smooth — fewer samples")
+    else:
+        verdict = "↑ too noisy — more samples"
+    rows.append({
+        "pass": f"{i + 1} (≈{SPACING[i + 1]} m)",
+        "search": f"{p['radius']} m · {p['ndmin']}–{p['ndmax']}",
+        "blocks caught": f"{100 * caught['n'] / (NX * NY):.1f}% (zone ≈{100 * zone_share[i]:.0f}%)",
+        "Var(Z*)/Var(NN)": f"{ratio:.3f}",
+        "verdict": verdict,
+    })
+un = sum(1 for p in mpe_pass if p == 0)
+rows.append({"pass": "SPLS (one big pass)", "search": "320 m · 2–40", "blocks caught": "100%",
+             "Var(Z*)/Var(NN)": f"{v_of(spls_est)['var'] / v_of(nn_est)['var']:.3f}",
+             "verdict": "over-smoothed by design"})
+rows.append({"pass": "NN", "search": "nearest sample", "blocks caught": "100%",
+             "Var(Z*)/Var(NN)": "1.000", "verdict": "no smoothing by design"})
+ui.table(rows)
+print(f"window for every pass: {f_win[0]:.3f}–{f_win[1]:.3f} (f = {f:.3f}) · unestimated after pass 3: {un} blocks · kriging {t_krige:.0f} ms")
+
+/// md
+## what each model looks like
+
+Pass classification first — the calibrated searches should paint the drilling zones back (the lesson's
+Figure 3): pass 1 (bright) where the infill is, pass 3 in the sparse ground. Then the three estimates on
+one grade scale: SPLS visibly flattens the field; NN is a mosaic of sample polygons; MPE keeps the
+structure without the noise.
+
+/// adder
+mpe_show = [mpe_est[b] if mpe_pass[b] > 0 else -999 for b in range(NX * NY)]
+spls_show = [spls_est[b] if spls_t.status[b] == gsjs.STATUS.OK else -999 for b in range(NX * NY)]
+
+figA, (axP, axM) = plt.subplots(1, 2, figsize=[820, 400])
+axP.imshow(mpe_pass, NX, NY, cmap="viridis", vmin=0, vmax=3)
+axP.set_title("pass classification — 1 core · 2 ring · 3 sparse")
+axM.imshow(mpe_show, NX, NY, cmap="viridis", vmin=G_LO, vmax=G_HI, nodata=-999)
+axM.set_title("MPE estimate")
+display(figA.show())
+
+figB, (axS, axN) = plt.subplots(1, 2, figsize=[820, 400])
+axS.imshow(spls_show, NX, NY, cmap="viridis", vmin=G_LO, vmax=G_HI, nodata=-999)
+axS.set_title("SPLS — one big search (over-smoothed)")
+axN.imshow(nn_est, NX, NY, cmap="viridis", vmin=G_LO, vmax=G_HI)
+axN.set_title("NN — nearest sample (no smoothing)")
+display(figB.show())
+
+/// md
+## the verdict — grade–tonnage against the truth
+
+The Misima study judged each model against blast-holes; here we judge against the true block grades the
+deposit was built from. Each straw man fails in its own regime: over-smoothing lifts SPLS *above* the
+reference on tonnes at cutoffs below the mean (and dilutes the grade); no smoothing makes NN *over-select*
+at cutoffs above it — too many blocks called ore. The calibrated MPE should track the truth on both sides.
+
+/// adder
+cutoffs = [i * 0.18 for i in range(25)]
+ok_all = [gsjs.STATUS.OK] * (NX * NY)
+mpe_status = [gsjs.STATUS.OK if p > 0 else gsjs.STATUS.NOT_ATTEMPTED for p in mpe_pass]
+gt_truth = gsjs.gradeTonnage(truth_blocks, ok_all, {"cutoffs": cutoffs})
+gt_mpe = gsjs.gradeTonnage(mpe_est, mpe_status, {"cutoffs": cutoffs})
+gt_spls = gsjs.gradeTonnage(spls_est, spls_t.status, {"cutoffs": cutoffs})
+gt_nn = gsjs.gradeTonnage(nn_est, ok_all, {"cutoffs": cutoffs})
+
+def pct(a):
+    return [100 * v / (NX * NY) for v in a]
+
+fig2, (axT, axG) = plt.subplots(1, 2, figsize=[860, 340])
+axT.plot(cutoffs, pct(gt_truth.tonnage), label="truth", linewidth=2)
+axT.plot(cutoffs, pct(gt_spls.tonnage), label="SPLS")
+axT.plot(cutoffs, pct(gt_nn.tonnage), label="NN")
+axT.plot(cutoffs, pct(gt_mpe.tonnage), label="MPE")
+axT.set_xlabel("cutoff")
+axT.set_ylabel("tonnes above cutoff (%)")
+axT.legend()
+axG.plot(cutoffs, list(gt_truth.grade), label="truth", linewidth=2)
+axG.plot(cutoffs, list(gt_spls.grade), label="SPLS")
+axG.plot(cutoffs, list(gt_nn.grade), label="NN")
+axG.plot(cutoffs, list(gt_mpe.grade), label="MPE")
+axG.set_xlabel("cutoff")
+axG.set_ylabel("mean grade above cutoff")
+axG.legend()
+display(fig2.show())
+js.window.__multipass = {"f": f, "fWin": f_win}             # probe surface (smoke assertions)
+
+# the scorecard (the Misima table, in miniature) — TWO cutoffs, because each
+# straw man sins in its own regime: over-smoothing inflates tonnes when the
+# cutoff sits below the mean grade; under-smoothing over-selects above it.
+def score_at(est, status, cut):
+    ton = 0
+    met = 0.0
+    t_ton = 0
+    t_met = 0.0
+    for b in range(NX * NY):
+        if truth_blocks[b] >= cut:
+            t_ton += 1
+            t_met += truth_blocks[b]
+        if status[b] == gsjs.STATUS.OK and est[b] >= cut:
+            ton += 1
+            met += est[b]
+    t_err = 100 * (ton - t_ton) / t_ton
+    g_err = 100 * ((met / ton) / (t_met / t_ton) - 1) if ton > 0 else float("nan")
+    return {"t": t_err, "g": g_err}
+
+LO = 2.2                                # below and above the mean grade
+HI = 3.0
+
+def fmt_pct(v):
+    if v != v:                          # NaN
+        return "— (no blocks selected)"
+    return ("+" if v >= 0 else "") + f"{v:.1f}%"
+
+score_rows = []
+for name, est, st2 in [["SPLS", spls_est, spls_t.status], ["NN", nn_est, ok_all], ["MPE", mpe_est, mpe_status]]:
+    lo = score_at(est, st2, LO)
+    hi = score_at(est, st2, HI)
+    # keys are literal strings on purpose: computed (f-string) dict keys make a
+    # Map, and ui.table reads plain-object rows
+    score_rows.append({"model": name,
+                       "tonnes @ 2.2 (below mean)": fmt_pct(lo["t"]), "grade @ 2.2": fmt_pct(lo["g"]),
+                       "tonnes @ 3.0 (above mean)": fmt_pct(hi["t"]), "grade @ 3.0": fmt_pct(hi["g"])})
+ui.table(score_rows)
+print("error vs truth — over-smoothing (SPLS) inflates tonnage below the mean; no smoothing (NN) over-selects above it; the calibrated MPE stays closest to the truth on both sides")
+
+/// md
+## pitfalls the lesson flags (and this notebook inherits)
+
+- **Calibrate per domain.** One variogram, one *f*, one calibration — *per estimation domain*. This
+  notebook is one domain; a real deposit repeats everything inside each.
+- **The 75 % rule.** A minimum far below the maximum lets a pass blend two drill spacings; keeping
+  ndmin ≈ 0.75·ndmax keeps each pass reading one spacing.
+- **Drillholes are strings.** In 3D, cap samples per hole (2–3) and use octant limits, or the search
+  reads one hole's string as a neighbourhood — `search.perHoleMax` and `search.sectors` in gsjs.
+- **Sparse domains may not calibrate.** With too little data the ratio can refuse to enter the window
+  even at minimum samples — try pass 3 with a 300 m radius. Prefer coverage and stability over forcing
+  it (the lesson's Domain 4), and let the refusal downgrade the classification instead.
+- **Clustered drilling is greedy.** Infill chases grade, so dense zones are also high-variance zones;
+  the ratio is taken against NN precisely because NN implicitly declusters.
+
+The lesson closes by pointing past fixed passes, toward optimizing the search *per block* against its
+local variance target. The pieces are all on this page: `f` from the variogram, a variance ratio per
+neighbourhood, and a search you can parameterize per target.
+
+Reference: J. Harding & C. V. Deutsch — *Multiple Pass Estimation*, Geostatistics Lessons,
+[geostatisticslessons.com/lessons/multipass](https://geostatisticslessons.com/lessons/multipass).

@@ -127,8 +127,8 @@ describe('Colormaps', () => {
     const m = rgb.match(/rgb\((\d+),(\d+),(\d+)\)/);
     assert.ok(m);
     const [, r, g, b] = m.map(Number);
-    // polynomial approximation: green channel dominant at t=1
-    assert.ok(g > 200);
+    // real viridis tops out yellow: (253, 231, 37)
+    assert.ok(r > 200 && g > 200 && b < 100);
   });
 
   it('clamps out-of-range values', () => {

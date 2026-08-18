@@ -25,6 +25,7 @@ const ADDER_EXPORTS = {
   '@gcu/scitra': ['scitra'],
   '@gcu/learn': ['learn'],
   '@atra/gslib': ['gslib'],
+  '@gcu/gsjs': ['gsjs'],
 };
 
 // ── Example categories ──
@@ -103,6 +104,7 @@ const categories = {
     'example_gsjs_tour.txt',
     'example_gsjs_estimate.txt',
     'example_gsjs_multipass.txt',
+    'example_gsjs_multipass_py.txt',
   ],
 
   // gis — spatial analysis: maps, raster, hydrology
