@@ -211,7 +211,8 @@ it (equivalent to hard-coding earlier passes and estimating only what remains). 
 
 - **search radius** controls *coverage* — which blocks a pass reaches;
 - **max samples** controls *variance* — more samples, more smoothing, lower ratio;
-- **min samples** stays at ~75 % of max, so a pass reads *one* data spacing instead of blending two;
+- **min samples** comes from the *min ratio* slider (default 75 % of max — the computed count shows
+  below the sliders), so a pass reads *one* data spacing instead of blending two;
 - too smooth (ratio below the window) → *lower* the sample counts; too noisy → *raise* them.
 
 Move the sliders and read the table: the defaults land all three passes inside the *f* window — note
@@ -224,20 +225,25 @@ the lesson's cue to downgrade confidence rather than force it.
 /// code
 const r1 = ui.slider("pass 1 · radius (m)", 30, { min: 25, max: 120, step: 5 });
 const m1 = ui.slider("pass 1 · max samples", 4, { min: 3, max: 32, step: 1 });
+const q1 = ui.slider("pass 1 · min ratio", 0.75, { min: 0.25, max: 1, step: 0.05 });
 const r2 = ui.slider("pass 2 · radius (m)", 55, { min: 50, max: 200, step: 5 });
 const m2 = ui.slider("pass 2 · max samples", 4, { min: 3, max: 32, step: 1 });
+const q2 = ui.slider("pass 2 · min ratio", 0.75, { min: 0.25, max: 1, step: 0.05 });
 const r3 = ui.slider("pass 3 · radius (m)", 190, { min: 100, max: 350, step: 10 });
 const m3 = ui.slider("pass 3 · max samples", 3, { min: 3, max: 32, step: 1 });
+const q3 = ui.slider("pass 3 · min ratio", 0.75, { min: 0.25, max: 1, step: 0.05 });
+// the 75 % rule as a DEFAULT, not a constant — drop a ratio and the pass blends two spacings
+const nmin = (m, q) => Math.max(2, Math.round(q*m));
+ui.display(`min samples — pass 1: ${nmin(m1, q1)} of ${m1} · pass 2: ${nmin(m2, q2)} of ${m2} · pass 3: ${nmin(m3, q3)} of ${m3}`);
 
 /// code
 // ── the three calibrated passes + the two straw men ─────────────────────────
 const grid = { nx: NX, ny: NY, nz: 1, xmn: B/2, ymn: B/2, zmn: 0, xsiz: B, ysiz: B, zsiz: B };
 const disc = { nx: 4, ny: 4, nz: 1 };
-const nmin = (m) => Math.max(2, Math.round(0.75*m));        // the 75 % rule
 const PASSES = [
-  { radius: r1, ndmax: m1, ndmin: nmin(m1) },
-  { radius: r2, ndmax: m2, ndmin: nmin(m2) },
-  { radius: r3, ndmax: m3, ndmin: nmin(m3) },
+  { radius: r1, ndmax: m1, ndmin: nmin(m1, q1) },
+  { radius: r2, ndmax: m2, ndmin: nmin(m2, q2) },
+  { radius: r3, ndmax: m3, ndmin: nmin(m3, q3) },
 ];
 const t0 = performance.now();
 const passRuns = PASSES.map(p => {
