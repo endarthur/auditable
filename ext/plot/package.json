@@ -1,6 +1,6 @@
 {
   "name": "@gcu/plot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Matplotlib-style plotting for the browser: subplots, plot, scatter, imshow, hist, bar. Canvas-based, zero runtime dependencies.",
   "type": "module",
   "main": "src/api.js",
@@ -22,7 +22,16 @@
   "scripts": {
     "build": "node build.js"
   },
-  "keywords": ["plot", "plotting", "chart", "matplotlib", "canvas", "visualization", "auditable", "gcu"],
+  "keywords": [
+    "plot",
+    "plotting",
+    "chart",
+    "matplotlib",
+    "canvas",
+    "visualization",
+    "auditable",
+    "gcu"
+  ],
   "license": "MIT",
   "author": "Arthur Endlein Correia",
   "repository": {
@@ -39,6 +48,8 @@
     "exampleOf": "library pack — declares gcu.adderExports so adder code (`import plt`) resolves it offline once installed; registers its `plt` export on load."
   },
   "gcu": {
-    "adderExports": ["plt"]
+    "adderExports": [
+      "plt"
+    ]
   }
 }

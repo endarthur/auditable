@@ -276,6 +276,31 @@ class ScopeChain {
   }
 
   /**
+   * Reassign a binding if it already exists somewhere in the chain;
+   * otherwise declare it locally. Mirrors emit-js's `store` op semantics:
+   * if the name is in scope (any ancestor or this frame), update where
+   * it lives; if it's a new name, create the binding in the current frame.
+   *
+   * Used by the AIR interpreter's `store` op so that
+   *
+   *   let sum = 0;
+   *   for (let i = 0; i < 10; i++) sum = sum + i;
+   *
+   * correctly updates the outer `sum` instead of declaring a per-iteration
+   * local that gets discarded when the loop frame pops.
+   */
+  setOrExisting(name, value) {
+    for (let s = this; s; s = s.parent) {
+      if (s.bindings.has(name)) {
+        s.bindings.set(name, value);
+        return this;
+      }
+    }
+    this.bindings.set(name, value);
+    return this;
+  }
+
+  /**
    * Return a new child scope with `this` as parent. Caller is responsible
    * for assigning the result somewhere — e.g. `chain = chain.push()`.
    */

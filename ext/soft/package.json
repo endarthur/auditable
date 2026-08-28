@@ -1,6 +1,6 @@
 {
   "name": "@gcu/soft",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Soft — an English-keyword programming language with a tree-walking evaluator. Pure JS interpreter, locale-aware keywords (en, pt-BR bundled). Semantics map closer to JS than Python.",
   "type": "module",
   "main": "src/index.js",
@@ -44,7 +44,16 @@
       "optional": true
     }
   },
-  "keywords": ["language", "interpreter", "english-keywords", "dsl", "soft", "locale", "auditable", "gcu"],
+  "keywords": [
+    "language",
+    "interpreter",
+    "english-keywords",
+    "dsl",
+    "soft",
+    "locale",
+    "auditable",
+    "gcu"
+  ],
   "license": "MIT",
   "author": "Arthur Endlein Correia",
   "repository": {
@@ -62,7 +71,11 @@
   },
   "gcu": {
     "languages": [
-      { "cellType": "soft", "tag": "soft", "label": "Soft" }
+      {
+        "cellType": "soft",
+        "tag": "soft",
+        "label": "Soft"
+      }
     ]
   }
 }
