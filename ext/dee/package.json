@@ -1,6 +1,6 @@
 {
   "name": "@gcu/dee",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Three.js-based 3D scene for geoscientific visualization: block models, sections, drillholes, surfaces, polylines, clip planes, raycasting. Expects THREE on globalThis or passed via opts.",
   "type": "module",
   "main": "src/main.js",
@@ -30,7 +30,18 @@
       "optional": true
     }
   },
-  "keywords": ["3d", "three.js", "geology", "block-model", "drillhole", "visualization", "section", "mining", "auditable", "gcu"],
+  "keywords": [
+    "3d",
+    "three.js",
+    "geology",
+    "block-model",
+    "drillhole",
+    "visualization",
+    "section",
+    "mining",
+    "auditable",
+    "gcu"
+  ],
   "license": "MIT",
   "author": "Arthur Endlein Correia",
   "repository": {

@@ -1,6 +1,6 @@
 {
   "name": "@gcu/voxmesh",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Greedy voxel meshing for block models and volumetric data. Binning, bucket aggregation, chunked meshing, convenience helpers. Produces triangle meshes for rendering.",
   "type": "module",
   "main": "src/main.js",
@@ -22,7 +22,18 @@
   "scripts": {
     "build": "node build.js"
   },
-  "keywords": ["voxel", "meshing", "greedy", "block-model", "3d", "volumetric", "geology", "mining", "auditable", "gcu"],
+  "keywords": [
+    "voxel",
+    "meshing",
+    "greedy",
+    "block-model",
+    "3d",
+    "volumetric",
+    "geology",
+    "mining",
+    "auditable",
+    "gcu"
+  ],
   "license": "MIT",
   "author": "Arthur Endlein Correia",
   "repository": {

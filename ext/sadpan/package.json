@@ -1,6 +1,6 @@
 {
   "name": "@gcu/sadpan",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DataFrame-style structured data manipulation: series, tables, group-by, joins, CSV/JSON IO. Inspired by pandas, scaled down for a notebook runtime.",
   "type": "module",
   "main": "src/api.js",
@@ -22,7 +22,16 @@
   "scripts": {
     "build": "node build.js"
   },
-  "keywords": ["dataframe", "pandas", "series", "table", "groupby", "data-analysis", "auditable", "gcu"],
+  "keywords": [
+    "dataframe",
+    "pandas",
+    "series",
+    "table",
+    "groupby",
+    "data-analysis",
+    "auditable",
+    "gcu"
+  ],
   "license": "MIT",
   "author": "Arthur Endlein Correia",
   "repository": {
@@ -39,6 +48,8 @@
     "exampleOf": "library pack — declares gcu.adderExports so adder code (`import sadpan`) resolves it offline once installed; registers its `sadpan` export on load."
   },
   "gcu": {
-    "adderExports": ["sadpan"]
+    "adderExports": [
+      "sadpan"
+    ]
   }
 }

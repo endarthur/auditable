@@ -1,6 +1,6 @@
 {
   "name": "@gcu/adder",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Python-in-JavaScript. AST parser + tree-walking evaluator in pure JS, no Wasm. Standalone library — Python values are JS values (no FFI boundary). Used by Auditable as a cell type.",
   "type": "module",
   "main": "src/index.js",
@@ -47,7 +47,17 @@
       "optional": true
     }
   },
-  "keywords": ["python", "interpreter", "adder", "micropython", "dsl", "language", "ast", "auditable", "gcu"],
+  "keywords": [
+    "python",
+    "interpreter",
+    "adder",
+    "micropython",
+    "dsl",
+    "language",
+    "ast",
+    "auditable",
+    "gcu"
+  ],
   "license": "MIT",
   "author": "Arthur Endlein Correia",
   "repository": {
@@ -65,7 +75,14 @@
   },
   "gcu": {
     "languages": [
-      { "cellType": "adder", "tag": "adder", "label": "Python (adder)", "aliases": ["mpy"] }
+      {
+        "cellType": "adder",
+        "tag": "adder",
+        "label": "Python (adder)",
+        "aliases": [
+          "mpy"
+        ]
+      }
     ]
   }
 }

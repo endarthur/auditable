@@ -1,6 +1,6 @@
 {
   "name": "@gcu/grid",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Regular block-model grid utilities: geometry (index/flat conversion, centroids, rotation), selections (masks, boolean ops), compacting, operations (map, reduce, histogram, grade-tonnage), spatial queries (slices, shells, regridding).",
   "type": "module",
   "main": "src/main.js",
@@ -22,7 +22,16 @@
   "scripts": {
     "build": "node build.js"
   },
-  "keywords": ["block-model", "grid", "geology", "mining", "geostatistics", "raster", "auditable", "gcu"],
+  "keywords": [
+    "block-model",
+    "grid",
+    "geology",
+    "mining",
+    "geostatistics",
+    "raster",
+    "auditable",
+    "gcu"
+  ],
   "license": "MIT",
   "author": "Arthur Endlein Correia",
   "repository": {

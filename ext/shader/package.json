@@ -1,6 +1,6 @@
 {
   "name": "@gcu/shader",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shadertoy-compatible WebGL 2 shader helper. Tagged-template `glsl` + `shader(canvas, code)` for live hot-compile fragment shaders with Shadertoy-style uniforms.",
   "type": "module",
   "main": "index.js",
@@ -12,7 +12,16 @@
     "index.js",
     "README.md"
   ],
-  "keywords": ["shader", "webgl", "webgl2", "shadertoy", "glsl", "tagged-template", "auditable", "gcu"],
+  "keywords": [
+    "shader",
+    "webgl",
+    "webgl2",
+    "shadertoy",
+    "glsl",
+    "tagged-template",
+    "auditable",
+    "gcu"
+  ],
   "license": "MIT",
   "author": "Arthur Endlein Correia",
   "repository": {
