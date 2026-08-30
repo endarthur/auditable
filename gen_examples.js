@@ -47,6 +47,7 @@ const categories = {
     'example_python.txt',
     'example_python_sandbox.txt',
     'example_widgets.txt',
+    'example_scrub.txt',
     'example_dialog.txt',
     'example_terminal.txt',
     'example_app_export.txt',

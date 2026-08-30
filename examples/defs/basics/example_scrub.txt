@@ -1,0 +1,98 @@
+/// auditable
+/// title: scrubbable numbers — Alt+drag any literal
+/// settings: {"theme":"dark","fontSize":13,"width":"860","runOnLoad":"yes"}
+
+/// md
+# scrubbable numbers
+
+Every number in this notebook is a control. **Hold Alt and drag any numeric literal** — the cursor
+becomes ↔ over a number — and the value scrubs under your finger: the source rewrites as you drag,
+and the cell plus everything downstream re-runs live. The code stays the single truth — a scrub *is*
+an edit, just faster than typing.
+
+- **Alt + drag** — scrub horizontally
+- **Shift** while dragging — steps ×10
+- **Ctrl+Z** — one undo restores the pre-drag value
+- the literal's own form sets the step: `50` steps by 1, `0.75` by 0.01, `1.5e3` steps its mantissa
+
+Start below: grab any of the three numbers in the spirograph and drag slowly.
+
+/// code
+// Alt+drag R, r or d — every value draws a different curve
+const R = 90, r = 33, d = 55;
+
+const W = Math.min(420, window.innerWidth - 80);
+const cv = ui.canvas(W, W); const g = cv.getContext("2d");
+g.fillStyle = "#111"; g.fillRect(0, 0, W, W);
+g.lineWidth = 1.4;
+const cx = W/2, cy = W/2, k = (W/2 - 12)/(Math.abs(R - r) + d || 1);
+let prev = null;
+for (let t = 0; t <= Math.PI*2*r/gcd(R, r) + 0.02; t += 0.01) {
+  const x = (R - r)*Math.cos(t) + d*Math.cos(t*(R - r)/r);
+  const y = (R - r)*Math.sin(t) - d*Math.sin(t*(R - r)/r);
+  if (prev) {
+    g.strokeStyle = `hsl(${(t*40) % 360} 70% 60%)`;
+    g.beginPath(); g.moveTo(cx + prev[0]*k, cy + prev[1]*k); g.lineTo(cx + x*k, cy + y*k); g.stroke();
+  }
+  prev = [x, y];
+}
+function gcd(a, b) { a = Math.abs(Math.round(a)); b = Math.abs(Math.round(b)); while (b) [a, b] = [b, a % b]; return a || 1; }
+
+/// md
+## scrubbing crosses cells — the DAG is the point
+
+A slider only moves what it was wired to. A scrub moves *any* number, and the reactive DAG carries the
+change wherever that name flows. The cell below defines three constants; the one after it uses them —
+plus a hidden target. **Scrub `freq`, `amp` and `phase` until your wave locks onto the grey one.**
+(Match ≥ 99 % wins. `phase` has two decimals, so it scrubs finely — hold Shift to move faster.)
+
+/// code
+const freq = 3, amp = 40, phase = 0.00;
+
+/// code
+// the target you're chasing — and the live match score
+const TARGET = { freq: 5, amp: 78, phase: 1.25 };
+const W2 = Math.min(560, window.innerWidth - 80), H2 = 220;
+const cv2 = ui.canvas(W2, H2); const g2 = cv2.getContext("2d");
+g2.fillStyle = "#111"; g2.fillRect(0, 0, W2, H2);
+const wave = (p, x) => p.amp * Math.sin(p.freq * (x/W2) * Math.PI * 2 + p.phase);
+const draw = (p, color, width) => {
+  g2.strokeStyle = color; g2.lineWidth = width; g2.beginPath();
+  for (let x = 0; x <= W2; x++) {
+    const y = H2/2 - wave(p, x);
+    if (x === 0) g2.moveTo(x, y); else g2.lineTo(x, y);
+  }
+  g2.stroke();
+};
+draw(TARGET, "#555", 2);
+draw({ freq, amp, phase }, "#c89b3c", 1.6);
+let err = 0;
+for (let x = 0; x <= W2; x++) err += (wave(TARGET, x) - wave({ freq, amp, phase }, x)) ** 2;
+const rms = Math.sqrt(err / (W2 + 1));
+const match = Math.max(0, 100 * (1 - rms / TARGET.amp));
+ui.display(match >= 99
+  ? `match ${match.toFixed(1)} % — locked. That was three numbers scrubbed across a cell boundary.`
+  : `match ${match.toFixed(1)} % — scrub freq, amp and phase in the cell above`);
+
+/// md
+## the step comes from how you wrote the number
+
+Each literal scrubs in its own natural unit — the form you typed *is* the step declaration:
+
+/// code
+const whole = 50;        // steps by 1
+const fine = 0.750;      // steps by 0.001 — three decimals, three digits of control
+const sci = 1.5e3;       // steps its mantissa: 1.5e3 → 1.6e3
+ui.display(`whole ${whole} · fine ${fine} · sci ${sci} → product ${(whole * fine * sci).toFixed(1)}`);
+
+/// md
+## notes
+
+- Works in **every cell type** — js, Python (adder), Soft, even a number inside a `glsl` shader
+  template recompiles the shader as you drag. Numbers look like numbers everywhere.
+- A `%manual` cell runs under a scrub — holding the number is as explicit a gesture as Ctrl+Enter.
+  With autorun off, scrubbing edits the text only.
+- Heavy cells re-run per step, honestly — scrubbing a constant that feeds a simulation *is* running
+  the simulation. The value-equality gate still stops anything downstream that didn't change.
+- One drag, one undo step. The scrubbed source saves, exports and diffs like any other edit —
+  because it is one.
