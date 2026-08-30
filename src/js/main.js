@@ -77,6 +77,8 @@ import './cell-type-toolbar.js';
 import './menubar.js';
 import './goto.js'; // @optional
 import './size-compare.js'; // @optional
+import './scrub-core.js';
+import './scrub.js'; // @optional
 import './shim.js';
 import './mcp-access.js';
 import './mcp-adapter.js';
