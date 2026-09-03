@@ -18,6 +18,71 @@ function buildDateFromGit() {
   }
 }
 
+function rewriteExampleForWorks(src) {
+    let out = src
+      // Module directive: /// module: <url> <build-time-path>
+      .replace(/^(\/\/\/ module: )\.\/ext\/([\w-]+)\/index\.js( .*)$/gm,
+               '$1@gcu/$2$3')
+      .replace(/^(\/\/\/ module: )\.\/ext\/([\w-]+)\/([\w-]+)\.js( .*)$/gm,
+               '$1@gcu/$2/$3$4')
+      .replace(/^(\/\/\/ module: )@plan( .*)$/gm,
+               '$1@gcu/plan$2')
+      // load()/install() calls in code cells
+      .replace(/(load|install|installBinary)\((['"`])\.\/ext\/([\w-]+)\/index\.js\2\)/g,
+               '$1($2@gcu/$3$2)')
+      .replace(/(load|install|installBinary)\((['"`])\.\/ext\/([\w-]+)\/([\w-]+)\.js\2\)/g,
+               '$1($2@gcu/$3/$4$2)')
+      .replace(/(load|install|installBinary)\((['"`])@plan\2\)/g,
+               '$1($2@gcu/plan$2)');
+
+    // Detect remaining unresolvable references. @atra/* IS resolvable in
+    // works-all (we bundle the libraries under /usr/lib/@atra/), so it's
+    // not flagged. @demo/* (per-example data) and the .src.js variants of
+    // atra libraries (different export shape from @atra/*) stay flagged.
+    const unresolvable = new Set();
+    for (const m of out.matchAll(/@demo\/[\w-]+/g)) unresolvable.add(m[0]);
+    for (const m of out.matchAll(/\.\/ext\/atra\/lib\/[\w-]+\.src\.js/g)) {
+      unresolvable.add(m[0]);
+    }
+    // Leftover ./ext/* refs not caught by the rewrite (multi-segment
+    // paths). Skip atra/lib (handled separately above).
+    for (const m of out.matchAll(/\.\/ext\/(?!atra\/lib)[\w-]+(?:\/[\w-]+)*/g)) {
+      unresolvable.add(m[0]);
+    }
+
+    return { source: out, unresolvable: [...unresolvable] };
+  }
+
+function collectWorksExamples() {
+  const examplesRoot = path.join(__dirname, 'examples', 'defs');
+  if (!fs.existsSync(examplesRoot)) return null;
+  const defs = {};
+  const manifest = { categories: {} };
+  let rewroteCount = 0, unresolvedCount = 0;
+  for (const cat of fs.readdirSync(examplesRoot, { withFileTypes: true })) {
+    if (!cat.isDirectory()) continue;
+    if (cat.name === 'data-corpora') continue;     // raw Gutenberg dumps + builder
+    const catPath = path.join(examplesRoot, cat.name);
+    const files = fs.readdirSync(catPath).filter((f) => f.endsWith('.txt')).sort();
+    if (files.length === 0) continue;
+    manifest.categories[cat.name] = [];
+    for (const f of files) {
+      const rel = cat.name + '/' + f;
+      const raw = fs.readFileSync(path.join(catPath, f), 'utf8');
+      const { source, unresolvable } = rewriteExampleForWorks(raw);
+      defs[rel] = source;
+      if (source !== raw) rewroteCount++;
+      if (unresolvable.length > 0) unresolvedCount++;
+      const titleMatch = source.match(/^\/\/\/\s*title:\s*(.+?)\s*$/m);
+      const title = titleMatch ? titleMatch[1] : f.replace(/^example_/, '').replace(/\.txt$/, '').replace(/_/g, ' ');
+      const entry = { file: rel, name: f, title };
+      if (unresolvable.length > 0) entry.unresolvable = unresolvable;
+      manifest.categories[cat.name].push(entry);
+    }
+  }
+  return { manifest, defs, rewroteCount, unresolvedCount };
+}
+
 const target = (process.argv.find(a => a.startsWith('--target=')) || '').split('=')[1] || '';
 const lean = process.argv.includes('--lean');
 // `@collab` modules are OPT-IN: excluded by default, included only with --collab.
@@ -582,70 +647,13 @@ if (target === 'works' || target === 'works-all' || target === 'works-core') {
   //
   // Returns { source, unresolvable: ['@atra/alpack', ...] } so the
   // manifest can flag examples whose pickered version won't fully run.
-  function _rewriteExampleForWorks(src) {
-    let out = src
-      // Module directive: /// module: <url> <build-time-path>
-      .replace(/^(\/\/\/ module: )\.\/ext\/([\w-]+)\/index\.js( .*)$/gm,
-               '$1@gcu/$2$3')
-      .replace(/^(\/\/\/ module: )\.\/ext\/([\w-]+)\/([\w-]+)\.js( .*)$/gm,
-               '$1@gcu/$2/$3$4')
-      .replace(/^(\/\/\/ module: )@plan( .*)$/gm,
-               '$1@gcu/plan$2')
-      // load()/install() calls in code cells
-      .replace(/(load|install|installBinary)\((['"`])\.\/ext\/([\w-]+)\/index\.js\2\)/g,
-               '$1($2@gcu/$3$2)')
-      .replace(/(load|install|installBinary)\((['"`])\.\/ext\/([\w-]+)\/([\w-]+)\.js\2\)/g,
-               '$1($2@gcu/$3/$4$2)')
-      .replace(/(load|install|installBinary)\((['"`])@plan\2\)/g,
-               '$1($2@gcu/plan$2)');
-
-    // Detect remaining unresolvable references. @atra/* IS resolvable in
-    // works-all (we bundle the libraries under /usr/lib/@atra/), so it's
-    // not flagged. @demo/* (per-example data) and the .src.js variants of
-    // atra libraries (different export shape from @atra/*) stay flagged.
-    const unresolvable = new Set();
-    for (const m of out.matchAll(/@demo\/[\w-]+/g)) unresolvable.add(m[0]);
-    for (const m of out.matchAll(/\.\/ext\/atra\/lib\/[\w-]+\.src\.js/g)) {
-      unresolvable.add(m[0]);
-    }
-    // Leftover ./ext/* refs not caught by the rewrite (multi-segment
-    // paths). Skip atra/lib (handled separately above).
-    for (const m of out.matchAll(/\.\/ext\/(?!atra\/lib)[\w-]+(?:\/[\w-]+)*/g)) {
-      unresolvable.add(m[0]);
-    }
-
-    return { source: out, unresolvable: [...unresolvable] };
-  }
+  // (hoisted to top level as rewriteExampleForWorks — shared with --target=packages)
 
   function buildExamplesPayload() {
     if (!isWorksAll) return '';
-    const examplesRoot = path.join(__dirname, 'examples', 'defs');
-    if (!fs.existsSync(examplesRoot)) return '';
-    const defs = {};
-    const manifest = { categories: {} };
-    let rewroteCount = 0;
-    let unresolvedCount = 0;
-    for (const cat of fs.readdirSync(examplesRoot, { withFileTypes: true })) {
-      if (!cat.isDirectory()) continue;
-      if (cat.name === 'data-corpora') continue;     // raw Gutenberg dumps + builder
-      const catPath = path.join(examplesRoot, cat.name);
-      const files = fs.readdirSync(catPath).filter((f) => f.endsWith('.txt')).sort();
-      if (files.length === 0) continue;
-      manifest.categories[cat.name] = [];
-      for (const f of files) {
-        const rel = cat.name + '/' + f;
-        const raw = fs.readFileSync(path.join(catPath, f), 'utf8');
-        const { source, unresolvable } = _rewriteExampleForWorks(raw);
-        defs[rel] = source;
-        if (source !== raw) rewroteCount++;
-        if (unresolvable.length > 0) unresolvedCount++;
-        const titleMatch = source.match(/^\/\/\/\s*title:\s*(.+?)\s*$/m);
-        const title = titleMatch ? titleMatch[1] : f.replace(/^example_/, '').replace(/\.txt$/, '').replace(/_/g, ' ');
-        const entry = { file: rel, name: f, title };
-        if (unresolvable.length > 0) entry.unresolvable = unresolvable;
-        manifest.categories[cat.name].push(entry);
-      }
-    }
+    const collected = collectWorksExamples();
+    if (!collected) return '';
+    const { manifest, defs, rewroteCount, unresolvedCount } = collected;
     console.log(`works-all examples: rewrote ${rewroteCount} defs, ${unresolvedCount} still have unresolvable refs (@atra/* / @demo/* / leftover ./ext/*)`);
     const payload = { version: 1, manifest, defs };
     const json = JSON.stringify(payload);
@@ -1169,6 +1177,53 @@ if (target === 'packages') {
       console.log(`  packed ${pkgJson.name}@${pkgJson.version} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB)`);
     }
 
+
+    // ── @gcu/examples — the notebook example defs as an installable content
+    // package. works-all bakes these as a payload; a provisioned shell gets
+    // them from here instead: gcupkg install lands examples/* under
+    // /lib/@gcu/examples/ + /usr/share/examples/@gcu_examples/, the boot scan
+    // rehydrates, and each entry's `category` merges it into the picker's
+    // real categories (Help → Open example…). Filenames are flattened
+    // (<cat>_<file>) because the /lib example scan is non-recursive.
+    {
+      const collected = collectWorksExamples();
+      if (collected) {
+        const rootPkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+        const files = {};
+        const exManifest = [];
+        for (const [cat, list] of Object.entries(collected.manifest.categories)) {
+          for (const e of list) {
+            const flat = cat + '_' + e.name;
+            files['examples/' + flat] = Buffer.from(collected.defs[e.file], 'utf8');
+            const me = { file: flat, title: e.title, category: cat };
+            if (e.unresolvable) me.unresolvable = e.unresolvable;
+            exManifest.push(me);
+          }
+        }
+        files['examples/manifest.json'] = Buffer.from(JSON.stringify({ examples: exManifest }, null, 1), 'utf8');
+        files['LICENSE'] = fs.readFileSync(path.join(__dirname, 'LICENSE'));
+        files['package.json'] = Buffer.from(JSON.stringify({
+          name: '@gcu/examples', version: rootPkg.version,
+          description: 'The Auditable example notebooks — every category from the examples gallery, in the Help → Open example… picker.',
+          license: 'MIT',
+        }, null, 2) + '\n', 'utf8');
+        const { bytes } = packGcupkg({
+          name: '@gcu/examples', version: rootPkg.version,
+          description: 'The Auditable example notebooks (Help → Open example…).',
+          license: 'MIT', files, contributes: ['examples'], integrityCovers: [], date,
+        });
+        const rel = 'dist/_gcu_examples.gcupkg';
+        fs.writeFileSync(path.join(outDir, rel), bytes);
+        entries.push({
+          name: '@gcu/examples', kind: 'gcupkg', title: 'Example notebooks',
+          description: 'Every example from the Auditable gallery, in the Help → Open example… picker.',
+          version: rootPkg.version, license: 'MIT', contributes: ['examples'],
+          size: bytes.length, url: rel, integrity: sriOfBytes(bytes),
+          tags: ['examples', 'content', 'notebook'],
+        });
+        console.log(`  packed @gcu/examples@${rootPkg.version} → ${rel} (${(bytes.length / 1024).toFixed(1)} KB, ${exManifest.length} defs)`);
+      }
+    }
     const registry = {
       registry: 1,
       name: 'GCU Packages',
