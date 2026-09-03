@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>auditable — examples</title>
+<style>
+  :root { --bg:#14171c; --panel:#1b1f26; --line:#2a2f38; --fg:#e6e8eb; --dim:#9aa3af; --teal:#3fb6b2; --orange:#e08a3c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font-family:"Barlow",system-ui,-apple-system,Segoe UI,sans-serif; line-height:1.5; }
+  a { color:inherit; text-decoration:none; }
+  header { padding:48px 24px 8px; max-width:1100px; margin:0 auto; }
+  header h1 { font-family:"Space Mono",ui-monospace,Menlo,monospace; font-size:28px; margin:0 0 6px; }
+  header h1 a:hover { color:var(--teal); }
+  header p { color:var(--dim); margin:0; max-width:60ch; }
+  header .back { display:inline-block; margin-bottom:18px; color:var(--teal);
+    font-family:"Space Mono",monospace; font-size:13px; }
+  main { max-width:1100px; margin:0 auto; padding:16px 24px 64px; }
+  section { margin-top:34px; }
+  section h2 { font-family:"Space Mono",monospace; font-size:14px; letter-spacing:.04em;
+    text-transform:uppercase; color:var(--dim); border-bottom:1px solid var(--line);
+    padding-bottom:8px; margin:0 0 16px; }
+  section h2 .count { color:var(--line); margin-left:6px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    padding:14px 16px; display:flex; flex-direction:column; gap:4px; transition:border-color .12s,transform .12s; }
+  .card:hover { border-color:var(--teal); transform:translateY(-1px); }
+  .card .t { font-weight:600; }
+  .card .n { font-family:"Space Mono",monospace; font-size:12px; color:var(--dim); }
+  footer { max-width:1100px; margin:0 auto; padding:24px; color:var(--dim);
+    font-size:13px; border-top:1px solid var(--line); }
+</style>
+</head>
+<body>
+<header>
+  <a class="back" href="../index.html">← auditable</a>
+  <h1><a href="../index.html">examples</a></h1>
+  <p>88 self-contained notebooks — each one a single HTML file. Click any to open and run it live; nothing is installed, nothing is fetched.</p>
+</header>
+<main>
+
+    <section>
+      <h2>Basics <span class="count">26</span></h2>
+      <div class="grid">
+        <a class="card" href="basics/example_plot.html"><span class="t">@gcu/plot — canvas plotting</span><span class="n">example_plot</span></a>
+        <a class="card" href="basics/example_units.html"><span class="t">@gcu/units — unit conversions</span><span class="n">example_units</span></a>
+        <a class="card" href="basics/example_dashboard.html"><span class="t">data dashboard</span><span class="n">example_dashboard</span></a>
+        <a class="card" href="basics/example_encrypted.html"><span class="t">encrypted notebook</span><span class="n">example_encrypted</span></a>
+        <a class="card" href="basics/example_app_export.html"><span class="t">export as app</span><span class="n">example_app_export</span></a>
+        <a class="card" href="basics/example_life.html"><span class="t">game of life</span><span class="n">example_life</span></a>
+        <a class="card" href="basics/example_idw.html"><span class="t">IDW interpolation</span><span class="n">example_idw</span></a>
+        <a class="card" href="basics/example_lorenz.html"><span class="t">Lorenz attractor</span><span class="n">example_lorenz</span></a>
+        <a class="card" href="basics/example_mandelbrot.html"><span class="t">Mandelbrot explorer</span><span class="n">example_mandelbrot</span></a>
+        <a class="card" href="basics/example_md_interpolation.html"><span class="t">markdown interpolation</span><span class="n">example_md_interpolation</span></a>
+        <a class="card" href="basics/example_dialog.html"><span class="t">modal dialogs</span><span class="n">example_dialog</span></a>
+        <a class="card" href="basics/example_modules.html"><span class="t">module playground</span><span class="n">example_modules</span></a>
+        <a class="card" href="basics/example_notebook_fs.html"><span class="t">notebook filesystem</span><span class="n">example_notebook_fs</span></a>
+        <a class="card" href="basics/example_particles.html"><span class="t">particle sandbox</span><span class="n">example_particles</span></a>
+        <a class="card" href="basics/example_python.html"><span class="t">python mode</span><span class="n">example_python</span></a>
+        <a class="card" href="basics/example_python_sandbox.html"><span class="t">Python sandbox — drop your .ipynb here</span><span class="n">example_python_sandbox</span></a>
+        <a class="card" href="basics/example_sadpan.html"><span class="t">sadpan — Dataframe Library</span><span class="n">example_sadpan</span></a>
+        <a class="card" href="basics/example_scrub.html"><span class="t">scrubbable numbers — Alt+drag any literal</span><span class="n">example_scrub</span></a>
+        <a class="card" href="basics/example_sideact.html"><span class="t">sideact — reactive UI</span><span class="n">example_sideact</span></a>
+        <a class="card" href="basics/example_template.html"><span class="t">template — VFS-backed {{path | filter}} rendering</span><span class="n">example_template</span></a>
+        <a class="card" href="basics/example_terminal.html"><span class="t">terminal cells</span><span class="n">example_terminal</span></a>
+        <a class="card" href="basics/example_unified_fs.html"><span class="t">unified filesystem</span><span class="n">example_unified_fs</span></a>
+        <a class="card" href="basics/example_workers.html"><span class="t">web workers</span><span class="n">example_workers</span></a>
+        <a class="card" href="basics/example_webmcp.html"><span class="t">WebMCP bridge</span><span class="n">example_webmcp</span></a>
+        <a class="card" href="basics/example_widgets.html"><span class="t">widget components</span><span class="n">example_widgets</span></a>
+        <a class="card" href="basics/example_workshop.html"><span class="t">workshop workshop</span><span class="n">example_workshop</span></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>Adder · Python <span class="count">8</span></h2>
+      <div class="grid">
+        <a class="card" href="adder/example_adder.html"><span class="t">adder — cells and tags</span><span class="n">example_adder</span></a>
+        <a class="card" href="adder/example_adder_dee.html"><span class="t">adder — domain estimation + dee</span><span class="n">example_adder_dee</span></a>
+        <a class="card" href="adder/example_adder_dhsa.html"><span class="t">adder — drill hole spacing analysis</span><span class="n">example_adder_dhsa</span></a>
+        <a class="card" href="adder/example_adder_fs.html"><span class="t">adder — Python filesystem</span><span class="n">example_adder_fs</span></a>
+        <a class="card" href="adder/example_adder_estimation.html"><span class="t">adder — simulate, drill, estimate</span><span class="n">example_adder_estimation</span></a>
+        <a class="card" href="adder/example_adder_gslib.html"><span class="t">adder + gslib — kriging</span><span class="n">example_adder_gslib</span></a>
+        <a class="card" href="adder/example_adder_sadpan.html"><span class="t">adder + sadpan — pandas-style dataframes</span><span class="n">example_adder_sadpan</span></a>
+        <a class="card" href="adder/example_adder_natra.html"><span class="t">adder × natra — numpy for Python cells</span><span class="n">example_adder_natra</span></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>Atra · Wasm <span class="count">8</span></h2>
+      <div class="grid">
+        <a class="card" href="atra/example_atra_strings.html"><span class="t">atra — character literals &amp; data segments</span><span class="n">example_atra_strings</span></a>
+        <a class="card" href="atra/example_atra_tour.html"><span class="t">atra — language tour</span><span class="n">example_atra_tour</span></a>
+        <a class="card" href="atra/example_atra.html"><span class="t">atra — Wasm kernels</span><span class="n">example_atra</span></a>
+        <a class="card" href="atra/example_atra_layouts.html"><span class="t">atra layouts — N-body gravity</span><span class="n">example_atra_layouts</span></a>
+        <a class="card" href="atra/example_atra_multi_memory.html"><span class="t">atra multi-memory — columnar block model</span><span class="n">example_atra_multi_memory</span></a>
+        <a class="card" href="atra/example_atra_v_julia.html"><span class="t">atra vs Julia</span><span class="n">example_atra_v_julia</span></a>
+        <a class="card" href="atra/example_natra.html"><span class="t">natra — ndarray for the browser</span><span class="n">example_natra</span></a>
+        <a class="card" href="atra/example_v8_vs_wasm.html"><span class="t">V8 JS vs Wasm SIMD — BLAS-1</span><span class="n">example_v8_vs_wasm</span></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>Geostatistics <span class="count">9</span></h2>
+      <div class="grid">
+        <a class="card" href="gslib/example_dee.html"><span class="t">@gcu/dee — 3D block model viewer</span><span class="n">example_dee</span></a>
+        <a class="card" href="gslib/example_grid.html"><span class="t">@gcu/grid — block model operations</span><span class="n">example_grid</span></a>
+        <a class="card" href="gslib/example_alpack.html"><span class="t">ALPACK — dense linear algebra in Wasm</span><span class="n">example_alpack</span></a>
+        <a class="card" href="gslib/example_alpack_atra.html"><span class="t">atra + ALPACK — all-Wasm interpolation</span><span class="n">example_alpack_atra</span></a>
+        <a class="card" href="gslib/example_gslib_dhsa.html"><span class="t">DHSA — drill hole spacing analysis</span><span class="n">example_gslib_dhsa</span></a>
+        <a class="card" href="gslib/example_dee_domains.html"><span class="t">domain estimation — peel + grid + dee</span><span class="n">example_dee_domains</span></a>
+        <a class="card" href="gslib/example_gslib_kb2d.html"><span class="t">KB2D — 2D kriging</span><span class="n">example_gslib_kb2d</span></a>
+        <a class="card" href="gslib/example_pairing.html"><span class="t">pairing analysis — historic vs infill</span><span class="n">example_pairing</span></a>
+        <a class="card" href="gslib/example_gslib_sgsim.html"><span class="t">SGSIM — Gaussian simulation</span><span class="n">example_gslib_sgsim</span></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>GIS <span class="count">3</span></h2>
+      <div class="grid">
+        <a class="card" href="gis/example_hydrology.html"><span class="t">raster — hydrology</span><span class="n">example_hydrology</span></a>
+        <a class="card" href="gis/example_raster.html"><span class="t">raster — terrain analysis</span><span class="n">example_raster</span></a>
+        <a class="card" href="gis/example_spinifex.html"><span class="t">web GIS</span><span class="n">example_spinifex</span></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>Geology <span class="count">5</span></h2>
+      <div class="grid">
+        <a class="card" href="geology/example_peel_3d.html"><span class="t">depth peeling — 3D block model (three.js)</span><span class="n">example_peel_3d</span></a>
+        <a class="card" href="geology/example_stereonet.html"><span class="t">stereonet</span><span class="n">example_stereonet</span></a>
+        <a class="card" href="geology/example_stereonet_cell.html"><span class="t">stereonet cell</span><span class="n">example_stereonet_cell</span></a>
+        <a class="card" href="geology/example_winding_3d.html"><span class="t">winding number — 3D block model (three.js)</span><span class="n">example_winding_3d</span></a>
+        <a class="card" href="geology/example_winding.html"><span class="t">winding number — block model evaluation</span><span class="n">example_winding</span></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>Calque <span class="count">3</span></h2>
+      <div class="grid">
+        <a class="card" href="calque/example_calque_advanced.html"><span class="t">calque — advanced features</span><span class="n">example_calque_advanced</span></a>
+        <a class="card" href="calque/example_calque.html"><span class="t">calque — spreadsheet language</span><span class="n">example_calque</span></a>
+        <a class="card" href="calque/example_sheet.html"><span class="t">spreadsheet IO</span><span class="n">example_sheet</span></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>Language extensions <span class="count">9</span></h2>
+      <div class="grid">
+        <a class="card" href="extensions/example_librarian.html"><span class="t">@gcu/librarian — text search demo</span><span class="n">example_librarian</span></a>
+        <a class="card" href="extensions/example_yaml.html"><span class="t">@gcu/yaml — strict YAML loader</span><span class="n">example_yaml</span></a>
+        <a class="card" href="extensions/example_air_ir.html"><span class="t">AIR — textual IR</span><span class="n">example_air_ir</span></a>
+        <a class="card" href="extensions/example_over.html"><span class="t">OVER — table transforms</span><span class="n">example_over</span></a>
+        <a class="card" href="extensions/example_shader.html"><span class="t">shader playground</span><span class="n">example_shader</span></a>
+        <a class="card" href="extensions/example_soft.html"><span class="t">soft — English keyword language</span><span class="n">example_soft</span></a>
+        <a class="card" href="extensions/example_soft_ptbr.html"><span class="t">soft — programação em português</span><span class="n">example_soft_ptbr</span></a>
+        <a class="card" href="extensions/example_sql.html"><span class="t">SQL notebook</span><span class="n">example_sql</span></a>
+        <a class="card" href="extensions/example_vfs.html"><span class="t">virtual filesystem</span><span class="n">example_vfs</span></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>Etc <span class="count">9</span></h2>
+      <div class="grid">
+        <a class="card" href="etc/example_plan_files.html"><span class="t">@plan — .plan files</span><span class="n">example_plan_files</span></a>
+        <a class="card" href="etc/example_plan_analysis.html"><span class="t">@plan — project analysis</span><span class="n">example_plan_analysis</span></a>
+        <a class="card" href="etc/example_plan.html"><span class="t">@plan — project scheduling</span><span class="n">example_plan</span></a>
+        <a class="card" href="etc/example_iso9660.html"><span class="t">iso 9660</span><span class="n">example_iso9660</span></a>
+        <a class="card" href="etc/example_line.html"><span class="t">line — TypedArray-based numerical library</span><span class="n">example_line</span></a>
+        <a class="card" href="etc/example_raf_repro.html"><span class="t">rAF hang repro — verbatim copy of atra_layouts (see ROADMAP)</span><span class="n">example_raf_repro</span></a>
+        <a class="card" href="etc/example_resource_estimation.html"><span class="t">resource estimation — 3 deposits</span><span class="n">example_resource_estimation</span></a>
+        <a class="card" href="etc/example_synth.html"><span class="t">synth</span><span class="n">example_synth</span></a>
+        <a class="card" href="etc/example_threejs.html"><span class="t">three.js — procedural terrain</span><span class="n">example_threejs</span></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>gsjs <span class="count">8</span></h2>
+      <div class="grid">
+        <a class="card" href="gsjs/example_drillhole.html"><span class="t">drillholes — desurvey, composite, QC</span><span class="n">example_drillhole</span></a>
+        <a class="card" href="gsjs/example_gsjs_estimate.html"><span class="t">gsjs — a resource estimate, end to end</span><span class="n">example_gsjs_estimate</span></a>
+        <a class="card" href="gsjs/example_gsjs_domains.html"><span class="t">gsjs — domained estimation (a model per zone)</span><span class="n">example_gsjs_domains</span></a>
+        <a class="card" href="gsjs/example_gsjs_cap.html"><span class="t">gsjs — live top-cut (krige once, re-realize free)</span><span class="n">example_gsjs_cap</span></a>
+        <a class="card" href="gsjs/example_gsjs_multipass_py.html"><span class="t">gsjs — multiple-pass estimation (Python)</span><span class="n">example_gsjs_multipass_py</span></a>
+        <a class="card" href="gsjs/example_gsjs_multipass.html"><span class="t">gsjs — multiple-pass estimation (variance-calibrated search)</span><span class="n">example_gsjs_multipass</span></a>
+        <a class="card" href="gsjs/example_gsjs_tour.html"><span class="t">gsjs — the recipe artifact + QA (swath, grade–tonnage, HGR)</span><span class="n">example_gsjs_tour</span></a>
+        <a class="card" href="gsjs/example_variography.html"><span class="t">variography — experimental variogram + interactive fit</span><span class="n">example_variography</span></a>
+      </div>
+    </section>
+</main>
+<footer>auditable · Geoscientific Chaos Union · <a href="https://github.com/gentropic/auditable" style="color:var(--teal)">github.com/gentropic/auditable</a></footer>
+</body>
+</html>

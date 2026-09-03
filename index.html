@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>auditable — a reactive notebook in a single HTML file</title>
+<meta name="description" content="A reactive computational notebook in a single, self-contained HTML file. JavaScript and Python, offline, no install.">
+<style>
+  :root {
+    --bg:#14171c; --panel:#1b1f26; --line:#2a2f38; --fg:#e6e8eb; --dim:#9aa3af;
+    --teal:#3fb6b2; --orange:#e08a3c; --green:#6cae54; --kw:#c8a8d8;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); line-height:1.55;
+    font-family:"Barlow",system-ui,-apple-system,Segoe UI,sans-serif; }
+  a { color:var(--teal); text-decoration:none; }
+  .wrap { max-width:980px; margin:0 auto; padding:0 24px; }
+  code, .mono { font-family:"Space Mono",ui-monospace,Menlo,monospace; }
+
+  .hero { padding:72px 0 44px; text-align:center; }
+  .hero h1 { font-family:"Space Mono",monospace; font-size:48px; margin:0 0 12px; letter-spacing:-.01em; }
+  .hero .tag { font-size:21px; margin:0 auto 10px; max-width:34ch; }
+  .hero .sub { color:var(--dim); max-width:56ch; margin:0 auto 32px; }
+  .cta { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+  .btn { display:inline-block; padding:12px 22px; border-radius:8px; font-weight:600;
+    border:1px solid var(--line); background:var(--panel); color:var(--fg); transition:border-color .12s,transform .12s; }
+  .btn:hover { transform:translateY(-1px); border-color:var(--teal); }
+  .btn.primary { background:var(--orange); border-color:var(--orange); color:#14171c; }
+  .btn.primary:hover { filter:brightness(1.06); }
+  .btn .mono { font-size:13px; color:var(--dim); display:block; font-weight:400; }
+  .btn.primary .mono { color:#3a2a14; }
+
+  .features { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; padding:24px 0 8px; }
+  .feat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px 22px; }
+  .feat h3 { margin:0 0 6px; font-family:"Space Mono",monospace; font-size:15px; }
+  .feat p { margin:0; color:var(--dim); font-size:15px; }
+  .feat .k { color:var(--teal); }
+
+  .strip { border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-top:48px;
+    padding:36px 0; display:flex; gap:32px; flex-wrap:wrap; justify-content:space-between; align-items:center; }
+  .strip .blurb { max-width:46ch; color:var(--dim); }
+  .strip .blurb b { color:var(--fg); }
+
+  footer { padding:40px 0 64px; color:var(--dim); font-size:14px; text-align:center; }
+  footer a { color:var(--dim); } footer a:hover { color:var(--teal); }
+  .editions { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:14px; font-size:13px; }
+  .editions a { font-family:"Space Mono",monospace; }
+
+  /* language playground */
+  .playground > h2 { font-family:"Space Mono",monospace; font-size:20px; margin:48px 0 4px; }
+  .playground > .lead { color:var(--dim); margin:0 0 18px; }
+  .tabs { display:flex; gap:6px; }
+  .tabs button { font-family:"Space Mono",monospace; font-size:13px; padding:9px 15px; cursor:pointer;
+    background:transparent; color:var(--dim); border:1px solid transparent; border-bottom:none;
+    border-radius:8px 8px 0 0; position:relative; top:1px; }
+  .tabs button.active { color:var(--fg); background:var(--panel); border-color:var(--line); }
+  .pad { background:var(--panel); border:1px solid var(--line); border-radius:0 10px 10px 10px; padding:14px; }
+  /* highlighted editor: transparent textarea over a colored <pre>, scroll-synced */
+  .editor { position:relative; }
+  .editor .hl, #toy-code {
+    margin:0; box-sizing:border-box; width:100%; min-height:128px; padding:12px;
+    border:1px solid var(--line); border-radius:8px; tab-size:2; white-space:pre; overflow:auto;
+    font-family:"Space Mono",ui-monospace,Menlo,monospace; font-size:13px; line-height:1.55;
+  }
+  .editor .hl { position:absolute; inset:0; background:var(--bg); color:var(--fg);
+    pointer-events:none; scrollbar-width:none; }
+  .editor .hl::-webkit-scrollbar { display:none; }
+  .editor .hl code { font:inherit; }
+  #toy-code { position:relative; resize:vertical; background:transparent; color:transparent; caret-color:var(--fg); }
+  #toy-code:focus { outline:none; }
+  .editor:focus-within .hl, .editor:focus-within #toy-code { border-color:var(--teal); }
+  .c-kw { color:var(--kw); }
+  .c-str { color:var(--green); }
+  .c-com { color:var(--dim); font-style:italic; }
+  .c-num { color:var(--teal); }
+  .toy-bar { display:flex; align-items:center; gap:12px; margin:12px 0; }
+  #toy-run { font-family:"Space Mono",monospace; font-weight:700; font-size:13px; padding:9px 20px; cursor:pointer;
+    background:var(--green); color:#11160d; border:none; border-radius:8px; }
+  #toy-run:hover { filter:brightness(1.08); }
+  #toy-status { color:var(--dim); font-family:"Space Mono",monospace; font-size:12px; }
+  #toy-out { margin:0; padding:12px; min-height:22px; background:var(--bg); border:1px solid var(--line);
+    border-radius:8px; color:var(--teal); white-space:pre-wrap; word-break:break-word;
+    font-family:"Space Mono",ui-monospace,Menlo,monospace; font-size:13px; line-height:1.55; }
+  #toy-out.err { color:var(--orange); }
+
+  /* dark scrollbars (Firefox + WebKit) */
+  * { scrollbar-width:thin; scrollbar-color:#39414e transparent; }
+  ::-webkit-scrollbar { width:11px; height:11px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:#2f3845; border-radius:7px; border:2px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background:#3d4858; }
+  ::-webkit-scrollbar-corner { background:transparent; }
+
+  /* ecosystem grid */
+  .eco > h2 { font-family:"Space Mono",monospace; font-size:20px; margin:52px 0 4px; }
+  .eco > .lead { color:var(--dim); margin:0 0 18px; max-width:64ch; }
+  .eco-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(196px,1fr)); gap:10px; }
+  .ext { display:block; color:inherit; text-decoration:none;
+    background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:11px 13px;
+    transition:border-color .12s, transform .12s; }
+  .ext:hover { border-color:var(--teal); transform:translateY(-1px); }
+  .ext b { font-family:"Space Mono",monospace; color:var(--teal); font-size:13px; }
+  .ext span { display:block; color:var(--dim); font-size:13px; margin-top:3px; line-height:1.4; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="hero">
+    <h1>auditable</h1>
+    <p class="tag">A reactive computational notebook in a single HTML file.</p>
+    <p class="sub">JavaScript and Python in the same reactive document. No install, no server, no account — it runs entirely in your browser, and it works offline. Save it, email it, archive it: it's one file.</p>
+    <div class="cta">
+      <a class="btn primary" href="auditable.html">Open the notebook <span class="mono">auditable.html</span></a>
+      <a class="btn" href="https://gentropic.org/works/">Open Works <span class="mono">the GCU desktop</span></a>
+      <a class="btn" href="examples/index.html">Browse examples <span class="mono">81 notebooks</span></a>
+    </div>
+  </section>
+
+  <section class="features">
+    <div class="feat"><h3 class="k">One file</h3><p>Inline CSS, HTML, and JS in a single self-contained <code>.html</code>. Nothing to install; nothing phones home.</p></div>
+    <div class="feat"><h3 class="k">Reactive</h3><p>Cells form a dependency graph. Change a value or drag a slider and everything downstream re-runs automatically.</p></div>
+    <div class="feat"><h3 class="k">JS + Python</h3><p>Write JavaScript, or Python via <code>adder</code> — a real Python dialect that compiles to fast JS. Same reactive graph.</p></div>
+    <div class="feat"><h3 class="k">Offline &amp; private</h3><p>The network is an opt-in edge. It runs under a strict no-network policy, losing only explicitly network-named features.</p></div>
+    <div class="feat"><h3 class="k">Extensible</h3><p>Languages, cell types, and libraries plug in — geostatistics, GIS, plotting, dataframes, shaders, SQL, and more.</p></div>
+    <div class="feat"><h3 class="k">Verifiable</h3><p>Releases are Ed25519-signed; the in-app updater verifies signatures before applying. Trust is checkable.</p></div>
+  </section>
+
+  <section class="playground">
+    <h2>Try the languages</h2>
+    <p class="lead">Real interpreters and compilers, running right in this page — each loads only when you hit Run. Edit the code and run it again.</p>
+    <div class="tabs" id="toy-tabs">
+      <button data-lang="js" class="active">js · JavaScript</button>
+      <button data-lang="adder">adder · Python</button>
+      <button data-lang="soft">soft · English</button>
+      <button data-lang="atra">atra · Wasm</button>
+    </div>
+    <div class="pad">
+      <div class="editor">
+        <pre class="hl" aria-hidden="true"><code id="toy-hl"></code></pre>
+        <textarea id="toy-code" spellcheck="false" wrap="off" aria-label="code"></textarea>
+      </div>
+      <div class="toy-bar"><button id="toy-run">▶ Run</button><span id="toy-status"></span></div>
+      <pre id="toy-out">› hit Run</pre>
+    </div>
+  </section>
+
+  <section class="eco">
+    <h2>Batteries included</h2>
+    <p class="lead">Languages, science, and geoscience plug in as cell types and libraries — no package manager, no environment. A sample of what ships:</p>
+    <div class="eco-grid">
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/adder" target="_blank" rel="noopener"><b>adder</b><span>Python, compiled to JS</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/soft" target="_blank" rel="noopener"><b>soft</b><span>English-keyword language</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/atra" target="_blank" rel="noopener"><b>atra</b><span>compiles to WebAssembly</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/shader" target="_blank" rel="noopener"><b>glsl</b><span>live GLSL shaders</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/sql" target="_blank" rel="noopener"><b>sql</b><span>SQL with completions</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/plot" target="_blank" rel="noopener"><b>plot</b><span>matplotlib-shaped charts</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/sadpan" target="_blank" rel="noopener"><b>sadpan</b><span>pandas-shaped dataframes</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/natra" target="_blank" rel="noopener"><b>natra</b><span>numpy-shaped ndarrays</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/scitra" target="_blank" rel="noopener"><b>scitra</b><span>scipy-shaped science</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/line" target="_blank" rel="noopener"><b>line</b><span>pure-JS linear algebra</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/learn" target="_blank" rel="noopener"><b>learn</b><span>scikit-learn-shaped ML</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/atra/lib" target="_blank" rel="noopener"><b>gslib</b><span>geostatistics — kriging, sgsim</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/spinifex" target="_blank" rel="noopener"><b>spinifex</b><span>web GIS over OpenLayers</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/stereonet" target="_blank" rel="noopener"><b>stereonet</b><span>structural-geology nets</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/units" target="_blank" rel="noopener"><b>units</b><span>dimensional units &amp; conversion</span></a>
+      <a class="ext" href="https://github.com/gentropic/auditable/tree/main/ext/calque" target="_blank" rel="noopener"><b>calque</b><span>spreadsheet language → xlsx</span></a>
+    </div>
+  </section>
+
+  <section class="strip">
+    <div class="blurb"><b>Built for real work.</b> Resource estimation, geostatistics, spatial analysis — the kind of computation that usually needs a stack of installs, in one file you can hand to a colleague.</div>
+    <a class="btn" href="https://github.com/gentropic/auditable/releases">Download a release <span class="mono">signed builds</span></a>
+  </section>
+
+  <footer>
+    <div>
+      <a href="https://github.com/gentropic/auditable">Source on GitHub</a> ·
+      <a href="https://github.com/gentropic/auditable/releases">Releases</a> ·
+      <a href="scan/">Signature scanner</a> ·
+      MIT licensed
+    </div>
+    <div class="editions">
+      Editions:
+      <a href="editions/auditable-py.html">Python</a>
+      <a href="editions/auditable-geo.html">Geoscience</a>
+    </div>
+    <div style="margin-top:16px">Geoscientific Chaos Union — <a href="https://gentropic.org">gentropic.org</a></div>
+  </footer>
+
+</div>
+
+<script type="module">
+  // Language toys — lazy-load each bundle from ./lib/ only on first Run, so the page
+  // ships tiny. adder/soft return their defined variables (print is discarded, like a
+  // cell's output); atra compiles to Wasm in-browser and we call main() + show the size.
+  const SNIPPETS = {
+    js: `// the obvious one — yes, a notebook runs JavaScript\nconst squares = Array.from({ length: 8 }, (_, n) => n * n);\nreturn { squares, total: squares.reduce((a, b) => a + b, 0) };`,
+    adder: `# real Python — compiled to JS, running in this page\nsquares = [n*n for n in range(8)]\ntotal = sum(squares)`,
+    soft: `set width to 12\nset height to 8\nset area to width times height`,
+    atra: `! a numeric kernel — compiled to WebAssembly, in your browser\nfunction main(): i32\nvar\n  i, s: i32\nbegin\n  s := 0\n  for i := 0, 100\n    s := s + i\n  end for\n  main := s\nend`,
+  };
+  const _cache = {};
+  const mod = (n) => (_cache[n] ||= import('./lib/' + n + '.js'));
+  const fmt = (vars, skip = []) => {
+    const lines = [];
+    for (const [k, v] of Object.entries(vars)) {
+      if (skip.includes(k) || typeof v === 'function') continue;
+      lines.push(`${k} = ${JSON.stringify(v)}`);
+    }
+    return lines.join('\n') || '(no values)';
+  };
+  const RUN = {
+    js(code) {
+      const r = new Function(code)();
+      if (r === undefined) return '(no value returned — end with `return …`)';
+      return (r && typeof r === 'object' && !Array.isArray(r)) ? fmt(r) : JSON.stringify(r);
+    },
+    async adder(code) { const { adder } = await mod('adder'); return fmt(await adder.adderTag([code])); },
+    async soft(code) { const { soft } = await mod('soft'); return fmt(await soft.softTag([code]), ['Math', 'Text', 'List']); },
+    async atra(code) {
+      const { atra } = await mod('atra');
+      const bytes = atra.compile(code).length;
+      const ex = atra.run(code);
+      const out = typeof ex.main === 'function' ? ex.main() : '(define a main() to see a result)';
+      return `main() = ${out}\ncompiled to ${bytes} bytes of WebAssembly`;
+    },
+  };
+  let cur = 'js';
+  const codeEl = document.getElementById('toy-code');
+  const hlEl = document.getElementById('toy-hl');
+  const outEl = document.getElementById('toy-out');
+  const statusEl = document.getElementById('toy-status');
+
+  // Tiny per-language highlighter: one master regex (comment | string | number |
+  // identifier), classify by which group matched. No deps, no bundle.
+  const GRAMMAR = {
+    js:    { com: /\/\/[^\n]*|\/\*[\s\S]*?\*\//, str: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/, kw: 'const let var function return if else for while do of in new class extends await async yield try catch finally throw switch case break continue typeof instanceof delete void this super import export from default true false null undefined' },
+    adder: { com: /#[^\n]*/, str: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/, kw: 'def return if elif else for while in not and or is import from as class lambda pass break continue with try except finally raise yield global None True False print range len sum' },
+    soft:  { com: /#[^\n]*/, str: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/, kw: 'set to say if otherwise each for change in is at least most than greater less equal plus minus times divided by and or not while repeat let be of' },
+    atra:  { com: /![^\n]*/, str: /"(?:[^"\\]|\\.)*"/, kw: 'function subroutine var begin end for call return if then else while do and or not mod div export i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool array' },
+  };
+  for (const g of Object.values(GRAMMAR)) g.kwset = new Set(g.kw.split(' '));
+  const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  function highlight(code, lang) {
+    const g = GRAMMAR[lang];
+    if (!g) return esc(code) + '\n';
+    const re = new RegExp('(?<com>' + g.com.source + ')|(?<str>' + g.str.source + ')|(?<num>\\b\\d+(?:\\.\\d+)?\\b)|(?<id>[A-Za-z_]\\w*)', 'g');
+    let out = '', last = 0, m;
+    while ((m = re.exec(code)) !== null) {
+      out += esc(code.slice(last, m.index));
+      const t = m[0], gr = m.groups;
+      const cls = gr.com ? 'c-com' : gr.str ? 'c-str' : gr.num ? 'c-num' : (gr.id && g.kwset.has(t)) ? 'c-kw' : '';
+      out += cls ? '<span class="' + cls + '">' + esc(t) + '</span>' : esc(t);
+      last = m.index + t.length;
+      if (t.length === 0) re.lastIndex++;
+    }
+    return out + esc(code.slice(last)) + '\n';
+  }
+  const paint = () => { hlEl.innerHTML = highlight(codeEl.value, cur); };
+  codeEl.addEventListener('input', paint);
+  codeEl.addEventListener('scroll', () => { const p = hlEl.parentElement; p.scrollTop = codeEl.scrollTop; p.scrollLeft = codeEl.scrollLeft; });
+  codeEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    e.preventDefault();
+    const s = codeEl.selectionStart, en = codeEl.selectionEnd;
+    codeEl.value = codeEl.value.slice(0, s) + '  ' + codeEl.value.slice(en);
+    codeEl.selectionStart = codeEl.selectionEnd = s + 2;
+    paint();
+  });
+
+  const setLang = (lang) => {
+    cur = lang;
+    codeEl.value = SNIPPETS[lang];
+    paint();
+    codeEl.scrollTop = 0; hlEl.parentElement.scrollTop = 0;
+    outEl.textContent = '› hit Run';
+    outEl.classList.remove('err');
+    for (const b of document.querySelectorAll('#toy-tabs button')) b.classList.toggle('active', b.dataset.lang === lang);
+  };
+  document.getElementById('toy-tabs').addEventListener('click', (e) => {
+    if (e.target.dataset && e.target.dataset.lang) setLang(e.target.dataset.lang);
+  });
+  document.getElementById('toy-run').addEventListener('click', async () => {
+    statusEl.textContent = 'loading + running…';
+    outEl.classList.remove('err');
+    try {
+      outEl.textContent = await RUN[cur](codeEl.value);
+      statusEl.textContent = '';
+    } catch (err) {
+      outEl.textContent = (err && err.message) || String(err);
+      outEl.classList.add('err');
+      statusEl.textContent = 'error';
+    }
+  });
+  setLang('js');
+</script>
+</body>
+</html>
