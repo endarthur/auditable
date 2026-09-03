@@ -1651,6 +1651,48 @@ try {
     else fail(`filter: suggestion appears ${dm}× — "${msgs['FEE > 40']}"`);
   }
 
+  // ── the FILTER WIDGET DRAWER (@gcu/filterui) — the expression as live
+  //    controls; a slider drag surgically rewrites its literal and re-filters ──
+  {
+    await page.evaluate(async () => {
+      let t = 'id,grade,lito\n';
+      for (let i = 0; i < 300; i++) t += `${i},${(i * 0.2).toFixed(1)},${['ox', 'sulf', 'trans'][i % 3]}\n`;
+      window._lamina.open('fd.csv', new TextEncoder().encode(t));
+      await new Promise((r) => setTimeout(r, 400));   // gutter stats (the drawer's bounds provider)
+      document.getElementById('filter').value = 'grade > 30 and lito = "ox"';
+      await window._lamina.applyFilter('grade > 30 and lito = "ox"');
+    });
+    await page.click('#filterWidgets');
+    await page.waitForTimeout(300);
+    const ui = await page.evaluate(() => {
+      const d = document.getElementById('fdrawer');
+      return { shown: d.classList.contains('show'), sliders: d.querySelectorAll('input[type="range"]').length,
+        chips: d.querySelectorAll('.fd-chip').length, on: [...d.querySelectorAll('.fd-chip.on')].map((c) => c.textContent) };
+    });
+    if (ui.shown && ui.sliders === 1 && ui.chips >= 3 && ui.on.includes('ox'))
+      ok(`filter drawer: expression projected as widgets (${ui.sliders} slider, ${ui.chips} chips incl. gutter values, on=${ui.on})`);
+    else fail(`filter drawer: projection wrong — ${JSON.stringify(ui)}`);
+    const drag = await page.evaluate(async () => {
+      const sl = document.querySelector('#fdrawer input[type="range"]');
+      sl.value = 45; sl.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 700));   // widget apply is debounced 350 ms (a scan per drag, not per step)
+      const vs = window._laminaVS;
+      return { text: document.getElementById('filter').value, rows: vs.rowCount() };
+    });
+    if (/^grade > 4[45][0-9.]* and lito = "ox"$/.test(drag.text) && drag.rows > 0 && drag.rows < 100)
+      ok(`filter drawer: slider drag rewrites the literal + re-scans ("${drag.text}" → ${drag.rows} rows)`);
+    else fail(`filter drawer: drag wrong — "${drag.text}" → ${drag.rows} rows`);
+    const rst = await page.evaluate(async () => {
+      [...document.querySelectorAll('#fdrawer .fd-head button')].find((b) => b.textContent === 'reset').click();
+      await new Promise((r) => setTimeout(r, 500));
+      return { text: document.getElementById('filter').value, rows: window._laminaVS.rowCount() };
+    });
+    if (rst.text === 'grade > 30 and lito = "ox"')
+      ok(`filter drawer: reset restores the snapshot ("${rst.text}", ${rst.rows} rows)`);
+    else fail(`filter drawer: reset wrong — "${rst.text}"`);
+    await page.click('#filterWidgets');   // close
+  }
+
 } catch (e) {
   fail('smoke threw: ' + e.message);
 } finally {

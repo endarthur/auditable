@@ -9,10 +9,11 @@
 
 import { createGrid, PENDING } from '@gcu/loom';
 import { detectKind, buildMemorySource, buildFileSource, buildStreamSource, buildSourceFromIndex, indexOf, fileKey, createRecordViewSource, scanFilter, createResultView, scanSortKeys, scanColumnStats, scanAllColumnStats, scanGroupBy, scanGradeTonnage, scanDataQuality, parseNum, createLaminaProvider, LOADING, withCalcCursor, withCalcView } from '@gcu/lamina';
-import { compile, compileBool, validate, deps, complete, tokenize } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
+import { compile, compileBool, validate, deps, complete, tokenize, parse as exprParse, quoteIdent } from '@gcu/expr';   // SQL-WHERE-flavored filter + calc language; complete() drives autocomplete, tokenize() the highlight overlay
 import { gradeTonnage } from '@gcu/sluice';   // streaming accumulators — the grade-tonnage cutoff curve (one accumulator per grade field, driven from lamina's record cursor)
 import { convert as unitConvert } from '@gcu/units';   // grade/density unit declarations — the block-model report
 import { geometryAccumulator, inferGeometry } from '@gcu/recon';   // grid-geometry inference (harvested from BMA) — the grid summary
+import { createFilterDrawer, flattenExpr } from '@gcu/filterui';   // the shared filter-widget drawer (micro's, extracted)
 import { ProcessManager } from '@gcu/proc';
 import { detectFormat, listZip, readZip, gunzipBytes, listTar, readTar, unzstdBytes, unbz2Bytes } from '@gcu/archive';
 import { census as xlsxCensus, openSheet as xlsxOpenSheet } from '@gcu/sheet';   // worksheets as TYPED table documents — no CSV round-trip
@@ -3675,6 +3676,68 @@ function setFilterText(text) {
   syncFilterClear();
 }
 function syncFilterClear() { $('#filterWrap').classList.toggle('has', $('#filter').value.length > 0); syncHL($('#filter'), $('#filterHL')); }
+
+// ── the FILTER WIDGET DRAWER — @gcu/filterui over lamina's gutter stats ──────
+// The engine (span-surgical AST↔widget projection) is the shared package;
+// lamina's providers come from what it already knows for free: the gutter
+// glyph stats (windowed sample — numeric min/max, top categorical values)
+// and the schema's number/text split. Bounds are approximate by nature here
+// (never-resident files); the expression text stays exact.
+let _fdOpen = false, _fdTimer = null, _fdDrawer = null;
+const _fdUc = (col) => (current ? current.schema.findIndex((sc) => sc.name === col) : -1);
+const _fdMeta = {
+  boundsFor: (col, v) => {
+    const c = current; const uc = _fdUc(col);
+    const g = c && c.gutter && uc >= 0 ? c.gutter[uc] : null;
+    if (g && g.min != null && g.max != null && g.max > g.min) return [g.min, g.max];
+    const sp = Math.max(1, Math.abs(v) * 2); return [v - sp, v + sp];
+  },
+  valuesFor: (col, cur) => {
+    const c = current; const uc = _fdUc(col);
+    const g = c && c.gutter && uc >= 0 ? c.gutter[uc] : null;
+    if (g && g.kind === 'cat' && g.values && g.values.length) return [...new Set([...g.values, ...cur])];
+    return [...new Set(cur)];
+  },
+  columns: () => {
+    const c = current; if (!c || !c.schema) return { numeric: [], categorical: [] };
+    const numeric = [], categorical = [];
+    for (const sc of c.schema) (sc.type === 'number' ? numeric : categorical).push(sc.name);
+    return { numeric, categorical };
+  },
+};
+function fdDrawer() {
+  if (_fdDrawer) return _fdDrawer;
+  _fdDrawer = createFilterDrawer({
+    host: $('#fdrawer'),
+    expr: { parse: exprParse, validate, quoteIdent },
+    meta: _fdMeta,
+    schema: () => (current ? (current.d.kind === 'delimited' ? current.d.schema : [{ name: 'line' }]) : undefined),
+    highlight: (hl, text) => renderExprHL(hl, text),
+    apply: (text, source) => {
+      $('#filter').value = flattenExpr(text); syncFilterClear();
+      clearTimeout(_fdTimer);
+      // lamina filters by SCANNING (never-resident) — debounce generously so a
+      // slider drag queues one scan, not one per step
+      if (source === 'reset' || source === 'clear') applyFilter(text);
+      else _fdTimer = setTimeout(() => applyFilter(text), 350);
+    },
+  });
+  return _fdDrawer;
+}
+function toggleFilterDrawer(force) {
+  const d = $('#fdrawer');
+  _fdOpen = force !== undefined ? force : !_fdOpen;
+  $('#filterWidgets').classList.toggle('on', _fdOpen);
+  $('#filterWidgets').textContent = _fdOpen ? '▴' : '▾';
+  if (!_fdOpen) { d.classList.remove('show'); return; }
+  fdDrawer().open($('#filter').value);
+  const r = $('#filterWrap').getBoundingClientRect();
+  d.style.left = Math.max(8, Math.min(innerWidth - 540, r.left)) + 'px';
+  d.style.top = (r.bottom + 4) + 'px';
+  d.classList.add('show');
+}
+$('#filterWidgets').onclick = () => toggleFilterDrawer();
+$('#filter').addEventListener('change', () => { if (_fdOpen) fdDrawer().render(); });
 $('#filter').addEventListener('input', syncFilterClear);
 $('#filter').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') applyFilter(e.target.value);
