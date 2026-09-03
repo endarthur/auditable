@@ -1747,6 +1747,7 @@ if (target === 'micro') {
   const SPEC = {
     '../../ext/condenser/src/main.js': '#condenser',   // dev runs the src tree; the build ships the bundle
     '../../ext/expr/index.js': '#expr',
+    '../../ext/filterui/index.js': '#filterui',
     '../../ext/sluice/index.js': '#sluice',
     '../../ext/loom/index.js': '#loom',
     '../../ext/winding/index.js': '#winding',
@@ -1764,6 +1765,7 @@ if (target === 'micro') {
     ['condenser', 'ext/condenser/index.js'],
     ['dispatch',  'ext/dispatch/index.js'],           // session-trained NL → command (zero-dep, no WASM: Sealed holds)
     ['expr',      'ext/expr/index.js'],
+    ['filterui',  'ext/filterui/index.js'],           // the shared filter-widget engine (extracted from the fd* drawer)
     ['sluice',    'ext/sluice/index.js'],              // streaming column stats (the columns tab)
     ['loom',      'ext/loom/index.js'],                // the attribute table's canvas grid
     ['winding',   'ext/winding/index.js'],             // select-by-solid containment (spec 17)

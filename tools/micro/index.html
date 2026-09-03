@@ -113,41 +113,8 @@
   #filterHL { right: 24px; }
   #fdrawer { position: fixed; display: none; z-index: 9; background: #1a1a1a; border: 1px solid var(--bd2); box-shadow: 0 6px 24px rgba(0,0,0,0.5); padding: 10px 12px; font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 340px; max-width: 520px; max-height: 60vh; overflow-y: auto; }
   #fdrawer.show { display: block; }
-  .fdw .fd-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--accent); }
-  .fdw .fd-head button { background: none; border: 1px solid var(--bd2); border-radius: 3px; color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 2px 8px; cursor: pointer; }
-  .fdw .fd-head button:hover { color: var(--text-hi); }
-  .fdw .fd-head .fd-dot { color: var(--warn, #c8a02e); margin-right: 4px; }
-  .fdw .fd-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
-  .fdw .fd-row > b { color: var(--text-hi); font-weight: normal; min-width: 60px; }
-  .fdw .fd-op { color: var(--dim); font-size: 10px; text-transform: uppercase; margin: -4px 0 4px 2px; }
-  .fdw input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); }
-  .fdw input[type="number"], .fdw input[type="text"] { width: 84px; font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
-  .fdw .fd-chip { border: 1px solid var(--bd2); border-radius: 10px; padding: 1px 9px; cursor: pointer; color: var(--muted); user-select: none; }
-  .fdw .fd-chip.on { border-color: var(--accent); color: var(--accent); }
-  .fdw .fd-expr { color: var(--dim); border: 1px dashed var(--bd2); border-radius: 3px; padding: 1px 8px; }
-  .fdw .fd-add { color: var(--dim); }
-  .fdw select { font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg-field); border: 1px solid var(--bd2); border-radius: 3px; padding: 2px 4px; }
-  .fdw .fd-edwrap { position: relative; margin-bottom: 2px; }
-  #fdrawer #fdExprHL { padding: 4px 6px; font-size: 12px; white-space: pre; }
-  #fdrawer #fdExpr { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--bd2) transparent; }
-  #fdrawer #fdExpr::-webkit-scrollbar { height: 7px; width: 7px; }
-  #fdrawer #fdExpr::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 4px; }
-  #fdrawer #fdExpr::-webkit-scrollbar-track { background: transparent; }
-  .fdw .fd-hint { color: var(--dim); margin: 2px 0 8px; }
-  #fdrawer #fdExpr { width: 100%; box-sizing: border-box; position: relative; z-index: 1; color: transparent; caret-color: var(--text-hi); font-family: var(--mono); font-size: 12px; background: transparent; border: 1px solid var(--bd2); border-radius: 3px; padding: 4px 6px; resize: vertical; min-height: 2.6em; margin-bottom: 0; }
-  #fdrawer #fdExpr::placeholder { color: var(--dim); }
-  #fdrawer #fdExpr.err { border-color: #b0563a; }
-  #fdrawer #fdErr { color: #b0563a; font-size: 11px; min-height: 14px; margin-bottom: 6px; }
-  .fdw .fd-row.nw { flex-wrap: nowrap; }
-  .fdw .fd-row.nw input[type="number"] { width: 68px; flex: 0 0 auto; }
-  .fdw .fd-row.nw input[type="range"] { min-width: 56px; }
-  .fdw .fd-group { border-left: 2px solid var(--bd2); padding: 6px 0 0 10px; margin: 2px 0 8px; }
-  .fdw .fd-op.click { cursor: pointer; display: inline-block; border: 1px solid transparent; border-radius: 8px; padding: 0 7px; }
-  .fdw .fd-op.click:hover { border-color: var(--bd2); color: var(--text-hi); }
-  .fdw select { background: #222; color: var(--text); border: 1px solid var(--bd2); border-radius: 3px; font: inherit; }
-  .fdw .fd-opsel { flex: 0 0 auto; color: var(--muted); }
-  .fdw .fd-x { flex: 0 0 auto; margin-left: auto; background: none; border: none; color: var(--dim); font: inherit; font-size: 13px; cursor: pointer; padding: 0 3px; }
-  .fdw .fd-x:hover { color: #b0563a; }
+  /* .fdw widget styles are injected by @gcu/filterui (injectStyles) — only the
+     drawer POSITIONING stays here */
   .cw-wrap { display: flex; font-family: var(--mono); font-size: 12px; color: var(--text); }
   .cw-rail { flex: 0 0 150px; border-right: 1px solid var(--bd2); overflow-y: auto; padding: 6px 0; }
   .cw-item { padding: 4px 10px; cursor: pointer; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -882,6 +849,7 @@ import { convert as unitConvert } from '../../ext/units/index.js';   // @gcu/uni
 import { parse as yamlParse, emit as yamlEmit, scalar as yamlScalar, mapNode as yamlMap, seqNode as yamlSeq, mapEntry as yamlEntry } from '../../ext/yaml/index.js';   // @gcu/yaml — recipes are hand-editable YAML files
 import { census as xlsxCensus, openSheet as xlsxOpenSheet } from '../../ext/sheet/index.js';   // @gcu/sheet — worksheets as table documents (typed columns; no CSV round-trip)
 import { compileBool, compileValue, compileChunk, compileChunkBool, validate, complete, parse, deps, canMatch, quoteIdent, tokenize } from '../../ext/expr/index.js';   // lamina's filter language + autocomplete, verbatim
+import { createFilterDrawer, renderChain as fuiRenderChain, renderLeaf as fuiRenderLeaf, fmtNum as fuiFmtNum, flattenExpr as fuiFlatten } from '../../ext/filterui/index.js';   // @gcu/filterui — the span-surgical AST↔widget engine (extracted from this very drawer)
 import { welford, tdigest, quantileFromCentroids, topK, cardinality } from '../../ext/sluice/index.js';   // streaming column stats (one pass, all columns)
 import { createGrid, PENDING } from '../../ext/loom/index.js';   // the attribute table's canvas grid (lamina's engine)
 import { buildBVH, windingBVH, Winding, raycastBVH } from '../../ext/winding/index.js';   // select-by-solid containment (spec 17)
@@ -8864,38 +8832,13 @@ $('#filter').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') applyBlockFilter($('#filter').value);
   else if (e.key === 'Escape') { $('#filter').value = ''; syncFilterClear(); applyBlockFilter(''); }
 });
-// ── the FILTER WIDGET DRAWER ──────────────────────────────────────────────────
-// Renders the CURRENT filter expression as live controls — the EXPRESSION stays
-// the single source of truth: a widget is a projection of its AST clause, and
-// touching one SURGICALLY rewrites its literal's source span in the text (the
-// filter box updates as you drag; user formatting preserved; spans shift by the
-// edit delta so sibling widgets stay bound). Re-filters ride the pin cache →
-// live. Reset restores the snapshot taken when the drawer opened.
-let _fdOpen = false, _fdSnap = null, _fdTimer = null, _fdSpans = [], _fdText = null;
-// the AUTHORITATIVE expression (may be multiline + commented). The toolbar's
-// single-line input STRIPS newlines — after which a # comment would eat the rest —
-// so the input only ever shows a semantically-EQUAL flattened mirror (comments
-// stripped, lines joined); the true text lives here / on the layer's filterExpr.
-function fdFlatten(t) { return String(t).replace(/#[^\n]*/g, '').split('\n').map((x) => x.trim()).filter(Boolean).join(' '); }
-function fdSrc() {
-  if (_fdOpen && _fdText != null) return _fdText;
-  const L = activeLayer(); return (L && L.filterExpr) || $('#filter').value;
-}
-function fdApply(text) {
-  _fdText = text;
-  $('#filter').value = fdFlatten(text); syncFilterClear();
-  const ed = $('#fdExpr'); if (ed && document.activeElement !== ed) { ed.value = text; fdAutosize(); }
-  clearTimeout(_fdTimer); _fdTimer = setTimeout(() => applyBlockFilter(text), 60);
-  const dot = $('.fdw .fd-dot'); if (dot) dot.textContent = text === _fdSnap ? '' : '●';
-}
-function fdReplace(sp, txt) {                              // surgical span edit + shift siblings
-  const s0 = fdSrc(), nt = s0.slice(0, sp.start) + txt + s0.slice(sp.end);
-  const delta = txt.length - (sp.end - sp.start);
-  for (const o of _fdSpans) { if (o === sp) continue; if (o.start >= sp.end) { o.start += delta; o.end += delta; } else if (o.start <= sp.start && o.end >= sp.end) { o.end += delta; } }   // after: shift; containing extent: stretch
-  sp.end = sp.start + txt.length;
-  fdApply(nt);
-}
-const fdNum = (v, step) => (step >= 1 ? String(Math.round(v)) : String(+v.toFixed(Math.max(0, Math.ceil(-Math.log10(step)) + 1))));
+// ── the FILTER WIDGET DRAWER — @gcu/filterui, driven by micro's providers ────
+// The engine (span-surgical AST↔widget projection over the expression text) is
+// the shared package now; micro supplies the metadata providers (pinned
+// columns / parquet footers / band sidecars), the @gcu/expr services, the
+// highlight overlay, and the apply debounce. The calc window drives the same
+// row renderers with its own rewrite context, as before.
+let _fdOpen = false, _fdTimer = null, _fdDrawer = null;
 // numeric bounds for a column: pinned column → exact; parquet footers; band sidecars; else spread around v
 function fdBounds(L, col, v) {
   const e = pinGet(L, col);
@@ -8915,309 +8858,62 @@ function fdValues(L, col, cur) {
   if (h && h.categories && mm && mm.cat != null && String(h.columns[mm.cat]).toLowerCase() === String(col).toLowerCase()) return h.categories.slice();
   return [...new Set(cur)];
 }
-function fdLeafSpec(n) {                                    // classify a clause → a widget spec
-  const isF = (x) => x && x.t === 'field', numLit = (x) => x && (x.t === 'num' || (x.t === 'neg' && x.start != null)) && x.start != null;
-  const numVal = (x) => (x.t === 'neg' ? -x.e.v : x.v);
-  const opSp = (x) => (x.opStart != null ? { start: x.opStart, end: x.opEnd } : null);
-  if (n.t === 'cmp') {
-    if (isF(n.l) && numLit(n.r)) return { kind: 'slider', col: n.l.name, op: n.op, sp: n.r, v: numVal(n.r), opSp: opSp(n), node: n };
-    if (isF(n.r) && numLit(n.l)) return { kind: 'slider', col: n.r.name, op: ({ '<': '>', '>': '<', '<=': '>=', '>=': '<=' }[n.op] || n.op), sp: n.l, v: numVal(n.l), flipped: true, opSp: opSp(n), node: n };
-    if (isF(n.l) && n.r && n.r.t === 'str' && n.r.start != null && (n.op === '=' || n.op === '!=')) return { kind: 'chips', col: n.l.name, op: n.op, picks: [n.r], node: n };
-  }
-  if (n.t === 'between' && isF(n.e) && numLit(n.lo) && numLit(n.hi)) return { kind: 'range', col: n.e.name, lo: n.lo, hi: n.hi, vlo: numVal(n.lo), vhi: numVal(n.hi), node: n };
-  if (n.t === 'in' && isF(n.e) && n.set.every((m2) => m2.t === 'str' && m2.start != null)) return { kind: 'chips', col: n.e.name, op: 'in', picks: n.set, node: n };
-  if (n.t === 'isblank' && isF(n.e)) return { kind: 'flag', col: n.e.name, label: 'is blank', other: 'filled', node: n };
-  if (n.t === 'isfilled' && isF(n.e)) return { kind: 'flag', col: n.e.name, label: 'is filled', other: 'blank', node: n };
-  if ((n.t === 'contains' && isF(n.l) && n.r && n.r.t === 'str' && n.r.start != null)) return { kind: 'text', col: n.l.name, verb: 'contains', sp: n.r, v: n.r.v };
-  if (n.t === 'matches' && isF(n.e)) return { kind: 'expr', label: quoteIdent(n.e.name) + ' matches …' };
-  if (n.t === 'not') {                                      // postfix not keeps its extent (op edits stay honest);
-    const inner = fdLeafSpec(n.e);                          // prefix `not (…)` has none → structural edits hidden
-    if (inner && inner.kind !== 'expr') { inner.negated = true; inner.node = n.start != null ? n : null; return inner; }
-  }
-  return { kind: 'expr', label: 'expression' };
-}
-// the drawer skeleton (built once per page): header + a MULTILINE expression
-// editor (two-way synced with the widgets; live-validated) + the widget body.
-function fdSkeleton() {
-  const dr = $('#fdrawer');
-  if (dr.querySelector('#fdBody')) return;
-  dr.textContent = '';
-  const head = document.createElement('div'); head.className = 'fd-head';
-  const ttl = document.createElement('span'); ttl.innerHTML = '<span class="fd-dot"></span>filter widgets';
-  const btns = document.createElement('span');
-  const rst = document.createElement('button'); rst.textContent = 'reset'; rst.title = 'restore the filter as it was when the drawer opened';
-  rst.onclick = () => { _fdText = _fdSnap; fdApply(_fdSnap); clearTimeout(_fdTimer); applyBlockFilter(_fdSnap); renderFilterDrawer(); };
-  btns.append(rst);                                        // no ×: the toolbar ▾/▴ toggles the drawer (an × reads as "clear")
-  head.append(ttl, btns);
-  const edwrap = document.createElement('div'); edwrap.className = 'fd-edwrap';
-  const edhl = document.createElement('div'); edhl.id = 'fdExprHL'; edhl.className = 'exprhl'; edhl.setAttribute('aria-hidden', 'true');
-  const ed = document.createElement('textarea'); ed.id = 'fdExpr'; ed.rows = 2; ed.spellcheck = false; ed.wrap = 'off';
-  ed.placeholder = 'filter expression…  # comments ok';
-  for (const ev of ['scroll', 'keyup', 'click']) ed.addEventListener(ev, () => syncHL(ed, edhl));
-  ed.addEventListener('input', () => {                     // typing: mirror + validate live, apply when valid (debounced)
-    fdAutosize(); syncHL(ed, edhl);
-    const t = _fdText = ed.value;
-    $('#filter').value = fdFlatten(t); syncFilterClear();
-    $('.fdw .fd-dot').textContent = t === _fdSnap ? '' : '●';
-    clearTimeout(_fdTimer);
-    if (fdValidateUI()) _fdTimer = setTimeout(() => applyBlockFilter(t), 300);
-  });
-  ed.addEventListener('change', () => renderFilterDrawer());   // commit (blur) -> re-project the widgets
-  const err = document.createElement('div'); err.id = 'fdErr';
-  const body = document.createElement('div'); body.id = 'fdBody';
-  edwrap.append(edhl, ed);
-  dr.append(head, edwrap, err, body);
-}
-function fdAutosize() { const ed = $('#fdExpr'); if (!ed) return; ed.style.height = 'auto'; ed.style.height = Math.min(140, ed.scrollHeight + 2) + 'px'; syncHL(ed, $('#fdExprHL')); }
-function fdValidateUI() {
-  const ed = $('#fdExpr'), errEl = $('#fdErr'); if (!ed) return true;
-  const t = _fdOpen && _fdText != null ? _fdText : ed.value; let ok = true, msg = '';
-  if (t.trim()) {
-    const AL = activeLayer(); const h = AL && layerTableHeader(AL);
-    const v = validate(t, h ? schemaExt(AL, h) : undefined);
-    ok = v.ok; msg = ok ? '' : ((v.errors[0] && v.errors[0].message) || 'invalid expression');
-  }
-  ed.classList.toggle('err', !ok); errEl.textContent = msg;
-  return ok;
-}
-const FDFLIP = { '<': '>', '>': '<', '<=': '>=', '>=': '<=' };
-// a compact operator <select> that rewrites its clause on pick
-function fdOpSel(opts, cur, onPick) {
-  const s = document.createElement('select'); s.className = 'fd-opsel';
-  for (const o of opts) s.append(new Option(o, o));
-  s.value = cur;
-  s.onchange = () => onPick(s.value);
-  return s;
-}
-// flatten a same-joiner chain — but a PARENTHESIZED child stays a nested group
-// (even same-op), so `A and (B or C)` and `A and (B and C)` both render as boxes.
-function fdChain(n) {
-  if (!n || (n.t !== 'and' && n.t !== 'or')) return { op: null, items: n ? [n] : [], joiners: [] };
-  const op = n.t, items = [], joiners = [];
-  (function walk(x, root) {
-    if (x && x.t === op && (root || x.gStart == null) && x.jStart != null) { walk(x.l); joiners.push({ start: x.jStart, end: x.jEnd }); walk(x.r); }
-    else items.push(x);
-  })(n, true);
-  return { op, items, joiners };
-}
-// the add-condition row: [joiner…] + [column…] → seeds an editable clause
-// (numeric → `col > mid`, category → `col = "first"`; every piece is then
-// changeable in place via the row's own op dropdown / widgets).
-function fdAddRow(AL, insert, defJoin, compact) {
-  const row = document.createElement('div'); row.className = 'fd-row fd-add';
-  let joinSel = null;
-  if (fdSrc().trim()) {
-    const opts = compact ? ['and', 'or'] : ['and', 'or', 'and ( … )', '( all ) or …'];
-    joinSel = document.createElement('select'); joinSel.className = 'fd-opsel';
-    for (const o of opts) joinSel.append(new Option(o, o));
-    joinSel.value = defJoin;
-    row.appendChild(joinSel);
-  }
-  const sel = document.createElement('select');
+// the add-row column picker: numeric columns + the mapped category + dict-coded paint columns
+function fdColumnsOf(AL) {
   const nums = numericColsOf(AL); const h = layerTableHeader(AL); const mm = h.mapping || {};
   const catName = mm.cat != null ? h.columns[mm.cat] : null;
-  const catPaint = (AL.paintCols || []).filter((c) => c.kind !== 'ratio' && c.dict && c.dict.length > 1);   // flag / derived categorical columns (dict-coded, e.g. a by-solid flag)
-  sel.append(new Option('add condition…', ''));
-  for (const c of nums) sel.append(new Option(c, 'n:' + c));
-  if (catName) sel.append(new Option(catName, 'c:' + catName));
-  for (const c of catPaint) if (c.name !== catName) sel.append(new Option(c.name, 'c:' + c.name));
-  sel.onchange = () => {
-    const v = sel.value; if (!v) return;
-    const col = v.slice(2);
-    let clause;
-    if (v[0] === 'c') { const vals = fdValues(AL, col, []); clause = quoteIdent(col) + ' = "' + (vals.find((x) => x) || vals[0] || '') + '"'; }
-    else { const [lo, hi] = fdBounds(AL, col, 0); clause = quoteIdent(col) + ' > ' + fdNum((lo + hi) / 2, (hi - lo) / 200 || 0.01); }
-    insert(clause, joinSel ? joinSel.value : 'and');
-    clearTimeout(_fdTimer); applyBlockFilter(fdSrc());
-    renderFilterDrawer();
-  };
-  row.appendChild(sel);
-  return row;
+  const catPaint = (AL.paintCols || []).filter((c) => c.kind !== 'ratio' && c.dict && c.dict.length > 1);   // flag / derived categorical paint columns
+  const categorical = catName ? [catName] : [];
+  for (const c of catPaint) if (c.name !== catName) categorical.push(c.name);
+  return { numeric: nums, categorical };
 }
-// render one chain level: leaf rows joined by CLICKABLE and/or pills (each pill
-// rewrites its own joiner token); nested/parenthesized groups indent, and a
-// parenthesized group gets its own add row inserting INSIDE the brackets.
-// `ctx` is the rewrite context: { push(span), replace(span, txt), rerender(),
-// addRow? } — the filter drawer's default edits the filter text; the calc
-// window passes its own so the SAME widgets edit a calc expression instead.
-const FD_CTX = { push: (sp) => _fdSpans.push(sp), replace: (sp, txt) => fdReplace(sp, txt), rerender: () => renderFilterDrawer(), addRow: (...a2) => fdAddRow(...a2) };
-function fdRenderChain(d, n, AL, ctx, delSelf) {
-  const cx = ctx || FD_CTX;
-  const ch = fdChain(n);
-  const extOf = (x) => (x && x.gStart != null ? { start: x.gStart, end: x.gEnd } : (x && x.start != null ? { start: x.start, end: x.end } : null));
-  ch.items.forEach((it, i2) => {
-    if (i2 > 0) {
-      const j = ch.joiners[i2 - 1];
-      const o = document.createElement('div'); o.className = 'fd-op'; o.textContent = ch.op;
-      if (j && j.start != null) {
-        cx.push(j);
-        o.classList.add('click'); o.title = 'switch and ↔ or';
-        o.onclick = () => { cx.replace(j, ch.op === 'and' ? 'or' : 'and'); cx.rerender(); };
-      }
-      d.appendChild(o);
-    }
-    // this item's REMOVE: the clause + its adjoining joiner; a lone item
-    // cascades to delSelf (the parent removes the whole group / clears)
-    let del = null;
-    if (ch.items.length === 1) del = delSelf || null;
-    else {
-      const ext = extOf(it);
-      const j = i2 > 0 ? ch.joiners[i2 - 1] : ch.joiners[0];
-      if (ext && j && j.start != null) {
-        const cut = i2 > 0 ? { start: j.start, end: ext.end } : { start: ext.start, end: j.end };
-        cx.push(cut);
-        del = () => { cx.replace(cut, ''); cx.rerender(); };
-      }
-    }
-    const nested = it && (it.t === 'and' || it.t === 'or');
-    if (nested || (it && it.gStart != null)) {
-      const g = document.createElement('div'); g.className = 'fd-group';
-      if (nested) fdRenderChain(g, it, AL, cx, del);
-      else fdRenderLeaf(g, it, AL, cx, del);
-      if (it.gStart != null && AL && layerTableHeader(AL) && cx.addRow) {
-        const at = { start: it.gEnd - 1, end: it.gEnd - 1 };   // just before the group's ')'
-        cx.push(at);
-        g.appendChild(cx.addRow(AL, (clause, join) => { cx.replace(at, ' ' + join + ' ' + clause); }, it.t === 'or' ? 'or' : 'and', true));
-      }
-      d.appendChild(g);
-    } else fdRenderLeaf(d, it, AL, cx, del);
+const fdMetaFor = (L) => ({
+  boundsFor: (col, v) => fdBounds(L, col, v),
+  valuesFor: (col, cur) => fdValues(L, col, cur),
+  columns: () => fdColumnsOf(L),
+});
+// calc-window compatibility: the old inline renderers' signatures, now backed by the package
+const fdNum = fuiFmtNum;
+const fdRenderChain = (d, n, L, ctx, delSelf) => fuiRenderChain(d, n, fdMetaFor(L), { quoteIdent, ...ctx }, delSelf);
+const fdRenderLeaf = (d, leaf, L, ctx, del) => fuiRenderLeaf(d, leaf, fdMetaFor(L), { quoteIdent, ...ctx }, del);
+function fdDrawer() {
+  if (_fdDrawer) return _fdDrawer;
+  _fdDrawer = createFilterDrawer({
+    host: $('#fdrawer'),
+    expr: { parse, validate, quoteIdent },
+    meta: {                                                // live: always the ACTIVE layer
+      boundsFor: (col, v) => fdBounds(activeLayer(), col, v),
+      valuesFor: (col, cur) => fdValues(activeLayer(), col, cur),
+      columns: () => { const AL = activeLayer(); return AL && layerTableHeader(AL) ? fdColumnsOf(AL) : { numeric: [], categorical: [] }; },
+    },
+    schema: () => { const AL = activeLayer(); const h = AL && layerTableHeader(AL); return h ? schemaExt(AL, h) : undefined; },
+    highlight: (hl, text) => renderExprHL(hl, text),
+    apply: (text, source) => {
+      $('#filter').value = fuiFlatten(text); syncFilterClear();
+      clearTimeout(_fdTimer);
+      if (source === 'reset' || source === 'clear') applyBlockFilter(text);
+      else _fdTimer = setTimeout(() => applyBlockFilter(text), source === 'editor' ? 300 : 60);
+    },
   });
+  return _fdDrawer;
 }
-function fdRenderLeaf(d, leaf, AL, ctx, del) {
-  const cx = ctx || FD_CTX;
-  const spec = fdLeafSpec(leaf);
-  const row = document.createElement('div'); row.className = 'fd-row';
-  const lab = document.createElement('b'); lab.textContent = (spec.negated ? 'not ' : '') + (spec.col || ''); row.appendChild(lab);
-  const extent = spec.node && spec.node.start != null ? spec.node : null;
-  if (extent) cx.push(extent);
-  if (spec.kind === 'slider' && AL) {
-    row.classList.add('nw');
-    cx.push(spec.sp);
-    const [lo, hi] = fdBounds(AL, spec.col, spec.v); const step = (hi - lo) / 200 || 0.01;
-    if (spec.opSp) {
-      cx.push(spec.opSp);
-      const opts = ['>', '>=', '<', '<=', '=', '!=']; if (extent) opts.push('between');
-      row.appendChild(fdOpSel(opts, spec.op, (op2) => {
-        if (op2 === 'between') cx.replace(extent, quoteIdent(spec.col) + ' between ' + fdNum(spec.v, step) + ' and ' + fdNum(hi, step));
-        else cx.replace(spec.opSp, spec.flipped ? (FDFLIP[op2] || op2) : op2);
-        cx.rerender();
-      }));
-    } else { const opEl = document.createElement('span'); opEl.textContent = spec.op; opEl.style.color = 'var(--dim)'; row.appendChild(opEl); }
-    const sl = document.createElement('input'); sl.type = 'range'; sl.min = lo; sl.max = hi; sl.step = step; sl.value = spec.v;
-    const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(spec.v, step);
-    const push = (v) => { cx.replace(spec.sp, fdNum(+v, step)); };
-    sl.oninput = () => { nb.value = fdNum(+sl.value, step); push(sl.value); };
-    sl.onchange = () => cx.rerender();                     // drag end → resync spans
-    nb.onchange = () => { push(nb.value); cx.rerender(); };
-    row.append(sl, nb);
-  } else if (spec.kind === 'range' && AL) {
-    row.classList.add('nw');
-    cx.push(spec.lo); cx.push(spec.hi);
-    const [lo, hi] = fdBounds(AL, spec.col, (spec.vlo + spec.vhi) / 2); const step = (hi - lo) / 200 || 0.01;
-    if (extent) {
-      row.appendChild(fdOpSel(['between', '>', '>=', '<', '<=', '=', '!='], 'between', (op2) => {
-        if (op2 === 'between') return;
-        cx.replace(extent, quoteIdent(spec.col) + ' ' + op2 + ' ' + fdNum(spec.vlo, step));
-        cx.rerender();
-      }));
-    } else { const opEl = document.createElement('span'); opEl.textContent = 'between'; opEl.style.color = 'var(--dim)'; opEl.style.flex = '0 0 auto'; row.appendChild(opEl); }
-    const mk = (sp, v) => { const nb = document.createElement('input'); nb.type = 'number'; nb.step = 'any'; nb.value = fdNum(v, step); nb.onchange = () => { cx.replace(sp, fdNum(+nb.value, step)); cx.rerender(); }; return nb; };
-    const s1 = document.createElement('input'); s1.type = 'range'; s1.min = lo; s1.max = hi; s1.step = step; s1.value = spec.vlo;
-    const s2 = document.createElement('input'); s2.type = 'range'; s2.min = lo; s2.max = hi; s2.step = step; s2.value = spec.vhi;
-    s1.oninput = () => cx.replace(spec.lo, fdNum(+s1.value, step)); s2.oninput = () => cx.replace(spec.hi, fdNum(+s2.value, step));
-    s1.onchange = s2.onchange = () => cx.rerender();
-    row.append(mk(spec.lo, spec.vlo), s1, s2, mk(spec.hi, spec.vhi));   // num | lo-slider | hi-slider | num, one aligned line
-  } else if (spec.kind === 'chips' && AL) {
-    spec.picks.forEach((m2) => cx.push(m2));
-    const cur = spec.picks.map((m2) => m2.v);
-    const vals = fdValues(AL, spec.col, cur);
-    const q = (x) => '"' + x + '"';
-    const curOp = spec.negated && spec.op === 'in' ? 'not in' : spec.op;
-    if (extent && !(spec.negated && spec.op !== 'in')) {
-      row.appendChild(fdOpSel(['=', '!=', 'in', 'not in'], curOp, (op2) => {
-        const txt = (op2 === 'in' || op2 === 'not in')
-          ? quoteIdent(spec.col) + ' ' + op2 + ' (' + cur.map(q).join(', ') + ')'
-          : quoteIdent(spec.col) + ' ' + op2 + ' ' + q(cur[0]);
-        cx.replace(extent, txt);
-        cx.rerender();
-      }));
-    } else { const opEl = document.createElement('span'); opEl.textContent = curOp; opEl.style.color = 'var(--dim)'; row.appendChild(opEl); }
-    for (const v of vals) {
-      const ch = document.createElement('span'); ch.className = 'fd-chip' + (cur.includes(v) ? ' on' : ''); ch.textContent = v;
-      ch.onclick = () => {
-        if (spec.op === 'in') {                           // multi: rewrite the member-list span
-          const now = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v];
-          if (!now.length) return;
-          const first = spec.picks[0], last = spec.picks[spec.picks.length - 1];
-          cx.replace({ start: first.start, end: last.end }, now.map(q).join(', '));
-        } else cx.replace(spec.picks[0], q(v));           // single: swap the literal
-        cx.rerender();
-      };
-      row.appendChild(ch);
-    }
-  } else if (spec.kind === 'text') {
-    cx.push(spec.sp);
-    const t = document.createElement('input'); t.type = 'text'; t.value = spec.v; t.style.width = '140px';
-    t.onchange = () => { cx.replace(spec.sp, '"' + t.value.replace(/"/g, '') + '"'); cx.rerender(); };
-    row.append(document.createTextNode(spec.verb), t);
-  } else if (spec.kind === 'flag') {
-    const f = document.createElement('span'); f.className = 'fd-chip on'; f.textContent = spec.label;
-    if (extent && !spec.negated) {                        // click → toggle blank ↔ filled
-      f.title = 'switch blank ↔ filled';
-      f.onclick = () => { cx.replace(extent, quoteIdent(spec.col) + ' is ' + spec.other); cx.rerender(); };
-    }
-    row.appendChild(f);
-  } else {
-    const x = document.createElement('span'); x.className = 'fd-expr'; x.textContent = spec.label || 'expression'; row.appendChild(x);
-  }
-  if (del) {
-    const xb = document.createElement('button'); xb.className = 'fd-x'; xb.textContent = '×'; xb.title = 'remove this condition';
-    xb.onclick = del;
-    row.appendChild(xb);
-  }
-  d.appendChild(row);
+function fdSrc() {
+  if (_fdOpen && _fdDrawer) return _fdDrawer.getText();
+  const L = activeLayer(); return (L && L.filterExpr) || $('#filter').value;
 }
-function renderFilterDrawer() {
-  fdSkeleton();
-  const ed = $('#fdExpr');
-  if (document.activeElement !== ed) { ed.value = fdSrc(); fdAutosize(); }
-  fdValidateUI();
-  const d = $('#fdBody'); d.textContent = ''; _fdSpans = [];
-  const AL = activeLayer();
-  $('.fdw .fd-dot').textContent = fdSrc() === _fdSnap ? '' : '●';
-  const src = fdSrc();
-  let ast = null; if (src.trim()) { try { ast = parse(src); } catch { ast = null; } }
-  if (src.trim() && !ast) { const r = document.createElement('div'); r.className = 'fd-row'; r.innerHTML = '<span class="fd-expr">can’t parse — fix the text first</span>'; d.appendChild(r); }
-  if (!src.trim()) { const r = document.createElement('div'); r.className = 'fd-hint'; r.textContent = 'no filter yet — type an expression above, or add a condition below'; d.appendChild(r); }
-  if (ast) fdRenderChain(d, ast, AL, null, () => { fdApply(''); clearTimeout(_fdTimer); applyBlockFilter(''); renderFilterDrawer(); });
-  // the top-level add: joiner picker incl. bracket seeds — `and ( … )` opens a
-  // new group after the current text; `( all ) or …` wraps EVERYTHING so far
-  // and starts an alternative branch. A trailing # comment forces a newline
-  // join so the appended clause can't be eaten by it.
-  if (AL && layerTableHeader(AL)) {
-    d.appendChild(fdAddRow(AL, (clause, join) => {
-      const cur = fdSrc().trim();
-      if (!cur) { fdApply(clause); return; }
-      const sep = /#[^\n]*$/.test(cur) ? '\n' : ' ';
-      if (join === 'and ( … )') fdApply(cur + sep + 'and (' + clause + ')');
-      else if (join === '( all ) or …') fdApply((cur.includes('\n') || cur.includes('#') ? '(\n' + cur + '\n)' : '(' + cur + ')') + ' or ' + clause);
-      else fdApply(cur + sep + join + ' ' + clause);
-    }, 'and', false));
-  }
-}
+function renderFilterDrawer() { fdDrawer().render(); }
 function toggleFilterDrawer(force) {
   const d = $('#fdrawer');
   _fdOpen = force !== undefined ? force : !_fdOpen;
   $('#filterWidgets').classList.toggle('on', _fdOpen);
   $('#filterWidgets').textContent = _fdOpen ? '▴' : '▾';
   if (!_fdOpen) { d.classList.remove('show'); return; }
-  { const L = activeLayer(); _fdText = (L && L.filterExpr) || $('#filter').value; }
-  _fdSnap = _fdText;
+  const L = activeLayer();
+  fdDrawer().open((L && L.filterExpr) || $('#filter').value);
   const r = $('#filterWrap').getBoundingClientRect();
   d.style.left = Math.max(8, Math.min(innerWidth - 540, r.left)) + 'px';
   d.style.top = (r.bottom + 4) + 'px';
   d.classList.add('show');
-  renderFilterDrawer();
 }
 $('#filterWidgets').onclick = () => toggleFilterDrawer();
 $('#filter').addEventListener('change', () => { if (_fdOpen) renderFilterDrawer(); });

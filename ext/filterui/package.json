@@ -1,0 +1,23 @@
+{
+  "name": "@gcu/filterui",
+  "version": "0.1.0",
+  "description": "Bidirectional AST↔widget editor for @gcu/expr filter expressions — the text stays the truth, widgets surgically rewrite source spans. Extracted from micro's filter drawer; host-agnostic via injected providers.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["index.js", "src", "LICENSE", "README.md"],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["filter", "expression", "widgets", "ui", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gentropic/auditable.git",
+    "directory": "ext/filterui"
+  }
+}

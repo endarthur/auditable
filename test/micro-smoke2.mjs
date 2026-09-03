@@ -627,63 +627,63 @@ await p.close();
   chk(`reset restores the snapshot exactly ("${rst.text}", ${rst.h} hits == ${hits0})`, rst.text === EXPR && rst.h === hits0);
   // the multiline expression editor: typing there applies (debounced) + re-projects the widgets on commit
   const edt = await pf.evaluate(async () => {
-    const ed = document.querySelector('#fdExpr');
+    const ed = document.querySelector('#fdrawer .fd-editor');
     ed.focus(); ed.value = 'FE between 40\n  and 60'; ed.dispatchEvent(new Event('input', { bubbles: true }));
     await new Promise((r) => setTimeout(r, 600));
     ed.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise((r) => setTimeout(r, 200));
     const L = window._micro.layers()[0]; let h = 0; for (const m of L._filterMask) if (m) h++;
-    return { mirrored: document.querySelector('#filter').value.includes('between 40'), sliders: document.querySelectorAll('#fdBody input[type="range"]').length, h, err: document.querySelector('#fdErr').textContent };
+    return { mirrored: document.querySelector('#filter').value.includes('between 40'), sliders: document.querySelectorAll('#fdrawer .fd-body input[type="range"]').length, h, err: document.querySelector('#fdrawer .fd-err').textContent };
   });
   chk(`editor: multiline expr applies + re-projects (mirrored ${edt.mirrored}, ${edt.sliders} range sliders, ${edt.h} hits, err "${edt.err}")`,
     edt.mirrored && edt.sliders === 2 && edt.h > 0 && edt.err === '');
   const edErr = await pf.evaluate(async () => {
-    const ed = document.querySelector('#fdExpr');
+    const ed = document.querySelector('#fdrawer .fd-editor');
     ed.focus(); ed.value = 'FE > and'; ed.dispatchEvent(new Event('input', { bubbles: true }));
     await new Promise((r) => setTimeout(r, 100));
-    return document.querySelector('#fdExpr').classList.contains('err') && document.querySelector('#fdErr').textContent.length > 0;
+    return document.querySelector('#fdrawer .fd-editor').classList.contains('err') && document.querySelector('#fdrawer .fd-err').textContent.length > 0;
   });
   chk(`editor: live validation flags a bad expression`, edErr);
   // op dropdowns / clickable joiners / bracket groups — every projected element
   // rewrites its own source span (ops via the cmp op-token span, and/or via the
   // joiner token span, groups via paren extents + insert-before-')').
   await pf.evaluate(async () => {
-    const ed = document.querySelector('#fdExpr');
+    const ed = document.querySelector('#fdrawer .fd-editor');
     ed.focus(); ed.value = 'FE > 45 and LITO = "HEMATITE"'; ed.dispatchEvent(new Event('input', { bubbles: true }));
     await new Promise((r) => setTimeout(r, 500));
     ed.dispatchEvent(new Event('change', { bubbles: true })); ed.blur();
     await new Promise((r) => setTimeout(r, 200));
   });
   const opsw = await pf.evaluate(async () => {
-    const s2 = [...document.querySelectorAll('#fdBody .fd-opsel')].find((x) => x.value === '>');
+    const s2 = [...document.querySelectorAll('#fdrawer .fd-body .fd-opsel')].find((x) => x.value === '>');
     if (!s2) return { text: 'NO OP SELECT' };
     s2.value = '<='; s2.dispatchEvent(new Event('change'));
     await new Promise((r) => setTimeout(r, 400));
     const L = window._micro.layers()[0]; let h = 0; for (const m of L._filterMask) if (m) h++;
-    return { text: document.querySelector('#fdExpr').value, h };
+    return { text: document.querySelector('#fdrawer .fd-editor').value, h };
   });
   chk(`op dropdown rewrites the op token ("${opsw.text}", ${opsw.h} hits)`,
     opsw.text === 'FE <= 45 and LITO = "HEMATITE"' && opsw.h > 0);
   const jsw = await pf.evaluate(async () => {
-    const pill = document.querySelector('#fdBody .fd-op.click');
+    const pill = document.querySelector('#fdrawer .fd-body .fd-op.click');
     if (!pill) return 'NO CLICKABLE PILL';
     pill.click();
     await new Promise((r) => setTimeout(r, 300));
-    return document.querySelector('#fdExpr').value;
+    return document.querySelector('#fdrawer .fd-editor').value;
   });
   chk(`joiner pill click switches and → or ("${jsw}")`, jsw === 'FE <= 45 or LITO = "HEMATITE"');
   const grp = await pf.evaluate(async () => {
-    let add = [...document.querySelectorAll('#fdBody .fd-add')].pop();       // top-level add: seed an and-group
+    let add = [...document.querySelectorAll('#fdrawer .fd-body .fd-add')].pop();       // top-level add: seed an and-group
     add.querySelector('.fd-opsel').value = 'and ( … )';
     let col = [...add.querySelectorAll('select')].pop(); col.value = 'n:FE'; col.dispatchEvent(new Event('change'));
     await new Promise((r) => setTimeout(r, 400));
-    const boxed = !!document.querySelector('#fdBody .fd-group');
-    add = document.querySelector('#fdBody .fd-group .fd-add');               // then add INSIDE the brackets
+    const boxed = !!document.querySelector('#fdrawer .fd-body .fd-group');
+    add = document.querySelector('#fdrawer .fd-body .fd-group .fd-add');               // then add INSIDE the brackets
     if (!add) return { boxed, text: 'NO GROUP ADD' };
     const js = add.querySelector('.fd-opsel'); if (js) js.value = 'or';
     col = [...add.querySelectorAll('select')].pop(); col.value = 'n:FE'; col.dispatchEvent(new Event('change'));
     await new Promise((r) => setTimeout(r, 400));
-    return { boxed, text: document.querySelector('#fdExpr').value };
+    return { boxed, text: document.querySelector('#fdrawer .fd-editor').value };
   });
   chk(`bracket seed + add-inside-group ("${grp.text}")`,
     grp.boxed && /or LITO = "HEMATITE" and \(FE > [0-9.]+ or FE > [0-9.]+\)$/.test(grp.text));
